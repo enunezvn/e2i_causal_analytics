@@ -311,6 +311,21 @@ def _json_payload(frame: str) -> Any:
 # ------------------------------------------------------ teardown under one context
 
 
+async def _next_body_frame(stream: Any) -> Any:
+    """The next frame from ``stream`` that is not a keepalive heartbeat.
+
+    A heartbeat is emitted whenever a pull outlives the interval, and a loaded
+    box can make that happen before a frame the test is waiting for. Skipping
+    them keeps the frame assertions from racing the clock. The heartbeat
+    assertions in the test are gated on a pull that provably cannot finish, so
+    they stay exact rather than going through here.
+    """
+    while True:
+        frame = await stream.__anext__()
+        if frame != SSE_KEEPALIVE_FRAME:
+            return frame
+
+
 async def test_a_keepalive_then_an_early_disconnect_keep_the_shared_frame_context():
     """The two moments the wrapper re-enters the one context every pull shares.
 
@@ -320,10 +335,12 @@ async def test_a_keepalive_then_an_early_disconnect_keep_the_shared_frame_contex
 
     Then an early disconnect with a pull still OUTSTANDING — the case a
     disconnect between frames never reaches, because the wrapper has already
-    nulled ``pending`` and its teardown cancels nothing. Here the wrapper
-    cancels the live pull, awaits it, then ``aclose``\\ s the body: three more
-    entries into that context, and the place a ``RuntimeError: cannot enter
-    context`` would surface.
+    nulled ``pending`` and its teardown cancels nothing. Cancelling a live pull
+    re-enters the shared context one last time: the task owns it, so the body's
+    ``except``/``finally`` run inside it, and that is where a ``RuntimeError:
+    cannot enter context`` would surface. The wrapper's own ``await pending``
+    and ``aclose()`` run in the consumer's context instead, which is why the
+    assertions below check the abandoned task rather than watch the wrapper.
 
     Both halves are driven by events rather than wall-clock sleeps, so the pull
     is guaranteed pending rather than merely likely. The body stands in for
@@ -356,12 +373,13 @@ async def test_a_keepalive_then_an_early_disconnect_keep_the_shared_frame_contex
             body_saw.append("finalised")
 
     stream = with_sse_keepalive(body(), interval_seconds=0.01)
-    assert await stream.__anext__() == "frame-0"
-    # A heartbeat is the proof that a pull is outstanding, not merely slow.
+    assert await _next_body_frame(stream) == "frame-0"
+    # The body now waits on an event nobody has set, so the pull CANNOT finish:
+    # a heartbeat is the proof that a pull is outstanding, not merely slow.
     assert await stream.__anext__() == SSE_KEEPALIVE_FRAME
     resume.set()
-    assert await stream.__anext__() == "frame-1"
-    # ... and the next pull is the one the consumer abandons.
+    assert await _next_body_frame(stream) == "frame-1"
+    # ... and the next pull, on an event never set, is the one abandoned below.
     assert await stream.__anext__() == SSE_KEEPALIVE_FRAME
 
     pulls = [

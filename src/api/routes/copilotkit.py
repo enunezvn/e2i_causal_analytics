@@ -363,11 +363,11 @@ from src.utils.tool_evidence import evidence_tool_count
 
 logger = logging.getLogger(__name__)
 
-# ``_session_id_context`` (imported above) carries session_id on every route. On
-# the AG-UI route the keepalive's per-frame tasks used to drop it, which is why
-# graph STATE is the channel the nodes read (#2064); #2100 gave those pulls one
-# shared context, so the var arrives too and carries the same value. Declared in
-# chatbot_tools so the chat tools read the same binding as here and chat_bridge.
+# ``_session_id_context`` (imported above) is declared in chatbot_tools so the
+# chat tools read the same binding. AG-UI's execute() and the chat bridge bind
+# it; /chat/stream binds its tools from state, via SessionBoundToolNode. The
+# keepalive's per-frame tasks used to drop it on the AG-UI route, which is why
+# graph STATE is the channel the nodes read (#2064); #2100 gave them one context.
 
 # Per-run discriminator for frontend_message_id stamping: the session key is
 # the conversation threadId, so overlapping streams in the same conversation
@@ -1204,8 +1204,8 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         _run_id_context.set(run_id)
         # Attribute this run's LLM usage to the chat user/session (admin
         # observability, spec 2026-07-12). Both capture hooks read this
-        # contextvar; the user_id is derived from the session prefix and the
-        # anonymous UUID maps to NULL — attribution is honest-only.
+        # contextvar; the user_id is the verified request user (#2077), the
+        # session prefix only as fallback, else NULL — attribution is honest-only.
         set_chat_attribution(persistent_session_id, run_id)
         dbg(f"Set session_id in state and context var: {persistent_session_id[:20]}...")
 
@@ -3560,7 +3560,7 @@ def create_e2i_chat_agent(
         messages = state.get("messages", [])
 
         # Get session_id with priority: context var > state > config. Since #2100
-        # the var reaches here too, carrying the value state carries (#2064).
+        # the var reaches here too; execute() sets both, nothing checks they match.
         session_id = _session_id_context.get()
         session_id_source = "context_var" if session_id else None
 

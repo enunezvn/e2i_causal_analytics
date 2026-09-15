@@ -120,7 +120,7 @@ async def test_a_real_tool_node_carries_the_bound_session_into_the_tool(orchestr
 
     This models the chat bridge (``chat_bridge.py:~206``), which sets the var and
     calls ``graph.ainvoke`` with no keepalive wrapper. It does not model AG-UI,
-    where the binding never reaches the graph (see the AG-UI tests below).
+    whose binding is made inside the wrapper (see the AG-UI tests below).
     """
     workflow = StateGraph(MessagesState)
     workflow.add_node("tools", ToolNode(chatbot_tools.E2I_CHATBOT_TOOLS))

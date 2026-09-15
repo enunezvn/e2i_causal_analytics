@@ -12,12 +12,13 @@ gone by the next pull — which is why chat LLM usage recorded ``surface='other'
 user_id=NULL`` from 2026-08-16 until #2100 gave those pulls one shared context.
 
 It is readable again, and this module still does not read it. Attribution is a
-DERIVED value: ``set_chat_attribution`` resolves its ``user_id`` from the two
-channels below, preferring the verified one, and falls back to the session
-prefix where no request bound a verified id. Reading it here would add a hop to
-reach the same answer, and would silently promote that prefix — a claim the
-caller makes, not a credential — on the paths where nothing was bound. Both
-channels survive into the tools; this module reads them directly:
+DERIVED value, and derived by this very module: ``set_chat_attribution`` resolves
+its ``user_id`` through the same ``resolve_session_user_id`` that
+``resolve_tool_user_id`` below delegates to, so the two cannot disagree and
+neither can promote the session prefix over a verified id. Reading the
+attribution here would be a hop to an answer already computed, and would make
+tool identity depend on whether some entry point called ``set_chat_attribution``
+first. Both channels survive into the tools; this module reads them directly:
 
 * the session itself, for the ``{user}~{session}`` ids ``/chat/stream`` mints
   (and their ``~bridge`` shadow, which splits on the first ``~`` the way every
@@ -191,8 +192,8 @@ def authorize_chat_identity(token_user_id: str, claims: ChatClaims, testing_mode
     TOOLS read empty, so on a bare-uuid session every composition recorded a NULL
     owner and #2095's owner gate took its absent-pass branch. Binding here — in
     the request task, before the graph or the SSE body starts — is the same
-    channel the AG-UI route uses, and it survives the keepalive wrapper's
-    per-frame tasks because they copy the context that already carries it.
+    channel the AG-UI route uses, and it survives the keepalive wrapper, whose
+    frame pulls all share one context copied from the task that binds it here.
     """
     reject_identity_mismatch(token_user_id, claims.user_id, claims.session_id, testing_mode)
     set_authenticated_user(token_user_id)
