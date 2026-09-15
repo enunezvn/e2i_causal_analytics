@@ -21,6 +21,7 @@ doubled; the tool, its schema and the action are the real ones.
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any, Dict, Optional
 from unittest.mock import MagicMock
 
@@ -135,3 +136,98 @@ def test_the_model_facing_schema_makes_the_session_optional_and_says_to_omit_it(
     description = schema["properties"]["session_id"]["description"].lower()
     assert "omit" in description and "current conversation" in description, description
     assert tools.ConversationMemoryInput().session_id is None
+
+
+# ------------------------------------------------------ item 2: run_causal_analysis
+
+
+class _RecordingOrchestrator:
+    def __init__(self) -> None:
+        self.inputs: list[Dict[str, Any]] = []
+
+    async def run(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        self.inputs.append(payload)
+        return {
+            "response_text": "Real causal analysis: ATE=0.184",
+            "ate": 0.184,
+            "ci": [0.142, 0.226],
+            "p_value": 0.012,
+            "significant": True,
+        }
+
+
+@pytest.fixture
+def orchestrator(monkeypatch) -> _RecordingOrchestrator:
+    import src.api.routes.copilotkit as ck
+
+    fake = _RecordingOrchestrator()
+    monkeypatch.setattr(ck, "_get_orchestrator", lambda: fake)
+    return fake
+
+
+async def _run_action(session: Optional[str]) -> Dict[str, Any]:
+    """The real action, with the session channel bound the way its two callers
+    leave it: ``execute()`` binds the thread; an SDK ``actions/execute`` binds none."""
+    import src.api.routes.copilotkit as ck
+
+    token = ck._session_id_context.set(session)
+    try:
+        return await ck.run_causal_analysis(
+            intervention="HCP Engagement", target_kpi="TRx Volume", brand="Kisqali"
+        )
+    finally:
+        ck._session_id_context.reset(token)
+
+
+def _strings(value: Any):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for v in value.values():
+            yield from _strings(v)
+    elif isinstance(value, (list, tuple)):
+        for v in value:
+            yield from _strings(v)
+
+
+def _uuid_shaped(value: str) -> bool:
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        return False
+    return True
+
+
+async def test_the_action_passes_the_bound_session_and_the_verified_caller(orchestrator):
+    """Inside a turn: ``execute()`` bound both channels, and the bare AG-UI
+    thread carries no prefix, so the user can only come from the verified one."""
+    set_authenticated_user(CALLER)
+
+    result = await _run_action(CALLER_THREAD)
+
+    assert result.get("data_source") == "orchestrator", result
+    [payload] = orchestrator.inputs
+    assert payload["session_id"] == CALLER_THREAD
+    assert payload["user_id"] == CALLER
+
+
+async def test_an_sdk_call_with_no_session_still_names_the_verified_caller(orchestrator):
+    """A direct ``actions/execute`` request: the auth dependency bound the
+    identity, nothing bound a session. The session stays None — never minted."""
+    set_authenticated_user(CALLER)
+
+    await _run_action(None)
+
+    [payload] = orchestrator.inputs
+    assert payload["session_id"] is None
+    assert payload["user_id"] == CALLER
+
+
+async def test_unbound_the_action_hands_the_orchestrator_nothing_it_did_not_have(orchestrator):
+    await _run_action(None)
+
+    [payload] = orchestrator.inputs
+    assert payload["session_id"] is None
+    assert payload["user_id"] is None
+    minted = [s for s in _strings(payload) if _uuid_shaped(s)]
+    assert not minted, f"the action invented an id: {minted}"

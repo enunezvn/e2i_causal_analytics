@@ -2544,6 +2544,10 @@ async def run_causal_analysis(
             result = await orchestrator.run(
                 {
                     "query": query,
+                    # #2105: bound by execute() in a turn, None from an SDK actions/execute
+                    # request (its auth gate binds only the identity). Never minted.
+                    "session_id": _session_id_context.get(),
+                    "user_id": chat_identity.resolve_tool_user_id(_session_id_context.get()),
                     "user_context": {
                         "brand": brand,
                         "intervention": intervention,
@@ -5443,9 +5447,6 @@ async def stream_chat(
         f"user={authenticated_user_id}, request_id={effective_request_id}"
     )
 
-    # Update the request with the effective request_id
-    chat_request.request_id = effective_request_id
-
     # #1659: every frame below originates from a LangGraph node-completion
     # update, and the orchestrator is ONE node that ainvokes a nested graph — so
     # without a keepalive this body is silent for the whole turn. Measured on
@@ -5513,7 +5514,6 @@ async def chat(
 
     # Phase 1 G08: Use middleware request_id if not provided in body
     effective_request_id = chat_request.request_id or get_request_id() or "unknown"
-    chat_request.request_id = effective_request_id
 
     logger.info(
         f"[Chatbot] Chat request: query={redact_query(chat_request.query)}, "
