@@ -47,6 +47,38 @@ logger = logging.getLogger(__name__)
 F = TypeVar("F", bound=Callable[..., Any])
 
 
+def _refutation_suite_score(result: Dict[str, Any]) -> Optional[float]:
+    """The ``confidence_score`` of the ``refutation`` audit row (#2127).
+
+    Definition (owner decision 2026-09-15): the confidence of a causal_impact
+    estimate is the refutation-suite score —
+    ``RefutationRunner._calculate_confidence_score``, the weighted mean over
+    the suite's tests (PASSED 1.0 / WARNING 0.6 / FAILED 0) that decides
+    PROCEED / REVIEW / BLOCK (BLOCK < 0.50). ``RefutationNode.execute`` returns
+    it as ``refutation_confidence``, the sibling of ``refutation_results``
+    whose ``confidence_adjustment`` is the same ``RefutationSuite
+    .confidence_score``; the explicit key is read here. The interpretation
+    row's grade (#2123) is a coarsening of the same evidence; the estimation
+    row stays NULL by definition.
+
+    Stored AS RETURNED — no clamping, rescaling or default. Absent (the
+    early-failure ``refutation_error`` shape: no suite ran) → None silently.
+    Anything but a number in [0, 1] would be a runner bug, not a value to
+    store → None plus one WARNING.
+    """
+    score = result.get("refutation_confidence")
+    if score is None:
+        return None
+    if isinstance(score, bool) or not isinstance(score, (int, float)) or not (0.0 <= score <= 1.0):
+        logger.warning(
+            "refutation_confidence=%r is not a number in [0, 1]; recording NULL on the "
+            "refutation audit row (runner bug, not a value to store) (#2127)",
+            score,
+        )
+        return None
+    return score
+
+
 def traced_node(node_name: str) -> Callable[[F], F]:
     """Decorator to add Opik tracing and audit chain recording to workflow nodes.
 
@@ -145,13 +177,23 @@ def traced_node(node_name: str) -> Callable[[F], F]:
                         output_summary["statistical_significance"] = est.get(
                             "statistical_significance"
                         )
-                        confidence_score = est.get("confidence")
+                        # confidence_score stays NULL BY DEFINITION (#2127): in
+                        # this agent's vocabulary an estimate has precision (SE,
+                        # CI, p-value), not confidence — confidence is the
+                        # refutation-suite score, recorded on the refutation
+                        # row below. EstimationResult has no ``confidence`` key
+                        # (the old ``est.get("confidence")`` read was dead on
+                        # 177/177 live rows), and the chain is append-only, so
+                        # this row cannot receive the score later.
                     elif node_name == "refutation":
                         ref = result.get("refutation_results", {})
                         output_summary["tests_passed"] = ref.get("tests_passed")
                         output_summary["overall_robust"] = ref.get("overall_robust")
                         output_summary["gate_decision"] = ref.get("gate_decision")
                         validation_passed = ref.get("overall_robust")
+                        # The confidence of a causal_impact estimate IS the
+                        # refutation-suite score (#2127); see the helper.
+                        confidence_score = _refutation_suite_score(result)
                         # add_entry calls refutation_results.to_dict() internally
                         # (audit_chain.py:345); the refutation node persists a
                         # dict via RefutationSuite.to_legacy_format() so we wrap
