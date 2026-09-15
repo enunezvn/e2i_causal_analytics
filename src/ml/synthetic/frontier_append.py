@@ -90,7 +90,7 @@ from src.ml.synthetic.generators.data_lag import (
     stamp_sequence_number,
 )
 from src.ml.synthetic.generators.model_metrics import stamp_model_metrics
-from src.ml.synthetic.generators.nbrx_series import generate_nbrx_rows
+from src.ml.synthetic.generators.nbrx_series import generate_nbrx_rows, with_nbrx
 
 logger = logging.getLogger(__name__)
 
@@ -397,7 +397,7 @@ def generate_month_cohort(month_start: date) -> Dict[str, pd.DataFrame]:
     bm["metric_id"] = [f"{prefix}_{i:04d}" for i in range(len(bm))]
     # Canonical TRx lane: the nbrx series rides beside the 60 re-keyed cohort
     # rows (own RNG + own id namespace), so appending it changes none of them.
-    bm = pd.concat([bm, generate_nbrx_rows(bm)], ignore_index=True)
+    bm = with_nbrx(bm)
     return {"business_metrics": bm}
 
 

@@ -66,7 +66,7 @@ from src.ml.synthetic.generators.experiment_generator import (
 from src.ml.synthetic.generators.feedback_generator import FeedbackGenerator
 from src.ml.synthetic.generators.mlops_generator import MLOpsGenerator
 from src.ml.synthetic.generators.model_metrics import stamp_model_metrics
-from src.ml.synthetic.generators.nbrx_series import generate_nbrx_rows
+from src.ml.synthetic.generators.nbrx_series import with_nbrx
 from src.ml.synthetic.generators.observability_generator import ObservabilityGenerator
 from src.ml.synthetic.loaders import BatchLoader, LoaderConfig
 
@@ -101,6 +101,31 @@ SMALL_SIZES = {
     "business_metrics": 1000,
     "feature_values": 5000,
 }
+
+
+def build_business_metrics_dataset(
+    n_records: int,
+    seed: int = 42,
+    id_prefix: str = "",
+    anchor_to_now: bool = False,
+    anchor_reference: Optional[date] = None,
+) -> pd.DataFrame:
+    """The DR loader's business_metrics frame: the frozen stream plus its nbrx rows.
+
+    Extracted from generate_datasets (canonical TRx lane, codex r2) so the nbrx
+    reproduction contract test runs the loader's real configuration. The config
+    keeps the DEFAULT start_date, so the monthly window ends at the run month
+    (see the #1566 note in generate_datasets).
+    """
+    bm_config = GeneratorConfig(
+        id_prefix=id_prefix,
+        seed=seed,
+        anchor_to_now=anchor_to_now,
+        anchor_reference=anchor_reference,
+        n_records=n_records,
+    )
+    # Canonical TRx lane: nbrx is generated beside the stream, never inside it.
+    return with_nbrx(BusinessMetricsGenerator(bm_config).generate())
 
 
 def generate_datasets(
@@ -236,16 +261,13 @@ def generate_datasets(
     # cohorts would no longer sit on the new base's trend line — re-freeze
     # BM_TREND_ORIGIN to the new base's first month in the same change.
     logger.info(f"Generating {sizes['business_metrics']:,} business metrics...")
-    bm_config = GeneratorConfig(
-        id_prefix=id_prefix,
+    bm_df = build_business_metrics_dataset(
+        sizes["business_metrics"],
         seed=seed,
+        id_prefix=id_prefix,
         anchor_to_now=anchor_to_now,
         anchor_reference=anchor_reference,
-        n_records=sizes["business_metrics"],
     )
-    bm_df = BusinessMetricsGenerator(bm_config).generate()
-    # Canonical TRx lane: nbrx is generated beside the stream, never inside it.
-    bm_df = pd.concat([bm_df, generate_nbrx_rows(bm_df)], ignore_index=True)
     datasets["business_metrics"] = bm_df
     logger.info(f"  Generated {len(bm_df):,} business metrics")
 
