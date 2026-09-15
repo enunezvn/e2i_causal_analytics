@@ -1590,3 +1590,108 @@ def test_a_non_volume_kpi_ignores_the_mixed_scope_too(monkeypatch) -> None:
     assert isinstance(resolved, dict), resolved
     assert resolved["analysis_results"][0]["analysis_type"] == "kpi_lookup"
     assert stub.calls == [("WS3-BI-009", {"brand": "Kisqali"})]
+
+
+# --------------------------------------------------------------------------
+# #2114 codex r3 HIGH — a BLANK structured brand is not a decision. The gate
+# skips the clarify when a structured source supplied a brand, and
+# `_structured_brand` mapped "" to None but returned " " and "\t\n" unchanged,
+# so a whitespace-only `user_context.brand` re-opened the two-scope leak 10c
+# closed: the ask reached the calculator and was answered for one brand.
+#
+# Measured 2026-09-15, both ingresses: the typed-entities path was ALREADY
+# correct -- `_entity_value` tests `ent["value"].strip()`, so every blank form
+# is treated as absent. Only the `user_context` path had the gap. These tests
+# pin both so the two ingresses can never drift apart again.
+# --------------------------------------------------------------------------
+
+BLANK_BRANDS = ["", " ", "\t\n", "   \t "]
+
+
+@pytest.mark.parametrize("blank", BLANK_BRANDS)
+def test_a_blank_user_context_brand_is_not_a_decision(monkeypatch, blank) -> None:
+    """A brand of whitespace names nobody, so it must not suppress the clarify:
+    the mixed-scope ask still asks, names both candidates, binds no figure and
+    makes ZERO engine calls."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    agent_input = _agent_input(MIXED_SCOPE_QUERY)
+    agent_input["user_context"] = {"brand": blank}
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](agent_input, _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    payload = resolved["analysis_results"][0]
+    assert payload["analysis_type"] == "kpi_lookup_clarification"
+    assert payload["ambiguous_brands"] == ["Kisqali", "Fabhalta"]
+    assert "value" not in payload
+    for brand in ("Kisqali", "Fabhalta"):
+        assert brand in payload["key_findings"][0], payload["key_findings"]
+    assert stub.calls == []
+
+
+@pytest.mark.parametrize("blank", BLANK_BRANDS)
+def test_a_blank_typed_entity_brand_is_not_a_decision(monkeypatch, blank) -> None:
+    """The other structured ingress, held to the SAME rule. This path was
+    already correct (``_entity_value`` filters on ``.strip()``); pinned here so
+    a future edit cannot make the two ingresses disagree."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    agent_input = _agent_input(MIXED_SCOPE_QUERY)
+    agent_input["parsed_query"] = {"entities": [{"type": "brand", "value": blank}]}
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](agent_input, _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    payload = resolved["analysis_results"][0]
+    assert payload["analysis_type"] == "kpi_lookup_clarification"
+    assert payload["ambiguous_brands"] == ["Kisqali", "Fabhalta"]
+    assert stub.calls == []
+
+
+@pytest.mark.parametrize("blank", BLANK_BRANDS)
+def test_blank_structured_brands_agree_across_both_ingresses(blank) -> None:
+    """The seam itself, stated once: every blank form reads as 'nobody decided'
+    whichever structured source carried it."""
+    from_ctx = {"query": MIXED_SCOPE_QUERY, "user_context": {"brand": blank}}
+    from_entities = {
+        "query": MIXED_SCOPE_QUERY,
+        "parsed_query": {"entities": [{"type": "brand", "value": blank}]},
+    }
+    assert disp._structured_brand(from_ctx) is None, blank
+    assert disp._structured_brand(from_entities) is None, blank
+
+
+def test_a_blank_context_brand_falls_through_to_the_text_scan() -> None:
+    """The consequence of fixing the seam, pinned deliberately: a blank context
+    brand now behaves EXACTLY like an absent one for cohort resolution too --
+    which is how "" has always behaved -- so `_extract_brand_region` reaches the
+    #1351 text scan instead of handing ' ' to a case-sensitive brand predicate
+    that can match no row."""
+    blank_ctx = {
+        "query": MIXED_SCOPE_QUERY,
+        "user_context": {"brand": " "},
+        "parsed_query": {"entities": []},
+    }
+    absent_ctx = {
+        "query": MIXED_SCOPE_QUERY,
+        "user_context": {},
+        "parsed_query": {"entities": []},
+    }
+    assert disp._extract_brand_region(blank_ctx) == disp._extract_brand_region(absent_ctx)
+    assert disp._extract_brand_region(blank_ctx) == ("Kisqali", None)
+
+    brandless = {"query": "What is NBRx?", "user_context": {"brand": "\t"}, "parsed_query": {}}
+    assert disp._extract_brand_region(brandless) == (None, None)
+
+
+def test_a_real_structured_brand_is_still_a_decision(monkeypatch) -> None:
+    """The guard must not over-reach: a genuine brand still wins the mixed-scope
+    ask, exactly as the 10c pin requires."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    agent_input = _agent_input(MIXED_SCOPE_QUERY)
+    agent_input["user_context"] = {"brand": "Fabhalta"}
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](agent_input, _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["analysis_type"] == "kpi_lookup"
+    assert stub.calls == [("WS3-BI-007", {"brand": "Fabhalta"})]

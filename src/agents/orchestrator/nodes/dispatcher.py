@@ -220,13 +220,13 @@ def _entity_value(payload: Dict[str, Any], entity_type: str) -> Optional[str]:
 
 def _structured_brand(payload: Dict[str, Any]) -> Optional[str]:
     """The brand a STRUCTURED source decided on: typed NLP entities, else the
-    ``user_context`` a chat caller stashed. ``None`` means nobody decided — the
-    ask text may still ground brands, but that is evidence, not a decision
-    (#2114: the clarify gate turns on exactly this distinction)."""
+    ``user_context`` a chat caller stashed — a BLANK value decides nothing, so
+    both ingresses read it as absent (``_entity_value``'s own ``.strip()`` rule).
+    ``None`` means nobody decided; ask text is evidence, not a decision (#2114)."""
     brand = _entity_value(payload, "brand")
     ctx = payload.get("user_context") or {}
     if brand is None and isinstance(ctx, dict) and isinstance(ctx.get("brand"), str):
-        brand = ctx["brand"] or None
+        brand = ctx["brand"] if ctx["brand"].strip() else None
     return brand
 
 
