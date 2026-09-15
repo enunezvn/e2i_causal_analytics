@@ -143,8 +143,8 @@ Changelog:
              Root cause: AG-UI LangGraph's state management may not preserve custom
              fields from RunAgentInput.state when passing to graph nodes.
              Fix: execute() sets a session contextvar that chat_node() reads first,
-             with state and config.thread_id as fallbacks. (#2064: on the AG-UI
-             route keepalive copies the context, so graph state is the channel.)
+             with state and config.thread_id as fallbacks. (#2064 made graph
+             state the channel; #2100 revived the var, and the two now agree.)
     1.21.0 - Added message persistence to Supabase chatbot_messages table.
              All user messages, assistant responses, tool calls, and synthesized responses
              are now persisted using ChatbotMessageRepository. This enables:
@@ -363,11 +363,11 @@ from src.utils.tool_evidence import evidence_tool_count
 
 logger = logging.getLogger(__name__)
 
-# ``_session_id_context`` (imported above) carries session_id only where no
-# keepalive wrapper sits between it and the graph, e.g. the chat bridge; on the
-# AG-UI route keepalive copies the context per frame, so graph STATE is the real
-# channel there (#2064). The variable is declared in chatbot_tools so the chat
-# tools read the same binding; the name stays for readers here and chat_bridge.
+# ``_session_id_context`` (imported above) is declared in chatbot_tools so the
+# chat tools read the same binding. AG-UI's execute() and the chat bridge bind
+# it; /chat/stream binds its tools from state, via SessionBoundToolNode. The
+# keepalive's per-frame tasks used to drop it on the AG-UI route, which is why
+# graph STATE is the channel the nodes read (#2064); #2100 gave them one context.
 
 # Per-run discriminator for frontend_message_id stamping: the session key is
 # the conversation threadId, so overlapping streams in the same conversation
@@ -1198,14 +1198,14 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         # state's run_id into _persist_message_sync as the fallback.
         state_with_session["run_id"] = run_id
 
-        # Also bind the context var (v1.21.1). It does NOT reach graph nodes here
-        # (#2064: keepalive copies the context), so state above is the real channel.
+        # Also bind the context var (v1.21.1). The keepalive's per-frame tasks
+        # used to drop it (#2064), so state above is the channel; #2100 revived it.
         _session_id_context.set(persistent_session_id)
         _run_id_context.set(run_id)
         # Attribute this run's LLM usage to the chat user/session (admin
         # observability, spec 2026-07-12). Both capture hooks read this
-        # contextvar; the user_id is derived from the session prefix and the
-        # anonymous UUID maps to NULL — attribution is honest-only.
+        # contextvar; the user_id is the verified request user (#2077), the
+        # session prefix only as fallback, else NULL — attribution is honest-only.
         set_chat_attribution(persistent_session_id, run_id)
         dbg(f"Set session_id in state and context var: {persistent_session_id[:20]}...")
 
@@ -3559,8 +3559,8 @@ def create_e2i_chat_agent(
 
         messages = state.get("messages", [])
 
-        # Get session_id with priority: context var > state > config. The var is set
-        # only where no keepalive wrapper intervenes; here it is empty (#2064).
+        # Get session_id with priority: context var > state > config. Since #2100
+        # the var reaches here too; execute() sets both, nothing checks they match.
         session_id = _session_id_context.get()
         session_id_source = "context_var" if session_id else None
 
@@ -4704,7 +4704,7 @@ async def copilotkit_custom_handler(
                 # Extract parameters - check both nested body and top level (AG-UI protocol varies)
                 # Some SDK versions send {"method": "agent/run", "body": {"threadId": ..., "messages": [...]}}
                 # Others send {"method": "agent/run", "threadId": ..., "messages": [...]}
-                thread_id = chat_identity.owned_thread_id(body_json, request, TESTING_MODE)
+                thread_id = await chat_identity.owned_thread_id(body_json, request, TESTING_MODE)
                 if thread_id is None:
                     return JSONResponse(status_code=403, content={"error": "threadId not yours"})
                 state = body_data.get("state") or body_json.get("state") or {}
@@ -4878,7 +4878,7 @@ async def copilotkit_custom_handler(
         body_bytes = b""
 
     # #2077: same thread-ownership policy as the root branch, which never ran here.
-    if method != "OPTIONS" and chat_identity.sdk_thread_denied(body_bytes, request, TESTING_MODE):
+    if await chat_identity.sdk_thread_denied(body_bytes, request, TESTING_MODE, method):
         return JSONResponse(status_code=403, content={"error": "threadId not yours"})
 
     # For all other paths, delegate to SDK handler
@@ -5097,7 +5097,7 @@ _EMPTY_STREAM_FALLBACK = (
 )
 
 
-def _resolve_chat_identity(authenticated_user: Dict[str, Any], chat_request: ChatRequest) -> str:
+async def _resolve_chat_identity(authenticated_user: dict, chat_request: ChatRequest) -> str:
     """Resolve the authoritative chat identity from the authenticated token.
 
     Finding 1 [HIGH IDOR]: ``ChatRequest.user_id`` was a required request-body
@@ -5131,7 +5131,7 @@ def _resolve_chat_identity(authenticated_user: Dict[str, Any], chat_request: Cha
             detail="Authenticated user identity is missing.",
         )
 
-    return chat_identity.authorize_chat_identity(token_user_id, chat_request, TESTING_MODE)
+    return await chat_identity.authorize_chat_identity(token_user_id, chat_request, TESTING_MODE)
 
 
 def _resolve_chat_brand(authenticated_user: Dict[str, Any], requested_brand: Optional[str]) -> str:
@@ -5431,7 +5431,7 @@ async def stream_chat(
         }
     """
     # Finding 1: derive identity from the authenticated token, never the body.
-    authenticated_user_id = _resolve_chat_identity(_user, chat_request)
+    authenticated_user_id = await _resolve_chat_identity(_user, chat_request)
     # H1 (#694): a brand_context outside the caller's grants would let them poison
     # another tenant's scoped causal-graph view via store_causal_path -> reject.
     chat_request.brand_context = _resolve_chat_brand(_user, chat_request.brand_context)
@@ -5507,7 +5507,7 @@ async def chat(
     # Finding 1: derive identity from the authenticated token, never the body.
     # (Outside the try/except so a 403 propagates instead of being swallowed
     # into a 200 error body.)
-    authenticated_user_id = _resolve_chat_identity(_user, chat_request)
+    authenticated_user_id = await _resolve_chat_identity(_user, chat_request)
     # H1 (#694): a brand_context outside the caller's grants would let them poison
     # another tenant's scoped causal-graph view via store_causal_path -> reject.
     chat_request.brand_context = _resolve_chat_brand(_user, chat_request.brand_context)

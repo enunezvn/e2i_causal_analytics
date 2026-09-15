@@ -4,12 +4,21 @@
 module answers *which user*, from the same kind of channel: one the tools can
 actually read at the moment they run.
 
-The issue proposed ``llm_attribution.get_attribution().user_id``. Measured false
-on the browser route: the AG-UI handler streams ``execute()`` through
-``with_sse_keepalive``, which pulls every frame in a fresh task, so the
-attribution set while one frame is produced is gone by the next pull — which is
-why chat LLM usage has been recording ``surface='other', user_id=NULL`` since
-2026-08-16. Two channels do survive into the tools:
+The issue proposed ``llm_attribution.get_attribution().user_id``. That was
+measured dead on the browser route when this module was written: the AG-UI
+handler streams ``execute()`` through ``with_sse_keepalive``, which pulled every
+frame in a fresh task, so the attribution set while one frame was produced was
+gone by the next pull — which is why chat LLM usage recorded ``surface='other',
+user_id=NULL`` from 2026-08-16 until #2100 gave those pulls one shared context.
+
+It is readable again, and this module still does not read it. Attribution is a
+DERIVED value, and derived by this very module: ``set_chat_attribution`` resolves
+its ``user_id`` through the same ``resolve_session_user_id`` that
+``resolve_tool_user_id`` below delegates to, so the two cannot disagree and
+neither can promote the session prefix over a verified id. Reading the
+attribution here would be a hop to an answer already computed, and would make
+tool identity depend on whether some entry point called ``set_chat_attribution``
+first. Both channels survive into the tools; this module reads them directly:
 
 * the session itself, for the ``{user}~{session}`` ids ``/chat/stream`` mints
   (and their ``~bridge`` shadow, which splits on the first ``~`` the way every
@@ -45,12 +54,150 @@ from typing import Any, Dict, List, Optional, Protocol
 
 from fastapi import HTTPException, status
 
+from src.memory.services.factories import get_async_supabase_client
+from src.repositories.chatbot_conversation import ChatbotConversationRepository
 from src.utils.llm_attribution import (
+    ANONYMOUS_USER_ID,
+    get_authenticated_user_id,
     resolve_session_user_id,
     set_authenticated_user,
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def thread_owner_denied(thread_id: Optional[str], token_user_id: Optional[str]) -> bool:
+    """True when an EXISTING conversation belongs to someone other than the caller.
+
+    #2077 refused a foreign ``{owner}~{uuid}`` PREFIX, which is a claim the body
+    carries. This answers the other half (#2107): the stored owner of a thread
+    that already exists. CopilotKit mints bare uuids with no prefix, so the
+    prefix check never saw them — token X could send Y's thread id and the turn
+    would run inside Y's conversation, taking Y's last ten messages into the
+    prompt (``chatbot_graph.py:~1006``) and writing messages that migration
+    123's trigger stamps with Y's ``user_id``. Service-role clients bypass RLS
+    (``supabase_client.py:~36``, ``factories.py:~759``), so an application-side
+    check is the only gate there can be.
+
+    **Raises nothing a failing lookup can produce.** The AG-UI call site sits
+    inside the handler's broad ``except``, which falls through to the *ungated*
+    SDK path — an ordinary exception here would defeat the very check it
+    performs. Returns a bool; each caller answers 403 itself. Cancellation is
+    the deliberate exception: ``CancelledError`` is a ``BaseException`` and is
+    left to propagate, because a turn that is being torn down should not be
+    reported as allowed.
+
+    Rules, in order:
+
+    1. nothing to compare (no thread, or no verified caller) -> allow, no query;
+    2. no such conversation -> allow. This is #1405's arbitrary-thread support
+       and it is what keeps every NEW bare thread working;
+    3. the caller owns it -> allow;
+    4. the anonymous sentinel owns it -> allow, at INFO. The sentinel records
+       the ABSENCE of an identity: those rows predate #1405's JWT attribution,
+       so there is nobody to protect and nothing to back-fill from;
+    5. anyone else owns it -> deny, at WARNING, naming no ids;
+    6. the lookup failed -> allow, at WARNING. Fail-OPEN is deliberate: the
+       write and the read that constitute the harm go through this same
+       database, so an outage that blinds the check equally disables what it
+       protects, while fail-closed would 403 every chat user during a hiccup.
+    """
+    if not thread_id or not token_user_id:
+        return False
+    try:
+        client = await get_async_supabase_client()
+        if not client:
+            # Without a client the repository answers None, which is also how it
+            # reports "no such conversation" — so a check that never RAN would
+            # otherwise be indistinguishable in the log from one that ran and
+            # allowed. Say which happened.
+            logger.warning(
+                "[Chat] No conversation store client; the owner check did not run "
+                "and the turn is allowed (fail-open, #2107)."
+            )
+            return False
+        repository = ChatbotConversationRepository(supabase_client=client)
+        conversation = await repository.get_by_session_id(thread_id)
+    except Exception:
+        logger.warning(
+            "[Chat] Thread owner lookup failed; allowing the turn (fail-open, #2107). "
+            "The conversation store this check reads is the same one the turn writes.",
+            exc_info=True,
+        )
+        return False
+    if not conversation:
+        return False
+    return _owner_denies(conversation.get("user_id"), token_user_id)
+
+
+def _owner_denies(owner: Optional[str], token_user_id: Optional[str]) -> bool:
+    """Does this stored owner refuse this caller? The comparison, without the lookup.
+
+    Split out so the route seams and the in-turn tool seam decide ownership by
+    the same rules while each spends only ONE primary-key read: the tool needs
+    the conversation row itself, and re-deriving the verdict from a second
+    lookup would be both slower and a chance for the two to drift.
+    """
+    if not owner or not token_user_id or owner == token_user_id:
+        return False
+    if owner == ANONYMOUS_USER_ID:
+        logger.info(
+            "[Chat] Existing conversation has the anonymous sentinel owner; "
+            "treating it as unowned and allowing the turn (#2107)."
+        )
+        return False
+    logger.warning(
+        "[Chatbot] Rejected threadId ownership (possible IDOR): the conversation "
+        "already exists and is owned by another user"
+    )
+    return True
+
+
+async def owned_conversation(
+    conversation_repository: Any, session_id: Optional[str]
+) -> Optional[Dict[str, Any]]:
+    """The conversation a chat TOOL may read, or None when it is not the caller's.
+
+    The route seams close the boundary at the edge of a turn, but the guarantee
+    has a hole INSIDE an allowed turn: ``conversation_memory_tool`` takes a
+    session id the MODEL supplies, so a caller sitting in their own conversation
+    can steer it into naming someone else's and read that history back. Being
+    inside an authorized conversation does not make a second conversation yours.
+
+    The caller is the bound verified identity — the channel the route set and
+    the one the other tools resolve from — never anything in the tool argument,
+    which is a claim. No verified caller means no comparison is possible, so the
+    read still proceeds (the unauthenticated and TESTING_MODE paths keep their
+    behaviour) — but it WARNS, like every fail-open path on the route seams. An
+    empty channel inside the AG-UI graph is a real regression class, and an
+    operator must be able to tell a check that passed from one that never ran.
+
+    A refusal returns None, which is the tool's existing "not found" shape: deny
+    and nonexistent are deliberately indistinguishable, so the tool is not an
+    existence oracle for other people's sessions. A lookup FAILURE still raises
+    into the tool's own ``except``, which is today's behaviour for a store that
+    is down — unlike the route seams, there is a handler here already.
+
+    #2105 owns replacing the model-supplied argument with the bound session;
+    until then this is what makes keeping it safe.
+    """
+    if not session_id:
+        return None
+    conversation: Optional[Dict[str, Any]] = await conversation_repository.get_by_session_id(
+        session_id
+    )
+    if not conversation:
+        return None
+    caller = get_authenticated_user_id()
+    if not caller:
+        logger.warning(
+            "[Chat] No verified caller bound; the conversation owner check did not "
+            "run and the history read is allowed (fail-open, #2107)."
+        )
+        return conversation
+    if _owner_denies(conversation.get("user_id"), caller):
+        return None
+    return conversation
 
 
 def resolve_tool_user_id(session_id: Optional[str]) -> Optional[str]:
@@ -175,7 +322,9 @@ class ChatClaims(Protocol):
     def session_id(self) -> Optional[str]: ...
 
 
-def authorize_chat_identity(token_user_id: str, claims: ChatClaims, testing_mode: bool) -> str:
+async def authorize_chat_identity(
+    token_user_id: str, claims: ChatClaims, testing_mode: bool
+) -> str:
     """Vet a chat request's owner claims, bind the verified identity, return it.
 
     The binding is the point #2077 was missing on ``/chat`` and ``/chat/stream``:
@@ -183,10 +332,26 @@ def authorize_chat_identity(token_user_id: str, claims: ChatClaims, testing_mode
     TOOLS read empty, so on a bare-uuid session every composition recorded a NULL
     owner and #2095's owner gate took its absent-pass branch. Binding here — in
     the request task, before the graph or the SSE body starts — is the same
-    channel the AG-UI route uses, and it survives the keepalive wrapper's
-    per-frame tasks because they copy the context that already carries it.
+    channel the AG-UI route uses, and it survives the keepalive wrapper, whose
+    frame pulls all share one context copied from the task that binds it here.
+
+    #2107 adds the stored-owner half of the claim check. Raising is correct
+    HERE, unlike on the AG-UI seam: both callers resolve the identity OUTSIDE
+    their try/except, precisely so a 403 propagates instead of being swallowed
+    into a 200 error body — and on ``/chat/stream`` that also puts the refusal
+    ahead of the ``StreamingResponse``, so the caller gets a real 403 rather
+    than an SSE error frame inside a 200.
+
+    Raises:
+        HTTPException: 403 when a claim, or the conversation's stored owner,
+            disagrees with the token identity.
     """
     reject_identity_mismatch(token_user_id, claims.user_id, claims.session_id, testing_mode)
+    if not testing_mode and await thread_owner_denied(claims.session_id, token_user_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Request session_id does not belong to the authenticated user.",
+        )
     set_authenticated_user(token_user_id)
     return str(token_user_id)
 
@@ -205,7 +370,21 @@ def _thread_ids(body: Any) -> List[str]:
     nested = body.get("body")
     candidates = [nested.get("threadId") if isinstance(nested, dict) else None]
     candidates.append(body.get("threadId"))
-    return [c for c in candidates if isinstance(c, str) and c]
+    # De-duplicated, order preserved: AG-UI commonly sends the SAME id at both
+    # levels, and that is one claim, not two. Precedence still decides which id
+    # the turn runs under; each DISTINCT id now costs one lookup, not two.
+    return list(dict.fromkeys(c for c in candidates if isinstance(c, str) and c))
+
+
+def _token_user_id(request: Any) -> Optional[str]:
+    """The verified id the middleware or the auth gate attached, or None.
+
+    ``request.state.user`` is the one identity on a chat request that the caller
+    did not supply; everything else in the body is a claim.
+    """
+    state = getattr(request, "state", None)
+    user = getattr(state, "user", None) if state is not None else None
+    return user.get("id") if isinstance(user, dict) else None
 
 
 def _claims_another_owner(body: Any, request: Any, testing_mode: bool) -> bool:
@@ -221,9 +400,7 @@ def _claims_another_owner(body: Any, request: Any, testing_mode: bool) -> bool:
     """
     if testing_mode:
         return False
-    state = getattr(request, "state", None)
-    user = getattr(state, "user", None) if state is not None else None
-    token_user_id = user.get("id") if isinstance(user, dict) else None
+    token_user_id = _token_user_id(request)
     if not token_user_id:
         return False
     for thread_id in _thread_ids(body):
@@ -237,30 +414,78 @@ def _claims_another_owner(body: Any, request: Any, testing_mode: bool) -> bool:
     return False
 
 
-def owned_thread_id(body_json: Dict[str, Any], request: Any, testing_mode: bool) -> Optional[str]:
+async def _claims_a_foreign_conversation(body: Any, request: Any, testing_mode: bool) -> bool:
+    """Does this body name an EXISTING conversation the caller does not own (#2107)?
+
+    The companion to ``_claims_another_owner``, which answers the same question
+    about the ``{owner}~`` prefix — syntax the caller supplies. This one reads
+    the stored owner, so it is the half that covers the bare uuids CopilotKit
+    actually mints. Same TESTING_MODE exemption, and the same lookup-failure
+    contract: ``thread_owner_denied`` swallows its own failures.
+    """
+    if testing_mode:
+        return False
+    token_user_id = _token_user_id(request)
+    if not token_user_id:
+        return False
+    for thread_id in _thread_ids(body):
+        if await thread_owner_denied(thread_id, token_user_id):
+            return True
+    return False
+
+
+async def owned_thread_id(
+    body_json: Dict[str, Any], request: Any, testing_mode: bool
+) -> Optional[str]:
     """The AG-UI turn's thread id, or None when it claims someone else's ownership.
 
     None means reject; the caller answers 403 rather than raising, because an
     exception here would be swallowed by the handler's broad except into the
     ungated SDK fallthrough.
+
+    Two claims, both refused: a foreign ``{owner}~`` prefix (#2077) and, since
+    #2107, a bare id that already names someone else's conversation. A thread
+    nobody has opened yet is still accepted — that is the arbitrary-thread
+    support #1405 documented, and every new browser turn depends on it.
     """
     if _claims_another_owner(body_json, request, testing_mode):
         return None
     claimed = _thread_ids(body_json)
-    return claimed[0] if claimed else str(uuid.uuid4())
+    if not claimed:
+        return str(uuid.uuid4())
+    if await _claims_a_foreign_conversation(body_json, request, testing_mode):
+        return None
+    return claimed[0]
 
 
-def sdk_thread_denied(body_bytes: bytes, request: Any, testing_mode: bool) -> bool:
+async def sdk_thread_denied(
+    body_bytes: bytes, request: Any, testing_mode: bool, method: str = "POST"
+) -> bool:
     """Whether the SDK sub-path body claims a thread the caller does not own.
 
-    The root branch's check never ran here: ``agent/{name}`` and
-    ``agents/execute`` reach the third-party handler through the fallthrough,
-    which delegates the body verbatim. Read the same bytes the SDK will read —
-    the stream is already buffered at this point, so nothing is consumed. An
-    unparseable body names no thread and is left to the SDK to reject.
+    The root branch's check never ran here: ``agent/{name}``, ``agents/execute``
+    and ``agent/{name}/state`` reach the third-party handler through the
+    fallthrough, which delegates the body verbatim. All three read ``threadId``
+    from the top level of that body (``copilotkit/integrations/fastapi.py``
+    :107,127,195), which is what ``_thread_ids`` reads — so one seam covers
+    every sub-path, ``/state`` included: it returns the conversation's agent
+    state, and disclosure is the same harm as execution.
+
+    Read the same bytes the SDK will read — the stream is already buffered at
+    this point, so nothing is consumed. An unparseable body names no thread and
+    is left to the SDK to reject.
+
+    ``method`` carries the preflight exemption that used to sit inline at the
+    call site: OPTIONS is a CORS negotiation with no turn behind it, so it must
+    not cost a database round trip. Taking it here keeps the call site one line
+    wide, which the module-size ratchet on ``copilotkit.py`` requires.
     """
+    if method == "OPTIONS":
+        return False
     try:
         body = json.loads(body_bytes) if body_bytes else None
     except (ValueError, TypeError):
         return False
-    return _claims_another_owner(body, request, testing_mode)
+    if _claims_another_owner(body, request, testing_mode):
+        return True
+    return await _claims_a_foreign_conversation(body, request, testing_mode)

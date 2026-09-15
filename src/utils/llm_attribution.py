@@ -74,10 +74,13 @@ def set_authenticated_user(user_id: Optional[str]) -> None:
 def get_authenticated_user_id() -> Optional[str]:
     """The token-verified user of the current request context, or None.
 
-    The public read of the fallback channel above. Unlike the attribution
-    contextvar it is set in the REQUEST task, upstream of the SSE keepalive
-    wrapper that pulls each frame in a fresh task, so it is still readable from
-    inside a chat graph's nodes (#2077).
+    The public read of the fallback channel above. It is set in the REQUEST
+    task, upstream of the SSE keepalive wrapper, so it has always been readable
+    from inside a chat graph's nodes (#2077) — including while the attribution
+    contextvar was not, because the wrapper pulled each frame in a fresh task
+    that discarded its writes. #2100 gave those pulls one shared context, so
+    both channels now survive; this one is still the honest-or-nothing source,
+    and set_chat_attribution derives its user_id from it.
     """
     return _authenticated_user_id.get()
 
