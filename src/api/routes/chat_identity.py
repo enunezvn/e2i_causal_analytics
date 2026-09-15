@@ -61,6 +61,7 @@ from src.utils.llm_attribution import (
     get_authenticated_user_id,
     resolve_session_user_id,
     set_authenticated_user,
+    set_chat_attribution,
 )
 
 logger = logging.getLogger(__name__)
@@ -354,6 +355,62 @@ async def authorize_chat_identity(
         )
     set_authenticated_user(token_user_id)
     return str(token_user_id)
+
+
+class ChatTurn(Protocol):
+    """A plain chat request whose turn ids the route seam finalises IN PLACE.
+
+    ``ChatClaims`` is read-only because the claim checks only read. This is the
+    writable view the same ``ChatRequest`` satisfies: ``session_id`` and
+    ``request_id`` are ``Optional[str]`` on the model, so the invariant mutable
+    members match exactly, and ``user_id`` stays a read-only property because
+    nothing here writes it.
+    """
+
+    @property
+    def user_id(self) -> Optional[str]: ...
+
+    session_id: Optional[str]
+    request_id: Optional[str]
+
+
+async def bind_plain_chat_turn(
+    token_user_id: str,
+    chat_request: ChatTurn,
+    testing_mode: bool,
+    fallback_request_id: Optional[str],
+) -> str:
+    """Authorize a plain chat turn, finalise its ids on the request, bind attribution.
+
+    #2119: ``set_chat_attribution`` had one caller, inside the AG-UI
+    ``execute()``. ``/chat`` and ``/chat/stream`` bound the identity channel
+    (``authorize_chat_identity``) and nothing else, so every LLM call those turns
+    made recorded ``surface='other'`` with a NULL user and session, and their
+    assistant rows drained no token usage.
+
+    The attribution needs the turn's session id, and on these routes the id did
+    not exist yet at the only point where a binding reaches every reader: the
+    REQUEST task, before the ``StreamingResponse`` is built or ``run_chatbot`` is
+    awaited (the keepalive wrapper copies that context once and every frame
+    pull shares the copy, #2100). ``_stream_chat_response`` and
+    ``create_initial_state`` each minted the id later, downstream of the graph's
+    creation. So the session is minted HERE now, in the exact ``{user}~{uuid4}``
+    shape both of those mint, and written back onto the request; for these two
+    routes the two downstream mints are unreachable because the request always
+    carries a session by the time they run. ``request_id`` is finalised the
+    same way, with the expression both routes already use, so the value bound
+    here is the value the routes log and return.
+
+    Returns the verified identity, as ``authorize_chat_identity`` does; its 403s
+    propagate unchanged, and nothing is bound when it refuses.
+    """
+    identity = await authorize_chat_identity(token_user_id, chat_request, testing_mode)
+    session_id = chat_request.session_id or f"{identity}~{uuid.uuid4()}"
+    request_id = chat_request.request_id or fallback_request_id or "unknown"
+    chat_request.session_id = session_id
+    chat_request.request_id = request_id
+    set_chat_attribution(session_id, request_id)
+    return identity
 
 
 def _thread_ids(body: Any) -> List[str]:
