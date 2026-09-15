@@ -1600,9 +1600,12 @@ def test_a_non_volume_kpi_ignores_the_mixed_scope_too(monkeypatch) -> None:
 # closed: the ask reached the calculator and was answered for one brand.
 #
 # Measured 2026-09-15, both ingresses: the typed-entities path was ALREADY
-# correct -- `_entity_value` tests `ent["value"].strip()`, so every blank form
-# is treated as absent. Only the `user_context` path had the gap. These tests
-# pin both so the two ingresses can never drift apart again.
+# correct -- it dropped every blank form before the chooser saw it. Only the
+# `user_context` path had the gap. These tests pin both so the two ingresses
+# can never drift apart again. (r5 later replaced `_entity_value` with
+# `_entity_values`, which offers EVERY entity to `first_named_scope`; blanks
+# are still absent, now because the chooser's `names_something` drops them
+# rather than because the reader filtered on `.strip()`.)
 # --------------------------------------------------------------------------
 
 BLANK_BRANDS = ["", " ", "\t\n", "   \t "]
@@ -1632,8 +1635,9 @@ def test_a_blank_user_context_brand_is_not_a_decision(monkeypatch, blank) -> Non
 @pytest.mark.parametrize("blank", BLANK_BRANDS)
 def test_a_blank_typed_entity_brand_is_not_a_decision(monkeypatch, blank) -> None:
     """The other structured ingress, held to the SAME rule. This path was
-    already correct (``_entity_value`` filters on ``.strip()``); pinned here so
-    a future edit cannot make the two ingresses disagree."""
+    already correct -- a blank entity names nobody and is dropped before any
+    decision; pinned here so a future edit cannot make the two ingresses
+    disagree."""
     stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
     agent_input = _agent_input(MIXED_SCOPE_QUERY)
     agent_input["parsed_query"] = {"entities": [{"type": "brand", "value": blank}]}

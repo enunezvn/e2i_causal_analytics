@@ -29,3 +29,32 @@ def match_nullable_column(query: Any, column: str, value: Optional[str]) -> Any:
     if value is None:
         return query.is_(column, "null")
     return query.eq(column, value)
+
+
+def escape_like_pattern(value: str) -> str:
+    """Escape PostgREST/SQL ``LIKE``/``ILIKE`` metacharacters in ``value``.
+
+    ``.ilike`` interprets its argument as a PATTERN, not a literal, so a
+    caller-supplied value containing ``%`` or ``_`` broadens the match. Escaping
+    them with the default ``\\`` escape character makes the pattern a literal,
+    whole-string, case-insensitive match -- the case-insensitivity is what the
+    caller wanted from ILIKE and is preserved; the wildcarding is not.
+
+    Backslash is escaped FIRST so the escapes added after it are not themselves
+    escaped: doing ``%`` first would turn ``"\\%"`` into ``"\\\\%"``, an escaped
+    backslash followed by a LIVE ``%``, which is the broadening this prevents.
+
+    MEASURED read-only against live ``causal_paths`` (109 rows, three brands)
+    before this moved here: unescaped ``.ilike("brand","%")`` returned all 109
+    across all three brands, and ``"Kis%"``/``"_isqali"`` each returned
+    Kisqali's 37 for an ask that named neither. Escaped, all three return 0,
+    while ``"Kisqali"`` and ``"kisqali"`` still return their own 37.
+
+    Lives here, beside :func:`match_nullable_column`, for the same #1991-debt-3
+    reason that one does: a repository filtering a caller-supplied string
+    reaches for the one definition instead of writing its own -- or, as
+    ``causal_path`` did in both of its twins, omitting it. Home chosen so no
+    layer inverts: ``src/api/repositories/`` may import ``src/repositories/``,
+    never the reverse.
+    """
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")

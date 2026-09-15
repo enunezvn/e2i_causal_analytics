@@ -465,3 +465,173 @@ def test_a_recognised_region_is_NORMALISED(monkeypatch, raw, normalised) -> None
     )
 
     assert captured["region"] == normalised
+
+
+# --------------------------------------------------------------------------
+# #2114 codex r5: the entity ingress chose its candidate BEFORE validating it,
+# one level below where r4's fix landed. `_entity_value` returned the first
+# entity whose value was `.strip()`-truthy and stopped -- and U+200B is not
+# whitespace, so a zero-width entity satisfied that test and the valid entity
+# BEHIND it was never offered to the vocabulary.
+#
+# Measured on the pre-fix code, with a positive control:
+#     [ZWSP, " Kisqali "]     -> None        (valid entity never seen)
+#     ["Xolair", " Kisqali "] -> "Xolair"
+#     [" Kisqali "]           -> "Kisqali"   <- control
+#
+# The fix offers EVERY matching entity, in order, then `user_context`, to the
+# one chooser -- so recognition decides across all candidates instead of
+# position deciding before recognition. Fifth round on this gate; the point is
+# to stop patching shapes.
+#
+# NOTE ON REACHABILITY, so a future reader weighs these correctly: NOTHING in
+# this codebase populates `parsed_query.entities` today -- `ParsedQuery` is a
+# TypedDict that is never constructed and `parsed_query` appears nowhere under
+# `src/api/`. This ingress is a declared contract awaiting its NLP producer, so
+# these tests pin a LATENT defect, not a live one. The `user_context` half of
+# the same seam IS live (chatbot_tools.py:1631).
+# --------------------------------------------------------------------------
+
+
+def _state_with_entity_list(
+    entities: Any, *, user_context: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """State whose `parsed_query.entities` is EXACTLY what the caller passes --
+    several entities of one type, or a malformed container."""
+    return {
+        "query": "What drives adoption and where are the gaps?",
+        "user_context": user_context if user_context is not None else {"user_id": "u1"},
+        "session_id": "sess-1",
+        "parsed_query": {"intent": "causal_impact", "entities": entities},
+    }
+
+
+def _ent(entity_type: str, value: Any) -> Dict[str, Any]:
+    return {"type": entity_type, "value": value, "confidence": 0.95, "source": "exact"}
+
+
+ZWSP = "​"
+
+
+def test_one_valid_brand_entity_still_resolves(monkeypatch) -> None:
+    """POSITIVE CONTROL for every multi-entity assertion below: the single-entity
+    path must work, or 'the second entity was reached' proves nothing."""
+    captured = _capture_resolver(monkeypatch)
+
+    node = DispatcherNode()
+    _resolved_input(
+        node,
+        _state_with_entity_list([_ent("brand", " Kisqali ")]),
+        _tool_composer_dispatch(),
+    )
+
+    assert captured["brand"] == "Kisqali"
+
+
+@pytest.mark.parametrize("hidden_by", [ZWSP, "﻿", "\x00", "Xolair", "NotARealBrand"])
+def test_an_earlier_entity_does_not_hide_a_later_VALID_brand(monkeypatch, hidden_by) -> None:
+    """Recognition decides, not position. A junk or unserviceable entity ahead
+    of a real one must not consume the slot."""
+    captured = _capture_resolver(monkeypatch)
+
+    node = DispatcherNode()
+    _resolved_input(
+        node,
+        _state_with_entity_list([_ent("brand", hidden_by), _ent("brand", " Kisqali ")]),
+        _tool_composer_dispatch(),
+    )
+
+    assert captured["brand"] == "Kisqali", f"{hidden_by!r} hid the valid entity behind it"
+
+
+@pytest.mark.parametrize("hidden_by", [ZWSP, "﻿", "NotARegion"])
+def test_an_earlier_entity_does_not_hide_a_later_VALID_region(monkeypatch, hidden_by) -> None:
+    """The region half of the same defect -- `_entity_value` is shared."""
+    captured = _capture_resolver(monkeypatch)
+
+    node = DispatcherNode()
+    _resolved_input(
+        node,
+        _state_with_entity_list([_ent("region", hidden_by), _ent("region", " West ")]),
+        _tool_composer_dispatch(),
+    )
+
+    assert captured["region"] == "west", f"{hidden_by!r} hid the valid entity behind it"
+
+
+def test_an_unrecognised_entity_is_still_DELIVERED_when_nothing_resolves(monkeypatch) -> None:
+    """Recognition NORMALISES and never DELETES (r4 HIGH-2, kept): when no
+    candidate resolves, the first meaningful one is still handed on so the
+    fail-closed consumer sees a decision rather than 'no scope given'."""
+    captured = _capture_resolver(monkeypatch)
+
+    node = DispatcherNode()
+    _resolved_input(
+        node,
+        _state_with_entity_list(
+            [_ent("brand", ZWSP), _ent("brand", "Xolair")],
+            user_context={"region": "west"},
+        ),
+        _tool_composer_dispatch(),
+    )
+
+    assert captured["brand"] == "Xolair"
+
+
+def test_entities_ahead_of_user_context_still_win_when_they_resolve(monkeypatch) -> None:
+    """Ordering across SOURCES is unchanged: a resolvable entity outranks the
+    stashed context, and only a candidate that names nothing is skipped."""
+    captured = _capture_resolver(monkeypatch)
+
+    node = DispatcherNode()
+    _resolved_input(
+        node,
+        _state_with_entity_list(
+            [_ent("brand", "Fabhalta")],
+            user_context={"brand": "Kisqali", "region": "west"},
+        ),
+        _tool_composer_dispatch(),
+    )
+
+    assert captured["brand"] == "Fabhalta"
+
+
+# --------------------------------------------------------------------------
+# #2114 codex r5 MEDIUM: `(parsed_query.get("entities") ... ) or []` leaves a
+# TRUTHY NON-ITERABLE container in place, so `for ent in 1` raised TypeError --
+# killing the dispatch even when a perfectly valid `user_context` brand was
+# sitting right there. Missing / None / non-dict / non-string entries were all
+# handled; this one shape was not. A malformed container means "no structured
+# entities", so the context fallback must survive it.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("malformed", [1, True, 3.5, object()])
+def test_a_malformed_entities_container_falls_back_to_user_context(monkeypatch, malformed) -> None:
+    captured = _capture_resolver(monkeypatch)
+
+    node = DispatcherNode()
+    _resolved_input(
+        node,
+        _state_with_entity_list(malformed, user_context={"brand": "Kisqali", "region": "west"}),
+        _tool_composer_dispatch(),
+    )
+
+    assert captured["brand"] == "Kisqali"
+
+
+def test_a_string_entities_container_degrades_to_absent_rather_than_raising(monkeypatch) -> None:
+    """Pinned deliberately: a str IS iterable, so this never raised -- each
+    character simply fails the dict check and the context fallback wins. Kept so
+    a later 'fix' to the container guard cannot turn a working degradation into
+    a TypeError."""
+    captured = _capture_resolver(monkeypatch)
+
+    node = DispatcherNode()
+    _resolved_input(
+        node,
+        _state_with_entity_list("abc", user_context={"brand": "Kisqali", "region": "west"}),
+        _tool_composer_dispatch(),
+    )
+
+    assert captured["brand"] == "Kisqali"

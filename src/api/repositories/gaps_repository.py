@@ -15,24 +15,23 @@ from datetime import datetime, timezone
 from typing import Any, List, Optional
 
 from src.api.routes.gaps import GapAnalysisResponse, GapAnalysisStatus
+from src.repositories.query_utils import escape_like_pattern
 
 logger = logging.getLogger(__name__)
 
 _TABLE = "gap_analyses"
 
 
-def _escape_like(value: str) -> str:
-    """Escape PostgREST/SQL ``LIKE``/``ILIKE`` metacharacters in ``value``.
-
-    The brand filter uses a case-insensitive ``.ilike`` match (see
-    ``list_completed``). ``.ilike`` interprets its argument as a *pattern*, so a
-    caller-supplied brand containing ``%`` or ``_`` (or a literal backslash)
-    would otherwise broaden the match — e.g. ``brand="%"`` matches every brand.
-    Escaping these metacharacters with the default ``\\`` escape character makes
-    the pattern a literal, whole-string, case-insensitive match. Backslash is
-    escaped first so the subsequent ``%``/``_`` escapes are not double-escaped.
-    """
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+#: Escape LIKE/ILIKE metacharacters in a caller-supplied filter value.
+#:
+#: This repository owned the only copy until #2114 found the SAME defect
+#: unescaped in BOTH ``causal_path`` twins. Promoted verbatim to
+#: :mod:`src.repositories.query_utils` so there is one definition, one
+#: docstring and one test rather than a second copy — the layering holds
+#: because ``src/api/`` may import ``src/repositories/``, never the reverse.
+#: Re-exported under the original private name so this module's call site and
+#: its tests keep reading the way they did.
+_escape_like = escape_like_pattern
 
 
 class GapsRepository:
