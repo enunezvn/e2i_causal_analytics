@@ -489,3 +489,4 @@ class TestFirstNamedScopeHasNoRejectedOptionResidue:
         assert "normalise=False" not in doc
         low = doc.lower()
         assert "region predicates are not case-sensitive" in low
+        assert "region predicates are case-sensitive" not in low
