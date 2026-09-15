@@ -27,13 +27,20 @@ def test_patient_axes_are_the_calculator_context_keys():
     assert _vf().PATIENT_AXES == ("segment", "therapy_line", "biologic", "ige_tier")
 
 
-def test_the_scale_note_carries_both_measured_numbers():
-    note = _vf().MEASURED_SCALE_NOTE
-    assert "800,349" in note and "597" in note and "2026-09-15" in note
-    # The 597 window is the data frontier's (max event_date - 30 days, inclusive),
-    # not "trailing 30 days" from the run day (which reads 572).
-    assert "2026-08-14 through 2026-09-14 inclusive" in note
-    assert "trailing" not in note
+def test_the_scale_note_is_exactly_the_measured_sentence():
+    # An independent copy, written out here rather than built from the module, so
+    # the sentence cannot drift factually and stay green (substring checks let
+    # 597 match 1597). The 597 window is the data frontier's
+    # (event_date >= max(event_date) - 30, inclusive = 2026-08-14..2026-09-14), not
+    # a trailing 30 days from the run day, which reads 572
+    # (docs/demos/results/2026-09-15_trx_canonical/scale_note_597_provenance.txt).
+    expected = (
+        "measured 2026-09-15, Kisqali canonical TRx for 2026-08 was 800,349 "
+        "(business_metrics, brand x region x calendar month) against 597 patient-panel "
+        "prescription events from 2026-08-14 through 2026-09-14 inclusive "
+        "(treatment_events), about 1,300x"
+    )
+    assert _vf().MEASURED_SCALE_NOTE == expected
 
 
 def test_one_null_dimension_rule_in_sql_and_in_python():
