@@ -120,7 +120,7 @@ def test_tool_composer_input_carries_real_dataframe(monkeypatch) -> None:
         node, _state_with_entities("Kisqali", "Northeast"), _tool_composer_dispatch()
     )
 
-    assert captured == {"brand": "Kisqali", "region": "northeast"}  # normalised (r4 option 3)
+    assert captured == {"brand": "Kisqali", "region": "Northeast"}
     assert "data" in prepared
     assert isinstance(prepared["data"], pd.DataFrame)
     assert len(prepared["data"]) == 3
@@ -148,7 +148,7 @@ def test_brand_region_fallback_to_user_context(monkeypatch) -> None:
         _tool_composer_dispatch(),
     )
 
-    assert captured == {"brand": "Fabhalta", "region": "south"}  # normalised (r4 option 3)
+    assert captured == {"brand": "Fabhalta", "region": "South"}
     assert isinstance(prepared["data"], pd.DataFrame)
 
 
@@ -237,7 +237,7 @@ def test_extract_brand_region_prefers_entities_over_user_context() -> None:
         },
         "user_context": {"brand": "Fabhalta", "region": "South"},
     }
-    assert disp._extract_brand_region(payload) == ("Kisqali", "west")  # normalised (r4 option 3)
+    assert disp._extract_brand_region(payload) == ("Kisqali", "West")
 
 
 def _kpi_frame(is_truncated: bool):
@@ -442,19 +442,12 @@ def test_an_unrecognised_region_reaches_the_resolver(monkeypatch, unserveable) -
     assert captured["region"] == unserveable
 
 
-@pytest.mark.parametrize(
-    "raw,normalised", [(" West ", "west"), ("WEST", "west"), ("South", "south")]
-)
-def test_a_recognised_region_is_NORMALISED(monkeypatch, raw, normalised) -> None:
-    """REVERSED from this task's own first cut, on measured evidence.
-
-    Option 2 returned region raw on the argument that `cohort_resolution`
-    normalises for itself. It does -- but the Branch A KPI path does not: it
-    passes `context["region"]` straight into `LOWER(region::text) = LOWER($N)`,
-    which folds CASE but never strips WHITESPACE, so a padded ' West ' matched
-    no row and the KPI failed closed on a scope the caller gave correctly.
-    Normalising here serves every consumer, including the one that cannot.
-    """
+@pytest.mark.parametrize("raw", [" West ", "WEST", "South"])
+def test_a_recognised_region_travels_RAW_not_normalised(monkeypatch, raw) -> None:
+    """Deliberate asymmetry with brand, and the reason is measured: brand needed
+    normalising because its predicate is case-sensitive, while
+    `cohort_resolution._normalize_region` already folds region casing itself. So
+    region keeps its raw form and no existing pin moves."""
     captured = _capture_resolver(monkeypatch)
 
     node = DispatcherNode()
@@ -464,4 +457,4 @@ def test_a_recognised_region_is_NORMALISED(monkeypatch, raw, normalised) -> None
         _tool_composer_dispatch(),
     )
 
-    assert captured["region"] == normalised
+    assert captured["region"] == raw

@@ -66,17 +66,11 @@ def _structured_scope(payload: Dict[str, Any], key: str, resolve: Any, **kw: Any
 
 
 def _structured_region(payload: Dict[str, Any]) -> Optional[str]:
-    """The region a STRUCTURED source decided on, NORMALISED to its census label.
-
-    Measured, not assumed: every live region predicate is
-    ``LOWER(region::text) = LOWER($N)``, which folds CASE but never strips
-    WHITESPACE — so a padded ``' West '`` from ``user_context`` matched no row
-    and the KPI failed closed on a scope the caller had given correctly.
-    ``cohort_resolution`` normalises for itself, but the Branch A KPI path passes
-    this value straight into that predicate, so the normalisation belongs here
-    where every consumer benefits (#2114 r4).
-    """
+    """The region a STRUCTURED source decided on. Returned RAW: an unresolvable
+    candidate no longer masks a servable one and a value naming nobody is
+    ``None``, but the spelling is untouched — ``cohort_resolution`` folds region
+    casing itself, so normalising here would change behaviour for no consumer."""
     from src.services.enum_labels import resolve_region_label
 
     resolve = functools.partial(resolve_region_label, allow_synonyms=True)
-    return _structured_scope(payload, "region", resolve)
+    return _structured_scope(payload, "region", resolve, normalise=False)
