@@ -643,14 +643,22 @@ class CausalMLExecutor(LibraryExecutor):
             ) = _extract_uplift_inputs_from_state(state)
 
             # #2067: say what CausalML's internal `y = (y > 0)` did to this
-            # outcome, BEFORE the fit, on the array already in hand. The
-            # collapse gate computes its statistics inside the refusal
-            # branch, so nothing is reusable from it on the passing path.
+            # outcome. Computed BEFORE the fit, on the array already in hand
+            # (the collapse gate computes its statistics inside the refusal
+            # branch, so nothing is reusable from it on the passing path),
+            # but attached to `warnings` only AFTER the fit returns (#2106):
+            # the notice speaks of "the reported `ate`", and a fit that
+            # raises reports none. The NaN case is the concrete one: the
+            # extractor passes a partially-NaN outcome through on purpose,
+            # sklearn's `check_X_y` in causalml's `UpliftTreeClassifier.fit`
+            # (causalml/inference/tree/uplift.pyx:458) raises `Input y
+            # contains NaN`, the wrapper's `estimate` turns that into
+            # `success=False` (src/causal_engine/uplift/base.py:369) and
+            # `_fit_uplift_model` re-raises it — into the fail-closed
+            # handlers below, which return `warnings` as they stand.
             binarization_warning, outcome_binarized, outcome_distinct_values = _binarization_notice(
                 y_arr, str(state.get("outcome_var"))
             )
-            if binarization_warning is not None:
-                warnings.append(binarization_warning)
 
             # Deterministic random_state: stable value so repeated calls
             # against the same state produce repeatable fits. NOT a seeded
@@ -679,6 +687,13 @@ class CausalMLExecutor(LibraryExecutor):
                 raise RuntimeError(
                     "Uplift estimation reported success but produced no uplift_scores."
                 )
+
+            # #2106: the fit returned and the payload below will carry its
+            # `ate`, so the notice about that `ate` is attached here — ahead
+            # of the metrics step so the warning order on the success path
+            # is unchanged (binarization first, then any metrics warning).
+            if binarization_warning is not None:
+                warnings.append(binarization_warning)
 
             # Best-effort auuc/qini; failure here is non-fatal but emits a warning.
             try:
