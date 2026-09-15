@@ -14,8 +14,8 @@ a query and a user context and nothing about WHO asked: no ``user_id``, no
 passes the bound session and the identity resolved from it — or None, never a
 minted value, when nothing is bound (a direct SDK ``actions/execute`` request).
 
-Only the conversation store, the message store and the orchestrator are
-doubled; the tool, its schema and the action are the real ones.
+Only the Supabase client, the conversation store, the message store and the
+orchestrator are doubled; the tool, its schema and the action are the real ones.
 """
 
 from __future__ import annotations
@@ -183,7 +183,7 @@ def orchestrator(monkeypatch) -> _RecordingOrchestrator:
 
 async def _run_action(session: Optional[str]) -> Dict[str, Any]:
     """The real action, with the session channel set as the test needs: the SDK
-    ``actions/execute`` request that reaches it binds none."""
+    action requests that reach it bind none."""
     import src.api.routes.copilotkit as ck
 
     token = ck._session_id_context.set(session)
@@ -218,7 +218,9 @@ async def test_a_bound_session_if_one_ever_is_is_forwarded_with_the_verified_cal
     """Pins the forwarding. Today nothing binds a session before this handler
     runs: ``chat_node`` binds only the backend tools and the frontend action
     schemas (``copilotkit.py:~3670``), so the backend action is reached only via
-    the SDK ``actions/execute`` request. If a caller ever binds one, it is passed."""
+    the SDK action paths, ``action/{name}`` and ``actions/execute``
+    (``patches/copilotkit/copilotkit/integrations/fastapi.py:138,183``), which
+    bind identity and no session. If a caller ever binds one, it is passed."""
     set_authenticated_user(CALLER)
 
     result = await _run_action(CALLER_THREAD)

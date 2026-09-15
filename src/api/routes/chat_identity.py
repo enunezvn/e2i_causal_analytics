@@ -183,10 +183,10 @@ async def owned_conversation(
     what keeps a model that still names one honest.
     """
     if not session_id:
-        # #2105: the model omitted the argument (as told to) and this turn bound
-        # no session — the #2100 regression class, an empty channel inside the
-        # graph. The tool answers "not found" for a conversation that exists, so
-        # the operator has to be able to see why.
+        # #2105: nothing named (or an empty id) and nothing bound for this turn.
+        # An empty session channel inside the graph is the #2100 regression
+        # class, and the tool answers "not found" without looking, so the
+        # operator has to be able to see that this is why.
         logger.warning(
             "[Chat] conversation_memory_tool called with no conversation named and none "
             "bound for this turn; answering not-found without a lookup (#2105)."
@@ -392,22 +392,26 @@ async def bind_plain_chat_turn(
 
     #2119: ``set_chat_attribution`` had one caller, inside the AG-UI
     ``execute()``. ``/chat`` and ``/chat/stream`` bound the identity channel
-    (``authorize_chat_identity``) and nothing else, so every LLM call those turns
-    made recorded ``surface='other'`` with a NULL user and session, and their
+    (``authorize_chat_identity``) and nothing else, so every metered LLM call
+    those turns made (zero-token calls are skipped, ``llm_usage_callback.py:~63``)
+    recorded ``surface='other'`` with a NULL user and session, and their
     assistant rows drained no token usage.
 
     The attribution needs the turn's session id, and on these routes the id did
-    not exist yet at the only point where a binding reaches every reader: the
-    REQUEST task, before the ``StreamingResponse`` is built or ``run_chatbot`` is
-    awaited (the keepalive wrapper copies that context once and every frame
-    pull shares the copy, #2100). ``_stream_chat_response`` and
-    ``create_initial_state`` each minted the id later, downstream of the graph's
-    creation. So the session is minted HERE now, in the exact ``{user}~{uuid4}``
-    shape both of those mint, and written back onto the request; for these two
-    routes the two downstream mints are unreachable because the request always
-    carries a session by the time they run. ``request_id`` is finalised the
-    same way, with the expression both routes already use, so the value bound
-    here is the value the routes log and return.
+    not exist yet where the binding has to be made: the REQUEST task, before the
+    ``StreamingResponse`` is built or ``run_chatbot`` is awaited — the context
+    the keepalive wrapper copies once for every frame pull (#2100) and the
+    dispatcher's thread offload of a sync agent now copies too (#2119 Part D).
+    ``_stream_chat_response`` and ``create_initial_state`` each minted the id
+    later, downstream of the graph's creation. So the session is minted HERE
+    now, in the exact ``{user}~{uuid4}`` shape both of those used, and written
+    back onto the request: the stream route's mint is deleted, and
+    ``create_initial_state``'s cannot fire from these routes because the request
+    always carries a session by then. ``request_id`` is finalised the same way,
+    with the expression both routes already use, so the value bound here is the
+    value the routes log and pass to the graph; the response's ``X-Request-ID``
+    header is the tracing middleware's own id when tracing is on
+    (``tracing.py:~253``), unchanged from before.
 
     Returns the verified identity, as ``authorize_chat_identity`` does; its 403s
     propagate unchanged, and nothing is bound when it refuses.

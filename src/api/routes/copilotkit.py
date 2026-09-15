@@ -2544,8 +2544,8 @@ async def run_causal_analysis(
             result = await orchestrator.run(
                 {
                     "query": query,
-                    # #2105: None on the SDK actions/execute path, the only one that reaches
-                    # this handler (its auth gate binds identity, no session). Never minted.
+                    # #2105: None on the SDK action paths (action/{name}, actions/execute), the
+                    # only ones reaching this handler: identity bound, no session. Never minted.
                     "session_id": _session_id_context.get(),
                     "user_id": chat_identity.resolve_tool_user_id(_session_id_context.get()),
                     "user_context": {
