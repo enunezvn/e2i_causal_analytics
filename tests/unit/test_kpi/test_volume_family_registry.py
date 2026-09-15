@@ -114,6 +114,37 @@ def test_canonical_share_has_no_event_era_threshold(registry):
     assert panel is not None and panel.target == 0.30
 
 
+def _catalog_entry(kpi_id: str) -> dict:
+    """One entry of the GENERATED frontend catalog (the artifact the charts read)."""
+    import json
+    import re
+    from pathlib import Path
+
+    catalog = (
+        Path(__file__).resolve().parents[3]
+        / "frontend"
+        / "src"
+        / "lib"
+        / "kpi-catalog.generated.ts"
+    )
+    match = re.search(rf'^\s*(\{{"id": "{kpi_id}".*?\}}),?$', catalog.read_text(), re.MULTILINE)
+    assert match, f"{kpi_id} missing from the generated catalog"
+    return json.loads(match.group(1))
+
+
+def test_both_share_kpis_stay_percentages_without_an_event_era_target():
+    """codex r1 HIGH: removing the 0.30 target also removed the only signal
+    derive_semantic_type had for WS3-BI-008, so the share silently became a
+    Number and would render 0.66 instead of 66%. Both shares declare
+    value_format: percent, so the formatting no longer depends on a threshold."""
+    canonical = _catalog_entry("WS3-BI-008")
+    assert canonical["semanticType"] == "Percentage"
+    assert "target" not in canonical, canonical
+    panel = _catalog_entry("WS3-BI-014")
+    assert panel["semanticType"] == "Percentage"
+    assert panel["target"] == 0.3
+
+
 def test_canonical_names_are_unchanged(registry):
     assert registry.get("WS3-BI-005").name == "Total Prescriptions (TRx)"
     assert registry.get("WS3-BI-006").name == "New Prescriptions (NRx)"

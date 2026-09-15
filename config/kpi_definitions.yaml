@@ -937,6 +937,10 @@ ws3_business:
       - business_metrics.brand
     view: null
     threshold: null
+    # A share renders as a percentage. Declared, not inferred: gen_kpi_catalog
+    # otherwise reads percent-ness off a 0..1 threshold band, and this KPI has no
+    # target (the event-era 0.30 assumed a third each).
+    value_format: percent
     frequency: monthly
     workstream: WS3
     windowable: clean
@@ -1057,6 +1061,9 @@ ws3_business:
       target: 0.30
       warning: 0.20
       critical: 0.10
+    # Declared for the same reason as WS3-BI-008: percent-ness must not depend on
+    # the threshold band surviving.
+    value_format: percent
     frequency: weekly
     workstream: WS3
     windowable: clean
