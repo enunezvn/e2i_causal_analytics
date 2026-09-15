@@ -59,7 +59,10 @@ class ExplainerState(TypedDict):
     conversation_history: NotRequired[List[Dict[str, Any]]]
 
     # === MEMORY INTEGRATION ===
-    session_id: NotRequired[str]  # For memory correlation
+    # Optional because the caller may have no session (#2099): the agent used to
+    # backfill a minted ``explainer_<hex12>`` here, which is a checkpointer thread
+    # id, not a conversation. NotRequired permits an absent key, not a present None.
+    session_id: NotRequired[Optional[str]]  # Caller session, or None
     memory_config: NotRequired[Dict[str, Any]]  # Memory configuration
     episodic_context: NotRequired[List[Dict[str, Any]]]  # Retrieved past explanations
     semantic_context: NotRequired[Dict[str, Any]]  # Knowledge graph entities

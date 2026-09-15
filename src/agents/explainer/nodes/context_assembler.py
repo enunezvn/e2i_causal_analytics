@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 class ConversationStoreProtocol(Protocol):
     """Protocol for conversation store."""
 
-    async def get_recent(self, session_id: Optional[str], limit: int) -> List[Dict[str, Any]]:
+    async def get_recent(self, session_id: str, limit: int) -> List[Dict[str, Any]]:
         """Get recent conversation history."""
         ...
 

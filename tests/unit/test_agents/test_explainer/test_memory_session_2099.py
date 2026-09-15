@@ -24,6 +24,8 @@ from typing import Any, Dict, List, Optional
 import pytest
 
 from src.agents.explainer.agent import ExplainerAgent
+from src.agents.explainer.nodes.context_assembler import ContextAssemblerNode
+from src.agents.explainer.nodes.deep_reasoner import DeepReasonerNode
 from src.agents.explainer.nodes.narrative_generator import NarrativeGeneratorNode
 
 _MINT_RE = re.compile(r"^explainer_[0-9a-f]{12}$")
@@ -133,49 +135,59 @@ class _RecordingHooks:
 
 
 def _node(hooks: _RecordingHooks) -> NarrativeGeneratorNode:
-    node = NarrativeGeneratorNode()
+    node = NarrativeGeneratorNode(use_llm=False)
     node._memory_hooks = hooks  # type: ignore[assignment]
     return node
 
 
+async def _reasoned_state(base_state: Dict[str, Any], analysis_results: List[Any]) -> Any:
+    """Drive the real upstream nodes, as test_narrative_generator.py does.
+
+    These tests go through ``NarrativeGeneratorNode.execute()`` rather than
+    calling ``_store_explanation_in_memory`` directly, because the behaviour
+    under test IS the guard in ``execute`` -- calling the helper straight would
+    bypass the changed line and pass on base.
+    """
+    assembled = await ContextAssemblerNode().execute(
+        {**base_state, "analysis_results": analysis_results}  # type: ignore[arg-type]
+    )
+    return await DeepReasonerNode(use_llm=False).execute(assembled)
+
+
 @pytest.mark.asyncio
-async def test_episodic_write_still_happens_without_a_session():
+async def test_episodic_write_still_happens_without_a_session(
+    base_explainer_state, sample_causal_analysis
+):
     """The guard gated the whole write; a NULL session must not silence it."""
     hooks = _RecordingHooks()
+    reasoned = await _reasoned_state(base_explainer_state, [sample_causal_analysis])
 
-    await _node(hooks)._store_explanation_in_memory(
-        session_id=None,
-        state={"query": "q", "memory_config": {}},  # type: ignore[arg-type]
-        result={"executive_summary": "s", "detailed_explanation": "d"},
-    )
+    result = await _node(hooks).execute({**reasoned, "session_id": None})
 
+    assert result["status"] == "completed"
     assert hooks.stored == [None], "the episodic explanation row was not written"
 
 
 @pytest.mark.asyncio
-async def test_session_keyed_cache_is_skipped_without_a_session():
+async def test_session_keyed_cache_is_skipped_without_a_session(
+    base_explainer_state, sample_causal_analysis
+):
     """The cache key embeds the session; None would write an unreachable key."""
     hooks = _RecordingHooks()
+    reasoned = await _reasoned_state(base_explainer_state, [sample_causal_analysis])
 
-    await _node(hooks)._store_explanation_in_memory(
-        session_id=None,
-        state={"query": "q", "memory_config": {}},  # type: ignore[arg-type]
-        result={"executive_summary": "s", "detailed_explanation": "d"},
-    )
+    await _node(hooks).execute({**reasoned, "session_id": None})
 
     assert hooks.cached == [], f"cached under a session-less key: {hooks.cached!r}"
 
 
 @pytest.mark.asyncio
-async def test_both_writes_happen_with_a_real_session():
+async def test_both_writes_happen_with_a_real_session(base_explainer_state, sample_causal_analysis):
     """The change is scoped to the session-less path."""
     hooks = _RecordingHooks()
+    reasoned = await _reasoned_state(base_explainer_state, [sample_causal_analysis])
 
-    await _node(hooks)._store_explanation_in_memory(
-        session_id=_SESSION,
-        state={"query": "q", "memory_config": {}},  # type: ignore[arg-type]
-        result={"executive_summary": "s", "detailed_explanation": "d"},
-    )
+    await _node(hooks).execute({**reasoned, "session_id": _SESSION})
 
     assert hooks.cached == [_SESSION]
     assert hooks.stored == [_SESSION]
