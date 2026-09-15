@@ -6,7 +6,7 @@ interpretation branch) forwarded ``interp["causal_confidence"]`` — a
 categorical LABEL (``"high"`` / ``"medium"`` / ``"low"`` / ``"N/A"``) — as
 ``AuditChainService.add_entry(confidence_score=...)``, which is declared
 ``Optional[float]`` and lands in ``audit_chain_entries.confidence_score
-numeric(5,4)``. Postgres refused every insert
+numeric(5,4)``. Postgres refused every insert that carried a label
 (``22P02 invalid input syntax for type numeric: "high"``); the wrapper's
 ``except Exception`` turned that into ``WARNING Failed to record audit entry``
 and continued. Measured 2026-09-15: 0 of 177 causal_impact workflows (7 d)
@@ -17,7 +17,10 @@ The node already owns the label→number mapping
 high 1.0) for the DSPy signal. The fix promotes that mapping to a module-level
 ``confidence_label_to_score`` and has the wrapper use it — same numbers, no
 guessing: an unknown label (``"N/A"``) becomes NULL in the audit row, while
-the DSPy signal keeps its historical ``0.5`` default byte-for-byte.
+the DSPy signal keeps its historical ``0.5`` default for every label the node
+writes. The one difference is unreachable from the node: a non-string label
+used to raise ``AttributeError`` inside the signal's swallowed ``try`` and now
+yields ``0.5``.
 
 Same call-shape style as ``test_audit_chain_kwargs.py`` (#355).
 """
@@ -54,8 +57,10 @@ def mock_audit_service():
 def strict_audit_service():
     """A double that enforces the ``numeric(5,4)`` column contract at the
     ``add_entry`` boundary: ``confidence_score`` must be ``None`` or a float in
-    [0, 1]. Anything else (the categorical label pre-fix) raises, exactly as
-    the real insert does — this is what the wrapper's ``except Exception``
+    [0, 1]. It rejects a superset of what the column rejects — anything but
+    ``None`` or a float in [0, 1] (an int or bool that ``numeric(5,4)`` would
+    accept is refused here too) — so the categorical label pre-fix raises just
+    as the real insert did; that is what the wrapper's ``except Exception``
     swallowed into a WARNING."""
     svc = MagicMock(spec=AuditChainService)
 
@@ -239,6 +244,34 @@ def test_confidence_label_to_score_default_is_used_for_unknown_only():
     assert confidence_label_to_score("N/A", default=0.5) == 0.5
     # A real label ignores the default.
     assert confidence_label_to_score("low", default=0.5) == 0.33
+
+
+@pytest.mark.parametrize(
+    ("label", "expected"),
+    [("high", 1.0), ("Medium", 0.66), ("low", 0.33)],
+)
+def test_mlflow_metrics_block_uses_the_same_mapping(label, expected):
+    """``_extract_mlflow_metrics`` carried its own copy of the three numbers;
+    it now calls the shared mapping. Known labels → the same values as before,
+    an unknown label leaves the metric unset (never a default), and an absent
+    label leaves it unset too."""
+    from src.agents.causal_impact.graph import _extract_mlflow_metrics
+
+    metrics = _extract_mlflow_metrics(
+        {"interpretation": {"causal_confidence": label}}, total_latency_ms=1.0
+    )
+    assert metrics["causal_confidence"] == expected
+
+
+@pytest.mark.parametrize("label", ["N/A", "bogus"])
+def test_mlflow_metrics_block_leaves_unknown_label_unset(label):
+    from src.agents.causal_impact.graph import _extract_mlflow_metrics
+
+    metrics = _extract_mlflow_metrics(
+        {"interpretation": {"causal_confidence": label}}, total_latency_ms=1.0
+    )
+    assert "causal_confidence" not in metrics
+    assert "causal_confidence" not in _extract_mlflow_metrics({}, total_latency_ms=1.0)
 
 
 def test_dspy_signal_mapping_is_byte_identical():

@@ -24,11 +24,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# The node's single label→number mapping. Shared by the DSPy training signal
-# (``InterpretationNode._confidence_to_score``) and the audit-chain wrapper
-# (``graph.traced_node``): ``audit_chain_entries.confidence_score`` is
+# The single label→number mapping for ``causal_confidence``. Shared by the
+# DSPy training signal (``InterpretationNode._confidence_to_score``), the
+# MLflow metrics block (``graph._extract_mlflow_metrics``) and the audit-chain
+# wrapper (``graph.traced_node``): ``audit_chain_entries.confidence_score`` is
 # ``numeric(5,4)`` and refused the categorical label, so the interpretation
-# entry was never written (#2123). No other numbers exist for these labels.
+# entry was never written (#2123).
 _CONFIDENCE_LABEL_SCORES: Dict[str, float] = {"low": 0.33, "medium": 0.66, "high": 1.0}
 
 
