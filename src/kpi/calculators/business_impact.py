@@ -16,6 +16,7 @@ import logging
 from typing import Any
 
 from src.kpi.calculator import KPICalculatorBase
+from src.kpi.calculators.canonical_volume import canonical_query_call
 from src.kpi.models import (
     KPIMetadata,
     KPIResult,
@@ -90,10 +91,16 @@ class BusinessImpactCalculator(KPICalculatorBase):
             "WS3-BI-002": self._calc_wau,
             "WS3-BI-003": self._calc_patient_touch_rate,
             "WS3-BI-004": self._calc_hcp_coverage,
-            "WS3-BI-005": self._calc_trx,
-            "WS3-BI-006": self._calc_nrx,
-            "WS3-BI-007": self._calc_nbrx,
-            "WS3-BI-008": self._calc_trx_share,
+            # Canonical TRx lane: TRx/NRx/NBRx/TRx Share read business_metrics
+            # (migration 143); the event-ledger calculators serve the panel ids.
+            "WS3-BI-005": lambda ctx: self._calc_canonical_volume("WS3-BI-005", ctx),
+            "WS3-BI-006": lambda ctx: self._calc_canonical_volume("WS3-BI-006", ctx),
+            "WS3-BI-007": lambda ctx: self._calc_canonical_volume("WS3-BI-007", ctx),
+            "WS3-BI-008": lambda ctx: self._calc_canonical_volume("WS3-BI-008", ctx),
+            "WS3-BI-011": self._calc_trx,
+            "WS3-BI-012": self._calc_nrx,
+            "WS3-BI-013": self._calc_nbrx,
+            "WS3-BI-014": self._calc_trx_share,
             "WS3-BI-009": self._calc_conversion_rate,
             "WS3-BI-010": self._calc_roi,
         }
@@ -345,8 +352,27 @@ class BusinessImpactCalculator(KPICalculatorBase):
             return float(result[0]["coverage"])
         raise RuntimeError("KPI WS3-BI-004 unavailable: no data for HCP coverage")
 
+    def _calc_canonical_volume(self, kpi_id: str, context: dict[str, Any]) -> float:
+        """WS3-BI-005..008 over the canonical business_metrics series (migration 143).
+
+        The headline is the latest COMPLETE calendar month (never the in-progress
+        one); ``data_through`` (that month's last day) and ``data_month`` ride the
+        context into ``KPIResult.metadata`` so every surface can cite the period.
+        """
+        query_id, params, result_key = canonical_query_call(kpi_id, context)
+        result = self._execute_query(query_id, params)
+        self._stash_data_through(context, result)
+        if result and isinstance(result[0], dict) and result[0].get("data_month") is not None:
+            context["data_month"] = result[0]["data_month"]
+        if result and result[0].get(result_key) is not None:
+            return float(result[0][result_key])
+        raise RuntimeError(
+            f"KPI {kpi_id} unavailable: no complete month of business_metrics "
+            f"{result_key} rows for this scope"
+        )
+
     def _calc_trx(self, context: dict[str, Any]) -> float:
-        """Calculate WS3-BI-005: Total Prescriptions (TRx).
+        """Calculate WS3-BI-011: patient-panel TRx (observed Rx events).
 
         Total prescription volume. No threshold (volume metric). When a region
         is supplied, routes to the region-scoped variant (migration 077); brand
@@ -371,10 +397,10 @@ class BusinessImpactCalculator(KPICalculatorBase):
         self._stash_data_through(context, result)
         if result and result[0].get("trx") is not None:
             return float(result[0]["trx"])
-        raise RuntimeError("KPI WS3-BI-005 unavailable: no data for total prescriptions (TRx)")
+        raise RuntimeError("KPI WS3-BI-011 unavailable: no data for total prescriptions (TRx)")
 
     def _calc_nrx(self, context: dict[str, Any]) -> float:
-        """Calculate WS3-BI-006: New Prescriptions (NRx).
+        """Calculate WS3-BI-012: patient-panel NRx (observed Rx events).
 
         First-time prescriptions for a patient. No threshold (volume metric).
         When a region is supplied, routes to the region-scoped variant
@@ -400,10 +426,10 @@ class BusinessImpactCalculator(KPICalculatorBase):
         self._stash_data_through(context, result)
         if result and result[0].get("nrx") is not None:
             return float(result[0]["nrx"])
-        raise RuntimeError("KPI WS3-BI-006 unavailable: no data for new prescriptions (NRx)")
+        raise RuntimeError("KPI WS3-BI-012 unavailable: no data for new prescriptions (NRx)")
 
     def _calc_nbrx(self, context: dict[str, Any]) -> float:
-        """Calculate WS3-BI-007: New-to-Brand Prescriptions (NBRx).
+        """Calculate WS3-BI-013: patient-panel NBRx (observed Rx events).
 
         First prescription of specific brand for a patient.
         No threshold (volume metric). Region/window/segment/therapy_line
@@ -414,7 +440,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
             # NBRx is new-to-brand by definition: with no brand the metric is undefined,
             # not zero. Fail loud rather than fabricate a plausible 0 prescriptions.
             raise RuntimeError(
-                "KPI WS3-BI-007 unavailable: no brand specified for new-to-brand prescriptions (NBRx)"
+                "KPI WS3-BI-013 unavailable: no brand specified for new-to-brand prescriptions (NBRx)"
             )
 
         query_id, params = self._resolve_windowed_call(
@@ -433,11 +459,11 @@ class BusinessImpactCalculator(KPICalculatorBase):
         if result and result[0].get("nbrx") is not None:
             return float(result[0]["nbrx"])
         raise RuntimeError(
-            "KPI WS3-BI-007 unavailable: no data for new-to-brand prescriptions (NBRx)"
+            "KPI WS3-BI-013 unavailable: no data for new-to-brand prescriptions (NBRx)"
         )
 
     def _calc_trx_share(self, context: dict[str, Any]) -> float:
-        """Calculate WS3-BI-008: TRx Share.
+        """Calculate WS3-BI-014: patient-panel TRx Share.
 
         A brand's share of the TRACKED PORTFOLIO's prescriptions — the
         denominator is every prescription in ``treatment_events``, and only the
@@ -455,7 +481,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
         if not brand:
             # TRx Share is a brand's share of category: with no brand the metric is
             # undefined, not zero. Fail loud rather than fabricate a plausible 0% share.
-            raise RuntimeError("KPI WS3-BI-008 unavailable: no brand specified for TRx share")
+            raise RuntimeError("KPI WS3-BI-014 unavailable: no brand specified for TRx share")
 
         window = context.get("window")
         if window is not None and (
@@ -464,7 +490,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
             or context.get("ige_tier") is not None
         ):
             raise RuntimeError(
-                "KPI WS3-BI-008: a time window on TRx share can be combined only "
+                "KPI WS3-BI-014: a time window on TRx share can be combined only "
                 "with the severity-tier (segment) or line-of-therapy axis; "
                 "windowed region/biologic/IgE-tier share variants are not "
                 "registered (migration 111 covers plain/segment/line only)."
@@ -485,7 +511,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
         self._stash_data_through(context, result)
         if result and result[0].get("share") is not None:
             return float(result[0]["share"])
-        raise RuntimeError("KPI WS3-BI-008 unavailable: no data for TRx share")
+        raise RuntimeError("KPI WS3-BI-014 unavailable: no data for TRx share")
 
     def _calc_conversion_rate(self, context: dict[str, Any]) -> float:
         """Calculate WS3-BI-009: Conversion Rate.

@@ -742,8 +742,11 @@ class TestRegistryCoherence:
             meta = registry.get(kpi_id)
             assert meta is not None, f"{kpi_id} missing from config/kpi_definitions.yaml"
             if meta.threshold is None:
-                # Volume metrics tracked without a target BY DESIGN.
-                assert kpi_id in {"WS3-BI-005", "WS3-BI-006", "WS3-BI-007"}
+                # Volume metrics tracked without a target BY DESIGN. WS3-BI-008 joined
+                # them in the canonical TRx lane: brands differ in size, so no
+                # portfolio-wide share target applies (the event-era 0.30 assumed a
+                # third each); the panel share WS3-BI-014 keeps that target.
+                assert kpi_id in {"WS3-BI-005", "WS3-BI-006", "WS3-BI-007", "WS3-BI-008"}
                 continue
             target, warning = meta.threshold.target, meta.threshold.warning
             if target is None or warning is None:
