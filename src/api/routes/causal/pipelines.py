@@ -845,6 +845,19 @@ def _get_stage_latency_ms(
     return int(output.get("total_latency_ms") or 0)
 
 
+# #2106: the two spellings of DoWhy's nonparametric-ATE identification label
+# that reach `identified_estimand`. Literals, not `str(EstimandType...)`: this
+# route module must not import dowhy at import time (see
+# test_causal_import_is_pure_1991); the 2067 test derives the first one from
+# the library so a DoWhy `__str__` change is caught there.
+_DOWHY_NONPARAMETRIC_ATE_LABELS = frozenset(
+    {
+        "EstimandType.NONPARAMETRIC_ATE",  # str(EstimandType.NONPARAMETRIC_ATE): prod
+        "nonparametric-ate",  # EstimandType.NONPARAMETRIC_ATE.value
+    }
+)
+
+
 def _extract_library_payload(
     library: str,
     output: PipelineOutput,
@@ -870,19 +883,22 @@ def _extract_library_payload(
 
     Payload keys (#2106 — one vocabulary per key, never two):
         ``identified_estimand``: DoWhy's identification label, copied verbatim
-            from its executor (``estimand_type`` such as ``nonparametric-ate``,
-            else the estimand's class name). DoWhy ONLY — it is the estimand
-            DoWhy identified from the graph, an identification step the
-            other libraries never perform; the pipeline orchestrator reads it
-            into ``identification_method``.
+            from its executor: ``str(estimand_type)`` (dowhy.py:427), which
+            for DoWhy's plain-Enum ``EstimandType`` is
+            ``EstimandType.NONPARAMETRIC_ATE`` on the real executor — not the
+            enum's value ``nonparametric-ate`` — else the estimand's class
+            name. DoWhy ONLY — it is the estimand DoWhy identified from the
+            graph, an identification step the other libraries never perform;
+            the pipeline orchestrator reads it into ``identification_method``.
         ``estimand``: what the stage's reported ``effect_estimate`` ESTIMATES,
             in one vocabulary for every branch that can say: ``"ate"`` for an
             average treatment effect on the outcome as named,
             ``"risk_difference_on_indicator_y_gt_0"`` for CausalML's
-            binarized case. DoWhy derives it only from the one label whose
-            mapping is certain (``nonparametric-ate`` → ``ate``); CausalML
-            takes it from the executor's ``outcome_binarized`` discriminator.
-            EconML carries no estimand claim today, and none is invented.
+            binarized case. DoWhy derives it only from the one identification
+            whose mapping is certain (nonparametric ATE, in either spelling of
+            ``_DOWHY_NONPARAMETRIC_ATE_LABELS`` → ``ate``); CausalML takes it
+            from the executor's ``outcome_binarized`` discriminator. EconML
+            carries no estimand claim today, and none is invented.
     """
     result_payload = _read_library_result_from_state(library, state)
     if result_payload is None:
@@ -917,11 +933,15 @@ def _extract_library_payload(
         if isinstance(estimand, str):
             payload["identified_estimand"] = estimand
             # #2106: name what the effect ESTIMATES next to what was
-            # IDENTIFIED. `nonparametric-ate` is the one DoWhy label whose
-            # estimated quantity is certain (an ATE on the outcome as named);
-            # any other label keeps its identification claim and gets no
-            # guessed `estimand`.
-            if estimand == "nonparametric-ate":
+            # IDENTIFIED. DoWhy's nonparametric ATE is the one identification
+            # whose estimated quantity is certain (an ATE on the outcome as
+            # named). It arrives in two spellings: the real executor emits
+            # `str(estimand_type)` (dowhy.py:427), and DoWhy's `EstimandType`
+            # is a plain Enum, so prod carries "EstimandType.NONPARAMETRIC_ATE"
+            # (the deployed api's dowhy stage in the #2067 live cert); the
+            # enum's value is "nonparametric-ate". Any other label keeps its
+            # identification claim and gets no guessed `estimand`.
+            if estimand in _DOWHY_NONPARAMETRIC_ATE_LABELS:
                 payload["estimand"] = "ate"
     elif library == "econml":
         ate = result_payload.get("ate") or result_payload.get("overall_ate")

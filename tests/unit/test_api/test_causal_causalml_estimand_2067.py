@@ -8,8 +8,10 @@ causalml branch of ``_extract_library_payload`` carries the estimand and the
 ``data_provenance`` honesty marker the executor sets but the route dropped.
 
 #2106: #2067 wrote that estimand under ``identified_estimand`` — the key the
-dowhy branch uses for DoWhy's own identification label (``nonparametric-ate``,
-the estimand it IDENTIFIED from the graph, a step CausalML never performs).
+dowhy branch uses for DoWhy's own identification label (``str()`` of DoWhy's
+``EstimandType`` enum, ``EstimandType.NONPARAMETRIC_ATE`` on the real
+executor: the estimand it IDENTIFIED from the graph, a step CausalML never
+performs).
 One key, two vocabularies, two meanings. The stage payload now separates them:
 ``identified_estimand`` stays DoWhy's identification label, DoWhy only;
 ``estimand`` names what the reported ``effect_estimate`` ESTIMATES, in one
@@ -221,8 +223,8 @@ def _dowhy_payload(identified_estimand: str) -> Dict[str, Any]:
 
     The dict mirrors the executor's result shape (``dowhy.py`` builds
     ``causal_effect`` and ``identified_estimand``, the latter from
-    ``_extract_estimand_label`` — DoWhy's ``estimand_type`` string, else the
-    estimand's class name).
+    ``_extract_estimand_label`` — ``str()`` of DoWhy's ``estimand_type``
+    enum, else the estimand's class name).
     """
     state = cast(
         PipelineState,
@@ -241,12 +243,30 @@ def _dowhy_payload(identified_estimand: str) -> Dict[str, Any]:
     return causal_pipelines._extract_library_payload("dowhy", output, state=state)
 
 
-def test_dowhy_nonparametric_ate_label_keeps_it_and_derives_estimand_ate() -> None:
-    # DoWhy's `nonparametric-ate` is the one identification label whose
-    # estimated quantity is certain: an ATE on the outcome as named.
-    payload = _dowhy_payload("nonparametric-ate")
+def test_dowhy_real_executor_label_is_kept_verbatim_and_derives_estimand_ate() -> None:
+    # The label the REAL executor emits: `_extract_estimand_label` returns
+    # `str(estimand_type)` (dowhy.py:427), and DoWhy's `EstimandType` is a
+    # plain Enum, so that is "EstimandType.NONPARAMETRIC_ATE" — the string
+    # the deployed api's dowhy stage carried in the #2067 live cert — not the
+    # enum's value "nonparametric-ate". The test follows the library, not a
+    # literal, so a DoWhy change to the enum's `__str__` is caught here.
+    from dowhy.causal_identifier import EstimandType
+
+    real_label = str(EstimandType.NONPARAMETRIC_ATE)
+    assert real_label != EstimandType.NONPARAMETRIC_ATE.value, real_label
+
+    payload = _dowhy_payload(real_label)
 
     assert payload["effect_estimate"] == 0.25
+    assert payload["identified_estimand"] == real_label
+    assert payload["estimand"] == "ate"
+
+
+def test_dowhy_enum_value_label_also_derives_estimand_ate() -> None:
+    # The enum's value spelling is the same certain identification; a
+    # payload that carries it (e.g. a caller that stored `.value`) maps too.
+    payload = _dowhy_payload("nonparametric-ate")
+
     assert payload["identified_estimand"] == "nonparametric-ate"
     assert payload["estimand"] == "ate"
 

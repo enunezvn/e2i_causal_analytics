@@ -418,9 +418,11 @@ class DoWhyExecutor(LibraryExecutor):
         """Derive a stable human-readable label from a DoWhy IdentifiedEstimand.
 
         DoWhy's identified_estimand object exposes an `estimand_type`
-        attribute (string-like) that identifies the identification strategy
-        (e.g., "nonparametric-ate", "backdoor"). We prefer that label;
-        fall back to the class name if estimand_type is missing.
+        attribute that identifies the identification strategy; it is DoWhy's
+        `EstimandType`, a plain Enum, so the label below is `str()` of it —
+        "EstimandType.NONPARAMETRIC_ATE", not the enum's value
+        "nonparametric-ate" (#2106). We prefer that label; fall back to the
+        class name if estimand_type is missing.
         """
         estimand_type = getattr(identified_estimand, "estimand_type", None)
         if estimand_type is not None:
