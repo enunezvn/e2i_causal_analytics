@@ -369,14 +369,13 @@ class CausalImpactAgent(SkillsMixin):
         # puts ``session_id`` in the generic payload and, for this run(dict)
         # agent, MERGES its input resolver's output into that payload
         # (dispatcher.py ``agent_input.update(resolved)``), so the session
-        # arrives here -- it was this literal that dropped it, so every
-        # dispatched turn's episodic row landed with a NULL session. Kept RAW
-        # (a composite ``{user}~{session}`` id on the plain routes, a bare
-        # thread uuid on AG-UI): never parsed or minted here. The episodic
-        # writer recovers the uuid (``_coerce_session_id``, #1404) and
-        # discovery uses ``coerce_session_uuid`` (graph_builder.py). Set only
-        # when non-empty, so the write's ``state.get("session_id") or None``
-        # stores an honest NULL for a session-less call.
+        # arrived here and this literal dropped it: since #2113 every
+        # dispatched turn's episodic row landed with a NULL session (before
+        # that, with a minted uuid). Kept RAW (a composite ``{user}~{session}``
+        # id on the plain routes, a bare thread uuid on AG-UI): never parsed or
+        # minted here. Set only when non-empty, so the write's
+        # ``state.get("session_id") or None`` stores an honest NULL for a
+        # session-less call.
         session_id = input_data.get("session_id")
         if session_id:
             state["session_id"] = session_id

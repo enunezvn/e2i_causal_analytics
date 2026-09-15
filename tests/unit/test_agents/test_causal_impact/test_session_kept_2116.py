@@ -7,14 +7,17 @@ output into the generic payload (``agent_input.update(resolved)``), so the
 heterogeneous_optimizer row carried the thread. The drop is one level down:
 ``CausalImpactAgent._initialize_state`` built the ``CausalImpactState`` literal from
 ``input_data`` and never copied ``session_id``, so the memory write at the end of the
-run read ``state.get("session_id")`` as ``None`` on every dispatched turn.
+run read ``state.get("session_id")`` as ``None`` on every dispatched turn (a NULL row
+since #2113; a minted uuid before that).
 
 Keeping the session in state exposes a second defect: ``GraphBuilderNode._run_discovery``
-did ``UUID(session_id) if session_id else None`` outside any ``try``. The plain chat
-routes carry a composite ``{user}~{session}`` id, which never parses, so once the state
-carried the session, every plain-route causal turn would have aborted discovery with a
-``ValueError``. Discovery now recovers the trailing session uuid with the shared
-``coerce_session_uuid`` (a bare uuid unchanged, ``None`` for anything malformed).
+did ``UUID(session_id) if session_id else None``. The plain chat routes carry a composite
+``{user}~{session}`` id, which never parses, so with the session in state the parse
+raised a ``ValueError`` inside ``_run_discovery``; ``execute`` catches it and records a
+``discovery_skip_reason``, so every plain-route causal turn with ``auto_discover`` set
+silently fell back to the manual DAG. Discovery now recovers the trailing session uuid
+with the shared ``coerce_session_uuid`` (a bare uuid unchanged, ``None`` for anything
+malformed).
 
 The session stays RAW in the agent's state; only discovery coerces it (for the uuid
 column the discovery runner persists into) and only the episodic writer coerces it
