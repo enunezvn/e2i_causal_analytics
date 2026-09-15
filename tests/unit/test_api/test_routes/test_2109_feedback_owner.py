@@ -59,7 +59,11 @@ SHARED_DETAIL = "threadId not yours"
 
 
 class _FakeConversations:
-    """The rows ``chatbot_conversations`` holds, keyed by its primary key."""
+    """The rows ``chatbot_conversations`` holds, keyed by its primary key.
+
+    Copied from ``test_2107_thread_owner.py`` (tests do not import tests);
+    keep in sync.
+    """
 
     def __init__(self, rows: Dict[str, str], *, raises: bool = False) -> None:
         self._rows = rows
@@ -107,7 +111,11 @@ class _FakeMessages:
 
     Honours the two filters the route resolves by — ``id`` and ``session_id`` —
     so path (a) finds the row by id and path (b) only ever sees rows of the
-    session the caller named, exactly as the real query would.
+    session the caller named, exactly as the real query would. It IGNORES the
+    ``role`` and ``metadata->>frontend_message_id`` filters: that is safe only
+    because every session here has exactly one row, so a future fixture with
+    several rows per session must honour them too or path (b) will silently
+    match the wrong row.
     """
 
     def __init__(self, rows: List[Dict[str, Any]]) -> None:
