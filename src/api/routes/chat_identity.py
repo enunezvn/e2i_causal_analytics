@@ -70,10 +70,13 @@ async def thread_owner_denied(thread_id: Optional[str], token_user_id: Optional[
     (``supabase_client.py:~36``, ``factories.py:~759``), so an application-side
     check is the only gate there can be.
 
-    **Never raises.** The AG-UI call site sits inside the handler's broad
-    ``except``, which falls through to the *ungated* SDK path — an exception
-    here would defeat the very check it performs. Returns a bool; each caller
-    answers 403 itself.
+    **Raises nothing a failing lookup can produce.** The AG-UI call site sits
+    inside the handler's broad ``except``, which falls through to the *ungated*
+    SDK path — an ordinary exception here would defeat the very check it
+    performs. Returns a bool; each caller answers 403 itself. Cancellation is
+    the deliberate exception: ``CancelledError`` is a ``BaseException`` and is
+    left to propagate, because a turn that is being torn down should not be
+    reported as allowed.
 
     Rules, in order:
 
@@ -94,12 +97,23 @@ async def thread_owner_denied(thread_id: Optional[str], token_user_id: Optional[
         return False
     try:
         client = await get_async_supabase_client()
+        if not client:
+            # Without a client the repository answers None, which is also how it
+            # reports "no such conversation" — so a check that never RAN would
+            # otherwise be indistinguishable in the log from one that ran and
+            # allowed. Say which happened.
+            logger.warning(
+                "[Chat] No conversation store client; the owner check did not run "
+                "and the turn is allowed (fail-open, #2107)."
+            )
+            return False
         repository = ChatbotConversationRepository(supabase_client=client)
         conversation = await repository.get_by_session_id(thread_id)
     except Exception:
         logger.warning(
             "[Chat] Thread owner lookup failed; allowing the turn (fail-open, #2107). "
-            "The conversation store this check reads is the same one the turn writes."
+            "The conversation store this check reads is the same one the turn writes.",
+            exc_info=True,
         )
         return False
     if not conversation:
@@ -338,7 +352,10 @@ def _thread_ids(body: Any) -> List[str]:
     nested = body.get("body")
     candidates = [nested.get("threadId") if isinstance(nested, dict) else None]
     candidates.append(body.get("threadId"))
-    return [c for c in candidates if isinstance(c, str) and c]
+    # De-duplicated, order preserved: AG-UI commonly sends the SAME id at both
+    # levels, and that is one claim, not two. Precedence still decides which id
+    # the turn runs under; each DISTINCT id now costs one lookup, not two.
+    return list(dict.fromkeys(c for c in candidates if isinstance(c, str) and c))
 
 
 def _token_user_id(request: Any) -> Optional[str]:
@@ -385,7 +402,7 @@ async def _claims_a_foreign_conversation(body: Any, request: Any, testing_mode: 
     The companion to ``_claims_another_owner``, which answers the same question
     about the ``{owner}~`` prefix — syntax the caller supplies. This one reads
     the stored owner, so it is the half that covers the bare uuids CopilotKit
-    actually mints. Same TESTING_MODE exemption, and the same never-raises
+    actually mints. Same TESTING_MODE exemption, and the same lookup-failure
     contract: ``thread_owner_denied`` swallows its own failures.
     """
     if testing_mode:

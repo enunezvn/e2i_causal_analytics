@@ -618,3 +618,46 @@ async def test_chat_stream_handler_accepts_real_traffic(session_id, chat_client,
 
     assert response.status_code == 200
     assert graph_calls["stream"] == 1
+
+
+# --------------- round 2 LOW + minors: diagnosability and one lookup per id
+
+
+async def test_a_missing_client_warns_instead_of_passing_silently(monkeypatch, caplog):
+    """Fail-open is policy, but it has to be visible.
+
+    With no client the repository returns None, which is the same answer as
+    "no such conversation" — so the gate looked like it had run and allowed,
+    when in fact it never ran at all. Those two must not read alike in a log.
+    """
+
+    async def _no_client() -> None:
+        return None
+
+    monkeypatch.setattr(chat_identity, "get_async_supabase_client", _no_client)
+
+    with caplog.at_level(logging.WARNING, logger="src.api.routes.chat_identity"):
+        denied = await chat_identity.thread_owner_denied(VICTIM_THREAD, CALLER)
+
+    assert denied is False
+    logged = " ".join(r.getMessage() for r in caplog.records)
+    assert logged, "an owner check that never ran passed silently"
+    assert VICTIM_THREAD not in logged and CALLER not in logged
+
+
+async def test_a_failing_lookup_warns_with_the_traceback(dead_lookup, caplog):
+    """A fail-open that names no cause cannot be diagnosed after the fact."""
+    with caplog.at_level(logging.WARNING, logger="src.api.routes.chat_identity"):
+        await chat_identity.thread_owner_denied(VICTIM_THREAD, CALLER)
+
+    assert any(r.exc_info for r in caplog.records), "the fail-open carried no traceback"
+
+
+async def test_a_body_naming_one_thread_twice_costs_one_lookup(conversations):
+    """AG-UI sends threadId nested AND top level; the same id is one claim."""
+    body = {"method": "agent/run", "threadId": CALLER_THREAD, "body": {"threadId": CALLER_THREAD}}
+
+    resolved = await chat_identity.owned_thread_id(body, _request("", b"", {"id": CALLER}), False)
+
+    assert resolved == CALLER_THREAD
+    assert conversations.lookups == [CALLER_THREAD]
