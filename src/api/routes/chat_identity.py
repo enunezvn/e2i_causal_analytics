@@ -158,8 +158,10 @@ async def owned_conversation(
     The caller is the bound verified identity — the channel the route set and
     the one the other tools resolve from — never anything in the tool argument,
     which is a claim. No verified caller means no comparison is possible, so the
-    read proceeds exactly as it did before (the unauthenticated and TESTING_MODE
-    paths are unchanged).
+    read still proceeds (the unauthenticated and TESTING_MODE paths keep their
+    behaviour) — but it WARNS, like every fail-open path on the route seams. An
+    empty channel inside the AG-UI graph is a real regression class, and an
+    operator must be able to tell a check that passed from one that never ran.
 
     A refusal returns None, which is the tool's existing "not found" shape: deny
     and nonexistent are deliberately indistinguishable, so the tool is not an
@@ -177,7 +179,14 @@ async def owned_conversation(
     )
     if not conversation:
         return None
-    if _owner_denies(conversation.get("user_id"), get_authenticated_user_id()):
+    caller = get_authenticated_user_id()
+    if not caller:
+        logger.warning(
+            "[Chat] No verified caller bound; the conversation owner check did not "
+            "run and the history read is allowed (fail-open, #2107)."
+        )
+        return conversation
+    if _owner_denies(conversation.get("user_id"), caller):
         return None
     return conversation
 

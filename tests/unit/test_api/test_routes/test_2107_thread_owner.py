@@ -661,3 +661,36 @@ async def test_a_body_naming_one_thread_twice_costs_one_lookup(conversations):
 
     assert resolved == CALLER_THREAD
     assert conversations.lookups == [CALLER_THREAD]
+
+
+# ------ round 3: an unbound caller allows the read, but never silently
+
+
+@pytest.fixture
+def unbound_caller():
+    """No verified identity in the channel the tool guard reads."""
+    from src.utils.llm_attribution import set_authenticated_user
+
+    set_authenticated_user(None)
+    yield
+    set_authenticated_user(None)
+
+
+async def test_an_unbound_caller_allows_the_read_but_says_so(
+    memory_tool, unbound_caller, conversations, caplog
+):
+    """An empty attribution channel inside the AG-UI graph is the regression
+    class #2100 is repairing, and here it silently disables the owner check.
+
+    The allow stays — with no verified caller there is nothing to compare, and
+    fail-open is the lane's policy — but the route seams WARN on every one of
+    their fail-open paths and this one did not, so an operator could not tell
+    an owner check that passed from one that never ran.
+    """
+    with caplog.at_level(logging.WARNING, logger="src.api.routes.chat_identity"):
+        result = await memory_tool.ainvoke({"session_id": VICTIM_THREAD})
+
+    assert result["success"] is True, "policy changed: the unbound read must still be allowed"
+    logged = " ".join(r.getMessage() for r in caplog.records)
+    assert logged, "an owner check that never ran passed silently"
+    assert VICTIM not in logged and VICTIM_THREAD not in logged
