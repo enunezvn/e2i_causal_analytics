@@ -31,6 +31,14 @@ Supabase/parquet frames, not graph node attributes — `imputation_audit.py`
 already covers missingness upstream); FalkorDB multi-graph counterfactual
 branching (DoWhy counterfactuals + `src/digital_twin` cover what-if).
 
+## Decisions taken (user, 2026-09-15)
+
+| Decision | Call | Consequence in this plan |
+|---|---|---|
+| Plant a spillover in the synthetic DGP | **Yes, both channels, kept simple** | Phase 3 ships the within-patient trigger spillover AND a minimal shared-patient HCP graph (patients assigned to 1–2 HCPs). Both opt-in, defaults leave today's output byte-identical. |
+| KG edges may shape DAGs shipped on real data | **No, at this time** | Phase 5's real-track tier hints are DEFERRED. The synthetic-only gold-standard prior gate stays as a low-priority, no-shipped-output-change item. |
+| Optum joins the graph | **Build and validate the join; do NOT re-persist / analyse Optum yet** | Phase 4 is split: 4a (crosswalk property + validation on the in-process FalkorDB fake and the synthetic shared-patient cohort) is in scope; 4b (Optum re-persist with `--replace` and the peer-diffusion report) waits for an explicit go. |
+
 ## Two tracks, two roles (user direction 2026-09-15: "use both")
 
 | Track | Role | Why |
@@ -119,7 +127,7 @@ Pure, frame-level functions; no DB; unit-tested on real-shaped frames (no mocks)
   `window_days=30` (the KPI's own window). Nothing fabricated: the keys are
   real frame columns already selected by `_TRIGGER_SELECT`.
 
-### Phase 3 — Synthetic validation with a PLANTED spillover (decision point)
+### Phase 3 — Synthetic validation with a PLANTED spillover (APPROVED: both channels, keep simple)
 
 Without a planted channel, synthetic data can only show "adjustment changes
 nothing", which proves nothing about the mechanism. Proposed DGP change,
@@ -130,24 +138,48 @@ opt-in and versioned (mirrors how COMM-ARMS Phase 4 added `trigger_accepted`):
   raises the conversion probability attached to the patient's OTHER triggers by
   `spillover_beta` on the logit scale. Ground truth written to the existing
   ground-truth sidecar (direct effect, spillover effect).
-- Optional second channel for the HCP grain (`hcp_generator`): draw a sparse
-  `SHARED_PATIENTS` graph (patients assigned to 1–2 HCPs) so
-  `persist_hcp_influence_to_falkordb.py` can ingest a synthetic cohort and the
-  FalkorDB neighbor source is exercised end-to-end on data with known truth.
+- Second channel, HCP grain (`patient_generator._assign_hcps`): with
+  `secondary_hcp_rate` (default 0.0) a patient gets a SECOND HCP drawn from the
+  same academic/non-academic pool; `treatment_generator` / `trigger_generator`
+  then draw each event's `hcp_id` from the patient's HCP set instead of the
+  single column. That is the whole change — the shared-patient graph FOLLOWS
+  from it via the existing `build_hcp_influence_graph` (two HCPs treating the
+  same patient in the lookback window form an edge), so
+  `persist_hcp_influence_to_falkordb.py` can ingest a synthetic cohort
+  unchanged and the FalkorDB neighbor source is exercised end-to-end on data
+  with known truth. No referral semantics, no new edge type: it is the same
+  shared-patient construct Optum uses. Ground-truth spillover on this channel:
+  an HCP's accepted-trigger share raises adoption odds of its shared-patient
+  neighbors by `hcp_spillover_beta` (default 0.0).
 - Acceptance gate (new `test_gate_12_interference_recovery` in
   `test_synthetic_causal_gates.py`): with `spillover_beta>0`, the unadjusted ATE
   is biased by more than 2 SE; the exposure-adjusted direct effect is within
   tolerance of the planted value; the spillover coefficient has the planted sign
   and is significant; cluster-bootstrap CI coverage ≥ nominal over 20 seeds.
 
-**Decision needed before Phase 3**: changing the DGP is a product call (it adds
-a mechanism to the gold-standard data every other gate runs on). Default
-`spillover_beta=0.0` keeps every existing gate unchanged; the recovery gate runs
-on an opt-in load.
+Both knobs default to 0.0 so every existing gate (1–11) runs on byte-identical
+data; the recovery gate (12) runs on an opt-in load with the knobs set. The
+`secondary_hcp_rate` knob must be exercised by the gate with S0.1 re-measured:
+the synthetic `SHARED_PATIENTS` graph must be non-empty ONLY when the knob is
+set.
 
-### Phase 4 — Optum application
+### Phase 4a — Graph join functionality (IN SCOPE; validated on synthetic + fake)
 
-- O0.1 fix (node `hcp_id` property) + re-persist per cohort with `--replace`.
+- O0.1 fix: `persist_hcp_influence_to_falkordb.py` stamps `hcp_id`
+  (`HCP_{seq}`, same `sorted(npi_rx.keys())` derivation as the converter —
+  factor the derivation into one shared helper so the two cannot drift) on
+  every `(:HCP)` node, and the `FalkorDBNeighbors` source matches on it.
+- Validation: (i) unit test against the in-process FalkorDB fake already used
+  by `test_persist_hcp_influence_to_falkordb.py` — round-trip parity of
+  `hcp_id` for every node; (ii) integration on the synthetic shared-patient
+  cohort from Phase 3 — join fraction = 1.0 and exposure map equals the one
+  computed in-memory from the frame (byte-for-byte parity, the #169 contract).
+- Optum is NOT re-persisted in this phase.
+
+### Phase 4b — Optum application (DEFERRED — waits for an explicit go)
+
+- Re-persist per cohort with `--replace`, then measure O0.2 (degree, exposure
+  variance).
 - Treatment = HCP's own adoption status at an index time; outcome = neighbor
   adoption in a later window (diffusion estimand). Exposure map from
   `FalkorDBNeighbors`, leakage gate on adoption timing. Adjust for the
@@ -158,7 +190,7 @@ on an opt-in load.
   the cluster-robust CI. This is a REPORT, not a new KPI, until an expert
   review accepts the estimand.
 
-### Phase 5 — KG causal edges as discovery priors (both tracks)
+### Phase 5 — KG causal edges as discovery priors (real track DEFERRED; synthetic gate only)
 
 - Source: `semantic_memory.list_relationships(relationship_types=["CAUSES"], curated_only=True)`
   filtered to `validation_status == "validated"` (the sync stamps it;
@@ -169,10 +201,11 @@ on an opt-in load.
   - Synthetic track: Shard-09 gold-standard chains (`causal_paths_generator`,
     `treatment_arm -> {treatment_initiated, persistent_180d, discontinued_180d}`)
     are DGP truth — allowed as `required_edges`.
-  - Real/Optum track: KG edges enter only as **tier hints**
-    (`CausalPriorKnowledge.tiers`, source-before-target) and as
-    `forbidden_edges` for the reverse direction — orientation only, never
-    existence. The data still decides whether the edge exists.
+  - Real/Optum track (DEFERRED by decision 2): when revisited, KG edges would
+    enter only as **tier hints** (`CausalPriorKnowledge.tiers`,
+    source-before-target) and as `forbidden_edges` for the reverse direction —
+    orientation only, never existence. Nothing in this plan changes a shipped
+    real-data DAG.
 - Provenance: extend `_compute_edge_provenance` with `kg_prior` (distinct from
   `required_prior`) so the shipped DAG says which edges the KG oriented.
 - Gate (synthetic): guided PC with KG tiers recovers the gold-standard edges at
@@ -200,14 +233,18 @@ on an opt-in load.
 
 ## Order of work and stop rules
 
-1. Phase 0 measurements S0.3, O0.1, O0.2, O0.4 (half a day, droplet). **Stop
-   rule**: if S0.3 shows < 5% overlapping triggers AND the user declines the
-   Phase 3 DGP plant, drop Phase 2's synthetic wiring and keep only Phase 1's
-   diagnostic (which is still an honest improvement over `no_evidence`).
-2. Phase 1 (pure functions) + Phase 5 synthetic half — no DB, CI-only.
-3. Phase 2 wiring, validated on synthetic with Phase 3 (if approved).
-4. Phase 4 Optum report.
-5. Phase 5 real-track tier hints, last: it changes shipped DAGs.
+1. Phase 0 measurements S0.3 and O0.4 (droplet). O0.1/O0.2 on Optum are
+   deferred with Phase 4b; O0.1 is instead proven on the synthetic cohort in
+   Phase 4a. S0.3 is now informational (the Phase 3 plant is approved), but
+   still worth committing as a printed measurement.
+2. Phase 1 (pure functions) — no DB, CI-only.
+3. Phase 3 DGP knobs (both channels) + gate 12 skeleton (red).
+4. Phase 2 wiring; gate 12 goes green on the opt-in load.
+5. Phase 4a join functionality, validated on the synthetic shared-patient
+   cohort and the FalkorDB fake.
+6. Phase 5 synthetic gold-standard prior gate (low priority, optional).
+7. Deferred, each behind its own go: Phase 4b Optum re-persist + report;
+   Phase 5 real-track tier hints.
 
 ## Discipline
 
