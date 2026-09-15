@@ -170,11 +170,11 @@ async def refuse_foreign_thread(thread_id: Optional[str], token_user_id: Optiona
     ``{"success": false}`` body.
 
     Existence oracle, accepted: a refused caller learns the thread exists. The
-    ``session_id`` path reads nothing before the gate (a prefix match ahead of
-    it was a content oracle), so what remains is thread existence there
-    (random v4 ids) and ``message_id`` existence on the other path (sequential
-    ints, countable) — both strictly less than before, when the same call
-    rated the row and returned success.
+    ``session_id`` path reads no MESSAGE before the gate (a prefix match ahead
+    of it was a content oracle; the gate reads the conversation row), so what
+    remains is thread existence there (ids generated as random v4 uuids) and
+    ``message_id`` existence on the other path (sequential ints, countable).
+    What a foreign caller can DO shrank: it used to rate the row and succeed.
     """
     if await thread_owner_denied(thread_id, token_user_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="threadId not yours")

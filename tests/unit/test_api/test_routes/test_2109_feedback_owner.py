@@ -114,10 +114,10 @@ class _FakeMessages:
     Honours the two filters the route resolves by — ``id`` and ``session_id`` —
     so path (a) finds the row by id and path (b) only ever sees rows of the
     session the caller named, exactly as the real query would. It IGNORES the
-    ``role`` and ``metadata->>frontend_message_id`` filters: that is safe only
-    because every session here has exactly one row, so a future fixture with
-    several rows per session must honour them too or path (b) will silently
-    match the wrong row.
+    ``role`` and ``metadata->>frontend_message_id`` filters: safe only because
+    every session here has exactly one row, an assistant one whose stamped id
+    the tests supply (``_message``), so a fixture with several rows per session
+    must honour them too or path (b) will silently match the wrong row.
     """
 
     def __init__(self, rows: List[Dict[str, Any]]) -> None:
@@ -253,7 +253,7 @@ def test_path_b_a_caller_supplied_foreign_session_is_refused(
     assert conversations.lookups == [VICTIM_THREAD]
 
 
-# ------------------------------------ T7/T8: path (b) reads nothing before the gate
+# ---------------------------------- T7/T8: path (b) reads no message before the gate
 
 
 def test_path_b_a_matching_preview_in_a_foreign_thread_reads_no_message(
@@ -262,7 +262,7 @@ def test_path_b_a_matching_preview_in_a_foreign_thread_reads_no_message(
     """The prefix match ran BEFORE the gate, so a foreign caller could probe a
     stored response one prefix at a time: a hit answered 403, a miss the 200
     not-found body. The gate now sits on the caller-supplied session before any
-    message read."""
+    message read (it reads only the conversation row)."""
     response = _post(
         feedback_client, session_id=VICTIM_THREAD, response_preview=MESSAGE_CONTENT[:20]
     )
