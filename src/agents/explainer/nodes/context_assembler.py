@@ -87,7 +87,8 @@ class ContextAssemblerNode:
 
         try:
             # === MEMORY RETRIEVAL ===
-            session_id = state.get("session_id", "default")
+            # May be None since #2099; the hooks skip the session-keyed read.
+            session_id = state.get("session_id")
             query = state.get("query", "")
 
             # Initialize memory fields with defaults
@@ -226,10 +227,13 @@ class ContextAssemblerNode:
 
     async def _get_conversation_history(self, state: ExplainerState) -> List[Dict[str, Any]]:
         """Get relevant conversation history."""
-        if self.conversation_store:
+        session_id = state.get("session_id")
+        # No session, no conversation to fetch (#2099): the store is keyed on the
+        # session, so a session-less lookup can only return empty.
+        if session_id and self.conversation_store:
             try:
                 return await self.conversation_store.get_recent(
-                    session_id=state.get("session_id", "default"),
+                    session_id=session_id,
                     limit=5,
                 )
             except Exception as e:

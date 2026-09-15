@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 class PredictionMemoryContext:
     """Context retrieved from memory systems for prediction synthesis."""
 
-    session_id: str
+    session_id: Optional[str]
     working_memory: List[Dict[str, Any]] = field(default_factory=list)
     episodic_context: List[Dict[str, Any]] = field(default_factory=list)
     cached_predictions: List[Dict[str, Any]] = field(default_factory=list)
@@ -119,7 +119,7 @@ class PredictionSynthesizerMemoryHooks:
 
     async def get_context(
         self,
-        session_id: str,
+        session_id: Optional[str],
         entity_id: str,
         entity_type: str,
         prediction_target: str,
@@ -130,7 +130,8 @@ class PredictionSynthesizerMemoryHooks:
         Retrieve context from working and episodic memory.
 
         Args:
-            session_id: Session identifier for working memory lookup
+            session_id: Session identifier for working memory lookup; None skips
+                the session-keyed read (#2099)
             entity_id: Entity being predicted (HCP ID, territory ID, etc.)
             entity_type: Type of entity (hcp, territory, patient)
             prediction_target: What is being predicted
@@ -165,8 +166,11 @@ class PredictionSynthesizerMemoryHooks:
             prediction_target=prediction_target,
         )
 
+        # A session-less run still reads episodic/semantic memory, so this line
+        # stays -- it just stops saying "session None" (#2099).
+        scope = f"session {session_id}" if session_id else "a session-less run"
         logger.info(
-            f"Retrieved prediction context for session {session_id}: "
+            f"Retrieved prediction context for {scope}: "
             f"working={len(context.working_memory)}, "
             f"cached={len(context.cached_predictions)}, "
             f"episodic={len(context.episodic_context)}"
@@ -176,11 +180,15 @@ class PredictionSynthesizerMemoryHooks:
 
     async def _get_working_memory_context(
         self,
-        session_id: str,
+        session_id: Optional[str],
         limit: int = 10,
     ) -> List[Dict[str, Any]]:
-        """Retrieve recent conversation from working memory."""
-        if not self.working_memory:
+        """Retrieve recent conversation from working memory.
+
+        Without a session there is no conversation to retrieve: reading under a
+        minted id only ever returns empty, so return empty directly (#2099).
+        """
+        if session_id is None or not self.working_memory:
             return []
 
         try:

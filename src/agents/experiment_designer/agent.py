@@ -20,7 +20,6 @@ Contract: .claude/contracts/tier3-contracts.md lines 82-142
 
 import asyncio
 import logging
-import uuid
 from typing import TYPE_CHECKING, Any, Literal, Optional, cast
 
 from pydantic import BaseModel, Field, field_validator
@@ -319,9 +318,10 @@ class ExperimentDesignerAgent(SkillsMixin):
         self.max_redesign_iterations = max_redesign_iterations
         self.enable_mlflow = enable_mlflow
         self.enable_memory = enable_memory
-        #: Session id of the most recent memory contribution (None until the
-        #: first completed design; ExperimentDesignerInput carries no session
-        #: concept, so the agent mints one per run for memory correlation).
+        #: Session id of the most recent memory contribution. Always None as of
+        #: #2099: ExperimentDesignerInput carries no session concept, and the
+        #: uuid the agent used to mint per run was an identity no conversation
+        #: owned. Kept as the wiring handle the #883 tests assert against.
         self.last_memory_session_id: Optional[str] = None
         self._mlflow_tracker: Optional["ExperimentDesignerMLflowTracker"] = None
         self.graph = create_experiment_designer_graph(
@@ -342,7 +342,11 @@ class ExperimentDesignerAgent(SkillsMixin):
         """
         if not self.enable_memory:
             return
-        session_id = str(uuid.uuid4())
+        # No session is minted here (#2099). ExperimentDesignerInput has no
+        # session concept, so there is nothing honest to put in
+        # agent_activities.input_data.session_id -- a per-run uuid only looked
+        # like a conversation that never existed.
+        session_id: Optional[str] = None
         self.last_memory_session_id = session_id
         try:
             counts = await contribute_to_memory(

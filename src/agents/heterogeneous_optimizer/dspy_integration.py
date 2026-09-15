@@ -19,6 +19,16 @@ from typing import Any, Dict, List, Literal, Optional
 logger = logging.getLogger(__name__)
 
 
+def _session_segment(session_id: Optional[str]) -> str:
+    """Signal-id prefix segment for a session.
+
+    Signal ids embed the session for grepability, but a session-less run has no
+    session to embed (#2099). Drop the segment rather than stamping the literal
+    ``None`` into an id.
+    """
+    return f"{session_id}_" if session_id else ""
+
+
 # =============================================================================
 # 1. TRAINING SIGNAL STRUCTURE
 # =============================================================================
@@ -37,7 +47,7 @@ class HeterogeneousOptimizationTrainingSignal:
 
     # === Input Context ===
     signal_id: str = ""
-    session_id: str = ""
+    session_id: Optional[str] = None
     query: str = ""
     treatment_var: str = ""
     outcome_var: str = ""
@@ -148,7 +158,8 @@ class HeterogeneousOptimizationTrainingSignal:
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for storage."""
         return {
-            "signal_id": self.signal_id or f"ho_{self.session_id}_{self.created_at}",
+            "signal_id": self.signal_id
+            or f"ho_{_session_segment(self.session_id)}{self.created_at}",
             "source_agent": "heterogeneous_optimizer",
             "dspy_type": "sender",
             "timestamp": self.created_at,
@@ -418,7 +429,7 @@ class HeterogeneousOptimizerSignalCollector:
 
     def collect_optimization_signal(
         self,
-        session_id: str,
+        session_id: Optional[str],
         query: str,
         treatment_var: str,
         outcome_var: str,

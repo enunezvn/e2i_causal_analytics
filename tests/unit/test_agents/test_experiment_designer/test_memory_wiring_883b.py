@@ -9,8 +9,9 @@ tests/integration/test_agent_activities_realign_883b.py (hook payloads):
 * enable_memory=True (default) -> contribute_to_memory called once post-run
   (async arun AND sync run — the dispatcher invokes sync run() in an executor
   thread, where the no-running-loop guard admits asyncio.run);
-* the agent mints a session id per run (ExperimentDesignerInput has no
-  session concept) and exposes it as last_memory_session_id;
+* the memory session is exposed as last_memory_session_id and is None
+  (ExperimentDesignerInput has no session concept, so since #2099 the agent
+  mints nothing and the stored row records an honest NULL);
 * enable_memory=False          -> no call attempted;
 * 046-trap posture             -> a RAISING contribution never changes the
   run's output or raises to the caller;
@@ -93,9 +94,10 @@ class TestMemoryWiringAsync:
         assert call["result"]["design_type"] == output.design_type
         assert call["state"]["status"] == "completed"
         assert call["brand"] == "remibrutinib"
-        # The agent mints and exposes the memory session id.
+        # The agent exposes the memory session it stored. There is none: the
+        # input carries no session concept, and #2099 removed the per-run mint.
         assert call["session_id"] == agent.last_memory_session_id
-        assert agent.last_memory_session_id
+        assert agent.last_memory_session_id is None
 
     @pytest.mark.asyncio
     async def test_default_agent_has_memory_enabled(self):
