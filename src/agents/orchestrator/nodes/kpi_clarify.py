@@ -31,9 +31,12 @@ because they are one concern with one rule.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Optional, Sequence
 
 from src.kpi.volume_family import CANONICAL_VOLUME_KPI_IDS, PANEL_VOLUME_KPI_IDS
+
+logger = logging.getLogger(__name__)
 
 #: A vetted-SQL KPI read is deterministic, not an estimate — and so is the
 #: DECISION to clarify (a vocabulary miss / a scan that grounded >1 brand), so
@@ -105,21 +108,33 @@ def brand_clarify_evidence(kpi: Any, brands: Sequence[str]) -> Dict[str, Any]:
     }
 
 
-def brand_clarify_for_ask(kpi: Any, query: Optional[str]) -> Optional[Dict[str, Any]]:
+def brand_clarify_for_ask(
+    kpi: Any, query: Optional[str], structured_brand: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
     """The brand clarify for ``query`` on ``kpi``, or ``None`` to carry on.
 
-    Returns a payload ONLY when the KPI is brand-scoped AND the ask grounds more
-    than one brand. Naming no brand is the intentional portfolio ask and keeps
-    computing unscoped; naming exactly one binds it as before. The caller must
-    consult this only when no structured source bound a brand — an explicit
-    ``entities`` / ``user_context`` brand is a decision already taken, not a
-    question to re-ask (the same precedence the region scan follows).
+    Returns a payload ONLY when the KPI is brand-scoped, no STRUCTURED source
+    supplied a brand, and the ask grounds more than one. Naming no brand is the
+    intentional portfolio ask and keeps computing unscoped; grounding exactly
+    one binds it as before.
+
+    ``structured_brand`` — not the text-scanned one — is the gate (#2114 codex
+    r2): an explicit ``entities`` / ``user_context`` brand is a decision already
+    taken and is never re-asked, but a brand the SCAN merely bound is not a
+    decision. Keying off the scanned brand let the mixed shape through, because
+    "Kisqali and PNH" binds Kisqali while grounding two scopes.
     """
-    if kpi.id not in BRAND_CLARIFY_KPI_IDS:
+    if structured_brand or kpi.id not in BRAND_CLARIFY_KPI_IDS:
         return None
     from src.services.query_entities import brand_scan
 
     scan = brand_scan(query)
     if not scan.is_ambiguous:
         return None
-    return brand_clarify_evidence(kpi, scan.named_brands)
+    logger.info(
+        "explainer resolver: the ask grounds brands %s and %s is reported per brand "
+        "-> returning the brand clarify instead of a figure for one of them.",
+        ", ".join(scan.grounded_brands),
+        kpi.id,
+    )
+    return brand_clarify_evidence(kpi, scan.grounded_brands)

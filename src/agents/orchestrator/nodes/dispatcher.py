@@ -218,6 +218,18 @@ def _entity_value(payload: Dict[str, Any], entity_type: str) -> Optional[str]:
     return None
 
 
+def _structured_brand(payload: Dict[str, Any]) -> Optional[str]:
+    """The brand a STRUCTURED source decided on: typed NLP entities, else the
+    ``user_context`` a chat caller stashed. ``None`` means nobody decided — the
+    ask text may still ground brands, but that is evidence, not a decision
+    (#2114: the clarify gate turns on exactly this distinction)."""
+    brand = _entity_value(payload, "brand")
+    ctx = payload.get("user_context") or {}
+    if brand is None and isinstance(ctx, dict) and isinstance(ctx.get("brand"), str):
+        brand = ctx["brand"] or None
+    return brand
+
+
 def _extract_brand_region(payload: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
     """Derive ``(brand, region)`` for cohort resolution from the dispatch context.
 
@@ -233,15 +245,12 @@ def _extract_brand_region(payload: Dict[str, Any]) -> tuple[Optional[str], Optio
     fabricates. Returns ``(None, None)`` when no source names them — the
     consuming resolvers then fail closed honestly.
     """
-    brand = _entity_value(payload, "brand")
+    brand = _structured_brand(payload)
     region = _entity_value(payload, "region")
 
-    user_context = payload.get("user_context") or {}
-    if isinstance(user_context, dict):
-        if brand is None and isinstance(user_context.get("brand"), str):
-            brand = user_context["brand"] or None
-        if region is None and isinstance(user_context.get("region"), str):
-            region = user_context["region"] or None
+    ctx = payload.get("user_context") or {}
+    if region is None and isinstance(ctx, dict) and isinstance(ctx.get("region"), str):
+        region = ctx["region"] or None
 
     if brand is None or region is None:
         from src.services import query_entities
@@ -2304,20 +2313,11 @@ def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str,
                 ambiguous_phrase,
             )
             return [region_clarify_evidence(kpi, ambiguous_phrase)]
-    if brand is None:
-        # #2114: an ask naming SEVERAL brands grounds none, and for the
-        # brand-scoped Rx-volume family the unscoped read is the portfolio
-        # total — a number belonging to none of them. Ask here, where the ask
-        # text still exists; the calculator can no longer tell the two apart.
-        brand_clarify = brand_clarify_for_ask(kpi, query)
-        if brand_clarify is not None:
-            logger.info(
-                "explainer resolver: the ask names brands %s and %s is reported per brand "
-                "-> returning the brand clarify instead of the portfolio total.",
-                ", ".join(brand_clarify["ambiguous_brands"]),
-                kpi.id,
-            )
-            return [brand_clarify]
+    # #2114: an ask grounding SEVERAL brands must end in a question, not a figure
+    # for one of them. Only the ask text tells them apart; the calculator cannot.
+    brand_clarify = brand_clarify_for_ask(kpi, query, _structured_brand(agent_input))
+    if brand_clarify is not None:
+        return [brand_clarify]
     context: Dict[str, Any] = {}
     if brand:
         context["brand"] = brand

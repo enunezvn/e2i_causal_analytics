@@ -62,46 +62,73 @@ def canonical_brand(raw: Optional[str]) -> Optional[str]:
 class BrandScan:
     """Outcome of the deterministic brand scan over the ask text (#2114).
 
-    ``brand``         exactly one brand grounded, else ``None``.
-    ``named_brands``  EVERY brand the text grounds, in scan order. More than
-                      one means the ask is ambiguous: a caller that can speak
-                      to the user should ask WHICH brand instead of falling
-                      back to an unscoped figure, because for a brand-additive
-                      metric that figure is the whole tracked portfolio — a
-                      number belonging to none of the brands named.
+    ``brand``             exactly one brand under the LEGACY #1356 precedence —
+                          a named brand suppresses the indication pass, and a
+                          value binds only when exactly one survives. Untouched:
+                          cohort_profiler's ``ask.py`` and the #1574 gap rule
+                          depend on it byte-for-byte.
+    ``grounded_brands``   every DISTINCT brand the text grounds by EITHER route,
+                          de-duplicated. More than one means the ask names more
+                          than one scope: a caller that can speak to the user
+                          should ask WHICH brand instead of falling back to a
+                          figure, because for a brand-additive metric an
+                          unscoped read is the whole tracked portfolio and a
+                          single-brand read answers a narrower ask than the one
+                          put to it.
 
-    ``brand_from_text`` alone cannot carry that distinction: it returns ``None``
-    both for "named none" (the honest portfolio ask) and for "named several"
-    (the ambiguous ask). This is the brand twin of :class:`RegionScan`, which
-    #1572 added for exactly the same reason.
+    The two fields differ precisely on the MIXED shape ("NBRx for Kisqali and
+    PNH"): ``brand`` is Kisqali because a name beats an indication, while
+    ``grounded_brands`` is ``("Kisqali", "Fabhalta")`` because PNH grounds
+    Fabhalta and that is a second scope. Running both routes for the signal is
+    what makes the mixed shape visible at all — guarding the indication pass on
+    "no brand named" hid it (#2114 codex r2 HIGH).
+
+    A brand named beside its OWN indication ("Kisqali for HR+ breast cancer")
+    grounds ONE brand twice, so the de-duplication leaves it unambiguous — the
+    same rule that makes a repeated brand name unambiguous, not a special case.
+
+    ``brand_from_text`` alone cannot carry any of this: it returns ``None`` both
+    for "named none" (the honest portfolio ask) and for "named several" (the
+    ambiguous ask), and it cannot report the mixed shape at all. This is the
+    brand twin of :class:`RegionScan`, which #1572 added for the same reason.
     """
 
     brand: Optional[str]
-    named_brands: Tuple[str, ...]
+    grounded_brands: Tuple[str, ...]
 
     @property
     def is_ambiguous(self) -> bool:
-        return len(self.named_brands) > 1
+        return len(self.grounded_brands) > 1
 
 
 def brand_scan(query: Optional[str]) -> BrandScan:
-    """Scan the ask text for brands: name pass first, then the indication pass.
+    """Run BOTH grounding routes over the ask text and report each separately.
 
-    A named brand is authoritative, so the indication pass runs only when no
-    brand is named (the proven #1356 precedence, unchanged). Never fabricates:
-    an empty query grounds nothing.
+    The name pass and the indication pass always both run — the legacy
+    precedence is applied afterwards to ``brand`` alone, so the ambiguity signal
+    sees a scope the precedence would have discarded. Never fabricates: an empty
+    query grounds nothing. Order is deterministic and independent of where the
+    words fall in the text: named brands in ``SUPPORTED_BRANDS`` order, then
+    indication-only brands in ``INDICATION_TO_BRAND`` order.
     """
     if not query:
-        return BrandScan(brand=None, named_brands=())
-    found: List[str] = []
+        return BrandScan(brand=None, grounded_brands=())
+    named: List[str] = []
     for b in SUPPORTED_BRANDS:
-        if re.search(rf"\b{b}\b", query, re.I) and b not in found:
-            found.append(b)
-    if not found:
-        for pattern, b in INDICATION_TO_BRAND:
-            if re.search(pattern, query, re.I) and b not in found:
-                found.append(b)
-    return BrandScan(brand=found[0] if len(found) == 1 else None, named_brands=tuple(found))
+        if re.search(rf"\b{b}\b", query, re.I) and b not in named:
+            named.append(b)
+    indicated: List[str] = []
+    for pattern, b in INDICATION_TO_BRAND:
+        if re.search(pattern, query, re.I) and b not in indicated:
+            indicated.append(b)
+    # The #1356 precedence, byte-identical: a named brand suppresses the
+    # indication pass for the bound value.
+    legacy = named or indicated
+    grounded = named + [b for b in indicated if b not in named]
+    return BrandScan(
+        brand=legacy[0] if len(legacy) == 1 else None,
+        grounded_brands=tuple(grounded),
+    )
 
 
 def brand_from_text(query: Optional[str]) -> Optional[str]:

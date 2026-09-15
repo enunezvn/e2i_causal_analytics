@@ -1477,3 +1477,116 @@ def test_the_brand_clarify_gate_is_exactly_the_rx_volume_family() -> None:
     # The boundary: brand-filterable KPIs outside the volume family keep their
     # pre-existing behaviour (see the Conversion Rate test above).
     assert "WS3-BI-009" not in BRAND_CLARIFY_KPI_IDS
+
+
+# --------------------------------------------------------------------------
+# #2114 codex r2 HIGH — the MIXED scope: a brand NAMED plus a different brand's
+# INDICATION. `brand_from_text` runs the indication pass only when no brand is
+# named (#1356 precedence), so "NBRx for Kisqali and PNH" bound Kisqali, never
+# reached the r1 gate (which fired only when `brand` was None), and answered a
+# two-brand ask with a Kisqali-only figure. The clarify must therefore key off
+# the STRUCTURED brand -- what a caller explicitly decided -- not off whatever
+# the text scan happened to bind.
+# --------------------------------------------------------------------------
+
+MIXED_SCOPE_QUERY = "What is NBRx for Kisqali and PNH?"
+
+
+@pytest.mark.parametrize(
+    "query,kpi_id",
+    [
+        ("What is NBRx for Kisqali and PNH?", "WS3-BI-007"),
+        ("What is NBRx for PNH and Kisqali?", "WS3-BI-007"),
+        ("What is TRx for Kisqali and PNH?", "WS3-BI-005"),
+        ("What is NRx for Kisqali and CSU?", "WS3-BI-006"),
+        # Indication first, brand second -- the scan is order-free.
+        ("What is TRx for urticaria and Kisqali?", "WS3-BI-005"),
+    ],
+)
+def test_a_named_brand_plus_another_brands_indication_clarifies(monkeypatch, query, kpi_id) -> None:
+    """Both candidates must be named in the question, no figure may be bound,
+    and the engine must never be asked -- even though the text scan bound a
+    single brand and the r1 gate would have waved it through."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](_agent_input(query), _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    payload = resolved["analysis_results"][0]
+    assert payload["analysis_type"] == "kpi_lookup_clarification"
+    assert payload["kpi_id"] == kpi_id
+    assert payload["needs_clarification"] is True
+    assert "value" not in payload
+    assert len(payload["ambiguous_brands"]) == 2
+    for brand in payload["ambiguous_brands"]:
+        assert brand in payload["key_findings"][0], payload["key_findings"]
+    assert stub.calls == []
+
+
+def test_the_mixed_scope_clarify_names_the_indication_brand(monkeypatch) -> None:
+    """PNH -> Fabhalta, so the question must offer Fabhalta as the alternative
+    -- naming only Kisqali would be the same wrong-scope answer in question
+    form."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](_agent_input(MIXED_SCOPE_QUERY), _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    payload = resolved["analysis_results"][0]
+    assert payload["ambiguous_brands"] == ["Kisqali", "Fabhalta"]
+    assert "Fabhalta" in payload["key_findings"][0]
+    assert stub.calls == []
+
+
+def test_a_brand_beside_its_own_indication_still_computes(monkeypatch) -> None:
+    """The measured decision: both routes grounding the SAME brand is ONE
+    scope, so the commonest clinical phrasing keeps its answer."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("What is TRx for Kisqali in HR+ breast cancer?"), _dispatch()
+    )
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["analysis_type"] == "kpi_lookup"
+    assert stub.calls == [("WS3-BI-005", {"brand": "Kisqali"})]
+
+
+def test_a_structured_brand_wins_over_a_mixed_scope_ask(monkeypatch) -> None:
+    """The gate keys off the STRUCTURED brand: an explicit user_context brand
+    is a decision already taken, so even a mixed-scope ask is honoured."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    agent_input = _agent_input(MIXED_SCOPE_QUERY)
+    agent_input["user_context"] = {"brand": "Fabhalta"}
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](agent_input, _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["analysis_type"] == "kpi_lookup"
+    assert stub.calls == [("WS3-BI-007", {"brand": "Fabhalta"})]
+
+
+def test_a_structured_entity_brand_also_wins_over_a_mixed_scope_ask(monkeypatch) -> None:
+    """Same for the NLP entities channel, the other structured source."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    agent_input = _agent_input(MIXED_SCOPE_QUERY)
+    agent_input["parsed_query"] = {"entities": [{"type": "brand", "value": "Kisqali"}]}
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](agent_input, _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["analysis_type"] == "kpi_lookup"
+    assert stub.calls == [("WS3-BI-007", {"brand": "Kisqali"})]
+
+
+def test_a_non_volume_kpi_ignores_the_mixed_scope_too(monkeypatch) -> None:
+    """The volume-family boundary holds for the mixed shape as well."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("What is the conversion rate for Kisqali and PNH?"), _dispatch()
+    )
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["analysis_type"] == "kpi_lookup"
+    assert stub.calls == [("WS3-BI-009", {"brand": "Kisqali"})]
