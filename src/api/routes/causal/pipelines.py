@@ -867,6 +867,22 @@ def _extract_library_payload(
     EconML's empty/error payload — reading it for DoWhy would drop the
     real DoWhy data. The per-library state fields preserve every executor's
     result.
+
+    Payload keys (#2106 — one vocabulary per key, never two):
+        ``identified_estimand``: DoWhy's identification label, copied verbatim
+            from its executor (``estimand_type`` such as ``nonparametric-ate``,
+            else the estimand's class name). DoWhy ONLY — it is the estimand
+            DoWhy identified from the graph, an identification step the
+            other libraries never perform; the pipeline orchestrator reads it
+            into ``identification_method``.
+        ``estimand``: what the stage's reported ``effect_estimate`` ESTIMATES,
+            in one vocabulary for every branch that can say: ``"ate"`` for an
+            average treatment effect on the outcome as named,
+            ``"risk_difference_on_indicator_y_gt_0"`` for CausalML's
+            binarized case. DoWhy derives it only from the one label whose
+            mapping is certain (``nonparametric-ate`` → ``ate``); CausalML
+            takes it from the executor's ``outcome_binarized`` discriminator.
+            EconML carries no estimand claim today, and none is invented.
     """
     result_payload = _read_library_result_from_state(library, state)
     if result_payload is None:
@@ -900,6 +916,13 @@ def _extract_library_payload(
         estimand = result_payload.get("identified_estimand")
         if isinstance(estimand, str):
             payload["identified_estimand"] = estimand
+            # #2106: name what the effect ESTIMATES next to what was
+            # IDENTIFIED. `nonparametric-ate` is the one DoWhy label whose
+            # estimated quantity is certain (an ATE on the outcome as named);
+            # any other label keeps its identification claim and gets no
+            # guessed `estimand`.
+            if estimand == "nonparametric-ate":
+                payload["estimand"] = "ate"
     elif library == "econml":
         ate = result_payload.get("ate") or result_payload.get("overall_ate")
         if isinstance(ate, (int, float)):
@@ -929,11 +952,12 @@ def _extract_library_payload(
         # indicator (y > 0), not an ATE on the column the caller named. The
         # executor decides this before the fit; a payload that carries no
         # discriminator gets no estimand claim rather than a guessed one.
+        # #2106: the key is `estimand` (what the number estimates), never
+        # `identified_estimand` — CausalML performs no identification step,
+        # and that key is DoWhy's identification label (see the docstring).
         binarized = result_payload.get("outcome_binarized")
         if isinstance(binarized, bool):
-            payload["identified_estimand"] = (
-                "risk_difference_on_indicator_y_gt_0" if binarized else "ate"
-            )
+            payload["estimand"] = "risk_difference_on_indicator_y_gt_0" if binarized else "ate"
             distinct = result_payload.get("outcome_distinct_values")
             if isinstance(distinct, int):
                 payload["outcome_distinct_values"] = distinct

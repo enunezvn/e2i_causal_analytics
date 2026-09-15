@@ -1356,7 +1356,7 @@ class TestCausalMLBinarizationDiscriminatorIsTheRecodingItself:
     `{0, 2}` and `{-1, 1}` have 2 distinct values, so they pass #2063's
     collapse gate AND a `distinct > 2` condition — yet `y = (y > 0)` still
     changes their values, the fit is on the derived indicator, and the stage
-    payload would have labelled the result `identified_estimand = "ate"`.
+    payload would have labelled the result `estimand = "ate"`.
     A false estimand label is exactly the harm this issue is about, so the
     discriminator is the recoding itself: does `(y > 0)` differ from `y`?
     """

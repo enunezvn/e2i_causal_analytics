@@ -1,20 +1,32 @@
-"""#2067: the CausalML stage payload must name the estimand its `ate` belongs to.
+"""#2067 / #2106: the CausalML stage payload must name the estimand its `ate` belongs to.
 
-The executor now warns when CausalML's internal ``y = (y > 0)`` recodes a
+The executor warns when CausalML's internal ``y = (y > 0)`` recodes a
 non-collapsing outcome, but ``warnings`` reaches only the raw JSON of
 ``POST /causal/pipeline/{sequential,parallel}`` — no page renders it. The
 cheap seam is to put the estimand next to the number that needs it: the
-causalml branch of ``_extract_library_payload`` carries
-``identified_estimand`` (as the dowhy branch already does) and the
+causalml branch of ``_extract_library_payload`` carries the estimand and the
 ``data_provenance`` honesty marker the executor sets but the route dropped.
+
+#2106: #2067 wrote that estimand under ``identified_estimand`` — the key the
+dowhy branch uses for DoWhy's own identification label (``nonparametric-ate``,
+the estimand it IDENTIFIED from the graph, a step CausalML never performs).
+One key, two vocabularies, two meanings. The stage payload now separates them:
+``identified_estimand`` stays DoWhy's identification label, DoWhy only;
+``estimand`` names what the reported ``effect_estimate`` ESTIMATES, in one
+vocabulary for every branch that can say (``ate`` /
+``risk_difference_on_indicator_y_gt_0``). DoWhy derives ``estimand`` only from
+the one label whose mapping is certain; CausalML never writes
+``identified_estimand`` again.
 
 Both land in ``PipelineStageResult.additional_results`` (``Dict[str, Any]``)
 and in the parallel response's free-form ``library_results``, so no pydantic
 field is added and the generated ``api.ts`` does not move.
 
-The payloads under test come from a REAL ``CausalMLExecutor.execute`` run —
-only the forest fit is stood in for, since the estimand is decided before the
-fit and does not depend on its numbers.
+The causalml payloads under test come from a REAL ``CausalMLExecutor.execute``
+run — only the forest fit is stood in for, since the estimand is decided before
+the fit and does not depend on its numbers. The dowhy payloads are the
+executor's result-dict shape (``causal_effect`` + ``identified_estimand``)
+placed in state directly.
 """
 
 from __future__ import annotations
@@ -148,7 +160,10 @@ def test_binarized_outcome_stage_names_the_binarized_estimand() -> None:
 
     assert stage.status == AnalysisStatus.COMPLETED
     assert stage.effect_estimate == 0.02
-    assert stage.additional_results["identified_estimand"] == BINARIZED_ESTIMAND
+    assert stage.additional_results["estimand"] == BINARIZED_ESTIMAND
+    # #2106: CausalML performs no identification step, so the stage must not
+    # carry the key that means "the estimand DoWhy identified from the graph".
+    assert "identified_estimand" not in stage.additional_results
     assert stage.additional_results["data_provenance"] == PROVENANCE_MODEL_PREDICTED_UPLIFT
 
 
@@ -158,7 +173,8 @@ def test_genuinely_binary_outcome_stage_names_the_ate() -> None:
 
     stage = _stage(output, state)
 
-    assert stage.additional_results["identified_estimand"] == "ate"
+    assert stage.additional_results["estimand"] == "ate"
+    assert "identified_estimand" not in stage.additional_results
     assert stage.additional_results["data_provenance"] == PROVENANCE_MODEL_PREDICTED_UPLIFT
 
 
@@ -177,6 +193,7 @@ def test_payload_without_the_discriminator_claims_no_estimand() -> None:
     payload = causal_pipelines._extract_library_payload("causalml", output, state=state)
 
     assert payload["effect_estimate"] == 0.02
+    assert "estimand" not in payload
     assert "identified_estimand" not in payload
     assert "data_provenance" not in payload
 
@@ -190,5 +207,55 @@ def test_two_valued_non_binary_outcome_stage_names_the_binarized_estimand() -> N
 
     stage = _stage(output, state)
 
-    assert stage.additional_results["identified_estimand"] == BINARIZED_ESTIMAND
+    assert stage.additional_results["estimand"] == BINARIZED_ESTIMAND
     assert stage.additional_results["outcome_distinct_values"] == 2
+
+
+# =============================================================================
+# #2106: the dowhy branch keeps its identification label and gains `estimand`
+# =============================================================================
+
+
+def _dowhy_payload(identified_estimand: str) -> Dict[str, Any]:
+    """Run ``_extract_library_payload`` over a DoWhy result dict in state.
+
+    The dict mirrors the executor's result shape (``dowhy.py`` builds
+    ``causal_effect`` and ``identified_estimand``, the latter from
+    ``_extract_estimand_label`` — DoWhy's ``estimand_type`` string, else the
+    estimand's class name).
+    """
+    state = cast(
+        PipelineState,
+        {
+            "config": _config(),
+            "dowhy_result": {
+                "success": True,
+                "result": {
+                    "causal_effect": 0.25,
+                    "identified_estimand": identified_estimand,
+                },
+            },
+        },
+    )
+    output = cast(PipelineOutput, {"libraries_used": ["dowhy"], "errors": []})
+    return causal_pipelines._extract_library_payload("dowhy", output, state=state)
+
+
+def test_dowhy_nonparametric_ate_label_keeps_it_and_derives_estimand_ate() -> None:
+    # DoWhy's `nonparametric-ate` is the one identification label whose
+    # estimated quantity is certain: an ATE on the outcome as named.
+    payload = _dowhy_payload("nonparametric-ate")
+
+    assert payload["effect_estimate"] == 0.25
+    assert payload["identified_estimand"] == "nonparametric-ate"
+    assert payload["estimand"] == "ate"
+
+
+def test_dowhy_other_identification_label_claims_no_estimand() -> None:
+    # Any other DoWhy label (here the pre-real-wiring placeholder, "backdoor")
+    # is kept verbatim as the identification label, and no `estimand` is
+    # guessed from it.
+    payload = _dowhy_payload("backdoor")
+
+    assert payload["identified_estimand"] == "backdoor"
+    assert "estimand" not in payload
