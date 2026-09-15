@@ -104,6 +104,16 @@ _ALIASES: Dict[str, str] = {
     "share of total prescriptions": "WS3-BI-008",
     "trx": "WS3-BI-005",
     "total prescription": "WS3-BI-005",
+    # Canonical TRx lane (2026-09-15): the patient-panel event FAMILY. WS3-BI-011 is
+    # the family's stated default — an explicit decision, not the registry-order
+    # accident _best_name_match would produce (all four panel KPIs tie there on two
+    # matched tokens; reversing their registry order flips this to the SHARE).
+    # The member discriminators are NOT here: see _PANEL_MEMBER_ALIASES, which must
+    # be matched BEFORE this loop because "observed rx events" (18 chars) is the
+    # prefix of all four registry names and length order cannot express
+    # "specific before generic" (codex r16-01).
+    "observed rx events": "WS3-BI-011",
+    "rx events": "WS3-BI-011",
     "return on investment": "WS3-BI-010",
     "roi": "WS3-BI-010",
     "hcp coverage": "WS3-BI-004",
@@ -133,6 +143,32 @@ _ALIASES: Dict[str, str] = {
     "pr-auc": "WS1-MP-002",
     "pr auc": "WS1-MP-002",
     "f1 score": "WS1-MP-003",
+}
+
+#: Panel MEMBER discriminators, matched BEFORE the generic alias loop (codex r16-01).
+#: Each entry names ONE panel KPI. They cannot live in _ALIASES: that loop is ordered by
+#: alias LENGTH, and the family alias "observed rx events" is longer than every member
+#: phrase AND a prefix of every member registry name, so it wins on all four names and
+#: shadows 012 / 013 / 014 onto 011. Ordering here is structural, not incidental.
+#:
+#: "patient panel X" forms match the registry NAME. Mind the normalization: whitespace is
+#: collapsed first and separators are mapped to spaces afterwards one-for-one (so spans stay
+#: aligned), which turns " - " into THREE spaces that are never re-collapsed. The names the
+#: matcher sees are 'observed rx events   patient panel nrx (nrx panel)' — so an alias may
+#: not span that gap, and these deliberately start at "patient".
+_PANEL_MEMBER_ALIASES: Dict[str, str] = {
+    "trx share panel": "WS3-BI-014",
+    "panel trx share": "WS3-BI-014",
+    "patient panel trx share": "WS3-BI-014",
+    "nbrx panel": "WS3-BI-013",
+    "panel nbrx": "WS3-BI-013",
+    "patient panel nbrx": "WS3-BI-013",
+    "nrx panel": "WS3-BI-012",
+    "panel nrx": "WS3-BI-012",
+    "patient panel nrx": "WS3-BI-012",
+    "trx panel": "WS3-BI-011",
+    "panel trx": "WS3-BI-011",
+    "patient panel trx": "WS3-BI-011",
 }
 
 # Registry abbreviations that are ordinary English words: admitting them to
@@ -245,6 +281,10 @@ KPI_SEMANTIC_NOTES = {
         "only n, never an invented range."
     ),
 }
+
+# Canonical TRx lane: the patient-panel share is the same portfolio-share concept
+# over treatment_events, so it carries the same fabrication guard.
+KPI_SEMANTIC_NOTES["WS3-BI-014"] = KPI_SEMANTIC_NOTES["WS3-BI-008"]
 
 
 # ---------------------------------------------------------------------------
@@ -418,6 +458,15 @@ def recognize_kpi_span(query: Optional[str]) -> Optional[Tuple[KPIMetadata, str,
         share_kpi = registry.get("WS3-BI-008")
         if share_kpi is not None:
             return share_kpi, q, m.start(), m.end()
+
+    # 0b) panel MEMBER discriminators before the generic alias loop (codex r16-01).
+    # Longest-first WITHIN the members, so "trx share panel" beats "trx panel".
+    for alias in sorted(_PANEL_MEMBER_ALIASES, key=len, reverse=True):
+        m = _alias_pattern(alias).search(q)
+        if m is not None:
+            kpi = registry.get(_PANEL_MEMBER_ALIASES[alias])
+            if kpi is not None:
+                return kpi, q, m.start(), m.end()
 
     # 1) alias match — longest alias first so "conversion rate" beats "rate".
     for alias in sorted(_ALIASES, key=len, reverse=True):
