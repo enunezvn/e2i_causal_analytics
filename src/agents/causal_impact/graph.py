@@ -69,10 +69,15 @@ def _refutation_suite_score(result: Dict[str, Any]) -> Optional[float]:
 
     Stored AS RETURNED — no clamping, rescaling or default. Absent → None
     silently. Provenance, not outcome, decides whether a score exists: the
-    node's two ``except`` returns set ``refutation_error`` and spread the
+    node's two ``except`` returns set the ``refutation_error`` KEY (its value
+    may be empty — the generic handler stores ``str(e)``, "" for a bare
+    exception — so presence, not truthiness, is the marker) and spread the
     input state, so no score of that invocation exists and the caller
-    records NULL even if the incoming state carried one; a COMPLETED suite
-    that BLOCKs or is withheld on the expert-review gate also fails closed
+    records NULL even if the incoming state carried one. A completed return
+    could carry the key only by inheriting it from the input state, which
+    the compiled graph does not produce (no node before refutation writes
+    it). A COMPLETED suite that BLOCKs or is withheld on the expert-review
+    gate also fails closed
     (status failed + error_message, so its row's action_type is
     ``refutation_error`` too) but carries its own fresh score, which IS
     recorded — a ``refutation_error`` row therefore carries a score (BLOCK /
@@ -218,16 +223,19 @@ def traced_node(node_name: str) -> Callable[[F], F]:
                         # The confidence of a causal_impact estimate IS the
                         # refutation-suite score (#2127); see the helper. Gated
                         # on PROVENANCE, not on the failed-closed outcome: the
-                        # node's two ``except`` returns set ``refutation_error``
-                        # and spread the input state (no suite of this run), so
-                        # key presence alone could carry a stale score. A
-                        # completed BLOCK / expert-review halt also fails
-                        # closed (status failed + error_message → the same
-                        # refutation_error action_type) but carries its own
-                        # fresh score, which IS recorded.
+                        # node's two ``except`` returns set the
+                        # ``refutation_error`` KEY (its value may be empty — the
+                        # generic handler stores ``str(e)``, "" for a bare
+                        # exception, so presence, not truthiness, is the
+                        # marker) and spread the input state (no suite of this
+                        # run), so a ``refutation_confidence`` key alone could
+                        # carry a stale score. A completed BLOCK / expert-review
+                        # halt also fails closed (status failed + error_message
+                        # → the same refutation_error action_type) but carries
+                        # its own fresh score, which IS recorded.
                         confidence_score = (
                             None
-                            if result.get("refutation_error")
+                            if "refutation_error" in result
                             else _refutation_suite_score(result)
                         )
                         # add_entry calls refutation_results.to_dict() internally

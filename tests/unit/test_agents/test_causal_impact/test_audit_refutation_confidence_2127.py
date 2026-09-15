@@ -203,10 +203,12 @@ async def test_refutation_early_failure_row_is_null_without_warning(
 # T2b (round 3) — an EXCEPTION return must not inherit a score. The node's
 # two ``except`` returns spread the INPUT state, so a ``refutation_confidence``
 # already in that state rides along on the error return although THIS
-# invocation ran no suite. Both of those returns set ``refutation_error``
-# (the completed return never does), so the wrapper gates the score on that
-# key — not on key presence, and not on the failed-closed verdict (round 4:
-# a completed BLOCK also fails closed but carries a fresh score). Reachable
+# invocation ran no suite. Both of those returns set the ``refutation_error``
+# KEY (its value may be empty — the generic handler stores ``str(e)``, "" for
+# a bare exception), and the completed return never does, so the wrapper
+# gates the score on key PRESENCE — not on the value's truthiness (round 5),
+# and not on the failed-closed verdict (round 4: a completed BLOCK also
+# fails closed but carries a fresh score). Reachable
 # only by invoking the traced node directly with such a dict:
 # ``CausalImpactState`` declares no ``refutation_confidence`` channel, so the
 # compiled graph never carries one — this pins the intent, not a live defect.
@@ -243,12 +245,92 @@ async def test_refutation_failed_closed_row_does_not_inherit_a_stale_score(
 
 
 # ---------------------------------------------------------------------------
+# T2b' (round 5) — the marker is key PRESENCE, not truthiness. The generic
+# handler stores ``"refutation_error": str(e)``, which is "" for a bare
+# exception (``str(RuntimeError()) == ""``). A truthiness gate treats that
+# row as a completed return and records the stale inherited score. The row
+# is still named ``refutation_error``: ``node_failed_closed`` falls through
+# the falsy marker to ``status == "failed"`` + ``error_message``
+# (``_FAILURE_PAYLOAD_KEYS``, audit_chain_mixin.py). RED on 41fa61f75:
+# 0.91 recorded.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_empty_refutation_error_marker_still_blocks_the_inherited_score(
+    mock_audit_service, mock_opik, base_state, caplog
+):
+    node = _refutation_node(
+        {
+            "status": "failed",
+            "refutation_error": "",
+            "error_message": "Refutation failed: ",
+            "refutation_confidence": 0.91,
+        }
+    )
+    with caplog.at_level(logging.WARNING, logger=GRAPH_LOGGER):
+        await node(base_state)
+
+    assert mock_audit_service.add_entry.call_count == 1
+    kwargs = mock_audit_service.add_entry.call_args.kwargs
+    # Named by the failed status + error_message, not by the (empty) marker.
+    assert kwargs["action_type"] == "refutation_error"
+    assert kwargs["confidence_score"] is None, (
+        "an empty refutation_error is still the exception marker (str(e) of a bare "
+        f"exception) — NULL, not the inherited score; got {kwargs['confidence_score']!r}"
+    )
+    assert kwargs["validation_passed"] is False
+    assert kwargs["refutation_results"] is None
+    assert not _warnings(caplog, "refutation_confidence")
+
+
+class _RaisingRunner:
+    """Stand-in runner whose suite raises a BARE exception (empty message)."""
+
+    def run_all_tests(self, **kwargs):
+        raise RuntimeError()
+
+
+@pytest.mark.asyncio
+async def test_real_node_bare_exception_return_does_not_inherit_a_stale_score(
+    monkeypatch, mock_audit_service, mock_opik, base_state, caplog
+):
+    """The REAL ``RefutationNode.execute`` body: the stand-in runner raises
+    ``RuntimeError()`` inside the node's ``try``, the generic handler returns
+    ``refutation_error: ""`` and spreads the input state — which carries a
+    stale ``refutation_confidence: 0.91`` — through the real ``traced_node``."""
+    gate = ExpertReviewGate(repository=harness_1991._ReviewRepo(rows=[]), auto_create_review=True)
+    real_node = harness_1991._node(monkeypatch, GateDecision.PROCEED, gate)
+    real_node.runner = _RaisingRunner()
+    traced = traced_node("refutation")(real_node.execute)
+
+    with caplog.at_level(logging.WARNING, logger=GRAPH_LOGGER):
+        result = await traced(
+            {**harness_1991._state(), **base_state, "refutation_confidence": 0.91}
+        )
+
+    # Positive control: the exception reached the GENERIC handler.
+    assert result["refutation_error"] == ""
+    assert result["error_message"] == "Refutation failed: "
+    assert result["status"] == "failed"
+    assert result["refutation_confidence"] == 0.91  # inherited by the spread
+
+    assert mock_audit_service.add_entry.call_count == 1
+    kwargs = mock_audit_service.add_entry.call_args.kwargs
+    assert kwargs["action_type"] == "refutation_error"
+    assert kwargs["confidence_score"] is None, (
+        f"real bare-exception return: expected NULL, got {kwargs['confidence_score']!r}"
+    )
+    assert not _warnings(caplog, "refutation_confidence")
+
+
+# ---------------------------------------------------------------------------
 # T2c / T2d (round 4) — provenance, not outcome. A COMPLETED suite that
 # BLOCKs, or is withheld on the expert-review gate, returns ``status: failed``
 # + ``error_message`` (so the row is a ``refutation_error`` row) but carries
 # ITS OWN fresh ``refutation_confidence`` and ``refutation_results`` — that
 # score is the one the row most needs and must be recorded. Only the two
-# ``except`` returns set ``refutation_error``. RED on 6326b347c: the
+# ``except`` returns set the ``refutation_error`` key. RED on 6326b347c: the
 # ``None if failed_closed`` gate dropped the fresh score (None).
 # ---------------------------------------------------------------------------
 
@@ -303,7 +385,7 @@ async def test_completed_block_row_keeps_its_fresh_suite_score(
 
 @pytest.mark.asyncio
 async def test_expert_review_halt_row_keeps_its_fresh_suite_score(
-    mock_audit_service, mock_opik, base_state
+    mock_audit_service, mock_opik, base_state, caplog
 ):
     node = _refutation_node(
         {
@@ -317,13 +399,15 @@ async def test_expert_review_halt_row_keeps_its_fresh_suite_score(
             "expert_review_decision": "rejected",
         }
     )
-    await node(base_state)
+    with caplog.at_level(logging.WARNING, logger=GRAPH_LOGGER):
+        await node(base_state)
 
     kwargs = mock_audit_service.add_entry.call_args.kwargs
     assert kwargs["action_type"] == "refutation_error"
     assert kwargs["confidence_score"] == 0.72
     assert kwargs["validation_passed"] is False
     assert isinstance(kwargs["refutation_results"], RefutationResults)
+    assert not _warnings(caplog, "refutation_confidence")
 
 
 # Positive control for the marker: the REAL node, driven into BLOCK with the
