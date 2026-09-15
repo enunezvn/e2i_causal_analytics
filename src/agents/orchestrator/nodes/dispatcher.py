@@ -28,6 +28,7 @@ from .kpi_clarify import (
     KPI_LOOKUP_CONFIDENCE as _KPI_LOOKUP_CONFIDENCE,
 )
 from .kpi_clarify import brand_clarify_for_ask, region_clarify_evidence
+from .structured_scope import _structured_brand, _structured_region
 
 logger = logging.getLogger(__name__)
 
@@ -196,40 +197,6 @@ def _coerce_to_input_model(
     return input_cls(**merged)
 
 
-def _entity_value(payload: Dict[str, Any], entity_type: str) -> Optional[str]:
-    """Return the first ``parsed_query.entities`` value of ``entity_type``.
-
-    Mirrors the ``parsed_query.entities`` derivation used for ``drift_monitor``'s
-    ``features_to_monitor`` default (KPI/feature mentions): walk the structured
-    NLP entities the orchestrator already carries and return the first non-empty
-    string ``value`` whose ``type`` matches. Returns ``None`` when no such entity
-    exists (the caller then falls back to ``user_context`` or proceeds without).
-    """
-    parsed_query = payload.get("parsed_query") or {}
-    entities = (parsed_query.get("entities") if isinstance(parsed_query, dict) else None) or []
-    for ent in entities:
-        if (
-            isinstance(ent, dict)
-            and ent.get("type") == entity_type
-            and isinstance(ent.get("value"), str)
-            and ent["value"].strip()
-        ):
-            return cast(str, ent["value"])
-    return None
-
-
-def _structured_brand(payload: Dict[str, Any]) -> Optional[str]:
-    """The brand a STRUCTURED source decided on — typed NLP entities, else the
-    ``user_context`` a chat caller stashed — resolved through the substrate's
-    ``brand_type`` vocabulary, which normalises case/padding and reads blank,
-    zero-width and junk alike as nobody-decided (#2114: four leaks, one predicate)."""
-    from src.services.enum_labels import resolve_brand_label
-
-    ctx = payload.get("user_context") or {}
-    raw = _entity_value(payload, "brand") or (ctx.get("brand") if isinstance(ctx, dict) else None)
-    return resolve_brand_label(raw if isinstance(raw, str) else None)
-
-
 def _extract_brand_region(payload: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
     """Derive ``(brand, region)`` for cohort resolution from the dispatch context.
 
@@ -246,11 +213,7 @@ def _extract_brand_region(payload: Dict[str, Any]) -> tuple[Optional[str], Optio
     consuming resolvers then fail closed honestly.
     """
     brand = _structured_brand(payload)
-    region = _entity_value(payload, "region")
-
-    ctx = payload.get("user_context") or {}
-    if region is None and isinstance(ctx, dict) and isinstance(ctx.get("region"), str):
-        region = ctx["region"] or None
+    region = _structured_region(payload)
 
     if brand is None or region is None:
         from src.services import query_entities

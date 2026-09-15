@@ -1808,19 +1808,41 @@ def test_a_substrate_brand_outside_the_commercial_three_is_still_a_decision(
     assert stub.calls == [("WS3-BI-007", {"brand": real_enum_brand.lower()})]
 
 
-@pytest.mark.parametrize("junk", ["Xolair", "NotABrand", "12345", "-"])
-def test_an_unrecognised_brand_string_is_not_a_decision(monkeypatch, junk) -> None:
-    """A string outside the `brand_type` enum cannot match a row, so treating it
-    as a decision would suppress the clarify AND filter to nothing. It reads as
-    nobody-decided and the ambiguous ask asks."""
+@pytest.mark.parametrize("unserveable", ["Xolair", "NotABrand", "12345", "-"])
+def test_an_unrecognised_brand_string_IS_a_decision(monkeypatch, unserveable) -> None:
+    """REVERSED from the r3 version of this test, deliberately (r4 HIGH-2).
+
+    r3 treated a value outside the `brand_type` enum as nobody-decided, so the
+    ambiguous ask re-asked. That conflated two different facts and, at the other
+    consumer, erased the value entirely -- cohort resolution then read "no brand
+    specified" and widened to every patient. A caller who sets `brand='Xolair'`
+    HAS decided; the substrate simply cannot serve it. So the clarify does not
+    re-ask, the value travels unchanged, and the honest failure happens where the
+    scope is applied rather than being papered over with a question.
+    """
     stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
     agent_input = _agent_input(MIXED_SCOPE_QUERY)
-    agent_input["user_context"] = {"brand": junk}
+    agent_input["user_context"] = {"brand": unserveable}
 
     resolved = disp.INPUT_RESOLVERS["explainer"](agent_input, _dispatch())
 
     assert isinstance(resolved, dict), resolved
-    payload = resolved["analysis_results"][0]
-    assert payload["analysis_type"] == "kpi_lookup_clarification"
-    assert payload["ambiguous_brands"] == ["Kisqali", "Fabhalta"]
-    assert stub.calls == []
+    assert resolved["analysis_results"][0]["analysis_type"] == "kpi_lookup"
+    assert stub.calls == [("WS3-BI-007", {"brand": unserveable})], (
+        "the unrecognised scope must reach the calculator unchanged, not be erased"
+    )
+
+
+def test_an_unresolvable_entity_does_not_hide_a_valid_context_brand(monkeypatch) -> None:
+    """r4 HIGH-1 at the clarify gate: validation precedes source selection, so a
+    junk `entities` value no longer masks a servable `user_context` one."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    agent_input = _agent_input(MIXED_SCOPE_QUERY)
+    agent_input["parsed_query"] = {"entities": [{"type": "brand", "value": "NotABrand"}]}
+    agent_input["user_context"] = {"brand": "competitor"}
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](agent_input, _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["analysis_type"] == "kpi_lookup"
+    assert stub.calls == [("WS3-BI-007", {"brand": "competitor"})]

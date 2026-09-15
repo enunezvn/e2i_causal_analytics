@@ -28,6 +28,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional, Union
 
 import pandas as pd
+import pytest
 
 from src.agents.orchestrator.nodes import dispatcher as disp
 from src.agents.orchestrator.nodes.dispatcher import DispatcherNode, NeedsStructuredInput
@@ -284,3 +285,176 @@ def test_tool_composer_kpi_not_truncated_omits_flag(monkeypatch) -> None:
     )
     assert prepared["kpi_outcome"] == "converted"
     assert "kpi_truncated" not in prepared
+
+
+# --------------------------------------------------------------------------
+# #2114 codex r4 HIGH-2 — the SEAM this file did not test.
+#
+# `test_unrecognized_brand_proceeds_without_data` above stubs the resolver with
+# a fake that IGNORES its arguments, so it asserts only that the dispatcher
+# survives a None result. It passes whether the dispatcher hands over
+# 'NotARealBrand' or None, and was therefore blind when b09a3271d started
+# erasing unrecognised brands: `_structured_brand` returned None, cohort
+# resolution read that as "no brand specified", and the cohort silently widened
+# to the whole population -- the exact harm cohort_resolution.py:174-177 exists
+# to prevent, by failing closed on a non-empty unrecognised brand.
+#
+# These tests capture the VALUE the resolver receives, which is the only thing
+# that can catch an erasure at this seam.
+# --------------------------------------------------------------------------
+
+
+def _capture_resolver(monkeypatch) -> Dict[str, Any]:
+    """Patch the cohort resolver and record exactly what it is handed."""
+    captured: Dict[str, Any] = {}
+
+    def fake_resolve(brand, region):  # noqa: ANN001
+        captured["brand"] = brand
+        captured["region"] = region
+        return None  # fail closed, as the real resolver does for a bogus brand
+
+    monkeypatch.setattr("src.services.cohort_resolution.resolve_cohort_frame", fake_resolve)
+    return captured
+
+
+@pytest.mark.parametrize("unserveable", ["Xolair", "NotARealBrand", "Dupixent"])
+def test_an_unrecognised_structured_brand_reaches_the_resolver(monkeypatch, unserveable) -> None:
+    """A brand the enum cannot serve must still be DELIVERED, so the
+    fail-closed downstream can reject it. Erasing it to None reads as "no brand
+    specified" and widens the cohort to every patient."""
+    captured = _capture_resolver(monkeypatch)
+
+    node = DispatcherNode()
+    prepared = _resolved_input(
+        node,
+        _state_with_entities(user_context={"brand": unserveable, "region": "west"}),
+        _tool_composer_dispatch(),
+    )
+
+    assert captured["brand"] == unserveable, "an unrecognised brand must not be erased"
+    assert "data" not in prepared
+
+
+def test_a_recognised_brand_is_normalised_on_the_way_to_the_resolver(monkeypatch) -> None:
+    """Recognition NORMALISES (the 10e win, kept): padding and casing are
+    resolved to the enum label the case-sensitive predicate can match."""
+    captured = _capture_resolver(monkeypatch)
+
+    node = DispatcherNode()
+    _resolved_input(
+        node,
+        _state_with_entities(user_context={"brand": " kisqali "}),
+        _tool_composer_dispatch(),
+    )
+
+    assert captured["brand"] == "Kisqali"
+
+
+@pytest.mark.parametrize("blank", ["", " ", "​", "﻿", "\x00"])
+def test_a_blank_structured_brand_is_still_erased(monkeypatch, blank) -> None:
+    """The other half of the distinction: a value naming NOBODY stays None, so
+    the text scan may still speak and the clarify gate still fires.
+
+    A region is supplied because the dispatcher short-circuits when brand AND
+    region are both None ("nothing to resolve against"), and this test is about
+    what the resolver RECEIVES, not about that short-circuit.
+    """
+    captured = _capture_resolver(monkeypatch)
+
+    node = DispatcherNode()
+    _resolved_input(
+        node,
+        _state_with_entities(user_context={"brand": blank, "region": "west"}),
+        _tool_composer_dispatch(),
+    )
+
+    assert captured["brand"] is None
+
+
+def test_an_unresolvable_entity_does_not_hide_a_valid_context_brand(monkeypatch) -> None:
+    """HIGH-1 at this seam: source selection must not precede validation."""
+    captured = _capture_resolver(monkeypatch)
+
+    node = DispatcherNode()
+    state = _state_with_entities(
+        "NotARealBrand", user_context={"brand": "competitor", "region": "west"}
+    )
+    _resolved_input(node, state, _tool_composer_dispatch())
+
+    assert captured["brand"] == "competitor"
+
+
+# --------------------------------------------------------------------------
+# #2114 codex r4 — the REGION half, measured separately rather than assumed.
+#
+# Region had defect A (an unresolvable candidate masks a servable later one) and
+# the blank leak, but NOT the erasure/widening defect: it passed everything
+# through raw, so `cohort_resolution`'s region fail-closed still fired. Region is
+# therefore returned RAW here — `cohort_resolution._normalize_region` normalises
+# it itself (measured: 'West' and ' West ' -> 'west'), so casing is harmless at
+# that consumer and normalising would be an unmotivated behaviour change.
+# --------------------------------------------------------------------------
+
+
+def test_an_unresolvable_entity_region_does_not_hide_a_valid_context_region(monkeypatch) -> None:
+    """Defect A on the region half."""
+    captured = _capture_resolver(monkeypatch)
+
+    node = DispatcherNode()
+    state = _state_with_entities(region="NotARegion", user_context={"region": "west"})
+    _resolved_input(node, state, _tool_composer_dispatch())
+
+    assert captured["region"] == "west"
+
+
+@pytest.mark.parametrize("blank", ["", " ", "​", "﻿", "\x00"])
+def test_a_blank_structured_region_names_nobody(monkeypatch, blank) -> None:
+    """The region blank leak: U+200B survived `.strip()` and read as a decision.
+
+    A brand is supplied so the dispatcher does not short-circuit on
+    (None, None) before reaching the resolver.
+    """
+    captured = _capture_resolver(monkeypatch)
+
+    node = DispatcherNode()
+    _resolved_input(
+        node,
+        _state_with_entities(user_context={"brand": "Kisqali", "region": blank}),
+        _tool_composer_dispatch(),
+    )
+
+    assert captured["region"] is None
+
+
+@pytest.mark.parametrize("unserveable", ["NotARegion", "Atlantis", "EMEA"])
+def test_an_unrecognised_region_reaches_the_resolver(monkeypatch, unserveable) -> None:
+    """Region never had the erasure defect and must not acquire one: the value
+    travels so cohort_resolution's own region fail-closed can reject it."""
+    captured = _capture_resolver(monkeypatch)
+
+    node = DispatcherNode()
+    _resolved_input(
+        node,
+        _state_with_entities(user_context={"region": unserveable}),
+        _tool_composer_dispatch(),
+    )
+
+    assert captured["region"] == unserveable
+
+
+@pytest.mark.parametrize("raw", [" West ", "WEST", "South"])
+def test_a_recognised_region_travels_RAW_not_normalised(monkeypatch, raw) -> None:
+    """Deliberate asymmetry with brand, and the reason is measured: brand needed
+    normalising because its predicate is case-sensitive, while
+    `cohort_resolution._normalize_region` already folds region casing itself. So
+    region keeps its raw form and no existing pin moves."""
+    captured = _capture_resolver(monkeypatch)
+
+    node = DispatcherNode()
+    _resolved_input(
+        node,
+        _state_with_entities(user_context={"region": raw}),
+        _tool_composer_dispatch(),
+    )
+
+    assert captured["region"] == raw

@@ -54,7 +54,8 @@ import chain (measured +0 modules), and ``src/services`` imports nothing from
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Optional, Tuple
+import unicodedata
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # The enum labels (database contract — see module docstring)
@@ -219,3 +220,52 @@ def resolve_brand_label(brand: Optional[str]) -> Optional[str]:
     if not brand or not brand.strip():
         return None
     return _BRAND_LABEL_BY_CASEFOLD.get(brand.strip().casefold())
+
+
+def names_something(value: Optional[str]) -> bool:
+    """True when ``value`` carries at least one VISIBLE character.
+
+    A positive test, deliberately: "not blank" is an open-ended negative that
+    every new input shape escapes — ``str.strip()`` removes Unicode whitespace
+    but leaves U+200B and U+FEFF (category ``Cf``) and NUL (``Cc``), which is
+    how zero-width characters kept arriving as decisions (#2114). Asking
+    instead whether anything is visible closes the whole class at once.
+    """
+    if not isinstance(value, str):
+        return False
+    return any(not ch.isspace() and unicodedata.category(ch) not in ("Cf", "Cc") for ch in value)
+
+
+def first_named_scope(
+    candidates: Iterable[Optional[str]],
+    resolve: Callable[[Optional[str]], Optional[str]],
+    *,
+    normalise: bool = True,
+) -> Optional[str]:
+    """The first candidate that RESOLVES, else the first that NAMES SOMETHING.
+
+    Validation precedes source selection: a candidate that names nothing is
+    skipped entirely, and an unrecognised one never masks a later candidate the
+    vocabulary can serve (#2114 codex r4 HIGH-1 — an invalid ``entities`` value
+    was hiding a valid ``user_context`` one).
+
+    Recognition NORMALISES; it must never DELETE. When nothing resolves, the
+    first meaningful candidate is returned UNCHANGED, because "unrecognised" and
+    "absent" are different facts: blank means nobody decided, ``'Xolair'`` means
+    somebody decided something this substrate cannot serve. Erasing the second
+    reads downstream as "no scope given" and silently widens the query — the
+    harm ``cohort_resolution``'s fail-closed exists to prevent (r4 HIGH-2).
+
+    ``normalise=False`` keeps the candidate's own spelling while still using the
+    vocabulary to CHOOSE it. Region passes False: ``cohort_resolution`` folds
+    region casing itself (measured — ``'West'`` and ``' West '`` both normalise
+    there), so rewriting it here would be a behaviour change with no consumer
+    asking for it. Brand needs the normalised form because its predicate is
+    case-sensitive.
+    """
+    meaningful = [c for c in candidates if names_something(c)]
+    for candidate in meaningful:
+        resolved = resolve(candidate)
+        if resolved is not None:
+            return resolved if normalise else candidate
+    return meaningful[0] if meaningful else None
