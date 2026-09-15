@@ -465,10 +465,10 @@ async def test_the_owner_gate_binds_the_identity_channel_only_after_it_passes(
 def memory_tool(monkeypatch, conversations):
     """``conversation_memory_tool`` over the doubled conversation store.
 
-    The tool takes a session id the MODEL supplies, so being inside a
-    conversation the caller owns does not make the target conversation theirs.
-    #2105 owns replacing that argument with the bound session; until then the
-    argument stays and the owner check is what makes it safe.
+    The tool accepts a session id the MODEL may supply (#2105 made it optional,
+    defaulting to the bound session), so being inside a conversation the caller
+    owns does not make a NAMED target conversation theirs. The owner check is
+    what makes the argument safe.
     """
     import src.api.routes.chatbot_tools as tools
 

@@ -179,8 +179,8 @@ async def owned_conversation(
     into the tool's own ``except``, which is today's behaviour for a store that
     is down — unlike the route seams, there is a handler here already.
 
-    #2105 owns replacing the model-supplied argument with the bound session;
-    until then this is what makes keeping it safe.
+    #2105 made the argument optional, defaulting to the bound session; this is
+    what keeps a model that still names one honest.
     """
     if not session_id:
         return None
