@@ -132,14 +132,20 @@ def _national_trx(df: pd.DataFrame, month: Optional[str]) -> Dict[str, float]:
     return {str(b): float(v) for b, v in d.groupby("brand")["value"].sum().items()}
 
 
+def _differs(new: pd.Series, old: pd.Series, tolerance: float = 0.005) -> pd.Series:
+    """Row-wise change mask. NaN arithmetic compares False, so a null on exactly
+    one side is counted explicitly; null on both sides is unchanged."""
+    return ((new - old).abs() > tolerance) | (new.isna() != old.isna())
+
+
 def diff_summary(db: pd.DataFrame, regen: pd.DataFrame, scale_month: str) -> Dict[str, Any]:
     """What ``--execute`` would change. Pure; both frames carry DIFF_COLUMNS."""
     db_ids, regen_ids = set(db["metric_id"]), set(regen["metric_id"])
     merged = regen[DIFF_COLUMNS].merge(
         db[["metric_id", "value", "target"]], on="metric_id", suffixes=("", "_db")
     )
-    value_changed = int(((merged["value"] - merged["value_db"]).abs() > 0.005).sum())
-    target_changed = int(((merged["target"] - merged["target_db"]).abs() > 0.005).sum())
+    value_changed = int(_differs(merged["value"], merged["value_db"]).sum())
+    target_changed = int(_differs(merged["target"], merged["target_db"]).sum())
 
     def scale(month: Optional[str]) -> Dict[str, Dict[str, float]]:
         before, after = _national_trx(db, month), _national_trx(regen, month)
@@ -236,20 +242,39 @@ def execute_refusal(
 
 
 def existing_metric_ids(
-    client: Any, ids: Sequence[str], chunk_size: int = ID_LOOKUP_CHUNK
+    client: Any,
+    ids: Sequence[str],
+    chunk_size: int = ID_LOOKUP_CHUNK,
+    page_size: int = PAGE_SIZE,
 ) -> List[str]:
     """Which of ``ids`` already exist in business_metrics under ANY metric_name,
     NULL included. ``fetch_db_aggregate_rows`` filters on metric_name, so a row
     this run would INSERT can collide with a non-aggregate row that diff_summary
-    never saw (and whose target it never compared)."""
+    never saw (and whose target it never compared). Each chunk is paged with the
+    same cap-agnostic ``.range()`` idiom as the aggregate read (#931/#938).
+
+    The lookup and the upsert are not atomic, by design: the only other writer of
+    these ids is the frontier-append cron, which builds them with the same
+    deterministic generator (``generate_month_cohort`` / ``generate_nbrx_rows``),
+    so a row it inserts in between is byte-identical to the one written here."""
     found: set[str] = set()
     wanted = list(ids)
     for start in range(0, len(wanted), chunk_size):
         chunk = wanted[start : start + chunk_size]
-        rows = (
-            client.table("business_metrics").select("metric_id").in_("metric_id", chunk).execute()
-        ).data
-        found.update(str(r["metric_id"]) for r in rows)
+        offset = 0
+        while True:
+            rows = (
+                client.table("business_metrics")
+                .select("metric_id")
+                .in_("metric_id", chunk)
+                .order("metric_id")
+                .range(offset, offset + page_size - 1)
+                .execute()
+            ).data
+            if not rows:
+                break
+            found.update(str(r["metric_id"]) for r in rows)
+            offset += len(rows)
     return sorted(found)
 
 
@@ -395,6 +420,7 @@ def main(argv: Optional[Sequence[str]] = None, loader: Optional[Any] = None) -> 
         0
         if (
             post["value_changed"] == 0
+            and post["target_changed"] == 0
             and not post["ids_only_in_regen"]
             and not post["new_series_ids"]
         )

@@ -185,66 +185,78 @@ _NBRX = ("nbrx_202607_kisqali_midwest", "2026-07-01", "Kisqali", "midwest", "nbr
 
 class _FakeQuery:
     """The PostgREST subset the script uses: select / in_ / order / range / execute.
-    ``in_`` never matches NULL, like SQL ``IN``."""
+    ``in_`` never matches NULL, like SQL ``IN``. ``cap`` truncates every response
+    to that many rows, like a server-side max-rows setting."""
 
-    def __init__(self, rows):
+    def __init__(self, rows, cap=None):
         self._rows = rows
+        self._cap = cap
 
     def select(self, _columns):
         return self
 
     def in_(self, column, values):
         wanted = set(values)
-        return _FakeQuery([r for r in self._rows if r.get(column) in wanted])
+        return _FakeQuery([r for r in self._rows if r.get(column) in wanted], self._cap)
 
     def order(self, column):
-        return _FakeQuery(sorted(self._rows, key=lambda r: r[column]))
+        return _FakeQuery(sorted(self._rows, key=lambda r: r[column]), self._cap)
 
     def range(self, start, end):
-        return _FakeQuery(self._rows[start : end + 1])
+        return _FakeQuery(self._rows[start : end + 1], self._cap)
 
     def execute(self):
-        return SimpleNamespace(data=[dict(r) for r in self._rows])
+        rows = self._rows if self._cap is None else self._rows[: self._cap]
+        return SimpleNamespace(data=[dict(r) for r in rows])
 
 
 class _FakeClient:
-    def __init__(self, rows):
+    def __init__(self, rows, cap=None):
         self.rows = [dict(r) for r in rows]
         self.lookups = 0
+        self._cap = cap
 
     def table(self, name):
         assert name == "business_metrics"
         self.lookups += 1
-        return _FakeQuery(self.rows)
+        return _FakeQuery(self.rows, self._cap)
 
 
 class _FakeLoader:
     """Upserts on metric_id into the fake table; ``drop_ids`` are silently not
-    written (an incomplete upsert the re-read must catch)."""
+    written (an incomplete upsert the re-read must catch) and ``target_shift_ids``
+    are written with target + 1 (a target the re-read must catch)."""
 
-    def __init__(self, client, drop_ids=()):
+    def __init__(self, client, drop_ids=(), target_shift_ids=()):
         self.client = client
         self.calls = []
         self._drop = set(drop_ids)
+        self._shift = set(target_shift_ids)
 
     def load_table(self, table, df):
         self.calls.append((table, len(df)))
         by_id = {r["metric_id"]: r for r in self.client.rows}
         for rec in df.to_dict("records"):
-            if rec["metric_id"] not in self._drop:
-                by_id[rec["metric_id"]] = {c: rec[c] for c in reseed.DIFF_COLUMNS}
+            if rec["metric_id"] in self._drop:
+                continue
+            row = {c: rec[c] for c in reseed.DIFF_COLUMNS}
+            if rec["metric_id"] in self._shift:
+                row["target"] = row["target"] + 1.0
+            by_id[rec["metric_id"]] = row
         self.client.rows = list(by_id.values())
         return SimpleNamespace(
             records_loaded=len(df) - len(self._drop), records_failed=0, total_batches=1, errors=[]
         )
 
 
-def _run_main(monkeypatch, db_specs, regen_specs, flags, drop_ids=(), raw_db_rows=()):
+def _run_main(
+    monkeypatch, db_specs, regen_specs, flags, drop_ids=(), raw_db_rows=(), target_shift_ids=()
+):
     regen = _rows(*regen_specs)
     regen["is_synthetic"] = True
     monkeypatch.setattr(reseed, "build_reseed_frame", lambda frontier: regen)
     client = _FakeClient(_rows(*db_specs).to_dict("records") + list(raw_db_rows))
-    loader = _FakeLoader(client, drop_ids)
+    loader = _FakeLoader(client, drop_ids, target_shift_ids)
     code = reseed.main(["--execute", "--frontier", "2026-08-30", *flags], loader=loader)
     return code, loader
 
@@ -329,4 +341,61 @@ class TestExecutePath:
         ids = [r["metric_id"] for r in rows] + ["nbrx_202612_kisqali_west"]
         found = reseed.existing_metric_ids(client, ids, chunk_size=2)
         assert found == sorted(r["metric_id"] for r in rows)
-        assert client.lookups == 3
+        # one page plus the terminating empty page per chunk (cap-agnostic paging)
+        assert client.lookups == 6
+
+    def test_the_id_lookup_pages_past_a_per_response_row_cap(self):
+        rows = [
+            {"metric_id": f"nbrx_20260{m}_kisqali_west", "metric_name": None} for m in range(1, 8)
+        ]
+        client = _FakeClient(rows, cap=3)
+        ids = [r["metric_id"] for r in rows]
+        found = reseed.existing_metric_ids(client, ids)  # a single 100-id chunk
+        assert found == sorted(ids)
+        assert "nbrx_202607_kisqali_west" in found  # beyond the first 3-row response
+
+    def test_an_existing_nbrx_row_with_a_null_db_target_refuses_before_load(self, monkeypatch):
+        null_target = (*_NBRX[:6], None)
+        code, loader = _run_main(
+            monkeypatch, [_LEGACY, null_target], [_LEGACY, _NBRX], ["--allow-new-series"]
+        )
+        assert code == 3 and loader.calls == []
+
+    def test_a_target_altered_on_re_read_exits_1(self, monkeypatch, capsys):
+        code, loader = _run_main(
+            monkeypatch,
+            [_LEGACY],
+            [_LEGACY, _NBRX],
+            ["--allow-new-series"],
+            target_shift_ids=[_NBRX[0]],
+        )
+        assert len(loader.calls) == 1
+        assert code == 1
+        assert "target mismatches=1" in capsys.readouterr().out
+
+
+class TestNullTransitions:
+    """NaN arithmetic compares False, so a null on exactly one side must be
+    counted explicitly (codex r2)."""
+
+    @staticmethod
+    def _frame(column, value):
+        spec = list(_LEGACY)
+        spec[5 if column == "value" else 6] = value
+        frame = _rows(tuple(spec))
+        # the numeric coercion fetch_db_aggregate_rows applies to live rows
+        frame[["value", "target"]] = frame[["value", "target"]].astype(float)
+        return frame
+
+    @pytest.mark.parametrize("column", ["value", "target"])
+    @pytest.mark.parametrize(
+        ("db_value", "regen_value", "changed"),
+        [(None, 10.0, 1), (10.0, None, 1), (None, None, 0)],
+    )
+    def test_a_null_on_exactly_one_side_is_a_change(self, column, db_value, regen_value, changed):
+        s = diff_summary(
+            self._frame(column, db_value),
+            self._frame(column, regen_value),
+            scale_month="2026-07-01",
+        )
+        assert s[f"{column}_changed"] == changed
