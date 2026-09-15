@@ -450,15 +450,20 @@ class ScopeDefinerAgent:
 
         ``store_scope_definition`` was defined but never called from ``run()`` AND
         called a non-existent ``insert_episodic_memory`` signature — both fixed
-        (compat shim + migration 039). Graceful degradation. ``session_id`` is the
-        ``audit_workflow_id`` (uuid column) or a fresh UUID — never the non-UUID
-        ``experiment_id``.
+        (compat shim + migration 039). Graceful degradation. ``session_id`` is always
+        ``None`` (#2099): the audit workflow id is a correlation handle, not a
+        conversation, and it is persisted in the episodic ``raw_content``. The
+        non-UUID ``experiment_id`` is never used as a session either.
         """
         try:
             experiment_id = output.get("experiment_id")
             if not experiment_id:
                 return
-            session_id = str(output.get("audit_workflow_id") or uuid4())
+            # No session here (#2099). The audit workflow id is the audit
+            # chain's identity, not a conversation, and episodic_memories
+            # .session_id means "which conversation" -- so it travels in
+            # raw_content instead and this column records an honest NULL.
+            session_id = None
             hooks = ScopeDefinerMemoryHooks()
             await hooks.store_scope_definition(session_id=session_id, result=output, state=output)
         except Exception as e:

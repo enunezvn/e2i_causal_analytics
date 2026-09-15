@@ -273,6 +273,14 @@ class ModelTrainerMemoryHooks:
 
             content = {
                 "experiment_id": state.get("experiment_id"),
+                # The audit chain's workflow id used to be persisted AS the session
+                # (#2099). It is a real correlation handle but not a conversation,
+                # so it keeps its value here. Absent when the state has none.
+                **(
+                    {"audit_workflow_id": str(state["audit_workflow_id"])}
+                    if state.get("audit_workflow_id")
+                    else {}
+                ),
                 "training_run_id": result.get("training_run_id"),
                 "model_id": result.get("model_id"),
                 "algorithm_name": state.get("algorithm_name"),

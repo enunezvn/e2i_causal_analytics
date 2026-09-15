@@ -264,6 +264,14 @@ class ModelSelectorMemoryHooks:
 
             content = {
                 "experiment_id": state.get("experiment_id"),
+                # The audit chain's workflow id used to be persisted AS the session
+                # (#2099). It is a real correlation handle but not a conversation,
+                # so it keeps its value here. Absent when the state has none.
+                **(
+                    {"audit_workflow_id": str(state["audit_workflow_id"])}
+                    if state.get("audit_workflow_id")
+                    else {}
+                ),
                 "algorithm_name": result.get("algorithm_name"),
                 "algorithm_family": result.get("algorithm_family"),
                 "algorithm_class": result.get("algorithm_class"),

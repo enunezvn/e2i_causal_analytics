@@ -260,6 +260,14 @@ class ModelDeployerMemoryHooks:
 
             content = {
                 "experiment_id": state.get("experiment_id"),
+                # The audit chain's workflow id used to be persisted AS the session
+                # (#2099). It is a real correlation handle but not a conversation,
+                # so it keeps its value here. Absent when the state has none.
+                **(
+                    {"audit_workflow_id": str(state["audit_workflow_id"])}
+                    if state.get("audit_workflow_id")
+                    else {}
+                ),
                 "deployment_id": result.get("deployment_id"),
                 "model_uri": state.get("model_uri"),
                 "model_version": result.get("model_version"),

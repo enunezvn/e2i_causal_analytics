@@ -320,6 +320,14 @@ class ScopeDefinerMemoryHooks:
 
             content = {
                 "experiment_id": result.get("experiment_id"),
+                # The audit chain's workflow id used to be persisted AS the session
+                # (#2099). It is a real correlation handle but not a conversation,
+                # so it keeps its value here. Absent when the state has none.
+                **(
+                    {"audit_workflow_id": str(state["audit_workflow_id"])}
+                    if state.get("audit_workflow_id")
+                    else {}
+                ),
                 "experiment_name": result.get("experiment_name"),
                 "problem_type": state.get("inferred_problem_type"),
                 "target_variable": state.get("inferred_target_variable"),
