@@ -536,3 +536,85 @@ async def test_an_unknown_session_keeps_todays_answer(memory_tool, bound_caller)
 
     assert result["success"] is False
     assert "Conversation not found" in result["error"]
+
+
+# ------------- round 2 MEDIUM: the plain routes, through the real handlers
+
+
+@pytest.fixture
+def chat_client(monkeypatch, conversations):
+    """A TestClient over the real router, authenticated as CALLER.
+
+    The resolver-level tests above cannot see the ``await`` at
+    ``copilotkit.py:~5434`` and ``:~5510``: drop either one and
+    ``_resolve_chat_identity`` returns an un-awaited coroutine, the gate never
+    runs, and the turn proceeds. Only the handler answers that.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from src.api.dependencies.auth import require_viewer
+
+    monkeypatch.setattr(ck, "TESTING_MODE", False)
+
+    app = FastAPI()
+    app.include_router(ck.router)
+    app.dependency_overrides[require_viewer] = lambda: {"id": CALLER}
+    return TestClient(app)
+
+
+@pytest.fixture
+def graph_calls(monkeypatch):
+    """Doubles for the two graph entry points, recording whether they ran."""
+    import src.api.routes.chatbot_graph as graph
+
+    calls: Dict[str, int] = {"run": 0, "stream": 0}
+
+    async def _run_chatbot(**kwargs: Any) -> Dict[str, Any]:
+        calls["run"] += 1
+        return {"response_text": "ok", "session_id": kwargs.get("session_id", "")}
+
+    async def _stream_chatbot(**kwargs: Any):
+        calls["stream"] += 1
+        return
+        yield  # pragma: no cover - makes this an async generator
+
+    monkeypatch.setattr(graph, "run_chatbot", _run_chatbot)
+    monkeypatch.setattr(graph, "stream_chatbot", _stream_chatbot)
+    return calls
+
+
+def _body(session_id: Optional[str]) -> Dict[str, Any]:
+    return {"query": "What is TRx?", "user_id": CALLER, "session_id": session_id}
+
+
+async def test_chat_handler_refuses_a_foreign_existing_session(chat_client, graph_calls):
+    response = chat_client.post("/copilotkit/chat", json=_body(VICTIM_THREAD))
+
+    assert response.status_code == 403
+    assert graph_calls["run"] == 0, "the graph ran on someone else's conversation"
+
+
+async def test_chat_stream_handler_refuses_a_foreign_existing_session(chat_client, graph_calls):
+    """403 as the HTTP status, not an error frame inside a 200 SSE body."""
+    response = chat_client.post("/copilotkit/chat/stream", json=_body(VICTIM_THREAD))
+
+    assert response.status_code == 403
+    assert "text/event-stream" not in response.headers.get("content-type", "")
+    assert graph_calls["stream"] == 0, "the stream body started on a foreign conversation"
+
+
+@pytest.mark.parametrize("session_id", [CALLER_THREAD, NEW_THREAD])
+async def test_chat_handler_accepts_real_traffic(session_id, chat_client, graph_calls):
+    response = chat_client.post("/copilotkit/chat", json=_body(session_id))
+
+    assert response.status_code == 200
+    assert graph_calls["run"] == 1
+
+
+@pytest.mark.parametrize("session_id", [CALLER_THREAD, NEW_THREAD])
+async def test_chat_stream_handler_accepts_real_traffic(session_id, chat_client, graph_calls):
+    response = chat_client.post("/copilotkit/chat/stream", json=_body(session_id))
+
+    assert response.status_code == 200
+    assert graph_calls["stream"] == 1
