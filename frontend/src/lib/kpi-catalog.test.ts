@@ -125,9 +125,18 @@ describe('semantic types', () => {
     }
   });
 
-  it('types Rx volumes and user counts as counts', () => {
-    for (const id of ['WS3-BI-005', 'WS3-BI-006', 'WS3-BI-007', 'WS3-BI-001']) {
+  it('types user counts and patient-panel Rx event counts as counts', () => {
+    for (const id of ['WS3-BI-001', 'WS3-BI-011', 'WS3-BI-012', 'WS3-BI-013']) {
       expect(KPI_CATALOG.find((e) => e.id === id)?.semanticType).toBe('Count');
+    }
+  });
+
+  it('types the canonical monthly Rx volumes as numbers', () => {
+    // Canonical TRx lane: WS3-BI-005..007 are modeled monthly LEVELS over
+    // business_metrics (fractional), not integer event counts — the patient-panel
+    // KPIs above are the counts.
+    for (const id of ['WS3-BI-005', 'WS3-BI-006', 'WS3-BI-007']) {
+      expect(KPI_CATALOG.find((e) => e.id === id)?.semanticType).toBe('Number');
     }
   });
 

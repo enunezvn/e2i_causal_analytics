@@ -66,3 +66,56 @@ def test_importing_it_is_cheap():
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120)
     assert out.returncode == 0, out.stderr[-2000:]
     assert out.stdout.strip() == "[]", out.stdout
+
+
+import pytest  # noqa: E402
+
+from src.kpi.volume_family import CANONICAL_TO_PANEL  # noqa: E402
+
+
+@pytest.fixture(scope="module")
+def registry():
+    from src.kpi.registry import get_registry
+
+    return get_registry()
+
+
+def test_every_family_id_is_registered(registry):
+    for canonical, panel in CANONICAL_TO_PANEL.items():
+        assert registry.get(canonical) is not None, canonical
+        assert registry.get(panel) is not None, panel
+
+
+@pytest.mark.parametrize("kpi_id", sorted(CANONICAL_TO_PANEL))
+def test_canonical_volume_reads_business_metrics_monthly(registry, kpi_id):
+    kpi = registry.get(kpi_id)
+    assert kpi.tables == ["business_metrics"]
+    assert kpi.windowable == "clean" and kpi.window == {"column": "metric_date"}
+    assert kpi.frequency == "monthly"
+    assert "Panel" not in kpi.name
+    caveat = (kpi.measurement_caveat or "").lower()
+    assert CANONICAL_TO_PANEL[kpi_id].lower() in caveat
+    assert "in-progress month" in caveat and "seasonal" in caveat
+
+
+@pytest.mark.parametrize("kpi_id", sorted(CANONICAL_TO_PANEL.values()))
+def test_panel_reads_the_event_ledger(registry, kpi_id):
+    kpi = registry.get(kpi_id)
+    assert kpi.tables == ["treatment_events"]
+    assert kpi.windowable == "clean" and kpi.window == {"column": "event_date"}
+    assert kpi.name.startswith("Observed Rx Events - Patient Panel ")
+    assert kpi.name.endswith(" Panel)")
+    assert "different" in (kpi.measurement_caveat or "").lower()
+
+
+def test_canonical_share_has_no_event_era_threshold(registry):
+    assert registry.get("WS3-BI-008").threshold is None
+    panel = registry.get("WS3-BI-014").threshold
+    assert panel is not None and panel.target == 0.30
+
+
+def test_canonical_names_are_unchanged(registry):
+    assert registry.get("WS3-BI-005").name == "Total Prescriptions (TRx)"
+    assert registry.get("WS3-BI-006").name == "New Prescriptions (NRx)"
+    assert registry.get("WS3-BI-007").name == "New-to-Brand Prescriptions (NBRx)"
+    assert registry.get("WS3-BI-008").name == "TRx Share"

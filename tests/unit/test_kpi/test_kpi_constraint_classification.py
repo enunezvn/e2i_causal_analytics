@@ -59,6 +59,10 @@ def test_ws1_dq_006_renamed_to_gap_with_direction(registry):
         ("WS3-BI-006", "claims"),  # NRx
         ("WS3-BI-007", "claims"),  # NBRx
         ("WS3-BI-008", "claims"),  # TRx share
+        ("WS3-BI-011", "claims"),  # TRx Panel (observed Rx events)
+        ("WS3-BI-012", "claims"),  # NRx Panel
+        ("WS3-BI-013", "claims"),  # NBRx Panel
+        ("WS3-BI-014", "claims"),  # TRx Share Panel
     ],
     ids=lambda v: v if isinstance(v, str) else "",
 )
