@@ -19,12 +19,22 @@ silently fell back to the manual DAG. Discovery now recovers the trailing sessio
 with the shared ``coerce_session_uuid`` (a bare uuid unchanged, ``None`` for anything
 malformed).
 
-The session stays RAW in the agent's state; only discovery coerces it (for the uuid
-column the discovery runner persists into) and only the episodic writer coerces it
-(``_coerce_session_id``, #1404). Doubles in these tests: the discovery runner, the
-memory hook's writer, and a probe agent registered under a test-local dispatch spec.
-The dispatcher, its resolver merge, ``_initialize_state``, ``_contribute_to_memory``,
-``store_causal_analysis`` and ``_run_discovery`` are the real ones.
+The session stays RAW in the agent's state. Four boundaries coerce it, each for its
+own uuid column: discovery (``_run_discovery`` -> ``coerce_session_uuid``); the episodic
+writer (``insert_episodic_memory_with_text``, ``_coerce_session_id`` at
+episodic_memory.py:751, #1404); the audit chain (audit_chain_mixin.py:516 forwards the
+raw state value, utils/audit_chain.py:326 coerces it, child entries inherit the parent's
+at :401); and the discovered-DAG repository (``_as_uuid_str`` at discovered_dag.py:110,
+called at :207 -- routed through the shared helper by this lane's Part C).
+
+Doubles in these tests, and nothing else: the discovery runner
+(``_discovery_runner.discover_dag``) and the discovery gate (``_discovery_gate.evaluate``);
+the memory contribution recorder (``memory_hooks.contribute_to_memory``); the episodic
+writer (``insert_episodic_memory_with_text``); the activity persist
+(``memory_hooks.persist_agent_activity``); and two probe agents plus a fake resolver
+registered under test-local dispatch entries. The dispatcher, its resolver merge,
+``_initialize_state``, ``_contribute_to_memory``, ``store_causal_analysis`` and
+``_run_discovery`` are the real ones.
 """
 
 from __future__ import annotations
@@ -83,17 +93,20 @@ def _init(**extra: Any) -> CausalImpactState:
 
 
 def test_initialize_state_keeps_the_callers_session_raw():
-    """A composite id is kept verbatim: no parse, no coercion, no mint here."""
+    """RED on the base (``KeyError``): a composite id is kept verbatim -- no parse, no
+    coercion, no mint here."""
     assert _init(session_id=_COMPOSITE)["session_id"] == _COMPOSITE
 
 
 def test_initialize_state_without_a_session_leaves_the_key_absent():
-    """``session_id`` is ``NotRequired``: a session-less call leaves it absent, so the
-    memory write's ``state.get("session_id") or None`` stores an honest NULL."""
+    """GREEN on the base (the key was never set): ``session_id`` is ``NotRequired``, a
+    session-less call leaves it absent, so the memory write's
+    ``state.get("session_id") or None`` stores an honest NULL."""
     assert "session_id" not in _init()
 
 
 def test_initialize_state_treats_an_empty_session_as_absent():
+    """GREEN on the base, pinned so the fix keeps ``""`` out of the state."""
     assert "session_id" not in _init(session_id="")
 
 
