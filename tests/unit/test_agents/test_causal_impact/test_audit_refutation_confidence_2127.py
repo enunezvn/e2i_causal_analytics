@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import re
 
 import pytest
 
@@ -197,6 +198,46 @@ async def test_refutation_early_failure_row_is_null_without_warning(
 
 
 # ---------------------------------------------------------------------------
+# T2b (round 3) — a failed-closed node must not inherit a score. The node's
+# error returns spread the INPUT state, so a ``refutation_confidence`` already
+# in that state rides along on the error return although THIS invocation ran
+# no suite. The wrapper gates on its own failed-closed verdict, not on key
+# presence. Reachable only by invoking the traced node directly with such a
+# dict: ``CausalImpactState`` declares no ``refutation_confidence`` channel, so
+# the compiled graph never carries one — this pins the intent, not a live
+# defect. RED on HEAD (bdfeeaac8): 0.91 recorded on the refutation_error row.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_refutation_failed_closed_row_does_not_inherit_a_stale_score(
+    mock_audit_service, mock_opik, base_state, caplog
+):
+    node = _refutation_node(
+        {
+            "status": "failed",
+            "refutation_error": "DoWhy model unavailable",
+            "error_message": "DoWhy model unavailable",
+            # Stale score spread from the input state by the node's error return.
+            "refutation_confidence": 0.91,
+        }
+    )
+    with caplog.at_level(logging.WARNING, logger=GRAPH_LOGGER):
+        await node(base_state)
+
+    assert mock_audit_service.add_entry.call_count == 1
+    kwargs = mock_audit_service.add_entry.call_args.kwargs
+    assert kwargs["action_type"] == "refutation_error"
+    assert kwargs["confidence_score"] is None, (
+        "this invocation ran no suite — the refutation_error row must be NULL, not "
+        f"the score inherited from the input state; got {kwargs['confidence_score']!r}"
+    )
+    assert kwargs["validation_passed"] is False
+    assert kwargs["refutation_results"] is None
+    assert not _warnings(caplog, "refutation_confidence")
+
+
+# ---------------------------------------------------------------------------
 # T3 — a value that is not a number in [0, 1] is a runner bug, not a value to
 # store: None + exactly one WARNING. On base the value is None either way
 # (never read), so the None half is a pin; the WARNING half is RED on base.
@@ -346,11 +387,12 @@ def test_node_return_shape_pins_both_carriers_to_suite_confidence_score():
     """``RefutationNode.execute`` returns ``refutation_confidence`` as
     ``suite.confidence_score`` beside ``refutation_results`` (the legacy dict
     whose ``confidence_adjustment`` is the same attribute). Running the node
-    needs DoWhy + persistence, so the return shape is pinned on its source."""
+    needs DoWhy + persistence, so the return shape is pinned on its source
+    (whitespace-tolerant, so a reformat does not trip it)."""
     src = inspect.getsource(RefutationNode.execute)
-    assert '"refutation_confidence": suite.confidence_score,' in src
-    assert '"refutation_results": refutation_results,' in src
-    assert "refutation_results = cast(RefutationResults, suite.to_legacy_format())" in src
+    assert re.search(r'"refutation_confidence":\s*suite\.confidence_score', src)
+    assert re.search(r'"refutation_results":\s*refutation_results', src)
+    assert re.search(r"suite\.to_legacy_format\(\)", src)
 
 
 @pytest.mark.asyncio
