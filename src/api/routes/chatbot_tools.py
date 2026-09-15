@@ -27,7 +27,7 @@ from langchain_core.tools import tool
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.agents.tool_composer import compose_query
-from src.api.routes.chat_identity import _composer_context, resolve_tool_user_id
+from src.api.routes.chat_identity import _composer_context, owned_conversation, resolve_tool_user_id
 from src.api.routes.chatbot_dspy import (
     CHATBOT_DSPY_ROUTING_ENABLED,
     VALID_AGENTS,
@@ -1405,8 +1405,8 @@ async def conversation_memory_tool(
         msg_repo = get_chatbot_message_repository(client)
         conv_repo = get_chatbot_conversation_repository(client)
 
-        # Get conversation metadata
-        conversation = await conv_repo.get_by_session_id(session_id)
+        # #2107: the caller must own it; a refusal reads as "not found" below.
+        conversation = await owned_conversation(conv_repo, session_id)
         if not conversation:
             return {
                 "success": False,

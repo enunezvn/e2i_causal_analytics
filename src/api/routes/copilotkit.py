@@ -4704,7 +4704,7 @@ async def copilotkit_custom_handler(
                 # Extract parameters - check both nested body and top level (AG-UI protocol varies)
                 # Some SDK versions send {"method": "agent/run", "body": {"threadId": ..., "messages": [...]}}
                 # Others send {"method": "agent/run", "threadId": ..., "messages": [...]}
-                thread_id = chat_identity.owned_thread_id(body_json, request, TESTING_MODE)
+                thread_id = await chat_identity.owned_thread_id(body_json, request, TESTING_MODE)
                 if thread_id is None:
                     return JSONResponse(status_code=403, content={"error": "threadId not yours"})
                 state = body_data.get("state") or body_json.get("state") or {}
@@ -4878,7 +4878,7 @@ async def copilotkit_custom_handler(
         body_bytes = b""
 
     # #2077: same thread-ownership policy as the root branch, which never ran here.
-    if method != "OPTIONS" and chat_identity.sdk_thread_denied(body_bytes, request, TESTING_MODE):
+    if await chat_identity.sdk_thread_denied(body_bytes, request, TESTING_MODE, method):
         return JSONResponse(status_code=403, content={"error": "threadId not yours"})
 
     # For all other paths, delegate to SDK handler
@@ -5097,7 +5097,7 @@ _EMPTY_STREAM_FALLBACK = (
 )
 
 
-def _resolve_chat_identity(authenticated_user: Dict[str, Any], chat_request: ChatRequest) -> str:
+async def _resolve_chat_identity(authenticated_user: dict, chat_request: ChatRequest) -> str:
     """Resolve the authoritative chat identity from the authenticated token.
 
     Finding 1 [HIGH IDOR]: ``ChatRequest.user_id`` was a required request-body
@@ -5131,7 +5131,7 @@ def _resolve_chat_identity(authenticated_user: Dict[str, Any], chat_request: Cha
             detail="Authenticated user identity is missing.",
         )
 
-    return chat_identity.authorize_chat_identity(token_user_id, chat_request, TESTING_MODE)
+    return await chat_identity.authorize_chat_identity(token_user_id, chat_request, TESTING_MODE)
 
 
 def _resolve_chat_brand(authenticated_user: Dict[str, Any], requested_brand: Optional[str]) -> str:
@@ -5431,7 +5431,7 @@ async def stream_chat(
         }
     """
     # Finding 1: derive identity from the authenticated token, never the body.
-    authenticated_user_id = _resolve_chat_identity(_user, chat_request)
+    authenticated_user_id = await _resolve_chat_identity(_user, chat_request)
     # H1 (#694): a brand_context outside the caller's grants would let them poison
     # another tenant's scoped causal-graph view via store_causal_path -> reject.
     chat_request.brand_context = _resolve_chat_brand(_user, chat_request.brand_context)
@@ -5507,7 +5507,7 @@ async def chat(
     # Finding 1: derive identity from the authenticated token, never the body.
     # (Outside the try/except so a 403 propagates instead of being swallowed
     # into a 200 error body.)
-    authenticated_user_id = _resolve_chat_identity(_user, chat_request)
+    authenticated_user_id = await _resolve_chat_identity(_user, chat_request)
     # H1 (#694): a brand_context outside the caller's grants would let them poison
     # another tenant's scoped causal-graph view via store_causal_path -> reject.
     chat_request.brand_context = _resolve_chat_brand(_user, chat_request.brand_context)
