@@ -311,7 +311,7 @@ def _json_payload(frame: str) -> Any:
 # ------------------------------------------------------ teardown under one context
 
 
-async def _next_body_frame(stream: Any) -> Any:
+async def _next_body_frame(stream: Any, timeout: float = 5.0) -> Any:
     """The next frame from ``stream`` that is not a keepalive heartbeat.
 
     A heartbeat is emitted whenever a pull outlives the interval, and a loaded
@@ -319,11 +319,29 @@ async def _next_body_frame(stream: Any) -> Any:
     them keeps the frame assertions from racing the clock. The heartbeat
     assertions in the test are gated on a pull that provably cannot finish, so
     they stay exact rather than going through here.
+
+    Bounded on purpose: a body that stops yielding would otherwise be skipped
+    over forever and surface only as the suite timeout killing this worker,
+    which reports nothing about which frame never came.
     """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    skipped = 0
+
+    def _expired() -> AssertionError:
+        return AssertionError(f"no body frame within {timeout}s ({skipped} keepalive(s) seen)")
+
     while True:
-        frame = await stream.__anext__()
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            raise _expired()
+        try:
+            frame = await asyncio.wait_for(stream.__anext__(), timeout=remaining)
+        except TimeoutError as exc:
+            raise _expired() from exc
         if frame != SSE_KEEPALIVE_FRAME:
             return frame
+        skipped += 1
 
 
 async def test_a_keepalive_then_an_early_disconnect_keep_the_shared_frame_context():
@@ -335,12 +353,14 @@ async def test_a_keepalive_then_an_early_disconnect_keep_the_shared_frame_contex
 
     Then an early disconnect with a pull still OUTSTANDING — the case a
     disconnect between frames never reaches, because the wrapper has already
-    nulled ``pending`` and its teardown cancels nothing. Cancelling a live pull
-    re-enters the shared context one last time: the task owns it, so the body's
-    ``except``/``finally`` run inside it, and that is where a ``RuntimeError:
-    cannot enter context`` would surface. The wrapper's own ``await pending``
-    and ``aclose()`` run in the consumer's context instead, which is why the
-    assertions below check the abandoned task rather than watch the wrapper.
+    nulled ``pending`` and its teardown cancels nothing. Here ``pending.cancel()``
+    itself runs in the caller's context; the pending task then resumes in the
+    shared frame context to receive its ``CancelledError`` and run the body's
+    handlers, which is the last entry into that context and the place a
+    ``RuntimeError: cannot enter context`` would surface. The wrapper's own
+    ``await pending`` and ``aclose()`` execute in the consumer's context, which
+    is why the assertions below inspect the abandoned task rather than the
+    wrapper.
 
     Both halves are driven by events rather than wall-clock sleeps, so the pull
     is guaranteed pending rather than merely likely. The body stands in for
