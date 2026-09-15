@@ -13,11 +13,12 @@ since #2113; a minted uuid before that).
 Keeping the session in state exposes a second defect: ``GraphBuilderNode._run_discovery``
 did ``UUID(session_id) if session_id else None``. The plain chat routes carry a composite
 ``{user}~{session}`` id, which never parses, so with the session in state the parse
-raised a ``ValueError`` inside ``_run_discovery``; ``execute`` catches it and records a
-``discovery_skip_reason``, so every plain-route causal turn with ``auto_discover`` set
-silently fell back to the manual DAG. Discovery now recovers the trailing session uuid
-with the shared ``coerce_session_uuid`` (a bare uuid unchanged, ``None`` for anything
-malformed).
+raised a ``ValueError`` inside ``_run_discovery``; ``execute`` catches it, logs it as a
+warning and surfaces it as ``discovery_skip_reason`` (also appended to the state's
+warnings), so every plain-route causal turn with ``auto_discover`` set still answered
+from the manual DAG -- visible to an operator reading the log or the state, not to the
+user. Discovery now recovers the trailing session uuid with the shared
+``coerce_session_uuid`` (a bare uuid in canonical form, ``None`` for anything malformed).
 
 The session stays RAW in the agent's state. Four boundaries coerce it, each for its
 own uuid column: discovery (``_run_discovery`` -> ``coerce_session_uuid``); the episodic

@@ -114,9 +114,11 @@ def _as_uuid_str(value: Any) -> Optional[str]:
     the composite ``{user}~{session}``, which a bare ``UUID()`` parse turned
     into ``None`` -- while discovery and the episodic writer both recover the
     trailing session uuid from the same id, so the DAG row was un-joinable to
-    the episodic row by session. The shared coercion keeps a bare uuid
-    unchanged, recovers the trailing uuid of a composite (``~bridge`` too) and
-    yields ``None`` for a malformed id rather than mis-associating it.
+    the episodic row by session. The shared coercion returns a bare uuid in
+    canonical form (an uppercase or unhyphenated spelling is canonicalised, and
+    then also kept in ``metadata.session_id_raw``), recovers the trailing uuid
+    of a composite (``~bridge`` too) and yields ``None`` for a malformed id
+    rather than mis-associating it.
     """
     if value is None or value == "":
         return None

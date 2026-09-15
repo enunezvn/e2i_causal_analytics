@@ -870,11 +870,13 @@ class GraphBuilderNode:
         # (#2116): a composite ``{user}~{session}`` on the plain routes, which
         # never parses as a uuid. A bare ``UUID(session_id)`` here raised a
         # ValueError inside this method; ``execute`` catches it (``except
-        # Exception`` around this call) and records ``discovery_skip_reason``,
-        # so with ``auto_discover`` set every plain-route causal turn silently
-        # fell back to the manual DAG. The shared coercion recovers the
-        # trailing session uuid, keeps a bare uuid unchanged and yields None
-        # (an honest null) for a malformed id.
+        # Exception`` around this call), logs it as a warning and surfaces it
+        # as ``discovery_skip_reason`` (also appended to the state's warnings),
+        # so with ``auto_discover`` set every plain-route causal turn still
+        # answered from the manual DAG -- visible to an operator reading the
+        # log or the state, not to the user. The shared coercion recovers the
+        # trailing session uuid, returns a bare uuid in canonical form and
+        # yields None (an honest null) for a malformed id.
         session_uuid = coerce_session_uuid(state.get("session_id"))
 
         result = await self.discovery_runner.discover_dag(
