@@ -204,8 +204,9 @@ class TestMonthCohortSeasonality:
         assert list(seasonal["metric_id"]) == list(flat["metric_id"])
         factor = 1 + SEASONAL_BP[8] / 10_000
 
-        volume = seasonal["metric_type"].isin(["trx", "nrx"])
-        assert volume.sum() == 24
+        # trx / nrx from the generator plus the 12 nbrx rows appended beside them.
+        volume = seasonal["metric_type"].isin(["trx", "nrx", "nbrx"])
+        assert volume.sum() == 36
         gap = (seasonal.loc[volume, "value"] - flat.loc[volume, "value"] * factor).abs()
         assert gap.max() <= 0.01, gap.max()
 
@@ -549,3 +550,50 @@ class TestAsOfRegression:
 
     def test_instant_registry_scope_is_exactly_feature_values(self):
         assert fa.INSTANT_COLUMNS == {"feature_values": "event_timestamp"}
+
+
+class TestNbrxRidesBesideCohorts:
+    """Canonical TRx lane: the monthly cron cohort and the frozen-base
+    regeneration both carry the nbrx series, without perturbing a single
+    existing row."""
+
+    def test_cohort_is_the_old_60_rows_plus_12_nbrx_rows(self):
+        bm = generate_month_cohort(date(2026, 8, 1))["business_metrics"]
+        assert len(bm) == 72
+        old = bm.iloc[:60].reset_index(drop=True)
+        assert (old["metric_id"] == [f"m2608_{i:04d}" for i in range(60)]).all()
+        assert set(old["metric_type"]) == {
+            "trx",
+            "nrx",
+            "market_share",
+            "conversion_rate",
+            "hcp_engagement_score",
+        }
+        expected = BusinessMetricsGenerator(
+            _cohort_config(trend_origin=fa.BM_TREND_ORIGIN)
+        ).generate()
+        for col in ("value", "target", "metric_date", "brand", "region", "metric_type"):
+            assert list(old[col]) == list(expected[col]), col
+        new = bm.iloc[60:]
+        assert set(new["metric_type"]) == {"nbrx"}
+        assert new["metric_id"].str.startswith("nbrx_202608_").all()
+
+    def test_base_nbrx_frame_covers_the_frozen_base_months(self):
+        frame = fa.base_nbrx_frame()
+        assert len(frame) == 1956
+        assert frame["metric_date"].min() == "2013-01-01"
+        assert frame["metric_date"].max() == "2026-07-01"
+
+    def test_frontier_datasets_carry_nbrx_up_to_the_frontier(self):
+        datasets = build_frontier_datasets(
+            frontier=date(2026, 8, 3),
+            as_of=datetime(2026, 8, 3, 3, 0),
+            include_coverage=False,
+            hcp_frame_factory=lambda: HCPGenerator(
+                GeneratorConfig(id_prefix="scv", seed=42, n_records=200)
+            ).generate(),
+        )
+        bm = datasets["business_metrics"]
+        nbrx = bm[bm["metric_type"] == "nbrx"]
+        assert len(nbrx) == 12 and set(nbrx["metric_date"]) == {"2026-08-01"}
+        assert bm["is_synthetic"].all()

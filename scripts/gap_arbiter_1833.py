@@ -65,6 +65,7 @@ from src.agents.gap_analyzer.nodes.roi_calculator import ROICalculatorNode
 from src.ml.synthetic.frontier_append import (
     BM_EPOCH,
     base_business_metrics_frame,
+    base_nbrx_frame,
     generate_month_cohort,
 )
 from src.ml.synthetic.generators.business_metrics_generator import BusinessMetricsGenerator
@@ -138,7 +139,8 @@ class FrameRepository:
 def build_frame(last_month: date) -> pd.DataFrame:
     """Frozen base (2013-01..2026-07) + monthly cohorts BM_EPOCH..last_month,
     exactly what the DB holds after the reseed + successive cron appends."""
-    frames = [base_business_metrics_frame()]
+    base = base_business_metrics_frame()
+    frames = [base, base_nbrx_frame(base)]
     ms = BM_EPOCH
     while ms <= last_month:
         frames.append(generate_month_cohort(ms)["business_metrics"])

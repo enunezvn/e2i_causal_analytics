@@ -66,6 +66,7 @@ from src.ml.synthetic.generators.experiment_generator import (
 from src.ml.synthetic.generators.feedback_generator import FeedbackGenerator
 from src.ml.synthetic.generators.mlops_generator import MLOpsGenerator
 from src.ml.synthetic.generators.model_metrics import stamp_model_metrics
+from src.ml.synthetic.generators.nbrx_series import generate_nbrx_rows
 from src.ml.synthetic.generators.observability_generator import ObservabilityGenerator
 from src.ml.synthetic.loaders import BatchLoader, LoaderConfig
 
@@ -243,6 +244,8 @@ def generate_datasets(
         n_records=sizes["business_metrics"],
     )
     bm_df = BusinessMetricsGenerator(bm_config).generate()
+    # Canonical TRx lane: nbrx is generated beside the stream, never inside it.
+    bm_df = pd.concat([bm_df, generate_nbrx_rows(bm_df)], ignore_index=True)
     datasets["business_metrics"] = bm_df
     logger.info(f"  Generated {len(bm_df):,} business metrics")
 
