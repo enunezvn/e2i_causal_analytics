@@ -36,9 +36,18 @@ def match_nullable_column(query: Any, column: str, value: Optional[str]) -> Any:
 #: ENUMERATED against the live server, not reasoned about (#2114 r6). PostgREST
 #: is Haskell and is not in our venv, so its translation layer cannot be read
 #: the way ``postgrest-py`` can -- ``base_request_builder.py:411`` forwards the
-#: pattern verbatim, which proves only that the client does nothing. 31 candidate
-#: characters were probed against the real server with a positive control (a row
-#: whose value contains a literal ``_``) and a negative control. Exactly these
+#: pattern verbatim, which proves only that the client does nothing. The probe
+#: covered a KNOWN-COMPLETE set -- every printable ASCII punctuation mark plus
+#: space, i.e. ``string.punctuation`` (32) + ``" "`` = **33 characters** -- each
+#: tested for BOTH wildcard roles against the real server, with a positive
+#: control (a row whose value contains a literal ``_``) and a negative control.
+#: The accounting closes exactly:
+#:
+#:     3 wildcards  +  1 special-not-wildcard (``\``)  +  29 literal  =  33
+#:
+#: and ``test_the_wildcard_set_is_the_ENUMERATED_one`` ASSERTS that partition
+#: against ``string.punctuation`` rather than restating the count, because a
+#: count in a comment is a claim and a set-difference is a check. Exactly these
 #: three widen:
 #:
 #:     ``*``  multi-char -- POSTGREST's own wildcard, translated to ``%``
@@ -49,12 +58,14 @@ def match_nullable_column(query: Any, column: str, value: Optional[str]) -> Any:
 #: one would stop matching:
 #:     , . : ( ) " ' ? # & = + space | [ ] { } ^ $ ! ~ / @ < > ; - `
 #:
-#: `-` and `` ` `` were the two probed LAST, after a set-difference of the first
-#: 30 against printable ASCII punctuation found them missing -- the claim had
-#: been one character wider than the evidence twice over. `-` is the one that
-#: could have mattered: it is plausible inside a real hyphenated brand or node
-#: value, so had it widened, an honest value would have been the victim. Both
-#: measured literal.
+#: `-` and `` ` `` were probed LAST: a set-difference of the first pass's own
+#: list against printable ASCII punctuation found them never probed, so the
+#: closed-class claim had been wider than the evidence under it. `-` is the one
+#: that could have mattered -- plausible inside a real hyphenated brand or node
+#: value, so had it widened the victim would have been an honest value, not an
+#: attacker. Both measured literal. (The totals were then wrong twice more, 30
+#: and 31, before being closed against the complete set above; hence asserting
+#: the partition instead of counting it.)
 #:
 #: The r5 version of this helper escaped only the two SQL wildcards, because it
 #: reasoned from SQL rather than from the stack. That closed a SHAPE and left the

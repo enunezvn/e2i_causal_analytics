@@ -7,6 +7,8 @@ reaches for it instead of writing its own (or forgetting to).
 
 from __future__ import annotations
 
+import string
+
 import pytest
 
 from src.repositories.query_utils import escape_like_pattern
@@ -59,14 +61,31 @@ class TestEscapeLikePattern:
         assert escape_like_pattern("\\_%*") == "\\\\\\_\\%\\*"
 
     def test_the_wildcard_set_is_the_ENUMERATED_one(self) -> None:
-        """The three wildcards were enumerated against the live server, not
-        reasoned about: 31 candidate characters probed with a positive and a
-        negative control. Exactly `*`, `%` and `_` widen; the other 29 --
-        , . : ( ) " ' ? # & = + space | [ ] { } ^ $ ! ~ / @ < > ; -- are
-        literal and MUST NOT be escaped, or an honest brand containing one
-        would stop matching.
+        """The three wildcards were enumerated against the LIVE server, not
+        reasoned about, and the class is closed against a KNOWN-COMPLETE set:
+        every printable ASCII punctuation mark plus space, 33 characters.
+
+        3 wildcards (`*` `%` `_`) + 1 special-not-wildcard (`\\`) + 29 literal
+        = 33. The accounting is ASSERTED below rather than stated, because
+        stating it is exactly what went wrong: an earlier revision claimed 30,
+        then 31, and its prose list disagreed with the loop beneath it. A count
+        in a docstring is a claim; a set-difference against ``string.punctuation``
+        is a check.
+
+        The literal characters MUST NOT be escaped -- an honest brand or node
+        value containing one would stop matching.
         """
-        for wild in ("*", "%", "_"):
+        wildcards = set("*%_")
+        special = set("\\")
+        literal = set(",.:()\"'?#&=+ |[]{}^$!~/@<>;-`")
+        complete = set(string.punctuation) | {" "}
+
+        # The class is closed: no candidate unaccounted for, none double-counted.
+        assert wildcards | special | literal == complete
+        assert not (wildcards & literal) and not (special & literal)
+        assert len(complete) == 33 and len(literal) == 29
+
+        for wild in sorted(wildcards):
             assert escape_like_pattern(wild) == "\\" + wild, wild
-        for literal in ",.:()\"'?#&=+ |[]{}^$!~/@<>;-`":
-            assert escape_like_pattern(literal) == literal, literal
+        for lit in sorted(literal):
+            assert escape_like_pattern(lit) == lit, lit

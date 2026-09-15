@@ -60,12 +60,18 @@ def _ilike_to_regex(pattern: str) -> re.Pattern[str]:
     unfalsifiable one.
 
     WHICH characters translate was ENUMERATED against the live server rather
-    than reasoned about -- 31 candidates probed with a positive and a negative
-    control, using a real value containing an underscore (``acceptance_status``)
-    as the discriminator:
+    than reasoned about, over a KNOWN-COMPLETE set: every printable ASCII
+    punctuation mark plus space (``string.punctuation`` + ``" "`` = 33), each
+    tested for both wildcard roles with a positive and a negative control, using
+    a real value containing an underscore (``acceptance_status``) as the
+    discriminator. 3 wildcards + 1 special (``\\``) + 29 literal = 33:
 
         wildcards : ``*`` (multi-char), ``%`` (multi-char), ``_`` (single char)
         literal   : , . : ( ) " ' ? # & = + space | [ ] { } ^ $ ! ~ / @ < > ; - `
+
+    ``test_the_wildcard_set_is_the_ENUMERATED_one`` asserts that partition
+    against ``string.punctuation``, so this list cannot drift from the helper
+    without a test failing.
 
     ``\\`` is not a wildcard but IS special: a dangling one is an API ERROR
     rather than a miss, which is why it is escaped first and never emitted bare.
