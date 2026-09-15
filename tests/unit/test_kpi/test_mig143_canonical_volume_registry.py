@@ -18,7 +18,8 @@ ROWS = gen.registry_rows()
 
 
 def test_committed_migration_is_the_generator_output():
-    assert MIGRATION.read_text() == gen.render()
+    # BYTES, not text: a CRLF rewrite changes the file while read_text() still matches.
+    assert MIGRATION.read_bytes() == gen.render().encode("utf-8")
 
 
 def test_seventeen_bases_each_with_one_synthetic_twin():
@@ -83,9 +84,26 @@ def test_the_rekey_is_collision_guarded_and_records_what_it_moved():
         assert f"['{old}', '{new}']" in block
 
 
+def test_notes_describe_the_aggregation_each_statement_performs():
+    """Nothing reads kpi_query_registry.note (measure_basis selects query_id,sql only),
+    but a note that misdescribes its own SQL is a trap for the next reader: the windowed
+    statements sum the months inside a window, they do not serve one month."""
+    for qid, _sql, _n, note in ROWS:
+        if "_windowed" in qid:
+            assert "latest complete month" not in note, qid
+            assert "summed over complete months fully inside [start, end]" in note, qid
+        elif "monthly_series" not in qid:
+            assert "for the latest complete month at the global TRx frontier" in note, qid
+        if "_region" in qid:
+            assert "for the specified region" in note, qid
+        if "trx_share" in qid:
+            assert "brand TRx / portfolio TRx" in note, qid
+
+
 def test_the_rollback_restores_only_what_the_migration_moved():
-    rollback = (MIGRATION.parent / "rollback_143_canonical_volume_kpis.sql").read_text()
-    assert rollback == gen.rollback_render()
+    path = MIGRATION.parent / "rollback_143_canonical_volume_kpis.sql"
+    rollback = path.read_text()
+    assert path.read_bytes() == gen.rollback_render().encode("utf-8")
     restore = gen.restore_sql()
     assert restore in rollback
     assert "a.disposition = 'moved' AND t.id = a.dest_history_id" in restore

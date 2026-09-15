@@ -155,6 +155,18 @@ _PARAM_DOC = {
 }
 
 
+#: What each statement aggregates, so a note never misdescribes its own SQL (codex r1).
+_TIME_SCOPE = {
+    False: "for the latest complete month at the global TRx frontier",
+    True: "summed over complete months fully inside [start, end]",
+}
+
+
+def _describe(subject: str, *, region: bool, windowed: bool) -> str:
+    scope = " for the specified region" if region else ""
+    return f"{subject} {_TIME_SCOPE[windowed]} over business_metrics{scope}"
+
+
 def registry_rows() -> List[Row]:
     rows: List[Row] = []
     for synthetic in (False, True):
@@ -164,14 +176,15 @@ def registry_rows() -> List[Row]:
             for variant, region, windowed in VARIANTS:
                 sql, n = volume_sql(metric, synthetic=synthetic, region=region, windowed=windowed)
                 note = (
-                    f"canonical TRx lane: {metric} latest complete month over business_metrics; "
+                    f"canonical TRx lane: {_describe(metric, region=region, windowed=windowed)}; "
                     f"{_PARAM_DOC[(variant, False)]}; {scope}"
                 )
                 rows.append((f"canonical_volume_{metric}{variant}{sfx}", sql, n, note))
         for variant, region, windowed in VARIANTS:
             sql, n = share_sql(synthetic=synthetic, region=region, windowed=windowed)
             note = (
-                "canonical TRx lane: brand share of portfolio trx over business_metrics; "
+                "canonical TRx lane: "
+                f"{_describe('brand TRx / portfolio TRx', region=region, windowed=windowed)}; "
                 f"{_PARAM_DOC[(variant, True)]}; {scope}"
             )
             rows.append((f"canonical_volume_trx_share{variant}{sfx}", sql, n, note))
@@ -393,7 +406,12 @@ def main(argv: List[str] | None = None) -> int:
     args = parser.parse_args(argv)
     outputs = {OUT: render(), ROLLBACK_OUT: rollback_render()}
     if args.check:
-        stale = [p for p, text in outputs.items() if (p.read_text() if p.exists() else "") != text]
+        # BYTES, not text: a CRLF rewrite changes the file while read_text() still matches.
+        stale = [
+            p
+            for p, text in outputs.items()
+            if (p.read_bytes() if p.exists() else b"") != text.encode("utf-8")
+        ]
         for path in stale:
             print(f"{path} is stale -- run python -m scripts.gen_canonical_volume_registry")
         if not stale:
