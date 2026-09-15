@@ -21,6 +21,7 @@ doubled; the tool, its schema and the action are the real ones.
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from typing import Any, Dict, Optional
 from unittest.mock import MagicMock
@@ -107,13 +108,28 @@ async def test_the_memory_tool_reads_the_bound_conversation_when_none_is_named(
     assert [m["content"] for m in result["messages"]] == [f"a question asked in {CALLER_THREAD}"]
 
 
-async def test_with_nothing_bound_and_nothing_named_the_tool_invents_no_session(conversations):
+async def test_with_nothing_bound_and_nothing_named_the_tool_invents_no_session(
+    conversations, caplog
+):
     """Unbound and unnamed is the existing "not found" shape with a NULL session —
-    and no lookup at all, so the store is never asked about an invented id."""
-    result = await tools.conversation_memory_tool.ainvoke({})
+    and no lookup at all, so the store is never asked about an invented id.
+
+    The model is told "not found" about a conversation that exists, so the
+    operator must be able to see why: an empty session channel inside the graph
+    is the #2100 regression class, and it must not pass at INFO."""
+    with caplog.at_level(logging.WARNING, logger="src.api.routes.chat_identity"):
+        result = await tools.conversation_memory_tool.ainvoke({})
 
     assert result == {"success": False, "error": "Conversation not found", "session_id": None}
     assert conversations.lookups == []
+    unbound = [
+        r
+        for r in caplog.records
+        if r.name == "src.api.routes.chat_identity"
+        and r.levelno == logging.WARNING
+        and "no conversation named and none bound" in r.getMessage()
+    ]
+    assert len(unbound) == 1, [r.getMessage() for r in caplog.records]
 
 
 async def test_a_named_foreign_conversation_is_still_refused_inside_a_bound_turn(

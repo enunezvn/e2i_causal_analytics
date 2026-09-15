@@ -183,6 +183,14 @@ async def owned_conversation(
     what keeps a model that still names one honest.
     """
     if not session_id:
+        # #2105: the model omitted the argument (as told to) and this turn bound
+        # no session — the #2100 regression class, an empty channel inside the
+        # graph. The tool answers "not found" for a conversation that exists, so
+        # the operator has to be able to see why.
+        logger.warning(
+            "[Chat] conversation_memory_tool called with no conversation named and none "
+            "bound for this turn; answering not-found without a lookup (#2105)."
+        )
         return None
     conversation: Optional[Dict[str, Any]] = await conversation_repository.get_by_session_id(
         session_id

@@ -294,7 +294,6 @@ class ConversationMemoryInput(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "session_id": "sess_abc123def456",
                 "message_count": 10,
                 "include_tool_calls": True,
             }
@@ -1390,7 +1389,7 @@ async def conversation_memory_tool(
     previous conversation turns.
 
     Args:
-        session_id: Omit to read the current conversation (#2105); only name another
+        session_id: Omit for the current conversation; name one only to read another you own
         message_count: Number of recent messages (1-50)
         include_tool_calls: Whether to include tool call details
 
@@ -1407,7 +1406,7 @@ async def conversation_memory_tool(
 
         # #2107: the caller must own it; a refusal reads as "not found" below.
         conversation = await owned_conversation(conv_repo, session_id)
-        if not conversation:
+        if not conversation or session_id is None:
             return {
                 "success": False,
                 "error": "Conversation not found",
