@@ -210,13 +210,20 @@ def test_no_identity_resolves_to_none_rather_than_a_fabricated_id():
     assert resolve_tool_user_id("not-a-uuid~0b7f7d6e-2c1a-4d7e-9a53-3f1f6a0c9e21") is None
 
 
-async def test_the_auth_gate_channel_survives_the_keepalive_wrapper_and_attribution_does_not():
-    """Why the issue's proposed source (``get_attribution()``) cannot be used here.
+async def test_both_identity_channels_survive_the_keepalive_wrapper():
+    """Both channels reach a later frame pull — and the verified one still wins.
 
-    ``with_sse_keepalive`` pulls each frame via ``asyncio.ensure_future``, so a
-    contextvar set while one frame is produced is gone by the next pull. The auth
-    gate sets its value in the REQUEST task, upstream of the wrapper, so it
-    survives — measured 2026-09-14 against the real wrapper.
+    When #2077 was written only the auth gate's channel survived: the wrapper
+    pulled each frame in a fresh task, so the attribution a body set while
+    producing one frame was gone by the next pull. #2100 gave every frame pull
+    one shared context, so ``get_attribution()`` survives too — which is why
+    chat usage rows, conversation ownership and token counts came back.
+
+    That does NOT demote the verified channel. ``resolve_tool_user_id`` reads it
+    first because a ``{user}~`` session prefix is a claim the caller makes, not a
+    credential: AG-UI reads ``threadId`` straight from the request body. Both
+    channels agreeing here is the point — the surviving attribution derives its
+    user from the same verified id.
     """
     from src.api.routes.chat_identity import resolve_tool_user_id
     from src.api.utils.sse_keepalive import with_sse_keepalive
@@ -244,7 +251,7 @@ async def test_the_auth_gate_channel_survives_the_keepalive_wrapper_and_attribut
     finally:
         set_authenticated_user(None)
 
-    assert seen["attribution_user"] is None, "get_attribution() unexpectedly survived"
+    assert seen["attribution_user"] == USER, "get_attribution() did not survive the frame pull"
     assert seen["resolved_user"] == USER
 
 

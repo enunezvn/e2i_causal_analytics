@@ -5,10 +5,12 @@ turn's session into ``chat_session_id_context`` for the duration of its tool
 calls and resets it afterwards, so ``orchestrator_tool`` and
 ``tool_composer_tool`` record the real conversation instead of inventing a
 ``chatbot-<ts>`` id; with no session to bind it binds nothing and the caller's
-binding, if any, still applies. A binding made outside the graph is not enough on
-the browser route: AG-UI's ``execute()`` binds the session while its first frame
-is pulled, and the handler's ``with_sse_keepalive`` pulls every frame in a fresh
-task with a copy of that context, so the graph runs without it. The node lives
+binding, if any, still applies. An outer binding could not be relied on for the
+browser route: AG-UI's ``execute()`` binds the session while its first frame is
+pulled, and ``with_sse_keepalive`` used to pull each later frame in a fresh task
+that dropped it, so the graph ran without it. #2100 gave those pulls one shared
+context and the binding now arrives as well, but state stays what this node
+reads — one channel, and the one the graph owns. The node lives
 here rather than in ``chatbot_tools`` because it belongs to neither graph in
 particular and to the tools module only by way of the context variable it sets.
 
@@ -54,8 +56,8 @@ class SessionBoundToolNode(ToolNode):
     caller set one, else ``state["session_id"]``, is bound for the duration of the
     tool calls and reset afterwards; with neither, nothing is bound here and the
     caller's binding (if any) applies. See the module docstring for why an outer
-    binding does not reach the tools on the AG-UI route, and for the bridge's
-    persisted-vs-tools session split (#2077).
+    binding could not be relied on to reach the tools on the AG-UI route, and for
+    the bridge's persisted-vs-tools session split (#2077).
     """
 
     async def ainvoke(
