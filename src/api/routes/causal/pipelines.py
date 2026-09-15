@@ -846,10 +846,10 @@ def _get_stage_latency_ms(
 
 
 # #2106: the two spellings of DoWhy's nonparametric-ATE identification label
-# that reach `identified_estimand`. Literals, not `str(EstimandType...)`: this
-# route module must not import dowhy at import time (see
-# test_causal_import_is_pure_1991); the 2067 test derives the first one from
-# the library so a DoWhy `__str__` change is caught there.
+# that reach `identified_estimand`. Literals, not `str(EstimandType...)`: dowhy
+# is a heavy import and this route module is imported by the app at startup,
+# so it must not pull dowhy in at import time; the 2067 test derives the first
+# spelling from the library, so a DoWhy `__str__` change is caught there.
 _DOWHY_NONPARAMETRIC_ATE_LABELS = frozenset(
     {
         "EstimandType.NONPARAMETRIC_ATE",  # str(EstimandType.NONPARAMETRIC_ATE): prod
@@ -883,8 +883,9 @@ def _extract_library_payload(
 
     Payload keys (#2106 — one vocabulary per key, never two):
         ``identified_estimand``: DoWhy's identification label, copied verbatim
-            from its executor: ``str(estimand_type)`` (dowhy.py:427), which
-            for DoWhy's plain-Enum ``EstimandType`` is
+            from its executor: ``_extract_estimand_label`` (dowhy.py) returns
+            ``str(estimand_type)``, which for DoWhy's plain-Enum
+            ``EstimandType`` is
             ``EstimandType.NONPARAMETRIC_ATE`` on the real executor — not the
             enum's value ``nonparametric-ate`` — else the estimand's class
             name. DoWhy ONLY — it is the estimand DoWhy identified from the
@@ -936,8 +937,8 @@ def _extract_library_payload(
             # IDENTIFIED. DoWhy's nonparametric ATE is the one identification
             # whose estimated quantity is certain (an ATE on the outcome as
             # named). It arrives in two spellings: the real executor emits
-            # `str(estimand_type)` (dowhy.py:427), and DoWhy's `EstimandType`
-            # is a plain Enum, so prod carries "EstimandType.NONPARAMETRIC_ATE"
+            # `str(estimand_type)` (`_extract_estimand_label`, dowhy.py), and
+            # DoWhy's `EstimandType` is a plain Enum, so prod carries "EstimandType.NONPARAMETRIC_ATE"
             # (the deployed api's dowhy stage in the #2067 live cert); the
             # enum's value is "nonparametric-ate". Any other label keeps its
             # identification claim and gets no guessed `estimand`.

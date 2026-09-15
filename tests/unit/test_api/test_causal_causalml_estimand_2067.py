@@ -245,8 +245,8 @@ def _dowhy_payload(identified_estimand: str) -> Dict[str, Any]:
 
 
 def test_dowhy_real_executor_label_is_kept_verbatim_and_derives_estimand_ate() -> None:
-    # The label the REAL executor emits: `_extract_estimand_label` returns
-    # `str(estimand_type)` (dowhy.py:427), and DoWhy's `EstimandType` is a
+    # The label the REAL executor emits: `_extract_estimand_label` (dowhy.py)
+    # returns `str(estimand_type)`, and DoWhy's `EstimandType` is a
     # plain Enum, so that is "EstimandType.NONPARAMETRIC_ATE" — the string
     # the deployed api's dowhy stage carried in the #2067 live cert — not the
     # enum's value "nonparametric-ate". The test follows the library, not a
