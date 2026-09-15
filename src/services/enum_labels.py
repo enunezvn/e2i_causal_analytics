@@ -239,8 +239,6 @@ def names_something(value: Optional[str]) -> bool:
 def first_named_scope(
     candidates: Iterable[Optional[str]],
     resolve: Callable[[Optional[str]], Optional[str]],
-    *,
-    normalise: bool = True,
 ) -> Optional[str]:
     """The first candidate that RESOLVES, else the first that NAMES SOMETHING.
 
@@ -256,16 +254,20 @@ def first_named_scope(
     reads downstream as "no scope given" and silently widens the query — the
     harm ``cohort_resolution``'s fail-closed exists to prevent (r4 HIGH-2).
 
-    ``normalise=False`` keeps the candidate's own spelling while still using the
-    vocabulary to CHOOSE it. Region passes False: ``cohort_resolution`` folds
-    region casing itself (measured — ``'West'`` and ``' West '`` both normalise
-    there), so rewriting it here would be a behaviour change with no consumer
-    asking for it. Brand needs the normalised form because its predicate is
-    case-sensitive.
+    BOTH scopes are normalised, for reasons measured on this substrate rather
+    than argued. Brand: its predicate is an exact, case-sensitive match on the
+    stored label (``src/kpi/history_backfill.py:427`` states it outright), so an
+    unnormalised ``' kisqali '`` can match no row. Region: every LIVE region
+    predicate folds CASE but strips no WHITESPACE
+    (``LOWER(region::text) = LOWER($N)``), so a padded ``' West '`` from
+    ``user_context`` matched nothing and failed closed on a scope the caller had
+    given correctly. Region predicates are NOT case-sensitive — the earlier
+    claim that 8 bare ``region=$N`` predicates are live is RETRACTED: all 8 are
+    superseded by later ``query_id`` redefinitions, 0 are live.
     """
     meaningful = [c for c in candidates if names_something(c)]
     for candidate in meaningful:
         resolved = resolve(candidate)
         if resolved is not None:
-            return resolved if normalise else candidate
+            return resolved
     return meaningful[0] if meaningful else None

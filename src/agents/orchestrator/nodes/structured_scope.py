@@ -55,14 +55,14 @@ def _structured_brand(payload: Dict[str, Any]) -> Optional[str]:
     return _structured_scope(payload, "brand", resolve_brand_label)
 
 
-def _structured_scope(payload: Dict[str, Any], key: str, resolve: Any, **kw: Any) -> Optional[str]:
+def _structured_scope(payload: Dict[str, Any], key: str, resolve: Any) -> Optional[str]:
     """Entities then ``user_context``, through ONE vocabulary-aware chooser so
     the clarify gate and the cohort extractor can never disagree (#2114)."""
     from src.services.enum_labels import first_named_scope
 
     ctx = payload.get("user_context") or {}
     stashed = ctx.get(key) if isinstance(ctx, dict) else None
-    return first_named_scope((_entity_value(payload, key), stashed), resolve, **kw)
+    return first_named_scope((_entity_value(payload, key), stashed), resolve)
 
 
 def _structured_region(payload: Dict[str, Any]) -> Optional[str]:

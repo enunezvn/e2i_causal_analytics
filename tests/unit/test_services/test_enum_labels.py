@@ -8,6 +8,7 @@ from the enum labels the database actually holds.
 """
 
 import functools
+import inspect
 
 import pytest
 
@@ -18,6 +19,8 @@ from src.services.enum_labels import (
     resolve_brand_label,
     resolve_region_label,
 )
+
+resolve_region_label_syn = functools.partial(resolve_region_label, allow_synonyms=True)
 
 
 class TestEnumLabelSets:
@@ -439,3 +442,41 @@ class TestFirstNamedScope:
         assert first_named_scope(["NotARegion", "west"], region) == "west"
         assert first_named_scope(["Atlantis"], region) == "Atlantis"
         assert first_named_scope([" West "], region) == "west"
+
+
+class TestFirstNamedScopeHasNoRejectedOptionResidue:
+    """#2114: `normalise=False` was an OPTION-2 parameter that survived the
+    revert/reapply of the option-3 decision. No caller ever passed it, and its
+    docstring argued for the rejected option against the behaviour its own test
+    asserts. These tests fail if the parameter or its branch returns.
+    """
+
+    def test_the_signature_takes_no_normalise_parameter(self) -> None:
+        """Teeth: re-adding `normalise=...` to the signature fails here."""
+        params = inspect.signature(first_named_scope).parameters
+        assert "normalise" not in params, f"rejected-option residue is back: {list(params)}"
+        assert list(params) == ["candidates", "resolve"]
+
+    def test_passing_the_removed_parameter_is_an_error(self) -> None:
+        """Teeth with a positive control: the same call WITHOUT the removed
+        keyword must succeed, so this proves the keyword is rejected rather than
+        that the call is broken for some unrelated reason."""
+        assert first_named_scope([" west "], resolve_region_label_syn) == "west"
+        with pytest.raises(TypeError):
+            first_named_scope([" west "], resolve_region_label_syn, normalise=False)
+
+    def test_a_resolvable_candidate_is_always_returned_normalised(self) -> None:
+        """The branch `return resolved if normalise else candidate` cannot come
+        back without failing this: both scopes normalise, unconditionally."""
+        assert first_named_scope([" kisqali "], resolve_brand_label) == "Kisqali"
+        assert first_named_scope([" West "], resolve_region_label_syn) == "west"
+        assert first_named_scope(["  COMPETITOR "], resolve_brand_label) == "competitor"
+
+    def test_the_docstring_does_not_argue_for_the_rejected_option(self) -> None:
+        """The module a reviewer reads first must not describe `normalise=False`
+        or call region predicates case-sensitive (that census is RETRACTED)."""
+        doc = first_named_scope.__doc__ or ""
+        assert "normalise=False" not in doc
+        low = doc.lower()
+        assert "case-sensitive" not in low or "brand" in low
+        assert "region predicates are not case-sensitive" in low
