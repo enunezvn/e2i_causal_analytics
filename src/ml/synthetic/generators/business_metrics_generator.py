@@ -85,7 +85,7 @@ class BusinessMetricsGenerator(BaseGenerator[pd.DataFrame]):
         Fabhalta         1.03     0.86    0.98    1.10    south
         Remibrutinib     1.00     1.08    1.04    0.88    west
 
-    Anchored step events (``BRAND_REGION_EVENTS``; trx + nrx + market_share;
+    Anchored step events (``BRAND_REGION_EVENTS``; trx + nrx + nbrx + market_share;
     value only; never revert; compound) with their true effects::
 
         Kisqali/midwest      x0.88 from 2026-05-01, x0.85 from 2026-10-01
@@ -213,7 +213,7 @@ class BusinessMetricsGenerator(BaseGenerator[pd.DataFrame]):
         BrandRegionEvent(
             brand="Kisqali",
             region="midwest",
-            metric_types=("trx", "nrx", "market_share"),
+            metric_types=("trx", "nrx", "nbrx", "market_share"),
             start=date(2026, 5, 1),
             factor=0.88,
             label="midwest IDN/PBM formulary exclusion (step -12% from 2026-05)",
@@ -221,7 +221,7 @@ class BusinessMetricsGenerator(BaseGenerator[pd.DataFrame]):
         BrandRegionEvent(
             brand="Kisqali",
             region="midwest",
-            metric_types=("trx", "nrx", "market_share"),
+            metric_types=("trx", "nrx", "nbrx", "market_share"),
             start=date(2026, 10, 1),
             factor=0.85,
             label="oral-SERD competitor launch in midwest community oncology (step -15% from 2026-10)",
@@ -229,7 +229,7 @@ class BusinessMetricsGenerator(BaseGenerator[pd.DataFrame]):
         BrandRegionEvent(
             brand="Fabhalta",
             region="south",
-            metric_types=("trx", "nrx", "market_share"),
+            metric_types=("trx", "nrx", "nbrx", "market_share"),
             start=date(2026, 6, 1),
             factor=0.88,
             label="south PNH center-of-excellence referral pathway loss (step -12% from 2026-06)",
@@ -237,7 +237,7 @@ class BusinessMetricsGenerator(BaseGenerator[pd.DataFrame]):
         BrandRegionEvent(
             brand="Fabhalta",
             region="south",
-            metric_types=("trx", "nrx", "market_share"),
+            metric_types=("trx", "nrx", "nbrx", "market_share"),
             start=date(2026, 11, 1),
             factor=0.85,
             label="south Medicaid prior-authorization tightening (step -15% from 2026-11)",
@@ -245,7 +245,7 @@ class BusinessMetricsGenerator(BaseGenerator[pd.DataFrame]):
         BrandRegionEvent(
             brand="Remibrutinib",
             region="west",
-            metric_types=("trx", "nrx", "market_share"),
+            metric_types=("trx", "nrx", "nbrx", "market_share"),
             start=date(2026, 6, 1),
             factor=0.88,
             label="west Kaiser/IDN formulary step-edit (step -12% from 2026-06)",
@@ -253,7 +253,7 @@ class BusinessMetricsGenerator(BaseGenerator[pd.DataFrame]):
         BrandRegionEvent(
             brand="Remibrutinib",
             region="west",
-            metric_types=("trx", "nrx", "market_share"),
+            metric_types=("trx", "nrx", "nbrx", "market_share"),
             start=date(2026, 11, 1),
             factor=0.85,
             label="west biologic competitor copay program (step -15% from 2026-11)",
