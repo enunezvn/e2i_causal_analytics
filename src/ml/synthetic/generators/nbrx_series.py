@@ -159,5 +159,13 @@ def with_nbrx(bm_frame: pd.DataFrame) -> pd.DataFrame:
     """The ONE seam every entrypoint uses: ``bm_frame`` with its nbrx rows appended.
 
     The input is never mutated and its rows keep their order, so the cohort re-key
-    and the frozen-base identity are untouched (canonical TRx lane, codex r1)."""
+    and the frozen-base identity are untouched (canonical TRx lane, codex r1).
+    Applying it twice would append duplicate content-addressed ids, so a frame that
+    already carries nbrx rows is refused."""
+    already = bm_frame["metric_name"] == NBRX_METRIC
+    if already.any():
+        raise ValueError(
+            f"bm_frame already carries nbrx rows ({int(already.sum())}); "
+            "with_nbrx must be applied exactly once"
+        )
     return pd.concat([bm_frame, generate_nbrx_rows(bm_frame)], ignore_index=True)

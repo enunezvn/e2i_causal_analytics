@@ -90,7 +90,7 @@ from src.ml.synthetic.generators.data_lag import (
     stamp_sequence_number,
 )
 from src.ml.synthetic.generators.model_metrics import stamp_model_metrics
-from src.ml.synthetic.generators.nbrx_series import generate_nbrx_rows, with_nbrx
+from src.ml.synthetic.generators.nbrx_series import with_nbrx
 
 logger = logging.getLogger(__name__)
 
@@ -368,8 +368,10 @@ def base_nbrx_frame(base: Optional[pd.DataFrame] = None) -> pd.DataFrame:
 
     Canonical TRx lane: nbrx is generated BESIDE the frozen stream
     (generators/nbrx_series.py) — pass an already-regenerated base to avoid
-    regenerating it twice. NOT part of append runs."""
-    return generate_nbrx_rows(base if base is not None else base_business_metrics_frame())
+    regenerating it twice. NOT part of append runs. The rows come from the one seam,
+    ``with_nbrx``: this is the nbrx slice of ``with_nbrx(base)``."""
+    frame = base if base is not None else base_business_metrics_frame()
+    return with_nbrx(frame).iloc[len(frame) :].reset_index(drop=True)
 
 
 def generate_month_cohort(month_start: date) -> Dict[str, pd.DataFrame]:

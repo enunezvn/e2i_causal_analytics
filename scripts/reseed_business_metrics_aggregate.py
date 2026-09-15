@@ -58,10 +58,10 @@ import pandas as pd
 
 from src.ml.synthetic.frontier_append import (
     base_business_metrics_frame,
-    base_nbrx_frame,
     generate_month_cohort,
     iter_month_starts,
 )
+from src.ml.synthetic.generators.nbrx_series import with_nbrx
 from src.ml.synthetic.loaders import BatchLoader, LoaderConfig
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -92,7 +92,7 @@ def build_reseed_frame(frontier: date) -> pd.DataFrame:
     current DGP: the frozen base plus the cohort months BM_EPOCH..frontier
     (exactly the months the cron's ``iter_month_starts`` emits)."""
     base = base_business_metrics_frame()
-    frames = [base, base_nbrx_frame(base)]
+    frames = [with_nbrx(base)]
     for month_start in iter_month_starts(frontier):
         frames.append(generate_month_cohort(month_start)["business_metrics"])
     frame = pd.concat(frames, ignore_index=True)
