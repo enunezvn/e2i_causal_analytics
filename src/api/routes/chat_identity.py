@@ -49,6 +49,7 @@ from src.memory.services.factories import get_async_supabase_client
 from src.repositories.chatbot_conversation import ChatbotConversationRepository
 from src.utils.llm_attribution import (
     ANONYMOUS_USER_ID,
+    get_authenticated_user_id,
     resolve_session_user_id,
     set_authenticated_user,
 )
@@ -103,8 +104,18 @@ async def thread_owner_denied(thread_id: Optional[str], token_user_id: Optional[
         return False
     if not conversation:
         return False
-    owner = conversation.get("user_id")
-    if not owner or owner == token_user_id:
+    return _owner_denies(conversation.get("user_id"), token_user_id)
+
+
+def _owner_denies(owner: Optional[str], token_user_id: Optional[str]) -> bool:
+    """Does this stored owner refuse this caller? The comparison, without the lookup.
+
+    Split out so the route seams and the in-turn tool seam decide ownership by
+    the same rules while each spends only ONE primary-key read: the tool needs
+    the conversation row itself, and re-deriving the verdict from a second
+    lookup would be both slower and a chance for the two to drift.
+    """
+    if not owner or not token_user_id or owner == token_user_id:
         return False
     if owner == ANONYMOUS_USER_ID:
         logger.info(
@@ -117,6 +128,44 @@ async def thread_owner_denied(thread_id: Optional[str], token_user_id: Optional[
         "already exists and is owned by another user"
     )
     return True
+
+
+async def owned_conversation(
+    conversation_repository: Any, session_id: Optional[str]
+) -> Optional[Dict[str, Any]]:
+    """The conversation a chat TOOL may read, or None when it is not the caller's.
+
+    The route seams close the boundary at the edge of a turn, but the guarantee
+    has a hole INSIDE an allowed turn: ``conversation_memory_tool`` takes a
+    session id the MODEL supplies, so a caller sitting in their own conversation
+    can steer it into naming someone else's and read that history back. Being
+    inside an authorized conversation does not make a second conversation yours.
+
+    The caller is the bound verified identity — the channel the route set and
+    the one the other tools resolve from — never anything in the tool argument,
+    which is a claim. No verified caller means no comparison is possible, so the
+    read proceeds exactly as it did before (the unauthenticated and TESTING_MODE
+    paths are unchanged).
+
+    A refusal returns None, which is the tool's existing "not found" shape: deny
+    and nonexistent are deliberately indistinguishable, so the tool is not an
+    existence oracle for other people's sessions. A lookup FAILURE still raises
+    into the tool's own ``except``, which is today's behaviour for a store that
+    is down — unlike the route seams, there is a handler here already.
+
+    #2105 owns replacing the model-supplied argument with the bound session;
+    until then this is what makes keeping it safe.
+    """
+    if not session_id:
+        return None
+    conversation: Optional[Dict[str, Any]] = await conversation_repository.get_by_session_id(
+        session_id
+    )
+    if not conversation:
+        return None
+    if _owner_denies(conversation.get("user_id"), get_authenticated_user_id()):
+        return None
+    return conversation
 
 
 def resolve_tool_user_id(session_id: Optional[str]) -> Optional[str]:

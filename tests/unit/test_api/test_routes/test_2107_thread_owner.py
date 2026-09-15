@@ -456,3 +456,83 @@ async def test_the_owner_gate_binds_the_identity_channel_only_after_it_passes(
         assert get_authenticated_user_id() is None
     finally:
         set_authenticated_user(None)
+
+
+# ------------------- round 2 HIGH: the gate also covers reads from INSIDE a turn
+
+
+@pytest.fixture
+def memory_tool(monkeypatch, conversations):
+    """``conversation_memory_tool`` over the doubled conversation store.
+
+    The tool takes a session id the MODEL supplies, so being inside a
+    conversation the caller owns does not make the target conversation theirs.
+    #2105 owns replacing that argument with the bound session; until then the
+    argument stays and the owner check is what makes it safe.
+    """
+    import src.api.routes.chatbot_tools as tools
+
+    messages = [
+        {
+            "role": "user",
+            "content": "the victim's private question",
+            "created_at": "2026-09-01T00:00:00Z",
+            "agent_name": None,
+            "tool_calls": [],
+            "tool_results": [],
+        }
+    ]
+    msg_repo = MagicMock()
+
+    async def _recent(session_id, count=10):
+        return messages
+
+    msg_repo.get_recent_messages = _recent
+
+    async def _client() -> object:
+        return object()
+
+    monkeypatch.setattr(tools, "get_async_supabase_client", _client)
+    monkeypatch.setattr(tools, "get_chatbot_conversation_repository", lambda client: conversations)
+    monkeypatch.setattr(tools, "get_chatbot_message_repository", lambda client: msg_repo)
+    return tools.conversation_memory_tool
+
+
+@pytest.fixture
+def bound_caller():
+    from src.utils.llm_attribution import set_authenticated_user
+
+    set_authenticated_user(CALLER)
+    yield CALLER
+    set_authenticated_user(None)
+
+
+async def test_the_memory_tool_will_not_read_another_users_conversation(
+    memory_tool, bound_caller, conversations, caplog
+):
+    """The every-read guarantee has to hold INSIDE an allowed turn too: a caller
+    can steer the model into naming Y's session, and the tool used to load it."""
+    with caplog.at_level(logging.WARNING, logger="src.api.routes.chat_identity"):
+        result = await memory_tool.ainvoke({"session_id": VICTIM_THREAD})
+
+    assert result["success"] is False
+    assert "messages" not in result
+    assert "the victim's private question" not in json.dumps(result)
+    logged = " ".join(r.getMessage() for r in caplog.records)
+    assert logged, "a refused history read logged nothing"
+    assert VICTIM not in logged and CALLER not in logged and VICTIM_THREAD not in logged
+
+
+async def test_the_memory_tool_still_reads_the_callers_own_conversation(memory_tool, bound_caller):
+    result = await memory_tool.ainvoke({"session_id": CALLER_THREAD})
+
+    assert result["success"] is True
+    assert result["message_count"] == 1
+
+
+async def test_an_unknown_session_keeps_todays_answer(memory_tool, bound_caller):
+    """Deny and not-found are the same shape, so the tool is no existence oracle."""
+    result = await memory_tool.ainvoke({"session_id": NEW_THREAD})
+
+    assert result["success"] is False
+    assert "Conversation not found" in result["error"]
