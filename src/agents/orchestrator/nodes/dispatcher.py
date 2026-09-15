@@ -219,15 +219,15 @@ def _entity_value(payload: Dict[str, Any], entity_type: str) -> Optional[str]:
 
 
 def _structured_brand(payload: Dict[str, Any]) -> Optional[str]:
-    """The brand a STRUCTURED source decided on: typed NLP entities, else the
-    ``user_context`` a chat caller stashed — a BLANK value decides nothing, so
-    both ingresses read it as absent (``_entity_value``'s own ``.strip()`` rule).
-    ``None`` means nobody decided; ask text is evidence, not a decision (#2114)."""
-    brand = _entity_value(payload, "brand")
+    """The brand a STRUCTURED source decided on — typed NLP entities, else the
+    ``user_context`` a chat caller stashed — resolved through the substrate's
+    ``brand_type`` vocabulary, which normalises case/padding and reads blank,
+    zero-width and junk alike as nobody-decided (#2114: four leaks, one predicate)."""
+    from src.services.enum_labels import resolve_brand_label
+
     ctx = payload.get("user_context") or {}
-    if brand is None and isinstance(ctx, dict) and isinstance(ctx.get("brand"), str):
-        brand = ctx["brand"] if ctx["brand"].strip() else None
-    return brand
+    raw = _entity_value(payload, "brand") or (ctx.get("brand") if isinstance(ctx, dict) else None)
+    return resolve_brand_label(raw if isinstance(raw, str) else None)
 
 
 def _extract_brand_region(payload: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:

@@ -38,7 +38,13 @@ SUPPORTED_BRANDS: Tuple[str, ...] = ("Remibrutinib", "Fabhalta", "Kisqali")
 INDICATION_TO_BRAND: Tuple[Tuple[str, str], ...] = (
     (r"\bcsu\b|\bchronic\s+spontaneous\s+urticaria\b|\burticaria\b", "Remibrutinib"),
     (r"\bpnh\b|\bparoxysmal\s+nocturnal\b", "Fabhalta"),
-    (r"\bbreast\s+cancer\b|\bhr\+\b|\bher2\b", "Kisqali"),
+    # ``hr+`` carries NO trailing ``\b`` on purpose (#2114 codex r3): ``\b`` after
+    # ``+`` needs a word-character transition, so ``\bhr\+\b`` matched "HR+breast"
+    # but NOT "HR+ and PNH" — Kisqali's indication grounded nothing in the shape
+    # people actually write, and such an ask was answered for the other brand
+    # alone. The LEADING ``\b`` still rejects "chr+". Measured: the proposed
+    # ``\bhr\+(?!\w)`` fixes the spaced form but REGRESSES "HR+breast"/"HR+2".
+    (r"\bbreast\s+cancer\b|\bhr\+|\bher2\b", "Kisqali"),
 )
 
 # The four canonical region values carried by the data substrate

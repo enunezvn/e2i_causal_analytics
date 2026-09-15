@@ -1695,3 +1695,132 @@ def test_a_real_structured_brand_is_still_a_decision(monkeypatch) -> None:
     assert isinstance(resolved, dict), resolved
     assert resolved["analysis_results"][0]["analysis_type"] == "kpi_lookup"
     assert stub.calls == [("WS3-BI-007", {"brand": "Fabhalta"})]
+
+
+# --------------------------------------------------------------------------
+# #2114 codex r3 — two HIGHs, one root cause each.
+#
+# HIGH-1: `\bhr\+\b` could not match a standalone "HR+", so Kisqali's indication
+# grounded nothing in "NBRx for HR+ and PNH?" and the ask was answered with a
+# Fabhalta-only figure. Fixed in the alias table (see TestHrPlusIndicationAlias).
+#
+# HIGH-2: U+200B / U+FEFF survive `.strip()`, so they stayed truthy on the
+# `user_context` path while `entities` returned None — the two ingresses 10d
+# unified had drifted apart again. That was the FOURTH blank shape to leak in
+# four rounds, so the predicate changed rather than the patch: `_structured_brand`
+# now asks the POSITIVE question "is this a brand the substrate recognises?"
+# instead of the open-ended negative "is this not blank".
+# --------------------------------------------------------------------------
+
+HR_PLUS_QUERIES = [
+    ("What is NBRx for HR+ and PNH?", "WS3-BI-007"),
+    ("What is NBRx for PNH and HR+?", "WS3-BI-007"),
+    ("What is TRx for HR+ and PNH?", "WS3-BI-005"),
+    ("What is NRx for HR+ and CSU?", "WS3-BI-006"),
+]
+
+INVISIBLE_BRANDS = ["​", "﻿", "\xa0"]
+
+
+@pytest.mark.parametrize("query,kpi_id", HR_PLUS_QUERIES)
+def test_standalone_hr_plus_beside_another_indication_clarifies(monkeypatch, query, kpi_id) -> None:
+    """HIGH-1 at the consumer: both brands named, no figure, no engine call."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](_agent_input(query), _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    payload = resolved["analysis_results"][0]
+    assert payload["analysis_type"] == "kpi_lookup_clarification"
+    assert payload["kpi_id"] == kpi_id
+    assert "value" not in payload
+    assert set(payload["ambiguous_brands"]) == {"Kisqali", "Fabhalta"} or set(
+        payload["ambiguous_brands"]
+    ) == {"Kisqali", "Remibrutinib"}, payload["ambiguous_brands"]
+    assert stub.calls == []
+
+
+@pytest.mark.parametrize("invisible", INVISIBLE_BRANDS)
+def test_an_invisible_character_brand_is_not_a_decision(monkeypatch, invisible) -> None:
+    """HIGH-2, `user_context` ingress: a zero-width or non-breaking space names
+    nobody, so it must not suppress the clarify."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    agent_input = _agent_input(MIXED_SCOPE_QUERY)
+    agent_input["user_context"] = {"brand": invisible}
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](agent_input, _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    payload = resolved["analysis_results"][0]
+    assert payload["analysis_type"] == "kpi_lookup_clarification"
+    assert payload["ambiguous_brands"] == ["Kisqali", "Fabhalta"]
+    assert "value" not in payload
+    assert stub.calls == []
+
+
+@pytest.mark.parametrize("invisible", INVISIBLE_BRANDS)
+def test_an_invisible_character_entity_is_not_a_decision(monkeypatch, invisible) -> None:
+    """HIGH-2, the other ingress, held to the same rule so the two cannot drift."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    agent_input = _agent_input(MIXED_SCOPE_QUERY)
+    agent_input["parsed_query"] = {"entities": [{"type": "brand", "value": invisible}]}
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](agent_input, _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["analysis_type"] == "kpi_lookup_clarification"
+    assert stub.calls == []
+
+
+@pytest.mark.parametrize("padded", [" Kisqali ", "kisqali", "  KISQALI\t"])
+def test_a_padded_or_miscased_brand_resolves_to_a_real_scope(monkeypatch, padded) -> None:
+    """The positive predicate normalises as a side effect, which closes the
+    padded-brand defect: the calculator receives 'Kisqali', not a string the
+    case-sensitive `brand::text = $1` predicate can never match."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    agent_input = _agent_input(MIXED_SCOPE_QUERY)
+    agent_input["user_context"] = {"brand": padded}
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](agent_input, _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["analysis_type"] == "kpi_lookup"
+    assert stub.calls == [("WS3-BI-007", {"brand": "Kisqali"})]
+
+
+@pytest.mark.parametrize("real_enum_brand", ["competitor", "other", "COMPETITOR"])
+def test_a_substrate_brand_outside_the_commercial_three_is_still_a_decision(
+    monkeypatch, real_enum_brand
+) -> None:
+    """`brand_type` carries five labels, not three: `competitor` and `other` are
+    real values with real rows (patient_journeys carries competitor RWD). The
+    predicate resolves against that FULL enum, so a competitor-scoped ask keeps
+    its scope instead of silently widening -- which would be this lane's own
+    defect class reintroduced by the fix for it."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    agent_input = _agent_input(MIXED_SCOPE_QUERY)
+    agent_input["user_context"] = {"brand": real_enum_brand}
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](agent_input, _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["analysis_type"] == "kpi_lookup"
+    assert stub.calls == [("WS3-BI-007", {"brand": real_enum_brand.lower()})]
+
+
+@pytest.mark.parametrize("junk", ["Xolair", "NotABrand", "12345", "-"])
+def test_an_unrecognised_brand_string_is_not_a_decision(monkeypatch, junk) -> None:
+    """A string outside the `brand_type` enum cannot match a row, so treating it
+    as a decision would suppress the clarify AND filter to nothing. It reads as
+    nobody-decided and the ambiguous ask asks."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    agent_input = _agent_input(MIXED_SCOPE_QUERY)
+    agent_input["user_context"] = {"brand": junk}
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](agent_input, _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    payload = resolved["analysis_results"][0]
+    assert payload["analysis_type"] == "kpi_lookup_clarification"
+    assert payload["ambiguous_brands"] == ["Kisqali", "Fabhalta"]
+    assert stub.calls == []

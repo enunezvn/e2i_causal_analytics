@@ -172,28 +172,43 @@ class TestBrandScan:
         assert scan.is_ambiguous is False
 
     @pytest.mark.parametrize(
-        "query",
+        "query,expected",
         [
-            "Why did Kisqali TRx drop in Q1?",
-            "what is driving remibrutinib NRx?",
-            "Compare Kisqali and Fabhalta conversion",
-            "profile CSU patients on therapy",
-            "PNH persistence drivers",
-            "HR+ breast cancer starts",
-            "Kisqali uptake in urticaria clinics",
-            "Did rep actions lift prescriptions?",
-            "What is NBRx for Kisqali and PNH?",
-            "What is NBRx for PNH and Kisqali?",
-            "What is TRx for Kisqali in HR+ breast cancer?",
-            "",
-            None,
+            # MEASURED 2026-09-15, not copied from the implementation.
+            ("Why did Kisqali TRx drop in Q1?", "Kisqali"),
+            ("what is driving remibrutinib NRx?", "Remibrutinib"),
+            ("Compare Kisqali and Fabhalta conversion", None),
+            ("profile CSU patients on therapy", "Remibrutinib"),
+            ("PNH persistence drivers", "Fabhalta"),
+            ("HR+ breast cancer starts", "Kisqali"),
+            ("Kisqali uptake in urticaria clinics", "Kisqali"),
+            ("Did rep actions lift prescriptions?", None),
+            ("What is NBRx for Kisqali and PNH?", "Kisqali"),
+            ("What is NBRx for PNH and Kisqali?", "Kisqali"),
+            ("What is TRx for Kisqali in HR+ breast cancer?", "Kisqali"),
+            # The r3 alias fix moved these two deliberately (see the 0c0a73dd2
+            # differential): HR+ alone now grounds Kisqali, and HR+ beside
+            # another indication is two brands, so nothing binds.
+            ("HR+ TRx trend", "Kisqali"),
+            ("What is NBRx for PNH and HR+?", None),
+            ("HR+breast uptake", "Kisqali"),
+            ("chr+ something", None),
+            ("", None),
+            (None, None),
         ],
     )
-    def test_brand_from_text_is_the_scan_brand_unchanged(self, query) -> None:
-        """The public one-value helper keeps its exact behaviour: every caller
-        (cohort_profiler ask.py, the dispatcher, the gap comparability rule)
-        still sees EXACTLY-ONE-or-None."""
-        assert brand_from_text(query) == brand_scan(query).brand
+    def test_brand_from_text_returns_the_expected_value(self, query, expected) -> None:
+        """The #1356 EXACTLY-ONE-or-None contract, asserted against literal
+        expected values.
+
+        This replaces an equality against ``brand_scan(query).brand``, which
+        became a TAUTOLOGY the moment ``brand_from_text`` was defined as exactly
+        that expression — it read as proof across two review rounds while
+        asserting ``x == x``. An equality test is evidence only while its two
+        sides have independent definitions; a literal table survives the very
+        refactor that hollowed the old assertion out.
+        """
+        assert brand_from_text(query) == expected
 
 
 class TestRegionFromText:
@@ -367,3 +382,45 @@ class TestSupportedRegions:
 
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-q"])
+
+
+class TestHrPlusIndicationAlias:
+    """#2114 codex r3 HIGH-1: ``\\bhr\\+\\b`` could not match a standalone "HR+".
+
+    ``\\b`` after ``+`` demands a word-character transition, so the alias fired
+    ONLY when a word followed immediately ("HR+breast", "HR+2") — never before a
+    space or punctuation, which is how people actually write it. Kisqali's
+    indication therefore grounded nothing in "HR+ and PNH", and the ask was
+    answered with Fabhalta alone. The fix drops the trailing ``\\b``; the LEADING
+    ``\\b`` still rejects "chr+". Codex proposed ``\\bhr\\+(?!\\w)``, which was
+    measured to REGRESS the two shapes that work today.
+    """
+
+    @pytest.mark.parametrize(
+        "query,expected",
+        [
+            ("HR+ and PNH", ("Kisqali", "Fabhalta")),
+            ("PNH and HR+", ("Kisqali", "Fabhalta")),
+            ("What is NBRx for HR+ and PNH?", ("Kisqali", "Fabhalta")),
+            ("HR+, PNH", ("Kisqali", "Fabhalta")),
+            ("HR+ and CSU", ("Remibrutinib", "Kisqali")),
+        ],
+    )
+    def test_standalone_hr_plus_grounds_kisqali_and_is_ambiguous(self, query, expected) -> None:
+        scan = brand_scan(query)
+        assert set(scan.grounded_brands) == set(expected), scan.grounded_brands
+        assert scan.is_ambiguous is True
+
+    @pytest.mark.parametrize("query", ["HR+breast", "HR+2 positive", "HR+ breast cancer"])
+    def test_the_shapes_that_already_worked_still_work(self, query) -> None:
+        """Pins the regression codex's `(?!\\w)` would have caused: these match
+        today and must keep matching."""
+        scan = brand_scan(query)
+        assert scan.grounded_brands == ("Kisqali",), scan.grounded_brands
+        assert scan.brand == "Kisqali"
+
+    @pytest.mark.parametrize("query", ["chr+ something", "the chr+ marker"])
+    def test_a_leading_word_character_still_rejects(self, query) -> None:
+        """The LEADING ``\\b`` is what stops "chr+"; dropping the trailing one
+        does not weaken it."""
+        assert brand_scan(query).grounded_brands == ()
