@@ -572,8 +572,13 @@ class TestNbrxRidesBesideCohorts:
         expected = BusinessMetricsGenerator(
             _cohort_config(trend_origin=fa.BM_TREND_ORIGIN)
         ).generate()
-        for col in ("value", "target", "metric_date", "brand", "region", "metric_type"):
-            assert list(old[col]) == list(expected[col]), col
+        # Every legacy column, data_split and the derived fields included, matches
+        # the generator's own frame; only metric_id is re-keyed under the month prefix.
+        assert list(old.columns) == list(expected.columns)
+        pd.testing.assert_frame_equal(
+            old.drop(columns="metric_id"),
+            expected.drop(columns="metric_id").reset_index(drop=True),
+        )
         new = bm.iloc[60:]
         assert set(new["metric_type"]) == {"nbrx"}
         assert new["metric_id"].str.startswith("nbrx_202608_").all()

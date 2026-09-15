@@ -6,9 +6,12 @@ assembly and the diff summary are pure and pinned here.
 """
 
 from datetime import date
+from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
+import scripts.reseed_business_metrics_aggregate as reseed
 import src.ml.synthetic.frontier_append as fa
 from scripts.reseed_business_metrics_aggregate import (
     AGGREGATE_METRIC_NAMES,
@@ -167,3 +170,163 @@ class TestDiffSummary:
         s = diff_summary(db, db.copy(), scale_month="2026-07-01")
         assert s["value_changed"] == 0 and s["target_changed"] == 0
         assert s["ids_only_in_db"] == [] and s["ids_only_in_regen"] == []
+
+
+# ---------------------------------------------------------------------------
+# The --execute path end to end (codex Tasks 4+5 review): the real main(),
+# fetch, diff_summary, refusals and verification over an in-memory table. Only
+# the Supabase client and the BatchLoader are replaced; build_reseed_frame is
+# patched to a tiny frame because it only supplies the regenerated rows.
+# ---------------------------------------------------------------------------
+_LEGACY = ("metric_aaaaaaaaaaaa", "2026-07-01", "Kisqali", "midwest", "trx", 100.0, 110.0)
+_COHORT = ("m2608_0000", "2026-08-01", "Kisqali", "midwest", "trx", 101.0, 111.0)
+_NBRX = ("nbrx_202607_kisqali_midwest", "2026-07-01", "Kisqali", "midwest", "nbrx", 9.0, 10.0)
+
+
+class _FakeQuery:
+    """The PostgREST subset the script uses: select / in_ / order / range / execute.
+    ``in_`` never matches NULL, like SQL ``IN``."""
+
+    def __init__(self, rows):
+        self._rows = rows
+
+    def select(self, _columns):
+        return self
+
+    def in_(self, column, values):
+        wanted = set(values)
+        return _FakeQuery([r for r in self._rows if r.get(column) in wanted])
+
+    def order(self, column):
+        return _FakeQuery(sorted(self._rows, key=lambda r: r[column]))
+
+    def range(self, start, end):
+        return _FakeQuery(self._rows[start : end + 1])
+
+    def execute(self):
+        return SimpleNamespace(data=[dict(r) for r in self._rows])
+
+
+class _FakeClient:
+    def __init__(self, rows):
+        self.rows = [dict(r) for r in rows]
+        self.lookups = 0
+
+    def table(self, name):
+        assert name == "business_metrics"
+        self.lookups += 1
+        return _FakeQuery(self.rows)
+
+
+class _FakeLoader:
+    """Upserts on metric_id into the fake table; ``drop_ids`` are silently not
+    written (an incomplete upsert the re-read must catch)."""
+
+    def __init__(self, client, drop_ids=()):
+        self.client = client
+        self.calls = []
+        self._drop = set(drop_ids)
+
+    def load_table(self, table, df):
+        self.calls.append((table, len(df)))
+        by_id = {r["metric_id"]: r for r in self.client.rows}
+        for rec in df.to_dict("records"):
+            if rec["metric_id"] not in self._drop:
+                by_id[rec["metric_id"]] = {c: rec[c] for c in reseed.DIFF_COLUMNS}
+        self.client.rows = list(by_id.values())
+        return SimpleNamespace(
+            records_loaded=len(df) - len(self._drop), records_failed=0, total_batches=1, errors=[]
+        )
+
+
+def _run_main(monkeypatch, db_specs, regen_specs, flags, drop_ids=(), raw_db_rows=()):
+    regen = _rows(*regen_specs)
+    regen["is_synthetic"] = True
+    monkeypatch.setattr(reseed, "build_reseed_frame", lambda frontier: regen)
+    client = _FakeClient(_rows(*db_specs).to_dict("records") + list(raw_db_rows))
+    loader = _FakeLoader(client, drop_ids)
+    code = reseed.main(["--execute", "--frontier", "2026-08-30", *flags], loader=loader)
+    return code, loader
+
+
+class TestExecutePath:
+    def test_an_existing_nbrx_row_with_a_changed_target_refuses_even_with_the_opt_in(
+        self, monkeypatch
+    ):
+        moved = (*_NBRX[:6], 12.0)
+        s = diff_summary(_rows(_LEGACY, _NBRX), _rows(_LEGACY, moved), scale_month="2026-07-01")
+        assert s["target_changed"] == 1 and s["new_series_ids"] == []
+        assert execute_refusal(s, allow_new_series=True) is not None
+        code, loader = _run_main(
+            monkeypatch, [_LEGACY, _NBRX], [_LEGACY, moved], ["--allow-new-series"]
+        )
+        assert code == 3 and loader.calls == []
+
+    def test_every_opt_in_together_still_refuses_a_target_change(self, monkeypatch):
+        moved = (*_LEGACY[:6], 115.0)
+        code, loader = _run_main(
+            monkeypatch,
+            [_LEGACY],
+            [moved, _COHORT, _NBRX],
+            ["--allow-id-drift", "--allow-new-cohorts", "--allow-new-series"],
+        )
+        assert code == 3 and loader.calls == []
+
+    @pytest.mark.parametrize(
+        ("flags", "code", "calls"),
+        [([], 3, 0), (["--allow-new-series"], 0, 1)],
+    )
+    def test_a_refusal_happens_before_load_table(self, monkeypatch, flags, code, calls):
+        got, loader = _run_main(monkeypatch, [_LEGACY], [_LEGACY, _NBRX], flags)
+        assert got == code
+        assert len(loader.calls) == calls
+
+    @pytest.mark.parametrize(
+        ("dropped", "line"),
+        [
+            (_COHORT[0], "missing ids=1 missing new-series ids=0"),
+            (_NBRX[0], "missing ids=0 missing new-series ids=1"),
+        ],
+    )
+    def test_an_incomplete_upsert_exits_1_and_names_both_missing_counts(
+        self, monkeypatch, capsys, dropped, line
+    ):
+        code, loader = _run_main(
+            monkeypatch,
+            [_LEGACY],
+            [_LEGACY, _COHORT, _NBRX],
+            ["--allow-new-cohorts", "--allow-new-series"],
+            drop_ids=[dropped],
+        )
+        assert len(loader.calls) == 1
+        assert code == 1
+        assert line in capsys.readouterr().out
+
+    @pytest.mark.parametrize(
+        ("spec", "metric_name"),
+        [(_NBRX, None), (_COHORT, "per_hcp_rollup")],
+    )
+    def test_an_insert_that_collides_with_a_non_aggregate_row_refuses_before_load(
+        self, monkeypatch, spec, metric_name
+    ):
+        # The aggregate read filters on metric_name, so this row is invisible to
+        # diff_summary and would be classed as a new series / new cohort.
+        raw = {**_rows(spec).to_dict("records")[0], "metric_name": metric_name}
+        code, loader = _run_main(
+            monkeypatch,
+            [_LEGACY],
+            [_LEGACY, spec],
+            ["--allow-new-cohorts", "--allow-new-series"],
+            raw_db_rows=[raw],
+        )
+        assert code == 4 and loader.calls == []
+
+    def test_the_id_lookup_ignores_metric_name_and_pages_in_chunks(self):
+        rows = [
+            {"metric_id": f"nbrx_20260{m}_kisqali_west", "metric_name": None} for m in range(1, 6)
+        ]
+        client = _FakeClient(rows)
+        ids = [r["metric_id"] for r in rows] + ["nbrx_202612_kisqali_west"]
+        found = reseed.existing_metric_ids(client, ids, chunk_size=2)
+        assert found == sorted(r["metric_id"] for r in rows)
+        assert client.lookups == 3

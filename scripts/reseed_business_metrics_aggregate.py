@@ -83,6 +83,8 @@ AGGREGATE_METRIC_NAMES = (
 NEW_SERIES_PREFIXES = ("nbrx_",)
 DIFF_COLUMNS = ["metric_id", "metric_date", "brand", "region", "metric_name", "value", "target"]
 PAGE_SIZE = 1000
+# metric_id lookups per request (keeps the PostgREST ``in.(...)`` URL short).
+ID_LOOKUP_CHUNK = 100
 
 
 def build_reseed_frame(frontier: date) -> pd.DataFrame:
@@ -233,6 +235,36 @@ def execute_refusal(
     return None
 
 
+def existing_metric_ids(
+    client: Any, ids: Sequence[str], chunk_size: int = ID_LOOKUP_CHUNK
+) -> List[str]:
+    """Which of ``ids`` already exist in business_metrics under ANY metric_name,
+    NULL included. ``fetch_db_aggregate_rows`` filters on metric_name, so a row
+    this run would INSERT can collide with a non-aggregate row that diff_summary
+    never saw (and whose target it never compared)."""
+    found: set[str] = set()
+    wanted = list(ids)
+    for start in range(0, len(wanted), chunk_size):
+        chunk = wanted[start : start + chunk_size]
+        rows = (
+            client.table("business_metrics").select("metric_id").in_("metric_id", chunk).execute()
+        ).data
+        found.update(str(r["metric_id"]) for r in rows)
+    return sorted(found)
+
+
+def insert_collision_refusal(collisions: Sequence[str]) -> Optional[str]:
+    """Why ``--execute`` must NOT insert, or None: an id classed as new (a cohort
+    or a new series) already exists outside the aggregate read. No flag."""
+    if not collisions:
+        return None
+    return (
+        f"{len(collisions)} ids this run would INSERT already exist in business_metrics "
+        f"outside the aggregate read (e.g. {list(collisions)[:3]}); upserting would overwrite "
+        "them with no target comparison. Investigate those rows before re-running."
+    )
+
+
 def print_summary(summary: Dict[str, Any]) -> None:
     print(f"rows to upsert            : {summary['rows_to_upsert']}")
     print(f"db aggregate rows         : {summary['db_aggregate_rows']}")
@@ -255,7 +287,9 @@ def print_summary(summary: Dict[str, Any]) -> None:
         print(f"  {key:24s} {s['before']:>12,.2f} -> {s['after']:>12,.2f}  x{ratio:.4f}")
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Optional[Sequence[str]] = None, loader: Optional[Any] = None) -> int:
+    """CLI entrypoint. ``loader`` (a ``BatchLoader``-shaped object with ``client``
+    and ``load_table``) is injectable so the execute path is testable offline."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", default=True, help="(default) diff only")
@@ -301,7 +335,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
-    loader = BatchLoader(LoaderConfig(batch_size=args.batch_size, dry_run=False))
+    if loader is None:
+        loader = BatchLoader(LoaderConfig(batch_size=args.batch_size, dry_run=False))
     client = loader.client
     if client is None:
         logger.error("no Supabase client (SUPABASE_URL / key missing) — nothing read or written")
@@ -331,6 +366,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         logger.error("REFUSING: %s", refusal)
         return 3
 
+    prospective = list(summary["ids_only_in_regen"]) + list(summary.get("new_series_ids") or [])
+    collision = insert_collision_refusal(existing_metric_ids(client, prospective))
+    if collision is not None:
+        logger.error("REFUSING: %s", collision)
+        return 4
+
     logger.info("upserting %d rows on metric_id via BatchLoader.load_table ...", len(regen))
     result = loader.load_table("business_metrics", regen)
     print(
@@ -347,7 +388,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     post = diff_summary(after, regen, scale_month=scale_month)
     print(
         f"post-upsert verification: value mismatches={post['value_changed']} "
-        f"target mismatches={post['target_changed']} missing ids={len(post['ids_only_in_regen'])}"
+        f"target mismatches={post['target_changed']} missing ids={len(post['ids_only_in_regen'])} "
+        f"missing new-series ids={len(post['new_series_ids'])}"
     )
     return (
         0
