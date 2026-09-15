@@ -58,6 +58,7 @@ import pandas as pd
 
 from src.ml.synthetic.frontier_append import (
     base_business_metrics_frame,
+    base_nbrx_frame,
     generate_month_cohort,
     iter_month_starts,
 )
@@ -67,9 +68,19 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logging.getLogger("httpx").setLevel(logging.WARNING)  # one line per page otherwise
 logger = logging.getLogger(__name__)
 
-# The 5 gap-connector keys (BusinessMetricsGenerator.METRIC_CONFIGS). Rows with
-# any other metric_name (or NULL — the per_hcp_rollup rows) are out of scope.
-AGGREGATE_METRIC_NAMES = ("trx", "nrx", "market_share", "conversion_rate", "hcp_engagement_score")
+# The gap-connector keys plus the canonical-TRx-lane nbrx series. Rows with any
+# other metric_name (or NULL — the per_hcp_rollup rows) are out of scope.
+AGGREGATE_METRIC_NAMES = (
+    "trx",
+    "nrx",
+    "nbrx",
+    "market_share",
+    "conversion_rate",
+    "hcp_engagement_score",
+)
+# Id namespaces of series the DB may never have held (canonical TRx lane). Their
+# absence from the DB is a NEW SERIES, not a missing cron cohort and not id drift.
+NEW_SERIES_PREFIXES = ("nbrx_",)
 DIFF_COLUMNS = ["metric_id", "metric_date", "brand", "region", "metric_name", "value", "target"]
 PAGE_SIZE = 1000
 
@@ -78,7 +89,8 @@ def build_reseed_frame(frontier: date) -> pd.DataFrame:
     """Every aggregate row the DB should hold at ``frontier`` under the
     current DGP: the frozen base plus the cohort months BM_EPOCH..frontier
     (exactly the months the cron's ``iter_month_starts`` emits)."""
-    frames = [base_business_metrics_frame()]
+    base = base_business_metrics_frame()
+    frames = [base, base_nbrx_frame(base)]
     for month_start in iter_month_starts(frontier):
         frames.append(generate_month_cohort(month_start)["business_metrics"])
     frame = pd.concat(frames, ignore_index=True)
@@ -153,7 +165,12 @@ def diff_summary(db: pd.DataFrame, regen: pd.DataFrame, scale_month: str) -> Dic
     return {
         "rows_to_upsert": int(len(regen)),
         "db_aggregate_rows": int(len(db)),
-        "ids_only_in_regen": sorted(regen_ids - db_ids),
+        "ids_only_in_regen": sorted(
+            i for i in regen_ids - db_ids if not i.startswith(NEW_SERIES_PREFIXES)
+        ),
+        "new_series_ids": sorted(
+            i for i in regen_ids - db_ids if i.startswith(NEW_SERIES_PREFIXES)
+        ),
         "ids_only_in_db": sorted(db_ids - regen_ids),
         "value_changed": value_changed,
         "value_unchanged": int(len(merged) - value_changed),
@@ -166,7 +183,10 @@ def diff_summary(db: pd.DataFrame, regen: pd.DataFrame, scale_month: str) -> Dic
 
 
 def execute_refusal(
-    summary: Dict[str, Any], allow_id_drift: bool = False, allow_new_cohorts: bool = False
+    summary: Dict[str, Any],
+    allow_id_drift: bool = False,
+    allow_new_cohorts: bool = False,
+    allow_new_series: bool = False,
 ) -> Optional[str]:
     """Why ``--execute`` must NOT proceed, or None. Fails closed on id drift in
     EITHER direction — each direction has its own explicit opt-in, because
@@ -180,6 +200,9 @@ def execute_refusal(
       cron). Upserting would INSERT them — byte-identical to what the cron
       will emit, but not the in-place reseed this script promises.
       ``--allow-new-cohorts`` inserts them now.
+    * ids of a series the DB has never held (``NEW_SERIES_PREFIXES``, e.g. the
+      canonical-TRx-lane nbrx series): upserting INSERTS a whole metric type.
+      ``--allow-new-series`` adds them; neither cohort nor drift opt-in does.
     * targets differ: the RNG stream moved; this is not a value-only reseed.
       No flag — the delete+reinsert path in the issue applies instead.
     """
@@ -201,6 +224,12 @@ def execute_refusal(
             "cohort months the Mon-3AM cron has not appended yet. Run after the cron, use an "
             "earlier --frontier, or pass --allow-new-cohorts to insert them now."
         )
+    new_series = summary.get("new_series_ids") or []
+    if new_series and not allow_new_series:
+        return (
+            f"{len(new_series)} rows of a series the DB has never held would be INSERTED "
+            f"(e.g. {new_series[:3]}). Pass --allow-new-series to add them."
+        )
     return None
 
 
@@ -210,6 +239,8 @@ def print_summary(summary: Dict[str, Any]) -> None:
     only_regen, only_db = summary["ids_only_in_regen"], summary["ids_only_in_db"]
     print(f"ids only in regeneration  : {len(only_regen)} {only_regen[:5]}")
     print(f"ids only in db (stale)    : {len(only_db)} {only_db[:5]}")
+    new_series = summary.get("new_series_ids") or []
+    print(f"new-series ids (insert)   : {len(new_series)} {new_series[:5]}")
     print(f"value changed / unchanged : {summary['value_changed']} / {summary['value_unchanged']}")
     print(f"target changed            : {summary['target_changed']}  (must be 0: RNG untouched)")
     print(f"per-brand national TRx, {summary['scale_month']} (before -> after, ratio):")
@@ -254,6 +285,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "the cron will upsert"
         ),
     )
+    parser.add_argument(
+        "--allow-new-series",
+        action="store_true",
+        help="execute even though a whole new series (nbrx_ ids) is absent from the DB; INSERTS it",
+    )
     parser.add_argument("--batch-size", type=int, default=500)
     args = parser.parse_args(argv)
 
@@ -286,7 +322,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
 
     refusal = execute_refusal(
-        summary, allow_id_drift=args.allow_id_drift, allow_new_cohorts=args.allow_new_cohorts
+        summary,
+        allow_id_drift=args.allow_id_drift,
+        allow_new_cohorts=args.allow_new_cohorts,
+        allow_new_series=args.allow_new_series,
     )
     if refusal is not None:
         logger.error("REFUSING: %s", refusal)
@@ -310,7 +349,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         f"post-upsert verification: value mismatches={post['value_changed']} "
         f"target mismatches={post['target_changed']} missing ids={len(post['ids_only_in_regen'])}"
     )
-    return 0 if (post["value_changed"] == 0 and not post["ids_only_in_regen"]) else 1
+    return (
+        0
+        if (
+            post["value_changed"] == 0
+            and not post["ids_only_in_regen"]
+            and not post["new_series_ids"]
+        )
+        else 1
+    )
 
 
 if __name__ == "__main__":

@@ -18,6 +18,17 @@ from scripts.reseed_business_metrics_aggregate import (
 )
 
 
+def _summary(**overrides):
+    base = {
+        "target_changed": 0,
+        "ids_only_in_db": [],
+        "ids_only_in_regen": [],
+        "new_series_ids": [],
+    }
+    base.update(overrides)
+    return base
+
+
 class TestExecuteGuard:
     """``--execute`` must FAIL CLOSED on id drift in EITHER direction (codex
     iter-1 BLOCKER: the first cut refused only stale DB ids, so running after
@@ -65,12 +76,14 @@ class TestBuildReseedFrame:
     def test_covers_base_and_cohort_months_through_frontier(self):
         frame = build_reseed_frame(frontier=date(2026, 8, 30))
         base = frame[frame["metric_id"].str.startswith("metric_")]
-        cohort = frame[~frame["metric_id"].str.startswith("metric_")]
+        cohort = frame[frame["metric_id"].str.startswith("m2608_")]
+        nbrx = frame[frame["metric_id"].str.startswith("nbrx_")]
         assert len(base) == 9780
         assert base["metric_date"].max() == "2026-07-01"
-        # BM_EPOCH (2026-08) through the frontier month: exactly one cohort
         assert len(cohort) == 60
-        assert cohort["metric_id"].str.startswith("m2608_").all()
+        # 163 base months + the 2026-08 cohort month, 12 cells each
+        assert len(nbrx) == 164 * 12
+        assert len(frame) == 9780 + 60 + 164 * 12
         assert frame["metric_id"].is_unique
         assert frame["is_synthetic"].all()
         assert frame["value"].notna().all()
@@ -79,15 +92,42 @@ class TestBuildReseedFrame:
     def test_cohort_rows_are_the_cron_cohort(self):
         frame = build_reseed_frame(frontier=date(2026, 9, 15))
         cohort = fa.generate_month_cohort(date(2026, 9, 1))["business_metrics"]
-        got = frame[frame["metric_id"].str.startswith("m2609_")].reset_index(drop=True)
-        pd.testing.assert_frame_equal(
-            got[["metric_id", "metric_date", "value", "target"]],
-            cohort[["metric_id", "metric_date", "value", "target"]],
-        )
+        for prefix in ("m2609_", "nbrx_202609_"):
+            got = frame[frame["metric_id"].str.startswith(prefix)].reset_index(drop=True)
+            want = cohort[cohort["metric_id"].str.startswith(prefix)].reset_index(drop=True)
+            pd.testing.assert_frame_equal(
+                got[["metric_id", "metric_date", "value", "target"]],
+                want[["metric_id", "metric_date", "value", "target"]],
+            )
 
     def test_frontier_before_epoch_is_base_only(self):
         frame = build_reseed_frame(frontier=date(2026, 7, 31))
-        assert len(frame) == 9780
+        assert len(frame) == 9780 + 1956
+
+
+class TestNewSeries:
+    def test_nbrx_is_an_aggregate_metric_name(self):
+        assert "nbrx" in AGGREGATE_METRIC_NAMES
+
+    def test_nbrx_ids_absent_from_the_db_are_a_new_series_not_a_cohort(self):
+        db = _rows(("a", "2026-07-01", "Kisqali", "midwest", "trx", 100.0, 110.0))
+        regen = _rows(
+            ("a", "2026-07-01", "Kisqali", "midwest", "trx", 100.0, 110.0),
+            ("nbrx_202607_kisqali_midwest", "2026-07-01", "Kisqali", "midwest", "nbrx", 9.0, 10.0),
+        )
+        s = diff_summary(db, regen, scale_month="2026-07-01")
+        assert s["ids_only_in_regen"] == []
+        assert s["new_series_ids"] == ["nbrx_202607_kisqali_midwest"]
+
+    def test_new_series_refuse_without_the_opt_in(self):
+        s = _summary(new_series_ids=["nbrx_202607_kisqali_midwest"])
+        refusal = execute_refusal(s)
+        assert refusal is not None and "--allow-new-series" in refusal
+        assert execute_refusal(s, allow_new_series=True) is None
+
+    def test_the_cohort_opt_in_does_not_admit_a_new_series(self):
+        s = _summary(new_series_ids=["nbrx_202607_kisqali_midwest"])
+        assert execute_refusal(s, allow_new_cohorts=True, allow_id_drift=True) is not None
 
 
 def _rows(*specs):
