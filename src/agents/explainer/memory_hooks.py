@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 class ExplanationContext:
     """Context retrieved from all memory systems for explanation generation."""
 
-    session_id: str
+    session_id: Optional[str]
     working_memory: List[Dict[str, Any]] = field(default_factory=list)
     episodic_context: List[Dict[str, Any]] = field(default_factory=list)
     semantic_context: Dict[str, Any] = field(default_factory=dict)
@@ -132,7 +132,7 @@ class ExplanationMemoryHooks:
 
     async def get_context(
         self,
-        session_id: str,
+        session_id: Optional[str],
         query: str,
         brand: Optional[str] = None,
         region: Optional[str] = None,
@@ -142,7 +142,8 @@ class ExplanationMemoryHooks:
         Retrieve context from all three memory systems.
 
         Args:
-            session_id: Session identifier for working memory lookup
+            session_id: Session identifier for working memory lookup; None
+                skips the session-keyed read (#2099)
             query: Query text for episodic similarity search
             brand: Optional brand filter for episodic search
             region: Optional region filter for episodic search
@@ -178,11 +179,15 @@ class ExplanationMemoryHooks:
 
     async def _get_working_memory_context(
         self,
-        session_id: str,
+        session_id: Optional[str],
         limit: int = 10,
     ) -> List[Dict[str, Any]]:
-        """Retrieve recent conversation from working memory."""
-        if not self.working_memory:
+        """Retrieve recent conversation from working memory.
+
+        Without a session there is no conversation to retrieve: reading under a
+        minted id only ever returns empty, so return empty directly (#2099).
+        """
+        if session_id is None or not self.working_memory:
             return []
 
         try:

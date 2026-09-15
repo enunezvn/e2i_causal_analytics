@@ -119,12 +119,38 @@ class TestContextAssemblerNode:
     ):
         """Test that conversation history is loaded when store is provided."""
         node = ContextAssemblerNode(mock_conversation_store)
-        state = {**base_explainer_state, "analysis_results": [sample_causal_analysis]}
+        state = {
+            **base_explainer_state,
+            "analysis_results": [sample_causal_analysis],
+            "session_id": "eeba22e7-4d9d-49ea-977b-b9e9d1549c53",
+        }
 
         result = await node.execute(state)
 
         assert result["conversation_history"] is not None
         assert len(result["conversation_history"]) > 0
+
+    @pytest.mark.asyncio
+    async def test_conversation_history_is_skipped_without_a_session(
+        self, base_explainer_state, sample_causal_analysis, mock_conversation_store
+    ):
+        """#2099: the store is keyed on the session.
+
+        This used to fall back to the literal string "default", so every
+        session-less run read from one shared bucket -- an invented identity of
+        the same class as the minted uuids. Without a session there is no
+        conversation to fetch.
+        """
+        node = ContextAssemblerNode(mock_conversation_store)
+        state = {
+            **base_explainer_state,
+            "analysis_results": [sample_causal_analysis],
+            "session_id": None,
+        }
+
+        result = await node.execute(state)
+
+        assert result["conversation_history"] == []
 
     @pytest.mark.asyncio
     async def test_execute_without_conversation_history(

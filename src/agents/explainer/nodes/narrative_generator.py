@@ -143,8 +143,12 @@ class NarrativeGeneratorNode:
             )
 
             # === MEMORY STORAGE ===
+            # Not gated on a truthy session any more (#2099): the episodic
+            # explanation row is worth storing with a NULL session, and gating
+            # the whole write on the session meant a session-less run silently
+            # stored NOTHING. The session-keyed cache is gated inside.
             session_id = state.get("session_id")
-            if session_id and self.memory_hooks:
+            if self.memory_hooks:
                 await self._store_explanation_in_memory(
                     session_id=session_id,
                     state=state,
@@ -1084,14 +1088,15 @@ class NarrativeGeneratorNode:
 
     async def _store_explanation_in_memory(
         self,
-        session_id: str,
+        session_id: Optional[str],
         state: ExplainerState,
         result: Dict[str, Any],
     ) -> None:
         """Store generated explanation in memory systems.
 
         Args:
-            session_id: Session identifier for memory correlation
+            session_id: Session identifier for memory correlation, or None --
+                the episodic row is still written, with a NULL session (#2099)
             state: Current explainer state
             result: Generated narrative result
 
@@ -1115,11 +1120,15 @@ class NarrativeGeneratorNode:
                 "visual_suggestions": result.get("visual_suggestions", []),
             }
 
-            # Cache in working memory (24h TTL)
-            cache_success = await self.memory_hooks.cache_explanation(
-                session_id=session_id,
-                explanation=explanation_data,
-            )
+            # Cache in working memory (24h TTL). Skipped without a session
+            # (#2099): the cache key embeds the session id, so a session-less
+            # write lands under a key no reader can ever ask for.
+            cache_success = False
+            if session_id is not None:
+                cache_success = await self.memory_hooks.cache_explanation(
+                    session_id=session_id,
+                    explanation=explanation_data,
+                )
 
             # Store in episodic memory for future retrieval
             brand = state.get("memory_config", {}).get("brand")

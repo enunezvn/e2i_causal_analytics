@@ -217,8 +217,14 @@ class ExplainerAgent(SkillsMixin):
                 return None
         return self._memory_hooks
 
-    def _generate_session_id(self) -> str:
-        """Generate a unique session ID for memory correlation."""
+    def _generate_thread_id(self) -> str:
+        """Generate a per-run LangGraph checkpointer thread id.
+
+        Named for its one real job (#2099). This value used to double as
+        ``state["session_id"]``, i.e. a claim about which conversation the row
+        belongs to -- but ``explainer_<hex12>`` is not a conversation, it is a
+        checkpoint namespace. The two roles are separate now.
+        """
         return f"explainer_{uuid.uuid4().hex[:12]}"
 
     async def _load_explanation_skills(
@@ -276,7 +282,8 @@ class ExplainerAgent(SkillsMixin):
             user_expertise: Target audience expertise level
             output_format: Desired output format
             focus_areas: Specific areas to focus on
-            session_id: Session ID for memory correlation
+            session_id: Session ID for memory correlation; None records an
+                honest NULL rather than a minted id (#2099)
             memory_config: Memory configuration (brand, region)
 
         Returns:
@@ -288,8 +295,11 @@ class ExplainerAgent(SkillsMixin):
         # Load relevant domain skills for explanation
         await self._load_explanation_skills(analysis_results, memory_config)
 
-        # Generate session ID if not provided
-        effective_session_id = session_id or self._generate_session_id()
+        # The memory session is the caller's, or None (#2099). The checkpointer
+        # needs a non-empty namespace per run, so it falls back to its own mint
+        # -- that mint is a thread id, never a session.
+        effective_session_id = session_id
+        thread_id = session_id or self._generate_thread_id()
 
         # Determine LLM mode
         if self._use_llm is not None:
@@ -345,14 +355,15 @@ class ExplainerAgent(SkillsMixin):
         logger.info(
             f"Starting explanation: {len(analysis_results)} results, "
             f"expertise={user_expertise}, format={output_format}, "
-            f"use_llm={effective_use_llm}, session={effective_session_id}"
+            f"use_llm={effective_use_llm}, session={effective_session_id}, "
+            f"thread={thread_id}"
         )
 
         # Get graph with appropriate LLM mode
         graph = self._get_graph(effective_use_llm)
 
         # Provide config with thread_id for checkpointer (if enabled)
-        config = {"configurable": {"thread_id": effective_session_id}}
+        config = {"configurable": {"thread_id": thread_id}}
         result = await graph.ainvoke(initial_state, config=config)
 
         return ExplainerOutput(
