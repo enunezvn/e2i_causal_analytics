@@ -29,7 +29,11 @@ from src.agents.causal_impact.nodes.adjustment_set_policy import (
 )
 from src.agents.causal_impact.nodes.estimation import estimate_causal_effect
 from src.agents.causal_impact.nodes.graph_builder import build_causal_graph
-from src.agents.causal_impact.nodes.interpretation import InterpretationNode, interpret_results
+from src.agents.causal_impact.nodes.interpretation import (
+    InterpretationNode,
+    confidence_label_to_score,
+    interpret_results,
+)
 from src.agents.causal_impact.nodes.refutation import refute_causal_estimate
 from src.agents.causal_impact.nodes.sensitivity import analyze_sensitivity
 from src.agents.causal_impact.state import CausalImpactState, spread_safe
@@ -184,7 +188,12 @@ def traced_node(node_name: str) -> Callable[[F], F]:
                         interp = result.get("interpretation", {})
                         output_summary["causal_confidence"] = interp.get("causal_confidence")
                         output_summary["depth_level"] = interp.get("depth_level")
-                        confidence_score = interp.get("causal_confidence")
+                        # causal_confidence is a LABEL (high/medium/low/N/A);
+                        # the audit column is numeric(5,4). Use the node's own
+                        # mapping; N/A / unknown → NULL, never a guess (#2123).
+                        confidence_score = confidence_label_to_score(
+                            interp.get("causal_confidence")
+                        )
 
                     span.set_output(output_summary)
 
