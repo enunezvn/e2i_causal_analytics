@@ -1,9 +1,11 @@
 """Calendar seasonality profile for the monthly Rx-volume series (canonical TRx lane)."""
 
-import inspect
 import math
+import random
+import types
 from datetime import date
 
+import numpy as np
 import pytest
 
 MONTHS = range(1, 13)
@@ -63,6 +65,25 @@ def test_keyed_on_calendar_month_not_year_or_day():
     assert s.seasonal_factor("trx", date(2013, 7, 1)) == s.seasonal_factor("trx", date(2026, 7, 28))
 
 
-def test_module_draws_no_randomness():
-    source = inspect.getsource(_s())
-    assert "random" not in source and "rng" not in source.lower()
+def test_calling_the_factor_consumes_no_global_random_state():
+    s = _s()
+    np_before = np.random.get_state()
+    py_before = random.getstate()
+    for metric in ("trx", "nrx", "nbrx", "market_share", "conversion_rate", "hcp_engagement_score"):
+        for m in MONTHS:
+            s.seasonal_factor(metric, date(2026, m, 1))
+    np_after = np.random.get_state()
+    assert np_after[0] == np_before[0]
+    assert np.array_equal(np_after[1], np_before[1])
+    assert np_after[2:] == np_before[2:]
+    assert random.getstate() == py_before
+
+
+def test_module_imports_nothing_from_numpy_or_random():
+    # Module globals, not source text: a local generator would need an import.
+    for name, obj in vars(_s()).items():
+        if isinstance(obj, types.ModuleType):
+            origin = obj.__name__
+        else:
+            origin = getattr(obj, "__module__", None)
+        assert not str(origin).startswith(("numpy", "random")), (name, origin)

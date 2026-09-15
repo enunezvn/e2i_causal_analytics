@@ -811,3 +811,44 @@ class TestCalendarSeasonality:
         assert len(ratios) >= 12
         # expectation 0.92/1.08 x ~1.005 trend ~= 0.855; noise sd of the mean ~0.02
         assert float(np.mean(ratios)) < 0.95, ratios
+
+
+# ---------------------------------------------------------------------------
+# BASE_CONFIG starts in January 2013, where the positional month_idx % 12 + 1
+# IS the calendar month, so an implementation keyed on month_idx would pass
+# TestCalendarSeasonality. These pairs start in AUGUST (with and without a
+# non-January trend_origin), so the two keys disagree on every row.
+# ---------------------------------------------------------------------------
+AUGUST_START_CONFIG = {
+    "id_prefix": "scv",
+    "seed": 42,
+    # 14 monthly dates x 60 brand/region/metric combos (+1 headroom per date).
+    "n_records": 14 * 61,
+    "start_date": date(2013, 8, 1),
+}
+# |round(x * f, 2) - round(x, 2) * f| <= 0.005 + 0.005 * 1.08
+ROUNDING_TOL = 0.011
+
+
+class TestCalendarSeasonalityKeyedOnCalendarMonth:
+    @pytest.mark.parametrize("trend_origin", [None, date(2013, 3, 1)])
+    def test_factor_follows_metric_date_month_not_month_idx(self, monkeypatch, trend_origin):
+        config = {**AUGUST_START_CONFIG, "trend_origin": trend_origin}
+        seasonal = BusinessMetricsGenerator(GeneratorConfig(**config)).generate()
+        from src.ml.synthetic.generators import seasonality
+
+        monkeypatch.setattr(seasonality, "SEASONAL_DEVIATION_BP", dict.fromkeys(range(1, 13), 0))
+        flat = BusinessMetricsGenerator(GeneratorConfig(**config)).generate()
+        assert list(seasonal["metric_id"]) == list(flat["metric_id"])
+        months = pd.to_datetime(seasonal["metric_date"]).dt.month
+        assert set(months) == set(range(1, 13))  # every calendar month is exercised
+        factor = months.map(lambda m: 1 + SEASONAL_BP[m] / 10_000)
+
+        volume = seasonal["metric_type"].isin(["trx", "nrx"])
+        assert volume.sum() > 0
+        gap = (seasonal.loc[volume, "value"] - flat.loc[volume, "value"] * factor[volume]).abs()
+        assert gap.max() <= ROUNDING_TOL, seasonal.loc[gap.idxmax(), ["metric_date", "metric_type"]]
+
+        share = seasonal["metric_type"] == "market_share"
+        assert share.sum() > 0
+        pd.testing.assert_series_equal(seasonal.loc[share, "value"], flat.loc[share, "value"])

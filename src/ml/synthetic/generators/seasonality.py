@@ -13,8 +13,8 @@ profile. Properties (pinned by tests/unit/test_synthetic/test_seasonality.py):
   ``month_idx`` (which depends on ``trend_origin``), so a single-date frontier
   cohort and the frozen-base regeneration agree on every month;
 * applied to ``value`` only (targets stay on the market-size trend line) and
-  draws from NO seeded generator, so metric_ids, targets and every seeded
-  column reproduce byte-for-byte and a reseed stays an in-place upsert on metric_id.
+  consumes NO random draws, so metric_ids, targets and every RNG column
+  reproduce byte-for-byte and a reseed stays an in-place upsert on metric_id.
 
 Why not ``DGPConfig.include_seasonality``: that flag configures the patient-level
 causal DGPs (``DGPType.TIME_SERIES``) and is read by nothing;

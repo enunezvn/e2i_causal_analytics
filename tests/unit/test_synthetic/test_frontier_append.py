@@ -189,6 +189,30 @@ class TestMonthCohortContinuity:
                 )
 
 
+class TestMonthCohortSeasonality:
+    """The cohort path applies the calendar factor EXACTLY once: same seed, the
+    profile zeroed for the flat run. The tolerance is 2dp rounding only,
+    |round(x * f, 2) - round(x, 2) * f| <= 0.005 + 0.005 * f < 0.01 for f = 0.98;
+    a doubly applied factor moves each value by ~2%."""
+
+    def test_august_cohort_value_is_flat_value_times_the_august_factor(self, monkeypatch):
+        from src.ml.synthetic.generators import seasonality
+
+        seasonal = generate_month_cohort(date(2026, 8, 1))["business_metrics"]
+        monkeypatch.setattr(seasonality, "SEASONAL_DEVIATION_BP", dict.fromkeys(range(1, 13), 0))
+        flat = generate_month_cohort(date(2026, 8, 1))["business_metrics"]
+        assert list(seasonal["metric_id"]) == list(flat["metric_id"])
+        factor = 1 + SEASONAL_BP[8] / 10_000
+
+        volume = seasonal["metric_type"].isin(["trx", "nrx"])
+        assert volume.sum() == 24
+        gap = (seasonal.loc[volume, "value"] - flat.loc[volume, "value"] * factor).abs()
+        assert gap.max() <= 0.01, gap.max()
+
+        other = ~volume
+        pd.testing.assert_series_equal(seasonal.loc[other, "value"], flat.loc[other, "value"])
+
+
 class TestBaseBusinessMetricsFrame:
     """#1833: the frozen-base regeneration identity, shared by the reseed
     script and the gap arbiter. Step 0 measured it byte-identical to the DB."""
