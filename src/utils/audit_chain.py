@@ -366,8 +366,11 @@ class AuditChainService:
             duration_ms: Execution time in milliseconds
             validation_passed: Whether validation tests passed
             confidence_score: Confidence level (0.0 to 1.0); its meaning is per
-                agent — for causal_impact it is the refutation-suite score, see
-                ``_refutation_suite_score`` in agents/causal_impact/graph.py (#2127)
+                agent and per row — for causal_impact, on the refutation row it
+                is the refutation-suite score (``_refutation_suite_score`` in
+                agents/causal_impact/graph.py, #2127; NULL on an exception
+                return, kept on a completed BLOCK), the interpretation row
+                carries the #2123 grade, the estimation row is NULL by definition
             refutation_results: DoWhy refutation test results
             auto_commit: Whether to immediately persist to database
 

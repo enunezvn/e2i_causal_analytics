@@ -68,12 +68,16 @@ def _refutation_suite_score(result: Dict[str, Any]) -> Optional[float]:
     stays NULL by definition.
 
     Stored AS RETURNED — no clamping, rescaling or default. Absent → None
-    silently. When the node failed closed (``refutation_error``) its error
-    return spreads the input state, so no score of this invocation exists
-    and none is recorded, even if the incoming state carried one — the
-    caller gates on ``node_failed_closed`` before calling this. Anything but
-    a number in [0, 1] is not a value this row may carry → None plus one
-    WARNING.
+    silently. Provenance, not outcome, decides whether a score exists: the
+    node's two ``except`` returns set ``refutation_error`` and spread the
+    input state, so no score of that invocation exists and the caller
+    records NULL even if the incoming state carried one; a COMPLETED suite
+    that BLOCKs or is withheld on the expert-review gate also fails closed
+    (status failed + error_message, so its row's action_type is
+    ``refutation_error`` too) but carries its own fresh score, which IS
+    recorded — a ``refutation_error`` row therefore carries a score (BLOCK /
+    halt) or NULL (exception). Anything but a number in [0, 1] is not a
+    value this row may carry → None plus one WARNING.
     """
     score = result.get("refutation_confidence")
     if score is None:
@@ -175,8 +179,9 @@ def traced_node(node_name: str) -> Callable[[F], F]:
                     # ``<node>_error`` like a raising node — the one readable
                     # execution outcome in audit_chain_entries; see
                     # audit_chain_mixin.node_failed_closed (2026-09-06).
-                    # Computed before the per-node block: the refutation
-                    # branch gates its confidence_score on it (#2127).
+                    # Outcome only: it names the row (``refutation_error``);
+                    # whether that row carries a score is decided by
+                    # provenance in the refutation branch (#2127).
                     failed_closed = node_failed_closed(node_name, state, result)
 
                     # Add node-specific output fields
@@ -212,11 +217,18 @@ def traced_node(node_name: str) -> Callable[[F], F]:
                         validation_passed = ref.get("overall_robust")
                         # The confidence of a causal_impact estimate IS the
                         # refutation-suite score (#2127); see the helper. Gated
-                        # on THIS invocation's outcome: the node's error returns
-                        # spread the input state, so key presence alone could
-                        # carry a score no suite of this run produced.
+                        # on PROVENANCE, not on the failed-closed outcome: the
+                        # node's two ``except`` returns set ``refutation_error``
+                        # and spread the input state (no suite of this run), so
+                        # key presence alone could carry a stale score. A
+                        # completed BLOCK / expert-review halt also fails
+                        # closed (status failed + error_message → the same
+                        # refutation_error action_type) but carries its own
+                        # fresh score, which IS recorded.
                         confidence_score = (
-                            None if failed_closed else _refutation_suite_score(result)
+                            None
+                            if result.get("refutation_error")
+                            else _refutation_suite_score(result)
                         )
                         # add_entry calls refutation_results.to_dict() internally
                         # (audit_chain.py:345); the refutation node persists a

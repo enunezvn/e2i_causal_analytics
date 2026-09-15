@@ -36,8 +36,10 @@ import re
 
 import pytest
 
+import tests.unit.test_agents.test_causal_impact.test_refutation_block_never_mints_1991 as harness_1991
 from src.agents.causal_impact.graph import traced_node
 from src.agents.causal_impact.nodes.refutation import RefutationNode
+from src.causal_engine.expert_review_gate import ExpertReviewGate
 from src.causal_engine.refutation_runner import (
     GateDecision,
     RefutationResult,
@@ -198,14 +200,17 @@ async def test_refutation_early_failure_row_is_null_without_warning(
 
 
 # ---------------------------------------------------------------------------
-# T2b (round 3) — a failed-closed node must not inherit a score. The node's
-# error returns spread the INPUT state, so a ``refutation_confidence`` already
-# in that state rides along on the error return although THIS invocation ran
-# no suite. The wrapper gates on its own failed-closed verdict, not on key
-# presence. Reachable only by invoking the traced node directly with such a
-# dict: ``CausalImpactState`` declares no ``refutation_confidence`` channel, so
-# the compiled graph never carries one — this pins the intent, not a live
-# defect. RED on HEAD (bdfeeaac8): 0.91 recorded on the refutation_error row.
+# T2b (round 3) — an EXCEPTION return must not inherit a score. The node's
+# two ``except`` returns spread the INPUT state, so a ``refutation_confidence``
+# already in that state rides along on the error return although THIS
+# invocation ran no suite. Both of those returns set ``refutation_error``
+# (the completed return never does), so the wrapper gates the score on that
+# key — not on key presence, and not on the failed-closed verdict (round 4:
+# a completed BLOCK also fails closed but carries a fresh score). Reachable
+# only by invoking the traced node directly with such a dict:
+# ``CausalImpactState`` declares no ``refutation_confidence`` channel, so the
+# compiled graph never carries one — this pins the intent, not a live defect.
+# RED on bdfeeaac8: 0.91 recorded on the refutation_error row.
 # ---------------------------------------------------------------------------
 
 
@@ -235,6 +240,137 @@ async def test_refutation_failed_closed_row_does_not_inherit_a_stale_score(
     assert kwargs["validation_passed"] is False
     assert kwargs["refutation_results"] is None
     assert not _warnings(caplog, "refutation_confidence")
+
+
+# ---------------------------------------------------------------------------
+# T2c / T2d (round 4) — provenance, not outcome. A COMPLETED suite that
+# BLOCKs, or is withheld on the expert-review gate, returns ``status: failed``
+# + ``error_message`` (so the row is a ``refutation_error`` row) but carries
+# ITS OWN fresh ``refutation_confidence`` and ``refutation_results`` — that
+# score is the one the row most needs and must be recorded. Only the two
+# ``except`` returns set ``refutation_error``. RED on 6326b347c: the
+# ``None if failed_closed`` gate dropped the fresh score (None).
+# ---------------------------------------------------------------------------
+
+
+def _legacy_block_results(confidence_adjustment: float) -> dict:
+    return {
+        **_legacy_refutation_results(confidence_adjustment),
+        "tests_passed": 1,
+        "tests_failed": 2,
+        "overall_robust": False,
+        "individual_tests": {
+            "placebo_treatment": {"passed": False, "status": "failed"},
+            "random_common_cause": {"passed": True, "status": "passed"},
+            "data_subset": {"passed": False, "status": "failed"},
+        },
+        "gate_decision": "block",
+    }
+
+
+@pytest.mark.asyncio
+async def test_completed_block_row_keeps_its_fresh_suite_score(
+    mock_audit_service, mock_opik, base_state, caplog
+):
+    node = _refutation_node(
+        {
+            "status": "failed",
+            "current_phase": "failed",
+            "error_message": "Estimate blocked: confidence 0.30 below 0.50",
+            "refutation_results": _legacy_block_results(0.30),
+            "refutation_confidence": 0.30,
+            "gate_decision": "block",
+            # NO refutation_error key: the suite ran and produced this score.
+        }
+    )
+    with caplog.at_level(logging.WARNING, logger=GRAPH_LOGGER):
+        await node(base_state)
+
+    assert mock_audit_service.add_entry.call_count == 1
+    kwargs = mock_audit_service.add_entry.call_args.kwargs
+    assert kwargs["action_type"] == "refutation_error"
+    assert kwargs["confidence_score"] == 0.30, (
+        "a completed BLOCK carries its own fresh suite score — the refutation_error "
+        f"row must record it, not NULL; got {kwargs['confidence_score']!r} (#2127)"
+    )
+    assert kwargs["validation_passed"] is False
+    rr = kwargs["refutation_results"]
+    assert isinstance(rr, RefutationResults)
+    assert rr.placebo_treatment is False and rr.random_common_cause is True
+    assert kwargs["output_data"]["gate_decision"] == "block"
+    assert not _warnings(caplog, "refutation_confidence")
+
+
+@pytest.mark.asyncio
+async def test_expert_review_halt_row_keeps_its_fresh_suite_score(
+    mock_audit_service, mock_opik, base_state
+):
+    node = _refutation_node(
+        {
+            "status": "failed",
+            "current_phase": "awaiting_expert_review",
+            "error_message": "withheld: the DAG was rejected by expert review",
+            "refutation_results": _legacy_refutation_results(0.72),
+            "refutation_confidence": 0.72,
+            "gate_decision": "proceed",
+            "expert_review_halt": True,
+            "expert_review_decision": "rejected",
+        }
+    )
+    await node(base_state)
+
+    kwargs = mock_audit_service.add_entry.call_args.kwargs
+    assert kwargs["action_type"] == "refutation_error"
+    assert kwargs["confidence_score"] == 0.72
+    assert kwargs["validation_passed"] is False
+    assert isinstance(kwargs["refutation_results"], RefutationResults)
+
+
+# Positive control for the marker: the REAL node, driven into BLOCK with the
+# #1991 harness (stand-in runner, no DoWhy), through the REAL traced_node.
+# Proves the completed BLOCK return sets status failed + error_message WITHOUT
+# refutation_error and carries the suite's score, and that the row records it.
+
+
+@pytest.mark.asyncio
+async def test_real_node_block_return_through_traced_node_records_the_score(
+    monkeypatch, mock_audit_service, mock_opik, base_state
+):
+    gate = ExpertReviewGate(repository=harness_1991._ReviewRepo(rows=[]), auto_create_review=True)
+    real_node = harness_1991._node(monkeypatch, GateDecision.BLOCK, gate)
+    traced = traced_node("refutation")(real_node.execute)
+
+    result = await traced({**harness_1991._state(), **base_state})
+
+    # The node's completed BLOCK return: failed closed, fresh score, no marker.
+    assert result["status"] == "failed" and result["error_message"]
+    assert "refutation_error" not in result
+    assert result["refutation_confidence"] == 0.3
+    assert result["refutation_results"]["confidence_adjustment"] == 0.3
+    assert result["refutation_results"]["gate_decision"] == "block"
+
+    assert mock_audit_service.add_entry.call_count == 1
+    kwargs = mock_audit_service.add_entry.call_args.kwargs
+    assert kwargs["action_type"] == "refutation_error"
+    assert kwargs["confidence_score"] == 0.3, (
+        f"real BLOCK return: expected 0.3 on the refutation_error row, got "
+        f"{kwargs['confidence_score']!r}"
+    )
+    assert kwargs["validation_passed"] is False
+
+
+def test_refutation_error_marker_is_set_only_by_the_except_returns():
+    """Both ``except`` blocks of ``RefutationNode.execute`` return
+    ``"refutation_error": ...``; the completed-return literal never does."""
+    src = inspect.getsource(RefutationNode.execute)
+    head, sep, tail = src.partition("except RefutationError")
+    assert sep, "expected an `except RefutationError` block in RefutationNode.execute"
+    assert not re.search(r'"refutation_error":', head), (
+        "the completed return must not set refutation_error — it is the marker "
+        "of an exception return"
+    )
+    assert len(re.findall(r'"refutation_error":\s*', tail)) == 2
+    assert re.search(r'"refutation_confidence":\s*suite\.confidence_score', head)
 
 
 # ---------------------------------------------------------------------------
