@@ -166,8 +166,11 @@ class PredictionSynthesizerMemoryHooks:
             prediction_target=prediction_target,
         )
 
+        # A session-less run still reads episodic/semantic memory, so this line
+        # stays -- it just stops saying "session None" (#2099).
+        scope = f"session {session_id}" if session_id else "a session-less run"
         logger.info(
-            f"Retrieved prediction context for session {session_id}: "
+            f"Retrieved prediction context for {scope}: "
             f"working={len(context.working_memory)}, "
             f"cached={len(context.cached_predictions)}, "
             f"episodic={len(context.episodic_context)}"

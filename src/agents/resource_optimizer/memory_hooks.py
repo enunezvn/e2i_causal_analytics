@@ -159,8 +159,11 @@ class ResourceOptimizerMemoryHooks:
             constraints=constraints,
         )
 
+        # A session-less run still reads episodic/semantic memory, so this line
+        # stays -- it just stops saying "session None" (#2099).
+        scope = f"session {session_id}" if session_id else "a session-less run"
         logger.info(
-            f"Retrieved optimization context for session {session_id}: "
+            f"Retrieved optimization context for {scope}: "
             f"cached={context.cached_optimization is not None}, "
             f"similar={len(context.similar_optimizations)}, "
             f"patterns={len(context.learned_patterns)}"

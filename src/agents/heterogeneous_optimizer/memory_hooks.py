@@ -176,8 +176,11 @@ class HeterogeneousOptimizerMemoryHooks:
             outcome_var=outcome_var,
         )
 
+        # A session-less run still reads episodic/semantic memory, so this line
+        # stays -- it just stops saying "session None" (#2099).
+        scope = f"session {session_id}" if session_id else "a session-less run"
         logger.info(
-            f"Retrieved context for session {session_id}: "
+            f"Retrieved context for {scope}: "
             f"working={len(context.working_memory)}, "
             f"episodic={len(context.episodic_context)}, "
             f"semantic_causal_paths={len(context.semantic_context.get('causal_paths', []))}"
