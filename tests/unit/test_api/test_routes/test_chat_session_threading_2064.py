@@ -10,8 +10,9 @@ compositions look attributed.
 
 The real session is bound by each chat brain's ``tools`` node
 (``SessionBoundToolNode``), from ``state["session_id"]``: AG-UI's ``execute()``
-also sets ``_session_id_context``, but the handler's keepalive wrapper pulls each
-frame in a fresh task, so that binding never reaches the graph's nodes.
+also sets ``_session_id_context``, which the handler's keepalive wrapper used to
+drop by pulling each frame in a fresh task (repaired by #2100, which is why
+these tests assert the VALUE rather than which channel delivered it).
 
 The AG-UI and ``/chat/stream`` graph tests drive the real graph entry points
 (``execute()`` under ``with_sse_keepalive``, or the compiled graph's own
@@ -119,7 +120,7 @@ async def test_a_real_tool_node_carries_the_bound_session_into_the_tool(orchestr
 
     This models the chat bridge (``chat_bridge.py:~206``), which sets the var and
     calls ``graph.ainvoke`` with no keepalive wrapper. It does not model AG-UI,
-    where the binding never reaches the graph (see the AG-UI tests below).
+    whose binding is made inside the wrapper (see the AG-UI tests below).
     """
     workflow = StateGraph(MessagesState)
     workflow.add_node("tools", ToolNode(chatbot_tools.E2I_CHATBOT_TOOLS))
@@ -234,11 +235,13 @@ class _ScriptedChatModel:
 async def test_an_agui_turn_gives_its_tools_the_thread_session(orchestrator, monkeypatch):
     """The browser route end to end: ``execute()`` under the handler's keepalive wrapper.
 
-    The handler streams ``with_sse_keepalive(...)`` around ``execute()``, which
-    pulls every frame in a fresh task. The session ``execute()`` binds before its
-    first frame therefore never reaches the graph's nodes (production: ``chat_node
-    … (source=state)``, and ``classification_logs.session_id`` NULL), so the tools
-    node must bind the thread session from graph state itself.
+    The handler streams ``with_sse_keepalive(...)`` around ``execute()``. It used
+    to pull every frame in a fresh task, so the session ``execute()`` binds before
+    its first frame never reached the graph's nodes (production: ``chat_node …
+    (source=state)``, and ``classification_logs.session_id`` NULL) — #2100
+    repaired that channel. This asserts the VALUE the tool sees, not which
+    channel delivered it, so it holds either way: the tools node binds the thread
+    session from graph state itself.
     """
     from src.api.routes import copilotkit
     from src.api.utils.sse_keepalive import with_sse_keepalive

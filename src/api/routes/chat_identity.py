@@ -4,12 +4,21 @@
 module answers *which user*, from the same kind of channel: one the tools can
 actually read at the moment they run.
 
-The issue proposed ``llm_attribution.get_attribution().user_id``. Measured false
-on the browser route: the AG-UI handler streams ``execute()`` through
-``with_sse_keepalive``, which pulls every frame in a fresh task, so the
-attribution set while one frame is produced is gone by the next pull — which is
-why chat LLM usage has been recording ``surface='other', user_id=NULL`` since
-2026-08-16. Two channels do survive into the tools:
+The issue proposed ``llm_attribution.get_attribution().user_id``. That was
+measured dead on the browser route when this module was written: the AG-UI
+handler streams ``execute()`` through ``with_sse_keepalive``, which pulled every
+frame in a fresh task, so the attribution set while one frame was produced was
+gone by the next pull — which is why chat LLM usage recorded ``surface='other',
+user_id=NULL`` from 2026-08-16 until #2100 gave those pulls one shared context.
+
+It is readable again, and this module still does not read it. Attribution is a
+DERIVED value, and derived by this very module: ``set_chat_attribution`` resolves
+its ``user_id`` through the same ``resolve_session_user_id`` that
+``resolve_tool_user_id`` below delegates to, so the two cannot disagree and
+neither can promote the session prefix over a verified id. Reading the
+attribution here would be a hop to an answer already computed, and would make
+tool identity depend on whether some entry point called ``set_chat_attribution``
+first. Both channels survive into the tools; this module reads them directly:
 
 * the session itself, for the ``{user}~{session}`` ids ``/chat/stream`` mints
   (and their ``~bridge`` shadow, which splits on the first ``~`` the way every
@@ -323,8 +332,8 @@ async def authorize_chat_identity(
     TOOLS read empty, so on a bare-uuid session every composition recorded a NULL
     owner and #2095's owner gate took its absent-pass branch. Binding here — in
     the request task, before the graph or the SSE body starts — is the same
-    channel the AG-UI route uses, and it survives the keepalive wrapper's
-    per-frame tasks because they copy the context that already carries it.
+    channel the AG-UI route uses, and it survives the keepalive wrapper, whose
+    frame pulls all share one context copied from the task that binds it here.
 
     #2107 adds the stored-owner half of the claim check. Raising is correct
     HERE, unlike on the AG-UI seam: both callers resolve the identity OUTSIDE
