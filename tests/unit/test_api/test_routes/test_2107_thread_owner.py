@@ -690,7 +690,21 @@ async def test_an_unbound_caller_allows_the_read_but_says_so(
     with caplog.at_level(logging.WARNING, logger="src.api.routes.chat_identity"):
         result = await memory_tool.ainvoke({"session_id": VICTIM_THREAD})
 
+    # The allow is real: the foreign history actually came back, not merely a
+    # success flag. Anything less would pass even if the read had been refused.
     assert result["success"] is True, "policy changed: the unbound read must still be allowed"
-    logged = " ".join(r.getMessage() for r in caplog.records)
-    assert logged, "an owner check that never ran passed silently"
-    assert VICTIM not in logged and VICTIM_THREAD not in logged
+    assert [m["content"] for m in result["messages"]] == ["the victim's private question"]
+
+    # THIS warning, not merely some captured text: an unrelated WARNING from any
+    # logger would otherwise satisfy the assertion and hide a silent fail-open.
+    unbound = [
+        record
+        for record in caplog.records
+        if record.name == "src.api.routes.chat_identity"
+        and record.levelno == logging.WARNING
+        and "No verified caller bound" in record.getMessage()
+        and "owner check did not run" in record.getMessage()
+    ]
+    assert len(unbound) == 1, [(r.name, r.levelname, r.getMessage()) for r in caplog.records]
+    assert VICTIM not in unbound[0].getMessage()
+    assert VICTIM_THREAD not in unbound[0].getMessage()
