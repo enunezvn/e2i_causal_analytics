@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from ..config import Brand, RegionEnum
+from . import seasonality
 from .base import BaseGenerator, GeneratorConfig
 
 
@@ -119,6 +120,17 @@ class BusinessMetricsGenerator(BaseGenerator[pd.DataFrame]):
     Remibrutinib (0 gaps at two positions, then noise regions win); both
     together pass, and the second step re-arms the temporal story once the
     first is absorbed into both windows.
+
+    Calendar seasonality (canonical TRx lane, 2026-09-15). trx / nrx (and the
+    separately generated nbrx series, generators/nbrx_series.py) ``value``
+    carries a deterministic calendar-month factor
+    (``seasonality.SEASONAL_DEVIATION_BP``: Jan 0.92 trough ... Dec 1.08 peak,
+    annual mean exactly 1.0). It is keyed on ``metric_date.month`` (never
+    ``month_idx``), multiplies value only and draws no RNG, so the frozen-base
+    identity (ids, targets, every RNG column) is unchanged and the reseed stays
+    an in-place upsert on ``metric_id``. It is region-independent, so it cancels
+    in vs-target / vs-benchmark gaps but NOT in the analyzer's quarter-over-
+    quarter temporal gaps; ``scripts/gap_arbiter_1833.py`` is the gate.
     """
 
     # Metric configurations by type
@@ -435,6 +447,9 @@ class BusinessMetricsGenerator(BaseGenerator[pd.DataFrame]):
             * trend_factor
             * (1 + noise)
             * self.brand_region_factor(brand, region, metric_type, metric_date)
+            # Canonical TRx lane: calendar seasonality (trx/nrx/nbrx only),
+            # value-only and RNG-free -- see generators/seasonality.py.
+            * seasonality.seasonal_factor(metric_type, metric_date)
         )
 
         # Ensure non-negative values

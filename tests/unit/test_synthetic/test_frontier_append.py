@@ -71,13 +71,32 @@ TRX_TREND = 0.02  # 2%/month
 AUG_2026_IDX = 163
 
 
-def _expected_trx(brand: str, region: str, month_idx: int, events: dict) -> float:
+# Canonical TRx lane: calendar seasonality on trx value (literal pin, same
+# reason as REGION_FACTORS above).
+SEASONAL_BP = {
+    1: -800,
+    2: -400,
+    3: 100,
+    4: 100,
+    5: 100,
+    6: -100,
+    7: -300,
+    8: -200,
+    9: 100,
+    10: 300,
+    11: 300,
+    12: 800,
+}
+
+
+def _expected_trx(brand: str, region: str, month_idx: int, events: dict, month: int) -> float:
     return (
         TRX_BASE[brand]
         * REGION_FACTORS[region]
         * (1 + TRX_TREND * month_idx)
         * BRAND_REGION_PERFORMANCE[brand][region]
         * events.get((brand, region), 1.0)
+        * (1 + SEASONAL_BP[month] / 10_000)
     )
 
 
@@ -105,7 +124,9 @@ class TestMonthCohortContinuity:
         assert len(trx) == 12
 
         expected = trx.apply(
-            lambda r: _expected_trx(r["brand"], r["region"], AUG_2026_IDX, EVENTS_ACTIVE_AUG_2026),
+            lambda r: _expected_trx(
+                r["brand"], r["region"], AUG_2026_IDX, EVENTS_ACTIVE_AUG_2026, month=8
+            ),
             axis=1,
         )
         ratio = float((trx["value"] / expected).mean())
@@ -144,6 +165,7 @@ class TestMonthCohortContinuity:
                 * BusinessMetricsGenerator.brand_region_factor(
                     row["brand"], row["region"], "trx", d
                 )
+                * (1 + SEASONAL_BP[d.month] / 10_000)
             )
             return row["value"] / line
 
