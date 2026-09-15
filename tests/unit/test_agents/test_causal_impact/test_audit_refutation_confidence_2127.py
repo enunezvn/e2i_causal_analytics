@@ -202,8 +202,9 @@ async def test_refutation_early_failure_row_is_null_without_warning(
 # ---------------------------------------------------------------------------
 # T2b (round 3) — an EXCEPTION return must not inherit a score. The node's
 # two ``except`` returns spread the INPUT state, so a ``refutation_confidence``
-# already in that state rides along on the error return although THIS
-# invocation ran no suite. Both of those returns set the ``refutation_error``
+# already in that state rides along on the error return, which carries no
+# trustworthy fresh score of THIS invocation (the exception may have followed
+# a computed suite). Both of those returns set the ``refutation_error``
 # KEY (its value may be empty — the generic handler stores ``str(e)``, "" for
 # a bare exception), and the completed return never does, so the wrapper
 # gates the score on key PRESENCE — not on the value's truthiness (round 5),

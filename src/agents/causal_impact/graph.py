@@ -72,8 +72,10 @@ def _refutation_suite_score(result: Dict[str, Any]) -> Optional[float]:
     node's two ``except`` returns set the ``refutation_error`` KEY (its value
     may be empty — the generic handler stores ``str(e)``, "" for a bare
     exception — so presence, not truthiness, is the marker) and spread the
-    input state, so no score of that invocation exists and the caller
-    records NULL even if the incoming state carried one. A completed return
+    input state, so that return carries no trustworthy fresh score of this
+    invocation (only what it inherited; the exception may have followed a
+    computed suite, e.g. in persistence) and the caller records NULL even
+    if the incoming state carried one. A completed return
     could carry the key only by inheriting it from the input state, which
     the compiled graph does not produce (no node before refutation writes
     it). A COMPLETED suite that BLOCKs or is withheld on the expert-review
@@ -227,9 +229,10 @@ def traced_node(node_name: str) -> Callable[[F], F]:
                         # ``refutation_error`` KEY (its value may be empty — the
                         # generic handler stores ``str(e)``, "" for a bare
                         # exception, so presence, not truthiness, is the
-                        # marker) and spread the input state (no suite of this
-                        # run), so a ``refutation_confidence`` key alone could
-                        # carry a stale score. A completed BLOCK / expert-review
+                        # marker) and spread the input state — no trustworthy
+                        # fresh score of this invocation, only what it
+                        # inherited — so a ``refutation_confidence`` key alone
+                        # could carry a stale score. A completed BLOCK / expert-review
                         # halt also fails closed (status failed + error_message
                         # → the same refutation_error action_type) but carries
                         # its own fresh score, which IS recorded.
@@ -491,8 +494,10 @@ def should_continue_after_refutation(
 
     Contract: gate_decision determines flow, fail-CLOSED (H1).
 
-    A refutation that ERRORED or FAILED sets ``refutation_error`` /
-    ``status="failed"`` but NO ``refutation_results`` — previously the gate then
+    A refutation that ERRORED sets ``refutation_error`` / ``status="failed"``
+    with NO ``refutation_results``, while a completed BLOCK or expert-review
+    halt sets ``status="failed"`` WITH ``refutation_results`` and a suite score
+    (#2127) — previously the gate then
     defaulted to ``"proceed"`` and carried a never-validated estimate forward to
     sensitivity → interpretation → a "completed" result. Route those to the
     error handler instead. Only PROCEED/REVIEW continue to sensitivity; BLOCK
