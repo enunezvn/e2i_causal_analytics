@@ -169,11 +169,12 @@ async def refuse_foreign_thread(thread_id: Optional[str], token_user_id: Optiona
     broad ``except Exception``, is what lets the 403 out instead of a 200
     ``{"success": false}`` body.
 
-    Existence oracle, accepted: a refused caller learns the thread exists. On
-    the ``session_id`` path that costs guessing a v4 uuid; on the ``message_id``
-    path the id is a sequential integer, so "exists and foreign" (403) is
-    distinguishable from "not found" (200 body) by counting — strictly less
-    than before, when the same call rated the row and returned success.
+    Existence oracle, accepted: a refused caller learns the thread exists. The
+    ``session_id`` path reads nothing before the gate (a prefix match ahead of
+    it was a content oracle), so what remains is thread existence there
+    (random v4 ids) and ``message_id`` existence on the other path (sequential
+    ints, countable) — both strictly less than before, when the same call
+    rated the row and returned success.
     """
     if await thread_owner_denied(thread_id, token_user_id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="threadId not yours")

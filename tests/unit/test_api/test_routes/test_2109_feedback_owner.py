@@ -54,6 +54,8 @@ NEW_MESSAGE_ID = 789
 # The detail the AG-UI gate answers with (copilotkit.py, ``"threadId not yours"``).
 SHARED_DETAIL = "threadId not yours"
 
+MESSAGE_CONTENT = "The TRx performance is up 4% quarter over quarter."
+
 
 # ------------------------------------------------------------------ the doubles
 
@@ -121,6 +123,9 @@ class _FakeMessages:
     def __init__(self, rows: List[Dict[str, Any]]) -> None:
         self._rows = rows
         self._filters: List[tuple[str, Any]] = []
+        # Every executed read, as its filters: T7 asserts a foreign session
+        # reads NOTHING before the gate.
+        self.reads: List[List[tuple[str, Any]]] = []
 
     def table(self, name: str) -> "_FakeMessages":
         assert name == "chatbot_messages", name
@@ -141,6 +146,7 @@ class _FakeMessages:
 
     def execute(self) -> _Result:
         filters, self._filters = self._filters, []
+        self.reads.append(filters)
         rows = [
             row
             for row in self._rows
@@ -154,7 +160,7 @@ def _message(message_id: int, session_id: str) -> Dict[str, Any]:
         "id": message_id,
         "session_id": session_id,
         "role": "assistant",
-        "content": "The TRx performance is up 4% quarter over quarter.",
+        "content": MESSAGE_CONTENT,
         "agent_name": "orchestrator",
         "metadata": {"frontend_message_id": f"m-{message_id}"},
         "tool_calls": None,
@@ -187,17 +193,21 @@ def writer(monkeypatch) -> _FakeFeedbackRepo:
 
 
 @pytest.fixture
-def feedback_client(monkeypatch, writer) -> TestClient:
-    """The real router, authenticated as CALLER, over a doubled message table."""
-    monkeypatch.setenv("SUPABASE_URL", "http://supabase.test")
-    monkeypatch.setenv("SUPABASE_SERVICE_KEY", "service-key-2109")
-    messages = _FakeMessages(
+def messages() -> _FakeMessages:
+    return _FakeMessages(
         [
             _message(VICTIM_MESSAGE_ID, VICTIM_THREAD),
             _message(CALLER_MESSAGE_ID, CALLER_THREAD),
             _message(NEW_MESSAGE_ID, NEW_THREAD),
         ]
     )
+
+
+@pytest.fixture
+def feedback_client(monkeypatch, writer, messages) -> TestClient:
+    """The real router, authenticated as CALLER, over a doubled message table."""
+    monkeypatch.setenv("SUPABASE_URL", "http://supabase.test")
+    monkeypatch.setenv("SUPABASE_SERVICE_KEY", "service-key-2109")
     monkeypatch.setattr(supabase, "create_client", lambda url, key: messages)
     app = FastAPI()
     app.include_router(ck.router)
@@ -243,7 +253,50 @@ def test_path_b_a_caller_supplied_foreign_session_is_refused(
     assert conversations.lookups == [VICTIM_THREAD]
 
 
+# ------------------------------------ T7/T8: path (b) reads nothing before the gate
+
+
+def test_path_b_a_matching_preview_in_a_foreign_thread_reads_no_message(
+    feedback_client, writer, conversations, messages
+):
+    """The prefix match ran BEFORE the gate, so a foreign caller could probe a
+    stored response one prefix at a time: a hit answered 403, a miss the 200
+    not-found body. The gate now sits on the caller-supplied session before any
+    message read."""
+    response = _post(
+        feedback_client, session_id=VICTIM_THREAD, response_preview=MESSAGE_CONTENT[:20]
+    )
+
+    _assert_refused(response, writer)
+    assert messages.reads == [], "a foreign session's messages were read before the gate"
+    assert conversations.lookups == [VICTIM_THREAD]
+
+
+def test_path_b_a_non_matching_preview_in_a_foreign_thread_is_refused_the_same_way(
+    feedback_client, writer, conversations, messages
+):
+    """A miss must be indistinguishable from a hit: the same 403, nothing read."""
+    response = _post(
+        feedback_client, session_id=VICTIM_THREAD, response_preview="Nothing like this"
+    )
+
+    _assert_refused(response, writer)
+    assert messages.reads == []
+
+
 # --------------------------------------------------------- T3: the own thread
+
+
+def test_path_b_a_matching_preview_in_the_own_thread_is_rated(
+    feedback_client, writer, conversations
+):
+    response = _post(
+        feedback_client, session_id=CALLER_THREAD, response_preview=MESSAGE_CONTENT[:20]
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["success"] is True
+    assert [c["message_id"] for c in writer.calls] == [CALLER_MESSAGE_ID]
 
 
 def test_the_callers_own_thread_is_rated_on_both_paths(feedback_client, writer, conversations):
