@@ -958,6 +958,11 @@ def _extract_library_payload(
         if isinstance(method, str):
             payload["method"] = method
     elif library == "causalml":
+        # This stage is NOT a member of the ATE consensus (#2027):
+        # `effect_estimate` is the mean model-predicted uplift, served with
+        # ci_lower / ci_upper / p_value = None (the only interval CausalML
+        # has is a dispersion) and labelled by `data_provenance` +
+        # `estimand` below. `consensus_effect` is DoWhy + EconML only.
         ate = result_payload.get("ate")
         if isinstance(ate, (int, float)):
             payload["effect_estimate"] = float(ate)

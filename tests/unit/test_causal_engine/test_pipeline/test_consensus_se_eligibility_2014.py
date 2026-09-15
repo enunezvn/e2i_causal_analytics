@@ -63,7 +63,10 @@ def test_causalml_contributes_no_standard_error_to_the_consensus() -> None:
     assert _se_for_library(state, "causalml") is None
     assert _se_for_library(state, "dowhy") is not None
     assert _se_for_library(state, "econml") is not None
-    assert state["consensus_weighting"] == "confidence"
+    # #2027: CausalML is no longer a consensus member, so its missing SE no
+    # longer trips the all-or-nothing gate — DoWhy + EconML keep precision
+    # weighting even with CausalML enabled and successful.
+    assert state["consensus_weighting"] == "inverse_variance"
 
 
 def test_dowhy_and_econml_sampling_ses_still_weight_by_precision() -> None:
