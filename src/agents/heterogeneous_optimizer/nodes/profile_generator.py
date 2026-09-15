@@ -591,7 +591,10 @@ Tactical Recommendation:
 
             # Initialize signal with input context
             signal = collector.collect_optimization_signal(
-                session_id=state.get("session_id") or "",
+                # ``or None``, never ``or ""`` (#2099): an empty string is a
+                # second invented-identity shape, and this feeds
+                # learning_signals.session_id.
+                session_id=state.get("session_id") or None,
                 query=state.get("query", ""),
                 treatment_var=state.get("treatment_var", ""),
                 outcome_var=state.get("outcome_var", ""),

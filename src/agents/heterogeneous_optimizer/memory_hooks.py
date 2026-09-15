@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 class CATEAnalysisContext:
     """Context retrieved from all memory systems for CATE analysis."""
 
-    session_id: str
+    session_id: Optional[str]
     working_memory: List[Dict[str, Any]] = field(default_factory=list)
     episodic_context: List[Dict[str, Any]] = field(default_factory=list)
     semantic_context: Dict[str, Any] = field(default_factory=dict)
@@ -137,7 +137,7 @@ class HeterogeneousOptimizerMemoryHooks:
 
     async def get_context(
         self,
-        session_id: str,
+        session_id: Optional[str],
         query: str,
         treatment_var: Optional[str] = None,
         outcome_var: Optional[str] = None,
@@ -147,7 +147,8 @@ class HeterogeneousOptimizerMemoryHooks:
         Retrieve context from all three memory systems.
 
         Args:
-            session_id: Session identifier for working memory lookup
+            session_id: Session identifier for working memory lookup; None
+                skips the session-keyed read (#2099)
             query: Query text for episodic similarity search
             treatment_var: Optional treatment variable for filtering
             outcome_var: Optional outcome variable for filtering
@@ -186,11 +187,15 @@ class HeterogeneousOptimizerMemoryHooks:
 
     async def _get_working_memory_context(
         self,
-        session_id: str,
+        session_id: Optional[str],
         limit: int = 10,
     ) -> List[Dict[str, Any]]:
-        """Retrieve recent conversation from working memory."""
-        if not self.working_memory:
+        """Retrieve recent conversation from working memory.
+
+        Without a session there is no conversation to retrieve: reading under a
+        minted id only ever returns empty, so return empty directly (#2099).
+        """
+        if session_id is None or not self.working_memory:
             return []
 
         try:
