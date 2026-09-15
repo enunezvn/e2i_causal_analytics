@@ -210,6 +210,7 @@ def test_two_valued_non_binary_outcome_stage_names_the_binarized_estimand() -> N
     stage = _stage(output, state)
 
     assert stage.additional_results["estimand"] == BINARIZED_ESTIMAND
+    assert "identified_estimand" not in stage.additional_results
     assert stage.additional_results["outcome_distinct_values"] == 2
 
 

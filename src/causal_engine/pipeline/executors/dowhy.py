@@ -418,11 +418,16 @@ class DoWhyExecutor(LibraryExecutor):
         """Derive a stable human-readable label from a DoWhy IdentifiedEstimand.
 
         DoWhy's identified_estimand object exposes an `estimand_type`
-        attribute that identifies the identification strategy; it is DoWhy's
-        `EstimandType`, a plain Enum, so the label below is `str()` of it —
+        attribute that identifies the identification strategy. On the
+        `CausalModel.identify_effect` path this executor takes it is DoWhy's
+        `EstimandType`, a plain Enum (dowhy/causal_model.py:227 normalises
+        the string to the enum), so the label below is `str()` of it —
         "EstimandType.NONPARAMETRIC_ATE", not the enum's value
-        "nonparametric-ate" (#2106). We prefer that label; fall back to the
-        class name if estimand_type is missing.
+        "nonparametric-ate" (#2106); a directly constructed
+        `IdentifiedEstimand` keeps whatever it was given
+        (identified_estimand.py:41) and may carry the value string, which is
+        why the API route accepts both spellings. We prefer that label; fall
+        back to the class name if estimand_type is missing.
         """
         estimand_type = getattr(identified_estimand, "estimand_type", None)
         if estimand_type is not None:
