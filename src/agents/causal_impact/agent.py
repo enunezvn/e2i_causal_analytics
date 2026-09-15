@@ -365,6 +365,21 @@ class CausalImpactAgent(SkillsMixin):
         if input_data.get("causal_path_id"):
             state["causal_path_id"] = str(input_data["causal_path_id"])
 
+        # #2116: keep the caller's chat session. The orchestrator's dispatcher
+        # puts ``session_id`` in the generic payload and, for this run(dict)
+        # agent, MERGES its input resolver's output into that payload
+        # (dispatcher.py ``agent_input.update(resolved)``), so the session
+        # arrived here and this literal dropped it: since #2113 every
+        # dispatched turn's episodic row landed with a NULL session (before
+        # that, with a minted uuid). Kept RAW (a composite ``{user}~{session}``
+        # id on the plain routes, a bare thread uuid on AG-UI): never parsed or
+        # minted here. Set only when non-empty, so the write's
+        # ``state.get("session_id") or None`` stores an honest NULL for a
+        # session-less call.
+        session_id = input_data.get("session_id")
+        if session_id:
+            state["session_id"] = session_id
+
         return state
 
     def _build_output(self, state: CausalImpactState, start_time: float) -> CausalImpactOutput:
