@@ -942,12 +942,29 @@ def test_the_value_path_over_refusal_battery(query, expected_id, scope, why, cal
 
     ⚠ WHAT A BINDING ROW PROVES, STATED EXACTLY: that THE WALK DOES NOT REFUSE IT. It does
     NOT prove the answer is scoped. Until r12 this file's double discarded `context`, so
-    these rows could not tell the difference, and ten of them are answering with NOTHING
-    BOUND — "by severity", "per brand", "across brands", "within the cohort", "among new
-    patients", "at the HCP level", "in Q3", "since January", "q3", "vs the prior period".
-    The `scope` column is the MEASURED context, so those rows are now WITNESSES OF #2141
-    rather than silent passes: when #2141 is fixed they will fail deliberately and whoever
-    fixes it will see exactly which asks change.
+    these rows could not tell the difference.
+
+    OF THE 24 ROWS: 10 bind a dimension; 14 carry `()`, and those 14 split two ways —
+
+      TWELVE ARE #2141 WITNESSES (a qualifier was named and DROPPED):
+        by severity · per brand · across brands · with high adherence ·
+        within the cohort · among new patients · at the HCP level · by segment ·
+        in Q3 · since January · q3 · vs the prior period
+
+      TWO ARE NOT WITNESSES (nothing was named, so nothing could bind):
+        "What is TRx?" · "show me the NRx panel"
+
+    The `scope` column is the MEASURED context, so the twelve are witnesses rather than
+    silent passes: when #2141 is fixed they fail deliberately and whoever fixes it sees
+    exactly which asks change.
+
+    ⚠ THIS ENUMERATION SAID "TEN" AND THE TABLE HELD TWELVE. It omitted "with high
+    adherence" and "by segment" — the second being the row codex specifically demanded.
+    Corrected by counting the parametrize programmatically instead of by eye: a prose
+    count beside a machine-checkable table is the fourth stale number this lane has
+    caught by arithmetic, and the only one that would have outlived the lane, because a
+    docstring is not executable. The split above is now stated so the total is derivable
+    (10 + 12 + 2 = 24) rather than asserted.
 
     ⚠ AND IT EXPOSES A LIMIT IN THE LANE'S OWN STORY, which belongs here in plain words.
     This lane refuses "What is TRx patients?" on the ground that it reaches the calculator
