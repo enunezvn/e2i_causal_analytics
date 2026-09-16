@@ -2434,7 +2434,7 @@ def _causal_path_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str
     if not isinstance(query, str) or not query.strip():
         return None
 
-    from src.agents.orchestrator.nodes.kpi_mentions import owned_mask
+    from src.agents.orchestrator.nodes.kpi_mentions import causal_masked_or_refusal
     from src.services.kpi_resolution import recognize_distinct_metric, recognize_kpi_span
 
     match = recognize_kpi_span(query)
@@ -2453,12 +2453,12 @@ def _causal_path_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str
         and not any(pattern.search(query) for pattern in _causal_ask_patterns())
     ):
         return None
-    if of_head is not None and of_head not in _CAUSAL_OF_HEADS:
-        # "what drives the cost of TRx up" (codex iter-1): TRx is a MODIFIER of
-        # a head the registry does not model — binding TRx drivers would answer
-        # a different question. Fail closed instead.
+    masked = causal_masked_or_refusal(normalized_query, kpi.id, match_start, match_end)
+    if masked is None:
+        # A governing of-head outside _CAUSAL_OF_HEADS on ANY owned occurrence
+        # ("the cost of TRx up", codex iter-1; a LATER one, codex r10): the KPI
+        # is a MODIFIER of a head the registry does not model. Fail closed.
         return None
-    masked = owned_mask(normalized_query, kpi.id, match_start, match_end)
     second = recognize_distinct_metric(masked, exclude_id=kpi.id, original_query=query)
     if second is not None:
         # Two distinct metrics in a causal ask (codex iter-5). The "on <Y>"

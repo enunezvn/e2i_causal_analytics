@@ -33,15 +33,39 @@ from __future__ import annotations
 from typing import Optional
 
 
-def owned_mask(normalized_query: str, kpi_id: str, start: int, end: int) -> str:
-    """Blank every span ``kpi_id`` owns, length-preserving.
+def causal_masked_or_refusal(
+    normalized_query: str, kpi_id: str, start: int, end: int
+) -> Optional[str]:
+    """The head-checked mask for the CAUSAL path, or ``None`` to refuse.
 
-    Ownership comes from the longest-wins occurrence map over the intact string,
-    so a phrase belonging to ANOTHER KPI is never carved out from under it.
+    The same per-occurrence principle as :func:`masked_or_refusal`, with a
+    DIFFERENT accepted head set — which is why the value guard is not reused
+    here (#2114 codex r10). On this path:
+
+    * a governing of-head outside ``_CAUSAL_OF_HEADS`` REFUSES -- "the cost of
+      NRx panel" names a head the registry does not model, so binding NRx
+      panel's drivers would answer a different question;
+    * a causal RIGHT-head does NOT refuse -- "NRx panel drivers" IS the ask
+      here, where the value path must decline it.
+
+    Checking only the FIRST mention left a later "cost of NRx panel" to be
+    masked away as a redundant repeat, and the registry was then asked for
+    WS3-BI-012. Measured across the lane: refused on the Task-11 base, ANSWERED
+    from 11a onward -- lane-introduced, not pre-existing, and 11b closed only
+    the value half because this site masked without checking heads at all.
     """
+    from src.agents.orchestrator.nodes.dispatcher import (
+        _CAUSAL_OF_HEADS,
+        _kpi_governing_of_head,
+    )
     from src.services.kpi_resolution import mask_spans, owned_mention_spans
 
-    return mask_spans(normalized_query, owned_mention_spans(normalized_query, kpi_id, start, end))
+    spans = owned_mention_spans(normalized_query, kpi_id, start, end)
+    for span_start, _span_end in spans:
+        of_head = _kpi_governing_of_head(normalized_query, span_start)
+        if of_head is not None and of_head not in _CAUSAL_OF_HEADS:
+            return None
+    return mask_spans(normalized_query, spans)
 
 
 def masked_or_refusal(normalized_query: str, kpi_id: str, start: int, end: int) -> Optional[str]:

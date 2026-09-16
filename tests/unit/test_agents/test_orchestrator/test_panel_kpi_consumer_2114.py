@@ -340,3 +340,110 @@ def test_the_mirror_direction_is_a_documented_PIN_not_a_fix(causal_registry):
     known gap in the causal ENTRY gate, unrelated to #2114's masking."""
     assert _causal_kpi_id("impact of TRx share panel on the share of Kisqali TRx") is None
     assert causal_registry == []
+
+
+# --- codex r10 MEDIUM: the causal path masks later UNSUPPORTED governing heads -------------
+# M2's defect, on the causal route. 11b closed it for `_kpi_lookup_evidence` via
+# `masked_or_refusal` (head-checks every owned occurrence); `_causal_path_evidence` still
+# called `owned_mask`, which does no head checks at all — so a later "cost of NRx panel"
+# was masked away as a redundant repeat and the registry was asked for WS3-BI-012.
+#
+# codex called this pre-existing. A three-way measurement says otherwise:
+#
+#   "what drives NRx panel and the cost of NRx panel?"
+#       33e85a13e (Task 11 base)  None, 0 calls      <- refused
+#       1a6ee9956 (11a)           012, 1 call        <- 11a INTRODUCED it
+#       61a03b3ad (HEAD)          012, 1 call        <- 11b did not close the causal half
+#
+# In-range and lane-caused. The base column also refuses "NRx panel and NRx panel", which is
+# the over-refusal 11a legitimately fixed — so the whole story is: base over-refuses the
+# family, 11a fixes the false refusals AND opens the guarded ones, 11b closes the value half.
+#
+# The head set DIFFERS by path and the value guard must NOT be reused: causal ACCEPTS a
+# causal right-head ("NRx panel drivers" is the ask), and refuses only a governing of-head
+# outside _CAUSAL_OF_HEADS ("cost of").
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "what drives NRx panel and the cost of NRx panel?",
+        "what drives NRx panel drivers and the cost of NRx panel?",
+        "what drives the cost of NRx panel?",
+    ],
+)
+def test_a_causal_ask_with_an_unsupported_head_on_any_occurrence_fails_closed(
+    query, causal_registry
+):
+    """`cost of X` names a head the registry does not model. Refusing only when it lands on
+    the FIRST mention leaves the later one to be masked away as a redundant repeat."""
+    assert _causal_kpi_id(query) is None, f"{query!r} bound an outcome"
+    assert causal_registry == [], f"{query!r} consulted the registry; that is not a refusal"
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "what drives NRx panel and NRx panel?",
+        "what drives NRx panel and NRx panel drivers?",
+        "what drives NRx panel?",
+    ],
+)
+def test_a_causal_repeat_and_a_causal_right_head_still_bind(query, causal_registry):
+    """The other half of the boundary, and the reason the VALUE guard cannot be reused here:
+    `drivers` is a causal right-head and IS the ask on this path, while the value path refuses
+    it. A repeated driver mention stays redundant."""
+    assert _causal_kpi_id(query) == "WS3-BI-012", query
+    assert causal_registry == ["Observed Rx Events - Patient Panel NRx (NRx Panel)"]
+
+
+# --- what property do ALL the causal rows share? ------------------------------------------
+# Third time this genus has hidden a live defect in this lane. The 11c causal rows were every
+# one of them cross-owner-or-single: none was a same-KPI repeat with a guarded LATER
+# occurrence, which is exactly why r10's defect survived 11c. The rows above fix that, then
+# acquire properties of their own — the guard always LATER, always exactly TWO occurrences,
+# always the head "cost", always NRx panel. These break all four.
+#
+# MEASURED against 11c (61a03b3ad), because "passed first time" says nothing about the base:
+# FOUR of the five are FIXES, not pins —
+#     three occurrences, third guarded            RED on 11c
+#     a different of-head ("accuracy of")         RED on 11c
+#     a different panel KPI (TRx share panel)     RED on 11c
+#     a CANONICAL KPI (TRx), no panel alias       RED on 11c   <- not panel-specific at all
+# and exactly ONE is a genuine pin:
+#     the guard on the FIRST occurrence           green on 11c (the pre-existing
+#                                                 first-mention check already caught it)
+# The canonical-KPI row is the one worth noticing: this was never a panel-vocabulary defect,
+# it was a per-occurrence head defect that the panel aliases merely made reachable.
+
+
+@pytest.mark.parametrize(
+    "query,why",
+    [
+        ("what drives the cost of NRx panel and NRx panel?", "guard on the FIRST occurrence"),
+        (
+            "what drives NRx panel and NRx panel and the cost of NRx panel?",
+            "THREE occurrences, the third guarded — arity must not matter",
+        ),
+        (
+            "what drives NRx panel and the accuracy of NRx panel?",
+            "a different unsupported of-head than 'cost'",
+        ),
+        (
+            "what drives TRx share panel and the cost of TRx share panel?",
+            "a different panel KPI",
+        ),
+        ("what drives TRx and the cost of TRx?", "a CANONICAL KPI, no panel alias involved"),
+    ],
+)
+def test_the_causal_boundary_holds_regardless_of_position_arity_head_or_kpi(
+    query, why, causal_registry
+):
+    assert _causal_kpi_id(query) is None, f"{query!r} bound an outcome; {why}"
+    assert causal_registry == [], f"{query!r} consulted the registry; {why}"
+
+
+def test_three_clean_causal_occurrences_still_bind(causal_registry):
+    """The ANSWER side of the arity probe on the causal path."""
+    assert _causal_kpi_id("what drives NRx panel and NRx panel and NRx panel?") == "WS3-BI-012"
+    assert causal_registry == ["Observed Rx Events - Patient Panel NRx (NRx Panel)"]
