@@ -821,7 +821,7 @@ export interface HierarchicalAnalysisResponse {
   /** Per-segment CATE results */
   segment_results: SegmentCATEResult[];
   /** Nested CI aggregation (absent when every segment is excluded) */
-  nested_ci?: NestedCIResult;
+  nested_ci?: NestedCIResult | null; // null when every segment is listed in nested_ci_excluded_segments (#2027)
   /**
    * Successful segments left out of the nested CI aggregate because the analyzer
    * produced no measured SE and/or CI bound for them (#2027).
