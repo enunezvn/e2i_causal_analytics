@@ -19,6 +19,11 @@ from typing import Annotated, Any, Dict, Optional
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
+from src.digital_twin.effect.cohort_causal_estimator import CohortCausalEstimator
+from src.digital_twin.effect.cohort_loader import (
+    build_cohort_provider_or_none_blocking,
+    no_effect_data_reason,
+)
 from src.digital_twin.fidelity_tracker import FidelityTracker
 from src.digital_twin.models.simulation_models import (
     InterventionConfig,
@@ -260,16 +265,32 @@ def simulate_intervention(
             regions=target_regions or [],
         )
 
+        # Identification gate, as /digital-twin/simulate applies it: the effect is estimated
+        # on the brand's cohort, or not at all. Checked before generating twins, the heavy
+        # step (#2025: the engine used to fall back to a synthetic planted effect here).
+        cohort_provider = build_cohort_provider_or_none_blocking(
+            intervention_type, brand_enum.value
+        )
+        if cohort_provider is None:
+            return _unavailable_output(
+                rationale=no_effect_data_reason(intervention_type, brand_enum.value),
+                reason="no effect data in the connected cohort for this intervention",
+                duration_weeks=duration_weeks,
+            )
+
         # Load + hydrate the active trained model and generate a population.
         # Fails closed (raises) if no model is loadable — the broad except below
         # then returns an honest 'refine' error result (no fabricated effect, #705 H3).
         twins = _get_or_create_twins(twin_type, brand_enum, twin_count)
 
-        # Run simulation
+        # Run simulation. Scope the estimate to the filtered regions the way the route does
+        # (#2023), so a region-targeted pre-screen states that region's effect.
         engine = SimulationEngine(
             population=twins,
             min_effect_threshold=0.05,
             confidence_threshold=0.70,
+            effect_provider=cohort_provider,
+            effect_estimator=CohortCausalEstimator(target_regions=target_regions or []),
         )
 
         result = engine.simulate(
@@ -294,19 +315,28 @@ def simulate_intervention(
         # The raw text stays in the log: the node copies these fields into the experiment_designer
         # warnings, which reach the answer, and library text means nothing to a reader (#2020).
         logger.error(f"Simulation failed: {e}", exc_info=True)
-        return {
-            "simulation_id": "error",
-            "recommendation": "refine",
-            "recommendation_rationale": "Simulation failed. Please check inputs and try again.",
-            "simulated_ate": 0.0,
-            "confidence_interval": (0.0, 0.0),
-            "recommended_sample_size": None,
-            "recommended_duration_weeks": duration_weeks,
-            "simulation_confidence": 0.0,
-            "fidelity_warning": True,
-            "fidelity_warning_reason": "the twin simulation could not be completed",
-            "top_segments": [],
-        }
+        return _unavailable_output(
+            rationale="Simulation failed. Please check inputs and try again.",
+            reason="the twin simulation could not be completed",
+            duration_weeks=duration_weeks,
+        )
+
+
+def _unavailable_output(*, rationale: str, reason: str, duration_weeks: int) -> Dict[str, Any]:
+    """The tool's result when no effect was estimated: no effect, no interval, a warning."""
+    return {
+        "simulation_id": "error",
+        "recommendation": "refine",
+        "recommendation_rationale": rationale,
+        "simulated_ate": 0.0,
+        "confidence_interval": (0.0, 0.0),
+        "recommended_sample_size": None,
+        "recommended_duration_weeks": duration_weeks,
+        "simulation_confidence": 0.0,
+        "fidelity_warning": True,
+        "fidelity_warning_reason": reason,
+        "top_segments": [],
+    }
 
 
 def _format_output(result: SimulationResult) -> Dict[str, Any]:

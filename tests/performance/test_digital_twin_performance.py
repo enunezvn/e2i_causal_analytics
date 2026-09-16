@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from src.digital_twin.effect.provider import SyntheticEffectDataProvider
 from src.digital_twin.models.simulation_models import (
     InterventionConfig,
     PopulationFilter,
@@ -149,7 +150,7 @@ class Test10kTwinsSimulation:
 
     def test_10k_twins_simulation_completes(self, population_10k, email_campaign_config):
         """Test that 10K twin simulation completes successfully."""
-        engine = SimulationEngine(population_10k)
+        engine = SimulationEngine(population_10k, effect_provider=SyntheticEffectDataProvider())
 
         start_time = time.time()
         result = engine.simulate(email_campaign_config)
@@ -161,7 +162,7 @@ class Test10kTwinsSimulation:
 
     def test_10k_twins_under_30_seconds(self, population_10k, email_campaign_config):
         """Test that 10K simulation completes in under 30 seconds."""
-        engine = SimulationEngine(population_10k)
+        engine = SimulationEngine(population_10k, effect_provider=SyntheticEffectDataProvider())
 
         start_time = time.time()
         result = engine.simulate(email_campaign_config)
@@ -172,7 +173,7 @@ class Test10kTwinsSimulation:
 
     def test_10k_twins_with_heterogeneity(self, population_10k, email_campaign_config):
         """Test 10K simulation with heterogeneity calculation."""
-        engine = SimulationEngine(population_10k)
+        engine = SimulationEngine(population_10k, effect_provider=SyntheticEffectDataProvider())
 
         start_time = time.time()
         result = engine.simulate(
@@ -188,7 +189,7 @@ class Test10kTwinsSimulation:
 
     def test_10k_twins_with_filter(self, population_10k, email_campaign_config):
         """Test 10K simulation with population filtering."""
-        engine = SimulationEngine(population_10k)
+        engine = SimulationEngine(population_10k, effect_provider=SyntheticEffectDataProvider())
 
         filter_ = PopulationFilter(
             specialties=["rheumatology", "dermatology"],
@@ -215,7 +216,7 @@ class Test50kTwinsSimulation:
 
     def test_50k_twins_simulation_completes(self, population_50k, email_campaign_config):
         """Test that 50K twin simulation completes successfully."""
-        engine = SimulationEngine(population_50k)
+        engine = SimulationEngine(population_50k, effect_provider=SyntheticEffectDataProvider())
 
         start_time = time.time()
         result = engine.simulate(email_campaign_config)
@@ -227,7 +228,7 @@ class Test50kTwinsSimulation:
 
     def test_50k_twins_under_120_seconds(self, population_50k, email_campaign_config):
         """Test that 50K simulation completes in under 120 seconds."""
-        engine = SimulationEngine(population_50k)
+        engine = SimulationEngine(population_50k, effect_provider=SyntheticEffectDataProvider())
 
         start_time = time.time()
         result = engine.simulate(email_campaign_config)
@@ -238,7 +239,7 @@ class Test50kTwinsSimulation:
 
     def test_50k_twins_execution_time_recorded(self, population_50k, email_campaign_config):
         """Test that execution time is properly recorded."""
-        engine = SimulationEngine(population_50k)
+        engine = SimulationEngine(population_50k, effect_provider=SyntheticEffectDataProvider())
 
         result = engine.simulate(email_campaign_config)
 
@@ -320,7 +321,7 @@ class TestScalingBehavior:
 
         for size in sizes:
             population = create_large_population(size)
-            engine = SimulationEngine(population)
+            engine = SimulationEngine(population, effect_provider=SyntheticEffectDataProvider())
 
             start = time.time()
             result = engine.simulate(email_campaign_config)
@@ -344,7 +345,7 @@ class TestScalingBehavior:
     def test_heterogeneity_calculation_overhead(self, email_campaign_config):
         """Test overhead of heterogeneity calculation."""
         population = create_large_population(10_000)
-        engine = SimulationEngine(population)
+        engine = SimulationEngine(population, effect_provider=SyntheticEffectDataProvider())
 
         # Without heterogeneity
         start = time.time()
@@ -404,7 +405,7 @@ class TestThroughput:
         0.09 FAIL.
         """
         population = create_large_population(5_000)
-        engine = SimulationEngine(population)
+        engine = SimulationEngine(population, effect_provider=SyntheticEffectDataProvider())
 
         n_simulations = 10
 
@@ -428,7 +429,7 @@ class TestThroughput:
     def test_different_intervention_types_performance(self):
         """Test performance across different intervention types."""
         population = create_large_population(5_000)
-        engine = SimulationEngine(population)
+        engine = SimulationEngine(population, effect_provider=SyntheticEffectDataProvider())
 
         interventions = [
             (
@@ -472,7 +473,7 @@ class TestStress:
     def test_many_small_simulations(self, email_campaign_config):
         """Test many small simulations in sequence."""
         population = create_large_population(500)
-        engine = SimulationEngine(population)
+        engine = SimulationEngine(population, effect_provider=SyntheticEffectDataProvider())
 
         n_simulations = 50
 
@@ -492,7 +493,7 @@ class TestStress:
     def test_complex_filters_performance(self):
         """Test performance with complex population filters."""
         population = create_large_population(20_000)
-        engine = SimulationEngine(population)
+        engine = SimulationEngine(population, effect_provider=SyntheticEffectDataProvider())
 
         config = InterventionConfig(
             intervention_type="email_campaign",

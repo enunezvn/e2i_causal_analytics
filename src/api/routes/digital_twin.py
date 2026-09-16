@@ -934,11 +934,11 @@ async def run_simulation(
             )
 
         if heavy_offload_enabled():
-            # Direction 2: the offload worker reconstructs the engine WITHOUT the cohort
-            # provider built above, so it would fabricate a synthetic effect for identified
-            # interventions. Fail HONESTLY until the worker runs the same cohort-causal path.
-            # (Offload is DARK by default; the inline path below is the real estimator.
-            # Follow-up: thread the cohort frame into the worker to restore offload.)
+            # Direction 2: the offload worker estimates on the cohort too (it loads the
+            # provider itself, #2025), but that path has never run against a live worker and
+            # it reloads the cohort rather than using the one gated above. Offload stays
+            # refused until it is certified. (Offload is DARK by default; the inline path
+            # below is the real estimator.)
             raise HTTPException(
                 status_code=503,
                 detail=(

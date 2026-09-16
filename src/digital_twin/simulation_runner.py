@@ -65,6 +65,11 @@ def run_simulation_compute(
             loudly rather than generate from an untrained model.
     """
     from src.digital_twin import twin_persistence
+    from src.digital_twin.effect.cohort_causal_estimator import CohortCausalEstimator
+    from src.digital_twin.effect.cohort_loader import (
+        build_cohort_provider_or_none_blocking,
+        no_effect_data_reason,
+    )
     from src.digital_twin.models.simulation_models import (
         InterventionConfig,
         PopulationFilter,
@@ -92,8 +97,22 @@ def run_simulation_compute(
         )
     model_id = UUID(model_id_value) if model_id_value else (generator.model_id or UUID(int=0))
 
+    # Estimate on the brand's cohort as the inline route does, or refuse: the engine used to
+    # fall back to a synthetic planted effect when built without a provider (#2025).
+    cohort_provider = build_cohort_provider_or_none_blocking(
+        intervention.intervention_type, brand.value
+    )
+    if cohort_provider is None:
+        raise RuntimeError(no_effect_data_reason(intervention.intervention_type, brand.value))
+
     population = generator.generate(n=twin_count)
-    engine = SimulationEngine(population=population)
+    engine = SimulationEngine(
+        population=population,
+        effect_provider=cohort_provider,
+        effect_estimator=CohortCausalEstimator(
+            target_regions=list(pop_filter.regions) if pop_filter else []
+        ),
+    )
     # Pin the resolved DB model id so twin_simulations.model_id FK holds (#705 H4).
     engine.model_id = model_id
     return engine.simulate(

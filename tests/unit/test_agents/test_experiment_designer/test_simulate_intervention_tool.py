@@ -28,6 +28,58 @@ def _import_tool_module():
     return module
 
 
+# Planted per-region effect of a high (above-median) email_campaign_count on conversion.
+PLANTED_EFFECT = {"northeast": 0.45, "west": 0.30, "south": 0.30, "midwest": 0.30}
+
+
+def _planted_cohort(n_per_region: int = 300, seed: int = 3):
+    """A per-HCP cohort frame with the columns ``load_cohort_frame`` returns."""
+    import numpy as np
+    import pandas as pd
+
+    rng = np.random.default_rng(seed)
+    frames = []
+    for region, tau in PLANTED_EFFECT.items():
+        market = rng.uniform(0.0, 1.0, n_per_region)
+        frames.append(
+            pd.DataFrame(
+                {
+                    "region": region,
+                    "email_campaign_count": rng.poisson(3 + 4 * market).astype(float),
+                    "market_share": market,
+                    "total_rx_count": rng.poisson(60, n_per_region).astype(float),
+                    "_tau": tau,
+                }
+            )
+        )
+    df = pd.concat(frames, ignore_index=True)
+    treated = (df["email_campaign_count"] > df["email_campaign_count"].median()).astype(float)
+    df["conversion_rate"] = (
+        0.2 + 0.3 * df["market_share"] + df["_tau"] * treated + rng.normal(0, 0.05, len(df))
+    )
+    return df.drop(columns="_tau")
+
+
+def _region_population(n_per_region: int = 130):
+    import numpy as np
+
+    from src.digital_twin.models.twin_models import Brand, DigitalTwin, TwinPopulation, TwinType
+
+    rng = np.random.default_rng(5)
+    twins = [
+        DigitalTwin(
+            twin_type=TwinType.HCP,
+            brand=Brand.KISQALI,
+            features={"region": region, "decile": int(rng.integers(1, 11))},
+            baseline_outcome=float(rng.uniform(0.1, 0.3)),
+            baseline_propensity=float(rng.uniform(0.2, 0.5)),
+        )
+        for region in PLANTED_EFFECT
+        for _ in range(n_per_region)
+    ]
+    return TwinPopulation(twin_type=TwinType.HCP, brand=Brand.KISQALI, twins=twins, size=len(twins))
+
+
 # Import schemas and models that don't trigger LLM init
 
 
@@ -257,10 +309,15 @@ class TestSimulateInterventionFailsClosed:
     def test_does_not_fabricate_when_no_model(self, monkeypatch, tool_module):
         from unittest.mock import AsyncMock, MagicMock
 
-        # Force the fail-closed path: a reachable client but NO active trained model.
+        # Force the fail-closed path: a reachable client, a usable cohort, but NO active
+        # trained model.
         monkeypatch.setattr(
             "src.memory.services.factories.get_async_supabase_client",
             AsyncMock(return_value=MagicMock()),
+        )
+        monkeypatch.setattr(
+            "src.digital_twin.effect.cohort_loader.load_cohort_frame",
+            AsyncMock(return_value=_planted_cohort()),
         )
         fake_repo = MagicMock()
         fake_repo.list_active_models = AsyncMock(return_value=[])
@@ -296,6 +353,17 @@ class TestSimulateInterventionFailsClosed:
         def _raise(*args, **kwargs):
             raise ValueError(raw)
 
+        from unittest.mock import AsyncMock, MagicMock
+
+        # A usable cohort, so the failure is raised past the identification gate (#2025).
+        monkeypatch.setattr(
+            "src.memory.services.factories.get_async_supabase_client",
+            AsyncMock(return_value=MagicMock()),
+        )
+        monkeypatch.setattr(
+            "src.digital_twin.effect.cohort_loader.load_cohort_frame",
+            AsyncMock(return_value=_planted_cohort()),
+        )
         monkeypatch.setattr(tool_module, "_get_or_create_twins", _raise)
         with caplog.at_level(logging.ERROR):
             out = tool_module.simulate_intervention.invoke(
@@ -314,6 +382,84 @@ class TestSimulateInterventionFailsClosed:
         assert out["simulated_ate"] == 0.0
         assert out["fidelity_warning"] is True
         assert raw in caplog.text
+
+
+@pytest.mark.xdist_group(name="experiment_designer_tools")
+class TestSimulateInterventionEstimatesOnTheCohort:
+    """#2025: the pre-screen built its engine with no effect provider, so it simulated the
+    engine's synthetic default (a planted ATE of 0.15) and returned it as the estimate. It
+    now estimates on the brand's cohort the way ``/digital-twin/simulate`` does, and
+    refuses when the cohort cannot identify the intervention.
+
+    The engine, the cohort provider and ``CohortCausalEstimator`` run for real; only the
+    database read and the model registry in front of them are replaced."""
+
+    @pytest.mark.timeout(180)
+    def test_returns_the_planted_cohort_effect_for_the_target_region(
+        self, monkeypatch, tool_module
+    ):
+        from unittest.mock import ANY, AsyncMock, MagicMock
+
+        load = AsyncMock(return_value=_planted_cohort())
+        monkeypatch.setattr("src.digital_twin.effect.cohort_loader.load_cohort_frame", load)
+        monkeypatch.setattr(
+            "src.memory.services.factories.get_async_supabase_client",
+            AsyncMock(return_value=MagicMock()),
+        )
+        monkeypatch.setattr(
+            tool_module, "_get_or_create_twins", lambda *a, **k: _region_population()
+        )
+
+        out = tool_module.simulate_intervention.invoke(
+            {
+                "intervention_type": "email_campaign",
+                "brand": "Kisqali",
+                "target_regions": ["northeast"],
+            }
+        )
+
+        load.assert_awaited_once_with(ANY, "Kisqali")
+        assert out["simulation_id"] != "error", out["recommendation_rationale"]
+        # The northeast effect, not the synthetic default (0.15) and not the whole-cohort
+        # average (~0.34): the target regions reach the estimator.
+        assert out["simulated_ate"] == pytest.approx(PLANTED_EFFECT["northeast"], abs=0.04)
+
+    def test_refuses_without_generating_twins_when_the_cohort_is_unusable(
+        self, monkeypatch, tool_module
+    ):
+        from unittest.mock import AsyncMock, MagicMock
+
+        import pandas as pd
+
+        monkeypatch.setattr(
+            "src.digital_twin.effect.cohort_loader.load_cohort_frame",
+            AsyncMock(return_value=pd.DataFrame()),
+        )
+        monkeypatch.setattr(
+            "src.memory.services.factories.get_async_supabase_client",
+            AsyncMock(return_value=MagicMock()),
+        )
+        generated = []
+        monkeypatch.setattr(
+            tool_module,
+            "_get_or_create_twins",
+            lambda *a, **k: generated.append(a) or _region_population(),
+        )
+
+        out = tool_module.simulate_intervention.invoke(
+            {"intervention_type": "email_campaign", "brand": "Kisqali"}
+        )
+
+        assert generated == []
+        assert out["recommendation"] == "refine"
+        assert out["simulated_ate"] == 0.0
+        assert out["confidence_interval"] == (0.0, 0.0)
+        assert out["fidelity_warning"] is True
+        assert out["recommendation_rationale"] == (
+            "No effect data available for intervention 'email_campaign' and brand 'Kisqali': "
+            "the connected cohort cannot identify this intervention, so a causal effect "
+            "cannot be estimated (no fabricated effect is returned)."
+        )
 
 
 @pytest.mark.xdist_group(name="experiment_designer_tools")

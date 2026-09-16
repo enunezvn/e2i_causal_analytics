@@ -19,6 +19,7 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
+from src.digital_twin.effect.provider import SyntheticEffectDataProvider
 from src.digital_twin.models.simulation_models import (
     InterventionConfig,
     PopulationFilter,
@@ -77,7 +78,7 @@ def population(valid_twins):
 @pytest.fixture
 def engine(population):
     """Create simulation engine."""
-    return SimulationEngine(population)
+    return SimulationEngine(population, effect_provider=SyntheticEffectDataProvider())
 
 
 # =============================================================================
@@ -257,7 +258,7 @@ class TestMissingRequiredFields:
             model_id=uuid4(),
         )
 
-        engine = SimulationEngine(population)
+        engine = SimulationEngine(population, effect_provider=SyntheticEffectDataProvider())
         config = InterventionConfig(
             intervention_type="email_campaign",
             duration_weeks=8,
@@ -477,7 +478,7 @@ class TestPartialTwinData:
             model_id=uuid4(),
         )
 
-        engine = SimulationEngine(population)
+        engine = SimulationEngine(population, effect_provider=SyntheticEffectDataProvider())
         config = InterventionConfig(
             intervention_type="email_campaign",
             duration_weeks=8,
@@ -513,7 +514,7 @@ class TestPartialTwinData:
             model_id=uuid4(),
         )
 
-        engine = SimulationEngine(population)
+        engine = SimulationEngine(population, effect_provider=SyntheticEffectDataProvider())
         config = InterventionConfig(
             intervention_type="email_campaign",
             duration_weeks=8,
@@ -549,7 +550,7 @@ class TestPartialTwinData:
             model_id=uuid4(),
         )
 
-        engine = SimulationEngine(population)
+        engine = SimulationEngine(population, effect_provider=SyntheticEffectDataProvider())
         config = InterventionConfig(
             intervention_type="email_campaign",
             duration_weeks=8,
@@ -586,7 +587,7 @@ class TestPartialTwinData:
             model_id=uuid4(),
         )
 
-        engine = SimulationEngine(population)
+        engine = SimulationEngine(population, effect_provider=SyntheticEffectDataProvider())
         config = InterventionConfig(
             intervention_type="email_campaign",
             duration_weeks=8,
@@ -681,7 +682,7 @@ class TestBoundaryValues:
             model_id=uuid4(),
         )
 
-        engine = SimulationEngine(population)
+        engine = SimulationEngine(population, effect_provider=SyntheticEffectDataProvider())
         config = InterventionConfig(
             intervention_type="email_campaign",
             duration_weeks=8,
@@ -716,7 +717,7 @@ class TestBoundaryValues:
             model_id=uuid4(),
         )
 
-        engine = SimulationEngine(population)
+        engine = SimulationEngine(population, effect_provider=SyntheticEffectDataProvider())
         config = InterventionConfig(
             intervention_type="email_campaign",
             duration_weeks=8,
@@ -752,7 +753,7 @@ class TestBoundaryValues:
             model_id=uuid4(),
         )
 
-        engine = SimulationEngine(population)
+        engine = SimulationEngine(population, effect_provider=SyntheticEffectDataProvider())
         config = InterventionConfig(
             intervention_type="email_campaign",
             duration_weeks=8,
@@ -788,7 +789,7 @@ class TestBoundaryValues:
             model_id=uuid4(),
         )
 
-        engine = SimulationEngine(population)
+        engine = SimulationEngine(population, effect_provider=SyntheticEffectDataProvider())
         config = InterventionConfig(
             intervention_type="email_campaign",
             duration_weeks=8,

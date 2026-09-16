@@ -18,6 +18,7 @@ from uuid import uuid4
 import numpy as np
 import pytest
 
+from src.digital_twin.effect.provider import SyntheticEffectDataProvider
 from src.digital_twin.models.simulation_models import (
     InterventionConfig,
     SimulationStatus,
@@ -139,7 +140,7 @@ class TestMemoryGrowthLinear:
             tracemalloc.reset_peak()
 
             population = create_population(size)
-            engine = SimulationEngine(population)
+            engine = SimulationEngine(population, effect_provider=SyntheticEffectDataProvider())
 
             # Run simulation
             result = engine.simulate(email_campaign_config)
@@ -208,7 +209,7 @@ class TestMemoryLeakDetection:
     def test_no_memory_leak_repeated_simulations(self, email_campaign_config):
         """Test that memory is stable across repeated simulations."""
         population = create_population(5_000)
-        engine = SimulationEngine(population)
+        engine = SimulationEngine(population, effect_provider=SyntheticEffectDataProvider())
 
         n_iterations = 10
         memory_readings = []
@@ -243,7 +244,7 @@ class TestMemoryLeakDetection:
     def test_no_leak_with_different_configs(self):
         """Test no memory leak when using different configurations."""
         population = create_population(3_000)
-        engine = SimulationEngine(population)
+        engine = SimulationEngine(population, effect_provider=SyntheticEffectDataProvider())
 
         configs = [
             InterventionConfig(intervention_type="email_campaign", duration_weeks=8),
@@ -283,7 +284,7 @@ class TestMemoryLeakDetection:
         for i in range(n_iterations):
             # Create new population and engine each iteration
             population = create_population(2_000)
-            engine = SimulationEngine(population)
+            engine = SimulationEngine(population, effect_provider=SyntheticEffectDataProvider())
 
             result = engine.simulate(email_campaign_config)
             assert result.status == SimulationStatus.COMPLETED
@@ -351,7 +352,7 @@ class TestGarbageCollection:
     def test_gc_releases_simulation_results(self, email_campaign_config):
         """Test that simulation results are properly garbage collected."""
         population = create_population(5_000)
-        engine = SimulationEngine(population)
+        engine = SimulationEngine(population, effect_provider=SyntheticEffectDataProvider())
 
         gc.collect()
         tracemalloc.reset_peak()
@@ -410,7 +411,7 @@ class TestPeakMemory:
         tracemalloc.reset_peak()
 
         population = create_population(10_000)
-        engine = SimulationEngine(population)
+        engine = SimulationEngine(population, effect_provider=SyntheticEffectDataProvider())
 
         result = engine.simulate(email_campaign_config)
         assert result.status == SimulationStatus.COMPLETED
@@ -428,7 +429,7 @@ class TestPeakMemory:
         tracemalloc.reset_peak()
 
         population = create_population(50_000)
-        engine = SimulationEngine(population)
+        engine = SimulationEngine(population, effect_provider=SyntheticEffectDataProvider())
 
         result = engine.simulate(email_campaign_config)
         assert result.status == SimulationStatus.COMPLETED
@@ -443,7 +444,7 @@ class TestPeakMemory:
     def test_heterogeneity_memory_overhead(self, email_campaign_config):
         """Test memory overhead of heterogeneity calculation."""
         population = create_population(10_000)
-        engine = SimulationEngine(population)
+        engine = SimulationEngine(population, effect_provider=SyntheticEffectDataProvider())
 
         # Without heterogeneity
         gc.collect()
@@ -487,7 +488,7 @@ class TestMemoryEfficiency:
 
         n_twins = 10_000
         population = create_population(n_twins)
-        engine = SimulationEngine(population)
+        engine = SimulationEngine(population, effect_provider=SyntheticEffectDataProvider())
 
         engine.simulate(email_campaign_config)
 
@@ -507,7 +508,7 @@ class TestMemoryEfficiency:
         import sys
 
         population = create_population(5_000)
-        engine = SimulationEngine(population)
+        engine = SimulationEngine(population, effect_provider=SyntheticEffectDataProvider())
 
         result = engine.simulate(email_campaign_config, calculate_heterogeneity=True)
 

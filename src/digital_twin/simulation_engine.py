@@ -32,7 +32,6 @@ from src.digital_twin.effect import (
     EffectEstimate,
     PolicyThresholds,
     RecommendationPolicy,
-    SyntheticEffectDataProvider,
     TwinEffectEstimator,
     experiment_size,
 )
@@ -88,7 +87,11 @@ class SimulationEngine:
         confidence_threshold: Minimum confidence for recommendations
 
     Example:
-        >>> engine = SimulationEngine(twin_population)
+        >>> engine = SimulationEngine(
+        ...     twin_population,
+        ...     effect_provider=cohort_provider,
+        ...     effect_estimator=CohortCausalEstimator(),
+        ... )
         >>> config = InterventionConfig(
         ...     intervention_type="email_campaign",
         ...     channel="email",
@@ -110,7 +113,8 @@ class SimulationEngine:
         confidence_threshold: float = DEFAULT_CONFIDENCE_THRESHOLD,
         model_fidelity_score: Optional[float] = None,
         cache: Optional["SimulationCache"] = None,
-        effect_provider: Optional[EffectDataProvider] = None,
+        *,
+        effect_provider: EffectDataProvider,
         effect_estimator: Optional[TwinEffectEstimator] = None,
     ):
         """
@@ -122,8 +126,11 @@ class SimulationEngine:
             confidence_threshold: Minimum confidence required
             model_fidelity_score: Fidelity score of generator model
             cache: Optional simulation cache for result caching
-            effect_provider: Labeled-data provider for uplift fitting
-                (defaults to the synthetic known-effect DGP). Injectable for tests.
+            effect_provider: Labeled-data provider for uplift fitting. Required, with no
+                default: a synthetic default returned its planted effect as the estimate
+                for any caller that forgot it (#2025). Production passes the cohort
+                provider; a test that wants the known-effect DGP passes
+                ``SyntheticEffectDataProvider`` explicitly.
             effect_estimator: Uplift effect estimator (defaults to the real
                 TwinEffectEstimator). Injectable for tests.
         """
@@ -133,7 +140,7 @@ class SimulationEngine:
         self.confidence_threshold = confidence_threshold
         self.model_fidelity_score = model_fidelity_score
         self._cache = cache
-        self._effect_provider = effect_provider or SyntheticEffectDataProvider()
+        self._effect_provider = effect_provider
         self._effect_estimator = effect_estimator or TwinEffectEstimator()
 
         logger.info(

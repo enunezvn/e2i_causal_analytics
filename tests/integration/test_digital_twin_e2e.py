@@ -23,6 +23,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from src.digital_twin.effect.provider import SyntheticEffectDataProvider
 from src.digital_twin.fidelity_tracker import FidelityTracker
 from src.digital_twin.models.simulation_models import (
     FidelityGrade,
@@ -182,6 +183,7 @@ class TestFullWorkflowDeploy:
         engine = SimulationEngine(
             population,
             min_effect_threshold=0.03,  # Lower threshold
+            effect_provider=SyntheticEffectDataProvider(),
         )
 
         result = engine.simulate(high_effect_config)
@@ -207,7 +209,9 @@ class TestFullWorkflowDeploy:
             specialties=["rheumatology"],
         )
 
-        engine = SimulationEngine(population, min_effect_threshold=0.03)
+        engine = SimulationEngine(
+            population, min_effect_threshold=0.03, effect_provider=SyntheticEffectDataProvider()
+        )
         result = engine.simulate(email_campaign_config, population_filter=filter_)
 
         # Should complete (may have fewer twins after filter)
@@ -228,6 +232,7 @@ class TestFullWorkflowSkip:
         engine = SimulationEngine(
             population,
             min_effect_threshold=0.50,  # Very high threshold
+            effect_provider=SyntheticEffectDataProvider(),
         )
 
         result = engine.simulate(low_effect_config)
@@ -255,6 +260,7 @@ class TestFullWorkflowRefine:
         engine = SimulationEngine(
             population,
             min_effect_threshold=0.02,
+            effect_provider=SyntheticEffectDataProvider(),
         )
 
         result = engine.simulate(config)
@@ -262,7 +268,7 @@ class TestFullWorkflowRefine:
         # Could be any outcome but verify structure
         assert result.status == SimulationStatus.COMPLETED
         # #2015: sizing is experiment_size (|effect| / the comparison-arm outcome SD), shared
-        # with the chat simulator. This engine keeps the default SyntheticEffectDataProvider;
+        # with the chat simulator. This engine passes SyntheticEffectDataProvider;
         # simulate() passes the twin features as reference_covariates, so the frame is the
         # resampled one (measured: 2,000 rows, 1,008 control / 992 treated) and carries no
         # region column. The sizing rule's comparison arm is defined on the cohort contrast,
@@ -270,7 +276,6 @@ class TestFullWorkflowRefine:
         # missing-column message. The contract is no number plus the stated reason, never a
         # fabricated one; a frame the rule CAN size is pinned in
         # tests/unit/test_digital_twin/test_simulation_engine.py::test_simulate_sizes_a_cohort_frame.
-        # The provider backs the dormant engine defaults tracked in #2025.
         assert result.recommended_sample_size is None
         assert (
             "recommended_sample_size is not given: cohort missing required column(s): "
@@ -295,7 +300,7 @@ class TestFidelityValidationWorkflow:
         generator.train(data=training_data, target_col="prescribing_change")
         population = generator.generate(n=300, seed=42)
 
-        engine = SimulationEngine(population)
+        engine = SimulationEngine(population, effect_provider=SyntheticEffectDataProvider())
         result = engine.simulate(email_campaign_config)
 
         # Step 1: Record prediction
@@ -507,7 +512,9 @@ class TestCompleteE2EWorkflow:
         population = generator.generate(n=400, seed=42)
 
         # 3. Simulate intervention
-        engine = SimulationEngine(population, min_effect_threshold=0.02)
+        engine = SimulationEngine(
+            population, min_effect_threshold=0.02, effect_provider=SyntheticEffectDataProvider()
+        )
         result = engine.simulate(email_campaign_config)
 
         assert result.status == SimulationStatus.COMPLETED
@@ -551,7 +558,7 @@ class TestCompleteE2EWorkflow:
         generator.train(data=training_data, target_col="prescribing_change")
         population = generator.generate(n=400, seed=42)
 
-        engine = SimulationEngine(population)
+        engine = SimulationEngine(population, effect_provider=SyntheticEffectDataProvider())
         result = engine.simulate(email_campaign_config)
 
         await fidelity_tracker.record_prediction(result)
@@ -581,7 +588,7 @@ class TestCompleteE2EWorkflow:
         generator.train(data=training_data, target_col="prescribing_change")
         population = generator.generate(n=500, seed=42)
 
-        engine = SimulationEngine(population)
+        engine = SimulationEngine(population, effect_provider=SyntheticEffectDataProvider())
         result = engine.simulate(
             email_campaign_config,
             calculate_heterogeneity=True,
@@ -641,7 +648,9 @@ class TestCacheIntegrationWorkflow:
         population = generator.generate(n=300, seed=42)
 
         # Create engine with cache
-        engine = SimulationEngine(population, cache=cache)
+        engine = SimulationEngine(
+            population, cache=cache, effect_provider=SyntheticEffectDataProvider()
+        )
 
         # First simulation (cache miss)
         np.random.seed(42)
