@@ -272,12 +272,19 @@ what it may be compared with**. The rule:
 axis** — a chart that plots them together is asserting a comparison the data
 does not support.
 
-The motivating measurement: `business_metrics.value` and a
-`treatment_events` prescription count are not the same quantity. Measured
-against the live DB on 2026-08-15, the national `business_metrics` TRx total
-for 2026-08 was 825,242 against 11,298 trailing-30-day `treatment_events`
-prescription events for the same brand — a stable **~73x** ratio month over
-month.
+The motivating measurement (#1640, 2026-08-15): `business_metrics.value` and a
+`treatment_events` prescription count are not the same quantity (825,242 vs
+11,298, ~73x). **Retired for the volume family by the canonical TRx lane
+(2026-09-15):** TRx, NRx, NBRx and TRx Share (WS3-BI-005..008) now compute from
+the canonical monthly `business_metrics` series (latest complete month,
+migration 143), so `kpi_calculate_tool` and `e2i_data_query_tool` agree on
+their scale. The event counts are separate KPIs, "Observed Rx Events - Patient
+Panel" (WS3-BI-011..014), which carry the patient-axis splits and the claims-lag
+nowcast. The comparability rule above still fences them: re-measured
+2026-09-15, Kisqali canonical TRx for 2026-08 was 800,349 against 597 panel
+prescription events from 2026-08-14 through 2026-09-14 inclusive (about
+1,300x). The canonical series is seasonal (January trough, December peak,
+±8%).
 
 The module is deliberately cheap to import (it lives under `src.kpi`, not
 `src.services`, because `src/services/__init__.py` eagerly pulls in

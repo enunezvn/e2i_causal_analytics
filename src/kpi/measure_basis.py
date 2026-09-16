@@ -28,6 +28,8 @@ import re
 import time
 from typing import Any, Dict, Optional
 
+from src.kpi.volume_family import MEASURED_SCALE_NOTE
+
 logger = logging.getLogger(__name__)
 
 #: What ``business_metrics.value`` actually is (#1640).
@@ -58,14 +60,12 @@ BUSINESS_METRICS_BASIS: Dict[str, Any] = {
     "grain": "brand x region x calendar month",
     "measure": "modeled market-scale monthly level",
     "note": (
-        "business_metrics.value is a MODELED market-scale level, not a count of "
-        "observed events. Do NOT compare it with, sum it against, or divide it by a "
-        "figure computed from treatment_events (which is what kpi_calculate_tool "
-        "returns for volume KPIs): measured 2026-08-15 (re-measured 2026-08-30 after "
-        "the #1833 reseed), the national business_metrics TRx total is ~71-73x the "
-        "trailing-30-day treatment_events prescription count for the same brand. If "
-        "both appear in one answer, say plainly that they measure "
-        "different things and never present one as a check on the other."
+        "business_metrics.value is the MODELED market-scale monthly level (brand x region x "
+        "calendar month) and the canonical substrate of TRx, NRx, NBRx and TRx Share "
+        "(WS3-BI-005..008): kpi_calculate_tool figures for those KPIs agree with these rows. "
+        "Do NOT compare it with, sum it against, or divide it by a patient-panel event KPI "
+        "(WS3-BI-011..014, computed from treatment_events): " + MEASURED_SCALE_NOTE + ". If both "
+        "appear in one answer, name each KPI and say plainly that they measure different things."
     ),
 }
 
@@ -174,11 +174,10 @@ def measure_basis_for_kpi(
             else "computed on demand; substrate not declared"
         ),
         "note": (
-            "Computed from the operational substrate at query time — NOT read from the "
-            "business_metrics snapshot table. Only compare with another figure whose "
-            "substrate matches; e2i_data_query_tool(query_type='kpi') returns "
-            "business_metrics rows, which for volume KPIs measure something different "
-            "(see its measure_basis)."
+            "Computed at query time from the tables named in `substrate`. Compare only with a "
+            "figure whose `comparison_key` matches: the canonical volume KPIs (WS3-BI-005..008) "
+            "rest on business_metrics; the patient-panel event KPIs (WS3-BI-011..014) rest on "
+            "treatment_events and measure a different, far smaller quantity."
         ),
     }
 
@@ -374,8 +373,8 @@ def materialized_history_basis(kpi: Any, rows: Optional[list] = None) -> Dict[st
     ``materialized_from`` keeps the provenance without overstating it.
 
     This is the surface #1640 is about: `renderKpiTrend` charts this series,
-    and the same answer can carry a business_metrics TRx figure from
-    ``e2i_data_query_tool`` -- measured ~73x apart.
+    and a patient-panel series can land beside a canonical business_metrics
+    figure -- about 1,300x apart.
     """
     # Provenance comes from the ROWS, not from the registry declaration. Every
     # kpi_history row carries the backfill's `source` tag, and for ROI that tag
@@ -435,14 +434,10 @@ def materialized_history_basis(kpi: Any, rows: Optional[list] = None) -> Dict[st
         + (
             "Read from the materialized kpi_history table -- the stored form of the "
             "COMPUTED KPI. Compare only with a figure resting on the same source: "
-            "`materialized_from` names it, and it is NOT always the same one "
-            "(ROI history is backfilled from business_metrics.roi, so it IS "
-            "comparable with stored ROI; the Rx-volume family is backfilled from "
-            "treatment_events, so it is NOT). For a treatment_events-backed series, "
-            "do NOT plot or compare it against e2i_data_query_tool(query_type='kpi') "
-            "business_metrics values -- measured 2026-08-15, those are ~73x larger "
-            "because they are a modeled market-scale level rather than a count of "
-            "observed events."
+            "`materialized_from` names it (ROI and the canonical TRx/NRx/NBRx/TRx Share "
+            "history rest on business_metrics, so they ARE comparable with stored "
+            "business_metrics rows; the patient-panel event KPIs WS3-BI-011..014 are "
+            "backfilled from treatment_events, so they are NOT -- " + MEASURED_SCALE_NOTE + ")."
         ),
     }
 
@@ -470,10 +465,9 @@ async def registry_query_basis(query_id: str) -> Optional[Dict[str, Any]]:
         "query_id": query_id,
         "measure": f"computed live from {', '.join(tables)}",
         "note": (
-            "Computed from the operational substrate at query time. Do NOT plot or "
-            "compare it against e2i_data_query_tool(query_type='kpi') values for a "
-            "volume KPI: measured 2026-08-15, those are ~73x larger because they are a "
-            "modeled market-scale level rather than a count of observed events."
+            "Computed live from the operational substrate. Compare only with a figure whose "
+            "comparison_key matches: a treatment_events series (the patient-panel Rx-event "
+            "family) is NOT comparable with business_metrics values -- " + MEASURED_SCALE_NOTE + "."
         ),
     }
 
@@ -590,12 +584,12 @@ def cross_substrate_conflict(
         "other_substrate": list(computed["substrate"]),
         "kpi_id": kpi.id,
         "note": (
-            f"The rows above are stored business_metrics values. {kpi.name} can also be "
-            f"COMPUTED by kpi_calculate_tool from {', '.join(computed['substrate']) or 'a different substrate'}, "
-            "and the two are NOT comparable: they measure different things and differ by a "
-            "large, roughly constant factor (measured ~73x for TRx). If both appear in one "
-            "answer, label each with its source and never present one as a check, total, "
-            "correction or share-of for the other."
+            "The rows above are stored business_metrics values -- the canonical substrate of "
+            f"TRx, NRx, NBRx and TRx Share (WS3-BI-005..008). {kpi.name} is COMPUTED by "
+            f"kpi_calculate_tool from {', '.join(computed['substrate']) or 'a different substrate'}, "
+            f"and the two are NOT comparable: they measure different things ({MEASURED_SCALE_NOTE}). "
+            "If both appear in one answer, name each KPI and its source and never present one as a "
+            "check, total, correction or share-of for the other."
         ),
     }
 
