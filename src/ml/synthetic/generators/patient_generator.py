@@ -12,7 +12,9 @@ import numpy as np
 import pandas as pd
 from scipy.special import expit
 
+from src.ml.synthetic.dgp import clinical_severity
 from src.ml.synthetic.dgp.adherence_outcomes import generate_adherence_outcomes
+from src.ml.synthetic.dgp.clinical_severity import uas7_from_severity
 from src.ml.synthetic.dgp.initiation_outcomes import generate_initiation_outcome
 
 from ..clinical_codes import BRAND_ELIGIBILITY_FIELDS, brand_codes
@@ -494,7 +496,9 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
             # DRAW every field unconditionally (identical order/consumption to the
             # pre-gating generator) …
             dx_v = str(self._rng.choice(cast("list[str]", codes["icd10"])))
-            uas7_v = int(self._rng.integers(16, 43))  # Remi: UAS7 16-42 (inclusion >=16)
+            # Remi: UAS7 16-42 (inclusion >=16). This uniform draw is the NOISE term of
+            # the severity copula applied after the loop (dgp.clinical_severity).
+            uas7_v = int(self._rng.integers(16, 43))
             stage_v = str(self._rng.choice(_stage_pool))
             ecog_v = int(self._rng.integers(0, 2))
             ldh_v = round(float(self._rng.uniform(1.5, 5.0)), 2)
@@ -513,6 +517,18 @@ class PatientGenerator(BaseGenerator[pd.DataFrame]):
             comp_inh.append(comp_v if "complement_inhibitor_status" in fields else None)
             proteinuria.append(prot_v if "proteinuria_g_day" in fields else None)
             egfr.append(egfr_v if "egfr" in fields else None)
+
+        # UAS7 follows the latent disease_severity (the tier and the clinical score
+        # agree; 2026-09-16). No RNG is consumed: the draw above is the copula noise.
+        _uas7_rows = [i for i, v in enumerate(uas7) if v is not None]
+        if _uas7_rows:
+            _mapped = uas7_from_severity(
+                np.array([uas7[i] for i in _uas7_rows]),
+                np.asarray(confounders["disease_severity"], dtype=float)[_uas7_rows],
+                rho=clinical_severity.UAS7_SEVERITY_RHO,
+            )
+            for i, v in zip(_uas7_rows, _mapped, strict=True):
+                uas7[i] = int(v)
 
         # Phase 2: biologic-experience + baseline serum IgE — the real anti-IgE
         # clinical axis for CSU/Remibrutinib (the axis the chatbot used to invent).

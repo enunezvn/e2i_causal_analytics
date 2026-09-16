@@ -1988,27 +1988,27 @@ class KpiCalculateInput(BaseModel):
         description=(
             "Optional severity tier filter: one of low_severity, "
             "medium_severity, high_severity. Served ONLY by TRx, NRx, NBRx, "
-            "TRx share, conversion rate and CATE (#1911) -- any other KPI "
-            "returns an error, the filter is never silently dropped. Mutually "
-            "exclusive with region/therapy_line."
+            "conversion rate and CATE (#1911) -- any other KPI (TRx share "
+            "included) returns an error, the filter is never silently dropped. "
+            "Mutually exclusive with region/therapy_line."
         ),
     )
     therapy_line: Optional[str] = Field(
         default=None,
         description=(
             "Optional line-of-therapy filter: one of '0', '1', '2', '3'. "
-            "Served ONLY by TRx, NRx, NBRx, TRx share and conversion rate "
-            "(#1911) -- any other KPI returns an error, the filter is never "
-            "silently dropped. Mutually exclusive with region/segment."
+            "Served ONLY by TRx, NRx, NBRx and conversion rate (#1911) -- any "
+            "other KPI (TRx share included) returns an error, the filter is "
+            "never silently dropped. Mutually exclusive with region/segment."
         ),
     )
     biologic: Optional[str] = Field(
         default=None,
         description=(
             "Optional biologic-status filter: 'naive' or 'experienced'. "
-            "Served ONLY by TRx, NRx, NBRx and TRx share (#1911) -- any other "
-            "KPI returns an error, the filter is never silently dropped. "
-            "AVAILABLE FOR REMIBRUTINIB ONLY -- for any other brand the tool "
+            "Served ONLY by TRx, NRx and NBRx (#1911) -- any other KPI (TRx "
+            "share included) returns an error, the filter is never silently "
+            "dropped. AVAILABLE FOR REMIBRUTINIB ONLY -- for any other brand the tool "
             "returns an error (the data is 100% NULL by design); do NOT retry "
             "or fabricate a split. Mutually exclusive with "
             "region/segment/therapy_line/ige_tier."
@@ -2019,8 +2019,8 @@ class KpiCalculateInput(BaseModel):
         description=(
             "Optional IgE-tertile filter: 'low', 'medium', or 'high' "
             "(data-driven tertiles, not a clinical threshold). Served ONLY by "
-            "TRx, NRx, NBRx and TRx share (#1911) -- any other KPI returns an "
-            "error, the filter is never silently dropped. AVAILABLE FOR "
+            "TRx, NRx and NBRx (#1911) -- any other KPI (TRx share included) "
+            "returns an error, the filter is never silently dropped. AVAILABLE FOR "
             "REMIBRUTINIB ONLY -- other brands return an error; do NOT fabricate. "
             "Mutually exclusive with region/segment/therapy_line/biologic."
         ),
@@ -2042,9 +2042,9 @@ class KpiCalculateInput(BaseModel):
         description=(
             "Time window, e.g. 'last 3 months', 'last year', 'Q1 2025', or "
             "'2025-01-01 to 2025-03-31'. Supported for TRx/NRx/NBRx (alone or "
-            "combined with any ONE axis), TRx share and conversion rate (alone "
-            "or combined with segment/therapy_line; NOT with region/biologic/"
-            "ige_tier -- the tool errors honestly), and the trigger-"
+            "combined with any ONE axis), TRx share (alone only) and conversion "
+            "rate (alone or with segment/therapy_line; other combinations error "
+            "honestly), and the trigger-"
             "effectiveness KPIs (alone or combined with brand/trigger_type/"
             "region -- migration 120). ALWAYS pass this when the user names "
             "a period. Omit for the engine's default window (the most recent "
@@ -2323,8 +2323,8 @@ _PATIENT_AXIS_LABELS: Dict[str, str] = {
 # re-derives every set by running the real calculators against a recording
 # client, so the sets cannot drift from the code:
 #   * BusinessImpactCalculator._resolve_windowed_call binds all four axes for
-#     WS3-BI-005 TRx / -006 NRx / -007 NBRx / -008 TRx share (migrations
-#     105/108/111).
+#     WS3-BI-005 TRx / -006 NRx / -007 NBRx (migrations 105/108). WS3-BI-008
+#     TRx share is in NO set: src.kpi.share_axis says why (2026-09-16).
 #   * BusinessImpactCalculator._calc_conversion_rate (WS3-BI-009) binds
 #     segment and therapy_line (migration 111) and REFUSES biologic/ige_tier
 #     itself (triggers carry no biologic/IgE dimension). It is left OUT of
@@ -2340,14 +2340,10 @@ _PATIENT_AXIS_LABELS: Dict[str, str] = {
 #     CM-002 here, so refusing it would drop a combination the calculator
 #     serves. It reads none of the other three axes.
 _PATIENT_AXIS_KPI_IDS: Dict[str, frozenset[str]] = {
-    "segment": frozenset(
-        {"WS3-BI-005", "WS3-BI-006", "WS3-BI-007", "WS3-BI-008", "WS3-BI-009", "CM-002"}
-    ),
-    "therapy_line": frozenset(
-        {"WS3-BI-005", "WS3-BI-006", "WS3-BI-007", "WS3-BI-008", "WS3-BI-009"}
-    ),
-    "biologic": frozenset({"WS3-BI-005", "WS3-BI-006", "WS3-BI-007", "WS3-BI-008"}),
-    "ige_tier": frozenset({"WS3-BI-005", "WS3-BI-006", "WS3-BI-007", "WS3-BI-008"}),
+    "segment": frozenset({"WS3-BI-005", "WS3-BI-006", "WS3-BI-007", "WS3-BI-009", "CM-002"}),
+    "therapy_line": frozenset({"WS3-BI-005", "WS3-BI-006", "WS3-BI-007", "WS3-BI-009"}),
+    "biologic": frozenset({"WS3-BI-005", "WS3-BI-006", "WS3-BI-007"}),
+    "ige_tier": frozenset({"WS3-BI-005", "WS3-BI-006", "WS3-BI-007"}),
 }
 
 
@@ -2355,20 +2351,24 @@ def _patient_axis_refusal(kpi: Any, axis: str) -> Dict[str, Any]:
     """The #1911 refusal for a patient axis on a KPI whose calculator does not
     bind it. The served KPIs are named in registry order (volume KPIs first)
     and the hint offers both ways out (#1565: a next step, not a dead end)."""
+    from src.kpi import share_axis as sa
     from src.kpi.registry import get_registry
 
     label = _PATIENT_AXIS_LABELS[axis]
     served_ids = _PATIENT_AXIS_KPI_IDS[axis]
     served = ", ".join(k.name for k in get_registry().get_all() if k.id in served_ids)
+    error = f"{axis} ({label}) applies only to {served}, not {kpi.name}."
+    hint = f"Ask for {kpi.name} without the {label} filter, or ask for one of {served} by {label}."
+    if kpi.id == sa.TRX_SHARE_KPI_ID:  # why, and the real answer (src.kpi.share_axis)
+        error += " " + sa.share_axis_reason(axis, label)
+        hint = f"{sa.share_axis_next_step(sa.TRX_NAME, label)} {hint}"
     return {
         "success": False,
         "query_type": "kpi_calculate",
         "kpi_id": kpi.id,
         "kpi_name": kpi.name,
-        "error": f"{axis} ({label}) applies only to {served}, not {kpi.name}.",
-        "hint": (
-            f"Ask for {kpi.name} without the {label} filter, or ask for one of {served} by {label}."
-        ),
+        "error": error,
+        "hint": hint,
     }
 
 
@@ -2445,9 +2445,9 @@ async def kpi_calculate_tool(
     share, conversion rate, or the trigger-effectiveness KPIs over that period
     — ALWAYS pass it when the user names one. A window composes with any ONE
     axis for the volume KPIs, with the ``segment`` / ``therapy_line`` axes for
-    share and conversion (e.g. per-tier conversion rate over the last year) and
-    with ``region`` for the trigger-effectiveness KPIs; it does NOT compose with
-    region/biologic/ige_tier for share or conversion (the tool errors honestly).
+    conversion (e.g. per-tier conversion rate over the last year) and with
+    ``region`` for the trigger-effectiveness KPIs; share takes a window ALONE
+    only (any other combination errors honestly).
     The engine reports back ``window_status`` ("applied" when the
     requested window was honored, "not_applicable" when the KPI has no time
     dimension, "default" when no window was requested), plus ``window_requested``
@@ -2478,20 +2478,20 @@ async def kpi_calculate_tool(
             region-scoped ("applied") or global ("not_applicable" — never
             present those as region-specific).
         segment: optional severity tier filter (low_severity, medium_severity,
-            high_severity), served ONLY by TRx, NRx, NBRx, TRx share,
-            conversion rate and CATE (#1911) -- any other KPI returns an error
-            (never a silent drop); mutually exclusive with region/therapy_line.
+            high_severity), served ONLY by TRx, NRx, NBRx, conversion rate
+            and CATE (#1911) -- any other KPI returns an error (never a silent
+            drop); mutually exclusive with region/therapy_line.
         therapy_line: optional line-of-therapy filter ('0'-'3'), served ONLY
-            by TRx, NRx, NBRx, TRx share and conversion rate (#1911) -- any
+            by TRx, NRx, NBRx and conversion rate (#1911) -- any
             other KPI returns an error (never a silent drop); mutually
             exclusive with region/segment.
         biologic: optional biologic-status filter ('naive'/'experienced'),
-            served ONLY by TRx, NRx, NBRx and TRx share (#1911) and
+            served ONLY by TRx, NRx and NBRx (#1911) and
             REMIBRUTINIB ONLY -- returns an error for any other KPI or brand
             (data is NULL by design; never a silent drop); mutually exclusive
             with the other axes.
         ige_tier: optional IgE-tertile filter ('low'/'medium'/'high',
-            data-driven), served ONLY by TRx, NRx, NBRx and TRx share (#1911)
+            data-driven), served ONLY by TRx, NRx and NBRx (#1911)
             and REMIBRUTINIB ONLY -- returns an error for any other KPI or
             brand (never a silent drop); mutually exclusive with the other
             axes.

@@ -423,28 +423,35 @@ async def test_axis_rules_patient_axes_match_calculators(monkeypatch):
             else query_id
         )
 
-    four = {"WS3-BI-005", "WS3-BI-006", "WS3-BI-007", "WS3-BI-008"}
-    assert {short(i) for i in four} == {"TRx", "NRx", "NBRx", "TRx Share"}
+    # TRx Share (WS3-BI-008) is refused on every patient axis: each patient is on
+    # one tracked brand, so a per-bucket portfolio share mixes indications
+    # (session_1789548670222_fcscf3u, 2026-09-16).
+    three = {"WS3-BI-005", "WS3-BI-006", "WS3-BI-007"}
+    assert {short(i) for i in three} == {"TRx", "NRx", "NBRx"}
+    assert short("WS3-BI-008") == "TRx Share"
     assert short("WS3-BI-009") == "Conversion Rate" and short("CM-002") == "CATE"
 
     # 1. Prose <-> tool allowlist: the sentence's three clauses ARE the sets.
     sentence = next(s for s in cat.AXIS_RULES.split(". ") if "patient axes are served" in s)
-    assert "TRx, NRx, NBRx and TRx Share (all four axes)" in sentence
+    assert "TRx, NRx and NBRx (all four axes)" in sentence
+    assert "never TRx Share" in sentence
+    assert "TRx Share (all four axes)" not in sentence
     assert "Conversion Rate (segment/therapy_line only)" in sentence
     assert "CATE by segment" in sentence
     assert "NO other KPI" in sentence
     assert _PATIENT_AXIS_KPI_IDS == {
-        "segment": four | {"WS3-BI-009", "CM-002"},
-        "therapy_line": four | {"WS3-BI-009"},
-        "biologic": four,
-        "ige_tier": four,
+        "segment": three | {"WS3-BI-009", "CM-002"},
+        "therapy_line": three | {"WS3-BI-009"},
+        "biologic": three,
+        "ige_tier": three,
     }
     # Section D names the same family instead of implying any KPI.
     c = await make_catalog()
     d_line = _section(cat.render_catalog_block(c), "D")
     assert "KPI breakdowns by ONE of the axes in A" in d_line
-    for kpi_id in four | {"WS3-BI-009", "CM-002"}:
+    for kpi_id in three | {"WS3-BI-009", "CM-002"}:
         assert short(kpi_id) in d_line, kpi_id
+    assert "TRx Share" not in d_line.split("per A)")[0]
 
     # 2. Tool allowlist <-> calculators. No query runs: the sentinel client
     #    proves every routing decision is taken before _execute_query.
@@ -469,7 +476,6 @@ async def test_axis_rules_patient_axes_match_calculators(monkeypatch):
         "business_impact_trx",
         "business_impact_nrx",
         "business_impact_nbrx",
-        "business_impact_trx_share",
     ):
         for axis, value in probe.items():
             qid, params = calc._resolve_windowed_call(
@@ -499,6 +505,11 @@ async def test_axis_rules_patient_axes_match_calculators(monkeypatch):
         with pytest.raises(RuntimeError, match="does not support"):
             calc._calc_conversion_rate({"brand": "Remibrutinib", axis: probe[axis]})
     assert len(bound) == 2  # the refusals never reached the query seam
+    # TRx Share refuses every patient axis before the query seam.
+    for axis, value in probe.items():
+        with pytest.raises(RuntimeError, match="one tracked brand"):
+            calc._calc_trx_share({"brand": "Remibrutinib", axis: value})
+    assert len(bound) == 2
     # The motivating unserved case (#1911 evidence): trigger precision does not
     # bind the tier -- it must be outside every set, and the prose says so.
     _, params = TriggerPerformanceCalculator._scoped(
