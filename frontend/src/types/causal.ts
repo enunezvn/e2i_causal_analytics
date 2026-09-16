@@ -797,6 +797,20 @@ export interface NestedCIResult {
 }
 
 /**
+ * A segment excluded from the nested CI aggregate (#2027)
+ */
+export interface NestedCIExcludedSegment {
+  segment_id: number;
+  segment_name: string;
+  /** Segment sample size */
+  n: number;
+  /** Stable reason code, e.g. "no_measured_uncertainty" */
+  reason: string;
+  /** Prose explanation of the reason */
+  detail: string;
+}
+
+/**
  * Response from hierarchical CATE analysis
  */
 export interface HierarchicalAnalysisResponse {
@@ -806,8 +820,13 @@ export interface HierarchicalAnalysisResponse {
   status: CausalAnalysisStatus;
   /** Per-segment CATE results */
   segment_results: SegmentCATEResult[];
-  /** Nested CI aggregation */
+  /** Nested CI aggregation (absent when every segment is excluded) */
   nested_ci?: NestedCIResult;
+  /**
+   * Successful segments left out of the nested CI aggregate because the analyzer
+   * produced no measured SE and/or CI bound for them (#2027).
+   */
+  nested_ci_excluded_segments?: NestedCIExcludedSegment[];
   /** Overall ATE estimate */
   overall_ate?: number;
   /** Overall CI lower */

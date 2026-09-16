@@ -45,7 +45,7 @@ ALLOWLIST: dict[str, int] = {
     "src/api/routes/predictions.py": 1519,
     "src/api/routes/resource_optimizer.py": 1549,
     "src/api/routes/segments.py": 2934,
-    "src/api/schemas/causal.py": 2153,
+    "src/api/schemas/causal.py": 2147,
     "src/causal_engine/energy_score/estimator_selector.py": 1926,
     "src/causal_engine/refutation_runner.py": 3166,
     "src/data/causal_role_classifier.py": 6525,
