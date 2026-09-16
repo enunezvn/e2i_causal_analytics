@@ -16,7 +16,7 @@ import pandas as pd
 import pytest
 
 from src.digital_twin.effect.cohort_causal_estimator import CohortCausalEstimator
-from src.digital_twin.effect.errors import EffectDataUnavailable
+from src.digital_twin.effect.errors import EffectCause, EffectDataUnavailable
 from src.digital_twin.effect.estimate import PROVENANCE_COHORT
 from src.digital_twin.effect.provider import (
     CohortEffectDataProvider,
@@ -99,8 +99,10 @@ def test_cohort_provider_returns_raw_cohort_frame():
 
 def test_cohort_provider_unknown_intervention_fails_closed():
     provider = CohortEffectDataProvider(_make_cohort())
-    with pytest.raises(EffectDataUnavailable):
+    with pytest.raises(EffectDataUnavailable) as caught:
         provider.get_training_frame("not_a_real_lever", brand="X", twin_type="hcp")
+    assert caught.value.cause is EffectCause.INTERVENTION_NOT_IDENTIFIED
+    assert caught.value.details == {}
 
 
 def test_cohort_provider_missing_channel_column_fails_closed():
@@ -108,8 +110,10 @@ def test_cohort_provider_missing_channel_column_fails_closed():
     planted column (email_campaign_count) — e.g. pre-backfill, or RWD with partial
     channel coverage -> honest unavailable, never a guessed effect."""
     provider = CohortEffectDataProvider(_make_cohort())
-    with pytest.raises(EffectDataUnavailable):
+    with pytest.raises(EffectDataUnavailable) as caught:
         provider.get_training_frame("email_campaign", brand="X", twin_type="hcp")
+    assert caught.value.cause is EffectCause.REQUIRED_COLUMN_MISSING
+    assert caught.value.details == {"n_rows": 3000, "has_treatment_column": False}
 
 
 def test_cohort_provider_call_frequency_estimable_from_its_own_channel():

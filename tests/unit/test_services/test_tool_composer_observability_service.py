@@ -358,3 +358,313 @@ def test_steps_are_fetched_for_every_failed_episode_in_pages():
     asked = [f for q in service.client.queries_for("composition_steps") for f in q.filters]
     looked_up = {cid for kind, _, values in asked if kind == "in" for cid in values}
     assert len(looked_up) == 10
+
+
+# ---------------------------------------------------------------------------
+# #2021 D3 / D1′: codes come from the database; sentences are rendered here
+# ---------------------------------------------------------------------------
+
+
+def _verdict(**over: Any) -> Any:
+    from src.agents.tool_composer.reliability import ToolReliability
+
+    row = {
+        "tool_name": "causal_effect_estimator",
+        "n_invoked": 12,
+        "n_succeeded": 4,
+        "n_refused": 8,
+        "n_health_failures": 0,
+        "n_health": 4,
+        "n_retried": 0,
+        "n_synthetic": 0,
+    }
+    row.update(over)
+    return ToolReliability.from_row(row)
+
+
+def test_a_tool_row_carries_the_refusal_code_and_its_rendered_sentence():
+    verdicts = {
+        "causal_effect_estimator": _verdict(most_common_refusal_reason="non_binary_treatment")
+    }
+    service = _service({"composer_episodes": [], "composition_steps": []})
+    (tool,) = service.overview(30, verdicts)["tools"]
+    assert tool["most_common_refusal_reason"] == "non_binary_treatment"
+    assert tool["most_common_refusal_sentence"] == (
+        "the treatment column is not a binary 0/1 indicator"
+    )
+
+
+def test_a_tool_row_carries_how_many_refusals_the_code_was_drawn_from():
+    """Most refusals recorded before ml/043 are uncoded, so the most common code can name a
+    minority; the page gets both numbers rather than a code presented as representative."""
+    verdicts = {
+        "causal_effect_estimator": _verdict(
+            n_invoked=54,
+            n_refused=50,
+            n_refused_coded=3,
+            most_common_refusal_reason="coverage_gap",
+        )
+    }
+    service = _service({"composer_episodes": [], "composition_steps": []})
+    (tool,) = service.overview(30, verdicts)["tools"]
+    assert tool["n_refused"] == 50
+    assert tool["n_refused_coded"] == 3
+
+
+def test_a_tool_row_carries_how_many_refusals_carry_the_most_common_code():
+    """A 1-of-3 tie winner and a 3-of-3 majority name the same code; only this count differs."""
+    verdicts = {
+        "causal_effect_estimator": _verdict(
+            n_invoked=54,
+            n_refused=50,
+            n_refused_coded=3,
+            n_most_common_refusal_reason=1,
+            most_common_refusal_reason="coverage_gap",
+        )
+    }
+    service = _service({"composer_episodes": [], "composition_steps": []})
+    (tool,) = service.overview(30, verdicts)["tools"]
+    assert (tool["n_refused"], tool["n_refused_coded"], tool["n_most_common_refusal_reason"]) == (
+        50,
+        3,
+        1,
+    )
+
+
+def test_an_unknown_coded_refusal_count_stays_null_not_zero():
+    """A database without ml/043 cannot say how many refusals were coded; 0 would claim none were."""
+    verdicts = {"causal_effect_estimator": _verdict(n_refused_coded=None)}
+    service = _service({"composer_episodes": [], "composition_steps": []})
+    (tool,) = service.overview(30, verdicts)["tools"]
+    assert tool["n_refused_coded"] is None
+
+
+def test_an_unknown_code_shows_the_code_and_no_invented_sentence():
+    verdicts = {
+        "causal_effect_estimator": _verdict(
+            most_common_refusal_reason="a_code_this_build_does_not_know"
+        )
+    }
+    service = _service({"composer_episodes": [], "composition_steps": []})
+    (tool,) = service.overview(30, verdicts)["tools"]
+    assert tool["most_common_refusal_reason"] == "a_code_this_build_does_not_know"
+    assert tool["most_common_refusal_sentence"] is None
+
+
+def test_a_failed_step_class_carries_its_code_and_rendered_reason():
+    failed = _episode(status="FAILED", outcome="failed")
+    steps = [
+        {
+            "episode_id": failed["episode_id"],
+            "step_number": 0,
+            "tool_name": "gap_calculator",
+            "outcome_class": "refused",
+            "reason_code": "coverage_gap",
+        }
+    ]
+    service = _service({"composer_episodes": [failed], "composition_steps": steps})
+    (row,) = service.overview(30)["recent_failures"]
+    assert row["step_classes"] == [
+        {
+            "step_number": 0,
+            "tool_name": "gap_calculator",
+            "outcome_class": "refused",
+            "reason_code": "coverage_gap",
+            "reason": "the data does not cover everything the question asked about",
+            "reason_details": {},
+        }
+    ]
+
+
+def _step_classes_for(step: Dict[str, Any]) -> List[Dict[str, Any]]:
+    failed = _episode(status="FAILED", outcome="failed")
+    steps = [{"episode_id": failed["episode_id"], "step_number": 0, **step}]
+    service = _service({"composer_episodes": [failed], "composition_steps": steps})
+    (row,) = service.overview(30)["recent_failures"]
+    return row["step_classes"]
+
+
+def test_an_uncoded_step_has_no_code_and_no_reason():
+    """Every step recorded before ml/043 is uncoded: not recorded, never the tool-failure sentence."""
+    (step,) = _step_classes_for({"tool_name": "gap_calculator", "outcome_class": "refused"})
+    assert step["reason_code"] is None and step["reason"] is None
+
+
+def test_a_step_with_an_unknown_code_keeps_the_code_and_invents_no_reason():
+    (step,) = _step_classes_for(
+        {"tool_name": "gap_calculator", "outcome_class": "refused", "reason_code": "not_a_code"}
+    )
+    assert step["reason_code"] == "not_a_code" and step["reason"] is None
+
+
+# ---------------------------------------------------------------------------
+# #2050: the numeric details recorded with a refusal reach the page
+# ---------------------------------------------------------------------------
+
+_LOGGER = "src.services.tool_composer_observability_service"
+
+
+def test_a_failed_step_class_carries_its_recorded_reason_details(caplog):
+    """ml/043 persists them; without them two diagnostics under one code read as one sentence."""
+    caplog.set_level("WARNING", logger=_LOGGER)
+    details = {"n_segments_named": 4, "n_no_contrast": 3, "n_non_finite": 0}
+
+    (step,) = _step_classes_for(
+        {
+            "tool_name": "cate_analyzer",
+            "outcome_class": "refused",
+            "reason_code": "insufficient_groups",
+            "reason_details": details,
+        }
+    )
+
+    assert step["reason_details"] == details
+    assert not [r for r in caplog.records if r.name == _LOGGER]
+
+
+@pytest.mark.parametrize(
+    "over",
+    [pytest.param({}, id="key-absent"), pytest.param({"reason_details": None}, id="null")],
+)
+def test_a_step_without_recorded_details_carries_an_empty_mapping(over, caplog):
+    caplog.set_level("WARNING", logger=_LOGGER)
+
+    (step,) = _step_classes_for({"tool_name": "gap_calculator", "outcome_class": "refused", **over})
+
+    assert step["reason_details"] == {}
+    assert not [r for r in caplog.records if r.name == _LOGGER]
+
+
+@pytest.mark.parametrize(
+    "stored",
+    [
+        pytest.param({"n_segments_named": "Brand_Secret"}, id="string-value"),
+        pytest.param({"Treatment_Column": 3}, id="bad-key"),
+        pytest.param({f"n_key_{i}": i for i in range(9)}, id="more-than-8-keys"),
+        pytest.param({"n_no_contrast": 3, "n_brand": "Brand_Secret"}, id="one-bad-value"),
+        pytest.param({"n_rows": 2**53}, id="unsafe-integer"),
+        pytest.param(["n_no_contrast", 3], id="not-an-object"),
+        pytest.param("Brand_Secret", id="bare-string"),
+    ],
+)
+def test_an_invalid_stored_details_value_is_dropped_on_read_and_logged_without_values(
+    stored, caplog
+):
+    """The table only requires a JSON object; only the RPC reducer enforces numbers. A direct write
+    can store text, and text is what these details exist to keep off the page."""
+    caplog.set_level("WARNING", logger=_LOGGER)
+
+    (step,) = _step_classes_for(
+        {
+            "tool_name": "cate_analyzer",
+            "outcome_class": "refused",
+            "reason_code": "insufficient_groups",
+            "reason_details": stored,
+        }
+    )
+
+    assert step["reason_details"] == {}
+    warnings = [r for r in caplog.records if r.name == _LOGGER and r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
+    assert "Brand_Secret" not in message and "Treatment_Column" not in message
+
+
+def test_two_refusals_under_one_code_stay_distinguishable_through_the_response_model():
+    """#2050: cate_analyzer's 'no treatment contrast' and 'no usable outcome' share one code and one
+    sentence; only the details tell them apart. The pair must survive the service and the response
+    model unchanged, booleans still booleans (bool is an int subclass, so == alone cannot tell)."""
+    from src.api.schemas.admin_tool_composer import ToolComposerObservability
+
+    failed = _episode(status="FAILED", outcome="failed")
+    no_contrast = {"n_segments_named": 4, "n_no_contrast": 3, "n_non_finite": 0, "is_scoped": True}
+    no_outcome = {"n_segments_named": 4, "n_no_contrast": 0, "n_non_finite": 3, "share_kept": 0.25}
+    steps = [
+        {"step_number": n, "tool_name": "cate_analyzer", "outcome_class": "refused",
+         "reason_code": "insufficient_groups", "reason_details": details}
+        for n, details in enumerate([no_contrast, no_outcome])
+    ]  # fmt: skip
+    rows = {
+        "composer_episodes": [failed],
+        "composition_steps": [{"episode_id": failed["episode_id"], **s} for s in steps],
+    }
+
+    out = _service(rows).overview(30)
+
+    (classes,) = [f["step_classes"] for f in out["recent_failures"]]
+    assert classes[0]["reason_code"] == classes[1]["reason_code"] == "insufficient_groups"
+    assert classes[0]["reason"] == classes[1]["reason"]
+    assert [s["reason_details"] for s in classes] == [no_contrast, no_outcome]
+
+    dumped = ToolComposerObservability.model_validate(out).model_dump(mode="json")
+
+    (dumped_classes,) = [f["step_classes"] for f in dumped["recent_failures"]]
+    assert dumped_classes == classes
+    assert dumped_classes[0]["reason_details"] != dumped_classes[1]["reason_details"]
+    first, second = (s["reason_details"] for s in dumped_classes)
+    assert type(first["is_scoped"]) is bool
+    assert type(first["n_no_contrast"]) is int and type(second["n_non_finite"]) is int
+    assert type(second["share_kept"]) is float
+
+
+def test_the_service_output_validates_against_the_response_model_unchanged():
+    """ToolReliabilityRow and StepClass forbid extra keys, so a key the service adds and the model
+    lacks would 500 the route. The real-DB route test skips on the droplet; this one does not."""
+    from src.api.schemas.admin_tool_composer import ToolComposerObservability
+
+    failed = _episode(status="FAILED", outcome="failed")
+    steps = [
+        {"step_number": 0, "tool_name": "gap_calculator", "outcome_class": "refused",
+         "reason_code": "coverage_gap"},
+        {"step_number": 1, "tool_name": "cate_analyzer", "outcome_class": "error"},
+        {"step_number": 2, "tool_name": "roi_estimator", "outcome_class": "refused",
+         "reason_code": "not_a_code"},
+    ]  # fmt: skip
+    rows = {
+        "composer_episodes": [failed],
+        "composition_steps": [{"episode_id": failed["episode_id"], **s} for s in steps],
+    }
+    verdicts = {
+        "gap_calculator": _verdict(tool_name="gap_calculator", n_refused_coded=None),
+        "cate_analyzer": _verdict(tool_name="cate_analyzer", n_refused_coded=0),
+        "causal_effect_estimator": _verdict(
+            n_refused_coded=4,
+            n_most_common_refusal_reason=2,
+            most_common_refusal_reason="non_binary_treatment",
+        ),
+    }
+    out = _service(rows).overview(30, verdicts)
+
+    dumped = ToolComposerObservability.model_validate(out).model_dump(mode="json")
+
+    assert dumped["tools"] == out["tools"]
+    assert [f["step_classes"] for f in dumped["recent_failures"]] == [
+        f["step_classes"] for f in out["recent_failures"]
+    ]
+    (step_classes,) = [f["step_classes"] for f in out["recent_failures"]]
+    assert [s["reason_code"] for s in step_classes] == ["coverage_gap", None, "not_a_code"]
+    assert sorted((t["n_refused_coded"] is None, t["n_refused_coded"]) for t in out["tools"]) == [
+        (False, 0),
+        (False, 4),
+        (True, None),
+    ]
+
+
+def test_the_service_module_does_not_import_the_tool_composer_package():
+    """Measured 2026-09-12: the package costs ~564 MB and ~17 s; this module alone ~47 MB."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    code = (
+        "import sys, src.services.tool_composer_observability_service; "
+        "print('src.agents.tool_composer' in sys.modules)"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=Path(__file__).resolve().parents[3],
+    )
+    assert out.stdout.strip() == "False"

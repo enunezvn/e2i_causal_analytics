@@ -87,8 +87,7 @@ class TwinEffectEstimator:
             # (``BaseUpliftModel.estimate``); it goes to the log, not the error (#2020).
             logger.warning("TwinEffectEstimator: uplift fit failed: %s", result.error_message)
             raise EstimationError(
-                "TwinEffectEstimator: uplift fit failed; the uplift model could not be fitted on "
-                "the training frame."
+                "TwinEffectEstimator: the uplift model could not be fitted on the training frame."
             )
 
         twin_scores = _to_1d(model.predict(x_twin))

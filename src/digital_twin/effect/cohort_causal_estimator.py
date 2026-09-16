@@ -30,7 +30,7 @@ from typing import Sequence
 import numpy as np
 import pandas as pd
 
-from src.digital_twin.effect.errors import EffectDataUnavailable
+from src.digital_twin.effect.errors import EffectCause, EffectDataUnavailable
 from src.digital_twin.effect.estimate import PROVENANCE_COHORT, EffectEstimate
 
 logger = logging.getLogger(__name__)
@@ -87,11 +87,23 @@ def _usable_rows(
     """The rows every estimate on this cohort uses: required columns present (refusing an
     under-adjusted estimate), numeric model inputs coerced, rows null in any of them dropped.
     Columns: ``t_raw``, ``y``, ``region`` and one per confounder."""
+    n_rows = int(len(cohort))
     if treatment_col not in cohort.columns:
-        raise EffectDataUnavailable(f"cohort missing treatment column '{treatment_col}'.")
+        raise EffectDataUnavailable(
+            f"cohort missing treatment column '{treatment_col}'.",
+            cause=EffectCause.REQUIRED_COLUMN_MISSING,
+            details={"n_rows": n_rows, "has_treatment_column": False},
+        )
     if outcome_col not in cohort.columns or region_col not in cohort.columns:
         raise EffectDataUnavailable(
-            f"cohort missing required column(s): need '{outcome_col}' and '{region_col}'."
+            f"cohort missing required column(s): need '{outcome_col}' and '{region_col}'.",
+            cause=EffectCause.REQUIRED_COLUMN_MISSING,
+            details={
+                "n_rows": n_rows,
+                "has_treatment_column": True,
+                "has_outcome_column": outcome_col in cohort.columns,
+                "has_region_column": region_col in cohort.columns,
+            },
         )
 
     # Require every REQUESTED confounder to be present — refuse to silently drop a known
@@ -102,7 +114,9 @@ def _usable_rows(
     if missing:
         raise EffectDataUnavailable(
             f"cohort missing required confounder column(s) {missing}; refusing to "
-            "produce an under-adjusted estimate."
+            "produce an under-adjusted estimate.",
+            cause=EffectCause.REQUIRED_COLUMN_MISSING,
+            details={"n_rows": n_rows, "n_missing_confounder_columns": len(missing)},
         )
 
     # Coerce + drop rows null in any model input (fail-honest, no NaN-as-0 fabrication).
@@ -151,7 +165,8 @@ def control_outcome_sd(
         scope = f"regions {targets}" if targets else "the cohort"
         raise EffectDataUnavailable(
             f"{scope} has {len(control)} usable comparison-arm rows for '{treatment_col}'; "
-            "the outcome spread cannot be measured."
+            "the outcome spread cannot be measured.",
+            cause=EffectCause.TOO_FEW_USABLE_ROWS,
         )
     return float(control["y"].std(ddof=1)), int(len(control))
 
@@ -188,18 +203,27 @@ def estimate_cohort_effect(
     )
     present_confounders = list(confounders)
 
+    n_usable = int(len(work))
     if len(work) < _MIN_ROWS:
         raise EffectDataUnavailable(
-            f"cohort has {len(work)} usable rows (< {_MIN_ROWS}) for '{treatment_col}'."
+            f"cohort has {len(work)} usable rows (< {_MIN_ROWS}) for '{treatment_col}'.",
+            cause=EffectCause.TOO_FEW_USABLE_ROWS,
+            details={"n_usable_rows": n_usable, "n_min_usable_rows": _MIN_ROWS},
         )
 
     # Pre-registered contrast: treated = above the cohort median intensity.
     t_thr = float(work["t_raw"].median())
     t = (work["t_raw"] > t_thr).astype(int).to_numpy()
     if len(np.unique(t)) < 2:
+        # One distinct value is a constant channel; more than one is a skew onto the median.
         raise EffectDataUnavailable(
             f"treatment '{treatment_col}' has no median contrast (all rows on one side); "
-            "cannot identify an effect."
+            "cannot identify an effect.",
+            cause=EffectCause.NO_TREATMENT_CONTRAST,
+            details={
+                "n_usable_rows": n_usable,
+                "n_distinct_treatment_values": int(work["t_raw"].nunique()),
+            },
         )
 
     y = work["y"].to_numpy(dtype=float)
@@ -207,7 +231,11 @@ def estimate_cohort_effect(
     # X = region (integer-coded heterogeneity axis); W = pre-treatment confounder controls.
     cats = sorted(work["region"].unique())
     if len(cats) < 1:
-        raise EffectDataUnavailable("cohort has no region values.")
+        raise EffectDataUnavailable(
+            "cohort has no region values.",
+            cause=EffectCause.TOO_FEW_USABLE_ROWS,
+            details={"n_usable_rows": n_usable},
+        )
     code = {c: i for i, c in enumerate(cats)}
     x = work["region"].map(code).to_numpy(dtype=float).reshape(-1, 1)
 
@@ -242,7 +270,9 @@ def estimate_cohort_effect(
         logger.warning("cohort causal estimation failed for '%s'", treatment_col, exc_info=e)
         raise EffectDataUnavailable(
             f"cohort causal estimation failed for '{treatment_col}': the causal forest could "
-            "not be fitted on this cohort."
+            "not estimate an effect on this cohort.",
+            cause=EffectCause.ESTIMATION_FAILED,
+            details={"n_usable_rows": n_usable, "is_target_inference": False},
         ) from e
 
     region_arr = work["region"].to_numpy(dtype=str)
@@ -256,13 +286,22 @@ def estimate_cohort_effect(
     target_ate = target_lo = target_hi = None
     target_n = 0
     if targets:
+        # Counted over every target before refusing; the message names the first that fails.
+        absent = [r for r in targets if not (region_arr == r).any()]
+        one_arm = [r for r in targets if r not in absent and len(np.unique(t[region_arr == r])) < 2]
         for region in targets:
-            in_region = region_arr == region
-            if not in_region.any() or len(np.unique(t[in_region])) < 2:
+            if region in absent or region in one_arm:
                 raise EffectDataUnavailable(
                     f"target region {region!r} has no treated-vs-control contrast in the "
                     f"cohort for '{treatment_col}' (cohort regions: {cats}); its effect "
-                    "cannot be estimated."
+                    "cannot be estimated.",
+                    cause=EffectCause.TARGET_REGION_NOT_COVERED,
+                    details={
+                        "n_target_regions": len(targets),
+                        "n_target_regions_absent": len(absent),
+                        "n_target_regions_one_arm": len(one_arm),
+                        "n_cohort_regions": len(cats),
+                    },
                 )
         mask = np.isin(region_arr, targets)
         try:
@@ -273,7 +312,13 @@ def estimate_cohort_effect(
             )
             raise EffectDataUnavailable(
                 f"target-region inference failed for '{treatment_col}': the causal forest could "
-                "not compute an interval on the targeted rows."
+                "not compute an interval on the targeted rows.",
+                cause=EffectCause.TARGET_INFERENCE_FAILED,
+                details={
+                    "n_usable_rows": n_usable,
+                    "is_target_inference": True,
+                    "n_target_rows": int(mask.sum()),
+                },
             ) from e
         target_ate, target_lo, target_hi = float(np.mean(eff[mask])), float(t_lo), float(t_hi)
         target_n = int(mask.sum())

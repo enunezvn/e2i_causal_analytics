@@ -76,7 +76,8 @@ from src.tool_registry import (
 )
 
 from .errors import ToolInputError, ToolRefusalError
-from .reason_codes import ReasonCode
+from .psi import population_stability_index
+from .reason_codes import ReasonCode, effect_reason_code
 
 logger = logging.getLogger(__name__)
 
@@ -3256,13 +3257,27 @@ def _power_number(name: str, value: Any, default: Optional[float] = None) -> Opt
             "size can be computed from it.",
             reason_code=ReasonCode.INVALID_INPUT_TYPE,
         )
-    if not math.isfinite(value):
+    try:
+        number = float(value)
+    except OverflowError as exc:
+        # An int too large for a float (``10**400``). Uncoded, this escaped the tool as a bare
+        # OverflowError that the executor retries (#2021). Python's text is not this tool's and
+        # the value can be hundreds of digits of caller data, so neither is echoed (#2020).
+        logger.warning(
+            "power_calculator: %s is too large to represent as a float", name, exc_info=exc
+        )
+        raise ToolInputError(
+            f"power_calculator: {name} is too large to be represented as a finite number. No "
+            "sample size can be computed from it.",
+            reason_code=ReasonCode.NON_FINITE_INPUT,
+        ) from exc
+    if not math.isfinite(number):
         raise ToolInputError(
             f"power_calculator: {name} must be a finite number; got {value!r}. No sample "
             "size can be computed from it.",
             reason_code=ReasonCode.NON_FINITE_INPUT,
         )
-    return float(value)
+    return number
 
 
 def _refuse_unhonoured_power_design(kwargs: Dict[str, Any]) -> None:
@@ -3775,23 +3790,24 @@ async def _load_cohort_provider(client: Any, intervention_type: str, brand_value
     turns a database error into ``None``: here an unreachable database must propagate (the
     executor retries it) and only an unusable cohort is refused.
     """
-    from src.digital_twin.effect.cohort_loader import (
-        cohort_provider_from_frame,
-        load_cohort_frame,
-    )
+    from src.digital_twin.effect.cohort_loader import assess_cohort_frame, load_cohort_frame
 
     cohort = await load_cohort_frame(client, brand_value)
-    provider = cohort_provider_from_frame(cohort, intervention_type)
-    if provider is None:
+    usability = assess_cohort_frame(cohort, intervention_type)
+    if usability.provider is None:
+        # One message for every cause (it is true for each); the code and details say which.
         raise ToolRefusalError(
             f"counterfactual_simulator: no effect data for intervention {intervention_type!r} "
             f"and brand {brand_value!r} — the brand's per-HCP cohort ({len(cohort)} rows) does "
             "not carry enough usable rows for this intervention's treatment channel, outcome, "
             "region and confounders, so a causal effect cannot be estimated. No effect is "
             "returned.",
-            reason_code=ReasonCode.EFFECT_NOT_ESTIMABLE,
+            reason_code=effect_reason_code(
+                usability.cause, fallback=ReasonCode.EFFECT_NOT_ESTIMABLE
+            ),
+            details=dict(usability.details),
         )
-    return provider
+    return usability.provider
 
 
 def _counterfactual_inputs(
@@ -3909,7 +3925,8 @@ def _targeted_effect(frame: Any, regions: List[str]) -> _TargetedEffect:
     except EffectDataUnavailable as exc:
         raise ToolRefusalError(
             f"counterfactual_simulator: {exc} No effect is returned.",
-            reason_code=ReasonCode.EFFECT_NOT_ESTIMABLE,
+            reason_code=effect_reason_code(exc.cause, fallback=ReasonCode.EFFECT_NOT_ESTIMABLE),
+            details=exc.details,
         ) from exc
     assert fit.target_ate is not None
     assert fit.target_ci_lower is not None and fit.target_ci_upper is not None
@@ -4032,7 +4049,12 @@ def _simulation_results(
         raise ToolRefusalError(
             f"counterfactual_simulator: the twin simulation for {intervention_type!r} on "
             f"{brand!r} did not complete: {result.error_message}. No effect is returned.",
-            reason_code=ReasonCode.SIMULATION_INCOMPLETE,
+            # The engine keeps the effect engine's cause (#2021 9b); a run that failed for any
+            # other reason, such as too few twins, names none and stays simulation_incomplete.
+            reason_code=effect_reason_code(
+                result.error_cause, fallback=ReasonCode.SIMULATION_INCOMPLETE
+            ),
+            details=result.error_details,
         )
 
     modifier = frame.effect_modifiers[0] if frame.effect_modifiers else "region"
@@ -4110,35 +4132,6 @@ def _simulation_results(
 # ============================================================================
 
 
-def _psi(baseline: Any, current: Any, *, bins: int = 10) -> Tuple[float, List[Dict[str, Any]]]:
-    """Population Stability Index between two 1-D numeric arrays.
-
-    Bins by ``baseline`` deciles; ``PSI = sum((c_pct - b_pct) * ln(c_pct/b_pct))``
-    with percentages floored at 1e-6 to avoid log(0). Returns ``(psi, buckets)``.
-    """
-    import numpy as np
-
-    b = np.asarray(baseline, dtype=float)
-    c = np.asarray(current, dtype=float)
-    edges = np.quantile(b, np.linspace(0, 1, bins + 1))
-    edges[0], edges[-1] = -np.inf, np.inf
-    edges = np.unique(edges)
-    b_counts = np.histogram(b, bins=edges)[0].astype(float)
-    c_counts = np.histogram(c, bins=edges)[0].astype(float)
-    b_pct = np.clip(b_counts / b_counts.sum(), 1e-6, None)
-    c_pct = np.clip(c_counts / c_counts.sum(), 1e-6, None)
-    psi = float(np.sum((c_pct - b_pct) * np.log(c_pct / b_pct)))
-    buckets = [
-        {
-            "range": f"{edges[i]:.4g}-{edges[i + 1]:.4g}",
-            "baseline_pct": float(b_pct[i]),
-            "current_pct": float(c_pct[i]),
-        }
-        for i in range(len(b_pct))
-    ]
-    return psi, buckets
-
-
 @composable_tool(
     name="psi_calculator",
     description="Calculate Population Stability Index for drift detection",
@@ -4205,7 +4198,7 @@ def psi_calculator(
             reason_code=ReasonCode.NO_USABLE_ROWS,
             details={"n_baseline_rows": len(baseline), "n_current_rows": len(current)},
         )
-    psi_value, buckets = _psi(baseline.to_numpy(), current.to_numpy())
+    psi_value, buckets = population_stability_index(baseline.to_numpy(), current.to_numpy())
     threshold = 0.1
     if psi_value < 0.1:
         interpretation = "No significant drift"

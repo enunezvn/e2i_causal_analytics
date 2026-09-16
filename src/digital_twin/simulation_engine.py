@@ -18,7 +18,7 @@ The simulation follows these steps:
 import logging
 import time
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 import numpy as np
@@ -231,11 +231,20 @@ class SimulationEngine:
             )
             estimate = self._effect_estimator.estimate(frame, twin_df)
         except (EffectDataUnavailable, EstimationError) as e:
+            # Only EffectDataUnavailable names a cause (#2021 9b). EstimationError's ``details`` is
+            # a diagnostic dict that may hold text, so nothing of it is carried.
+            unavailable = e if isinstance(e, EffectDataUnavailable) else None
             return self._create_error_result(
                 intervention_config,
                 population_filter or PopulationFilter(),
                 f"Effect estimation failed: {e}",
                 execution_time_ms=int((time.time() - start_time) * 1000),
+                error_cause=(
+                    str(unavailable.cause)
+                    if unavailable is not None and unavailable.cause is not None
+                    else None
+                ),
+                error_details=unavailable.details if unavailable is not None else None,
             )
 
         treatment_effects = list(estimate.per_twin_uplift.ravel())
@@ -500,8 +509,14 @@ class SimulationEngine:
         filters: PopulationFilter,
         error_message: str,
         execution_time_ms: int,
+        error_cause: Optional[str] = None,
+        error_details: Optional[Dict[str, Any]] = None,
     ) -> SimulationResult:
-        """Create error result when simulation cannot complete."""
+        """Create error result when simulation cannot complete.
+
+        ``error_cause`` / ``error_details`` are the effect engine's cause and counts, when it
+        named one; ``error_message`` is unchanged by them.
+        """
         return SimulationResult(
             model_id=self.model_id or uuid4(),
             intervention_config=config,
@@ -516,5 +531,7 @@ class SimulationEngine:
             simulation_confidence=0.0,
             status=SimulationStatus.FAILED,
             error_message=error_message,
+            error_cause=error_cause,
+            error_details=dict(error_details or {}),
             execution_time_ms=execution_time_ms,
         )

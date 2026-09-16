@@ -16,7 +16,7 @@ from __future__ import annotations
 import math
 import re
 from enum import StrEnum
-from typing import Dict, Mapping, Union
+from typing import Dict, Mapping, Optional, Tuple, Union
 
 
 class ReasonCode(StrEnum):
@@ -44,6 +44,9 @@ class ReasonCode(StrEnum):
     DEGENERATE_DESIGN = "degenerate_design"
     SIMULATION_INCOMPLETE = "simulation_incomplete"
     EFFECT_NOT_ESTIMABLE = "effect_not_estimable"
+    MISSING_REQUIRED_COLUMN = "missing_required_column"
+    NO_TREATMENT_CONTRAST = "no_treatment_contrast"
+    ESTIMATOR_FAILED = "estimator_failed"
 
     # --- Tool-authored input rejections: the value is not a legal input
     MISSING_REQUIRED_INPUT = "missing_required_input"
@@ -83,6 +86,9 @@ CANONICAL_SENTENCES: Dict[ReasonCode, str] = {
     ReasonCode.DEGENERATE_DESIGN: "the study design the inputs imply is too small to support a valid comparison",
     ReasonCode.SIMULATION_INCOMPLETE: "the twin simulation did not complete",
     ReasonCode.EFFECT_NOT_ESTIMABLE: "the cohort data cannot support a causal effect estimate for this intervention",
+    ReasonCode.MISSING_REQUIRED_COLUMN: "a column the estimate requires is not present in the data",
+    ReasonCode.NO_TREATMENT_CONTRAST: "the treatment does not split the rows into a treated and a comparison group",
+    ReasonCode.ESTIMATOR_FAILED: "the effect estimator could not produce an estimate from data that passed its checks",
     ReasonCode.MISSING_REQUIRED_INPUT: "a required input was not provided",
     ReasonCode.INVALID_INPUT_TYPE: "an input was of the wrong type",
     ReasonCode.INVALID_INPUT_VALUE: "an input value was outside what the tool accepts",
@@ -110,6 +116,62 @@ EXECUTOR_ASSIGNED = frozenset(
     }
 )
 
+#: The only outcome classes a TOOL authors (#2020). The executor sets these two solely in the arm
+#: that catches ToolRefusalError / ToolInputError, and since #2021 always with a reason code.
+TOOL_AUTHORED_CLASSES = frozenset({"refused", "input_rejected"})
+
+#: The reason code for each twin ``EffectCause`` (#2021 9b), keyed by its string value so the
+#: tool composer does not import ``src.digital_twin`` at load time. A reused code is one whose
+#: sentence is literally true for the cause. ``test_effect_reason_codes_2021`` pins that every
+#: cause is here; ``test_reason_code_coverage_2021`` that every value is a literal tool member.
+EFFECT_CAUSE_CODES: Dict[str, ReasonCode] = {
+    "intervention_not_identified": ReasonCode.EFFECT_NOT_ESTIMABLE,
+    "empty_cohort": ReasonCode.NO_USABLE_ROWS,
+    "required_column_missing": ReasonCode.MISSING_REQUIRED_COLUMN,
+    "too_few_usable_rows": ReasonCode.INSUFFICIENT_SAMPLE,
+    "no_treatment_contrast": ReasonCode.NO_TREATMENT_CONTRAST,
+    "target_region_not_covered": ReasonCode.COVERAGE_GAP,
+    "estimation_failed": ReasonCode.ESTIMATOR_FAILED,
+    "target_inference_failed": ReasonCode.ESTIMATOR_FAILED,
+}
+
+
+def effect_reason_code(cause: object, *, fallback: ReasonCode) -> ReasonCode:
+    """The code for a twin effect cause, or ``fallback`` when there is none or this build does
+    not know it — so an effect refusal never goes without a code."""
+    return fallback if cause is None else EFFECT_CAUSE_CODES.get(str(cause), fallback)
+
+
+def user_safe_failure_text(
+    outcome_class: Optional[str],
+    reason_code: Union[ReasonCode, str, None],
+    raw: Optional[str],
+) -> Tuple[Optional[str], Optional[str]]:
+    """What a failed step may say to a user or an LLM prompt (#2020), and what it withheld.
+
+    One rule, shared by the composer's fail-closed answer and the synthesis prompt so the two
+    cannot drift:
+
+    * verbatim only when the class is tool-authored, the code is a KNOWN member and the text is
+      non-empty (the refusal arm's constructor fails soft to tool_error, so an unknown code on an
+      authored class came from a foreign producer);
+    * otherwise ``"<canonical sentence> [<code>]"``, where an unknown or absent code renders as
+      tool_error in both the sentence and the tag (``reason_code`` is a plain string on the model);
+    * ``(None, None)`` when there is no text and no code.
+
+    Returns ``(fragment, withheld)``: ``withheld`` is the raw text the fragment replaced, else
+    ``None``. Pure — no prefix and no logging; each caller prefixes, and logs ``withheld``.
+    """
+    text = str(raw or "").strip()
+    if not text and not reason_code:
+        return None, None
+    known = reason_code in ReasonCode
+    if outcome_class in TOOL_AUTHORED_CLASSES and text and known:
+        return text, None
+    code = str(reason_code) if known else ReasonCode.TOOL_ERROR.value
+    return f"{canonical_sentence(code)} [{code}]", text or None
+
+
 # Bounds on the structured ``details`` payload. It is persisted, so it must stay
 # structure: counts, shares and flags under prefixed snake_case keys. No strings at any
 # length — a short one still fits a column or brand name, the data this module keeps out
@@ -117,7 +179,8 @@ EXECUTOR_ASSIGNED = frozenset(
 # inclusive): the admin page reads them.
 _MAX_DETAIL_KEYS = 8
 _MAX_DETAIL_INT = 2**53 - 1
-_DETAIL_KEY = re.compile(r"(n|is|has|share)_[a-z0-9_]+")
+# At most "share_" (6) + 58 = 64 characters: ml/043's reducer silently drops keys longer than 64.
+_DETAIL_KEY = re.compile(r"(n|is|has|share)_[a-z0-9_]{1,58}")
 
 
 def canonical_sentence(code: Union[ReasonCode, str, None]) -> str:
@@ -134,6 +197,23 @@ def canonical_sentence(code: Union[ReasonCode, str, None]) -> str:
         except ValueError:
             pass
     return CANONICAL_SENTENCES[ReasonCode.TOOL_ERROR]
+
+
+def known_sentence(code: Union[ReasonCode, str, None]) -> Optional[str]:
+    """The sentence for a code this build knows, else ``None``. For read-side display.
+
+    Unlike :func:`canonical_sentence`, an unknown code does NOT fall back to the generic
+    tool-failure sentence: an operator page must not relabel a refusal it cannot read as a tool
+    failure. The caller shows the bare code instead.
+    """
+    if isinstance(code, ReasonCode):
+        return CANONICAL_SENTENCES[code]
+    if isinstance(code, str):
+        try:
+            return CANONICAL_SENTENCES[ReasonCode(code)]
+        except ValueError:
+            return None
+    return None
 
 
 def validate_details(details: Mapping[str, object]) -> Dict[str, object]:

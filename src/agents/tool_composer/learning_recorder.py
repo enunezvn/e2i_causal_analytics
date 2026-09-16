@@ -41,6 +41,7 @@ from .models.composition_models import (
     ExecutionTrace,
     StepResult,
 )
+from .reason_codes import ReasonCode, validate_details
 from .registry_sync import RegistrySync, default_registry_sync
 from .rpc_port import RpcPort
 
@@ -256,6 +257,7 @@ def step_record(
 
     output = result.output.result if isinstance(result.output.result, Mapping) else {}
     fields = _output_fields(result.tool_name)
+    reason_code, reason_details = _reason_fields(result, number)
     return {
         "step_number": number,
         "tool_name": result.tool_name,
@@ -288,7 +290,47 @@ def step_record(
         "attempts": result.attempts,
         "cache_hit": result.cache_hit,
         "error_type": result.error_type,
+        # #2050 / D1′: the reason as structure — the closed code and its numeric details, and
+        # no text of any kind. The sentence is rendered at read time, and ml/041's RPC keeps
+        # NULL in error_message behind this. Both fields are re-validated here, not trusted.
+        "reason_code": reason_code,
+        "reason_details": reason_details,
     }
+
+
+def _reason_fields(result: StepResult, step_number: int) -> tuple[Optional[str], Dict[str, object]]:
+    """The step's reason code and details, re-validated at the serialization boundary.
+
+    Neither field is validated on ``StepResult``, and ``ToolRefusalError.details`` stays a
+    mutable dict after its construction-time check, so a hand-built or mutated result could
+    otherwise persist free text. Fail soft like the error constructor: a code outside the
+    closed set is sent as ``tool_error``, invalid details as ``{}``, each with a log line.
+    """
+    code: Optional[str] = None
+    if result.reason_code is not None:
+        try:
+            code = ReasonCode(result.reason_code).value
+        except ValueError:
+            logger.warning(
+                "composer recording: step %s (%s) carries reason_code %s outside the closed "
+                "set; recorded as tool_error",
+                step_number,
+                result.tool_name,
+                repr(result.reason_code)[:64],
+            )
+            code = ReasonCode.TOOL_ERROR.value
+    details: Dict[str, object]
+    try:
+        details = validate_details(result.reason_details or {})
+    except ValueError as exc:  # its message carries no values
+        logger.warning(
+            "composer recording: step %s (%s) reason_details rejected (%s); recorded as {}",
+            step_number,
+            result.tool_name,
+            exc,
+        )
+        details = {}
+    return code, details
 
 
 def to_record(

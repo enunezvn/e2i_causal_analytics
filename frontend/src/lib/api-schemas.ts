@@ -1757,6 +1757,13 @@ export const ToolComposerToolRowSchema = z.object({
   p95_latency_ms: z.number().nullable(),
   declared_latency_ms: z.number().nullable(),
   most_common_health_error: z.string().nullable(),
+  // #2021: the tool's most common CODED refusal reason (a closed code, or null if none of its
+  // refusals in the window carry one). n_refused_coded/n_most_common_refusal_reason are counts,
+  // not defaults — null means UNKNOWN (pre-ml/043), never 0.
+  most_common_refusal_reason: z.string().nullable().optional(),
+  most_common_refusal_sentence: z.string().nullable().optional(),
+  n_refused_coded: z.number().int().nonnegative().nullable().optional(),
+  n_most_common_refusal_reason: z.number().int().nonnegative().nullable().optional(),
   last_executed_at: z.string().nullable(),
 });
 
@@ -1764,6 +1771,12 @@ export const ToolComposerStepClassSchema = z.object({
   step_number: z.number().int().nullable(),
   tool_name: z.string().nullable(),
   outcome_class: z.string().nullable(),
+  // #2021: the step's closed reason code and its catalogue sentence; null sentence with a
+  // non-null code means a code this build does not know.
+  reason_code: z.string().nullable().optional(),
+  reason: z.string().nullable().optional(),
+  // #2050: the numeric diagnostics recorded with the refusal; optional so a pre-9a payload parses.
+  reason_details: z.record(z.string(), z.union([z.number(), z.boolean()])).optional(),
 });
 
 export const ToolComposerRecentFailureSchema = z.object({

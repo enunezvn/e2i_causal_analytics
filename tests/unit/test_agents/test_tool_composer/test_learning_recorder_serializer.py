@@ -96,6 +96,8 @@ def _result(
     error: Optional[str] = None,
     error_type: Optional[str] = None,
     attempts: int = 1,
+    reason_code: Optional[str] = None,
+    reason_details: Optional[Dict[str, Any]] = None,
 ) -> StepResult:
     started = datetime(2026, 9, 11, 10, 0, 0, tzinfo=timezone.utc)
     return StepResult(
@@ -117,6 +119,8 @@ def _result(
         outcome_class=outcome_class,
         attempts=attempts,
         error_type=error_type,
+        reason_code=reason_code,
+        reason_details=reason_details or {},
     )
 
 
@@ -157,6 +161,7 @@ def _sentinel_models():
             error=f"KeyError: '{SENTINEL}'",
             error_type="KeyError",
             attempts=3,
+            reason_code="tool_error",
         )
     )
     trace.add_result(
@@ -165,6 +170,7 @@ def _sentinel_models():
             outcome_class="input_rejected",
             error=f"bad {SENTINEL}",
             error_type="ToolInputError",
+            reason_code="missing_required_input",
         )
     )
     trace.add_result(
@@ -173,6 +179,8 @@ def _sentinel_models():
             outcome_class="refused",
             error=f"estimation_data_scope={SENTINEL}",
             error_type="ToolRefusalError",
+            reason_code="coverage_gap",
+            reason_details={"n_groups": 1},
         )
     )
     return d, plan, trace
@@ -345,7 +353,11 @@ def test_step_record_fields():
     rank = _step("kpi_rank", "rank_drivers", "sq_1", {}, deps=["kpi_dag"])
     plan = _plan(d, [dag, rank], [["kpi_dag"], ["kpi_rank"]])
     result = _result(
-        rank, outcome_class="timeout", error="took too long", error_type="SyncToolTimeout"
+        rank,
+        outcome_class="timeout",
+        error="took too long",
+        error_type="SyncToolTimeout",
+        reason_code="tool_timeout",
     )
     record = step_record(1, result, plan, allowlist=None)
     assert record == {
@@ -362,6 +374,8 @@ def test_step_record_fields():
         "attempts": 1,
         "cache_hit": False,
         "error_type": "SyncToolTimeout",
+        "reason_code": "tool_timeout",
+        "reason_details": {},
     }
 
 
@@ -382,3 +396,101 @@ def test_steps_of_unregistered_tools_are_not_sent_and_their_names_not_kept():
         }
     ]
     assert SENTINEL not in json.dumps(record)
+
+
+# ---------------------------------------------------------------------------
+# #2050: the recorded step carries the reason as structure, never as text
+# ---------------------------------------------------------------------------
+
+
+def test_a_refused_step_records_its_code_and_numeric_details_and_no_text():
+    d = _decomposition(["CAUSAL"])
+    ate = _step("ate", "causal_effect_estimator", "sq_0", {})
+    plan = _plan(d, [ate], [["ate"]])
+    result = _result(
+        ate,
+        outcome_class="refused",
+        error=f"treatment column {SENTINEL!r} carries 4 distinct non-null values",
+        error_type="ToolRefusalError",
+        reason_code="non_binary_treatment",
+        reason_details={"n_distinct": 4},
+    )
+    record = step_record(0, result, plan, allowlist=None)
+    assert record["reason_code"] == "non_binary_treatment"
+    assert type(record["reason_code"]) is str
+    assert record["reason_details"] == {"n_distinct": 4}
+    # D1′: the sentence is rendered at read time. The recorder sends no text, and the RPC's
+    # NULL in error_message (ml/041) stays the second guard behind this one.
+    assert "error_message" not in record
+    assert SENTINEL not in json.dumps(record)
+
+
+def test_a_succeeded_step_records_no_reason():
+    d = _decomposition(["CAUSAL"])
+    ate = _step("ate", "causal_effect_estimator", "sq_0", {})
+    plan = _plan(d, [ate], [["ate"]])
+    record = step_record(
+        0, _result(ate, outcome_class="succeeded", result={"ate": 0.1}), plan, allowlist=None
+    )
+    assert (record["reason_code"], record["reason_details"]) == (None, {})
+
+
+def test_every_failed_step_of_a_whole_record_carries_its_code():
+    d, plan, trace = _sentinel_models()
+    steps = to_record(decomposition=d, plan=plan, trace=trace, allowlist=CATALOG)["steps"]
+    assert [s["reason_code"] for s in steps] == [
+        None,
+        "tool_error",
+        "missing_required_input",
+        "coverage_gap",
+    ]
+    assert steps[3]["reason_details"] == {"n_groups": 1}
+
+
+# The model does not validate reason_code / reason_details, and ToolRefusalError.details stays a
+# mutable dict after its construction-time check, so the recorder re-validates at the boundary.
+
+
+def _refused(**reason: Any):
+    d = _decomposition(["CAUSAL"])
+    ate = _step("ate", "causal_effect_estimator", "sq_0", {})
+    plan = _plan(d, [ate], [["ate"]])
+    result = _result(ate, outcome_class="refused", error_type="ToolRefusalError", **reason)
+    return result, plan
+
+
+def test_details_mutated_to_carry_a_string_after_construction_are_sent_empty(caplog):
+    result, plan = _refused(reason_code="non_binary_treatment", reason_details={"n_distinct": 4})
+    result.reason_details["n_x"] = "Kisqali"
+    with caplog.at_level("WARNING", logger="src.agents.tool_composer.learning_recorder"):
+        record = step_record(0, result, plan, allowlist=None)
+    assert record["reason_details"] == {}
+    assert record["reason_code"] == "non_binary_treatment"
+    assert "Kisqali" not in json.dumps(record)
+    assert "Kisqali" not in caplog.text
+    assert any("reason_details" in r.getMessage() for r in caplog.records)
+
+
+def test_details_with_a_key_outside_the_convention_are_sent_empty():
+    result, plan = _refused(reason_code="coverage_gap", reason_details={"region": 1})
+    assert step_record(0, result, plan, allowlist=None)["reason_details"] == {}
+
+
+def test_a_code_outside_the_closed_set_is_sent_as_tool_error(caplog):
+    result, plan = _refused(reason_code="made_up_code")
+    with caplog.at_level("WARNING", logger="src.agents.tool_composer.learning_recorder"):
+        record = step_record(0, result, plan, allowlist=None)
+    assert record["reason_code"] == "tool_error"
+    assert "made_up_code" not in json.dumps(record)
+    assert any("made_up_code" in r.getMessage() for r in caplog.records)
+
+
+def test_a_numpy_scalar_detail_is_sent_as_a_builtin_number():
+    import numpy as np
+
+    result, plan = _refused(
+        reason_code="non_binary_treatment", reason_details={"n_distinct": np.int64(4)}
+    )
+    details = step_record(0, result, plan, allowlist=None)["reason_details"]
+    assert details == {"n_distinct": 4} and type(details["n_distinct"]) is int
+    assert json.dumps(details) == '{"n_distinct": 4}'

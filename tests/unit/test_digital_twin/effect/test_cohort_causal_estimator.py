@@ -17,7 +17,7 @@ from src.digital_twin.effect.cohort_causal_estimator import (
     CohortCausalEffect,
     estimate_cohort_effect,
 )
-from src.digital_twin.effect.errors import EffectDataUnavailable
+from src.digital_twin.effect.errors import EffectCause, EffectDataUnavailable
 
 # Planted truth (mirrors TRUE_CATE_BY_REGION in the backfill DGP).
 TRUE_CATE = {"northeast": 0.45, "west": 0.30, "south": 0.18, "midwest": 0.08}
@@ -169,8 +169,9 @@ def test_control_outcome_sd_is_the_outcome_spread_of_the_low_intensity_rows():
     assert n_t == len(in_target)
     assert sd_t == pytest.approx(in_target["conversion_rate"].std(ddof=1))
 
-    with pytest.raises(EffectDataUnavailable, match="atlantis"):
+    with pytest.raises(EffectDataUnavailable, match="atlantis") as caught:
         control_outcome_sd(cohort, "engagement_score", regions=["atlantis"])
+    assert caught.value.cause is EffectCause.TOO_FEW_USABLE_ROWS
 
 
 def test_estimator_scoped_to_target_regions_reports_that_regions_effect():
@@ -228,3 +229,118 @@ def test_estimator_refuses_a_target_region_the_cohort_cannot_estimate():
 
     with pytest.raises(EffectDataUnavailable, match="atlantis"):
         CohortCausalEstimator(target_regions=["atlantis"]).estimate(frame, twins)
+
+
+# ---------------------------------------------------------------------------
+# #2021 9b: each refusal names its cause; the message is unchanged
+# (the fit-failure and target-inference causes are asserted in test_refusal_text_is_authored_2020.py,
+# next to its _FitRaises / _TargetIntervalRaises fakes)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("drop", "details", "message"),
+    [
+        pytest.param(
+            "engagement_score",
+            {"n_rows": 240, "has_treatment_column": False},
+            "cohort missing treatment column 'engagement_score'.",
+            id="treatment",
+        ),
+        pytest.param(
+            "conversion_rate",
+            {
+                "n_rows": 240,
+                "has_treatment_column": True,
+                "has_outcome_column": False,
+                "has_region_column": True,
+            },
+            "cohort missing required column(s): need 'conversion_rate' and 'region'.",
+            id="outcome",
+        ),
+        pytest.param(
+            "region",
+            {
+                "n_rows": 240,
+                "has_treatment_column": True,
+                "has_outcome_column": True,
+                "has_region_column": False,
+            },
+            "cohort missing required column(s): need 'conversion_rate' and 'region'.",
+            id="region",
+        ),
+        pytest.param(
+            "market_share",
+            {"n_rows": 240, "n_missing_confounder_columns": 1},
+            "cohort missing required confounder column(s) ['market_share']; refusing to "
+            "produce an under-adjusted estimate.",
+            id="confounder",
+        ),
+    ],
+)
+def test_a_missing_column_is_named_as_the_cause(drop, details, message):
+    cohort = _make_confounded_cohort(n_per_region=60).drop(columns=drop)
+    with pytest.raises(EffectDataUnavailable) as caught:
+        estimate_cohort_effect(cohort, "engagement_score")
+    assert str(caught.value) == message
+    assert caught.value.cause is EffectCause.REQUIRED_COLUMN_MISSING
+    assert caught.value.details == details
+
+
+def test_too_few_rows_is_named_as_the_cause():
+    with pytest.raises(EffectDataUnavailable) as caught:
+        estimate_cohort_effect(_make_confounded_cohort(n_per_region=5), "engagement_score")
+    assert str(caught.value) == "cohort has 20 usable rows (< 200) for 'engagement_score'."
+    assert caught.value.cause is EffectCause.TOO_FEW_USABLE_ROWS
+    assert caught.value.details == {"n_usable_rows": 20, "n_min_usable_rows": 200}
+
+
+def test_a_constant_treatment_is_named_as_no_contrast():
+    cohort = _make_confounded_cohort(n_per_region=200)
+    cohort["engagement_score"] = 5.0
+    with pytest.raises(EffectDataUnavailable) as caught:
+        estimate_cohort_effect(cohort, "engagement_score")
+    assert str(caught.value) == (
+        "treatment 'engagement_score' has no median contrast (all rows on one side); "
+        "cannot identify an effect."
+    )
+    assert caught.value.cause is EffectCause.NO_TREATMENT_CONTRAST
+    assert caught.value.details == {"n_usable_rows": 800, "n_distinct_treatment_values": 1}
+
+
+@pytest.fixture(scope="module")
+def west_all_treated() -> pd.DataFrame:
+    """Every west row far above any median intensity, so west has treated rows only."""
+    cohort = _make_confounded_cohort(n_per_region=100)
+    cohort.loc[cohort["region"] == "west", "engagement_score"] = 100.0
+    return cohort
+
+
+_COHORT_REGIONS = "['midwest', 'northeast', 'south', 'west']"
+
+
+@pytest.mark.parametrize(
+    ("targets", "first", "absent", "one_arm"),
+    [
+        pytest.param(["atlantis"], "atlantis", 1, 0, id="absent"),
+        pytest.param(["west"], "west", 0, 1, id="one-arm"),
+        # Counted over every target; the message still names the first failing one.
+        pytest.param(["northeast", "atlantis", "west"], "atlantis", 1, 1, id="both"),
+    ],
+)
+def test_a_target_region_without_a_contrast_is_named_as_not_covered(
+    west_all_treated, targets, first, absent, one_arm
+):
+    with pytest.raises(EffectDataUnavailable) as caught:
+        estimate_cohort_effect(west_all_treated, "engagement_score", target_regions=targets)
+    assert str(caught.value) == (
+        f"target region {first!r} has no treated-vs-control contrast in the cohort for "
+        f"'engagement_score' (cohort regions: {_COHORT_REGIONS}); its effect cannot be estimated."
+    )
+    assert caught.value.cause is EffectCause.TARGET_REGION_NOT_COVERED
+    assert caught.value.details == {
+        "n_target_regions": len(targets),
+        "n_target_regions_absent": absent,
+        "n_target_regions_one_arm": one_arm,
+        "n_cohort_regions": 4,
+    }

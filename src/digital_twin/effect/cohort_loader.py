@@ -13,10 +13,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Optional
+from dataclasses import dataclass, field
+from typing import Any, Mapping, Optional, Union
 
 import pandas as pd
 
+from src.digital_twin.effect.errors import EffectCause
 from src.digital_twin.effect.provider import (
     COHORT_CONFOUNDERS,
     COHORT_ESTIMABLE_INTERVENTIONS,
@@ -100,16 +102,52 @@ def cohort_provider_from_frame(
     Split out (#2015) so a caller that must tell an unreachable database (retry) from an
     unusable cohort (refuse) can load the frame itself and still apply the same rule.
     """
+    return assess_cohort_frame(df, intervention_type).provider
+
+
+@dataclass(frozen=True)
+class CohortUsability:
+    """The outcome of :func:`assess_cohort_frame`: a provider, or why there is none (#2021).
+
+    ``details`` holds counts and flags only, so a refusal can carry them as its reason details.
+    """
+
+    provider: Optional[CohortEffectDataProvider]
+    cause: Optional[EffectCause] = None
+    details: Mapping[str, Union[int, bool]] = field(default_factory=dict)
+
+
+def assess_cohort_frame(df: pd.DataFrame, intervention_type: str) -> CohortUsability:
+    """:func:`cohort_provider_from_frame` with the cause when there is no provider.
+
+    Returns a value rather than raising, so a caller that only needs the provider stays a
+    one-line wrapper and the tool's refusal needs no exception handler.
+    """
     if intervention_type not in COHORT_ESTIMABLE_INTERVENTIONS:
-        return None
+        return CohortUsability(None, EffectCause.INTERVENTION_NOT_IDENTIFIED)
     treatment_col = INTERVENTION_TREATMENT_MAP[intervention_type]
-    if df.empty or treatment_col not in df.columns:
-        return None
+    n_rows = int(len(df))
+    if n_rows == 0:
+        return CohortUsability(None, EffectCause.EMPTY_COHORT, {"n_rows": n_rows})
     # Usable rows must have the treatment, outcome, region AND the required confounders
     # non-null — aligned with what the direct estimator needs (it fails closed otherwise),
     # so we never build a provider that /simulate would then reject.
-    if any(c not in df.columns for c in COHORT_CONFOUNDERS):
-        return None
+    has_treatment = treatment_col in df.columns
+    has_outcome = "conversion_rate" in df.columns
+    has_region = "region" in df.columns
+    n_missing_confounders = sum(1 for c in COHORT_CONFOUNDERS if c not in df.columns)
+    if not (has_treatment and has_outcome and has_region) or n_missing_confounders:
+        return CohortUsability(
+            None,
+            EffectCause.REQUIRED_COLUMN_MISSING,
+            {
+                "n_rows": n_rows,
+                "has_treatment_column": has_treatment,
+                "has_outcome_column": has_outcome,
+                "has_region_column": has_region,
+                "n_missing_confounder_columns": n_missing_confounders,
+            },
+        )
     required = [treatment_col, "conversion_rate", "region", *COHORT_CONFOUNDERS]
     usable = df.dropna(subset=required)
     if len(usable) < COHORT_MIN_ROWS:
@@ -119,8 +157,23 @@ def cohort_provider_from_frame(
             len(usable),
             COHORT_MIN_ROWS,
         )
-        return None
-    return CohortEffectDataProvider(usable)
+        # Which column drives the drop: an all-null channel reads n_null_treatment_rows == n_rows.
+        return CohortUsability(
+            None,
+            EffectCause.TOO_FEW_USABLE_ROWS,
+            {
+                "n_rows": n_rows,
+                "n_usable_rows": int(len(usable)),
+                "n_min_usable_rows": COHORT_MIN_ROWS,
+                "n_null_treatment_rows": int(df[treatment_col].isna().sum()),
+                "n_null_outcome_rows": int(df["conversion_rate"].isna().sum()),
+                "n_null_region_rows": int(df["region"].isna().sum()),
+                "n_null_confounder_rows": int(
+                    df[list(COHORT_CONFOUNDERS)].isna().any(axis=1).sum()
+                ),
+            },
+        )
+    return CohortUsability(CohortEffectDataProvider(usable))
 
 
 async def _treatment_column_usable(client: Any, brand: str, treatment_col: str) -> bool:

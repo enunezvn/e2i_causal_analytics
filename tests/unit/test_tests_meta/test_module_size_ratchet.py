@@ -34,7 +34,7 @@ ALLOWLIST: dict[str, int] = {
     # would have failed the ratchet's own `n == pin` assertion.
     "src/agents/orchestrator/nodes/dispatcher.py": 3700,
     "src/agents/tool_composer/executor.py": 1684,
-    "src/agents/tool_composer/tool_registrations.py": 4854,
+    "src/agents/tool_composer/tool_registrations.py": 4847,
     "src/api/main.py": 1692,
     "src/api/routes/chatbot_dspy.py": 4182,
     "src/api/routes/chatbot_graph.py": 3190,

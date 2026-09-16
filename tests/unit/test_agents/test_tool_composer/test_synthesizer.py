@@ -6,6 +6,7 @@ into coherent natural language responses.
 """
 
 import json
+import logging
 from datetime import datetime, timezone
 
 import pytest
@@ -225,7 +226,10 @@ class TestResultFormatting:
         formatted = synthesizer._format_results(synthesis_input)
 
         assert "FAILED" in formatted
-        assert "Tool execution failed" in formatted
+        # #2020: an uncoded, non-tool-authored failure renders tool_error's canonical sentence;
+        # its raw text goes to the log, not the synthesis prompt.
+        assert "Error: the tool failed to complete [tool_error]" in formatted
+        assert "Tool execution failed" not in formatted
 
     def test_format_bounds_long_output_and_states_the_elision(
         self, mock_llm_client, sample_decomposition
@@ -350,7 +354,7 @@ class TestFallbackResponse:
     def test_fallback_extracts_successful_results(self, mock_llm_client, sample_synthesis_input):
         """Test that fallback extracts key values from successful results"""
         synthesizer = ResponseSynthesizer(llm_client=mock_llm_client)
-        fallback = synthesizer._create_fallback_response(sample_synthesis_input, "Test error")
+        fallback = synthesizer._create_fallback_response(sample_synthesis_input)
 
         assert isinstance(fallback, ComposedResponse)
         assert fallback.confidence <= 0.5
@@ -376,10 +380,72 @@ class TestFallbackResponse:
         )
 
         synthesizer = ResponseSynthesizer(llm_client=mock_llm_client)
-        fallback = synthesizer._create_fallback_response(synthesis_input, "All tools failed")
+        fallback = synthesizer._create_fallback_response(synthesis_input)
 
         assert "Unable to" in fallback.answer or "error" in fallback.answer.lower()
         assert "sq_1" in fallback.failed_components
+
+    # #2020 S1: what an LLM-client failure looks like — status code, provider JSON, org id.
+    _PROVIDER_ERROR = (
+        "Error code: 429 - {'error': {'message': 'Rate limit reached for gpt-4o in organization "
+        "org-SENTINEL2020 on tokens per min (TPM): Limit 30000, Used 29990', 'type': 'tokens', "
+        "'code': 'rate_limit_exceeded'}}"
+    )
+    _PROVIDER_LEAKS = ("org-SENTINEL2020", "rate_limit_exceeded", "Error code: 429")
+    _FALLBACK_CAVEAT = "Synthesis could not be completed, so this answer was assembled without it."
+
+    @pytest.mark.asyncio
+    async def test_fallback_keeps_the_exception_text_out_of_the_answer_and_caveats(
+        self, mock_llm_client, sample_synthesis_input, caplog
+    ):
+        """#2020 S1: the fallback put ``str(e)`` into its caveats, and into its answer when no step
+        succeeded; ``tool_composer_tool`` returns that answer to chat."""
+        mock_llm_client.set_error(Exception(self._PROVIDER_ERROR))
+        with caplog.at_level(logging.DEBUG):
+            response = await ResponseSynthesizer(llm_client=mock_llm_client).synthesize(
+                sample_synthesis_input
+            )
+
+        visible = " || ".join([response.answer, *response.caveats])
+        for leak in self._PROVIDER_LEAKS:
+            assert leak not in visible, f"{leak!r} reached the fallback response"
+        assert response.caveats == [self._FALLBACK_CAVEAT]
+        # The raw text is withheld, not lost: logged once, at ERROR.
+        hits = [r for r in caplog.records if "org-SENTINEL2020" in r.getMessage()]
+        assert len(hits) == 1, f"expected the raw text logged once, got {len(hits)}"
+        # Only the user surfaces are redacted: the log stays an ERROR (Sentry's event level) with
+        # its traceback, because the fallback answer hides that synthesis failed at all.
+        assert hits[0].levelno == logging.ERROR
+        assert hits[0].exc_info is not None
+
+    @pytest.mark.asyncio
+    async def test_fallback_with_no_successful_step_keeps_the_exception_text_out_of_the_answer(
+        self, mock_llm_client, sample_decomposition
+    ):
+        now = datetime.now(timezone.utc)
+        trace = ExecutionTrace(plan_id="plan_2020_s1")
+        trace.add_result(
+            StepResult(
+                step_id="step_1",
+                sub_question_id="sq_1",
+                tool_name="test_tool",
+                input=ToolInput(tool_name="test_tool", parameters={}),
+                output=ToolOutput(tool_name="test_tool", success=False, error="Failed"),
+                status=ExecutionStatus.FAILED,
+                started_at=now,
+                completed_at=now,
+            )
+        )
+        synthesis_input = SynthesisInput(
+            original_query="Test", decomposition=sample_decomposition, execution_trace=trace
+        )
+        mock_llm_client.set_error(Exception(self._PROVIDER_ERROR))
+
+        response = await ResponseSynthesizer(llm_client=mock_llm_client).synthesize(synthesis_input)
+
+        assert "Unable to fully answer the query" in response.answer
+        for leak in self._PROVIDER_LEAKS:
+            assert leak not in response.answer, f"{leak!r} reached the fallback answer"
 
 
 class TestLLMInteraction:

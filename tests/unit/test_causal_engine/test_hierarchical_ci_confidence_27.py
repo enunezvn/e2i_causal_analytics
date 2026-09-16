@@ -12,9 +12,15 @@ z-score (2.576) while the response claimed 0.90 -- a functional honesty bug of
 exactly the #27 class. This test pins the corrected behavior: the half-width
 tracks the configured level via the shared z-score helper.
 
-No mocking of results: ``_compute_ci`` is the real method, given a real config
-and a model WITHOUT ``effect_inference`` so it deterministically takes the
-normal-approximation fallback over a real numpy std.
+No mocking of results: ``_compute_ci_bootstrap`` is the real method (the
+normal-approximation interval of the meta-learners), given a real config and real
+planted treatment/outcome arrays, so the SE is a genuine difference-in-means
+computation.
+
+#2142: this test used to reach the z-score through ``_compute_ci``'s
+``cate_std/√n`` fallback. That fallback was removed (it was the dispersion of
+fitted CATEs, not sampling uncertainty; ``_compute_ci`` now fails closed), so the
+z-score contract is pinned on the remaining normal-approximation interval.
 """
 
 import numpy as np
@@ -22,7 +28,7 @@ import pytest
 
 
 def _half_width_at_level(level: float) -> tuple[float, float]:
-    """Return (half_width, sigma_se) from the real _compute_ci fallback at ``level``."""
+    """Return (half_width, sigma_se) from the real _compute_ci_bootstrap at ``level``."""
     from src.causal_engine.hierarchical.segment_cate import (
         SegmentCATECalculator,
         SegmentCATEConfig,
@@ -30,18 +36,14 @@ def _half_width_at_level(level: float) -> tuple[float, float]:
 
     calc = SegmentCATECalculator(SegmentCATEConfig(ci_confidence_level=level))
 
-    # A model with no effect_inference -> _compute_ci falls back to the normal
-    # approximation (the path that hardcoded the z-score). Real, deterministic
-    # CATE values so cate_std and the resulting SE are genuine computations.
-    model = object()
-    cate_values = np.array([0.10, 0.50] * 10, dtype=float)
-    cate_mean = float(np.mean(cate_values))
-    cate_std = float(np.std(cate_values))
-    n = len(cate_values)
-    se = cate_std / np.sqrt(n)
+    treatment = np.array([1, 0] * 20)
+    outcome = np.array([1.0, 0.0, 3.0, 1.0] * 10)
+    y_t, y_c = outcome[treatment == 1], outcome[treatment == 0]
+    se = float(np.sqrt(np.var(y_t) / len(y_t) + np.var(y_c) / len(y_c)))
+    assert se > 0
 
-    lower, upper = calc._compute_ci(
-        model, X=None, cate_values=cate_values, cate_mean=cate_mean, cate_std=cate_std
+    lower, upper = calc._compute_ci_bootstrap(
+        np.zeros((len(outcome), 1)), treatment, outcome, cate_mean=1.5
     )
     assert lower is not None and upper is not None
     half_width = (upper - lower) / 2.0
