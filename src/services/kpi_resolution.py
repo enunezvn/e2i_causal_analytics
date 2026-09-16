@@ -1053,3 +1053,29 @@ def resolve_kpi_frame(
         window_days=window_days,
         include_synthetic=include_synthetic,
     )
+
+
+def names_exactly_one_kpi(normalized_query: str, kpi: KPIMetadata) -> bool:
+    """True when the caller's text IS ``kpi``'s own registry name, nothing more.
+
+    A registry name identifies exactly one KPI by construction, so when the ask
+    IS that name there is no ambiguity to adjudicate and the multi-KPI veto must
+    not fire. Without this, the lane's family aliases ("observed rx events" ->
+    WS3-BI-011) matched INSIDE the names of WS3-BI-012/013/014 -- all of which
+    begin "Observed Rx Events - Patient Panel ..." -- and the " - " in the name
+    itself satisfied the coordinator test, so THE NAME COORDINATED WITH ITSELF
+    and three of the four panel KPIs could not be computed by their own name at
+    all, with or without an axis (#2114, r12 CI triage).
+
+    ⭐ A SUBSTRING MATCH READ AS WHOLE-SPAN IDENTITY -- the third instance of that
+    genus in this lane in one day, after `brand_from_text('cost kisqali')` and
+    'west' inside 'west coast'. Three different resolvers, one mistake.
+
+    The comparison runs both strings through :func:`recognize_kpi_span`, which is
+    the normaliser the caller already used, so no normalisation is reimplemented
+    here and the two sides cannot drift apart. It compares the WHOLE string: an
+    ask that merely CONTAINS a registry name ("... (NRx Panel) and ROI") is not
+    equal to it, so a genuine coordination is still vetoed.
+    """
+    own_span = recognize_kpi_span(kpi.name)
+    return own_span is not None and own_span[1] == normalized_query

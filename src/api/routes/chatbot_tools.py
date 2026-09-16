@@ -2590,7 +2590,7 @@ async def kpi_calculate_tool(
         # for/else: the loop ran the full range without breaking, i.e. it never
         # ran out of mentions -- the cap stopped it, not the text.
         _scan_complete = False
-    if not _scan_complete:
+    if not _scan_complete and not kpi_resolution.names_exactly_one_kpi(_normalized, kpi):
         # Fail CLOSED, not just loudly (codex iter-6). Having established that a
         # further coordinated metric may be unexamined, computing one KPI and
         # returning success is exactly the false-complete this guard exists to
@@ -2613,7 +2613,7 @@ async def kpi_calculate_tool(
             "hint": "Call kpi_calculate_tool once per metric, naming each metric on its own.",
         }
 
-    if _coordinated:
+    if _coordinated and not kpi_resolution.names_exactly_one_kpi(_normalized, kpi):
         _all_named = sorted({str(kpi.name), *_coordinated})
         return {
             "success": False,
