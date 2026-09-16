@@ -115,6 +115,7 @@ const mockSimulationResponse: SimulationResponse = {
 };
 
 const mockSimulationDetailResponse: SimulationDetailResponse = {
+  subgroups_basis: 'per_twin',
   ...mockSimulationResponse,
   population_filters: { region: 'Northeast' },
   effect_heterogeneity: {

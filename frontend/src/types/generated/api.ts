@@ -18741,6 +18741,12 @@ export interface components {
                 [key: string]: unknown;
             };
             effect_heterogeneity: components["schemas"]["EffectHeterogeneityResponse"];
+            /**
+             * Subgroups Basis
+             * @description How effect_heterogeneity was computed (#2104): 'cohort_rows' (declared axes over the cohort rows behind the estimate, #2054), 'per_twin' (synthetic-path per-twin scores), 'twin_weighted_legacy' (a row stored before #2097 whose by_specialty / by_decile / by_adoption_stage averaged region CATEs over the generated twins and whose stored simulation_confidence was scored on twin count; the stored JSON is served unchanged), 'unknown' (no provenance recorded).
+             * @enum {string}
+             */
+            subgroups_basis: "cohort_rows" | "per_twin" | "twin_weighted_legacy" | "unknown";
             /** Intervention Config */
             intervention_config: {
                 [key: string]: unknown;
