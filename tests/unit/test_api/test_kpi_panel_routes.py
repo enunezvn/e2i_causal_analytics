@@ -54,6 +54,40 @@ def test_the_cohort_profiler_asks_the_panel_nrx():
     assert agent._NRX_KPI_ID == "WS3-BI-012"
 
 
+async def test_the_profiler_passes_the_panel_id_to_every_calculator_call():
+    """THE CONSUMER, not the constant. The test above pins ``_NRX_KPI_ID``, which
+    cannot fail if someone inlines a literal at ``agent.py``'s ``calculate`` call
+    site — the constant would still read WS3-BI-012 while the profiler asked the
+    canonical NRx. This records the kpi_id actually PASSED, over all 8 calls one
+    brand makes (headline + 3 severity tiers + 4 lines of therapy).
+
+    No harness: ``_profile_brand`` takes the calculator as an argument and touches
+    nothing else on the instance but ``_value`` and ``_log``, so there is no DB,
+    no graph and no agent construction.
+    """
+    import logging
+
+    from src.agents.cohort_profiler.agent import CohortProfilerAgent
+
+    class _RecordingCalculator:
+        def __init__(self) -> None:
+            self.kpi_ids: list[str] = []
+
+        def calculate(self, kpi_id, context=None):
+            self.kpi_ids.append(kpi_id)
+            return {"value": 7.0}
+
+    calculator = _RecordingCalculator()
+    profiler = CohortProfilerAgent.__new__(CohortProfilerAgent)
+    profiler._log = logging.getLogger("test_cohort_profiler_seam")
+
+    profile = await profiler._profile_brand(calculator, "Remibrutinib")
+
+    assert profile is not None and profile["brand"] == "Remibrutinib"
+    assert len(calculator.kpi_ids) == 8, calculator.kpi_ids
+    assert set(calculator.kpi_ids) == {"WS3-BI-012"}, calculator.kpi_ids
+
+
 @pytest.mark.parametrize("canonical", ["WS3-BI-005", "WS3-BI-006", "WS3-BI-007"])
 def test_the_named_panel_id_actually_serves_the_route(client, canonical):
     """FOLLOW the hint, do not just match its text. A refusal that names a next
