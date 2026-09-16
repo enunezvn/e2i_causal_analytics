@@ -22,6 +22,25 @@ or without an axis. The 12 `KeyError: 'kpi_id'` failures in
 test_chatbot_kpi_axis_gate_1911.py were the symptom; the missing key is the refusal
 shape, not the defect.
 
+⚠ WHAT THIS FIX RESTORES IS **IDENTITY**, NOT COMPUTATION — a precision the first
+report of it blurred. Measured at ce735f312, bare (no brand) and with a brand:
+
+    011  bare success=True   kpi_id=WS3-BI-011   | +brand success=True
+    012  bare success=True   kpi_id=WS3-BI-012   | +brand success=True
+    013  bare success=False  kpi_id=WS3-BI-013   | +brand success=True
+    014  bare success=False  kpi_id=WS3-BI-014   | +brand success=True
+
+All four IDENTIFY in every case, which is the defect this fix closes. Two of the
+four do not COMPUTE bare, for an unrelated domain reason ("no brand specified for
+new-to-brand prescriptions (NBRx)" / "for TRx share") — well-formed refusals that
+carry the kpi_id. The tests below supply a brand, so they prove computation UNDER
+THAT CONDITION and say nothing about the bare case.
+
+"All four compute by their own registry name" was therefore ONE WORD WIDER THAN
+ITS MEASUREMENT: true of these tests' conditions, wrong if read unconditionally.
+Same family as the battery count that said ten beside a table of twelve. Stated
+here so the next reader does not pin "all four compute bare" as an expectation.
+
 ⭐ THIRD INSTANCE OF ONE GENUS IN ONE DAY: A SUBSTRING MATCH READ AS WHOLE-SPAN
 IDENTITY. r12 finding 3 — `brand_from_text('cost kisqali')` matched a brand INSIDE
 the span. r12-7 — the resolver matched 'west' inside 'west coast'. Here — the family
