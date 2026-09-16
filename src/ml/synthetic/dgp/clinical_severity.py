@@ -68,4 +68,5 @@ def uas7_from_severity(
     u = (d - UAS7_MIN + 0.5) / _UAS7_LEVELS
     z = rho * (sev - _SEVERITY_MEAN) / _SEVERITY_SD + np.sqrt(1.0 - rho**2) * norm.ppf(u)
     out = UAS7_MIN + np.floor(_UAS7_LEVELS * norm.cdf(z))
-    return np.clip(out, UAS7_MIN, UAS7_MAX).astype(np.int64)
+    result: np.ndarray = np.clip(out, UAS7_MIN, UAS7_MAX).astype(np.int64)
+    return result
