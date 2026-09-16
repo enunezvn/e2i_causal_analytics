@@ -492,3 +492,153 @@ def test_three_clean_causal_occurrences_still_bind(causal_registry):
     """The ANSWER side of the arity probe on the causal path."""
     assert _causal_kpi_id("what drives NRx panel and NRx panel and NRx panel?") == "WS3-BI-012"
     assert causal_registry == ["Observed Rx Events - Patient Panel NRx (NRx Panel)"]
+
+
+# --- codex r11 MEDIUM: unsupported RIGHT-heads bypass causal refusal -----------------------
+# The causal path checks governing OF-heads on every owned occurrence and NEVER checks
+# right-heads at all. "what drives NRx panel cost?" has no of-head, so nothing refuses it and
+# the registry is asked for the NRx-panel outcome despite the unsupported "cost" sub-ask.
+#
+# TWO CORRECTIONS to the review, both measured, both making it bigger and older:
+#  1. NOT a per-occurrence gap. A SINGLE mention fails open too ("what drives NRx panel
+#     cost?" -> 012, 1 call). There is no check to extend on every occurrence; there is a
+#     check to ADD. codex's "on every occurrence" framing would have missed the first one.
+#  2. PRE-EXISTING against ACTUAL origin/main (bd3c7fb3d), not merely the lane base:
+#         "what drives TRx cost?"        main 005, 1 call   HEAD 005, 1 call
+#         "what drives NRx panel cost?"  main None, 0 calls  HEAD 012, 1 call
+#     The lane does not cause it; the lane NEWLY EXPOSES it for the four panel KPIs, which is
+#     what made it in-scope. Fixed under OWNER DECISION #10.
+#
+# ⚠ THE DESIGN HAZARD. The of-head check is a fail-closed ALLOWLIST and that shape CANNOT be
+# copied here: `_kpi_right_head` returns the next token whatever it is, so an allowlist of
+# causal heads alone would refuse every ordinary "for Kisqali" / "in Q3" ask. The
+# discriminator is STRUCTURAL and was established by enumeration, not guessed —
+#   legitimate right-heads are CLOSED-CLASS function words (for, in, by, across, among, at,
+#   with, from, and, or, than, this, last, next, the, when, where, ...), causal heads, a
+#   period/number token, or end-of-string;
+#   the defect's right-heads are OPEN-CLASS nouns naming another quantity (cost, accuracy,
+#   price, forecast, target, volume, trend, uplift, benchmark).
+# A denylist of nouns would be a labeling fix — nouns are an OPEN class and cannot be
+# enumerated. Function words are a CLOSED class and can be. That asymmetry is the whole
+# justification for the shape of this fix.
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "what drives NRx panel cost?",  # SINGLE mention — the review's framing missed this
+        "what drives NRx panel and NRx panel cost?",
+        "what drives TRx cost?",  # canonical — pre-existing on main
+        "what drives NRx panel accuracy?",
+        "what drives TRx price?",
+        "what drives NRx panel forecast?",
+        "what drives TRx target?",
+    ],
+)
+def test_an_unsupported_right_head_compound_fails_closed_on_the_causal_path(query, causal_registry):
+    """ "NRx panel cost" names a quantity the registry does not model. Binding NRx panel's
+    drivers answers a different question, so it must refuse BEFORE the repository call."""
+    assert _causal_kpi_id(query) is None, f"{query!r} bound an outcome"
+    assert causal_registry == [], f"{query!r} consulted the registry; that is not a refusal"
+
+
+@pytest.mark.parametrize(
+    "query,expected_id",
+    [
+        # prepositions and scope — the class this fix most risks over-refusing
+        ("what drives NRx panel for Kisqali?", "WS3-BI-012"),
+        ("what drives NRx panel in the west region?", "WS3-BI-012"),
+        ("what drives TRx by severity?", "WS3-BI-005"),
+        ("what drives NRx panel across brands?", "WS3-BI-012"),
+        ("what drives TRx among new patients?", "WS3-BI-005"),
+        ("what drives NRx panel at the HCP level?", "WS3-BI-012"),
+        ("what drives TRx with high adherence?", "WS3-BI-005"),
+        ("what drives NRx panel from Q1?", "WS3-BI-012"),
+        ("what drives TRx to date?", "WS3-BI-005"),
+        ("what drives NRx panel on the panel?", "WS3-BI-012"),
+        ("what drives TRx per brand?", "WS3-BI-005"),
+        ("what drives NRx panel within the cohort?", "WS3-BI-012"),
+        ("what drives TRx under the new plan?", "WS3-BI-005"),
+        ("what drives NRx panel between Q1 and Q2?", "WS3-BI-012"),
+        # temporal
+        ("what drives NRx panel in Q3?", "WS3-BI-012"),
+        ("what drives TRx last quarter?", "WS3-BI-005"),
+        ("what drives NRx panel this year?", "WS3-BI-012"),
+        ("what drives TRx over time?", "WS3-BI-005"),
+        ("what drives NRx panel during the launch?", "WS3-BI-012"),
+        ("what drives TRx since January?", "WS3-BI-005"),
+        ("what drives NRx panel after launch?", "WS3-BI-012"),
+        ("what drives TRx before launch?", "WS3-BI-005"),
+        ("what drives NRx panel next quarter?", "WS3-BI-012"),
+        ("what drives TRx recently?", "WS3-BI-005"),
+        # comparison / coordination / subordination
+        # NOTE the tail: "versus NRx" would name a SECOND KPI and is correctly refused by
+        # the two-metric veto — my first draft asserted it should bind, and red-first caught
+        # the bad EXPECTATION rather than a defect. The right-head under test is "versus".
+        ("what drives NRx panel versus last quarter?", "WS3-BI-012"),
+        ("what drives NRx panel vs the prior period?", "WS3-BI-012"),
+        ("what drives NRx panel when adherence is low?", "WS3-BI-012"),
+        ("what drives NRx panel where coverage is high?", "WS3-BI-012"),
+        ("what drives NRx panel if adherence drops?", "WS3-BI-012"),
+        # causal right-heads — accepted on THIS path, refused on the value path
+        ("what drives NRx panel drivers?", "WS3-BI-012"),
+        ("what drives TRx determinants?", "WS3-BI-005"),
+        ("what drives NRx panel predictors?", "WS3-BI-012"),
+        # end of string
+        ("what drives NRx panel?", "WS3-BI-012"),
+        ("what drives TRx", "WS3-BI-005"),
+    ],
+)
+def test_ordinary_right_heads_must_keep_binding(query, expected_id, causal_registry):
+    """THE OVER-REFUSAL BATTERY, and it is the point of the task. A fix that refuses
+    "what drives NRx panel for Kisqali?" is worse than the defect it closes — the same
+    mirror failure as 11a's "mask more", which destroyed five legitimate refusals."""
+    assert _causal_kpi_id(query) == expected_id, query
+    assert causal_registry, f"{query!r} never reached the registry"
+
+
+# --- what property do ALL the r11 rows share? ----------------------------------------------
+# codex found r11 by asking this of OUR fixtures ("coincidentally restricted to unsupported
+# of-heads"). Asking it of the new rows: every unsupported one is a SINGLE-WORD noun, and
+# every accepted one is a bare function word. These break both. All seven passed first time,
+# and the teeth run confirms they are PINS not fixes — the 7 reds on 9bd77796c were the
+# `..._fails_closed_on_the_causal_path` rows only.
+
+
+@pytest.mark.parametrize(
+    "query,why",
+    [
+        ("what drives NRx panel unit cost?", "multi-word compound, not a single noun"),
+        ("what drives NRx panel's cost?", "possessive form"),
+        ("what drives NRx panel run rate?", "a metric noun that reads temporal-ish"),
+        ("what drives NRx panel cost-per-script?", "hyphenated compound"),
+    ],
+)
+def test_unsupported_right_heads_refuse_in_any_surface_form(query, why, causal_registry):
+    assert _causal_kpi_id(query) is None, f"{query!r} bound an outcome; {why}"
+    assert causal_registry == [], f"{query!r} consulted the registry; {why}"
+
+
+@pytest.mark.parametrize(
+    "query,expected_id,why",
+    [
+        ("what drives NRx panel 2026?", "WS3-BI-012", "a bare number is scope, not a quantity"),
+        ("what drives NRx panel causes?", "WS3-BI-012", "plural causal head"),
+    ],
+)
+def test_period_and_causal_right_heads_still_bind(query, expected_id, why, causal_registry):
+    assert _causal_kpi_id(query) == expected_id, f"{query!r}; {why}"
+    assert causal_registry, f"{query!r} never reached the registry; {why}"
+
+
+def test_a_period_right_head_is_accepted_even_when_a_noun_follows_it(causal_registry):
+    """A KNOWN AND DELIBERATE LIMIT, pinned so it is a decision rather than a surprise.
+
+    "what drives NRx panel q3 performance?" BINDS, because the rule reads only the token
+    immediately after the mention and that token is a period token. One could argue the ask
+    is about "performance". Accepting it is the deliberate choice: the alternative refuses
+    "what drives NRx panel q3?" too, and OVER-REFUSAL is the worse failure here — the mirror
+    of 11a's "mask more", which destroyed five legitimate refusals. Revisit only with a
+    measured case where this costs a real answer."""
+    assert _causal_kpi_id("what drives NRx panel q3 performance?") == "WS3-BI-012"
+    assert causal_registry
