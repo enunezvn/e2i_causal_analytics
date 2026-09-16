@@ -240,35 +240,38 @@ _PERIOD_MODIFIERS = frozenset(
 #: The same token shape ``_kpi_right_head`` reads, applied to the whole tail.
 _TAIL_TOKEN_RE = re.compile(r"[\w'-]+")
 
-#: Generic nouns that trail a RESOLVED scope token and name its kind: "west
-#: region", "Kisqali brand". Consumable ONLY immediately after a token the
-#: resolver bound (see ``_scope_span``), so they can never open a hole on their
-#: own -- "What is NRx panel level?" still refuses, because "level" names a
-#: qualifier the platform does not resolve either (#2114 11g / #2139).
-_SCOPE_NOUNS = frozenset(
-    {
-        "region",
-        "regions",
-        "brand",
-        "brands",
-        "market",
-        "markets",
-        "area",
-        "areas",
-        "territory",
-        "territories",
-        "cohort",
-        "cohorts",
-        "tier",
-        "tiers",
-        "axis",
-        "axes",
-    }
-)
+#: The noun that may trail a RESOLVED scope token to name its kind: "west
+#: region", "Kisqali brand" -- KEYED TO THE DIMENSION THAT ACTUALLY BOUND, and
+#: consumable ONCE, immediately (#2114 11g / #2139; corrected by r12 HIGH-b).
+#:
+#: An earlier draft was a FLAT set including "cohort", "tier", "axis", "market",
+#: "area" and "territory", consumed whenever a scope token had been seen -- and
+#: the "seen" flag was never reset, so they chained: "Kisqali tier cohort axis"
+#: swallowed three unserved dimension nouns. Both halves were wrong:
+#:
+#: * neither resolver binds any of them (``brand_from_text`` and
+#:   ``region_from_text`` return None for every one), so they were PATIENT_AXES
+#:   under a new name -- readmitted one commit after 11h removed them, through a
+#:   different door. "territory-level detail" is in the capability catalogue's
+#:   NEVER_BLOCK list: no tool serves it at all;
+#: * un-keyed, the appositive crossed dimensions -- "Kisqali region" bound the
+#:   BRAND and then swallowed "region", the same fail-open in miniature.
+#:
+#: The key comes from WHICH RESOLVER returned non-None, never from a second word
+#: list, so it cannot drift from the registry.
+_SCOPE_APPOSITIVES = {
+    "brand": frozenset({"brand", "brands"}),
+    "region": frozenset({"region", "regions"}),
+}
 
 
-def _scope_span(tokens: list[str], index: int) -> int:
-    """How many tokens at ``index`` the PLATFORM ITSELF resolves as scope (0 if none).
+def _scope_span(tokens: list[str], index: int) -> tuple[int, Optional[str]]:
+    """How many tokens at ``index`` the PLATFORM ITSELF resolves as scope, and WHICH
+    dimension bound them -- ``(0, None)`` when nothing resolves.
+
+    The dimension is returned so the trailing appositive can be keyed to it: see
+    ``_SCOPE_APPOSITIVES``. It is read off which resolver answered, so it cannot
+    disagree with what the dispatcher will later bind.
 
     EXACTLY TWO DIMENSIONS, because exactly two are resolvable from query text.
     ``_extract_brand_region`` (dispatcher.py:216-226) asks ``brand_from_text`` and
@@ -315,13 +318,17 @@ def _scope_span(tokens: list[str], index: int) -> int:
     from src.services.query_entities import brand_from_text, region_from_text
 
     token = tokens[index]
-    if brand_from_text(token) or region_from_text(token):
-        return 1
+    if brand_from_text(token):
+        return 1, "brand"
+    if region_from_text(token):
+        return 1, "region"
     if index + 1 < len(tokens):
         pair = f"{token} {tokens[index + 1]}"
-        if brand_from_text(pair) or region_from_text(pair):
-            return 2
-    return 0
+        if brand_from_text(pair):
+            return 2, "brand"
+        if region_from_text(pair):
+            return 2, "region"
+    return 0, None
 
 
 def _tail_changes_the_quantity(
@@ -352,14 +359,18 @@ def _tail_changes_the_quantity(
     """
     tokens = _TAIL_TOKEN_RE.findall(normalized_query[span_end:])
     index = 0
-    after_scope = False
+    #: The dimension the PREVIOUS token bound, or None. Holds for exactly one
+    #: token, so a matching appositive is consumable once and only immediately
+    #: -- "west region" binds, "west region region" and "Kisqali tier cohort"
+    #: do not (r12 HIGH-b).
+    bound_dimension: Optional[str] = None
     while index < len(tokens):
         token = tokens[index]
         if token in causal_heads:
             return False
         if _PERIOD_TOKEN_RE.match(token):
             index += 1
-            after_scope = False
+            bound_dimension = None
             continue
         following = tokens[index + 1] if index + 1 < len(tokens) else None
         # A FUNCTION WORD IS DECIDED BEFORE ANY SCOPE LOOKAHEAD, and the order is
@@ -375,16 +386,17 @@ def _tail_changes_the_quantity(
                 and _PERIOD_TOKEN_RE.match(following)
             ):
                 index += 1
-                after_scope = False
+                bound_dimension = None
                 continue
             return False
-        if after_scope and token in _SCOPE_NOUNS:
+        if bound_dimension is not None and token in _SCOPE_APPOSITIVES[bound_dimension]:
             index += 1
+            bound_dimension = None
             continue
-        consumed = _scope_span(tokens, index)
+        consumed, dimension = _scope_span(tokens, index)
         if consumed:
             index += consumed
-            after_scope = True
+            bound_dimension = dimension
             continue
         return True
     return False

@@ -1056,3 +1056,50 @@ def test_a_free_text_patient_axis_is_dropped_scope_on_the_causal_path_too(causal
     again four tasks later — which is why each path is now asserted through its own."""
     assert _causal_kpi_id("what drives NRx panel segment?") is None
     assert causal_registry == []
+
+
+# --- r12 HIGH-b: generic scope nouns recreated the axis allowlist 11h removed --------------
+# `_SCOPE_NOUNS` was a flat set consumable whenever `after_scope` was true, and `after_scope`
+# was never reset. Two defects in one:
+#   (i) it chained — "Kisqali tier cohort axis" consumed three unserved dimension nouns;
+#  (ii) "cohort"/"tier"/"axis" (and "market"/"area"/"territory") name dimensions NEITHER
+#       resolver binds. Probed: brand_from_text and region_from_text return None for every
+#       one of them. They are PATIENT_AXES under a new name — exactly what 11h removed one
+#       commit earlier, readmitted through a different door. "territory-level detail" is in
+#       the capability catalogue's NEVER_BLOCK list, so "west territory" names something no
+#       tool serves at all.
+# The appositive is now KEYED TO THE DIMENSION THAT ACTUALLY BOUND, taken from which resolver
+# returned non-None — never a second word list — and consumable ONCE, immediately.
+
+
+@pytest.mark.parametrize(
+    "query,why",
+    [
+        ("What is NRx panel Kisqali tier?", "'tier' binds on neither resolver"),
+        ("What is NRx panel Kisqali cohort?", "'cohort' binds on neither resolver"),
+        ("What is TRx Kisqali tier cohort axis?", "three unserved nouns chained"),
+        ("What is NRx panel west region cohort tier?", "chained behind a real region"),
+        ("What is NRx panel Kisqali market?", "'market' is not a served dimension"),
+        ("What is NRx panel west territory?", "territory detail is in NEVER_BLOCK"),
+        ("What is NRx panel Kisqali region?", "BRAND bound; 'region' is the other dimension"),
+        ("What is NRx panel west brand?", "REGION bound; 'brand' is the other dimension"),
+        ("What is NRx panel west region region?", "the appositive is consumable ONCE"),
+    ],
+)
+def test_a_scope_noun_does_not_chain_or_cross_dimensions(query, why, calculator):
+    assert _kpi_lookup_evidence({"query": query}) is None, f"{query!r} answered; {why}"
+    assert calculator.calls == [], f"{query!r} called the calculator; {why}"
+
+
+@pytest.mark.parametrize(
+    "query,expected_id,why",
+    [
+        ("What is NRx panel Kisqali brand?", "WS3-BI-012", "brand bound, brand appositive"),
+        ("What is NRx panel west region?", "WS3-BI-012", "region bound, region appositive"),
+        ("What is TRx Kisqali?", "WS3-BI-005", "bare brand, no appositive"),
+        ("What is NRx panel for Kisqali?", "WS3-BI-012", "preposition ends the walk"),
+    ],
+)
+def test_the_matching_appositive_still_binds(query, expected_id, why, calculator):
+    assert _kpi_lookup_evidence({"query": query}), f"{query!r} refused; {why}"
+    assert calculator.calls == [expected_id], (query, why, calculator.calls)
