@@ -380,6 +380,17 @@ class StoredEstimateScope(BaseModel):
         )
 
 
+def stored_filter_regions(row: Dict[str, Any]) -> List[str]:
+    """Regions a stored twin_simulations row's population filter named (#2079).
+
+    The filter, never the scope (see :class:`StoredEstimateScope`): it lets a history card
+    say an UNKNOWN-scope effect may cover only these regions, as the detail view does.
+    """
+    filters = row.get("population_filters")
+    regions = filters.get("regions") if isinstance(filters, dict) else None
+    return [r for r in regions if isinstance(r, str)] if isinstance(regions, list) else []
+
+
 # Subgroup axes a cohort-provenance row can only carry if it was stored before #2097, when
 # by_specialty / by_decile / by_adoption_stage averaged region CATEs over the GENERATED
 # TWINS. Since #2097 the cohort estimator declares region alone and the engine writes {}

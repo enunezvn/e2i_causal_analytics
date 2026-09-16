@@ -211,13 +211,6 @@ def _stored_estimate_scope(row: Dict[str, Any]) -> "StoredEstimateScope":
     return StoredEstimateScope.from_row(row)
 
 
-def _stored_filter_regions(row: Dict[str, Any]) -> List[str]:
-    """Regions a stored row's population filter named (#2079). The filter, not the scope."""
-    filters = row.get("population_filters")
-    regions = filters.get("regions") if isinstance(filters, dict) else None
-    return [r for r in regions if isinstance(r, str)] if isinstance(regions, list) else []
-
-
 def _round4(value: Optional[float]) -> Optional[float]:
     return None if value is None else round(float(value), 4)
 
@@ -503,8 +496,6 @@ class SimulationHistoryItem(BaseModel):
     # Scope of ate_estimate (#2053); see SimulationResponse.estimate_scope.
     estimate_scope: EstimateScopeEnum
     target_regions: List[str] = Field(default=[])
-    # The stored population filter's regions (#2079): lets an 'unknown'-scope card say its
-    # effect may cover only these regions, as the detail view does. Never a scope.
     filter_regions: List[str] = Field(default=[])
 
 
@@ -944,11 +935,7 @@ async def run_simulation(
             )
 
         if heavy_offload_enabled():
-            # Direction 2: the offload worker estimates on the cohort too (it loads the
-            # provider itself, #2025), but that path has never run against a live worker and
-            # it reloads the cohort rather than using the one gated above. Offload stays
-            # refused until it is certified. (Offload is DARK by default; the inline path
-            # below is the real estimator.)
+            # Offload stays refused: the worker's cohort path (#2025) is uncertified live.
             raise HTTPException(
                 status_code=503,
                 detail=(
@@ -1188,6 +1175,8 @@ async def get_simulation_history(
         raise HTTPException(status_code=403, detail="No brand grant for this user.")
 
     try:
+        from src.digital_twin.twin_repository import stored_filter_regions
+
         repo = await _get_twin_repo()
         # Fetch enough rows to cover the requested window (repo returns newest
         # first), then apply the offset/limit slice.
@@ -1208,7 +1197,7 @@ async def get_simulation_history(
                     data_provenance=sim.get("data_provenance"),
                     estimate_scope=EstimateScopeEnum(scope.scope.value),
                     target_regions=scope.target_regions,
-                    filter_regions=_stored_filter_regions(sim),
+                    filter_regions=stored_filter_regions(sim),
                 )
             )
 

@@ -18,7 +18,7 @@ The simulation follows these steps:
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from uuid import uuid4
 
 import numpy as np
@@ -49,6 +49,7 @@ from .models.twin_models import DigitalTwin, TwinPopulation
 # Type hint for optional cache import
 TYPE_CHECKING = False
 if TYPE_CHECKING:
+    from .effect.cohort_causal_estimator import CohortCausalEstimator
     from .simulation_cache import SimulationCache
 
 logger = logging.getLogger(__name__)
@@ -115,7 +116,7 @@ class SimulationEngine:
         cache: Optional["SimulationCache"] = None,
         *,
         effect_provider: EffectDataProvider,
-        effect_estimator: Optional[TwinEffectEstimator] = None,
+        effect_estimator: Optional[Union[TwinEffectEstimator, "CohortCausalEstimator"]] = None,
     ):
         """
         Initialize simulation engine.
