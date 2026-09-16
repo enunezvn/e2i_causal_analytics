@@ -11970,6 +11970,13 @@ export interface components {
             /** @description Nested CI aggregation */
             nested_ci?: components["schemas"]["NestedCIResult"] | null;
             /**
+             * Nested Ci Excluded Segments
+             * @description Successful segments left OUT of the nested CI aggregate because the analyzer produced no measured standard error and/or no confidence-interval bound for them (#2027). Entries carry segment_id, segment_name, n, a stable reason code ('no_measured_uncertainty') and a prose detail. Present (possibly empty) even when nested_ci is null; nested_ci is null when every segment is listed here.
+             */
+            nested_ci_excluded_segments?: {
+                [key: string]: unknown;
+            }[];
+            /**
              * Overall Ate
              * @description Overall ATE estimate
              */

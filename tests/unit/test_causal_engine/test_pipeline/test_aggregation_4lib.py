@@ -6,8 +6,10 @@ Covers:
   written by Wave-1 executors.
 - ``_aggregate_results`` (sequential) and ``_aggregate_parallel_results``
   (parallel) build cross-library consensus that:
-  * Includes CausalML's ``ate`` in the ATE-consensus track when present
-  * Keeps CausalML's ``auuc``/``qini`` in a SEPARATE uplift channel
+  * Builds the ATE-consensus track from DoWhy + EconML only; CausalML is
+    NOT a member (#2027 — it has no sampling SE and its presence forced
+    the all-or-nothing SE gate off inverse-variance weighting)
+  * Keeps CausalML's ``ate``/``auuc``/``qini`` in a SEPARATE uplift channel
     (uplift is a population-targeting quality signal; not averaged with ATE)
   * Modulates ``consensus_confidence`` by NetworkX graph quality
     (DAG + treatment->outcome path present => no penalty;
@@ -403,12 +405,15 @@ def _par_pipeline() -> ParallelPipeline:
     return ParallelPipeline(router=LibraryRouter())
 
 
-class TestATEConsensusIncludesCausalML:
-    """C-6: CausalML's `ate` is part of the ATE-consensus track (alongside
-    DoWhy and EconML); CausalML and EconML both report population ATE.
+class TestATEConsensusExcludesCausalML:
+    """#2027: CausalML is NOT part of the ATE-consensus track. It can never
+    supply a sampling SE (post-#2014), and ``_apply_consensus``'s SE gate is
+    all-or-nothing, so its presence alone forced DoWhy and EconML onto
+    confidence weighting (0.048 vs 0.028 error on planted truth). The
+    consensus is DoWhy + EconML; CausalML's ``ate`` stays in the uplift channel.
     """
 
-    def test_sequential_consensus_includes_causalml_ate(self) -> None:
+    def test_sequential_consensus_excludes_causalml_ate(self) -> None:
         state = _minimal_pipeline_state()
         # All 3 effect-estimating libraries succeeded.
         state["dowhy_result"] = _le_result("dowhy", _real_dowhy_payload(), confidence=1.0)
@@ -420,17 +425,18 @@ class TestATEConsensusIncludesCausalML:
         pipe = _seq_pipeline()
         updated = pipe._aggregate_results(state)
 
-        # Consensus must include CausalML — weighted average of 3 ATEs.
+        # These fixtures carry no sampling SE (no dowhy `standard_error`; the
+        # econml estimator is not in ECONML_SAMPLING_INTERVAL_ESTIMATORS), so the
+        # documented confidence-weighted fallback applies — over DoWhy + EconML
+        # only: (0.15*1.0 + 0.17*0.8) / (1.0 + 0.8) = 0.286 / 1.8 = 0.15888...
         consensus = updated["consensus_effect"]
         assert consensus is not None
-        # Weighted average: (0.15*1.0 + 0.17*0.8 + 0.18*0.6) / (1.0+0.8+0.6)
-        # = (0.15 + 0.136 + 0.108) / 2.4 = 0.394 / 2.4 ≈ 0.164
-        assert 0.14 < consensus < 0.19, (
-            f"consensus_effect={consensus} should average over all 3 ATEs; "
-            "CausalML's ate=0.18 must be included"
+        assert abs(consensus - 0.286 / 1.8) < 1e-12, (
+            f"consensus_effect={consensus} must average DoWhy + EconML only; "
+            "CausalML's ate=0.18 is not a consensus member (#2027)"
         )
 
-    def test_parallel_consensus_includes_causalml_ate(self) -> None:
+    def test_parallel_consensus_excludes_causalml_ate(self) -> None:
         state = _minimal_pipeline_state()
         state["dowhy_result"] = _le_result("dowhy", _real_dowhy_payload(), confidence=1.0)
         state["causal_effect"] = 0.15
@@ -443,11 +449,11 @@ class TestATEConsensusIncludesCausalML:
 
         consensus = updated["consensus_effect"]
         assert consensus is not None
-        assert 0.14 < consensus < 0.19
+        assert abs(consensus - 0.286 / 1.8) < 1e-12
 
-    def test_pairwise_agreement_includes_all_pairs_with_ate(self) -> None:
-        """C-6: agreement dict must include all pairwise combinations of
-        effect-estimating libraries that produced an ATE.
+    def test_pairwise_agreement_has_no_causalml_pairs(self) -> None:
+        """#2027: agreement is computed over the consensus members only, so the
+        ``*_causalml`` pairs are gone with CausalML.
         """
         state = _minimal_pipeline_state()
         state["dowhy_result"] = _le_result("dowhy", _real_dowhy_payload(), confidence=1.0)
@@ -461,10 +467,9 @@ class TestATEConsensusIncludesCausalML:
 
         agreement = updated["library_agreement"]
         assert agreement is not None
-        # 3 libraries => 3 pairs: dowhy_econml, dowhy_causalml, econml_causalml
-        assert "dowhy_econml" in agreement
-        assert "dowhy_causalml" in agreement
-        assert "econml_causalml" in agreement
+        assert set(agreement) == {"dowhy_econml"}
+        assert "dowhy_causalml" not in agreement
+        assert "econml_causalml" not in agreement
 
 
 class TestUpliftChannelSeparateFromATE:
@@ -490,10 +495,10 @@ class TestUpliftChannelSeparateFromATE:
         assert updated["uplift_summary"]["auuc"] == 0.72
         assert updated["uplift_summary"]["qini"] == 0.55
 
-    def test_auuc_qini_not_averaged_into_consensus_effect(self) -> None:
-        """auuc=0.72 and qini=0.55 must NOT be mistaken for ATE values.
-        If only CausalML ran (no DoWhy/EconML), uplift metrics must NOT
-        leak into consensus_effect.
+    def test_causalml_only_run_has_no_consensus_effect(self) -> None:
+        """If only CausalML ran (no DoWhy/EconML), there is NO consensus: no
+        ATE-track library contributed (#2027). auuc=0.72 / qini=0.55 / ate=0.18
+        stay in the uplift channel and never surface as ``consensus_effect``.
         """
         state = _minimal_pipeline_state()
         state["causalml_result"] = _le_result("causalml", _real_causalml_payload(), confidence=0.7)
@@ -505,12 +510,10 @@ class TestUpliftChannelSeparateFromATE:
         pipe = _seq_pipeline()
         updated = pipe._aggregate_results(state)
 
-        # Consensus_effect should equal CausalML's ATE (0.18), NOT auuc/qini.
-        # If consensus_effect were 0.72 or 0.55 the auuc/qini leaked in.
-        assert updated["consensus_effect"] != 0.72
-        assert updated["consensus_effect"] != 0.55
-        if updated["consensus_effect"] is not None:
-            assert abs(updated["consensus_effect"] - 0.18) < 0.01
+        assert updated["consensus_effect"] is None
+        assert updated["consensus_confidence"] is None
+        assert updated["library_agreement"] is None
+        assert updated["uplift_summary"]["ate"] == 0.18
 
 
 # =============================================================================

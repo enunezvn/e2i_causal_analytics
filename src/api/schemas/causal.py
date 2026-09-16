@@ -138,18 +138,10 @@ class HierarchicalAnalysisRequest(BaseModel):
             "mock data — actual records come from `filters`/`estimation_data`)"
         ),
     )
-    filters: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="Data filters",
-    )
+    filters: Optional[Dict[str, Any]] = Field(default=None, description="Data filters")
 
     # Hierarchical configuration
-    n_segments: int = Field(
-        default=3,
-        ge=2,
-        le=10,
-        description="Number of uplift segments",
-    )
+    n_segments: int = Field(default=3, ge=2, le=10, description="Number of uplift segments")
     segmentation_method: SegmentationMethod = Field(
         default=SegmentationMethod.QUANTILE,
         description="Method for creating segments",
@@ -158,11 +150,7 @@ class HierarchicalAnalysisRequest(BaseModel):
         default=EstimatorType.CAUSAL_FOREST,
         description="EconML estimator for segment-level CATE",
     )
-    min_segment_size: int = Field(
-        default=50,
-        ge=10,
-        description="Minimum samples per segment",
-    )
+    min_segment_size: int = Field(default=50, ge=10, description="Minimum samples per segment")
     confidence_level: float = Field(
         default=0.95,
         ge=0.80,
@@ -173,12 +161,7 @@ class HierarchicalAnalysisRequest(BaseModel):
         default=AggregationMethod.VARIANCE_WEIGHTED,
         description="Method for aggregating segment CATEs",
     )
-    timeout_seconds: int = Field(
-        default=180,
-        ge=30,
-        le=600,
-        description="Maximum execution time",
-    )
+    timeout_seconds: int = Field(default=180, ge=30, le=600, description="Maximum execution time")
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -238,6 +221,17 @@ class HierarchicalAnalysisResponse(BaseModel):
         default_factory=list, description="Per-segment CATE results"
     )
     nested_ci: Optional[NestedCIResult] = Field(None, description="Nested CI aggregation")
+    nested_ci_excluded_segments: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description=(
+            "Successful segments left OUT of the nested CI aggregate because the "
+            "analyzer produced no measured standard error and/or no confidence-"
+            "interval bound for them (#2027). Entries carry segment_id, "
+            "segment_name, n, a stable reason code ('no_measured_uncertainty') and "
+            "a prose detail. Present (possibly empty) even when nested_ci is null; "
+            "nested_ci is null when every segment is listed here."
+        ),
+    )
     overall_ate: Optional[float] = Field(None, description="Overall ATE estimate")
     overall_ci_lower: Optional[float] = Field(None, description="Overall CI lower")
     overall_ci_upper: Optional[float] = Field(None, description="Overall CI upper")

@@ -294,21 +294,24 @@ class ParallelPipeline(PipelineOrchestrator):
         return results
 
     def _aggregate_parallel_results(self, state: PipelineState) -> PipelineState:
-        """Aggregate results from parallel execution (4-library consensus +
+        """Aggregate results from parallel execution (DoWhy + EconML consensus +
         uplift channel + structural-quality modulation).
 
         Delegates the cross-library reconciliation logic to the shared
         helpers in ``sequential.py``:
 
         - ``_collect_ate_estimates(state)`` returns one (library, effect,
-          confidence) triple per library that produced a finite effect
-          AND has a valid (numeric, in [0, 1], finite) confidence.
-          CausalML's ``ate`` (from ``uplift_summary``) is included
-          alongside DoWhy + EconML. CausalML's auuc/qini stay in the
-          separate uplift channel (``state["uplift_summary"]``) and are
-          NEVER averaged into ``consensus_effect``.
+          confidence) triple per ATE-track library (DoWhy, EconML) that
+          produced a finite effect AND has a valid (numeric, in [0, 1],
+          finite) confidence. CausalML is NOT collected (#2027): it has no
+          sampling SE, and the all-or-nothing SE gate meant its presence
+          forced the consensus off inverse-variance weighting. CausalML's
+          ``ate`` / auuc / qini stay in the separate uplift channel
+          (``state["uplift_summary"]``) and are NEVER averaged into
+          ``consensus_effect``.
         - ``_apply_consensus(state, effects)`` writes ``consensus_effect``
-          (confidence-weighted average) and ``consensus_confidence``
+          (inverse-variance-weighted when every member has a sampling SE,
+          else confidence-weighted) and ``consensus_confidence``
           (mean confidence, modulated by NetworkX structural quality
           when ``state["graph_quality"]`` is populated).
         - ``_apply_pairwise_agreement(state, effects)`` writes

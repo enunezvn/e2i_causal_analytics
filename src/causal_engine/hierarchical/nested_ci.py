@@ -14,7 +14,7 @@ Methods:
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 from numpy.typing import NDArray
@@ -46,6 +46,33 @@ class NestedCIConfig:
     min_segment_size: int = 30
     bootstrap_iterations: int = 1000
     bootstrap_random_state: Optional[int] = 42
+
+
+# Stable reason code for a segment left OUT of the nested aggregate by the two
+# bridges that build ``SegmentEstimate`` lists (the API route
+# ``_execute_hierarchical_analysis`` and the heterogeneous-optimizer node
+# ``_run_hierarchical_analysis``), #2027: the analyzer produced a CATE but no
+# measured standard error and/or no confidence-interval bound. ``ate_std`` and
+# ``ci_lower`` / ``ci_upper`` below are plain ``float``s that feed the
+# inverse-variance weights and I²/τ², so an unmeasured segment must be excluded
+# and listed rather than assigned invented values (the pre-#2027 bridges used
+# ``cate_std or 0.01`` and ``cate_mean ± 0.1``). A consumer branches on the code;
+# the accompanying ``detail`` is the prose. Same shape as
+# ``CATEResults.excluded_segments`` (#1610).
+NESTED_CI_EXCLUDED_NO_MEASURED_UNCERTAINTY = "no_measured_uncertainty"
+NESTED_CI_EXCLUDED_NO_MEASURED_UNCERTAINTY_DETAIL = (
+    "segment has no measured standard error and/or confidence-interval bound; "
+    "excluded from the nested aggregate rather than assigned invented values"
+)
+
+
+def nested_ci_exclusion_warning(entry: Dict[str, Any]) -> str:
+    """One served ``warnings`` line per excluded segment, so the exclusion is visible
+    without reading ``nested_ci_excluded_segments``. ``entry`` is one of its items."""
+    return (
+        f"Segment '{entry['segment_name']}' (n={entry['n']}) excluded from the nested CI: "
+        f"{entry['reason']}"
+    )
 
 
 @dataclass
