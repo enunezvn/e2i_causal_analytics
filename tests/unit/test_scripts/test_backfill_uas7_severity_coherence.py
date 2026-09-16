@@ -63,14 +63,19 @@ def test_vouched_newer_rows_are_excluded_even_in_a_mixed_export():
     assert pd.Timestamp(_NEW) > OLD_GENERATOR_CUTOFF > pd.Timestamp(_OLD)
 
 
-def test_a_later_cutoff_includes_pre_deploy_appends_and_an_earlier_one_is_refused():
-    old = _live(2700, seed=1)
-    pre_deploy_append = _live(300, seed=2).assign(created_at="2026-09-21T03:00:00Z")
-    deploy = pd.Timestamp("2026-09-22T10:00:00Z")
-    rows = plan(pd.concat([old, pre_deploy_append], ignore_index=True), deploy)
-    assert len(rows) == 3000
-    with pytest.raises(SystemExit, match="may not precede"):
-        plan(old, pd.Timestamp("2026-09-15T00:00:00Z"))
+def test_the_selection_cannot_be_widened_past_the_fixed_cutoff():
+    """Codex r3: widening to a container StartedAt remapped 232 of 300 new-generator
+    rows (the append runs from the host checkout). There is no widening knob."""
+    import inspect
+
+    assert list(inspect.signature(plan).parameters) == ["live", "newer_rows_are_new_generator"]
+    assert list(inspect.signature(to_sql).parameters) == ["rows"]
+    mixed = pd.concat(
+        [_live(2700, seed=1), _live(300, seed=2, applied=True).assign(created_at=_NEW)],
+        ignore_index=True,
+    )
+    rows = plan(mixed, newer_rows_are_new_generator=True)
+    assert len(rows) == 2700  # the mapped rows are excluded, never remapped
 
 
 def test_refuses_a_second_run_on_the_same_rows():

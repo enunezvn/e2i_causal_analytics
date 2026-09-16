@@ -13,17 +13,21 @@ columns — the same function the generator calls, not a re-draw.
 
 WHICH ROWS
 ----------
-The rows created before ``--cutoff`` (default :data:`OLD_GENERATOR_CUTOFF`; an explicit
-cutoff may only be LATER, e.g. the deployed api container's StartedAt). The copula did
-not exist before 2026-09-16, so no older row can hold a mapped value. A correlation is
-NOT used to decide which rows are old (a cohort mixing both generators passes any
-correlation band); it only detects that the selected set was already rewritten.
+Exactly the rows created before :data:`OLD_GENERATOR_CUTOFF`. The copula did not exist
+before that instant, so no older row can hold a mapped value. A correlation is NOT used
+to decide which rows are old (a cohort mixing both generators passes any correlation
+band); it only detects that the selected set was already rewritten.
 
-Rows created AT OR AFTER the cutoff are ambiguous: a weekly append that ran before the
-deploy wrote them with the OLD generator, one after it with the new. The script refuses
-while any exist, unless the operator has checked them against the deploy time and passes
-``--newer-rows-are-new-generator`` (otherwise raise ``--cutoff`` to the deploy time so
-the old-generator ones are included).
+Rows created AT OR AFTER the cutoff are ambiguous. The weekly append runs from the HOST
+checkout (``scripts/reseed_synthetic.sh``), so which generator wrote a batch depends on
+when that checkout was reset to a commit containing the copula, which no container
+timestamp records. There is deliberately no way to widen the selection: a wrong guess
+would remap new-generator rows a second time and still pass every correlation guard.
+Run this after the deploy and BEFORE the next Monday 03:00 append, when no such rows
+exist. If some do, the script refuses. ``--newer-rows-are-new-generator`` may then only
+EXCLUDE them, after checking ``/home/enunez/logs/e2i-reseed.log`` against the deploy's
+checkout reset. An old-generator batch excluded by mistake stays independent, which is
+the pre-change state and not a corrupted one.
 
 ROLLOUT (all three, in order)
 -----------------------------
@@ -112,25 +116,19 @@ def _validate(rows: pd.DataFrame) -> None:
         raise SystemExit("REFUSING: urticaria_severity_uas7 not an integer in 16..42")
 
 
-def plan(
-    live: pd.DataFrame,
-    cutoff: pd.Timestamp = OLD_GENERATOR_CUTOFF,
-    *,
-    newer_rows_are_new_generator: bool = False,
-) -> pd.DataFrame:
+def plan(live: pd.DataFrame, *, newer_rows_are_new_generator: bool = False) -> pd.DataFrame:
     """Old-generator rows with old/new UAS7. Raises when they were already rewritten or
     when rows at/after the cutoff exist and have not been vouched for."""
-    if cutoff < OLD_GENERATOR_CUTOFF:
-        raise SystemExit(f"REFUSING: --cutoff may not precede {OLD_GENERATOR_CUTOFF}.")
+    cutoff = OLD_GENERATOR_CUTOFF
     live = live[live["urticaria_severity_uas7"].notna()]
     created = pd.to_datetime(live["created_at"], utc=True)
     newer = created >= cutoff
     if newer.any() and not newer_rows_are_new_generator:
         raise SystemExit(
             f"REFUSING: {int(newer.sum())} Remibrutinib rows were created at/after the cutoff "
-            f"{cutoff} (earliest {created[newer].min()}). A weekly append before the deploy "
-            f"wrote them with the OLD generator. Raise --cutoff to the deployed api "
-            f"container's StartedAt, or pass --newer-rows-are-new-generator once checked."
+            f"{cutoff} (earliest {created[newer].min()}); nothing records which generator "
+            f"wrote them. Check the reseed log against the deploy's checkout reset, then pass "
+            f"--newer-rows-are-new-generator to EXCLUDE them (they are never remapped)."
         )
     rows = live[~newer].copy()
     if rows.empty:
@@ -167,10 +165,11 @@ def report(rows: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
-def to_sql(rows: pd.DataFrame, cutoff: pd.Timestamp = OLD_GENERATOR_CUTOFF) -> str:
+def to_sql(rows: pd.DataFrame) -> str:
     """One transaction: stage the whole cohort, lock and verify EVERY staged row, then
     compare-and-set the changed ones, assert, commit."""
     _validate(rows)
+    cutoff = OLD_GENERATOR_CUTOFF
     values = ",\n".join(
         f"('{pid}', {float(sev)!r}, {int(o)}, {int(n)})"
         for pid, sev, o, n in rows[
@@ -229,26 +228,19 @@ def main() -> int:
     )
     ap.add_argument("--in-csv", required=True, help="Export of the live Remibrutinib rows.")
     ap.add_argument(
-        "--cutoff",
-        default=str(OLD_GENERATOR_CUTOFF),
-        help="Rows created before this are old-generator rows (never earlier than the default).",
-    )
-    ap.add_argument(
         "--newer-rows-are-new-generator",
         action="store_true",
-        help="Operator checked: every row at/after --cutoff was written by the new generator.",
+        help="Operator checked the reseed log: EXCLUDE rows created at/after the cutoff.",
     )
     ap.add_argument("--backup-dir", default=str(_PROJECT_ROOT / "data" / "backups"))
     ap.add_argument("--sql-out", help="Write the transactional UPDATE here (nothing is applied).")
     args = ap.parse_args()
 
-    cutoff = pd.Timestamp(args.cutoff).tz_convert("UTC")
     rows = plan(
         pd.read_csv(args.in_csv),
-        cutoff,
         newer_rows_are_new_generator=args.newer_rows_are_new_generator,
     )
-    print(f"cutoff: {cutoff}")
+    print(f"cutoff: {OLD_GENERATOR_CUTOFF}")
     print(report(rows))
 
     backup = Path(args.backup_dir)
@@ -259,7 +251,7 @@ def main() -> int:
     print(f"backup: {path}")
 
     if args.sql_out:
-        Path(args.sql_out).write_text(to_sql(rows, cutoff))
+        Path(args.sql_out).write_text(to_sql(rows))
         print(f"sql: {args.sql_out}  (apply with psql -v ON_ERROR_STOP=1)")
     return 0
 
