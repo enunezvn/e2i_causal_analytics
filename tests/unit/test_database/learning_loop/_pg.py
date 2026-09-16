@@ -48,9 +48,10 @@ LANE_MIGRATIONS = (
     "ml/040_tool_registry_startup_sync.sql",
     "ml/041_composer_learning_loop_recording.sql",
     # ml/042 is NOT here: it alters twin_simulations, which no learning-loop fixture touches.
-    # ml/043 is absent because it does not exist on this branch — it is held by an unpushed
-    # branch (the refusal-reason-codes lane), which is also why this lane's migration is 044.
-    # The ml/044 file header carries the measurement.
+    # ml/043 (refusal reason codes) is NOT here, by that lane's decision (D4, 2026-09-12): this
+    # tuple defines the shared fixture's upgrade base, and 043 is pinned by
+    # test_lane_migration_files.py and rehearsed separately. It was written before 044, which is
+    # why 044 is not 043; the ml/044 file header carries the measurement.
     "ml/044_composer_episodes_feedback_id.sql",
 )
 
