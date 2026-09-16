@@ -34,25 +34,49 @@ TRX_KPI_ID = "WS3-BI-011"
 #: Registry name of TRX_KPI_ID (pinned by tests/unit/test_kpi/test_share_axis.py).
 TRX_NAME = "Observed Rx Events - Patient Panel TRx (TRx Panel)"
 
-#: ⚠ THE EXPLANATION EXTENDS TO BOTH SHARE KPIs; RE-KEYING IT MOVED IT AND THAT WAS
-#: A REGRESSION. Under this lane BOTH shares exist -- canonical WS3-BI-008 on
-#: business_metrics and panel WS3-BI-014 on treatment_events -- and a patient axis
-#: is undefined on each, for the same reason. Pointing the constants at 014 alone
-#: SILENTLY DELETED #2137's explanation from the canonical KPI, a behaviour
-#: live-verified on Remibrutinib the morning this lane merged. "Take #2137 whole"
-#: was right; "only the ids moved" was not.
+#: ⚠ TWO SHARES, TWO REASONS, ONE DESTINATION — OWNER DECISION #14 (#2114).
 #:
-#: Each share redirects to ITS OWN TRx, because the within-brand mix that answers
-#: the ask lives on the same substrate as the share that refused it.
+#: This module's reason is a statement about the PATIENT-PANEL substrate: "every
+#: patient is on exactly one tracked brand, so a share within a bucket divides one
+#: indication's prescriptions by another's". On main that was true of WS3-BI-008,
+#: which read the event ledger. After this lane 008 reads business_metrics at
+#: brand x region x calendar month (MEASURED: `registry.get("WS3-BI-008").tables ==
+#: ['business_metrics']`), where the patient is not the unit at all -- so the
+#: sentence is now LITERALLY FALSE of 008 and true only of panel share 014.
+#: Re-keying the constants to 014 was therefore correct: THE REASONING FOLLOWED THE
+#: SUBSTRATE, NOT THE ID.
+#:
+#: But the user's need did not move with the sentence. "TRx share by severity tier"
+#: resolves to canonical 008, and canonical TRx 005 no longer serves patient axes
+#: either, so that ask hit a dead stop where main gave a working next step. Owner
+#: #14: give 008 its OWN reason -- true of its own substrate -- and send both shares
+#: to the SAME destination, panel TRx WS3-BI-011, whose buckets sum to the brand
+#: total. Two reasons, one destination; the false sentence is not reused.
 CANONICAL_SHARE_KPI_ID = "WS3-BI-008"
-CANONICAL_TRX_KPI_ID = "WS3-BI-005"
-CANONICAL_TRX_NAME = "Total Prescriptions (TRx)"
 
-#: share KPI -> (TRx KPI id, TRx registry name) on the SAME substrate.
+#: share KPI -> (TRx KPI id, TRx registry name) that answers the ask instead.
+#: BOTH point at the PANEL TRx: it is the only TRx that carries a patient axis.
 SHARE_REDIRECTS: dict[str, Tuple[str, str]] = {
-    CANONICAL_SHARE_KPI_ID: (CANONICAL_TRX_KPI_ID, CANONICAL_TRX_NAME),
+    CANONICAL_SHARE_KPI_ID: (TRX_KPI_ID, TRX_NAME),
     TRX_SHARE_KPI_ID: (TRX_KPI_ID, TRX_NAME),
 }
+
+
+def share_axis_reason_for(kpi_id: str, axis: str, label: str) -> str:
+    """The reason THIS share KPI has no breakdown on ``axis`` -- true of ITS substrate.
+
+    The panel share gets the patient_journeys argument; the canonical share gets the
+    one that is true of business_metrics. Reusing the panel sentence for 008 would
+    state something false about the data it reads, which is what owner #14 rejected.
+    """
+    if kpi_id == CANONICAL_SHARE_KPI_ID:
+        return (
+            f"Canonical TRx Share is a portfolio share computed from business_metrics at "
+            f"brand x region x calendar month, which carries no patient dimension to split "
+            f"by {label}."
+        )
+    return share_axis_reason(axis, label)
+
 
 #: (context key, human label), in the calculator's axis precedence order.
 PATIENT_AXES: Tuple[Tuple[str, str], ...] = (

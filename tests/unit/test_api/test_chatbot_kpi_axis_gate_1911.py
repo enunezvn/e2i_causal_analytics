@@ -192,8 +192,25 @@ async def test_refusal_text_is_the_documented_contract(monkeypatch):
 @pytest.mark.parametrize("axis", sorted(_AXIS_PROBE))
 async def test_trx_share_by_patient_axis_refusal_points_to_the_within_brand_mix(monkeypatch, axis):
     """The motivating ask (2026-09-16): "Remibrutinib TRx Share by severity tier
-    and biologic status". The refusal must say WHY (one tracked brand per
-    patient) and offer the brand's own TRx by that axis as the answer."""
+    and biologic status". The refusal must say WHY and offer a working next step.
+
+    ⚠ REWRITTEN TO OWNER DECISION #14 (#2114), not reverted to #2137's wording. This
+    ask resolves to CANONICAL share WS3-BI-008, which after this lane reads
+    business_metrics at brand x region x calendar month (measured:
+    `registry.get("WS3-BI-008").tables == ['business_metrics']`). #2137's reason --
+    "every patient is on exactly one tracked brand" -- is a statement about
+    patient_journeys and is now LITERALLY FALSE of 008, so reusing it would make the
+    refusal lie about the data it read. The reasoning followed the SUBSTRATE, not the
+    id.
+
+    The user's need did not move with the sentence, though: canonical TRx 005 no
+    longer serves patient axes either, so this ask hit a dead stop where main gave a
+    working redirect. Owner #14 gives 008 its OWN substrate-true reason and sends it
+    to the SAME destination as panel share 014 -- panel TRx WS3-BI-011, the only TRx
+    carrying a patient axis. Two reasons, one destination.
+
+    The assertions are kept as strong as they were: it still refuses, the refusal
+    still names a reason, and the hint still names the TRx to ask for."""
     from src.api.routes.chatbot_tools import _PATIENT_AXIS_LABELS, kpi_calculate_tool
 
     reached: Dict[str, Any] = {}
@@ -204,8 +221,11 @@ async def test_trx_share_by_patient_axis_refusal_points_to_the_within_brand_mix(
     assert reached == {}
     assert resp["success"] is False and resp["kpi_id"] == "WS3-BI-008"
     label = _PATIENT_AXIS_LABELS[axis]
-    assert "one tracked brand" in resp["error"]
-    assert f"Total Prescriptions (TRx) by {label}" in resp["hint"]
+    # 008's OWN reason — true of business_metrics, not the panel sentence.
+    assert "no patient dimension" in resp["error"], resp["error"]
+    assert "one tracked brand" not in resp["error"], "008 must not reuse the panel reason"
+    # ...and the same destination as 014: panel TRx, the only TRx carrying an axis.
+    assert f"Observed Rx Events - Patient Panel TRx (TRx Panel) by {label}" in resp["hint"]
     assert "within-brand mix" in resp["hint"]
 
 
