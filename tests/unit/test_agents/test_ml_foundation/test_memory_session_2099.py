@@ -103,7 +103,8 @@ async def _run_update(module_path: str, state: Dict[str, Any]) -> None:
     agent = agent_cls.__new__(agent_cls)  # no __init__: the method only reads its argument
     import inspect
 
-    # model_deployer takes (output, state); the other five take one dict.
+    # model_deployer, scope_definer, model_selector and model_trainer take
+    # (output, final_state); data_preparer and feature_analyzer take one dict.
     arity = len(inspect.signature(agent_cls._update_episodic_memory).parameters) - 1
     if arity == 2:
         await agent._update_episodic_memory(state, state)
