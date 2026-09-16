@@ -81,9 +81,18 @@ def _collect_ate_estimates(state: PipelineState) -> List[Tuple[str, float, float
     confidence. The output is suitable for both consensus averaging and
     pairwise agreement.
 
-    Per C-6: includes DoWhy (``causal_effect``), EconML (``overall_ate``),
-    AND CausalML (``uplift_summary.ate``). CausalML's auuc/qini are NOT
-    included here — they live in the separate uplift channel.
+    The ATE track is DoWhy (``causal_effect``) and EconML (``overall_ate``).
+    CausalML is NOT a member (#2027): ``_apply_consensus`` weights by inverse
+    variance only when EVERY member has a sampling SE (an all-or-nothing gate,
+    by design), and CausalML can never supply one post-#2014 — its
+    ``ate_ci_*`` is ``std(predicted uplift) / sqrt(n)``, a dispersion. Its
+    presence alone forced DoWhy and EconML off precision weighting and onto
+    the incommensurable confidence scale (DoWhy's hardcoded 1.0 dominates).
+    Measured on planted truth (2026-09-12, binary outcome where CausalML
+    itself recovers fine): consensus error 0.048 with CausalML in the
+    consensus vs 0.028 without. CausalML's ``ate`` / auuc / qini stay in the
+    separate uplift channel (``state["uplift_summary"]``) and its stage
+    payload states its own estimand.
 
     A library is INCLUDED iff:
     1. Its result dict is present in state and ``success`` is truthy
@@ -120,35 +129,6 @@ def _collect_ate_estimates(state: PipelineState) -> List[Tuple[str, float, float
     ):
         effects.append(("econml", float(econml_effect), float(econml_result["confidence"])))
 
-    # --- CausalML: ate (population ATE from uplift fit) + causalml_result.confidence ---
-    # CausalML's ATE is read from `state["uplift_summary"]["ate"]` (the
-    # extraction channel populated by `_update_state_with_result` from
-    # the post-C-4 result_payload) — and, as a fallback for callers that
-    # exercise the aggregator directly without going through the orchestrator
-    # update path (e.g., unit tests that pre-populate raw library result
-    # dicts), from `causalml_result["result"]["ate"]`. We explicitly do
-    # NOT use auuc/qini here — those are model-quality metrics, not
-    # effect-magnitude estimates, and live in the SEPARATE uplift channel.
-    causalml_result = state.get("causalml_result")
-    causalml_ate: object = None
-    uplift_summary = state.get("uplift_summary")
-    if isinstance(uplift_summary, dict) and uplift_summary.get("ate") is not None:
-        causalml_ate = uplift_summary.get("ate")
-    elif isinstance(causalml_result, dict):
-        # Fallback path — aggregator invoked without orchestrator extraction.
-        raw_result = causalml_result.get("result")
-        if isinstance(raw_result, dict):
-            causalml_ate = raw_result.get("ate")
-    if (
-        causalml_ate is not None
-        and isinstance(causalml_ate, (int, float))
-        and math.isfinite(float(causalml_ate))
-        and isinstance(causalml_result, dict)
-        and causalml_result.get("success") is not False
-        and _is_valid_confidence(causalml_result.get("confidence"))
-    ):
-        effects.append(("causalml", float(causalml_ate), float(causalml_result["confidence"])))
-
     return effects
 
 
@@ -175,8 +155,10 @@ def _se_for_library(state: PipelineState, lib: str) -> Optional[float]:
     not an SE — and weighting by it let a pseudo-precision dominate the consensus. On
     the real Kisqali cohort (treatment_arm -> adherence_rate) CausalML's 0.0005 with a
     pseudo-SE of 1.75e-5 pulled the inverse-variance consensus to 0.0005 while DoWhy
-    (0.1096, SE 0.0044) and EconML (0.0916, SE 0.0047) agreed. Without a CausalML SE
-    the all-or-nothing gate below falls back to confidence weighting.
+    (0.1096, SE 0.0044) and EconML (0.0916, SE 0.0047) agreed. Because the gate below
+    is all-or-nothing, a CausalML member with no SE would push every member onto
+    confidence weighting — which is why CausalML is no longer collected into the
+    consensus at all (#2027, ``_collect_ate_estimates``).
     """
 
     def _ci_to_se(lo: object, hi: object) -> Optional[float]:
@@ -443,15 +425,18 @@ class SequentialPipeline(PipelineOrchestrator):
         return [lib for lib in SEQUENTIAL_ORDER if lib.value in enabled]
 
     def _aggregate_results(self, state: PipelineState) -> PipelineState:
-        """Aggregate results from all libraries (4-library ATE consensus +
+        """Aggregate results from all libraries (DoWhy + EconML ATE consensus +
         separate uplift channel + structural-quality modulation).
 
-        Per phase C-6 of GH #354:
+        Per phase C-6 of GH #354, amended by #2027:
 
-        - Effect estimates are collected from DoWhy (``causal_effect``),
-          EconML (``overall_ate``), and CausalML (``uplift_summary.ate``
-          — population ATE from the uplift fit). CausalML's auuc/qini
-          live in ``state["uplift_summary"]`` (set by
+        - Effect estimates are collected from DoWhy (``causal_effect``)
+          and EconML (``overall_ate``). CausalML is NOT a consensus member
+          (#2027): it can never supply a sampling SE, and the all-or-nothing
+          SE gate in ``_apply_consensus`` meant its presence alone forced the
+          other two off inverse-variance weighting (consensus error 0.048
+          with it vs 0.028 without, on planted truth). Its ``ate`` / auuc /
+          qini live in ``state["uplift_summary"]`` (set by
           ``_update_state_with_result``) — they are NEVER averaged into
           ``consensus_effect`` because uplift metrics answer a different
           question (population-targeting quality vs effect magnitude).

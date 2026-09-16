@@ -457,17 +457,20 @@ class TestNestedCIUsesTrueSE_H6:
     """
 
     def test_node_builds_ate_std_from_cate_se(self):
+        """#2027 tightened H6: the SE is ONLY seg.cate_se, with no fallback. A
+        segment without a measured SE / CI is excluded from the nested aggregate
+        (see ``test_hierarchical_nested_ci_excluded_2027.py``), never bridged with
+        ``cate_std`` (a dispersion), an invented 0.01, or a ±0.1 interval.
+        """
         source = inspect.getsource(HierarchicalAnalyzerNode._run_hierarchical_analysis)
-        assert "seg.cate_se" in source, (
-            "H6 regression: optimizer node must feed the true SE (seg.cate_se) "
-            "into SegmentEstimate.ate_std, not raw cate_std"
+        assert "ate_std=seg.cate_se," in source, (
+            "H6/#2027: optimizer node ate_std must be exactly the true SE (seg.cate_se)"
         )
-        # NOTE: ruff format wraps the 28-space-indented ate_std=( ... ) call across
-        # lines (E501), so assert the contiguous INNER conditional that survives the
-        # reflow rather than the glued one-liner (per shard STALE-TEST-RISK guidance).
-        assert "seg.cate_se if seg.cate_se is not None else (seg.cate_std or 0.01)" in source, (
-            "H6: optimizer node ate_std must be the cate_se-preferring expression"
-        )
+        assert "ci_lower=seg.cate_ci_lower," in source and "ci_upper=seg.cate_ci_upper," in source
+        for invented in ("or 0.01", "cate_std or", "- 0.1", "+ 0.1", "cate_ci_lower or"):
+            assert invented not in source, (
+                f"#2027 regression: the node bridge invents uncertainty again ({invented!r})"
+            )
         assert "ate_std=seg.cate_std or 0.01" not in source, (
             "H6 regression: optimizer node still feeds raw cate_std as the standard error"
         )

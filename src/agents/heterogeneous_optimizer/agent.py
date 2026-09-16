@@ -511,6 +511,10 @@ class HeterogeneousOptimizerAgent:
             "policy_recommendations": final_state.get("policy_recommendations", []),
             "expected_total_lift": final_state.get("expected_total_lift", 0.0),
             "optimal_allocation_summary": final_state.get("optimal_allocation_summary", ""),
+            # Hierarchical node (#2027): the nested aggregate and the segments it
+            # left out; both keys are declared on HeterogeneousOptimizerOutput.
+            "nested_ci": final_state.get("nested_ci"),
+            "nested_ci_excluded_segments": final_state.get("nested_ci_excluded_segments", []),
             # Feature importance
             "feature_importance": final_state.get("feature_importance", {}),
             # Summaries

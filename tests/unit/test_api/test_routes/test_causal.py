@@ -127,7 +127,7 @@ class TestHierarchicalAnalysis:
         path resolves a real DataFrame from filters.estimation_data_records and
         raises 503 when none is present (matching the sibling endpoints). The
         labeled demo path and the real-data path are covered by
-        tests/api/test_hierarchical_defab.py.
+        tests/unit/test_api/test_routes/test_hierarchical_defab.py.
         """
         response = client.post(
             "/causal/hierarchical/analyze",

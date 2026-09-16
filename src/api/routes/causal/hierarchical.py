@@ -13,7 +13,7 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
@@ -299,7 +299,12 @@ async def _execute_hierarchical_analysis(
         from src.causal_engine.hierarchical.analyzer import (
             SegmentationMethod as EngineSegmentationMethod,
         )
-        from src.causal_engine.hierarchical.nested_ci import SegmentEstimate
+        from src.causal_engine.hierarchical.nested_ci import (
+            NESTED_CI_EXCLUDED_NO_MEASURED_UNCERTAINTY,
+            NESTED_CI_EXCLUDED_NO_MEASURED_UNCERTAINTY_DETAIL,
+            SegmentEstimate,
+            nested_ci_exclusion_warning,
+        )
 
         # Map API enums to engine enums
         segmentation_map = {
@@ -376,9 +381,48 @@ async def _execute_hierarchical_analysis(
                 )
             )
 
-        # Compute nested CI
+        # Compute nested CI — fail closed on unmeasured segments (#2027). A
+        # segment enters the aggregate only with a measured SE (cate_se: the
+        # true SE of the segment ATE, H6 — never cate_std, a per-unit
+        # dispersion) AND both CI bounds; `is not None` so a real 0.0 bound is
+        # kept. The rest are listed with a reason and named in `warnings`.
+        # NestedConfidenceInterval.compute returns ±inf on zero segments, so
+        # "no segment left" is decided here: nested_ci stays None.
         nested_ci_result = None
-        if len([s for s in result.segment_results if s.success]) >= 1:
+        segment_estimates: List[SegmentEstimate] = []
+        nested_ci_excluded: List[Dict[str, Any]] = []
+        for seg in result.segment_results:
+            # A successful segment always carries cate_mean today (analyzer.py builds
+            # SegmentResult from SegmentCATEResult.cate_mean); an estimator that ever
+            # yields success with cate_mean=None is skipped here, NOT listed below.
+            if not (seg.success and seg.cate_mean is not None):
+                continue
+            if seg.cate_se is None or seg.cate_ci_lower is None or seg.cate_ci_upper is None:
+                nested_ci_excluded.append(
+                    {
+                        "segment_id": seg.segment_id,
+                        "segment_name": seg.segment_name,
+                        "n": seg.n_samples,
+                        "reason": NESTED_CI_EXCLUDED_NO_MEASURED_UNCERTAINTY,
+                        "detail": NESTED_CI_EXCLUDED_NO_MEASURED_UNCERTAINTY_DETAIL,
+                    }
+                )
+                continue
+            segment_estimates.append(
+                SegmentEstimate(
+                    segment_id=seg.segment_id,
+                    segment_name=seg.segment_name,
+                    ate=seg.cate_mean,
+                    ate_std=seg.cate_se,
+                    ci_lower=seg.cate_ci_lower,
+                    ci_upper=seg.cate_ci_upper,
+                    sample_size=seg.n_samples,
+                    cate=None,
+                )
+            )
+        exclusion_warnings = [nested_ci_exclusion_warning(e) for e in nested_ci_excluded]
+
+        if segment_estimates:
             nested_ci_config = NestedCIConfig(
                 confidence_level=request.confidence_level,
                 aggregation_method=aggregation_map.get(
@@ -388,36 +432,20 @@ async def _execute_hierarchical_analysis(
             )
             nested_ci_calc = NestedConfidenceInterval(nested_ci_config)
 
-            segment_estimates = [
-                SegmentEstimate(
-                    segment_id=seg.segment_id,
-                    segment_name=seg.segment_name,
-                    ate=seg.cate_mean,
-                    ate_std=(seg.cate_se if seg.cate_se is not None else (seg.cate_std or 0.01)),
-                    ci_lower=seg.cate_ci_lower or seg.cate_mean - 0.1,
-                    ci_upper=seg.cate_ci_upper or seg.cate_mean + 0.1,
-                    sample_size=seg.n_samples,
-                    cate=None,
-                )
-                for seg in result.segment_results
-                if seg.success and seg.cate_mean is not None
-            ]
-
-            if segment_estimates:
-                ci_result = nested_ci_calc.compute(segment_estimates)
-                nested_ci_result = NestedCIResult(
-                    aggregate_ate=ci_result.aggregate_ate,
-                    aggregate_ci_lower=ci_result.aggregate_ci_lower,
-                    aggregate_ci_upper=ci_result.aggregate_ci_upper,
-                    aggregate_std=ci_result.aggregate_std,
-                    confidence_level=ci_result.confidence_level,
-                    aggregation_method=ci_result.aggregation_method,
-                    segment_contributions=ci_result.segment_contributions,
-                    i_squared=ci_result.i_squared,
-                    tau_squared=ci_result.tau_squared,
-                    n_segments_included=ci_result.n_segments_included,
-                    total_sample_size=ci_result.total_sample_size,
-                )
+            ci_result = nested_ci_calc.compute(segment_estimates)
+            nested_ci_result = NestedCIResult(
+                aggregate_ate=ci_result.aggregate_ate,
+                aggregate_ci_lower=ci_result.aggregate_ci_lower,
+                aggregate_ci_upper=ci_result.aggregate_ci_upper,
+                aggregate_std=ci_result.aggregate_std,
+                confidence_level=ci_result.confidence_level,
+                aggregation_method=ci_result.aggregation_method,
+                segment_contributions=ci_result.segment_contributions,
+                i_squared=ci_result.i_squared,
+                tau_squared=ci_result.tau_squared,
+                n_segments_included=ci_result.n_segments_included,
+                total_sample_size=ci_result.total_sample_size,
+            )
 
         latency_ms = int((time.time() - start_time) * 1000)
 
@@ -426,6 +454,7 @@ async def _execute_hierarchical_analysis(
             status=AnalysisStatus.COMPLETED,
             segment_results=segment_results,
             nested_ci=nested_ci_result,
+            nested_ci_excluded_segments=nested_ci_excluded,
             overall_ate=result.overall_ate,
             overall_ci_lower=result.overall_ate_ci_lower,
             overall_ci_upper=result.overall_ate_ci_upper,
@@ -436,7 +465,10 @@ async def _execute_hierarchical_analysis(
             estimator_type=request.estimator_type.value,
             latency_ms=latency_ms,
             created_at=datetime.now(timezone.utc),
-            warnings=result.warnings if hasattr(result, "warnings") else [],
+            warnings=[
+                *(result.warnings if hasattr(result, "warnings") else []),
+                *exclusion_warnings,
+            ],
             errors=result.errors if result.errors else [],
             is_demo=False,
         )
