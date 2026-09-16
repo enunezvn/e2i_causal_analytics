@@ -570,6 +570,9 @@ class HierarchicalAnalyzerNode:
         segment_estimates: List[SegmentEstimate] = []
         nested_ci_excluded: List[Dict[str, Any]] = []
         for seg in result.segment_results:
+            # A successful segment always carries cate_mean today (analyzer.py builds
+            # SegmentResult from SegmentCATEResult.cate_mean); an estimator that ever
+            # yields success with cate_mean=None is skipped here, NOT listed below.
             if not (seg.success and seg.cate_mean is not None):
                 continue
             if seg.cate_se is None or seg.cate_ci_lower is None or seg.cate_ci_upper is None:
