@@ -270,29 +270,37 @@ _SCOPE_NOUNS = frozenset(
 def _scope_span(tokens: list[str], index: int) -> int:
     """How many tokens at ``index`` the PLATFORM ITSELF resolves as scope (0 if none).
 
-    Membership comes from the resolver the value path already consults two lines
-    later -- ``brand_from_text`` / ``region_from_text`` / ``PATIENT_AXES`` -- and
-    never from a word list copied into this module, which would drift from the
-    registry the day a brand is added (#2114 11g).
+    EXACTLY TWO DIMENSIONS, because exactly two are resolvable from query text.
+    ``_extract_brand_region`` (dispatcher.py:216-226) asks ``brand_from_text`` and
+    ``region_from_text`` and NOTHING ELSE -- an unserved qualifier is not rejected,
+    it is never examined. So these two resolvers are not merely the convenient
+    vocabulary, they are the whole of what free text can bind, and membership is
+    taken from them rather than from a word list copied into this module, which
+    would drift from the registry the day a brand is added (#2114 11g / #2139).
+
+    ⚠ PATIENT_AXES IS DELIBERATELY NOT HERE, and an earlier draft of this function
+    had it. The four patient axes ("segment", "therapy_line", "biologic",
+    "ige_tier") are a SEPARATE CHANNEL that free text does not feed. Measured:
+
+        What is NRx panel segment?  -> calculator context {}   <- axis DROPPED
+        What is TRx therapy line?   -> calculator context {}   <- dropped
+        What is NRx panel oncology? -> calculator context {}   <- the #2141 defect
+
+    Admitting them would have whitelisted tokens measured to be ignored -- the very
+    thing this fix refuses "oncology" for, and a labeling fix wearing the allowlist's
+    hat. "region" is likewise NOT a patient axis: it is the second text channel,
+    which is why "in the west region" arrives as ``{'region': 'west'}``.
 
     Two tokens are tried when one does not resolve, for the multi-word census
     phrases ("new england", "west coast"); one is preferred when it suffices, so
     "Kisqali cost" consumes only "Kisqali" and still refuses on "cost".
     """
-    from src.kpi.volume_family import PATIENT_AXES
     from src.services.query_entities import brand_from_text, region_from_text
 
     token = tokens[index]
-    if token in PATIENT_AXES:
-        return 1
     if brand_from_text(token) or region_from_text(token):
         return 1
     if index + 1 < len(tokens):
-        # Normalisation turns "_" into a space, so a two-word axis reaches the
-        # walk split -- "therapy_line" and "therapy line" normalise identically
-        # to "therapy line". Rejoin before asking PATIENT_AXES (measured, 11g).
-        if f"{token}_{tokens[index + 1]}" in PATIENT_AXES:
-            return 2
         pair = f"{token} {tokens[index + 1]}"
         if brand_from_text(pair) or region_from_text(pair):
             return 2

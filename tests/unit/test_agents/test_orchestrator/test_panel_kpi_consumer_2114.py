@@ -881,8 +881,9 @@ def test_a_qualifier_the_platform_cannot_resolve_fails_closed(query, calculator)
         ("What is NRx panel west region?", "WS3-BI-012", "bare REGION is scope"),
         ("What is TRx northeast?", "WS3-BI-005", "census region, bare"),
         ("What is TRx new england?", "WS3-BI-005", "two-token region phrase"),
-        ("What is NRx panel segment?", "WS3-BI-012", "a served PATIENT_AXES axis"),
-        ("What is TRx therapy_line?", "WS3-BI-005", "a served PATIENT_AXES axis"),
+        # NOTE: no patient-axis row here. An earlier draft asserted "What is NRx panel
+        # segment?" binds "as a served PATIENT_AXES axis" — measured FALSE, see
+        # test_a_free_text_patient_axis_is_dropped_scope_not_scope below.
         # prepositional scope
         ("What is NRx panel for Kisqali?", "WS3-BI-012", "preposition"),
         ("What is TRx by severity?", "WS3-BI-005", "preposition"),
@@ -922,7 +923,7 @@ def test_the_value_path_over_refusal_battery(query, expected_id, why, calculator
         ("what drives NRx panel Kisqali?", "WS3-BI-012"),
         ("what drives NRx panel west?", "WS3-BI-012"),
         ("what drives TRx northeast?", "WS3-BI-005"),
-        ("what drives NRx panel segment?", "WS3-BI-012"),
+        # no patient-axis row: free text does not bind an axis on either path
     ],
 )
 def test_bare_scope_binds_on_the_causal_path_too(query, expected_id, causal_registry):
@@ -1011,3 +1012,47 @@ def test_a_preposition_ends_the_walk_on_the_causal_path_too(causal_registry):
     q = "what drives TRx for Kisqali, given that access issues ate into field time?"
     assert _causal_kpi_id(q) == "WS3-BI-005"
     assert causal_registry
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "What is NRx panel segment?",
+        "What is TRx therapy line?",
+        "What is NRx panel biologic?",
+        "What is TRx ige tier?",
+    ],
+)
+def test_a_free_text_patient_axis_is_dropped_scope_not_scope(query, calculator):
+    """11h, correcting 11g: `f3663f2d6` had `PATIENT_AXES` inside `_scope_span`, so a bare
+    axis token bound as though free text could scope by it. IT CANNOT.
+
+    `_extract_brand_region` (dispatcher.py:216-226) asks `brand_from_text` and
+    `region_from_text` and NOTHING ELSE, so brand and region are the whole of what query
+    text can bind. The four patient axes are a separate channel it never feeds — and
+    "region" is that second text channel, NOT one of the four axes, which is why
+    "in the west region" arrives as {'region': 'west'} while an axis arrives as nothing.
+
+    Still live in this tree as the positive control, needing no source swap to show it:
+
+        What is NRx panel by segment?  ->  binds, calculator context {}
+
+    It binds at the preposition so the walk never judges it, and the axis is dropped all
+    the same. So an admitted axis token is indistinguishable from "oncology" — allowlisting
+    it whitelists a token measured to be ignored, which is precisely what 11g refuses
+    "oncology" for. I inferred "served axis" meant "bindable from free text" instead of
+    measuring it, and built the #2141 defect into the fix for #2139."""
+    assert _kpi_lookup_evidence({"query": query}) is None, f"{query!r} answered"
+    assert calculator.calls == [], f"{query!r} called the calculator"
+
+
+def test_a_free_text_patient_axis_is_dropped_scope_on_the_causal_path_too(causal_registry):
+    """The causal half, asserted through its OWN consumer.
+
+    A first draft of the test above carried this row inside the same parametrize and
+    asserted `value is None or causal is None`. That `or` CANNOT FAIL for the reason it
+    exists: `_causal_kpi_id` returns None for every "What is ..." row, so the value half
+    was never witnessed. Same shape as the vacuous assertion deleted in 10f, written by me
+    again four tasks later — which is why each path is now asserted through its own."""
+    assert _causal_kpi_id("what drives NRx panel segment?") is None
+    assert causal_registry == []
