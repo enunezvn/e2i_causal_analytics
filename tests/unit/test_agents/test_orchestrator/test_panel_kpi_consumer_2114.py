@@ -434,13 +434,58 @@ def test_a_causal_repeat_and_a_causal_right_head_still_bind(query, causal_regist
             "a different panel KPI",
         ),
         ("what drives TRx and the cost of TRx?", "a CANONICAL KPI, no panel alias involved"),
+        (
+            "what drives NRx and the accuracy of NRx?",
+            "CANONICAL + a second of-head — discriminates provenance the same way",
+        ),
     ],
 )
 def test_the_causal_boundary_holds_regardless_of_position_arity_head_or_kpi(
     query, why, causal_registry
 ):
+    """READ THE PROVENANCE NOTE BELOW BEFORE TREATING THESE AS LANE REGRESSIONS.
+
+    The two CANONICAL rows ("what drives TRx and the cost of TRx?", "what drives NRx and
+    the accuracy of NRx?") pin a **PRE-EXISTING** defect — broken at the lane base
+    `f73476bfc`, i.e. live on main before #2114 touched anything, and still live there.
+    They are NOT lane regressions. The panel rows are.
+    """
     assert _causal_kpi_id(query) is None, f"{query!r} bound an outcome; {why}"
     assert causal_registry == [], f"{query!r} consulted the registry; {why}"
+
+
+# --- PROVENANCE CORRECTION (appended; nothing above is rewritten) --------------------------
+# `eff8c5825`'s commit body says of codex r10:
+#     "CODEX CALLED THIS PRE-EXISTING ("This predates the range"). IT IS NOT."
+# THAT IS HALF WRONG, and the half it gets wrong is the one that matters for scope.
+#
+# Measured through the real `_causal_path_evidence` at FIVE commits, `src.__file__`
+# asserted, sources swapped with `git show` and restored by `cp` with `sha256sum -c`:
+#
+#                                            f73476bfc  33e85a13e  1a6ee9956  61a03b3ad  eff8c5825
+#                                            LANE BASE  Task 11    11a        11c        11d
+#   "what drives TRx and the cost of TRx?"     005 ***    005 ***    005 ***    005 ***    None OK
+#   "what drives NRx and the accuracy of NRx?" 006 ***    006 ***    006 ***    006 ***    None OK
+#   "what drives NRx panel and the cost of
+#                          NRx panel?"         None       None       012 ***    012 ***    None OK
+#
+# TWO HALVES, DIFFERENT PROVENANCE:
+#   * CANONICAL half — PRE-EXISTING. Broken at the lane base, before this lane existed;
+#     LIVE ON MAIN TODAY. codex's "predates the range" was RIGHT about this half.
+#   * PANEL half — LANE-INTRODUCED. Refused at base and at Task 11, opened by 11a.
+#     codex was wrong about this half.
+#
+# HOW BOTH OF US GOT IT WRONG, which is the reusable part: codex generalised from ONE case
+# to "predates the range"; the dispatcher generalised from ONE case to "lane-introduced".
+# Same error, opposite conclusions. PROVENANCE NEEDS THE CASE THAT DISCRIMINATES — here the
+# CANONICAL form, which contains no panel vocabulary at all — AND a commit old enough to
+# predate the suspected cause. Two commits inside the lane could not have shown this; the
+# lane base could.
+#
+# The canonical fix STAYS. Reverting it would leave an identical fail-open live in the same
+# function while shipping the panel fix — strictly worse. That 11d also closes a pre-existing
+# production fail-open OUTSIDE #2114's stated scope (same class as #2131) is a scope question
+# for the owner, and belongs in the PR body rather than being absorbed silently here.
 
 
 def test_three_clean_causal_occurrences_still_bind(causal_registry):
