@@ -35,11 +35,26 @@ from src.kpi.models import KPIResult, KPIStatus
 
 
 class _RecordingCalculator:
+    """⚠ `calls` RECORDS IDENTITY; `contexts` RECORDS WHAT WAS ASKED FOR.
+
+    Until r12 this double accepted `context` and threw it away, so every battery row
+    could assert WHICH KPI answered and none could see that the QUALIFIER had been
+    dropped — seven rows were answering with `{}` under an assertion that looked
+    thorough. A double that discards an argument cannot witness anything about it, and
+    that is the same family as the fake that ignores its arguments.
+
+    `calls` keeps its list-of-ids shape deliberately: dozens of tests assert
+    `calculator.calls == [id]`, and widening it would have rewritten them all to fix a
+    blindness that a second attribute closes.
+    """
+
     def __init__(self) -> None:
         self.calls: List[str] = []
+        self.contexts: List[Dict[str, Any]] = []
 
     def calculate(self, kpi_id: str, context: Dict[str, Any]) -> KPIResult:
         self.calls.append(kpi_id)
+        self.contexts.append(dict(context or {}))
         return KPIResult(
             kpi_id=kpi_id,
             value=123.0,
@@ -886,46 +901,68 @@ def test_a_qualifier_the_platform_cannot_resolve_fails_closed(query, calculator)
 
 
 @pytest.mark.parametrize(
-    "query,expected_id,why",
+    "query,expected_id,scope,why",
     [
         # ⭐ THE TRANSPLANT'S OWN DISPROOF — pinned so nobody reintroduces the causal rule here
-        ("What is TRx Kisqali?", "WS3-BI-005", "bare BRAND is scope on this path"),
-        ("What is NRx panel west region?", "WS3-BI-012", "bare REGION is scope"),
-        ("What is TRx northeast?", "WS3-BI-005", "census region, bare"),
-        ("What is TRx new england?", "WS3-BI-005", "two-token region phrase"),
+        ("What is TRx Kisqali?", "WS3-BI-005", ("brand",), "bare BRAND is scope on this path"),
+        ("What is NRx panel west region?", "WS3-BI-012", ("region",), "bare REGION is scope"),
+        ("What is TRx northeast?", "WS3-BI-005", ("region",), "census region, bare"),
+        ("What is TRx new england?", "WS3-BI-005", ("region",), "two-token region phrase"),
         # NOTE: no patient-axis row here. An earlier draft asserted "What is NRx panel
         # segment?" binds "as a served PATIENT_AXES axis" — measured FALSE, see
         # test_a_free_text_patient_axis_is_dropped_scope_not_scope below.
-        # prepositional scope
-        ("What is NRx panel for Kisqali?", "WS3-BI-012", "preposition"),
-        ("What is TRx by severity?", "WS3-BI-005", "preposition"),
-        ("What is NRx panel in the west region?", "WS3-BI-012", "preposition"),
-        ("What is TRx per brand?", "WS3-BI-005", "preposition"),
-        ("What is NRx panel across brands?", "WS3-BI-012", "preposition"),
-        ("What is TRx with high adherence?", "WS3-BI-005", "preposition"),
-        ("What is NRx panel within the cohort?", "WS3-BI-012", "preposition"),
-        ("What is TRx among new patients?", "WS3-BI-005", "preposition"),
-        ("What is NRx panel at the HCP level?", "WS3-BI-012", "preposition"),
+        # prepositional scope — ⚠ MOST OF THESE ARRIVE WITH NOTHING BOUND, see the docstring
+        ("What is NRx panel for Kisqali?", "WS3-BI-012", ("brand",), "preposition"),
+        ("What is TRx by severity?", "WS3-BI-005", (), "preposition, qualifier DROPPED"),
+        ("What is NRx panel in the west region?", "WS3-BI-012", ("region",), "preposition"),
+        ("What is TRx per brand?", "WS3-BI-005", (), "preposition, qualifier DROPPED"),
+        ("What is NRx panel across brands?", "WS3-BI-012", (), "preposition, DROPPED"),
+        ("What is TRx with high adherence?", "WS3-BI-005", (), "preposition, DROPPED"),
+        ("What is NRx panel within the cohort?", "WS3-BI-012", (), "preposition, DROPPED"),
+        ("What is TRx among new patients?", "WS3-BI-005", (), "preposition, DROPPED"),
+        ("What is NRx panel at the HCP level?", "WS3-BI-012", (), "preposition, DROPPED"),
+        ("What is TRx by segment?", "WS3-BI-005", (), "r12 asked for this row: also DROPPED"),
         # temporal
-        ("What is NRx panel in Q3?", "WS3-BI-012", "preposition then period"),
-        ("What is TRx last quarter?", "WS3-BI-005", "determiner then period"),
-        ("What is NRx panel this year?", "WS3-BI-012", "determiner then period"),
-        ("What is TRx since January?", "WS3-BI-005", "preposition then month"),
-        ("What is NRx panel q3?", "WS3-BI-012", "bare period token"),
-        ("What is TRx q3 2026?", "WS3-BI-005", "period chain"),
+        ("What is NRx panel in Q3?", "WS3-BI-012", (), "preposition then period, DROPPED"),
+        ("What is TRx last quarter?", "WS3-BI-005", ("window",), "determiner then period"),
+        ("What is NRx panel this year?", "WS3-BI-012", ("window",), "determiner then period"),
+        ("What is TRx since January?", "WS3-BI-005", (), "preposition then month, DROPPED"),
+        ("What is NRx panel q3?", "WS3-BI-012", (), "bare period token, DROPPED"),
+        ("What is TRx q3 2026?", "WS3-BI-005", ("window",), "period chain"),
         # comparison / end of string
-        ("What is NRx panel versus last quarter?", "WS3-BI-012", "comparison"),
-        ("What is TRx vs the prior period?", "WS3-BI-005", "comparison"),
-        ("What is TRx?", "WS3-BI-005", "end of string"),
-        ("show me the NRx panel", "WS3-BI-012", "another admitted lead-in"),
+        ("What is NRx panel versus last quarter?", "WS3-BI-012", ("window",), "comparison"),
+        ("What is TRx vs the prior period?", "WS3-BI-005", (), "comparison, DROPPED"),
+        ("What is TRx?", "WS3-BI-005", (), "end of string, nothing to bind"),
+        ("show me the NRx panel", "WS3-BI-012", (), "another admitted lead-in"),
     ],
 )
-def test_the_value_path_over_refusal_battery(query, expected_id, why, calculator):
-    """THE OVER-REFUSAL BATTERY FOR THIS PATH. Every row binds on 6d321cbcf as well as after,
-    so it is a guard on the fix and not a constraint the fix was fitted to."""
+def test_the_value_path_over_refusal_battery(query, expected_id, scope, why, calculator):
+    """THE OVER-REFUSAL BATTERY FOR THIS PATH — every row binds on 6d321cbcf as well as
+    after, so it guards the fix rather than describing it.
+
+    ⚠ WHAT A BINDING ROW PROVES, STATED EXACTLY: that THE WALK DOES NOT REFUSE IT. It does
+    NOT prove the answer is scoped. Until r12 this file's double discarded `context`, so
+    these rows could not tell the difference, and ten of them are answering with NOTHING
+    BOUND — "by severity", "per brand", "across brands", "within the cohort", "among new
+    patients", "at the HCP level", "in Q3", "since January", "q3", "vs the prior period".
+    The `scope` column is the MEASURED context, so those rows are now WITNESSES OF #2141
+    rather than silent passes: when #2141 is fixed they will fail deliberately and whoever
+    fixes it will see exactly which asks change.
+
+    ⚠ AND IT EXPOSES A LIMIT IN THE LANE'S OWN STORY, which belongs here in plain words.
+    This lane refuses "What is TRx patients?" on the ground that it reaches the calculator
+    with nothing bound — yet "What is TRx among new patients?" binds with nothing bound too.
+    Same dropped qualifier, same empty context, opposite verdict; the only difference is a
+    preposition. That is DELIBERATE and it is not a discriminator we claim to have: the
+    guard closes the BARE dropped-qualifier hole and leaves the PREPOSITIONAL one to #2141,
+    because refusing prepositional scope would refuse most legitimately-scoped asks there
+    are (owner decision #13). The honest statement of the rule is "a bare noun after the
+    mention must resolve", not "an ask must be scoped to answer".
+    """
     evidence = _kpi_lookup_evidence({"query": query})
     assert calculator.calls == [expected_id], (query, why, calculator.calls)
     assert evidence, f"{query!r} produced no evidence; {why}"
+    assert tuple(sorted(calculator.contexts[0])) == scope, (query, why, calculator.contexts)
 
 
 @pytest.mark.parametrize(

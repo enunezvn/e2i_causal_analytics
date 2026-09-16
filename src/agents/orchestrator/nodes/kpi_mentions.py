@@ -373,11 +373,23 @@ def _tail_changes_the_quantity(
 ) -> bool:
     """True when what follows the mention makes it a DIFFERENT quantity.
 
+    ⚠ THE SCOPE OF THIS GUARD, STATED EXACTLY, BECAUSE AN EARLIER VERSION OF THIS
+    DOCSTRING CLAIMED MORE THAN THE CODE DELIVERS (r12). It decides ONE question:
+    does a BARE token sitting directly after the mention name a different quantity?
+    It does NOT decide whether an ask is scoped. A qualifier behind a PREPOSITION is
+    never examined at all, so "What is TRx among new patients?" binds although it
+    reaches the calculator with nothing bound -- the same empty context that gets
+    "What is TRx patients?" refused one word away.
+
+    That asymmetry is DELIBERATE, not an oversight: judging a preposition's object
+    would refuse most legitimately-scoped asks there are, and dropped prepositional
+    scope is #2141 by owner decision #13. The honest rule is "a bare noun after the
+    mention must resolve", never "an ask must be scoped in order to answer".
+
     A period token does not settle the question, it DEFERS it: "NRx panel q3" is
     still NRx panel, but "NRx panel q3 cost" is a cost. So the tail is walked --
-    period tokens are consumed, and a determiner is consumed only when a period
-    token follows it ("last quarter cost") -- until a token turns up that is
-    neither. That token decides:
+    period tokens and resolvable scope are consumed, and a determiner is always
+    consumed -- until a token turns up that is none of those. That token decides:
 
     * end-of-string, a causal head or a closed-class function word -> the KPI is
       still the thing being asked about, so BIND;
