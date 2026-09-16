@@ -137,6 +137,8 @@ def _state(**overrides) -> dict:
         "outcome_var": "action_taken",
         "confounders": [],
         "estimation_result": {
+            # #2155: the estimation node always records the columns it fitted on.
+            "covariates_adjusted": [],
             "ate": 0.08,
             "ate_ci_lower": 0.06,
             "ate_ci_upper": 0.10,

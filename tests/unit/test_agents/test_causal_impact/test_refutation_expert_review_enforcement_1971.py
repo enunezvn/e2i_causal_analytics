@@ -239,6 +239,8 @@ def _state(**overrides: Any) -> Dict[str, Any]:
             "outcome_nodes": ["trx"],
         },
         "estimation_result": {
+            # #2155: the estimation node always records the columns it fitted on.
+            "covariates_adjusted": [],
             "ate": 0.5,
             "ate_ci_lower": 0.3,
             "ate_ci_upper": 0.7,
