@@ -27,6 +27,7 @@
 import { describe, it, expectTypeOf } from 'vitest';
 import type { components } from './generated/api';
 import type {
+  AgentAssessment,
   AgentAssessmentResponse,
   DagChanges,
   DagStructure,
@@ -48,6 +49,9 @@ type Declared<T> = {
   [K in keyof T as string extends K ? never : number extends K ? never : K]: T[K];
 };
 
+/** The backend's opaque `Dict[str, Any]`. */
+type OpaqueDict = { [key: string]: unknown };
+
 /**
  * Relaxations shared by the pending row and the full record (ReviewRecord extends
  * PendingReviewItem):
@@ -56,10 +60,12 @@ type Declared<T> = {
  *   mirror → generated only; generated → mirror still checks it.
  * - `agent_assessment_json`: the backend types it `Dict[str, Any]`; the mirror
  *   narrows it to `AgentAssessment`. Neither direction is assignable, so it is
- *   excluded from both — its key and its nullability are still pinned.
+ *   excluded from both — and pinned exactly per side instead (optional, nullable,
+ *   an opaque dict on the backend / `AgentAssessment` in the mirror).
  * - `dag_structure_json`: `DagStructure` is an interface without the snapshot's
  *   open index signature, so mirror → generated cannot hold. Excluded from that
- *   direction only; the snapshot pair is pinned on its own below.
+ *   direction only, and pinned exactly per side (optional, nullable, each side's
+ *   own snapshot type); the snapshot pair itself is pinned on its own below.
  */
 type RowMirrorToGeneratedRelaxed = 'version_count' | 'agent_assessment_json' | 'dag_structure_json';
 type RowGeneratedToMirrorRelaxed = 'agent_assessment_json';
@@ -85,6 +91,12 @@ describe('expert-review mirror types match generated/api.ts (#2092)', () => {
     expectTypeOf<Omit<ReviewVersion, 'dag_structure_json'>>().toEqualTypeOf<
       Omit<G['ReviewVersion'], 'dag_structure_json'>
     >();
+    expectTypeOf<Pick<ReviewVersion, 'dag_structure_json'>>().toEqualTypeOf<{
+      dag_structure_json?: DagStructure | null;
+    }>();
+    expectTypeOf<Pick<G['ReviewVersion'], 'dag_structure_json'>>().toEqualTypeOf<{
+      dag_structure_json?: G['DagStructureSnapshot'] | null;
+    }>();
   });
 
   it('PendingReviewItem (version_count? relaxation)', () => {
@@ -99,9 +111,16 @@ describe('expert-review mirror types match generated/api.ts (#2092)', () => {
     expectTypeOf<Required<PendingReviewItem>['version_count']>().toEqualTypeOf<
       G['PendingReviewItem']['version_count']
     >();
-    expectTypeOf<Extract<PendingReviewItem['agent_assessment_json'], null>>().toEqualTypeOf<
-      Extract<G['PendingReviewItem']['agent_assessment_json'], null>
-    >();
+    expectTypeOf<Pick<PendingReviewItem, 'agent_assessment_json' | 'dag_structure_json'>>()
+      .toEqualTypeOf<{
+        agent_assessment_json?: AgentAssessment | null;
+        dag_structure_json?: DagStructure | null;
+      }>();
+    expectTypeOf<Pick<G['PendingReviewItem'], 'agent_assessment_json' | 'dag_structure_json'>>()
+      .toEqualTypeOf<{
+        agent_assessment_json?: OpaqueDict | null;
+        dag_structure_json?: G['DagStructureSnapshot'] | null;
+      }>();
   });
 
   it('ReviewRecord', () => {
@@ -115,6 +134,16 @@ describe('expert-review mirror types match generated/api.ts (#2092)', () => {
     expectTypeOf<Required<ReviewRecord>['version_count']>().toEqualTypeOf<
       G['ReviewRecord']['version_count']
     >();
+    expectTypeOf<Pick<ReviewRecord, 'agent_assessment_json' | 'dag_structure_json'>>()
+      .toEqualTypeOf<{
+        agent_assessment_json?: AgentAssessment | null;
+        dag_structure_json?: DagStructure | null;
+      }>();
+    expectTypeOf<Pick<G['ReviewRecord'], 'agent_assessment_json' | 'dag_structure_json'>>()
+      .toEqualTypeOf<{
+        agent_assessment_json?: OpaqueDict | null;
+        dag_structure_json?: G['DagStructureSnapshot'] | null;
+      }>();
   });
 
   it('PendingReviewsResponse and ExpertReviewDetailResponse', () => {
@@ -168,9 +197,16 @@ describe('expert-review mirror types match generated/api.ts (#2092)', () => {
       keyof G['AgentAssessmentResponse']
     >();
     // - `assessment`: an opaque dict on the backend, narrowed to AgentAssessment
-    //   by the mirror (same reason as agent_assessment_json). Excluded both ways.
+    //   by the mirror (same reason as agent_assessment_json). Excluded both ways,
+    //   and pinned exactly per side (required, non-null).
     expectTypeOf<Omit<AgentAssessmentResponse, 'assessment'>>().toEqualTypeOf<
       Omit<G['AgentAssessmentResponse'], 'assessment'>
     >();
+    expectTypeOf<Pick<AgentAssessmentResponse, 'assessment'>>().toEqualTypeOf<{
+      assessment: AgentAssessment;
+    }>();
+    expectTypeOf<Pick<G['AgentAssessmentResponse'], 'assessment'>>().toEqualTypeOf<{
+      assessment: OpaqueDict;
+    }>();
   });
 });
