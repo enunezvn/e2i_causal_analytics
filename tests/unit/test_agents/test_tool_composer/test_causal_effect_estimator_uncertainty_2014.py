@@ -245,9 +245,10 @@ def test_causalml_uplift_interval_is_not_a_sampling_interval() -> None:
     output = _run_pipeline(["causalml"])
     primary = output["primary_result"]
     assert primary["ate_ci_lower"] is not None
-    assert output["consensus_effect"] == pytest.approx(primary["ate"], abs=1e-12)
+    # A CausalML-only run has no ATE-track consensus (#2027 A); the stage value stands.
+    assert output["consensus_effect"] is None
 
-    uncertainty = _uncertainty(output, output["consensus_effect"])
+    uncertainty = _uncertainty(output, primary["ate"])
 
     assert uncertainty["ci_lower"] is None and uncertainty["p_value"] is None
     assert uncertainty["uncertainty_method"] == "not_computed"
