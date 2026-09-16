@@ -76,7 +76,8 @@ from src.tool_registry import (
 )
 
 from .errors import ToolInputError, ToolRefusalError
-from .reason_codes import ReasonCode
+from .psi import population_stability_index
+from .reason_codes import ReasonCode, effect_reason_code
 
 logger = logging.getLogger(__name__)
 
@@ -3782,28 +3783,6 @@ def _twin_type_hcp() -> Any:
     return TwinType.HCP
 
 
-#: The reason code for each twin ``EffectCause`` (#2021 9b), keyed by its string value so this
-#: module does not import ``src.digital_twin`` at load time. A reused code is one whose sentence
-#: is literally true for the cause. ``test_effect_reason_codes_2021`` pins that every cause is
-#: here; ``test_reason_code_coverage_2021`` that every value is a literal tool member.
-_EFFECT_CAUSE_CODES: Dict[str, ReasonCode] = {
-    "intervention_not_identified": ReasonCode.EFFECT_NOT_ESTIMABLE,
-    "empty_cohort": ReasonCode.NO_USABLE_ROWS,
-    "required_column_missing": ReasonCode.MISSING_REQUIRED_COLUMN,
-    "too_few_usable_rows": ReasonCode.INSUFFICIENT_SAMPLE,
-    "no_treatment_contrast": ReasonCode.NO_TREATMENT_CONTRAST,
-    "target_region_not_covered": ReasonCode.COVERAGE_GAP,
-    "estimation_failed": ReasonCode.ESTIMATOR_FAILED,
-    "target_inference_failed": ReasonCode.ESTIMATOR_FAILED,
-}
-
-
-def _effect_reason_code(cause: object, *, fallback: ReasonCode) -> ReasonCode:
-    """The code for a twin effect cause, or ``fallback`` when there is none or this build does
-    not know it — so an effect refusal never goes without a code."""
-    return fallback if cause is None else _EFFECT_CAUSE_CODES.get(str(cause), fallback)
-
-
 async def _load_cohort_provider(client: Any, intervention_type: str, brand_value: str) -> Any:
     """The brand's cohort provider for this intervention, or a refusal.
 
@@ -3823,7 +3802,7 @@ async def _load_cohort_provider(client: Any, intervention_type: str, brand_value
             "not carry enough usable rows for this intervention's treatment channel, outcome, "
             "region and confounders, so a causal effect cannot be estimated. No effect is "
             "returned.",
-            reason_code=_effect_reason_code(
+            reason_code=effect_reason_code(
                 usability.cause, fallback=ReasonCode.EFFECT_NOT_ESTIMABLE
             ),
             details=dict(usability.details),
@@ -3946,7 +3925,7 @@ def _targeted_effect(frame: Any, regions: List[str]) -> _TargetedEffect:
     except EffectDataUnavailable as exc:
         raise ToolRefusalError(
             f"counterfactual_simulator: {exc} No effect is returned.",
-            reason_code=_effect_reason_code(exc.cause, fallback=ReasonCode.EFFECT_NOT_ESTIMABLE),
+            reason_code=effect_reason_code(exc.cause, fallback=ReasonCode.EFFECT_NOT_ESTIMABLE),
             details=exc.details,
         ) from exc
     assert fit.target_ate is not None
@@ -4072,7 +4051,7 @@ def _simulation_results(
             f"{brand!r} did not complete: {result.error_message}. No effect is returned.",
             # The engine keeps the effect engine's cause (#2021 9b); a run that failed for any
             # other reason, such as too few twins, names none and stays simulation_incomplete.
-            reason_code=_effect_reason_code(
+            reason_code=effect_reason_code(
                 result.error_cause, fallback=ReasonCode.SIMULATION_INCOMPLETE
             ),
             details=result.error_details,
@@ -4153,35 +4132,6 @@ def _simulation_results(
 # ============================================================================
 
 
-def _psi(baseline: Any, current: Any, *, bins: int = 10) -> Tuple[float, List[Dict[str, Any]]]:
-    """Population Stability Index between two 1-D numeric arrays.
-
-    Bins by ``baseline`` deciles; ``PSI = sum((c_pct - b_pct) * ln(c_pct/b_pct))``
-    with percentages floored at 1e-6 to avoid log(0). Returns ``(psi, buckets)``.
-    """
-    import numpy as np
-
-    b = np.asarray(baseline, dtype=float)
-    c = np.asarray(current, dtype=float)
-    edges = np.quantile(b, np.linspace(0, 1, bins + 1))
-    edges[0], edges[-1] = -np.inf, np.inf
-    edges = np.unique(edges)
-    b_counts = np.histogram(b, bins=edges)[0].astype(float)
-    c_counts = np.histogram(c, bins=edges)[0].astype(float)
-    b_pct = np.clip(b_counts / b_counts.sum(), 1e-6, None)
-    c_pct = np.clip(c_counts / c_counts.sum(), 1e-6, None)
-    psi = float(np.sum((c_pct - b_pct) * np.log(c_pct / b_pct)))
-    buckets = [
-        {
-            "range": f"{edges[i]:.4g}-{edges[i + 1]:.4g}",
-            "baseline_pct": float(b_pct[i]),
-            "current_pct": float(c_pct[i]),
-        }
-        for i in range(len(b_pct))
-    ]
-    return psi, buckets
-
-
 @composable_tool(
     name="psi_calculator",
     description="Calculate Population Stability Index for drift detection",
@@ -4248,7 +4198,7 @@ def psi_calculator(
             reason_code=ReasonCode.NO_USABLE_ROWS,
             details={"n_baseline_rows": len(baseline), "n_current_rows": len(current)},
         )
-    psi_value, buckets = _psi(baseline.to_numpy(), current.to_numpy())
+    psi_value, buckets = population_stability_index(baseline.to_numpy(), current.to_numpy())
     threshold = 0.1
     if psi_value < 0.1:
         interpretation = "No significant drift"

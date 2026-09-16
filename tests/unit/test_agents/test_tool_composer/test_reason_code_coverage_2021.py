@@ -79,14 +79,16 @@ def _threaded_params(tree: ast.Module) -> dict:
     return threaded
 
 
-_EFFECT_MAPPER = "_effect_reason_code"
-_EFFECT_TABLE = "_EFFECT_CAUSE_CODES"
+_EFFECT_MAPPER = "effect_reason_code"
+_EFFECT_TABLE = "EFFECT_CAUSE_CODES"
+# The table lives with the vocabulary; tool_registrations imports only the mapper.
+_EFFECT_TABLE_SOURCE = REPO_ROOT / "src/agents/tool_composer/reason_codes.py"
 
 
 def _effect_mapper_call(value: ast.expr) -> bool:
-    """True for exactly ``_effect_reason_code(<cause>, fallback=ReasonCode.MEMBER)`` (#2021 9b).
+    """True for exactly ``effect_reason_code(<cause>, fallback=ReasonCode.MEMBER)`` (#2021 9b).
 
-    The mapper returns its fallback or a value of ``_EFFECT_CAUSE_CODES``: the fallback must be
+    The mapper returns its fallback or a value of ``EFFECT_CAUSE_CODES``: the fallback must be
     a literal tool member here, and ``test_the_effect_cause_table_holds_only_tool_members``
     checks the table. Like the threaded guards, this follows one hop and ends in literals.
     """
@@ -102,7 +104,7 @@ def _effect_mapper_call(value: ast.expr) -> bool:
 
 
 def _effect_table_violations(tree: ast.Module, label: str) -> list:
-    """The module-level ``_EFFECT_CAUSE_CODES`` is a dict literal of string keys to tool members."""
+    """The module-level ``EFFECT_CAUSE_CODES`` is a dict literal of string keys to tool members."""
     tables = [
         node
         for node in tree.body
@@ -281,12 +283,12 @@ def test_the_site_count_is_what_the_lane_measured():
 @pytest.mark.parametrize(
     "code",
     [
-        pytest.param("_effect_reason_code(c)", id="no-fallback"),
-        pytest.param('_effect_reason_code(c, fallback="x")', id="string-fallback"),
-        pytest.param("_effect_reason_code(c, fallback=ReasonCode.TOOL_ERROR)", id="executor"),
-        pytest.param("_effect_reason_code(c, fallback=ReasonCode.NOT_A_MEMBER)", id="unknown"),
-        pytest.param("_effect_reason_code(c, fallback=code)", id="variable-fallback"),
-        pytest.param("_effect_reason_code(c, ReasonCode.NO_USABLE_ROWS)", id="positional"),
+        pytest.param("effect_reason_code(c)", id="no-fallback"),
+        pytest.param('effect_reason_code(c, fallback="x")', id="string-fallback"),
+        pytest.param("effect_reason_code(c, fallback=ReasonCode.TOOL_ERROR)", id="executor"),
+        pytest.param("effect_reason_code(c, fallback=ReasonCode.NOT_A_MEMBER)", id="unknown"),
+        pytest.param("effect_reason_code(c, fallback=code)", id="variable-fallback"),
+        pytest.param("effect_reason_code(c, ReasonCode.NO_USABLE_ROWS)", id="positional"),
         pytest.param("other_mapper(c, fallback=ReasonCode.NO_USABLE_ROWS)", id="other-function"),
     ],
 )
@@ -298,14 +300,14 @@ def test_a_mapped_reason_code_is_flagged_unless_its_fallback_is_a_tool_member(co
 def test_a_mapped_reason_code_with_a_tool_member_fallback_is_accepted():
     source = (
         "def tool():\n"
-        '    raise ToolRefusalError("x", reason_code=_effect_reason_code('
+        '    raise ToolRefusalError("x", reason_code=effect_reason_code('
         "cause, fallback=ReasonCode.EFFECT_NOT_ESTIMABLE))\n"
     )
     assert _raise_site_violations(ast.parse(source), "synthetic") == []
 
 
 def test_the_effect_cause_table_holds_only_tool_members():
-    (path,) = _SOURCES
+    path = _EFFECT_TABLE_SOURCE
     assert _effect_table_violations(_parse(path), str(path)) == []
 
 
@@ -322,11 +324,11 @@ def test_the_effect_cause_table_holds_only_tool_members():
     ],
 )
 def test_the_effect_cause_table_check_flags_a_value_that_is_not_a_tool_member(table):
-    source = f"_EFFECT_CAUSE_CODES: Dict[str, ReasonCode] = {table}\n"
+    source = f"EFFECT_CAUSE_CODES: Dict[str, ReasonCode] = {table}\n"
     assert _effect_table_violations(ast.parse(source), "synthetic") != []
 
 
 def test_the_effect_cause_table_check_flags_a_missing_table_and_accepts_a_literal_one():
     assert _effect_table_violations(ast.parse("OTHER = {}\n"), "synthetic") != []
-    source = '_EFFECT_CAUSE_CODES = {"empty_cohort": ReasonCode.NO_USABLE_ROWS}\n'
+    source = 'EFFECT_CAUSE_CODES = {"empty_cohort": ReasonCode.NO_USABLE_ROWS}\n'
     assert _effect_table_violations(ast.parse(source), "synthetic") == []

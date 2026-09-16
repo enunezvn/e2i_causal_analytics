@@ -2,7 +2,7 @@
 
 ``counterfactual_simulator`` refused every twin effect failure as ``effect_not_estimable`` or
 ``simulation_incomplete``. The loader, estimator and provider now name a cause
-(``EffectCause``); ``tool_registrations._EFFECT_CAUSE_CODES`` maps it to a code. The map is
+(``EffectCause``); ``reason_codes.EFFECT_CAUSE_CODES`` maps it to a code. The map is
 keyed by string value so the tool module never imports the twin package at load time.
 
 These tests live in the tool composer tree because they need ``ReasonCode`` and
@@ -16,9 +16,14 @@ import logging
 import pandas as pd
 import pytest
 
-from src.agents.tool_composer import tool_registrations as tr
 from src.agents.tool_composer.errors import ToolRefusalError
-from src.agents.tool_composer.reason_codes import EXECUTOR_ASSIGNED, ReasonCode, validate_details
+from src.agents.tool_composer.reason_codes import (
+    EFFECT_CAUSE_CODES,
+    EXECUTOR_ASSIGNED,
+    ReasonCode,
+    effect_reason_code,
+    validate_details,
+)
 from src.digital_twin.effect.cohort_causal_estimator import estimate_cohort_effect
 from src.digital_twin.effect.cohort_loader import assess_cohort_frame
 from src.digital_twin.effect.errors import EffectCause, EffectDataUnavailable
@@ -34,12 +39,12 @@ _ERRORS_LOGGER = "src.agents.tool_composer.errors"
 
 def test_every_cause_is_mapped_and_nothing_else_is():
     """No unmapped cause (it would silently get the fallback) and no stale key."""
-    assert {c.value for c in EffectCause} == set(tr._EFFECT_CAUSE_CODES)
+    assert {c.value for c in EffectCause} == set(EFFECT_CAUSE_CODES)
 
 
 def test_the_owner_approved_mapping():
     """Owner decision 2026-09-13: reuse a code whose sentence is literally true for the cause."""
-    assert tr._EFFECT_CAUSE_CODES == {
+    assert EFFECT_CAUSE_CODES == {
         "intervention_not_identified": ReasonCode.EFFECT_NOT_ESTIMABLE,
         "empty_cohort": ReasonCode.NO_USABLE_ROWS,
         "required_column_missing": ReasonCode.MISSING_REQUIRED_COLUMN,
@@ -52,7 +57,7 @@ def test_the_owner_approved_mapping():
 
 
 def test_no_cause_maps_to_an_executor_assigned_code():
-    assert not set(tr._EFFECT_CAUSE_CODES.values()) & EXECUTOR_ASSIGNED
+    assert not set(EFFECT_CAUSE_CODES.values()) & EXECUTOR_ASSIGNED
 
 
 @pytest.mark.parametrize(
@@ -66,7 +71,7 @@ def test_no_cause_maps_to_an_executor_assigned_code():
 )
 def test_an_absent_or_unknown_cause_gets_the_fallback(cause, expected):
     """A cause this build does not know still refuses with a code, never without one."""
-    assert tr._effect_reason_code(cause, fallback=ReasonCode.SIMULATION_INCOMPLETE) is expected
+    assert effect_reason_code(cause, fallback=ReasonCode.SIMULATION_INCOMPLETE) is expected
 
 
 def _loader_details():

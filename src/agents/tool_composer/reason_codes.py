@@ -120,6 +120,27 @@ EXECUTOR_ASSIGNED = frozenset(
 #: that catches ToolRefusalError / ToolInputError, and since #2021 always with a reason code.
 TOOL_AUTHORED_CLASSES = frozenset({"refused", "input_rejected"})
 
+#: The reason code for each twin ``EffectCause`` (#2021 9b), keyed by its string value so the
+#: tool composer does not import ``src.digital_twin`` at load time. A reused code is one whose
+#: sentence is literally true for the cause. ``test_effect_reason_codes_2021`` pins that every
+#: cause is here; ``test_reason_code_coverage_2021`` that every value is a literal tool member.
+EFFECT_CAUSE_CODES: Dict[str, ReasonCode] = {
+    "intervention_not_identified": ReasonCode.EFFECT_NOT_ESTIMABLE,
+    "empty_cohort": ReasonCode.NO_USABLE_ROWS,
+    "required_column_missing": ReasonCode.MISSING_REQUIRED_COLUMN,
+    "too_few_usable_rows": ReasonCode.INSUFFICIENT_SAMPLE,
+    "no_treatment_contrast": ReasonCode.NO_TREATMENT_CONTRAST,
+    "target_region_not_covered": ReasonCode.COVERAGE_GAP,
+    "estimation_failed": ReasonCode.ESTIMATOR_FAILED,
+    "target_inference_failed": ReasonCode.ESTIMATOR_FAILED,
+}
+
+
+def effect_reason_code(cause: object, *, fallback: ReasonCode) -> ReasonCode:
+    """The code for a twin effect cause, or ``fallback`` when there is none or this build does
+    not know it — so an effect refusal never goes without a code."""
+    return fallback if cause is None else EFFECT_CAUSE_CODES.get(str(cause), fallback)
+
 
 def user_safe_failure_text(
     outcome_class: Optional[str],

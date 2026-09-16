@@ -607,13 +607,12 @@ class PlanExecutor:
 
         # Resolve input parameters.
         # #1573: an unresolvable TOP-LEVEL reference is a plan defect that
-        # dooms this step deterministically — fail fast with an explicit
-        # reason (synthesis sees its reference_unresolvable sentence and the
-        # log keeps the reference text, #2020), never
-        # invoke the tool, and never retry. The tool's circuit breaker is NOT
-        # penalized: the tool never ran, and opening a healthy tool's circuit
-        # over a planner defect would block other, valid steps that use the
-        # same tool.
+        # dooms this step deterministically — fail fast with an explicit reason
+        # (synthesis sees its reference_unresolvable sentence and the log keeps
+        # the reference text, #2020), never invoke the tool, and never retry.
+        # The tool's circuit breaker is NOT penalized: the tool never ran, and
+        # opening a healthy tool's circuit over a planner defect would block
+        # other, valid steps that use the same tool.
         try:
             resolved_inputs = self._resolve_inputs(step.input_mapping, prior_outputs, context)
         except ReferenceResolutionError as e:
