@@ -194,15 +194,24 @@ _PERIOD_TOKEN_RE = re.compile(
 )
 
 
-#: Determiners that MODIFY a period noun instead of opening a phrase: "last
-#: quarter", "this year", "the q3". The walk steps over one of these only when a
-#: period token actually follows it, which is what keeps "this brand" binding.
+#: Determiners that MODIFY whatever follows instead of opening a phrase: "last
+#: quarter", "this year", "the q3", "this brand". The walk ALWAYS steps over one
+#: and defers the decision to the next token -- requiring a period token to
+#: follow was the r12 defect, because "last two quarters cost" then fell through
+#: to the function-word return and bound with "cost" never examined.
 #:
-#: Every member is also in ``_RIGHT_HEAD_FUNCTION_WORDS`` -- pinned as a test, not
-#: left to inspection -- and that subset relation is load-bearing: it makes the
-#: walk able only to REFUSE more than the single-token rule did, never to bind
-#: more. A modifier that were not already a binding token could be stepped over
-#: into an end-of-string and bind something that used to refuse.
+#: Every member is also in ``_RIGHT_HEAD_FUNCTION_WORDS``, pinned as a test. What
+#: that subset proves, stated to match the test rather than the ambition:
+#: stepping over a determiner into an end-of-string cannot bind a tail the
+#: single-token rule would have refused, because the determiner was already a
+#: binding token on its own.
+#:
+#: ⚠ IT DOES NOT PROVE WHOLE-HELPER MONOTONICITY, and an earlier version of this
+#: comment claimed it did ("able only to REFUSE more ... never to bind more").
+#: That became false the moment scope acceptance was added: `_scope_span` BINDS
+#: tails that used to refuse -- "TRx Kisqali" refused under 11e and binds now, by
+#: design. The subset is a local guard on one branch, not a global ordering, and
+#: it proves nothing about the grammar being complete (r12).
 _PERIOD_MODIFIERS = frozenset(
     {
         "a",
@@ -239,6 +248,10 @@ _PERIOD_MODIFIERS = frozenset(
 
 #: The same token shape ``_kpi_right_head`` reads, applied to the whole tail.
 _TAIL_TOKEN_RE = re.compile(r"[\w'-]+")
+
+#: Where a clause ends and so where a compound head must stop. "TRx cost" is one
+#: quantity; "the TRx, the total prescriptions," is the same one said twice.
+_CLAUSE_BOUNDARY_RE = re.compile(r"[,;:()]")
 
 #: The noun that may trail a RESOLVED scope token to name its kind: "west
 #: region", "Kisqali brand" -- KEYED TO THE DIMENSION THAT ACTUALLY BOUND, and
@@ -374,7 +387,14 @@ def _tail_changes_the_quantity(
     whatever stood behind it: "month cost", "quarter forecast", "year target" and
     "2026 revenue" all bound, and those are the defect's own nouns (#2114 11f).
     """
-    tokens = _TAIL_TOKEN_RE.findall(normalized_query[span_end:])
+    # A COMPOUND HEAD CANNOT SPAN A CLAUSE BOUNDARY, so the tail is cut at the
+    # first one. Without this the determiner rule refuses an APPOSITIVE RESTATEMENT
+    # of the same metric: "What is the TRx, the total prescriptions, for Kisqali?"
+    # consumed "the" and then judged "total" -- a word belonging to this KPI's own
+    # registry name -- and failed closed. Caught by #1475's suite, not by this
+    # module's own tests (r12). The same instinct is already in `_OF_HEAD_RE`,
+    # whose comment says punctuation breaks the chain.
+    tokens = _TAIL_TOKEN_RE.findall(_CLAUSE_BOUNDARY_RE.split(normalized_query[span_end:])[0])
     index = 0
     #: The dimension the PREVIOUS token bound, or None. Holds for exactly one
     #: token, so a matching appositive is consumable once and only immediately
@@ -389,7 +409,6 @@ def _tail_changes_the_quantity(
             index += 1
             bound_dimension = None
             continue
-        following = tokens[index + 1] if index + 1 < len(tokens) else None
         # A FUNCTION WORD IS DECIDED BEFORE ANY SCOPE LOOKAHEAD, and the order is
         # load-bearing. `_scope_span`'s two-token window would otherwise swallow
         # "for kisqali" whole, carrying the walk PAST the preposition into
@@ -397,11 +416,13 @@ def _tail_changes_the_quantity(
         # ate into field time" then refused on "given". A preposition opens a
         # phrase and ends the walk; it is never part of a scope span.
         if token in _RIGHT_HEAD_FUNCTION_WORDS:
-            if (
-                token in _PERIOD_MODIFIERS
-                and following is not None
-                and _PERIOD_TOKEN_RE.match(following)
-            ):
+            # A DETERMINER NEVER ENDS THE WALK; it modifies whatever follows, so
+            # the decision is DEFERRED to that. Requiring a period token here was
+            # the r12 defect: "last two quarters cost" skipped this branch, fell
+            # through to the function-word return, and bound with "cost" never
+            # examined. Prepositions still end the walk -- they open a phrase
+            # whose object must not be judged.
+            if token in _PERIOD_MODIFIERS:
                 index += 1
                 bound_dimension = None
                 continue

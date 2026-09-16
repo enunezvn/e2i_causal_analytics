@@ -724,7 +724,10 @@ def test_a_noun_behind_a_period_chain_still_fails_closed(query, causal_registry)
         ("what drives NRx panel last quarter?", "WS3-BI-012", "determiner then period, then EOS"),
         ("what drives TRx this year?", "WS3-BI-005", "determiner then period, then EOS"),
         ("what drives NRx panel in Q3 2026?", "WS3-BI-012", "preposition — never reaches the walk"),
-        ("what drives NRx panel this brand?", "WS3-BI-012", "determiner NOT before a period token"),
+        # "what drives NRx panel this brand?" was pinned HERE as binding in 11f, on the
+        # reasoning that a determiner not before a period token ends the walk. r12 showed
+        # that rule also bound "last two quarters cost". The row now lives — reversed, as a
+        # refusal — in test_a_determiner_does_not_license_the_noun_behind_it_on_the_causal_path.
     ],
 )
 def test_the_period_walk_does_not_over_refuse(query, expected_id, why, causal_registry):
@@ -736,7 +739,16 @@ def test_the_period_walk_does_not_over_refuse(query, expected_id, why, causal_re
 
 
 def test_every_period_modifier_is_already_a_binding_token():
-    """THE WALK MAY ONLY EVER REFUSE MORE, NEVER BIND MORE — pinned, not left to inspection.
+    """Every period modifier is also a function word — pinned, not left to inspection.
+
+    ⚠ TITLE CORRECTED (r12). This was called "THE WALK MAY ONLY EVER REFUSE MORE, NEVER BIND
+    MORE", which is not what it proves and is no longer true of the walk at all: `_scope_span`
+    BINDS tails that used to refuse ("TRx Kisqali" refused under 11e, binds now, by design).
+    What the subset actually buys is local and worth keeping: stepping over a determiner into
+    an end-of-string cannot bind a tail the single-token rule would have refused, because the
+    determiner was already a binding token on its own. It proves nothing about the grammar
+    being complete, and nothing about the helper as a whole. A test named for a property it
+    does not test is the family member this file has caught twice before.
 
     CORRECTION appended to 6a5eab03d, whose body says "RED-FIRST: 12 failed / 104 passed".
     12 + 104 = 116; this file collects 117. That run predated THIS test, so it is the same
@@ -1178,3 +1190,95 @@ def test_a_trailing_phrase_word_after_a_resolved_region_still_over_refuses(calcu
     this lane's ordering; reported for its own decision rather than absorbed here."""
     assert _kpi_lookup_evidence({"query": "What is TRx west coast?"}) is None
     assert calculator.calls == []
+
+
+# --- r12 MEDIUM: a determiner licensed everything behind it --------------------------------
+# Traced before fixing: 'last' is in BOTH _RIGHT_HEAD_FUNCTION_WORDS and _PERIOD_MODIFIERS.
+# Its follower 'two' is not a period token, so the modifier branch was skipped and control
+# reached the function-word `return False` — the determiner ENDED the walk and bound, with
+# 'cost' never examined. 'the' did the same one token earlier.
+#
+# A determiner now never ends the walk; it is consumed and the decision deferred to what
+# follows. Prepositions still end it — that distinction is the whole design, and it is why
+# "for Kisqali" cannot be judged by its object.
+#
+# ⚠ THIS REVERSES AN 11f PIN, deliberately: "this brand" now REFUSES on both paths. Measured
+# reason, not taste — it binds with calculator context {} (`brand_from_text('this brand')` is
+# None), so it is a dropped qualifier, exactly what #2141 covers. Contrast the row that must
+# keep binding: "last quarter" arrives with a real window,
+#     context={'window': {'start': '2026-04-01T00:00:00+00:00', 'end': '2026-07-01T...'}}
+# Temporal scope IS served; "this brand" is not. The determiner rule separates them.
+
+
+@pytest.mark.parametrize(
+    "query,why",
+    [
+        ("What is TRx last two quarters cost?", "'last' bound before 'cost' was seen"),
+        ("What is TRx the last two quarters cost?", "'the' did it one token earlier"),
+        ("What is NRx panel the cost?", "bare determiner then the defect noun"),
+        ("What is NRx panel this brand?", "dropped qualifier: context {} (reverses an 11f pin)"),
+        ("What is TRx this segment cost?", "determiner, unserved axis, quantity"),
+    ],
+)
+def test_a_determiner_does_not_license_the_noun_behind_it(query, why, calculator):
+    assert _kpi_lookup_evidence({"query": query}) is None, f"{query!r} answered; {why}"
+    assert calculator.calls == [], f"{query!r} called the calculator; {why}"
+
+
+def test_a_determiner_does_not_license_the_noun_behind_it_on_the_causal_path(causal_registry):
+    """The causal half of the same reversal, asserted through its own consumer."""
+    assert _causal_kpi_id("what drives NRx panel this brand?") is None
+    assert causal_registry == []
+
+
+@pytest.mark.parametrize(
+    "query,expected_id,why",
+    [
+        ("What is TRx last quarter?", "WS3-BI-005", "determiner then period, then EOS"),
+        ("What is NRx panel this year?", "WS3-BI-012", "determiner then period"),
+        ("What is NRx panel next quarter?", "WS3-BI-012", "determiner then period"),
+        ("What is TRx vs the prior period?", "WS3-BI-005", "comparison ends the walk first"),
+        ("What is NRx panel for Kisqali?", "WS3-BI-012", "preposition still ends the walk"),
+        ("What is NRx panel in the west region?", "WS3-BI-012", "preposition, then scope"),
+        ("What is TRx recently?", "WS3-BI-005", "adverb, not a determiner"),
+    ],
+)
+def test_temporal_determiners_and_prepositions_still_bind(query, expected_id, why, calculator):
+    assert _kpi_lookup_evidence({"query": query}), f"{query!r} refused; {why}"
+    assert calculator.calls == [expected_id], (query, why, calculator.calls)
+
+
+@pytest.mark.parametrize(
+    "query,expected_id,why",
+    [
+        (
+            "What is the TRx, the total prescriptions, for Kisqali?",
+            "WS3-BI-005",
+            "appositive restatement of the SAME metric",
+        ),
+        ("What is NRx panel, the panel count, for Kisqali?", "WS3-BI-012", "same shape"),
+    ],
+)
+def test_a_clause_boundary_ends_the_compound(query, expected_id, why, calculator):
+    """CAUGHT BY GATE B AGAIN, and by #1475's suite rather than this file: the determiner fix
+    consumed "the" in "the TRx, the total prescriptions, ..." and then judged "total" — a word
+    from this KPI's OWN registry name — as a foreign quantity, failing closed on a legitimate
+    restatement. A compound head cannot span a clause boundary, so the tail is cut at the
+    first one. Pinned here so this module's own tests catch it next time; the second row is
+    the same shape on a panel KPI, which #1475 does not cover."""
+    assert _kpi_lookup_evidence({"query": query}), f"{query!r} refused; {why}"
+    assert calculator.calls == [expected_id], (query, why, calculator.calls)
+
+
+@pytest.mark.parametrize(
+    "query,why",
+    [
+        ("What is NRx panel cost, for Kisqali?", "the defect noun is BEFORE the comma"),
+        ("What is TRx accuracy; for Kisqali?", "semicolon likewise"),
+    ],
+)
+def test_a_clause_boundary_does_not_rescue_a_compound_before_it(query, why, calculator):
+    """The cut must not become an escape hatch: a quantity noun sitting BEFORE the boundary
+    is still judged. Without this row the fix above would be a hole rather than a limit."""
+    assert _kpi_lookup_evidence({"query": query}) is None, f"{query!r} answered; {why}"
+    assert calculator.calls == [], f"{query!r} called the calculator; {why}"
