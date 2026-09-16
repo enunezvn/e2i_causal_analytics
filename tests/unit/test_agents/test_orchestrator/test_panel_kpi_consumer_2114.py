@@ -603,6 +603,29 @@ def test_ordinary_right_heads_must_keep_binding(query, expected_id, causal_regis
 # every accepted one is a bare function word. These break both. All seven passed first time,
 # and the teeth run confirms they are PINS not fixes — the 7 reds on 9bd77796c were the
 # `..._fails_closed_on_the_causal_path` rows only.
+#
+# --- CORRECTION appended 2026-09-16; the paragraph above stands as written -----------------
+# "the teeth run confirms they are PINS not fixes" is FALSE, and the reason is worth keeping:
+# THE TEETH RUN PREDATED THESE ROWS. It collected 86 tests; this file collects 93. The seven
+# property-breakers below were written AFTER that run and were never in it, so it could not
+# confirm anything about them. A measurement cited for rows it never collected is a number
+# attached to the wrong tree — the same defect as "I ran the gates, then edited a file", in
+# the other artifact. Arithmetic was the tell, not a re-run: the commit body's "7 failed /
+# 79 passed" sums to 86 standing beside a reported panel-consumer count of 93.
+#
+# RE-MEASURED on 9bd77796c — `git show` swap of `kpi_mentions.py` alone, positive control that
+# the swap was observed (both 11e symbols absent on base, present again after restore), `cp`
+# restore with `sha256sum -c` OK:
+#
+#     11 failed / 82 passed
+#      7  test_an_unsupported_right_head_compound_fails_closed_on_the_causal_path  (every row)
+#      4  test_unsupported_right_heads_refuse_in_any_surface_form                  (every row)
+#      0  test_period_and_causal_right_heads_still_bind, and the period-limit test
+#
+# So the four `..._in_any_surface_form` rows are FIXES, not pins: the base binds WS3-BI-012 on
+# every one of them, and this fix closes those surface forms too. Only the three binding rows
+# — the two `..._still_bind` rows and the period-limit test — are true pins. The teeth are
+# STRONGER than the commit body claimed, not weaker. The defect is in the reporting.
 
 
 @pytest.mark.parametrize(
