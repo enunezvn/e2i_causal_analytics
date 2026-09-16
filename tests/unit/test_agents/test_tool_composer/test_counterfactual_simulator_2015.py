@@ -768,11 +768,13 @@ def test_a_targeted_request_reports_only_the_asked_regions_effects(provider):
     assert out.cohort_ci_lower < out.cohort_effect < out.cohort_ci_upper
 
 
-def test_an_uncovered_targeted_region_is_refused_as_not_estimable(provider):
-    """The refusal for a region the cohort cannot contrast stays EFFECT_NOT_ESTIMABLE
+def test_an_uncovered_targeted_region_is_refused_as_a_coverage_gap(provider):
+    """The refusal for a region the cohort cannot contrast is never SIMULATION_INCOMPLETE
     (#2021): a caller must be able to tell "this region has no evidence" from "the
     simulation broke". Scoping the estimator makes the engine itself fail on such a
-    region, so the targeted inference is taken first and its precise refusal wins."""
+    region, so the targeted inference is taken first and its precise refusal wins. Since
+    #2021 9b that refusal names its cause, so the code is COVERAGE_GAP with the region
+    counts, not the generic EFFECT_NOT_ESTIMABLE."""
     from uuid import uuid4
 
     no_west = CohortEffectDataProvider(_cohort().query("region != 'west'"))
@@ -785,4 +787,10 @@ def test_an_uncovered_targeted_region_is_refused_as_not_estimable(provider):
             regions=["west"],
             model_id=uuid4(),
         )
-    assert caught.value.reason_code is ReasonCode.EFFECT_NOT_ESTIMABLE
+    assert caught.value.reason_code is ReasonCode.COVERAGE_GAP
+    assert caught.value.details == {
+        "n_target_regions": 1,
+        "n_target_regions_absent": 1,
+        "n_target_regions_one_arm": 0,
+        "n_cohort_regions": 3,
+    }
