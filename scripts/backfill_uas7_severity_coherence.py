@@ -29,16 +29,30 @@ EXCLUDE them, after checking ``/home/enunez/logs/e2i-reseed.log`` against the de
 checkout reset. An old-generator batch excluded by mistake stays independent, which is
 the pre-change state and not a corrupted one.
 
-ROLLOUT (all three, in order)
------------------------------
-1. This script, then apply its SQL (below).
-2. ``scripts/backfill_brand_axis_persistence.py --brand Remibrutinib --execute``: the
-   UAS7 >= 28 axis moves (1,106 live rows cross 28), so the persistence labels must be
-   re-derived; without ``--execute`` that script is a dry run.
-3. Gold-standard retrain: the weekly ``scripts/reseed_synthetic.sh`` cron runs
+PERSISTENCE LABELS (same transaction)
+-------------------------------------
+The UAS7 >= 28 axis moves (1,106 live rows cross 28) and drives the planted persistence
+differential, so the labels have to follow. They are NOT re-derived wholesale:
+``scripts/backfill_brand_axis_persistence.py --execute`` rewrites 3,132 of the 8,863
+live labels (measured 2026-09-16), because the live labels never came from its RNG
+stream (34% disagree even at the current UAS7). Only the change the new UAS7 CAUSES is
+applied: the old and the new UAS7 both go through that script's ``regenerate`` (same
+seed, same cohort, so the two streams are paired draw for draw); where the two
+regenerated labels differ the row takes the new one, everywhere else the live label
+stays. Measured on the live export: 193 rows move, 139 labels change, adjusted
+UAS7 >= 28 effect +0.1435 (full re-derivation +0.154, no label step +0.123), prevalence
+0.5663, proxy AUC 0.7588 (full re-derivation 0.7585). ``regenerate`` is one stream over
+the patient_id-sorted frame, so the pairing holds for the frame passed in; on the live
+box the cutoff selection is the whole Remibrutinib cohort. Do not run
+``backfill_brand_axis_persistence.py --brand Remibrutinib --execute`` after this.
+
+ROLLOUT (in order)
+------------------
+1. This script, then apply its SQL (below). UAS7 and the labels move together.
+2. Gold-standard retrain: the weekly ``scripts/reseed_synthetic.sh`` cron runs
    ``scripts/retrain_goldstd.sh`` (staging models + metric trends); until it does, the
    Remibrutinib persistence model is a fit to the old labels.
-4. Serving layer, when it should catch up: ``scripts/sync_goldstd_serving.py`` in its
+3. Serving layer, when it should catch up: ``scripts/sync_goldstd_serving.py`` in its
    documented order (SHAP bundles, Feast marker clear + full materialize, bentoml
    restart, SHAP cache refresh last). ``retrain_goldstd.sh`` deliberately does not do
    this, so it is the same step every weekly append already leaves to an operator.
@@ -46,22 +60,27 @@ ROLLOUT (all three, in order)
 SAFETY
 ------
 * One psql transaction. The plan is staged in a temp table with every computation
-  input (old UAS7, severity). EVERY staged row, changed or not, is locked and must
-  still exist and match (synthetic, Remibrutinib, older than the cutoff, same severity,
-  same UAS7) before anything is updated; then the changed rows are compare-and-set.
+  input (old UAS7, severity, old labels, every regeneration covariate). EVERY staged
+  row, changed or not, is locked and must still exist and match (synthetic,
+  Remibrutinib, older than the cutoff, same severity, UAS7, labels and covariates), and
+  no eligible live row may be missing from the plan, before anything is updated; then the changed rows are compare-and-set.
   ``IS DISTINCT FROM`` skips unchanged values so the ``updated_at`` trigger fires only
-  on real changes. It asserts the updated count and the resulting correlation over the
-  whole staged cohort (NULL fails) before COMMIT.
+  on real changes. It asserts the staged label-change count, the updated count, that
+  every staged row now carries its planned values, and the resulting correlation over
+  the whole staged cohort (NULL fails) before COMMIT.
 * Inputs are validated before any SQL is written: patient ids match
-  :data:`_PATIENT_ID`, severity is finite in [0, 10], UAS7 is an integer in 16..42, and
-  the correlation is defined.
+  :data:`_PATIENT_ID`, the persistence covariates are present, severity is finite in
+  [0, 10], UAS7 is an integer in 16..42, the labels are complementary 0/1, and the
+  correlation is defined.
 * The TSV backup is the exact undo.
 
 USAGE
 -----
     docker exec supabase-db psql -U postgres -d postgres -c "\\copy (SELECT patient_id,
-      disease_severity, urticaria_severity_uas7, segment_assignment, created_at
-      FROM patient_journeys WHERE brand::text='Remibrutinib' AND is_synthetic
+      brand, treatment_arm, disease_severity, academic_hcp, geographic_region,
+      segment_assignment, insurance_type, age_at_diagnosis, comorbidity_burden,
+      prior_therapy_lines, copay_support, psp_enrolled, persistent_180d,
+      discontinued_180d, urticaria_severity_uas7, created_at FROM patient_journeys WHERE brand::text='Remibrutinib' AND is_synthetic
       ORDER BY patient_id) TO STDOUT WITH CSV HEADER" > remi.csv
     python -m scripts.backfill_uas7_severity_coherence --in-csv remi.csv --sql-out apply.sql
     docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 < apply.sql
@@ -81,6 +100,13 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+from scripts.backfill_brand_axis_persistence import (  # noqa: E402
+    _AXES as _PERSISTENCE_AXES,
+)
+from scripts.backfill_brand_axis_persistence import (  # noqa: E402
+    _BASE_COVARIATE_COLS,
+    regenerate,
+)
 from src.ml.synthetic.dgp.clinical_severity import (  # noqa: E402
     UAS7_MAX,
     UAS7_MIN,
@@ -104,7 +130,29 @@ def _corr(frame: pd.DataFrame, col: str) -> float:
     )
 
 
+_REQUIRED_COLS = [*_BASE_COVARIATE_COLS, "urticaria_severity_uas7", "created_at"]
+
+#: Plan columns staged as integers (computation inputs and outputs).
+_STAGED_INTS = ("uas7_old", "uas7_new", "persist_old", "disc_old", "persist_new", "disc_new")
+#: Every other input ``regenerate`` reads; staged as text and compared under the lock,
+#: so a covariate edited after the export cannot commit a stale label decision.
+_REGEN_INTS = (
+    "treatment_arm",
+    "academic_hcp",
+    "age_at_diagnosis",
+    "comorbidity_burden",
+    "prior_therapy_lines",
+    "copay_support",
+    "psp_enrolled",
+)
+_REGEN_TOKENS = ("geographic_region", "insurance_type", "segment_assignment")
+_TOKEN = re.compile(r"^[a-z_]+$")
+
+
 def _validate(rows: pd.DataFrame) -> None:
+    missing = [c for c in _REQUIRED_COLS if c not in rows.columns]
+    if missing:
+        raise SystemExit(f"REFUSING: export lacks the persistence covariates {missing}")
     bad_ids = rows.loc[~rows["patient_id"].astype(str).str.match(_PATIENT_ID), "patient_id"]
     if not bad_ids.empty:
         raise SystemExit(f"REFUSING: unexpected patient_id format, e.g. {bad_ids.iloc[0]!r}")
@@ -114,6 +162,37 @@ def _validate(rows: pd.DataFrame) -> None:
     uas7 = pd.to_numeric(rows["urticaria_severity_uas7"], errors="coerce")
     if (uas7 % 1 != 0).any() or not uas7.between(UAS7_MIN, UAS7_MAX).all():
         raise SystemExit("REFUSING: urticaria_severity_uas7 not an integer in 16..42")
+    for col in _REGEN_INTS:
+        vals = pd.to_numeric(rows[col], errors="coerce")
+        if vals.isna().any() or (vals % 1 != 0).any():
+            raise SystemExit(f"REFUSING: {col} missing or not an integer")
+    for col in _REGEN_TOKENS:
+        if not rows[col].astype(str).str.match(_TOKEN).all():
+            raise SystemExit(f"REFUSING: {col} holds a value that is not a plain token")
+    persist = pd.to_numeric(rows["persistent_180d"], errors="coerce")
+    disc = pd.to_numeric(rows["discontinued_180d"], errors="coerce")
+    if not persist.isin([0, 1]).all() or not (persist + disc == 1).all():
+        raise SystemExit(
+            "REFUSING: persistent_180d / discontinued_180d are not complementary 0/1 labels"
+        )
+
+
+def _label_delta(rows: pd.DataFrame) -> None:
+    """Old/new persistence labels: the live label, moved only where the UAS7 change moves
+    the regenerated label (paired streams; see PERSISTENCE LABELS)."""
+    cfg = _PERSISTENCE_AXES["Remibrutinib"]
+
+    def regenerated(uas7_col: str) -> np.ndarray:
+        frame = rows.assign(urticaria_severity_uas7=rows[uas7_col])
+        out = regenerate(frame, cfg).set_index("patient_id")
+        return out.loc[rows["patient_id"], "persistent_180d"].to_numpy(dtype=int)
+
+    r0, r1 = regenerated("uas7_old"), regenerated("uas7_new")
+    rows["persist_old"] = rows["persistent_180d"].astype(int)
+    rows["disc_old"] = rows["discontinued_180d"].astype(int)
+    rows["persist_new"] = np.where(r0 != r1, r1, rows["persist_old"].to_numpy())
+    rows["disc_new"] = 1 - rows["persist_new"]
+    rows["label_regen_moved"] = r0 != r1
 
 
 def plan(live: pd.DataFrame, *, newer_rows_are_new_generator: bool = False) -> pd.DataFrame:
@@ -147,6 +226,7 @@ def plan(live: pd.DataFrame, *, newer_rows_are_new_generator: bool = False) -> p
     rows["uas7_new"] = uas7_from_severity(
         rows["uas7_old"].to_numpy(), rows["disease_severity"].astype(float).to_numpy()
     )
+    _label_delta(rows)
     return rows
 
 
@@ -162,61 +242,113 @@ def report(rows: pd.DataFrame) -> str:
     changed = int((rows["uas7_old"] != rows["uas7_new"]).sum())
     flips = int(((rows["uas7_old"] >= 28) != (rows["uas7_new"] >= 28)).sum())
     lines.append(f"values changed: {changed}  uncontrolled-CSU axis flips: {flips}")
+    relabelled = int((rows["persist_old"] != rows["persist_new"]).sum())
+    lines.append(
+        f"persistence labels changed: {relabelled} "
+        f"(regenerated label moved on {int(rows['label_regen_moved'].sum())} rows)  "
+        f"prevalence {rows['persist_old'].mean():.4f} -> {rows['persist_new'].mean():.4f}"
+    )
     return "\n".join(lines)
 
 
 def to_sql(rows: pd.DataFrame) -> str:
-    """One transaction: stage the whole cohort, lock and verify EVERY staged row, then
-    compare-and-set the changed ones, assert, commit."""
+    """One transaction: stage the whole cohort with every regeneration input, lock and
+    verify EVERY staged row, prove no eligible live row was left out, then
+    compare-and-set the changed ones (UAS7 and labels), assert, commit."""
     _validate(rows)
     cutoff = OLD_GENERATOR_CUTOFF
+    staged = ["patient_id", "disease_severity", *_STAGED_INTS, *_REGEN_INTS, *_REGEN_TOKENS]
+
+    def literal(col: str, value: object) -> str:
+        if col == "disease_severity":
+            return repr(float(value))  # type: ignore[arg-type]
+        if col in _STAGED_INTS:
+            return str(int(value))  # type: ignore[call-overload]
+        if col in _REGEN_INTS:
+            return f"'{int(value)}'"  # type: ignore[call-overload]
+        return f"'{value}'"  # patient_id and tokens, validated as plain identifiers
+
     values = ",\n".join(
-        f"('{pid}', {float(sev)!r}, {int(o)}, {int(n)})"
-        for pid, sev, o, n in rows[
-            ["patient_id", "disease_severity", "uas7_old", "uas7_new"]
-        ].itertuples(index=False)
+        "(" + ", ".join(literal(c, v) for c, v in zip(staged, tup, strict=True)) + ")"
+        for tup in rows[staged].itertuples(index=False)
     )
-    n_changed = int((rows["uas7_old"] != rows["uas7_new"]).sum())
+    label_changed = rows["persist_old"] != rows["persist_new"]
+    n_changed = int(((rows["uas7_old"] != rows["uas7_new"]) | label_changed).sum())
+    n_labels = int(label_changed.sum())
     lo, hi = UAS7_SEVERITY_RHO - 0.1, UAS7_SEVERITY_RHO + 0.1
+    eligible = f"""pj.brand::text = 'Remibrutinib'
+    AND pj.is_synthetic
+    AND pj.created_at < '{cutoff.isoformat()}'::timestamptz"""
+    unchanged = "\n".join(
+        [
+            eligible,
+            "    AND pj.disease_severity = p.severity",
+            "    AND pj.urticaria_severity_uas7 = p.uas7_old",
+            "    AND pj.persistent_180d = p.persist_old",
+            "    AND pj.discontinued_180d = p.disc_old",
+            *(f"    AND pj.{c}::text = p.{c}" for c in (*_REGEN_INTS, *_REGEN_TOKENS)),
+        ]
+    )
+    columns = ",\n  ".join(
+        [
+            "patient_id text PRIMARY KEY, severity numeric",
+            ", ".join(f"{c} int" for c in _STAGED_INTS),
+            ", ".join(f"{c} text" for c in (*_REGEN_INTS, *_REGEN_TOKENS)),
+        ]
+    )
     return f"""BEGIN;
 CREATE TEMP TABLE _uas7_plan (
-  patient_id text PRIMARY KEY, severity numeric, uas7_old int, uas7_new int
+  {columns}
 ) ON COMMIT DROP;
 INSERT INTO _uas7_plan VALUES
 {values};
 DO $$
-DECLARE matched int; updated int; c double precision;
+DECLARE matched int; missing int; updated int; relabelled int; c double precision;
 BEGIN
   PERFORM 1 FROM patient_journeys pj JOIN _uas7_plan p USING (patient_id) FOR UPDATE OF pj;
   SELECT count(*) INTO matched
   FROM patient_journeys pj JOIN _uas7_plan p USING (patient_id)
-  WHERE pj.brand::text = 'Remibrutinib'
-    AND pj.is_synthetic
-    AND pj.created_at < '{cutoff.isoformat()}'::timestamptz
-    AND pj.disease_severity = p.severity
-    AND pj.urticaria_severity_uas7 = p.uas7_old;
+  WHERE {unchanged};
   IF matched <> {len(rows)} THEN
     RAISE EXCEPTION 'expected all {len(rows)} staged rows unchanged since the export, % match', matched;
   END IF;
-  UPDATE patient_journeys pj SET urticaria_severity_uas7 = p.uas7_new
+  -- The label delta is paired over the WHOLE cohort; a partial export plans other labels.
+  SELECT count(*) INTO missing
+  FROM patient_journeys pj
+  WHERE {eligible}
+    AND NOT EXISTS (SELECT 1 FROM _uas7_plan p WHERE p.patient_id = pj.patient_id);
+  IF missing <> 0 THEN
+    RAISE EXCEPTION '% eligible Remibrutinib rows are not in the plan (partial or stale export)', missing;
+  END IF;
+  SELECT count(*) INTO relabelled FROM _uas7_plan WHERE persist_new <> persist_old;
+  IF relabelled <> {n_labels} THEN
+    RAISE EXCEPTION 'expected {n_labels} staged label changes, % staged', relabelled;
+  END IF;
+  UPDATE patient_journeys pj SET urticaria_severity_uas7 = p.uas7_new,
+    persistent_180d = p.persist_new, discontinued_180d = p.disc_new
   FROM _uas7_plan p
   WHERE pj.patient_id = p.patient_id
-    AND pj.brand::text = 'Remibrutinib'
-    AND pj.is_synthetic
-    AND pj.created_at < '{cutoff.isoformat()}'::timestamptz
-    AND pj.disease_severity = p.severity
-    AND pj.urticaria_severity_uas7 = p.uas7_old
-    AND pj.urticaria_severity_uas7 IS DISTINCT FROM p.uas7_new;
+    AND {unchanged}
+    AND (pj.urticaria_severity_uas7 IS DISTINCT FROM p.uas7_new
+      OR pj.persistent_180d IS DISTINCT FROM p.persist_new);
   GET DIAGNOSTICS updated = ROW_COUNT;
   IF updated <> {n_changed} THEN
     RAISE EXCEPTION 'expected {n_changed} rows updated, got % (a row changed since the export)', updated;
+  END IF;
+  SELECT count(*) INTO matched
+  FROM patient_journeys pj JOIN _uas7_plan p USING (patient_id)
+  WHERE pj.urticaria_severity_uas7 IS DISTINCT FROM p.uas7_new
+    OR pj.persistent_180d IS DISTINCT FROM p.persist_new
+    OR pj.discontinued_180d IS DISTINCT FROM p.disc_new;
+  IF matched <> 0 THEN
+    RAISE EXCEPTION '% staged rows do not carry their planned values after the update', matched;
   END IF;
   SELECT corr(pj.urticaria_severity_uas7, pj.disease_severity) INTO c
   FROM patient_journeys pj JOIN _uas7_plan p USING (patient_id);
   IF c IS NULL OR c < {lo:.2f} OR c > {hi:.2f} THEN
     RAISE EXCEPTION 'post-update corr % outside [{lo:.2f}, {hi:.2f}]', c;
   END IF;
-  RAISE NOTICE 'uas7 backfill: % rows updated, corr now %', updated, c;
+  RAISE NOTICE 'uas7 backfill: % rows updated ({n_labels} relabelled), corr now %', updated, c;
 END $$;
 COMMIT;
 """
@@ -247,7 +379,9 @@ def main() -> int:
     backup.mkdir(parents=True, exist_ok=True)
     stamp = pd.Timestamp.now(tz="UTC").strftime("%Y%m%dT%H%M%S")
     path = backup / f"remibrutinib_uas7_backup_{stamp}.tsv"
-    rows[["patient_id", "disease_severity", "uas7_old"]].to_csv(path, sep="\t", index=False)
+    rows[["patient_id", "disease_severity", "uas7_old", "persist_old", "disc_old"]].to_csv(
+        path, sep="\t", index=False
+    )
     print(f"backup: {path}")
 
     if args.sql_out:
