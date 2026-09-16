@@ -338,8 +338,8 @@ def render_catalog_block(catalog: CapabilityCatalog) -> str:
         )
 
     lines.append(
-        "D. Segments: KPI breakdowns by ONE of the axes in A (a patient axis only for TRx, NRx, NBRx, "
-        "Conversion Rate and CATE, per A); a ranking of HCP segments by predicted "
+        "D. Segments: KPI breakdowns by ONE of the axes in A (a patient axis only for TRx Panel, "
+        "NRx Panel, NBRx Panel, Conversion Rate and CATE, per A); a ranking of HCP segments by predicted "
         "likelihood to prescribe a brand, by specialty OR by geographic region; aggregate HCP / "
         "patient cohort profiles (counts by specialty, tier, severity - never named individuals)."
     )
