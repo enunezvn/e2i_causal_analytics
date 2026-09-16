@@ -60,9 +60,10 @@ ROLLOUT (in order)
 SAFETY
 ------
 * One psql transaction. The plan is staged in a temp table with every computation
-  input (old UAS7, severity, old labels). EVERY staged row, changed or not, is locked and must
-  still exist and match (synthetic, Remibrutinib, older than the cutoff, same severity,
-  same UAS7, same labels) before anything is updated; then the changed rows are compare-and-set.
+  input (old UAS7, severity, old labels, every regeneration covariate). EVERY staged
+  row, changed or not, is locked and must still exist and match (synthetic,
+  Remibrutinib, older than the cutoff, same severity, UAS7, labels and covariates), and
+  no eligible live row may be missing from the plan, before anything is updated; then the changed rows are compare-and-set.
   ``IS DISTINCT FROM`` skips unchanged values so the ``updated_at`` trigger fires only
   on real changes. It asserts the staged label-change count, the updated count, that
   every staged row now carries its planned values, and the resulting correlation over
@@ -131,6 +132,22 @@ def _corr(frame: pd.DataFrame, col: str) -> float:
 
 _REQUIRED_COLS = [*_BASE_COVARIATE_COLS, "urticaria_severity_uas7", "created_at"]
 
+#: Plan columns staged as integers (computation inputs and outputs).
+_STAGED_INTS = ("uas7_old", "uas7_new", "persist_old", "disc_old", "persist_new", "disc_new")
+#: Every other input ``regenerate`` reads; staged as text and compared under the lock,
+#: so a covariate edited after the export cannot commit a stale label decision.
+_REGEN_INTS = (
+    "treatment_arm",
+    "academic_hcp",
+    "age_at_diagnosis",
+    "comorbidity_burden",
+    "prior_therapy_lines",
+    "copay_support",
+    "psp_enrolled",
+)
+_REGEN_TOKENS = ("geographic_region", "insurance_type", "segment_assignment")
+_TOKEN = re.compile(r"^[a-z_]+$")
+
 
 def _validate(rows: pd.DataFrame) -> None:
     missing = [c for c in _REQUIRED_COLS if c not in rows.columns]
@@ -145,6 +162,13 @@ def _validate(rows: pd.DataFrame) -> None:
     uas7 = pd.to_numeric(rows["urticaria_severity_uas7"], errors="coerce")
     if (uas7 % 1 != 0).any() or not uas7.between(UAS7_MIN, UAS7_MAX).all():
         raise SystemExit("REFUSING: urticaria_severity_uas7 not an integer in 16..42")
+    for col in _REGEN_INTS:
+        vals = pd.to_numeric(rows[col], errors="coerce")
+        if vals.isna().any() or (vals % 1 != 0).any():
+            raise SystemExit(f"REFUSING: {col} missing or not an integer")
+    for col in _REGEN_TOKENS:
+        if not rows[col].astype(str).str.match(_TOKEN).all():
+            raise SystemExit(f"REFUSING: {col} holds a value that is not a plain token")
     persist = pd.to_numeric(rows["persistent_180d"], errors="coerce")
     disc = pd.to_numeric(rows["discontinued_180d"], errors="coerce")
     if not persist.isin([0, 1]).all() or not (persist + disc == 1).all():
@@ -228,51 +252,73 @@ def report(rows: pd.DataFrame) -> str:
 
 
 def to_sql(rows: pd.DataFrame) -> str:
-    """One transaction: stage the whole cohort, lock and verify EVERY staged row, then
+    """One transaction: stage the whole cohort with every regeneration input, lock and
+    verify EVERY staged row, prove no eligible live row was left out, then
     compare-and-set the changed ones (UAS7 and labels), assert, commit."""
     _validate(rows)
     cutoff = OLD_GENERATOR_CUTOFF
+    staged = ["patient_id", "disease_severity", *_STAGED_INTS, *_REGEN_INTS, *_REGEN_TOKENS]
+
+    def literal(col: str, value: object) -> str:
+        if col == "disease_severity":
+            return repr(float(value))  # type: ignore[arg-type]
+        if col in _STAGED_INTS:
+            return str(int(value))  # type: ignore[call-overload]
+        if col in _REGEN_INTS:
+            return f"'{int(value)}'"  # type: ignore[call-overload]
+        return f"'{value}'"  # patient_id and tokens, validated as plain identifiers
+
     values = ",\n".join(
-        f"('{pid}', {float(sev)!r}, {int(o)}, {int(n)}, {int(po)}, {int(do)}, {int(pn)}, {int(dn)})"
-        for pid, sev, o, n, po, do, pn, dn in rows[
-            [
-                "patient_id",
-                "disease_severity",
-                "uas7_old",
-                "uas7_new",
-                "persist_old",
-                "disc_old",
-                "persist_new",
-                "disc_new",
-            ]
-        ].itertuples(index=False)
+        "(" + ", ".join(literal(c, v) for c, v in zip(staged, tup, strict=True)) + ")"
+        for tup in rows[staged].itertuples(index=False)
     )
     label_changed = rows["persist_old"] != rows["persist_new"]
     n_changed = int(((rows["uas7_old"] != rows["uas7_new"]) | label_changed).sum())
     n_labels = int(label_changed.sum())
     lo, hi = UAS7_SEVERITY_RHO - 0.1, UAS7_SEVERITY_RHO + 0.1
+    eligible = f"""pj.brand::text = 'Remibrutinib'
+    AND pj.is_synthetic
+    AND pj.created_at < '{cutoff.isoformat()}'::timestamptz"""
+    unchanged = "\n".join(
+        [
+            eligible,
+            "    AND pj.disease_severity = p.severity",
+            "    AND pj.urticaria_severity_uas7 = p.uas7_old",
+            "    AND pj.persistent_180d = p.persist_old",
+            "    AND pj.discontinued_180d = p.disc_old",
+            *(f"    AND pj.{c}::text = p.{c}" for c in (*_REGEN_INTS, *_REGEN_TOKENS)),
+        ]
+    )
+    columns = ",\n  ".join(
+        [
+            "patient_id text PRIMARY KEY, severity numeric",
+            ", ".join(f"{c} int" for c in _STAGED_INTS),
+            ", ".join(f"{c} text" for c in (*_REGEN_INTS, *_REGEN_TOKENS)),
+        ]
+    )
     return f"""BEGIN;
 CREATE TEMP TABLE _uas7_plan (
-  patient_id text PRIMARY KEY, severity numeric, uas7_old int, uas7_new int,
-  persist_old smallint, disc_old smallint, persist_new smallint, disc_new smallint
+  {columns}
 ) ON COMMIT DROP;
 INSERT INTO _uas7_plan VALUES
 {values};
 DO $$
-DECLARE matched int; updated int; relabelled int; c double precision;
+DECLARE matched int; missing int; updated int; relabelled int; c double precision;
 BEGIN
   PERFORM 1 FROM patient_journeys pj JOIN _uas7_plan p USING (patient_id) FOR UPDATE OF pj;
   SELECT count(*) INTO matched
   FROM patient_journeys pj JOIN _uas7_plan p USING (patient_id)
-  WHERE pj.brand::text = 'Remibrutinib'
-    AND pj.is_synthetic
-    AND pj.created_at < '{cutoff.isoformat()}'::timestamptz
-    AND pj.disease_severity = p.severity
-    AND pj.urticaria_severity_uas7 = p.uas7_old
-    AND pj.persistent_180d = p.persist_old
-    AND pj.discontinued_180d = p.disc_old;
+  WHERE {unchanged};
   IF matched <> {len(rows)} THEN
     RAISE EXCEPTION 'expected all {len(rows)} staged rows unchanged since the export, % match', matched;
+  END IF;
+  -- The label delta is paired over the WHOLE cohort; a partial export plans other labels.
+  SELECT count(*) INTO missing
+  FROM patient_journeys pj
+  WHERE {eligible}
+    AND NOT EXISTS (SELECT 1 FROM _uas7_plan p WHERE p.patient_id = pj.patient_id);
+  IF missing <> 0 THEN
+    RAISE EXCEPTION '% eligible Remibrutinib rows are not in the plan (partial or stale export)', missing;
   END IF;
   SELECT count(*) INTO relabelled FROM _uas7_plan WHERE persist_new <> persist_old;
   IF relabelled <> {n_labels} THEN
@@ -282,13 +328,7 @@ BEGIN
     persistent_180d = p.persist_new, discontinued_180d = p.disc_new
   FROM _uas7_plan p
   WHERE pj.patient_id = p.patient_id
-    AND pj.brand::text = 'Remibrutinib'
-    AND pj.is_synthetic
-    AND pj.created_at < '{cutoff.isoformat()}'::timestamptz
-    AND pj.disease_severity = p.severity
-    AND pj.urticaria_severity_uas7 = p.uas7_old
-    AND pj.persistent_180d = p.persist_old
-    AND pj.discontinued_180d = p.disc_old
+    AND {unchanged}
     AND (pj.urticaria_severity_uas7 IS DISTINCT FROM p.uas7_new
       OR pj.persistent_180d IS DISTINCT FROM p.persist_new);
   GET DIAGNOSTICS updated = ROW_COUNT;

@@ -235,3 +235,70 @@ def test_sql_moves_labels_in_the_same_guarded_transaction():
     )
     # after the update every staged row carries exactly its planned values
     assert "pj.persistent_180d IS DISTINCT FROM p.persist_new" in sql.split("GET DIAGNOSTICS")[1]
+
+
+_REGEN_COVARIATES = (
+    "treatment_arm",
+    "academic_hcp",
+    "geographic_region",
+    "insurance_type",
+    "age_at_diagnosis",
+    "comorbidity_burden",
+    "prior_therapy_lines",
+    "segment_assignment",
+    "copay_support",
+    "psp_enrolled",
+)
+
+
+def test_sql_refuses_an_export_that_is_not_the_whole_eligible_cohort():
+    """Codex r1 HIGH: regenerate is one stream over the frame, so a subset export plans
+    DIFFERENT labels (33 of 2,000 on the fixture) and every per-row guard still passes.
+    The transaction must prove no eligible live row was left out of the plan."""
+    full = plan(_live(3000))
+    subset = plan(_live(3000).iloc[:2000])
+    merged = subset.merge(full, on="patient_id", suffixes=("_sub", "_full"))
+    assert (merged["persist_new_sub"] != merged["persist_new_full"]).any()
+
+    sql = to_sql(full)
+    guard = sql[: sql.index("UPDATE patient_journeys pj SET")]
+    assert "NOT EXISTS (SELECT 1 FROM _uas7_plan p WHERE p.patient_id = pj.patient_id)" in guard
+    assert "IF missing <> 0 THEN" in guard
+    # the eligibility predicate does NOT filter on UAS7, so a NULL-UAS7 row fails closed
+    eligible = guard[guard.index("INTO missing") : guard.index("IF missing <> 0")]
+    assert "urticaria_severity_uas7" not in eligible
+    assert f"pj.created_at < '{OLD_GENERATOR_CUTOFF.isoformat()}'::timestamptz" in eligible
+
+
+def test_sql_compare_and_sets_every_regeneration_input():
+    """Codex r1 MED: a covariate changed after the export (e.g. treatment_arm) changes
+    the planned labels while severity/UAS7/labels still match."""
+    live = _live(3000)
+    flipped = live.assign(treatment_arm=1 - live["treatment_arm"])
+    assert (plan(live)["persist_new"] != plan(flipped)["persist_new"]).any()
+
+    sql = to_sql(plan(live))
+    guard = sql[: sql.index("UPDATE patient_journeys pj SET")]
+    update = sql[sql.index("UPDATE patient_journeys pj SET") : sql.index("GET DIAGNOSTICS")]
+    for col in _REGEN_COVARIATES:
+        predicate = f"pj.{col}::text = p.{col}"
+        assert predicate in guard, predicate
+        assert predicate in update, predicate
+
+
+@pytest.mark.parametrize("col", ["geographic_region", "insurance_type", "segment_assignment"])
+def test_refuses_string_covariates_that_are_not_plain_tokens(col):
+    live = _live(200)
+    live[col] = live[col].astype(object)
+    live.loc[5, col] = "south'); DROP TABLE x; --"
+    with pytest.raises(SystemExit, match=col):
+        plan(live)
+
+
+@pytest.mark.parametrize("col", ["treatment_arm", "age_at_diagnosis", "copay_support"])
+def test_refuses_missing_integer_covariates(col):
+    live = _live(200)
+    live[col] = live[col].astype(float)
+    live.loc[5, col] = np.nan
+    with pytest.raises(SystemExit, match=col):
+        plan(live)
