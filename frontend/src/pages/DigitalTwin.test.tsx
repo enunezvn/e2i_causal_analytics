@@ -761,9 +761,11 @@ describe('DigitalTwin', () => {
       subgroups_basis: 'twin_weighted_legacy',
     });
     const title = screen.getByText(/Confidence: 83%/).getAttribute('title') ?? '';
-    expect(title).toMatch(/score stored when the simulation ran.*heuristic in force at that time/i);
-    expect(title).toMatch(/scored on the generated twin count/i);
+    expect(title).toMatch(/score stored when this simulation ran.*heuristic in force at that time/i);
+    expect(title).toMatch(/scored the evidence on the generated twin count/i);
     expect(title).not.toMatch(/more twins does not raise/i);
+    // Its evidence term WAS the twin count: no training-row claim may open the sentence.
+    expect(title).not.toMatch(/rows the estimator fit on/i);
   });
 
   it('says a stored cohort_rows detail carries the score of its time, without the invariance claim (#2104)', async () => {
@@ -773,9 +775,10 @@ describe('DigitalTwin', () => {
       subgroups_basis: 'cohort_rows',
     });
     const title = screen.getByText(/Confidence: 83%/).getAttribute('title') ?? '';
-    expect(title).toMatch(/score stored when the simulation ran.*heuristic in force at that time/i);
-    expect(title).not.toMatch(/scored on the generated twin count/i);
+    expect(title).toMatch(/score stored when this simulation ran.*heuristic in force at that time/i);
+    expect(title).not.toMatch(/generated twin count/i);
     expect(title).not.toMatch(/more twins does not raise/i);
+    expect(title).not.toMatch(/rows the estimator fit on/i);
   });
 
   it('pins the handwritten subgroups_basis union to the generated OpenAPI contract (#2104)', () => {

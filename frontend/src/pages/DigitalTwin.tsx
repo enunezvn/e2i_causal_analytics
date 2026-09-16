@@ -383,9 +383,12 @@ function confidenceTitle(simulation: AnySimulation): string {
   const base =
     'Confidence blends the evidence behind this estimate: the rows the estimator fit on, the precision of the 95% interval, and model fidelity.';
   if ('subgroups_basis' in simulation) {
-    const stored = `${base} This is the score stored when the simulation ran, computed by the confidence heuristic in force at that time.`;
+    // Its own opening: a legacy row's evidence term WAS the generated twin count, so the
+    // shared "rows the estimator fit on" sentence would be false before the qualification.
+    const stored =
+      'Confidence is the score stored when this simulation ran, computed by the confidence heuristic in force at that time: its evidence, the precision of the 95% interval, and model fidelity.';
     return simulation.subgroups_basis === 'twin_weighted_legacy'
-      ? `${stored} That heuristic scored on the generated twin count.`
+      ? `${stored} That heuristic scored the evidence on the generated twin count.`
       : stored;
   }
   switch (simulation.data_provenance) {
