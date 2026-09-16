@@ -246,8 +246,15 @@ _PERIOD_MODIFIERS = frozenset(
     }
 )
 
-#: The same token shape ``_kpi_right_head`` reads, applied to the whole tail.
-_TAIL_TOKEN_RE = re.compile(r"[\w'-]+")
+#: The token shape ``_kpi_right_head`` reads, applied to the whole tail -- plus
+#: "+", which the RESOLVER needs and a bare ``[\w'-]+`` destroys. "hr+" splits to
+#: "hr", and ``brand_from_text('hr')`` is None while ``brand_from_text('hr+')`` is
+#: 'Kisqali'; commit b09a3271d in this lane exists to let HR+ ground Kisqali, so
+#: the walk was refusing input its own discriminator says must bind (r12).
+#:
+#: "/" needs nothing: normalisation turns it into a space before the walk sees it
+#: ("HR+/HER2-" arrives as 'hr+ her2'). Measured, not assumed.
+_TAIL_TOKEN_RE = re.compile(r"[\w'+-]+")
 
 #: Where a clause ends and so where a compound head must stop. "TRx cost" is one
 #: quantity; "the TRx, the total prescriptions," is the same one said twice.

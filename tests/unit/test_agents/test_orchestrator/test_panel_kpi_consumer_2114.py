@@ -1282,3 +1282,52 @@ def test_a_clause_boundary_does_not_rescue_a_compound_before_it(query, why, calc
     is still judged. Without this row the fix above would be a hole rather than a limit."""
     assert _kpi_lookup_evidence({"query": query}) is None, f"{query!r} answered; {why}"
     assert calculator.calls == [], f"{query!r} called the calculator; {why}"
+
+
+# --- r12 MEDIUM: the lane over-refused a brand alias the lane itself added -----------------
+# `_TAIL_TOKEN_RE` was `[\w'-]+`, which splits "hr+" into "hr" — and `brand_from_text('hr')`
+# is None while `brand_from_text('hr+')` is 'Kisqali'. Commit b09a3271d IN THIS LANE exists
+# precisely to let HR+ ground Kisqali (#2114), so the walk was refusing input its own
+# discriminator says must bind. Self-inflicted, and invisible to every test because they all
+# used plain alphabetic brands.
+#
+# MEASURED, correcting half the brief: '/' needs no handling. Normalisation turns it into a
+# space long before the walk sees it —
+#     "What is NRx panel HR+/HER2-?"  ->  normalized tail ' hr+ her2 ?'
+# so only '+' has to survive tokenisation.
+
+
+def test_a_brand_alias_with_punctuation_still_binds(calculator):
+    assert _kpi_lookup_evidence({"query": "What is NRx panel HR+?"}), "HR+ refused"
+    assert calculator.calls == ["WS3-BI-012"], calculator.calls
+
+
+@pytest.mark.parametrize(
+    "query,why",
+    [
+        ("What is TRx triple negative?", "brand_from_text('triple negative') is None"),
+        ("What is NRx panel HR+ cost?", "the alias does not license a quantity behind it"),
+    ],
+)
+def test_the_alias_fix_does_not_open_a_hole(query, why, calculator):
+    assert _kpi_lookup_evidence({"query": query}) is None, f"{query!r} answered; {why}"
+    assert calculator.calls == [], f"{query!r} called the calculator; {why}"
+
+
+def test_a_split_compound_alias_binds_because_both_halves_resolve(calculator):
+    """I PREDICTED THIS WOULD REFUSE AND THE TEST DISPROVED ME — recorded because the wrong
+    prediction is the useful part.
+
+    I reasoned from the tokenisation alone: "HR+/HER2-" normalises to 'hr+ her2', 'hr+'
+    resolves so the single-token branch consumes it, and 'her2' would then be judged alone
+    and refuse — the same shape as the "west coast" limit. Measured instead:
+
+        brand_from_text('hr+')  = 'Kisqali'
+        brand_from_text('her2') = 'Kisqali'   <- an INDICATION alias, INDICATION_TO_BRAND
+
+    Both halves resolve independently, so both are consumed and the ask binds. The fix is
+    worth more than I claimed for it. Reading the token rule told me about the tokeniser and
+    nothing about the resolver behind it, which is the layer confusion this lane keeps
+    finding — here caught by red-first rather than shipped in a docstring."""
+    assert _kpi_lookup_evidence({"query": "What is NRx panel HR+/HER2-?"})
+    assert calculator.calls == ["WS3-BI-012"], calculator.calls
