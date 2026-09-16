@@ -14,6 +14,7 @@ The read-only cwd here is a ``chmod 0o555`` directory, so ``mkdir`` raises
 
 from __future__ import annotations
 
+import errno
 import os
 import tempfile
 from pathlib import Path
@@ -95,11 +96,63 @@ class TestLeakageRemediationCacheDir:
 
         assert lr._get_cache_dir() == tmp_path / ".cache" / "leakage_remediation"
 
-    def test_configured_cache_root_wins(self, tmp_path, monkeypatch, read_only_cwd):
+    def test_configured_cache_root_wins_over_a_writable_cwd(
+        self, tmp_path, monkeypatch, isolated_tempdir
+    ):
+        cwd = tmp_path / "cwd"
+        cwd.mkdir()
+        monkeypatch.chdir(cwd)
         root = tmp_path / "configured"
         monkeypatch.setenv("E2I_CACHE_DIR", str(root))
 
         assert lr._get_cache_dir() == root / "leakage_remediation"
+        assert not (cwd / ".cache").exists()
+
+    def test_read_only_filesystem_error_on_the_cwd_root_falls_back(
+        self, tmp_path, monkeypatch, isolated_tempdir
+    ):
+        """EROFS, as in e2i_api, injected so it runs whatever the uid."""
+        cwd = tmp_path / "cwd"
+        cwd.mkdir()
+        monkeypatch.chdir(cwd)
+        real_mkdir = Path.mkdir
+
+        def mkdir(self, *args, **kwargs):
+            if cwd in self.parents or self == cwd:
+                raise OSError(errno.EROFS, "Read-only file system", str(self))
+            return real_mkdir(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "mkdir", mkdir)
+
+        assert lr._get_cache_dir() == isolated_tempdir / "e2i_cache" / "leakage_remediation"
+
+    def test_tempdir_discovery_failure_does_not_block_a_configured_root(
+        self, tmp_path, monkeypatch, read_only_cwd
+    ):
+        """``tempfile.gettempdir()`` raises when no temp dir is usable; it
+        must only be asked once the earlier roots have failed."""
+
+        def no_tempdir():
+            raise FileNotFoundError("No usable temporary directory found")
+
+        monkeypatch.setattr(tempfile, "gettempdir", no_tempdir)
+        root = tmp_path / "configured"
+        monkeypatch.setenv("E2I_CACHE_DIR", str(root))
+
+        assert lr._get_cache_dir() == root / "leakage_remediation"
+
+    async def test_node_remediates_uncached_when_no_root_resolves(self, monkeypatch, read_only_cwd):
+        def no_tempdir():
+            raise FileNotFoundError("No usable temporary directory found")
+
+        monkeypatch.delenv("E2I_CACHE_DIR", raising=False)
+        monkeypatch.setattr(tempfile, "gettempdir", no_tempdir)
+
+        result = await lr.review_and_remediate_leakage(_leaky_state())
+
+        assert result["leakage_remediation_status"] == "applied", result.get(
+            "leakage_remediation_reasoning"
+        )
 
     def test_unwritable_configured_root_falls_back(
         self, tmp_path, monkeypatch, read_only_cwd, isolated_tempdir

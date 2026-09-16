@@ -33,7 +33,7 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -516,26 +516,38 @@ def _get_cache_dir() -> Optional[Path]:
     wins. The cwd is not writable everywhere -- ``e2i_api`` runs with a
     read-only rootfs at ``/app`` -- and the cache only saves repeat LLM
     calls, so when no root is writable remediation runs uncached (#2143).
+    Each root is resolved only when reached: ``Path.cwd()`` and
+    ``tempfile.gettempdir()`` can themselves raise.
     """
     import tempfile
 
-    roots: List[Path] = []
-    configured = os.environ.get("E2I_CACHE_DIR")
-    if configured:
-        roots.append(Path(configured))
-    roots.append(Path.cwd() / ".cache")
-    roots.append(Path(tempfile.gettempdir()) / "e2i_cache")
+    def _configured() -> Optional[Path]:
+        value = os.environ.get("E2I_CACHE_DIR")
+        return Path(value).absolute() if value else None
 
-    for root in roots:
-        cache_dir = root / "leakage_remediation"
+    root_resolvers: List[Tuple[str, Callable[[], Optional[Path]]]] = [
+        ("E2I_CACHE_DIR", _configured),
+        ("cwd", lambda: Path.cwd() / ".cache"),
+        ("tempdir", lambda: Path(tempfile.gettempdir()) / "e2i_cache"),
+    ]
+    for label, resolve in root_resolvers:
         try:
+            root = resolve()
+            if root is None:
+                continue
+            cache_dir = root / "leakage_remediation"
             cache_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
-            logger.warning(f"Leakage remediation cache unavailable at {cache_dir}: {e}")
+            # Expected for the cwd root in a read-only container; only a
+            # configured root failing is worth a warning.
+            log = logger.warning if label == "E2I_CACHE_DIR" else logger.debug
+            log(f"Leakage remediation cache root '{label}' unavailable: {e}")
             continue
+        # mkdir(exist_ok=True) succeeds on an existing read-only directory.
         if os.access(cache_dir, os.W_OK):
             return cache_dir
-        logger.warning(f"Leakage remediation cache unavailable at {cache_dir}: not writable")
+        log = logger.warning if label == "E2I_CACHE_DIR" else logger.debug
+        log(f"Leakage remediation cache root '{label}' not writable: {cache_dir}")
     logger.warning("No writable leakage remediation cache directory; running uncached")
     return None
 
