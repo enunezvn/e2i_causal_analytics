@@ -255,3 +255,88 @@ def test_three_clean_owned_mentions_still_answer(calculator):
     query = "What is NRx panel and NRx panel and the NRx panel?"
     assert _kpi_lookup_evidence({"query": query}) is not None, query
     assert calculator.calls == ["WS3-BI-012"]
+
+
+# --- r9 MEDIUM-1, the CAUSAL consumer: "Add regressions through both consumers" -------------
+# 11b remediated `_kpi_lookup_evidence` and wired `owned_mask` into `_causal_path_evidence`,
+# but nothing exercised the causal site. These close that.
+#
+# The seam is the REAL one: `_causal_path_evidence` does
+# `from src.repositories import causal_path as causal_path_repo` INSIDE the function and
+# calls `causal_path_repo.search_paths_for_outcome_sync(kpi.name, ...)`. Patching that
+# attribute records WHICH KPI was bound as the outcome. The masking and the directional
+# selection are NOT re-implemented here — a hand-rolled replica would be a probe faithful to
+# the wrong layer, which has already cost this lane one round.
+#
+# Asserting "evidence is not None" would be a test named for a behaviour it never exercises:
+# the finding is about WHICH outcome gets bound, so the assertion is the id.
+
+_PATH_ROW = {
+    "start_node": "HCP Visits",
+    "end_node": "TRx",
+    "brand": "Kisqali",
+    "confidence_level": 0.9,
+    "path_id": "p1",
+    "is_synthetic": False,
+}
+
+
+@pytest.fixture
+def causal_registry(monkeypatch) -> List[str]:
+    """Record the outcome term handed to the causal-path registry."""
+    bound: List[str] = []
+
+    def _fake(outcome_term, **kwargs):
+        bound.append(outcome_term)
+        return [_PATH_ROW]
+
+    monkeypatch.setattr(
+        "src.repositories.causal_path.search_paths_for_outcome_sync",
+        _fake,
+    )
+    return bound
+
+
+def _causal_kpi_id(query: str):
+    from src.agents.orchestrator.nodes.dispatcher import _causal_path_evidence
+
+    evidence = _causal_path_evidence({"query": query})
+    return evidence[0]["kpi_id"] if evidence else None
+
+
+def test_the_directed_causal_outcome_survives_ownership_masking(causal_registry):
+    """r9 MEDIUM-1's own causal example. "impact of X on Y" makes Y the outcome, and Y here
+    is the panel share (014). On 11a the ownership bug masked "trx share" out of
+    "trx share panel", the second mention was lost, and the outcome fell back to the
+    TRx-share KPI (008) — a DIFFERENT unit silently substituted before causal selection.
+    MEASURED on 11a: 008. On the Task-11 base and on 11b: 014."""
+    assert _causal_kpi_id("impact of share of Kisqali TRx on TRx share panel") == "WS3-BI-014"
+    assert causal_registry == ["Observed Rx Events - Patient Panel TRx Share (TRx Share Panel)"]
+
+
+def test_a_cross_owner_causal_ask_without_direction_fails_closed(causal_registry):
+    """No directional grammar, two distinct KPIs: a singleton path answer chosen by alias
+    order answers neither, so the `else: return None` branch must fire. On 11a this ANSWERED
+    with 008 — fail-OPEN on the causal route. MEASURED on 11a: 008; base and 11b: None."""
+    assert _causal_kpi_id("what drives the share of Kisqali TRx and TRx share panel") is None
+    assert causal_registry == [], "the registry was consulted; the ask should have failed closed"
+
+
+def test_a_single_panel_causal_ask_binds_the_panel_kpi(causal_registry):
+    """POSITIVE CONTROL. Both assertions above are about losing or refusing an outcome; they
+    are worth nothing unless a plain panel causal ask still binds the panel KPI."""
+    assert _causal_kpi_id("what drives TRx share panel") == "WS3-BI-014"
+    assert causal_registry == ["Observed Rx Events - Patient Panel TRx Share (TRx Share Panel)"]
+
+
+def test_the_mirror_direction_is_a_documented_PIN_not_a_fix(causal_registry):
+    """The direction-reversed mirror returns None, and it does so on the Task-11 base, on 11a
+    and on 11b alike — so this is PRE-EXISTING behaviour, pinned, NOT something 11b fixed.
+
+    Why it refuses: `recognize_kpi_span` binds "share of kisqali trx" (008) as the FIRST
+    match; that mention is neither `of`-headed by a causal word nor right-headed, so
+    `causally_headed` is False, and the query-level causal patterns do not match "impact of
+    … on …" either — the entry gate declines before any ownership logic runs. Recorded as a
+    known gap in the causal ENTRY gate, unrelated to #2114's masking."""
+    assert _causal_kpi_id("impact of TRx share panel on the share of Kisqali TRx") is None
+    assert causal_registry == []
