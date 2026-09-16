@@ -349,6 +349,7 @@ from src.api.routes.synthesis_guard import (
 )
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.api.utils.sse_keepalive import with_sse_keepalive
+from src.kpi import capability_policy as _cap
 from src.kpi.synthetic_mode import kpi_include_synthetic, resolve_kpi_query_id
 from src.utils.llm_attribution import (
     drain_run_usage,
@@ -3396,7 +3397,7 @@ You help users with:
 You MUST use tools proactively when users ask about data:
 - Use `e2i_data_query_tool` for KPI metrics, causal chains, agent analyses (an agent's ACTIVITY LOG — runs, confidences, timestamps; NOT the system health score), triggers
 - Use kpi_calculate_tool to COMPUTE a KPI value for a brand/period (NRx, TRx, NBRx, market share, conversion rate, ROI). Pass the brand and any time window the user names, and state which brand and window your answer covers.
-- BREAKDOWN GUIDANCE: For NRx/TRx/NBRx/conversion-rate patient-segment breakdowns, call `kpi_calculate_tool` once per bucket of ONE axis and present the results as a table. Axes: `segment` ∈ {low_severity, medium_severity, high_severity}; `therapy_line` ∈ {0,1,2,3}; and FOR REMIBRUTINIB ONLY (volume KPIs, NOT conversion rate) `biologic` ∈ {naive, experienced} and `ige_tier` ∈ {low, medium, high}. TRx share is NOT defined on a patient axis (each patient is on one tracked brand, so a per-bucket portfolio share mixes indications; the tool refuses it): for a "share by tier / line / biologic status / IgE tier" ask, call TRx once per bucket and present each bucket's TRx with its % of the brand's TRx total, labelled the within-brand mix. A volume axis's buckets sum to the head-line KPI, so the breakdown reconciles with the total (rates don't sum — their numerators/denominators do). When the user names a period ("last year", "Q1 2025"), ALWAYS pass `window` too — it composes with `segment`/`therapy_line` for TRx/NRx/NBRx and conversion rate. Use exactly one axis per breakdown — they are mutually exclusive.
+- BREAKDOWN GUIDANCE: {breakdown_guidance}
 - HONESTY GUARD: Clinical context is background framing only — never present a clinical sub-population as a data breakdown unless a tool actually returned per-bucket values. Biologic status (`biologic`) and IgE tier (`ige_tier`) are REAL breakdown axes for REMIBRUTINIB ONLY; for Kisqali/Fabhalta `kpi_calculate_tool` returns an error because the data is NULL by design — say it is unavailable for that brand and do NOT fabricate a split or guess. The real breakdown axes are severity tier (`segment`), line-of-therapy (`therapy_line`), biologic status and IgE tier (Remibrutinib only), plus geographic `region` — for TRx share only `region` applies, and a within-brand mix computed from TRx buckets is never a share. TRx Share is the brand's share of the TRACKED PORTFOLIO's prescriptions (Fabhalta + Kisqali + Remibrutinib, cross-indication) — NOT market share vs external competitors; competitor brands (e.g. Xolair, Dupixent) are not in the data model, so NEVER attribute the share complement to named competitors.
 - ROI DISPERSION (#1532): the ROI headline is a pooled point estimate and carries NO interval — never invent one. When the response includes `temporal_variability_band`, present each slice's band as "the range of its monthly ROI values over the past 12 months" with its `n` — it measures recent temporal variability, NOT a confidence interval and NOT uncertainty about the current value; for slices with `band_suppressed: true`, state only the n and that the band is suppressed.
 - SCALE GUARD (#1640): every KPI figure arrives with a `measure_basis` naming the substrate it was computed from. TWO FIGURES ARE COMPARABLE ONLY IF THEIR `measure_basis.comparison_key` MATCHES — that field, not `substrate`. They differ on purpose: a materialized history series is READ from `kpi_history` (its `substrate`) but RESTS on whatever the backfill drew it from (`materialized_from`, reduced to tables in `comparison_key`). Comparing on `substrate` would call a TRx history and an ROI history comparable because both are read from the same table, and would wrongly fence ROI history against stored ROI when both rest on `business_metrics`. If `measure_basis.mixed_sources` is true the series spans more than one substrate and is comparable with NOTHING — say so rather than comparing it. `kpi_calculate_tool` computes volume KPIs from the `treatment_events` ledger; `e2i_data_query_tool(query_type='kpi')` returns stored `business_metrics` rows, whose `value` is a MODELED market-scale level — measured, the national business_metrics TRx total is ~73x the trailing-30-day event count for the same brand. They are different quantities sharing a name. NEVER present one as a check, correction, total, or share-of for the other; never divide or sum across them; and never call the gap a discontinuity or a data error. If an answer needs both, give each its own row with its substrate stated, and say plainly that they measure different things. When a figure carries no `measure_basis`, treat it as NOT comparable rather than assuming it agrees.
@@ -3453,9 +3454,8 @@ a single query to an agent, it is not a directory.
 #
 # factory imports only logging/os/typing at module scope (agents are loaded lazily
 # by module/class name), so this costs nothing at import time.
-E2I_COPILOT_SYSTEM_PROMPT = E2I_COPILOT_SYSTEM_PROMPT.replace(
-    "{agent_roster}", build_agent_roster_block()
-)
+_ROSTERED = E2I_COPILOT_SYSTEM_PROMPT.replace("{agent_roster}", build_agent_roster_block())
+E2I_COPILOT_SYSTEM_PROMPT = _cap.render_blocks(_ROSTERED)
 
 
 class E2IAgentState(TypedDict, total=False):

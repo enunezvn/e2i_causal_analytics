@@ -51,6 +51,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from src.kpi.capability_policy import composed_caveat
+
 logger = logging.getLogger(__name__)
 
 # Verbatim in every profile: the direction-of-use guard that keeps prevalence
@@ -196,8 +198,11 @@ def _kpi_lines(metas: list[Any]) -> list[str]:
             parts.append(f"; actionability: {m.actionability}{owner}")
         if m.levers:
             parts.append(f"; levers: {', '.join(m.levers)}")
-        if m.measurement_caveat:
-            caveat = " ".join(str(m.measurement_caveat).split())
+        # #2150: the caveat the model sees is COMPOSED — the authored sentence
+        # plus the derived axis capability — so the block cannot claim a
+        # breakdown the tool refuses.
+        caveat = composed_caveat(m)
+        if caveat:
             parts.append(f". Caveat: {caveat}")
         lines.append("".join(parts))
     return lines

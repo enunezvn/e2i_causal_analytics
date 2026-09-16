@@ -42,6 +42,7 @@ from typing import (
 )
 
 from src.agents.factory import build_agent_roster_block
+from src.kpi.capability_policy import axis_rules_prose
 from src.kpi.models import Workstream
 from src.kpi.registry import get_registry
 from src.kpi.segmented_history import SEGMENTED_KPI_QUERY_FAMILIES
@@ -233,24 +234,11 @@ AXIS_PARAMETER_NAMES: Tuple[str, ...] = (
     "biologic",
     "ige_tier",
 )
-AXIS_RULES = (
-    "Breakdown axes, AT MOST ONE per ask: segment = patient severity tier (low/medium/high); "
-    "therapy_line = line of therapy (0-3); region = US census region (northeast/south/midwest/west); "
-    "and - Remibrutinib ONLY - biologic status (naive/experienced) or ige_tier (low/medium/high). "
-    "The patient axes are served for the PATIENT-PANEL KPIs TRx Panel, NRx Panel and NBRx Panel "
-    "(all four axes) and Conversion Rate (segment/therapy_line only), plus CATE by segment; "
-    "NO other KPI can be broken down by a patient axis. "
-    "The canonical TRx, NRx and NBRx series do NOT support a patient axis: they are brand x region x "
-    "calendar month and carry no patient dimension - ask for the matching Panel KPI by that axis. "
-    "NEITHER share supports a patient axis: TRx Share Panel because each patient is on one tracked "
-    "brand (a share by tier is TRx Panel by tier as the within-brand mix), and canonical TRx Share "
-    "because it carries no patient dimension at all; both redirect to TRx Panel by that axis. "
-    "The time window composes with any one axis for TRx Panel, NRx Panel and NBRx Panel; with region "
-    "for canonical TRx, NRx, NBRx and TRx Share; only with segment/therapy_line for Conversion Rate; "
-    "with no axis at all for TRx Share Panel; and only with region for Trigger Precision, "
-    "Acceptance Rate, Override Rate and Trigger Funnel Conversion. "
-    "TRx share is share of the tracked 3-brand portfolio, NOT share versus competitors."
-)
+# ⚠ DERIVED (#2150). The literal that stood here was CORRECT — it already named
+# the Panel KPIs — which is exactly why it was the next copy to go stale. The
+# generator reproduces it BYTE-IDENTICALLY today (proved by test), so this
+# changes no wording and removes the hand-maintenance.
+AXIS_RULES = axis_rules_prose()
 
 NEVER_BLOCK = (
     "NEVER PROPOSE (no tool serves these): named HCP or patient lists / rosters / exports; "

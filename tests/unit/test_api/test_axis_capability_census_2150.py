@@ -128,9 +128,8 @@ def test_the_patient_axis_allowlist_is_derived_from_the_policy():
     """Surface 7. Correct TODAY (e9d767372 moved it to the panel ids) but still
     hand-maintained, which is the #2150 defect: being right once is not the same as
     being derived."""
-    from src.kpi.capability_policy import axis_kpi_ids
-
     from src.api.routes.chatbot_tools import _PATIENT_AXIS_KPI_IDS
+    from src.kpi.capability_policy import axis_kpi_ids
 
     for axis in _PATIENT_AXIS_KPI_IDS:
         assert _PATIENT_AXIS_KPI_IDS[axis] == axis_kpi_ids(axis), axis
@@ -146,9 +145,8 @@ def test_the_volume_coverage_probe_set_is_derived_from_the_policy():
     011..013, which the probe was designed for, are not in the set at all. So the
     probe currently runs on the wrong three KPIs in both directions.
     """
-    from src.kpi.capability_policy import trailing_coverage_kpi_ids
-
     from src.api.routes.chatbot_tools import _VOLUME_KPI_IDS
+    from src.kpi.capability_policy import trailing_coverage_kpi_ids
 
     assert _VOLUME_KPI_IDS == trailing_coverage_kpi_ids()
 
@@ -158,7 +156,6 @@ def test_the_capability_catalog_axis_rules_are_derived_from_the_policy():
     """Surface 10: AXIS_RULES is prose ASSEMBLED from a hand-maintained view of the
     same fact, and it is injected into the chat capability prompt."""
     from src.kpi.capability_policy import axis_rules_prose
-
     from src.services.chat_capability_catalog import AXIS_RULES
 
     assert AXIS_RULES == axis_rules_prose()

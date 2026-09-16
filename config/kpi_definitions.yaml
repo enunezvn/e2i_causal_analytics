@@ -38,6 +38,8 @@ ws1_data_quality:
 
   source_coverage_patients:
     id: "WS1-DQ-001"
+    axis_capability:
+      axes: [region]
     name: "Source Coverage - Patients"
     value_format: percent
     definition: "Percentage of eligible patients present in source vs reference universe"
@@ -60,6 +62,8 @@ ws1_data_quality:
 
   source_coverage_hcps:
     id: "WS1-DQ-002"
+    axis_capability:
+      axes: [region]
     name: "Source Coverage - HCPs"
     value_format: percent
     definition: "Percentage of priority HCPs present in source vs universe"
@@ -128,6 +132,8 @@ ws1_data_quality:
     
   completeness_pass_rate:
     id: "WS1-DQ-005"
+    axis_capability:
+      axes: [region]
     name: "Completeness Pass Rate"
     value_format: percent
     definition: "1 minus null rate across brand-critical fields"
@@ -426,6 +432,9 @@ ws2_triggers:
 
   trigger_precision:
     id: "WS2-TR-001"
+    reporting_window: "30-day trigger cohort ending 30 days before the trigger-data frontier (the conversion window must mature)"
+    axis_capability:
+      axes: [region]
     name: "Trigger Precision"
     # definition v2 (2026-07-20, migration 113): the declared truth shape from
     # domain_vocabulary truth_definitions.next_best_action_truth — "trigger
@@ -471,6 +480,9 @@ ws2_triggers:
 
   trigger_recall:
     id: "WS2-TR-002"
+    axis_capability:
+      axes: [region]
+    additive: false
     name: "Trigger Recall"
     # definition v2 (2026-07-20, migration 113): denominator = NEW STARTS
     # (patients whose first-ever prescription lands in the frontier-anchored
@@ -509,6 +521,8 @@ ws2_triggers:
     
   action_rate_uplift:
     id: "WS2-TR-003"
+    axis_capability:
+      axes: [region]
     name: "Action Rate Uplift"
     definition: "Incremental action rate vs control group"
     formula: "(action_rate_treatment - action_rate_control) / action_rate_control"
@@ -535,6 +549,9 @@ ws2_triggers:
     
   acceptance_rate:
     id: "WS2-TR-004"
+    reporting_window: "most recent 30 days of trigger data"
+    axis_capability:
+      axes: [region]
     name: "Acceptance Rate"
     definition: "Percentage of delivered triggers accepted by reps"
     formula: "count(accepted) / count(delivered)"
@@ -567,6 +584,9 @@ ws2_triggers:
 
   false_alert_rate:
     id: "WS2-TR-005"
+    reporting_window: "most recent 30 days of trigger data"
+    axis_capability:
+      axes: [region]
     name: "False Alert Rate"
     definition: "Percentage of triggers marked as false positives"
     formula: "count(false_positive) / total_triggers"
@@ -596,6 +616,9 @@ ws2_triggers:
 
   override_rate:
     id: "WS2-TR-006"
+    reporting_window: "most recent 30 days of trigger data"
+    axis_capability:
+      axes: [region]
     name: "Override Rate"
     definition: "Percentage of triggers overridden by users"
     formula: "count(overridden) / count(delivered)"
@@ -627,6 +650,8 @@ ws2_triggers:
 
   lead_time_days:
     id: "WS2-TR-007"
+    axis_capability:
+      axes: [region]
     name: "Lead Time"
     definition: "Median days between trigger and outcome"
     formula: "median(outcome_date - trigger_date)"
@@ -657,6 +682,8 @@ ws2_triggers:
 
   change_fail_rate:
     id: "WS2-TR-008"
+    axis_capability:
+      axes: [region]
     name: "Change-Fail Rate (CFR)"
     definition: "Percentage of trigger changes that resulted in worse outcomes"
     formula: "count(change_failed) / count(changed_triggers)"
@@ -686,6 +713,9 @@ ws2_triggers:
 
   trigger_funnel_conversion:
     id: "WS2-TR-009"
+    reporting_window: "most recent 30 days of trigger data"
+    axis_capability:
+      axes: [region]
     name: "Trigger Funnel Conversion"
     # ADDED by the #1360 ruling (2026-07-30): trigger-effectiveness KPIs are
     # chat-KPI-path — served by kpi_calculate_tool over the migration-118
@@ -816,6 +846,9 @@ ws3_business:
     
   trx:
     id: "WS3-BI-005"
+    reporting_window: "most recent complete calendar month"
+    axis_capability:
+      axes: [region]
     name: "Total Prescriptions (TRx)"
     definition: "Monthly total prescription volume by brand x region (canonical business_metrics series)"
     formula: "sum(value) where metric_type = 'trx' for the latest complete calendar month"
@@ -849,6 +882,9 @@ ws3_business:
     
   nrx:
     id: "WS3-BI-006"
+    reporting_window: "most recent complete calendar month"
+    axis_capability:
+      axes: [region]
     name: "New Prescriptions (NRx)"
     definition: "Monthly new prescriptions by brand x region (canonical business_metrics series)"
     formula: "sum(value) where metric_type = 'nrx' for the latest complete calendar month"
@@ -881,6 +917,9 @@ ws3_business:
     
   nbrx:
     id: "WS3-BI-007"
+    reporting_window: "most recent complete calendar month"
+    axis_capability:
+      axes: [region]
     name: "New-to-Brand Prescriptions (NBRx)"
     definition: "Monthly new-to-brand prescriptions by brand x region (canonical business_metrics series)"
     formula: "sum(value) where metric_type = 'nbrx' for the latest complete calendar month"
@@ -913,6 +952,9 @@ ws3_business:
 
   trx_share:
     id: "WS3-BI-008"
+    reporting_window: "most recent complete calendar month"
+    axis_capability:
+      axes: [region]
     name: "TRx Share"
     definition: "Brand share of the tracked portfolio's canonical TRx for the latest complete month (competitor brands are not in the data model)"
     formula: "brand_trx / portfolio_trx over business_metrics metric_type = 'trx'"
@@ -951,6 +993,10 @@ ws3_business:
 
   trx_panel:
     id: "WS3-BI-011"
+    reporting_window: "most recent 30 days of prescription data"
+    axis_capability:
+      axes: [biologic, ige_tier, region, segment, therapy_line]
+    additive: true
     name: "Observed Rx Events - Patient Panel TRx (TRx Panel)"
     definition: "Prescription events observed for the tracked patient panel in the most recent 30 days of data"
     formula: "count(event_type = 'prescription')"
@@ -982,6 +1028,10 @@ ws3_business:
 
   nrx_panel:
     id: "WS3-BI-012"
+    reporting_window: "most recent 30 days of prescription data"
+    axis_capability:
+      axes: [biologic, ige_tier, region, segment, therapy_line]
+    additive: true
     name: "Observed Rx Events - Patient Panel NRx (NRx Panel)"
     definition: "First-time prescription events for the tracked patient panel in the most recent 30 days of data"
     formula: "count(first_prescription)"
@@ -1012,6 +1062,10 @@ ws3_business:
 
   nbrx_panel:
     id: "WS3-BI-013"
+    reporting_window: "most recent 30 days of prescription data"
+    axis_capability:
+      axes: [biologic, ige_tier, region, segment, therapy_line]
+    additive: true
     name: "Observed Rx Events - Patient Panel NBRx (NBRx Panel)"
     definition: "Patients whose first prescription of the brand lands in the most recent 30 days of panel data"
     formula: "count(first_brand_prescription)"
@@ -1041,6 +1095,11 @@ ws3_business:
 
   trx_share_panel:
     id: "WS3-BI-014"
+    reporting_window: "most recent 30 days of prescription data"
+    axis_capability:
+      axes: [region]
+      axes_under_window: []
+    additive: false
     name: "Observed Rx Events - Patient Panel TRx Share (TRx Share Panel)"
     definition: "Brand share of the tracked patient panel's prescription events (competitor brands are not in the data model)"
     formula: "brand_trx / category_trx"
@@ -1078,6 +1137,11 @@ ws3_business:
 
   conversion_rate:
     id: "WS3-BI-009"
+    reporting_window: "most recent 30 days of trigger data"
+    axis_capability:
+      axes: [region, segment, therapy_line]
+      axes_under_window: [segment, therapy_line]
+    additive: false
     name: "Conversion Rate"
     definition: "Percentage of triggers resulting in prescription"
     formula: "prescriptions_after_trigger / triggers_delivered"
@@ -1112,6 +1176,8 @@ ws3_business:
 
   roi:
     id: "WS3-BI-010"
+    axis_capability:
+      axes: [region]
     name: "Return on Investment"
     definition: "Value generated per dollar invested"
     formula: "value_captured / cost_invested"
@@ -1139,6 +1205,9 @@ brand_specific:
 
   remi_ah_uncontrolled_pct:
     id: "BR-001"
+    axis_capability:
+      axes: [region]
+    additive: false
     name: "Remi - AH Uncontrolled %"
     definition: "Percentage of antihistamine patients with uncontrolled symptoms"
     formula: "uncontrolled_patients / ah_patients"
@@ -1160,6 +1229,8 @@ brand_specific:
     
   remi_intent_to_prescribe_delta:
     id: "BR-002"
+    axis_capability:
+      axes: [region]
     name: "Remi - Intent-to-Prescribe Δ"
     definition: "Change in HCP intent-to-prescribe score after intervention"
     formula: "post_intent - pre_intent"
@@ -1183,6 +1254,9 @@ brand_specific:
     
   fabhalta_pnh_tested_pct:
     id: "BR-003"
+    axis_capability:
+      axes: [region]
+    additive: false
     name: "Fabhalta - % PNH Tested"
     definition: "Percentage of eligible patients tested for PNH"
     formula: "pnh_tested / eligible_patients"
@@ -1209,6 +1283,9 @@ brand_specific:
     
   kisqali_dx_adoption:
     id: "BR-004"
+    axis_capability:
+      axes: [region]
+    additive: false
     name: "Kisqali - Dx Adoption"
     definition: "Time from diagnosis to first Kisqali prescription"
     formula: "median(first_kisqali_date - diagnosis_date)"
@@ -1231,6 +1308,8 @@ brand_specific:
     
   kisqali_oncologist_reach:
     id: "BR-005"
+    axis_capability:
+      axes: [region]
     name: "Kisqali - Oncologist Reach"
     definition: "Percentage of oncologists with Kisqali engagement"
     formula: "engaged_oncologists / total_oncologists"
@@ -1272,6 +1351,8 @@ causal_metrics:
     
   treatment_effect_cate:
     id: "CM-002"
+    axis_capability:
+      axes: [segment]
     name: "Conditional ATE (CATE)"
     definition: "Treatment effect conditioned on segment"
     formula: "E[Y(1) - Y(0) | X=x]"

@@ -38,7 +38,8 @@ ALLOWLIST: dict[str, int] = {
     "src/api/main.py": 1692,
     "src/api/routes/chatbot_dspy.py": 4182,
     "src/api/routes/chatbot_graph.py": 3190,
-    "src/api/routes/chatbot_tools.py": 3054,
+    # 3054 -> 3031: #2150 replaced hand-kept capability literals with policy calls.
+    "src/api/routes/chatbot_tools.py": 3031,
     "src/api/routes/copilotkit.py": 6142,
     "src/api/routes/digital_twin.py": 1975,
     "src/api/routes/experiments.py": 1595,
