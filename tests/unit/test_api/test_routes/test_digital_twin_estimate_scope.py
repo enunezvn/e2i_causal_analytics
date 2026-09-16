@@ -241,3 +241,29 @@ def test_a_row_without_a_recorded_scope_reads_as_unknown(read, legacy):
     assert item.target_regions == []
     if hasattr(item, "cohort_effect"):
         assert item.cohort_effect is None
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("population_filters", "expected"),
+    [
+        # The two live unknown-scope rows (2026-09-12) carry this shape.
+        (
+            {"deciles": [], "regions": ["midwest"], "specialties": [], "adoption_stages": []},
+            ["midwest"],
+        ),
+        ({}, []),
+        (None, []),
+        ({"regions": None}, []),
+        ({"regions": ["northeast", 7, None]}, ["northeast"]),
+    ],
+    ids=["regions", "no_filter", "null_filters", "null_regions", "non_string_entries"],
+)
+def test_history_item_carries_the_stored_regions_filter(population_filters, expected):
+    """#2079: the history card needs the regions filter to tell an ambiguous region-filtered
+    unknown-scope row from an unfiltered one, as the detail view does from population_filters.
+    It is the stored filter, never a scope: target_regions stays empty for an unknown row."""
+    item = _read_history_item(_row(population_filters=population_filters))
+    assert item.filter_regions == expected
+    assert item.estimate_scope.value == "unknown"
+    assert item.target_regions == []

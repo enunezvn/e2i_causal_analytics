@@ -888,6 +888,18 @@ class TestRetrainingTriggerIntegration:
 class TestRetrainingService:
     """Tests for TwinRetrainingService."""
 
+    @pytest.fixture(autouse=True)
+    def _no_broker_enqueue(self):
+        """Keep ``trigger_retraining`` off the live Celery app (#2056).
+
+        Unpatched, ``execute_twin_retraining.delay`` sits in celery's Redis reconnect loops
+        (~20 s) wherever the broker is unreachable or rejects the URL. These tests assert the
+        job the service creates; queueing is covered in test_retraining_service_queueing.py.
+        """
+        with patch("src.tasks.ab_testing_tasks.execute_twin_retraining") as mock_task:
+            mock_task.delay = MagicMock(return_value=MagicMock(id="test-task-id"))
+            yield mock_task
+
     @pytest.fixture
     def retraining_config(self):
         """Create test retraining configuration."""
@@ -981,6 +993,35 @@ class TestRetrainingService:
 
         assert decision.should_retrain is True
         assert decision.requires_approval is False  # Auto-approved
+
+    @pytest.mark.asyncio
+    async def test_trigger_never_enqueues_on_a_live_celery_app(
+        self, retraining_service, monkeypatch
+    ):
+        """#2056: ``trigger_retraining`` calls ``execute_twin_retraining.delay``. Unpatched, a
+        unit test subscribed to the Redis result backend and sat in celery's reconnect loop
+        (20 retries, 1 s apart), then in the broker's, against the 30 s cap: the host .env's
+        Celery URLs carry no password (NOAUTH) and CI's unit lane has no Redis. Queueing is
+        covered with a stand-in task in test_retraining_service_queueing.py. A real enqueue
+        is recorded here and failed at once, so this guard is red fast rather than slow."""
+        from celery.app.task import Task
+
+        from src.digital_twin.retraining_service import TwinTriggerReason
+
+        enqueued = []
+
+        def _record(task, *args, **kwargs):
+            enqueued.append(task.name)
+            raise ConnectionError("a unit test enqueued on the live Celery app")
+
+        monkeypatch.setattr(Task, "apply_async", _record)
+
+        job = await retraining_service.trigger_retraining(
+            model_id=uuid4(), reason=TwinTriggerReason.MANUAL
+        )
+
+        assert job is not None
+        assert enqueued == []
 
     @pytest.mark.asyncio
     async def test_trigger_creates_job(self, retraining_service):

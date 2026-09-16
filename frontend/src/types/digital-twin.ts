@@ -768,6 +768,8 @@ export interface SimulationHistoryResponse {
     estimate_scope?: EstimateScope;
     /** Regions ate_estimate was estimated on; empty unless estimate_scope is 'regions' */
     target_regions?: string[];
+    /** Regions the stored population filter named (#2079); a filter, never a scope */
+    filter_regions?: string[];
   }>;
   /** Total count */
   total: number;
