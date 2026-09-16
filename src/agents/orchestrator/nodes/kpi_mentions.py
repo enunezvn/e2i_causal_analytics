@@ -286,6 +286,23 @@ def _scope_span(tokens: list[str], index: int) -> int:
         What is TRx therapy line?   -> calculator context {}   <- dropped
         What is NRx panel oncology? -> calculator context {}   <- the #2141 defect
 
+    ⚠ CORRECTION to the three lines above, which are NOT all from one tree. Two were
+    measured on ``f3663f2d6``; the "oncology" row was measured on ``6d321cbcf``, where
+    11g had not yet refused it. A table mixing two trees, written into the commit whose
+    own body warns that a measurement is bound to the tree it ran against. Re-measured
+    post-window at both, with a control asserting which implementation loaded:
+
+                                      6d321cbcf (pre-11g)   f3663f2d6 (11g)
+        What is NRx panel oncology?   {} binds              REFUSED
+        What is NRx panel segment?    {} binds              {} binds   <- the 11h defect
+        What is NRx panel cost?       {} binds              REFUSED
+
+    THE CORRECTED TABLE IS THE STRONGER ARGUMENT. On ``f3663f2d6``, "segment" and
+    "oncology" sit in the SAME dropped-scope condition -- both reach the calculator's
+    caller with nothing bound -- yet one answers and the other refuses. The only
+    difference between them is that "segment" was on this allowlist. That is the whole
+    case against admitting it, and it is visible only once the rows share a tree.
+
     Admitting them would have whitelisted tokens measured to be ignored -- the very
     thing this fix refuses "oncology" for, and a labeling fix wearing the allowlist's
     hat. "region" is likewise NOT a patient axis: it is the second text channel,
