@@ -34,6 +34,26 @@ TRX_KPI_ID = "WS3-BI-011"
 #: Registry name of TRX_KPI_ID (pinned by tests/unit/test_kpi/test_share_axis.py).
 TRX_NAME = "Observed Rx Events - Patient Panel TRx (TRx Panel)"
 
+#: ⚠ THE EXPLANATION EXTENDS TO BOTH SHARE KPIs; RE-KEYING IT MOVED IT AND THAT WAS
+#: A REGRESSION. Under this lane BOTH shares exist -- canonical WS3-BI-008 on
+#: business_metrics and panel WS3-BI-014 on treatment_events -- and a patient axis
+#: is undefined on each, for the same reason. Pointing the constants at 014 alone
+#: SILENTLY DELETED #2137's explanation from the canonical KPI, a behaviour
+#: live-verified on Remibrutinib the morning this lane merged. "Take #2137 whole"
+#: was right; "only the ids moved" was not.
+#:
+#: Each share redirects to ITS OWN TRx, because the within-brand mix that answers
+#: the ask lives on the same substrate as the share that refused it.
+CANONICAL_SHARE_KPI_ID = "WS3-BI-008"
+CANONICAL_TRX_KPI_ID = "WS3-BI-005"
+CANONICAL_TRX_NAME = "Total Prescriptions (TRx)"
+
+#: share KPI -> (TRx KPI id, TRx registry name) on the SAME substrate.
+SHARE_REDIRECTS: dict[str, Tuple[str, str]] = {
+    CANONICAL_SHARE_KPI_ID: (CANONICAL_TRX_KPI_ID, CANONICAL_TRX_NAME),
+    TRX_SHARE_KPI_ID: (TRX_KPI_ID, TRX_NAME),
+}
+
 #: (context key, human label), in the calculator's axis precedence order.
 PATIENT_AXES: Tuple[Tuple[str, str], ...] = (
     ("segment", "severity tier"),

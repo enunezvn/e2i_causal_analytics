@@ -178,9 +178,13 @@ async def test_refusal_text_is_the_documented_contract(monkeypatch):
     assert "Trigger Precision without the severity tier filter" in resp["hint"]
     assert "by severity tier" in resp["hint"]
     # The served list is REGISTRY order, so the volume KPIs lead and CATE closes.
-    assert resp["error"].index("Total Prescriptions (TRx)") < resp["error"].index(
-        "Conditional ATE (CATE)"
-    )
+    # #2114: the volume KPI that leads is now PANEL TRx — the canonical 005 no longer
+    # binds a patient axis, so its name is absent from the served list and .index()
+    # raised. The ORDERING PROPERTY is unchanged and still asserted; only the name of
+    # the KPI that leads moved with the contract.
+    assert resp["error"].index("Observed Rx Events - Patient Panel TRx (TRx Panel)") < resp[
+        "error"
+    ].index("Conditional ATE (CATE)")
 
 
 @pytest.mark.unit

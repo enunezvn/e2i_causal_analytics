@@ -2359,9 +2359,9 @@ def _patient_axis_refusal(kpi: Any, axis: str) -> Dict[str, Any]:
     served = ", ".join(k.name for k in get_registry().get_all() if k.id in served_ids)
     error = f"{axis} ({label}) applies only to {served}, not {kpi.name}."
     hint = f"Ask for {kpi.name} without the {label} filter, or ask for one of {served} by {label}."
-    if kpi.id == sa.TRX_SHARE_KPI_ID:  # why, and the real answer (src.kpi.share_axis)
+    if kpi.id in sa.SHARE_REDIRECTS:  # why, and the real answer (src.kpi.share_axis)
         error += " " + sa.share_axis_reason(axis, label)
-        hint = f"{sa.share_axis_next_step(sa.TRX_NAME, label)} {hint}"
+        hint = f"{sa.share_axis_next_step(sa.SHARE_REDIRECTS[kpi.id][1], label)} {hint}"
     return {
         "success": False,
         "query_type": "kpi_calculate",
