@@ -34,6 +34,8 @@ import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
 
+from src.causal.stats import z_score_for_confidence
+
 logger = logging.getLogger(__name__)
 
 
@@ -57,7 +59,7 @@ class HierarchicalConfig:
         min_segment_size: Minimum samples per segment for CATE estimation
         estimator_type: EconML estimator to use within segments
         parallel_segments: Run segment CATE in parallel
-        compute_nested_ci: Whether to compute nested confidence intervals
+        compute_nested_ci: Whether to compute segment CIs (and so the overall ATE CI)
         ci_confidence_level: Confidence level for intervals (default 0.95)
     """
 
@@ -332,6 +334,13 @@ class HierarchicalAnalyzer:
             overall_ate, overall_ci_lower, overall_ci_upper = self._aggregate_results(
                 segment_results, n_samples
             )
+            unmeasured = self._unmeasured_segments(segment_results)
+            if overall_ate is not None and unmeasured:
+                names = ", ".join(f"'{s.segment_name}' (n={s.n_samples})" for s in unmeasured)
+                warnings.append(
+                    f"overall CI withheld: {len(unmeasured)} segment(s) without measured "
+                    f"uncertainty: {names}"
+                )
 
             # Step 5: Compute segment heterogeneity
             heterogeneity = self._compute_heterogeneity(segment_results)
@@ -604,78 +613,65 @@ class HierarchicalAnalyzer:
 
         return segment_results
 
+    @staticmethod
+    def _unmeasured_segments(segment_results: List[SegmentResult]) -> List[SegmentResult]:
+        """Successful segments without a measured SE or either CI bound (#2027 predicate)."""
+        return [
+            s
+            for s in segment_results
+            if s.success
+            and s.cate_mean is not None
+            and (s.cate_se is None or s.cate_ci_lower is None or s.cate_ci_upper is None)
+        ]
+
     def _aggregate_results(
         self,
         segment_results: List[SegmentResult],
         n_total: int,
     ) -> Tuple[Optional[float], Optional[float], Optional[float]]:
-        """Aggregate segment-level CATE to overall ATE.
+        """Aggregate segment-level CATE to the overall ATE and ITS confidence interval.
 
-        Uses sample-size weighted average of segment CATEs.
+        The segments partition the analysed rows, so the sample-size-weighted mean
+        of segment CATEs, sum(n_i/N * CATE_i), is the population ATE. Its CI is the
+        delta-method CI of that same weighted sum, SE = sqrt(sum (n_i/N)^2 * se_i^2),
+        over the SAME segments (#2142). The precision-weighted meta-analytic view is
+        a different estimand; the route and the heterogeneous-optimizer node serve
+        it separately as ``nested_ci``.
+
+        A successful segment without a measured SE or either CI bound withholds the
+        CI (None, None) — the variance of the weighted sum is unknown, and dropping
+        the segment from the CI alone would pair two estimands again. The ATE is
+        still served; ``analyze`` names the segments in ``warnings``.
         """
         successful = [s for s in segment_results if s.success and s.cate_mean is not None]
 
         if not successful:
             return None, None, None
 
-        # Weighted average by sample size
         total_samples = sum(s.n_samples for s in successful)
         if total_samples == 0:
             return None, None, None
 
-        # cate_mean is guaranteed non-None by the filter above
-        overall_ate: float = sum(  # type: ignore[assignment]
-            (s.cate_mean or 0.0) * s.n_samples / total_samples for s in successful
+        overall_ate = float(
+            sum(
+                s.cate_mean * s.n_samples / total_samples
+                for s in successful
+                if s.cate_mean is not None
+            )
         )
 
-        # Aggregate confidence intervals using nested CI calculation
-        if self.config.compute_nested_ci:
-            from .nested_ci import (
-                NestedCIConfig,
-                NestedConfidenceInterval,
-                SegmentEstimate,
-            )
+        if self._unmeasured_segments(successful):
+            return overall_ate, None, None
 
-            # Convert SegmentResult to SegmentEstimate for nested CI
-            segment_estimates = [
-                SegmentEstimate(
-                    segment_id=s.segment_id,
-                    segment_name=s.segment_name,
-                    ate=s.cate_mean or 0.0,
-                    # H6: ate_std is a STANDARD ERROR (used in inverse-variance
-                    # weights + Q/I²/τ²), so bridge it from the true SE (cate_se),
-                    # NOT cate_std (the per-unit CATE dispersion). Fall back to
-                    # cate_std only if cate_se is unavailable.
-                    ate_std=(s.cate_se if s.cate_se is not None else (s.cate_std or 0.0)),
-                    ci_lower=s.cate_ci_lower or (s.cate_mean or 0.0),
-                    ci_upper=s.cate_ci_upper or (s.cate_mean or 0.0),
-                    sample_size=s.n_samples,
-                    cate=s.cate_values,
-                )
-                for s in successful
-            ]
-
-            ci_calculator = NestedConfidenceInterval(
-                NestedCIConfig(confidence_level=self.config.ci_confidence_level)
-            )
-
-            nested_result = ci_calculator.compute(segment_estimates)
-            overall_ci_lower = nested_result.aggregate_ci_lower
-            overall_ci_upper = nested_result.aggregate_ci_upper
-        else:
-            # Simple pooled CI (conservative)
-            ci_lower_weighted = sum(
-                float(s.cate_ci_lower or s.cate_mean or 0.0) * s.n_samples / total_samples
-                for s in successful
-            )
-            ci_upper_weighted = sum(
-                float(s.cate_ci_upper or s.cate_mean or 0.0) * s.n_samples / total_samples
-                for s in successful
-            )
-            overall_ci_lower = ci_lower_weighted
-            overall_ci_upper = ci_upper_weighted
-
-        return overall_ate, overall_ci_lower, overall_ci_upper
+        variance = sum(
+            (s.n_samples / total_samples) ** 2 * s.cate_se**2
+            for s in successful
+            if s.cate_se is not None
+        )
+        half_width = z_score_for_confidence(self.config.ci_confidence_level) * float(
+            np.sqrt(variance)
+        )
+        return overall_ate, overall_ate - half_width, overall_ate + half_width
 
     def _compute_heterogeneity(self, segment_results: List[SegmentResult]) -> Optional[float]:
         """Compute between-segment heterogeneity.

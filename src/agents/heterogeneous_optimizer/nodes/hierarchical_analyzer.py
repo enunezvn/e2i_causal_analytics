@@ -635,8 +635,10 @@ class HierarchicalAnalyzerNode:
             "overall_hierarchical_ci_upper": result.overall_ate_ci_upper,
             "n_segments_analyzed": result.n_segments,
         }
-        if exclusion_warnings:
-            # The state's `warnings` channel is append-only (reducer), so the
-            # exclusions surface without a schema read.
-            output["warnings"] = exclusion_warnings
+        # The analyzer's own warnings (e.g. "overall CI withheld", #2142) ride along
+        # with the exclusions: the state's `warnings` channel is append-only
+        # (reducer), so both surface without a schema read.
+        node_warnings = [*(result.warnings or []), *exclusion_warnings]
+        if node_warnings:
+            output["warnings"] = node_warnings
         return output
