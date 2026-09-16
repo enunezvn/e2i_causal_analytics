@@ -2068,7 +2068,7 @@ class KpiCalculateInput(BaseModel):
 # KPI the field is omitted (honest absence over a guessed period -- ROI stays
 # out: its two source probes' frontiers diverge). KEEP IN SYNC with those
 # migrations.
-KPI_REPORTING_WINDOWS = _cap.reporting_windows()
+KPI_REPORTING_WINDOWS = _cap.lazy_reporting_windows()
 
 # Definition clarifications the synthesizer MUST carry into the answer.
 # SSOT moved to src/services/kpi_resolution.py (#1475): the orchestrator's
@@ -2197,7 +2197,7 @@ def _kpi_result_to_response(
 # get the trailing-30d coverage probe below: for a ratio/share KPI (e.g.
 # WS3-BI-008 TRx Share) the trailing value is not additive, so the share math
 # would fire false warnings.
-_VOLUME_KPI_IDS = _cap.trailing_coverage_kpi_ids()
+_VOLUME_KPI_IDS = _cap.lazy_trailing_coverage_kpi_ids()
 
 _COVERAGE_MIN_WINDOW_DAYS = 45  # a window this short IS its own trailing period
 _COVERAGE_WARN_FACTOR = 2.0  # warn when trailing share > 2x the uniform share
@@ -2319,9 +2319,7 @@ _PATIENT_AXIS_LABELS: Dict[str, str] = {
 #     the prod substrate 2026-09-07), and 'CATE' / 'conditional ATE' resolve to
 #     CM-002 here, so refusing it would drop a combination the calculator
 #     serves. It reads none of the other three axes.
-_PATIENT_AXIS_KPI_IDS: Dict[str, frozenset[str]] = {
-    axis: _cap.axis_kpi_ids(axis) for axis in _cap.PATIENT_AXIS_NAMES
-}
+_PATIENT_AXIS_KPI_IDS = _cap.lazy_axis_kpi_ids()
 
 
 def _patient_axis_refusal(kpi: Any, axis: str, brand: Optional[str]) -> Dict[str, Any]:

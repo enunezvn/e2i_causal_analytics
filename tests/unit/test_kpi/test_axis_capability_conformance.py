@@ -211,3 +211,46 @@ def test_the_two_authored_share_reasons_stay_DISTINCT():
     assert canonical and panel
     assert canonical != panel, "the two share reasons were flattened into one"
     assert "business_metrics" in canonical
+
+
+# =============================================================================
+# POSITIVE CONTROL ON CONFIG LOADING — the silent-empty failure mode
+# =============================================================================
+
+
+@pytest.mark.unit
+def test_the_derived_sets_are_not_silently_empty():
+    """A mis-resolved config path turns the whole capability system OFF, quietly.
+
+    ``registry._load_definitions`` WARNS instead of raising when the YAML is not
+    found, so every derived set would come back EMPTY — and empty is
+    indistinguishable from "nothing serves these axes" at every surface
+    downstream: an empty allowlist refuses every axis, an empty coverage set never
+    probes, and EVERY test that asserts a refusal still passes. Nothing else in
+    this file would fail, because they all assert that things are refused.
+
+    So assert the positive: the sets have members, and the members are the ones
+    the platform is built on. Same shape as the probe's own control above, pointed
+    at config loading instead.
+    """
+    from src.kpi.capability_policy import axis_kpi_ids, trailing_coverage_kpi_ids
+
+    panel = {"WS3-BI-011", "WS3-BI-012", "WS3-BI-013"}
+    assert get_registry().get_all(), "the registry loaded NOTHING — config path?"
+    assert panel <= axis_kpi_ids("segment"), "the axis allowlist lost the panel trio"
+    assert trailing_coverage_kpi_ids() == panel, (
+        "the trailing-coverage set is not the panel trio — empty means the probe "
+        "silently never runs"
+    )
+
+
+@pytest.mark.unit
+def test_every_event_grain_kpi_declares_its_additivity():
+    """Completeness, so a MISSING declaration is loud at test time rather than a
+    silent absence of a probe at runtime (where it fails closed by design)."""
+    from src.kpi.capability_policy import event_grain_kpi_ids
+
+    undeclared = sorted(
+        kpi_id for kpi_id in event_grain_kpi_ids() if get_registry().get(kpi_id).additive is None
+    )
+    assert not undeclared, f"event-grain KPIs with no declared additivity: {undeclared}"

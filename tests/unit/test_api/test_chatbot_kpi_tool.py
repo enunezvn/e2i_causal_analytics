@@ -61,7 +61,7 @@ def test_kpi_result_to_response_value_badges_synthetic():
         # Disclosing it stops the chatbot from presenting the figure as
         # "the last 30 calendar days". Included ONLY because
         # window_status == "default".
-        "reporting_window": "most recent 30 days of prescription data",
+        "reporting_window": "most recent complete calendar month",
     }
 
 
@@ -75,8 +75,9 @@ def test_kpi_result_to_response_database_when_not_synthetic():
     resp = _kpi_result_to_response(kpi, result)
     assert resp["success"] is True
     assert resp["data_source"] == "database"
-    # Volume KPIs disclose the real (frontier-anchored) reporting window.
-    assert resp["reporting_window"] == "most recent 30 days of prescription data"
+    # #2114: canonical TRx reads MONTHLY business_metrics, so the disclosed period
+    # is the latest COMPLETE calendar month, not a trailing 30 days.
+    assert resp["reporting_window"] == "most recent complete calendar month"
 
 
 @pytest.mark.unit
@@ -146,10 +147,17 @@ def test_reporting_window_covers_frontier_anchored_ws3_family():
     from src.api.routes.chatbot_tools import KPI_REPORTING_WINDOWS
 
     assert KPI_REPORTING_WINDOWS == {
-        "WS3-BI-005": "most recent 30 days of prescription data",
-        "WS3-BI-006": "most recent 30 days of prescription data",
-        "WS3-BI-007": "most recent 30 days of prescription data",
-        "WS3-BI-008": "most recent 30 days of prescription data",
+        # #2114: 005..008 read MONTHLY business_metrics at the global TRx frontier,
+        # so "most recent 30 days" misstated the period. The 30-day prescription
+        # window moved WITH the event counts to the panel ids below.
+        "WS3-BI-005": "most recent complete calendar month",
+        "WS3-BI-006": "most recent complete calendar month",
+        "WS3-BI-007": "most recent complete calendar month",
+        "WS3-BI-008": "most recent complete calendar month",
+        "WS3-BI-011": "most recent 30 days of prescription data",
+        "WS3-BI-012": "most recent 30 days of prescription data",
+        "WS3-BI-013": "most recent 30 days of prescription data",
+        "WS3-BI-014": "most recent 30 days of prescription data",
         "WS3-BI-009": "most recent 30 days of trigger data",
         "WS2-TR-001": (
             "30-day trigger cohort ending 30 days before the trigger-data "

@@ -44,7 +44,7 @@ def _result(kpi_id: str, value: float) -> KPIResult:
     )
 
 
-def _calculator(window_value: float, trailing_value: float, kpi_id: str = "WS3-BI-005"):
+def _calculator(window_value: float, trailing_value: float, kpi_id: str = "WS3-BI-011"):
     """Calculator double: full-window value on the first window, trailing-30d on the sub-window."""
     calc = MagicMock()
     calls: list[dict] = []
@@ -68,7 +68,7 @@ async def test_asymmetric_window_gets_coverage_warning():
     calc = _calculator(window_value=15767.0, trailing_value=15239.0)
     with patch("src.api.routes.kpi.get_kpi_calculator", return_value=calc):
         resp = await kpi_calculate_tool.ainvoke(
-            {"kpi_name": "TRx", "brand": "Fabhalta", "window": NINETY_DAY_WINDOW}
+            {"kpi_name": "TRx Panel", "brand": "Fabhalta", "window": NINETY_DAY_WINDOW}
         )
     assert resp["success"] is True
     cov = resp["window_coverage"]
@@ -88,7 +88,7 @@ async def test_uniform_window_no_warning_but_shares_reported():
     calc = _calculator(window_value=45000.0, trailing_value=15000.0)
     with patch("src.api.routes.kpi.get_kpi_calculator", return_value=calc):
         resp = await kpi_calculate_tool.ainvoke(
-            {"kpi_name": "TRx", "brand": "Fabhalta", "window": NINETY_DAY_WINDOW}
+            {"kpi_name": "TRx Panel", "brand": "Fabhalta", "window": NINETY_DAY_WINDOW}
         )
     cov = resp["window_coverage"]
     assert cov["trailing_30d_share"] == pytest.approx(1 / 3, abs=0.01)
@@ -111,9 +111,9 @@ async def test_short_window_skips_coverage_probe():
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_non_volume_kpi_skips_coverage_probe():
-    """TRx Share (WS3-BI-008) is a ratio — a trailing-30d share comparison is
+    """TRx Share Panel (WS3-BI-014) is a ratio — a trailing-30d share comparison is
     meaningless there and would fire a false warning."""
-    calc = _calculator(window_value=0.42, trailing_value=0.41, kpi_id="WS3-BI-008")
+    calc = _calculator(window_value=0.42, trailing_value=0.41, kpi_id="WS3-BI-014")
     with patch("src.api.routes.kpi.get_kpi_calculator", return_value=calc):
         resp = await kpi_calculate_tool.ainvoke(
             {"kpi_name": "TRx Share", "window": NINETY_DAY_WINDOW}
@@ -138,7 +138,7 @@ async def test_trailing_probe_failure_never_blocks_main_result():
     calc.calculate = MagicMock(side_effect=calculate)
     with patch("src.api.routes.kpi.get_kpi_calculator", return_value=calc):
         resp = await kpi_calculate_tool.ainvoke(
-            {"kpi_name": "TRx", "brand": "Fabhalta", "window": NINETY_DAY_WINDOW}
+            {"kpi_name": "TRx Panel", "brand": "Fabhalta", "window": NINETY_DAY_WINDOW}
         )
     assert resp["success"] is True
     assert resp["value"] == 15767.0
@@ -152,7 +152,7 @@ async def test_zero_window_value_skips_shares():
     calc = _calculator(window_value=0.0, trailing_value=0.0)
     with patch("src.api.routes.kpi.get_kpi_calculator", return_value=calc):
         resp = await kpi_calculate_tool.ainvoke(
-            {"kpi_name": "TRx", "brand": "Fabhalta", "window": NINETY_DAY_WINDOW}
+            {"kpi_name": "TRx Panel", "brand": "Fabhalta", "window": NINETY_DAY_WINDOW}
         )
     assert resp["success"] is True
     assert "window_coverage" not in resp
@@ -166,7 +166,7 @@ async def test_zero_window_value_skips_shares():
 # --- silently SUPPRESSED for exactly the windows users most ask about.
 
 
-def _probe_kpi(kpi_id: str = "WS3-BI-005") -> SimpleNamespace:
+def _probe_kpi(kpi_id: str = "WS3-BI-011") -> SimpleNamespace:
     return SimpleNamespace(id=kpi_id)
 
 
@@ -195,7 +195,7 @@ async def test_future_end_window_probes_elapsed_tail():
     )
     calc = _probe_calculator(trailing_value=15239.0)
     cov = await _window_coverage_probe(
-        _probe_kpi(), _result("WS3-BI-005", 15767.0), window, calc, {}, now=NOW
+        _probe_kpi(), _result("WS3-BI-011", 15767.0), window, calc, {}, now=NOW
     )
     assert cov is not None
     assert cov["window_days"] == 222
@@ -221,7 +221,7 @@ async def test_future_end_short_elapsed_skips_probe():
     )
     calc = _probe_calculator(trailing_value=0.0)
     cov = await _window_coverage_probe(
-        _probe_kpi(), _result("WS3-BI-005", 9401.0), window, calc, {}, now=NOW
+        _probe_kpi(), _result("WS3-BI-011", 9401.0), window, calc, {}, now=NOW
     )
     assert cov is None
     assert calc.calculate.call_count == 0
@@ -240,7 +240,7 @@ async def test_past_window_probe_unchanged_by_clamp():
     )
     calc = _probe_calculator(trailing_value=15239.0)
     cov = await _window_coverage_probe(
-        _probe_kpi(), _result("WS3-BI-005", 15767.0), window, calc, {}, now=NOW
+        _probe_kpi(), _result("WS3-BI-011", 15767.0), window, calc, {}, now=NOW
     )
     assert cov is not None
     assert cov["window_days"] == 90

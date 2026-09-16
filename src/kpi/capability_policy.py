@@ -24,6 +24,8 @@ DECIDES, and a proposal that cannot serve is discarded rather than offered.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from collections.abc import Set as AbcSet
 from typing import Optional
 
 from src.kpi.registry import get_registry
@@ -40,6 +42,76 @@ from src.kpi.volume_family import CANONICAL_TO_PANEL
 #: ``axes_under_window`` to exist.
 PATIENT_AXIS_NAMES: tuple[str, ...] = tuple(axis for axis, _label in PATIENT_AXES)
 AXIS_LABELS: dict[str, str] = dict(PATIENT_AXES)
+
+
+class _LazySet(AbcSet):
+    """A set whose members are computed on EVERY access, not at import.
+
+    ⚠ WHY THIS IS NOT A SNAPSHOT. The derived constants used to be evaluated at
+    module import, which bound them to whatever the registry held the first time
+    the module was imported. That is harmless while the registry is loaded once
+    and never reloaded (MEASURED: nothing in src/ calls KPIRegistry.reset or
+    get_registry.cache_clear) — but ``registry._load_definitions`` WARNS instead of
+    raising when the YAML cannot be found, so a mis-resolved config path at import
+    time would leave the constants silently EMPTY. An empty axis allowlist refuses
+    every axis and an empty coverage set never probes, both with nothing but a log
+    line. Computing per access removes the snapshot entirely.
+    """
+
+    def __init__(self, fn):
+        self._fn = fn
+
+    def __contains__(self, item):
+        return item in self._fn()
+
+    def __iter__(self):
+        return iter(self._fn())
+
+    def __len__(self):
+        return len(self._fn())
+
+    def __repr__(self):
+        return repr(set(self._fn()))
+
+
+class _LazyAxisMap(Mapping):
+    """``axis -> served KPI ids``, resolved per access for the same reason."""
+
+    def __getitem__(self, axis):
+        if axis not in PATIENT_AXIS_NAMES:
+            raise KeyError(axis)
+        return axis_kpi_ids(axis)
+
+    def __iter__(self):
+        return iter(PATIENT_AXIS_NAMES)
+
+    def __len__(self):
+        return len(PATIENT_AXIS_NAMES)
+
+
+def lazy_axis_kpi_ids() -> "_LazyAxisMap":
+    return _LazyAxisMap()
+
+
+def lazy_trailing_coverage_kpi_ids() -> "_LazySet":
+    return _LazySet(trailing_coverage_kpi_ids)
+
+
+class _LazyWindowMap(Mapping):
+    """``kpi id -> reporting window``, resolved per access (same snapshot risk)."""
+
+    def __getitem__(self, kpi_id):
+        return reporting_windows()[kpi_id]
+
+    def __iter__(self):
+        return iter(reporting_windows())
+
+    def __len__(self):
+        return len(reporting_windows())
+
+
+def lazy_reporting_windows() -> "_LazyWindowMap":
+    return _LazyWindowMap()
 
 
 def serves(kpi_id: str, axis: str, *, brand: Optional[str] = None, window: bool = False) -> bool:
