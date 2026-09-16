@@ -285,7 +285,7 @@ class TestBootstrapCI:
 class TestFamilies:
     def test_rx_volume_family_only(self):
         assert NOWCAST_KPI_QUERY_FAMILIES == {
-            "WS3-BI-005": "business_impact_trx",
-            "WS3-BI-006": "business_impact_nrx",
-            "WS3-BI-007": "business_impact_nbrx",
+            "WS3-BI-011": "business_impact_trx",
+            "WS3-BI-012": "business_impact_nrx",
+            "WS3-BI-013": "business_impact_nbrx",
         }

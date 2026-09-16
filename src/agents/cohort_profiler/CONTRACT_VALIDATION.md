@@ -38,7 +38,7 @@ Three concepts kept deliberately separate (agent.py module docstring, "Design ra
 | **Fail-closed on empty** | ✅ | Member of `_FAIL_CLOSED_ON_FAILED_STATUS` (`dispatcher.py:1285-1299`); `status="failed"` only on genuine empty |
 | **Dispatch method** | ✅ | Default `analyze` (Tier-0 fall-through; **NOT** in `AGENT_METHOD_MAP`, `_agent_method_map.py:64-69`) |
 | **Response field** | ✅ | `AGENT_RESPONSE_FIELDS['cohort_profiler'] = ['narrative']` (`_agent_method_map.py:208-209`) |
-| **Real data (no fabrication)** | ✅ | Reuses `get_kpi_calculator().calculate` (WS3-BI-006 NRx) on the criteria-less path; mig-117 `kpi_query` allowlist RPC on the criteria/HCP paths; `n/a` on missing, fail-closed on genuine empty (`agent.py::_profile_patients_legacy`, `_value`, `_rpc_rows`) |
+| **Real data (no fabrication)** | ✅ | Reuses `get_kpi_calculator().calculate` (WS3-BI-012 panel NRx) on the criteria-less path; mig-117 `kpi_query` allowlist RPC on the criteria/HCP paths; `n/a` on missing, fail-closed on genuine empty (`agent.py::_profile_patients_legacy`, `_value`, `_rpc_rows`) |
 | **No graph / no LLM** | ✅ | Pure async computation, health_score-style fast path (`agent.py::CohortProfilerAgent.__init__`) |
 | **Ask binding (#1356)** | ✅ | `ask.py::parse_cohort_ask` → brand / criteria / threshold / window bind into the query; per-criterion Applied / NOT-applied accounting; unservable-only asks fail closed (`agent.py::_analyze_patients`, `_analyze_hcp`) |
 
@@ -112,7 +112,7 @@ _analyze_hcp(ask)
 
 ### Per-brand profile (`_profile_brand`, criteria-less legacy path)
 
-Each brand runs **≤8 sequential KPI-calculator calls**, each via `_value` → `asyncio.to_thread(calculator.calculate, "WS3-BI-006", context=...)`:
+Each brand runs **≤8 sequential KPI-calculator calls**, each via `_value` → `asyncio.to_thread(calculator.calculate, "WS3-BI-012", context=...)`:
 
 | # | Context | Meaning |
 |---|---------|---------|
@@ -120,7 +120,7 @@ Each brand runs **≤8 sequential KPI-calculator calls**, each via `_value` → 
 | 2–4 | `{"brand": b, "segment": <tier>}` | Disease-severity tiers: `low_severity`, `medium_severity`, `high_severity` |
 | 5–8 | `{"brand": b, "therapy_line": <line>}` | Line of therapy: `0`, `1`, `2`, `3` prior lines |
 
-**KPI identity**: `_NRX_KPI_ID = "WS3-BI-006"` (new prescriptions), reusing the **mig-105** `_segment` / `_line` registry variants (PR #1208) — the exact path the CopilotKit chat KPI tool and `/api/kpis` breakdown use, so reported numbers match the live chat UI (`agent.py::_NRX_KPI_ID`, `_get_calculator`).
+**KPI identity**: `_NRX_KPI_ID = "WS3-BI-012"` (patient-panel new prescriptions), reusing the **mig-105** `_segment` / `_line` registry variants (PR #1208) — the exact path the CopilotKit chat KPI tool and `/api/kpis` breakdown use, so reported numbers match the live chat UI (`agent.py::_NRX_KPI_ID`, `_get_calculator`).
 
 **Supported brands** (case-SENSITIVE exact match `brand::text = $1`): `("Remibrutinib", "Fabhalta", "Kisqali")` (`agent.py::SUPPORTED_BRANDS`).
 
@@ -184,7 +184,7 @@ Patient segment axes are disease-severity tier AND line-of-therapy; HCP segment 
 
 ## Conclusion
 
-`cohort_profiler` is the **Tier-0 chat companion** to `cohort_constructor`: a pure async, no-graph, no-LLM fast-path agent that answers free-text cohort questions with REAL DB-backed counts and BINDS the ask's parameters. Patient asks: new-Rx headline + severity-tier + line-of-therapy breakdowns for one brand or all supported brands (criteria-less asks stay on the mig-105 WS3-BI-006 calculator path so numbers match the live chat UI; servable criteria route through the mig-117 allowlist statement). HCP asks: per-HCP TRx aggregation over an explicit window with a threshold filter, specialty + priority-tier breakdowns, on the platform TRx-KPI substrate. Every recognized-but-unservable parameter is NAMED in a per-criterion accounting — nothing is silently dropped — and an ask made only of unservable parameters fails closed with guidance. It is fully chat-routable (`INTENT_TO_AGENTS['cohort_definition']`, `Domain.COHORT_DEFINITION`), grounds an optional brand at resolve time without ever failing closed there, and never launders an empty profile into a success.
+`cohort_profiler` is the **Tier-0 chat companion** to `cohort_constructor`: a pure async, no-graph, no-LLM fast-path agent that answers free-text cohort questions with REAL DB-backed counts and BINDS the ask's parameters. Patient asks: new-Rx headline + severity-tier + line-of-therapy breakdowns for one brand or all supported brands (criteria-less asks stay on the mig-105 WS3-BI-012 calculator path so numbers match the live chat UI; servable criteria route through the mig-117 allowlist statement). HCP asks: per-HCP TRx aggregation over an explicit window with a threshold filter, specialty + priority-tier breakdowns, on the platform TRx-KPI substrate. Every recognized-but-unservable parameter is NAMED in a per-criterion accounting — nothing is silently dropped — and an ask made only of unservable parameters fails closed with guidance. It is fully chat-routable (`INTENT_TO_AGENTS['cohort_definition']`, `Domain.COHORT_DEFINITION`), grounds an optional brand at resolve time without ever failing closed there, and never launders an empty profile into a success.
 
 ---
 

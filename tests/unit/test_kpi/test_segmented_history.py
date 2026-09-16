@@ -135,7 +135,7 @@ class TestLabelsAndIds:
         assert canonical_buckets("therapy_line") == ["0", "1", "2", "3"]
 
     def test_supported_kpis_match_migration_105_family(self):
-        assert set(SEGMENTED_KPI_QUERY_FAMILIES) == {"WS3-BI-005", "WS3-BI-006", "WS3-BI-007"}
+        assert set(SEGMENTED_KPI_QUERY_FAMILIES) == {"WS3-BI-011", "WS3-BI-012", "WS3-BI-013"}
         assert set(AXIS_SUFFIXES) == {"segment", "therapy_line"}
 
     def test_monthly_axis_query_id_plain_and_synthetic(self):

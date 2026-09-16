@@ -17,6 +17,8 @@ tests pin that contract; they need no DB and always run.
 
 from __future__ import annotations
 
+import pytest
+
 from scripts.check_kpi_coverage import PROBES
 from src.kpi.synthetic_mode import SYNTHETIC_TWINNED_QUERY_IDS
 
@@ -112,6 +114,31 @@ def test_every_probes_id_goes_through_the_resolver(monkeypatch):
             assert resolved == f"{base}{_SUFFIX}", f"{kid}: {base} should resolve to its twin"
         else:
             assert resolved == base, f"{kid}: twinless {base} must pass through unchanged"
+
+
+@pytest.mark.parametrize(
+    "kpi_id,base",
+    [
+        # Canonical volume family (business_metrics, migration 143).
+        ("WS3-BI-005", "canonical_volume_trx"),
+        ("WS3-BI-006", "canonical_volume_nrx"),
+        ("WS3-BI-007", "canonical_volume_nbrx"),
+        ("WS3-BI-008", "canonical_volume_trx_share"),
+        # Patient-panel Rx-event family (treatment_events) keeps business_impact_*.
+        ("WS3-BI-011", "business_impact_trx"),
+        ("WS3-BI-012", "business_impact_nrx"),
+        ("WS3-BI-013", "business_impact_nbrx"),
+        ("WS3-BI-014", "business_impact_trx_share"),
+    ],
+)
+def test_volume_probes_follow_the_registry_split(kpi_id, base):
+    """Canonical TRx lane: the probe must ask the statement the DEPLOYED KPI path
+    asks. 005..008 moved to the canonical business_metrics statements while the
+    treatment_events counts became the panel KPIs 011..014, so a probe still
+    pointing 005 at business_impact_trx would report a MAPPED value for a KPI
+    whose live value comes from a different table.
+    """
+    assert PROBES[kpi_id][0] == base
 
 
 def test_twinless_feature_drift_passes_through(monkeypatch):

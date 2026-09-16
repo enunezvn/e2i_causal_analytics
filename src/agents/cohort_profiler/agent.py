@@ -75,7 +75,9 @@ SUPPORTED_BRANDS: Tuple[str, ...] = ("Remibrutinib", "Fabhalta", "Kisqali")
 # NRx (new prescriptions) — the "new prescribing patients" proxy used to SIZE the
 # population. Reusing the mig-105 ``_segment`` / ``_line`` variants keeps this in
 # lock-step with the chat tool and the /api/kpis breakdown.
-_NRX_KPI_ID = "WS3-BI-006"
+# Canonical TRx lane: the cohort NRx breakdown runs per patient axis, which only
+# the patient-panel NRx (treatment_events) serves.
+_NRX_KPI_ID = "WS3-BI-012"
 
 # Allowlisted kpi_query statement ids (migration 117). Each has an
 # ``_include_synthetic`` twin following the ADDITIVE-variant idiom of

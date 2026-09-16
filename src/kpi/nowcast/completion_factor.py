@@ -4,8 +4,8 @@ Backlog #45 PR-B. The DGP stamps every claims-derived ``treatment_events`` row
 with ``claim_available_date`` (= event_date + adjudication lag; migration 115 +
 PR-A stamp pass). Base KPIs never read that column — they report the MATURE
 (omniscient, all-events) values. This module computes the honest as-of-frontier
-view for the Rx-volume trend KPIs (TRx WS3-BI-005 / NRx WS3-BI-006 / NBRx
-WS3-BI-007) and grosses it up back to a nowcast:
+view for the Rx-volume trend KPIs (TRx Panel WS3-BI-011 / NRx Panel WS3-BI-012 / NBRx Panel
+WS3-BI-013) and grosses it up back to a nowcast:
 
 1. **Data**: the migration-116 lag-triangle registry queries return, per
    calendar service month, the histogram of ``arrival_offset_days`` (=
@@ -85,9 +85,9 @@ logger = logging.getLogger(__name__)
 # separate numerator/denominator completion factors and are a labeled
 # follow-on, per the design). Mirrors SEGMENTED_KPI_QUERY_FAMILIES.
 NOWCAST_KPI_QUERY_FAMILIES: Dict[str, str] = {
-    "WS3-BI-005": "business_impact_trx",
-    "WS3-BI-006": "business_impact_nrx",
-    "WS3-BI-007": "business_impact_nbrx",
+    "WS3-BI-011": "business_impact_trx",
+    "WS3-BI-012": "business_impact_nrx",
+    "WS3-BI-013": "business_impact_nbrx",
 }
 
 #: Minimum mature service months required to estimate a completion curve.

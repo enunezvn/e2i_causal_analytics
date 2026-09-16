@@ -1903,9 +1903,11 @@ by region in 126) behind `GET /api/kpis/history/coverage`.
 
 `GET /api/kpis/{kpi_id}/history/nowcast` — the honest as-of-frontier view of
 the Rx-volume trend KPIs, plus a grossed-up estimate of where the month will
-land. **Gated to the Rx-volume family**: TRx (WS3-BI-005), NRx (WS3-BI-006),
-NBRx (WS3-BI-007). Any other `kpi_id` gets an explicit "no claims-lag nowcast
-series" refusal, not an empty chart.
+land. **Gated to the patient-panel Rx-event family**: TRx Panel (WS3-BI-011), NRx
+Panel (WS3-BI-012), NBRx Panel (WS3-BI-013) — the claims-arrival plane lives on
+`treatment_events`, and the canonical WS3-BI-005..007 series read monthly
+`business_metrics`, which has no per-claim arrival date. Any other `kpi_id` gets
+an explicit "no claims-lag nowcast series" refusal, not an empty chart.
 
 **Why it exists.** The DGP stamps every claims-derived `treatment_events` row
 with `claim_available_date` (= event date + adjudication lag; migration 115).

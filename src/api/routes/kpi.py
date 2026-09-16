@@ -692,8 +692,8 @@ async def get_kpi_history(
         "kpi_history table, which has no patient-segment dimension. Month "
         "bucketing and partial-edge-month trimming mirror the history "
         "backfill, so the bucket series partition the headline series. Only "
-        "the Rx-volume family (WS3-BI-005 TRx, WS3-BI-006 NRx, WS3-BI-007 "
-        "NBRx) supports axes."
+        "the patient-panel Rx-event family (WS3-BI-011 TRx Panel, WS3-BI-012 "
+        "NRx Panel, WS3-BI-013 NBRx Panel) supports axes."
     ),
     operation_id="get_kpi_history_segmented",
 )
@@ -727,6 +727,8 @@ async def get_kpi_history_segmented(
         fetch_segmented_rows,
         shape_segmented_series,
     )
+    from src.kpi.share_axis import SHARE_REDIRECTS
+    from src.kpi.volume_family import CANONICAL_TO_PANEL
 
     if axis not in AXIS_SUFFIXES:
         raise HTTPException(
@@ -734,11 +736,36 @@ async def get_kpi_history_segmented(
             detail=f"Unknown axis '{axis}'. Supported: {sorted(AXIS_SUFFIXES)}",
         )
     if kpi_id not in SEGMENTED_KPI_QUERY_FAMILIES:
+        # ⚠ THE REDIRECT MUST ROUND-TRIP (#2114 dead ends 1-4). A SHARE resolves
+        # through SHARE_REDIRECTS, not CANONICAL_TO_PANEL: the canonical share's
+        # panel twin WS3-BI-014 refuses every patient axis itself, which is dead
+        # end 3, so owner #14's answer — panel TRx's within-brand mix — is the one
+        # stated on every surface (share_axis.py line 1). The final gate is the
+        # destination's OWN capability, so no future family change can revive a
+        # dead end. Dead end 4 (a brand-blind redirect) cannot recur here: this
+        # route's AXIS_SUFFIXES is {segment, therapy_line} only, never the
+        # Remibrutinib-only biologic/ige_tier, and WS3-BI-011 serves both of
+        # those axes for every brand.
+        # The sentence states what is true of the CANONICAL substrate, so it is
+        # keyed to the canonical ids. WS3-BI-014 is also in SHARE_REDIRECTS but
+        # reads treatment_events, and claiming business_metrics of it would be a
+        # fabricated reason; it keeps the generic refusal.
+        redirect = (
+            SHARE_REDIRECTS[kpi_id][0]
+            if kpi_id in SHARE_REDIRECTS
+            else CANONICAL_TO_PANEL.get(kpi_id)
+        )
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=(
                 f"KPI '{kpi_id}' has no {axis}-level series. Axis-capable KPIs: "
                 f"{sorted(SEGMENTED_KPI_QUERY_FAMILIES)}"
+                + (
+                    f". {kpi_id} is the canonical business_metrics series (no patient "
+                    f"dimension); use the patient-panel KPI {redirect}."
+                    if kpi_id in CANONICAL_TO_PANEL and redirect in SEGMENTED_KPI_QUERY_FAMILIES
+                    else ""
+                )
             ),
         )
     if value is not None and value not in canonical_buckets(axis):
@@ -780,8 +807,9 @@ async def get_kpi_history_segmented(
     response_model=KPINowcastHistoryResponse,
     summary="Get KPI history with claims-lag provisional/nowcast overlay",
     description=(
-        "Monthly mature / provisional / nowcast series for the Rx-volume family "
-        "(WS3-BI-005 TRx, WS3-BI-006 NRx, WS3-BI-007 NBRx), computed live from "
+        "Monthly mature / provisional / nowcast series for the patient-panel Rx-event "
+        "family (WS3-BI-011 TRx Panel, WS3-BI-012 NRx Panel, WS3-BI-013 NBRx Panel), "
+        "computed live from "
         "the migration-116 claims-arrival lag triangle (backlog #45) — NOT from "
         "the materialized kpi_history table, whose figures stay the mature "
         "values. The completion factor is re-estimated empirically from mature "
@@ -811,6 +839,7 @@ async def get_kpi_history_nowcast(
         estimate_completion_from_rows,
         fetch_nowcast_rows,
     )
+    from src.kpi.volume_family import CANONICAL_TO_PANEL
 
     if get_registry().get(kpi_id) is None:
         raise HTTPException(
@@ -823,7 +852,16 @@ async def get_kpi_history_nowcast(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=(
                 f"KPI '{kpi_id}' has no claims-lag nowcast series. Nowcast-capable "
-                f"KPIs (Rx-volume family): {sorted(NOWCAST_KPI_QUERY_FAMILIES)}"
+                f"KPIs (patient-panel Rx-event family): {sorted(NOWCAST_KPI_QUERY_FAMILIES)}"
+                + (
+                    f". {kpi_id} is the canonical monthly business_metrics series (no "
+                    f"claims-arrival plane); use {CANONICAL_TO_PANEL[kpi_id]}."
+                    # Same round-trip gate as /history/segmented: the panel share has no
+                    # nowcast either, so the canonical share gets the capable list and no
+                    # redirect rather than a destination that refuses the same request.
+                    if CANONICAL_TO_PANEL.get(kpi_id) in NOWCAST_KPI_QUERY_FAMILIES
+                    else ""
+                )
             ),
         )
 

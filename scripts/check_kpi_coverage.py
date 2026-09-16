@@ -106,12 +106,19 @@ PROBES: dict[str, tuple[str, str, str | None]] = {
     "WS3-BI-002": ("business_impact_wau_fallback", "[]", "wau"),
     "WS3-BI-003": ("business_impact_patient_touch_rate", '["Kisqali"]', "touch_rate"),
     "WS3-BI-004": ("business_impact_hcp_coverage", "[]", "coverage"),
-    "WS3-BI-005": ("business_impact_trx", '["Kisqali"]', "trx"),
-    "WS3-BI-006": ("business_impact_nrx", '["Kisqali"]', "nrx"),
-    "WS3-BI-007": ("business_impact_nbrx", '["Kisqali"]', "nbrx"),
-    "WS3-BI-008": ("business_impact_trx_share", '["Kisqali"]', "share"),
+    "WS3-BI-005": ("canonical_volume_trx", '["Kisqali"]', "trx"),
+    "WS3-BI-006": ("canonical_volume_nrx", '["Kisqali"]', "nrx"),
+    "WS3-BI-007": ("canonical_volume_nbrx", '["Kisqali"]', "nbrx"),
+    "WS3-BI-008": ("canonical_volume_trx_share", '["Kisqali"]', "share"),
     "WS3-BI-009": ("business_impact_conversion_rate", "[]", "conversion_rate"),
     "WS3-BI-010": ("business_impact_roi_business_metrics_scoped", "[null, null]", "avg_roi"),
+    # Canonical TRx lane: 005..008 read business_metrics (canonical_volume_*, mig 143);
+    # the treatment_events event counts they used to compute are the patient-panel
+    # KPIs 011..014, which keep the business_impact_* statements.
+    "WS3-BI-011": ("business_impact_trx", '["Kisqali"]', "trx"),
+    "WS3-BI-012": ("business_impact_nrx", '["Kisqali"]', "nrx"),
+    "WS3-BI-013": ("business_impact_nbrx", '["Kisqali"]', "nbrx"),
+    "WS3-BI-014": ("business_impact_trx_share", '["Kisqali"]', "share"),
     # --- brand-specific ---
     "BR-001": ("brand_specific_remi_ah_uncontrolled", '["3"]', "uncontrolled_rate"),
     "BR-002": ("brand_specific_remi_intent_delta_fallback", "[]", "intent_delta"),
