@@ -11,35 +11,51 @@ BEFORE the change IS the generator's raw ``integers(16, 43)`` draw, i.e. exactly
 copula's noise term, so the new value is a deterministic recompute from two stored
 columns — the same function the generator calls, not a re-draw.
 
-After this, run ``scripts/backfill_brand_axis_persistence.py --brand Remibrutinib``:
-the UAS7 >= 28 axis membership moves, and persistence labels must follow it.
+WHICH ROWS
+----------
+Exactly the rows created before :data:`OLD_GENERATOR_CUTOFF`. The copula did not exist
+before that instant, so no row older than it can hold a mapped value, and the set is
+the same on every run. A correlation is NOT used to decide which rows are old (a cohort
+mixing both generators passes any correlation band); it only detects that this fixed
+set was already rewritten, and refuses.
+
+ROLLOUT (all three, in order)
+-----------------------------
+1. This script, then apply its SQL (below).
+2. ``scripts/backfill_brand_axis_persistence.py --brand Remibrutinib --execute``: the
+   UAS7 >= 28 axis moves (1,106 live rows cross 28), so the persistence labels must be
+   re-derived; without ``--execute`` that script is a dry run.
+3. Gold-standard retrain: the weekly ``scripts/reseed_synthetic.sh`` cron runs
+   ``scripts/retrain_goldstd.sh``; until it does, the Remibrutinib persistence model is
+   serving a fit to the old labels.
 
 SAFETY
 ------
-* NOT idempotent by construction (the mapping is applied to its own output on a
-  re-run), so it fails closed instead: only rows created before ``--created-before``
-  (rows written by the old generator) are read, and it REFUSES when those rows already
-  show the designed correlation. The TSV backup is the exact undo.
-* Writes through psql in ONE transaction that asserts the row count and the resulting
-  correlation before COMMIT; ``WHERE ... IS DISTINCT FROM`` skips unchanged rows so the
-  ``updated_at`` trigger fires only on real changes.
+* One psql transaction. The plan is staged in a temp table with every computation
+  input (old UAS7, severity) and the row is updated only if all of them still match,
+  the row is synthetic, Remibrutinib and older than the cutoff (compare-and-set).
+  ``IS DISTINCT FROM`` skips unchanged values so the ``updated_at`` trigger fires only
+  on real changes. It asserts the updated count and the resulting correlation over the
+  whole staged cohort (NULL fails) before COMMIT.
+* Inputs are validated before any SQL is written: patient ids match
+  :data:`_PATIENT_ID`, severity is finite in [0, 10], UAS7 is an integer in 16..42, and
+  the correlation is defined.
+* The TSV backup is the exact undo.
 
 USAGE
 -----
-    # 1. read-only report + backup + SQL file
-    python -m scripts.backfill_uas7_severity_coherence --created-before 2026-09-16T12:00:00Z \\
-        --in-csv remi.csv --sql-out apply.sql
-    # 2. apply
+    docker exec supabase-db psql -U postgres -d postgres -c "\\copy (SELECT patient_id,
+      disease_severity, urticaria_severity_uas7, segment_assignment, created_at
+      FROM patient_journeys WHERE brand::text='Remibrutinib' AND is_synthetic
+      ORDER BY patient_id) TO STDOUT WITH CSV HEADER" > remi.csv
+    python -m scripts.backfill_uas7_severity_coherence --in-csv remi.csv --sql-out apply.sql
     docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 < apply.sql
-
-``--in-csv`` is ``\\copy (SELECT patient_id, disease_severity, urticaria_severity_uas7,
-segment_assignment, created_at FROM patient_journeys WHERE brand::text='Remibrutinib'
-AND is_synthetic) TO STDOUT WITH CSV HEADER``.
 """
 
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -51,13 +67,20 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from src.ml.synthetic.dgp.clinical_severity import (  # noqa: E402
+    UAS7_MAX,
+    UAS7_MIN,
     UAS7_SEVERITY_RHO,
     uas7_from_severity,
 )
 
-#: Rows already showing more correlation than this were written by the new generator
-#: (or this script already ran): refuse. Old-generator rows measure ~0.01.
+#: No row created before this instant can come from the copula generator (it was
+#: written on this date and ships no earlier than its merge).
+OLD_GENERATOR_CUTOFF = pd.Timestamp("2026-09-16T00:00:00Z")
+
+#: Old-generator rows measure ~0.00; the rewritten set measures ~rho.
 ALREADY_APPLIED_CORR = 0.15
+
+_PATIENT_ID = re.compile(r"^[A-Za-z0-9_]+$")
 
 
 def _corr(frame: pd.DataFrame, col: str) -> float:
@@ -66,18 +89,33 @@ def _corr(frame: pd.DataFrame, col: str) -> float:
     )
 
 
-def plan(live: pd.DataFrame, created_before: pd.Timestamp) -> pd.DataFrame:
-    """Rows to rewrite, with old/new UAS7. Raises when the selection is already applied."""
-    rows = live[pd.to_datetime(live["created_at"], utc=True) < created_before].copy()
+def _validate(rows: pd.DataFrame) -> None:
+    bad_ids = rows.loc[~rows["patient_id"].astype(str).str.match(_PATIENT_ID), "patient_id"]
+    if not bad_ids.empty:
+        raise SystemExit(f"REFUSING: unexpected patient_id format, e.g. {bad_ids.iloc[0]!r}")
+    sev = pd.to_numeric(rows["disease_severity"], errors="coerce")
+    if sev.isna().any() or not sev.between(0.0, 10.0).all():
+        raise SystemExit("REFUSING: disease_severity missing or outside [0, 10]")
+    uas7 = pd.to_numeric(rows["urticaria_severity_uas7"], errors="coerce")
+    if (uas7 % 1 != 0).any() or not uas7.between(UAS7_MIN, UAS7_MAX).all():
+        raise SystemExit("REFUSING: urticaria_severity_uas7 not an integer in 16..42")
+
+
+def plan(live: pd.DataFrame) -> pd.DataFrame:
+    """Old-generator rows with old/new UAS7. Raises when they were already rewritten."""
+    rows = live[pd.to_datetime(live["created_at"], utc=True) < OLD_GENERATOR_CUTOFF].copy()
     rows = rows[rows["urticaria_severity_uas7"].notna()]
     if rows.empty:
         raise SystemExit("No Remibrutinib rows with UAS7 created before the cutoff.")
+    _validate(rows)
     before = _corr(rows, "urticaria_severity_uas7")
+    if not np.isfinite(before):
+        raise SystemExit("REFUSING: corr(UAS7, severity) is undefined (constant input).")
     if before > ALREADY_APPLIED_CORR:
         raise SystemExit(
-            f"REFUSING: corr(UAS7, severity) is already {before:.3f} on the selected rows "
-            f"(> {ALREADY_APPLIED_CORR}); they were written by the new generator or this "
-            f"script already ran. Restore from the TSV backup first if a re-run is intended."
+            f"REFUSING: corr(UAS7, severity) is already {before:.3f} on the old-generator "
+            f"rows (> {ALREADY_APPLIED_CORR}); this script already ran. Restore from the TSV "
+            f"backup first if a re-run is intended."
         )
     rows["uas7_old"] = rows["urticaria_severity_uas7"].astype(int)
     rows["uas7_new"] = uas7_from_severity(
@@ -87,7 +125,7 @@ def plan(live: pd.DataFrame, created_before: pd.Timestamp) -> pd.DataFrame:
 
 
 def report(rows: pd.DataFrame) -> str:
-    lines = [f"rows selected: {len(rows)}  rho={UAS7_SEVERITY_RHO}"]
+    lines = [f"rows selected: {len(rows)}  rho={UAS7_SEVERITY_RHO}  cutoff={OLD_GENERATOR_CUTOFF}"]
     for col in ("uas7_old", "uas7_new"):
         by_tier = rows.groupby("segment_assignment")[col]
         lines.append(
@@ -102,17 +140,20 @@ def report(rows: pd.DataFrame) -> str:
 
 
 def to_sql(rows: pd.DataFrame) -> str:
-    """One transaction: stage, update changed rows only, assert, commit."""
-    changed = rows[rows["uas7_old"] != rows["uas7_new"]]
+    """One transaction: stage the whole cohort, compare-and-set changed rows, assert, commit."""
+    _validate(rows)
     values = ",\n".join(
-        f"('{pid}', {int(o)}, {int(n)})"
-        for pid, o, n in changed[["patient_id", "uas7_old", "uas7_new"]].itertuples(index=False)
+        f"('{pid}', {float(sev)!r}, {int(o)}, {int(n)})"
+        for pid, sev, o, n in rows[
+            ["patient_id", "disease_severity", "uas7_old", "uas7_new"]
+        ].itertuples(index=False)
     )
-    n = len(changed)
+    n_changed = int((rows["uas7_old"] != rows["uas7_new"]).sum())
     lo, hi = UAS7_SEVERITY_RHO - 0.1, UAS7_SEVERITY_RHO + 0.1
-    ids = ", ".join(f"'{pid}'" for pid in rows["patient_id"])
     return f"""BEGIN;
-CREATE TEMP TABLE _uas7_plan (patient_id text PRIMARY KEY, uas7_old int, uas7_new int) ON COMMIT DROP;
+CREATE TEMP TABLE _uas7_plan (
+  patient_id text PRIMARY KEY, severity numeric, uas7_old int, uas7_new int
+) ON COMMIT DROP;
 INSERT INTO _uas7_plan VALUES
 {values};
 DO $$
@@ -122,15 +163,18 @@ BEGIN
   FROM _uas7_plan p
   WHERE pj.patient_id = p.patient_id
     AND pj.brand::text = 'Remibrutinib'
+    AND pj.is_synthetic
+    AND pj.created_at < '{OLD_GENERATOR_CUTOFF.isoformat()}'::timestamptz
+    AND pj.disease_severity = p.severity
     AND pj.urticaria_severity_uas7 = p.uas7_old
     AND pj.urticaria_severity_uas7 IS DISTINCT FROM p.uas7_new;
   GET DIAGNOSTICS updated = ROW_COUNT;
-  IF updated <> {n} THEN
-    RAISE EXCEPTION 'expected {n} rows updated, got % (a row changed since the export)', updated;
+  IF updated <> {n_changed} THEN
+    RAISE EXCEPTION 'expected {n_changed} rows updated, got % (a row changed since the export)', updated;
   END IF;
-  SELECT corr(urticaria_severity_uas7, disease_severity) INTO c
-  FROM patient_journeys WHERE patient_id IN ({ids});
-  IF c < {lo:.2f} OR c > {hi:.2f} THEN
+  SELECT corr(pj.urticaria_severity_uas7, pj.disease_severity) INTO c
+  FROM patient_journeys pj JOIN _uas7_plan p USING (patient_id);
+  IF c IS NULL OR c < {lo:.2f} OR c > {hi:.2f} THEN
     RAISE EXCEPTION 'post-update corr % outside [{lo:.2f}, {hi:.2f}]', c;
   END IF;
   RAISE NOTICE 'uas7 backfill: % rows updated, corr now %', updated, c;
@@ -143,25 +187,19 @@ def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    ap.add_argument(
-        "--created-before", required=True, help="ISO timestamp; only older rows are touched."
-    )
-    ap.add_argument(
-        "--in-csv", required=True, help="Export of the live Remibrutinib rows (see USAGE)."
-    )
+    ap.add_argument("--in-csv", required=True, help="Export of the live Remibrutinib rows.")
     ap.add_argument("--backup-dir", default=str(_PROJECT_ROOT / "data" / "backups"))
     ap.add_argument("--sql-out", help="Write the transactional UPDATE here (nothing is applied).")
     args = ap.parse_args()
 
-    live = pd.read_csv(args.in_csv)
-    rows = plan(live, pd.Timestamp(args.created_before).tz_convert("UTC"))
+    rows = plan(pd.read_csv(args.in_csv))
     print(report(rows))
 
     backup = Path(args.backup_dir)
     backup.mkdir(parents=True, exist_ok=True)
     stamp = pd.Timestamp.now(tz="UTC").strftime("%Y%m%dT%H%M%S")
     path = backup / f"remibrutinib_uas7_backup_{stamp}.tsv"
-    rows[["patient_id", "uas7_old"]].to_csv(path, sep="\t", index=False)
+    rows[["patient_id", "disease_severity", "uas7_old"]].to_csv(path, sep="\t", index=False)
     print(f"backup: {path}")
 
     if args.sql_out:

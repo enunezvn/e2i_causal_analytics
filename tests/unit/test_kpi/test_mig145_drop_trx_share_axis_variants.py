@@ -1,4 +1,4 @@
-"""Drift-lock for migration 144: the patient-axis TRx-share statements are deleted.
+"""Drift-lock for migration 145: the patient-axis TRx-share statements are deleted.
 
 The calculator refuses TRx share on every patient axis (chat
 session_1789548670222_fcscf3u, 2026-09-16), so these 12 registry rows are
@@ -12,7 +12,7 @@ from pathlib import Path
 
 MIG = (
     Path(__file__).resolve().parents[3]
-    / "database/migrations/144_drop_trx_share_patient_axis_variants.sql"
+    / "database/migrations/145_drop_trx_share_patient_axis_variants.sql"
 )
 
 
@@ -31,7 +31,7 @@ def _expected_ids() -> set:
 def _deleted_ids() -> set:
     sql = MIG.read_text()
     m = re.search(r"DELETE FROM kpi_query_registry\s+WHERE query_id IN \((.*?)\);", sql, re.S)
-    assert m, "migration 144 must DELETE FROM kpi_query_registry WHERE query_id IN (...)"
+    assert m, "migration 145 must DELETE FROM kpi_query_registry WHERE query_id IN (...)"
     return set(re.findall(r"'([a-z_]+)'", m.group(1)))
 
 

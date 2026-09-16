@@ -61,8 +61,10 @@ def uas7_from_severity(
         raise ValueError(f"rho must be in [0, 1), got {rho}")
     d = np.asarray(draw, dtype=float)
     sev = np.asarray(disease_severity, dtype=float)
-    if np.any((d < UAS7_MIN) | (d > UAS7_MAX)):
+    if not np.all(np.isfinite(d)) or np.any((d < UAS7_MIN) | (d > UAS7_MAX)):
         raise ValueError("UAS7 draw outside 16..42")
+    if not np.all(np.isfinite(sev)):
+        raise ValueError("disease_severity must be finite")
     u = (d - UAS7_MIN + 0.5) / _UAS7_LEVELS
     z = rho * (sev - _SEVERITY_MEAN) / _SEVERITY_SD + np.sqrt(1.0 - rho**2) * norm.ppf(u)
     out = UAS7_MIN + np.floor(_UAS7_LEVELS * norm.cdf(z))
