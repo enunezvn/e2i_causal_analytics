@@ -27,24 +27,25 @@ class TestSEFromCI:
     def test_se_derived_from_mean_ci_not_dispersion(self):
         calc = SegmentCATECalculator(SegmentCATEConfig(ci_confidence_level=0.95))
         # Segment-MEAN CI half-width ≈ 1.96·0.2 → SE ≈ 0.2, NOT cate_std=99.
-        se = calc._se_from_ci(4.608, 5.392, cate_std=99.0, n_samples=50)
+        se = calc._se_from_ci(4.608, 5.392)
         assert se == pytest.approx(0.2, abs=0.01)
 
-    def test_se_fallback_shrinks_with_n(self):
+    def test_no_ci_means_no_se(self):
+        # #2142: without a measured interval there is no SE. The former
+        # cate_std/√n stand-in was the dispersion of fitted CATEs, not sampling
+        # uncertainty (12-20x smaller than EconML's own SE on the cert frame).
         calc = SegmentCATECalculator(SegmentCATEConfig(ci_confidence_level=0.95))
-        se_n = calc._se_from_ci(None, None, cate_std=2.0, n_samples=100)
-        se_4n = calc._se_from_ci(None, None, cate_std=2.0, n_samples=400)
-        assert se_n == pytest.approx(0.2, abs=1e-6)
-        assert se_4n == pytest.approx(0.1, abs=1e-6)  # 4× n → 2× smaller SE
+        assert calc._se_from_ci(None, None) is None
+        assert calc._se_from_ci(1.0, None) is None
+        assert calc._se_from_ci(None, 1.0) is None
 
     def test_degenerate_se_is_none_not_zero(self):
         # A zero-width CI / constant-prediction segment must NOT yield SE=0
         # (which would become an infinite 1/SE² weight) — return None instead.
         calc = SegmentCATECalculator(SegmentCATEConfig(ci_confidence_level=0.95))
-        assert calc._se_from_ci(2.0, 2.0, cate_std=0.0, n_samples=50) is None
-        assert calc._se_from_ci(None, None, cate_std=0.0, n_samples=50) is None
+        assert calc._se_from_ci(2.0, 2.0) is None
         # A real CI still returns a positive SE.
-        assert calc._se_from_ci(1.8, 2.2, cate_std=0.0, n_samples=50) > 0
+        assert calc._se_from_ci(1.8, 2.2) > 0
 
 
 class TestAggregateUsesSE:
