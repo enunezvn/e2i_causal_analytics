@@ -1498,3 +1498,56 @@ async def test_advance_review_refuses_an_unrecorded_hash_against_a_row_that_has_
 
     assert ok is False
     assert fake_client.rows("expert_reviews")[0]["dag_version_hash"] == "h1"
+
+
+# --------------------------------------------------------------------------
+# renew_review (#2090): the renewal insert races uq_er_pending_estimand too
+# --------------------------------------------------------------------------
+
+
+def _seed_original_and_pending(fake_client: _FakeClient) -> None:
+    fake_client.seed(
+        "expert_reviews",
+        [
+            {
+                "review_id": "r-original",
+                "estimand_key": "b:t:y",
+                "approval_status": "approved",
+                "dag_version_hash": "h1",
+                "brand": "B",
+                "treatment_variable": "T",
+                "outcome_variable": "Y",
+            },
+            {"review_id": "r-pending", "estimand_key": "b:t:y", "approval_status": "pending"},
+        ],
+    )
+
+
+@pytest.mark.unit
+async def test_renew_review_recovers_pending_by_estimand_on_unique_violation(fake_client):
+    _seed_original_and_pending(fake_client)
+    fake_client.fail_next_insert(
+        "expert_reviews",
+        Exception('duplicate key value violates unique constraint "uq_er_pending_estimand"'),
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+
+    rid = await repo.renew_review(original_review_id="r-original", reviewer_id="q2")
+
+    assert rid == "r-pending"
+    # the same by-estimand lookup create_review uses, keyed from the ORIGINAL's estimand
+    assert ("eq", ("estimand_key", "b:t:y")) in fake_client.calls("expert_reviews")
+    assert fake_client.inserted("expert_reviews") == []
+
+
+@pytest.mark.unit
+async def test_renew_review_does_not_mask_a_non_unique_failure(fake_client):
+    """Only a 23505 is recovered; any other insert failure still returns None."""
+    _seed_original_and_pending(fake_client)
+    fake_client.fail_next_insert("expert_reviews", Exception("connection reset by peer"))
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+
+    rid = await repo.renew_review(original_review_id="r-original", reviewer_id="q2")
+
+    assert rid is None
+    assert ("eq", ("estimand_key", "b:t:y")) not in fake_client.calls("expert_reviews")
