@@ -484,7 +484,10 @@ function SimulationResultPanel({ simulation }: { simulation: AnySimulation }) {
                 SYNTHETIC
               </span>
             )}
-            <span className="text-xs text-[var(--color-text-tertiary)]">
+            <span
+              className="text-xs text-[var(--color-text-tertiary)]"
+              title="Confidence blends the evidence behind this estimate — the cohort rows the estimator fit on, the precision of the 95% interval, and model fidelity. Generating more twins does not raise it."
+            >
               Confidence: {(simulation.simulation_confidence * 100).toFixed(0)}%
             </span>
           </div>

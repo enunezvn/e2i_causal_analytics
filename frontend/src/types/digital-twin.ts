@@ -380,6 +380,13 @@ export interface SimulationDetailResponse extends SimulationResponse {
   population_filters: Record<string, unknown>;
   /** Effect heterogeneity by subgroup */
   effect_heterogeneity: EffectHeterogeneityResponse;
+  /**
+   * How effect_heterogeneity was computed (#2104): over the cohort rows behind the estimate,
+   * per generated twin (synthetic path), or 'twin_weighted_legacy' — a row stored before
+   * #2097 whose non-region subgroups averaged over the generated twins and whose stored
+   * simulation_confidence was scored on twin count. The stored JSON is served unchanged.
+   */
+  subgroups_basis?: 'cohort_rows' | 'per_twin' | 'twin_weighted_legacy' | 'unknown';
   /** Full intervention config */
   intervention_config: Record<string, unknown>;
   /** Completion timestamp */

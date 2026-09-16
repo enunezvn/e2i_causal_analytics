@@ -702,6 +702,22 @@ describe('DigitalTwin', () => {
     expect(screen.getByText(/^SYNTHETIC$/)).toBeInTheDocument();
   });
 
+  it('explains on the confidence badge that it follows the evidence, not the twin count (#2104)', () => {
+    (useRunSimulation as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      isPending: false,
+      data: mockRunResult,
+      isSuccess: true,
+      isError: false,
+    });
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+    // 0.83 -> "Confidence: 83%"; the title carries the explanation.
+    expect(screen.getByText(/Confidence: 83%/)).toHaveAttribute(
+      'title',
+      expect.stringMatching(/cohort rows.*more twins does not raise/i)
+    );
+  });
+
   it('does NOT show a SYNTHETIC badge for a non-synthetic provenance', () => {
     (useRunSimulation as ReturnType<typeof vi.fn>).mockReturnValue({
       mutate: mockMutate,
