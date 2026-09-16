@@ -238,9 +238,21 @@ async def test_trx_share_by_patient_axis_refusal_points_to_the_within_brand_mix(
 @pytest.mark.asyncio
 async def test_calculator_side_brand_guard_for_biologic_axes_still_fires(monkeypatch):
     """The Remibrutinib-only rule lives in BusinessImpactCalculator
-    (_guard_brand_scoped_axis) and fires BEFORE any query. The tool gate passes
-    TRx + biologic through (served axis), so the brand guard -- not the axis
-    gate -- is what refuses Kisqali."""
+    (_guard_brand_scoped_axis) and fires BEFORE any query. Two gates refuse
+    Kisqali + biologic, and WHICH ONE speaks depends on the KPI -- so this pins
+    the ORDER on both sides of the lane's contract flip:
+
+    * PANEL TRx/NRx/NBRx SERVE the axis, so the tool gate passes them through
+      and the BRAND guard is what refuses Kisqali (it was canonical TRx that
+      did this before #2114 moved the patient panel to WS3-BI-011..013).
+    * CANONICAL TRx no longer serves the axis, so the TOOL gate refuses first
+      and no calculator is ever built -- the brand guard is not reached, and
+      asserting the brand word absent would say nothing about which gate ran.
+
+    Measured, not assumed: the brand guard fires for all three panel volumes on
+    both Remibrutinib-only axes, and for Remibrutinib each axis BINDS into its
+    own query (the positive control that proves the probe can see success).
+    """
     from src.api.routes.chatbot_tools import kpi_calculate_tool
     from src.kpi.calculators.business_impact import BusinessImpactCalculator
 
@@ -252,28 +264,56 @@ async def test_calculator_side_brand_guard_for_biologic_axes_still_fires(monkeyp
             assert kpi is not None
             return calc.calculate(kpi, context)
 
+    panel = {"TRx Panel": "trx", "NRx Panel": "nrx", "NBRx Panel": "nbrx"}
+
     _install(monkeypatch, _RealBI())
+    for kpi_name in panel:
+        for axis in ("biologic", "ige_tier"):
+            resp = await kpi_calculate_tool.ainvoke(
+                {"kpi_name": kpi_name, "brand": "Kisqali", axis: _AXIS_PROBE[axis]}
+            )
+            assert resp["success"] is False, (kpi_name, axis, resp)
+            assert "Remibrutinib" in resp["error"], (kpi_name, axis, resp)
+            assert "applies only to" not in resp["error"]  # not the axis gate
+
+    # Positive control: for Remibrutinib each axis is BOUND into its own query.
+    bound: List[Tuple[str, List[Any]]] = []
+
+    def _record(query_id: str, params: List[Any]) -> None:
+        bound.append((query_id, list(params)))
+        raise RuntimeError("stop before the DB")
+
+    monkeypatch.setattr(calc, "_execute_query", _record)
+    for kpi_name, stem in panel.items():
+        for axis in ("biologic", "ige_tier"):
+            bound.clear()
+            resp = await kpi_calculate_tool.ainvoke(
+                {"kpi_name": kpi_name, "brand": "Remibrutinib", axis: _AXIS_PROBE[axis]}
+            )
+            assert resp["success"] is False and "stop before the DB" in resp["error"]
+            # The base id, not the ``_include_synthetic`` twin: the swap happens
+            # INSIDE ``_execute_query`` (which this test replaces), and the unit
+            # tree's autouse fixture pins both synthetic flags off. A probe run
+            # outside pytest picks the repo-root .env up and records the twin.
+            assert bound == [
+                (
+                    f"business_impact_{stem}_{axis}",
+                    ["Remibrutinib", _AXIS_PROBE[axis]],
+                )
+            ], (kpi_name, axis, bound)
+
+    # The other side of the flip: canonical TRx is refused by the TOOL gate, so
+    # no calculator is built at all. `_RaisingCalc` records any attribute touch,
+    # which is a stronger discriminator than the absence of a phrase.
+    reached: Dict[str, Any] = {}
+    _install(monkeypatch, _RaisingCalc(reached))
     for axis in ("biologic", "ige_tier"):
         resp = await kpi_calculate_tool.ainvoke(
             {"kpi_name": "TRx", "brand": "Kisqali", axis: _AXIS_PROBE[axis]}
         )
-        assert resp["success"] is False
-        assert "Remibrutinib" in resp["error"], resp
-        assert "applies only to" not in resp["error"]  # not the axis gate
-
-    # Positive control: for Remibrutinib the axis is BOUND into the query params.
-    bound: List[List[Any]] = []
-
-    def _record(query_id: str, params: List[Any]) -> None:
-        bound.append(list(params))
-        raise RuntimeError("stop before the DB")
-
-    monkeypatch.setattr(calc, "_execute_query", _record)
-    resp = await kpi_calculate_tool.ainvoke(
-        {"kpi_name": "TRx", "brand": "Remibrutinib", "biologic": "naive"}
-    )
-    assert resp["success"] is False and "stop before the DB" in resp["error"]
-    assert bound == [["Remibrutinib", "naive"]]
+        assert reached == {}, (axis, reached)
+        assert resp["success"] is False and resp["kpi_id"] == "WS3-BI-005"
+        assert "applies only to" in resp["error"], resp  # the axis gate spoke
 
 
 @pytest.mark.unit
