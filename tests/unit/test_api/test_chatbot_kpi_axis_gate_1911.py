@@ -38,11 +38,18 @@ _AXIS_PROBE: Dict[str, str] = {
 # The human-readable spec: the KPIs whose calculator BINDS each axis to a query.
 # Kept literal here on purpose (a reviewer can read it) and pinned three ways
 # below -- to the tool's constant and to the calculators' actual binding.
-# TRx Share (WS3-BI-008) is NOT served on any patient axis: every patient is on
-# one tracked brand, so a per-bucket portfolio share mixes indications (and is
-# always 100% on the Remibrutinib-only biologic/IgE axes) -- the 2026-09-16
+# TRx Share is NOT served on any patient axis: every patient is on one tracked
+# brand, so a per-bucket portfolio share mixes indications (and is always 100% on
+# the Remibrutinib-only biologic/IgE axes) -- the 2026-09-16
 # session_1789548670222_fcscf3u incident. The calculator refuses it too.
-_VOLUME = frozenset({"WS3-BI-005", "WS3-BI-006", "WS3-BI-007"})
+#
+# ⚠ THE SHARE KPI AND THE VOLUME TRIO BOTH MOVED (#2114, owner #11). The lane makes
+# business_metrics canonical and puts the patient panel on WS3-BI-011..014, so the
+# KPIs whose calculators BIND a patient axis are the PANEL trio, not the canonical
+# 005/006/007 -- `refuse_patient_axis` now turns those away. The share with no
+# patient-axis breakdown is panel WS3-BI-014, and it is in none of the four
+# measured sets, so owner #11 holds by MEASUREMENT here rather than by assertion.
+_VOLUME = frozenset({"WS3-BI-011", "WS3-BI-012", "WS3-BI-013"})
 _SERVED: Dict[str, frozenset] = {
     # _resolve_windowed_call (005..007) + _calc_conversion_rate (009, migration
     # 111) + _calc_cate (CM-002 binds ml_predictions.segment_assignment, same

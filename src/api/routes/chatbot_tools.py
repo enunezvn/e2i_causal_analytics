@@ -2340,10 +2340,10 @@ _PATIENT_AXIS_LABELS: Dict[str, str] = {
 #     CM-002 here, so refusing it would drop a combination the calculator
 #     serves. It reads none of the other three axes.
 _PATIENT_AXIS_KPI_IDS: Dict[str, frozenset[str]] = {
-    "segment": frozenset({"WS3-BI-005", "WS3-BI-006", "WS3-BI-007", "WS3-BI-009", "CM-002"}),
-    "therapy_line": frozenset({"WS3-BI-005", "WS3-BI-006", "WS3-BI-007", "WS3-BI-009"}),
-    "biologic": frozenset({"WS3-BI-005", "WS3-BI-006", "WS3-BI-007"}),
-    "ige_tier": frozenset({"WS3-BI-005", "WS3-BI-006", "WS3-BI-007"}),
+    "segment": frozenset({"WS3-BI-011", "WS3-BI-012", "WS3-BI-013", "WS3-BI-009", "CM-002"}),
+    "therapy_line": frozenset({"WS3-BI-011", "WS3-BI-012", "WS3-BI-013", "WS3-BI-009"}),
+    "biologic": frozenset({"WS3-BI-011", "WS3-BI-012", "WS3-BI-013"}),
+    "ige_tier": frozenset({"WS3-BI-011", "WS3-BI-012", "WS3-BI-013"}),
 }
 
 
