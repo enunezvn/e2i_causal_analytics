@@ -7,9 +7,11 @@ column INDEX, so a different order is a different fit: across container restarts
 the reconstructed ATE and every seeded refit moved at the 1e-4..1e-3 level while
 the seeds themselves were identical (lane-2029b cert).
 
-The reconstruction therefore pins both lists to the order the caller passed --
-the adjustment set's own order, which is also the column order the estimation
-node fit the reported estimate on.
+The reconstruction therefore pins both lists to the column order the estimation
+node fit the reported estimate on (``covariates_adjusted``, which follows the
+graph builder's SORTED adjustment set) -- not to the order the node received
+``common_causes`` in, which is usually ``state["confounders"]`` in the caller's
+order (codex r1: a repeatable fit in the wrong order is still a different fit).
 """
 
 from __future__ import annotations
@@ -41,26 +43,43 @@ def _frame(n: int = 400) -> pd.DataFrame:
     return X.assign(treatment_arm=t, persistent_180d=y)
 
 
-def _build(common_causes):
+def _build(common_causes, covariates_adjusted=None):
+    estimation_result = {"selected_estimator": "LinearDML", "random_state": 42}
+    if covariates_adjusted is not None:
+        estimation_result["covariates_adjusted"] = covariates_adjusted
     return _build_dowhy_estimate(
         data=_frame(),
         treatment="treatment_arm",
         outcome="persistent_180d",
         common_causes=common_causes,
-        estimation_result={"selected_estimator": "LinearDML", "random_state": 42},
+        estimation_result=estimation_result,
     )
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("order", [COVARIATES, COVARIATES[::-1]], ids=["forward", "reversed"])
-def test_reconstruction_keeps_the_callers_adjustment_order(order):
-    """Both lists DoWhy derives from sets come back in the caller's order. Two
-    opposite input orders cannot both equal one hash order, so without the pin
-    at least one case fails in any process."""
-    _, identified_estimand, estimate, _ = _build(list(order))
+@pytest.mark.parametrize("fit_order", [COVARIATES, COVARIATES[::-1]], ids=["forward", "reversed"])
+def test_reconstruction_uses_the_estimations_column_order(fit_order):
+    """Both lists DoWhy derives from sets come back in the order the estimation
+    RECORDED, although ``common_causes`` arrive in a different (caller) order.
+    Two opposite recorded orders cannot both equal one hash order, and neither
+    equals the order passed in, so without the pin at least one case fails."""
+    received = sorted(COVARIATES, key=lambda c: c[::-1])  # neither fit order
+    assert received not in (COVARIATES, COVARIATES[::-1])
 
-    assert identified_estimand.get_backdoor_variables() == list(order)
-    assert list(estimate.estimator._effect_modifier_names) == list(order)
+    _, identified_estimand, estimate, _ = _build(received, covariates_adjusted=list(fit_order))
+
+    assert identified_estimand.get_backdoor_variables() == list(fit_order)
+    assert list(estimate.estimator._effect_modifier_names) == list(fit_order)
+
+
+@pytest.mark.unit
+def test_reconstruction_without_a_recorded_order_uses_name_order():
+    """No ``covariates_adjusted`` recorded: the order is still independent of the
+    hash seed (by name), never DoWhy's set order."""
+    _, identified_estimand, estimate, _ = _build(list(COVARIATES[::-1]))
+
+    assert identified_estimand.get_backdoor_variables() == sorted(COVARIATES)
+    assert list(estimate.estimator._effect_modifier_names) == sorted(COVARIATES)
 
 
 _CHILD = """
@@ -70,7 +89,7 @@ import src
 from tests.unit.test_agents.test_causal_impact.test_refutation_adjustment_order_2084 import (
     COVARIATES, _build,
 )
-model, identified_estimand, estimate, _ = _build(list(COVARIATES))
+model, identified_estimand, estimate, _ = _build(list(COVARIATES), list(COVARIATES))
 placebo = model.refute_estimate(
     identified_estimand, estimate, method_name="placebo_treatment_refuter",
     placebo_type="permute", num_simulations=3, random_state=11,

@@ -16,7 +16,7 @@ environment contract to keep in sync.
 
 from __future__ import annotations
 
-from typing import Any, List
+from typing import Any, Dict, List
 
 
 def pin_adjustment_order(identified_estimand: Any, order: List[str]) -> None:
@@ -38,3 +38,24 @@ def pin_adjustment_order(identified_estimand: Any, order: List[str]) -> None:
         for key, names in (sets or {}).items():
             if names:
                 sets[key] = sorted(names, key=lambda name: (rank.get(name, len(rank)), name))
+
+
+def fit_column_order(common_causes: List[str], estimation_result: Dict[str, Any]) -> List[str]:
+    """``common_causes`` in the column order the estimation node fit the reported ATE on.
+
+    The reconstruction's ``common_causes`` usually come from ``state["confounders"]``
+    (the caller's order), while the estimator was fit on the graph's adjustment set,
+    which the graph builder SORTS, recorded as ``covariates_adjusted`` (plus
+    ``baseline_covariates_adjusted`` on an efficiency run). Pinning the caller's
+    order would make the reconstruction repeatable yet still a different
+    feature-index fit from the one on screen. So names the estimation recorded
+    keep ITS order; any other name follows, by name. Membership is unchanged --
+    this chooses an order, never a set.
+    """
+    reference = list(estimation_result.get("covariates_adjusted") or []) + list(
+        estimation_result.get("baseline_covariates_adjusted") or []
+    )
+    rank: Dict[str, int] = {}
+    for name in reference:
+        rank.setdefault(name, len(rank))
+    return sorted(common_causes, key=lambda name: (rank.get(name, len(rank)), name))
