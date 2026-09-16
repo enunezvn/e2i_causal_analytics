@@ -21,7 +21,7 @@ statements enforce.
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, Dict, Hashable, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Hashable, Iterable, List, Optional, Tuple, TypeVar
 
 from src.kpi.synthetic_mode import kpi_include_synthetic
 from src.kpi.volume_family import has_dimensions
@@ -43,7 +43,13 @@ _PAGE_SIZE = 5000
 _CACHE_KEY = "canonical_volume_rows"
 
 Cell = Tuple[str, str, str]  # (brand, region, month ISO)
+Pair = Tuple[str, str]  # (brand | region, month ISO)
 Acc = Tuple[float, bool]  # (sum, any input synthetic)
+#: ``_add`` is generic over its key so each accumulator keeps its OWN key type.
+#: Annotating the accumulators ``Dict[Hashable, Acc]`` instead would type every
+#: key as ``Hashable``, and mypy then refuses each ``for (b, m), ... in`` unpack
+#: ("Hashable object is not iterable") — one loose annotation, 12 errors.
+_Key = TypeVar("_Key", bound=Hashable)
 
 
 def _flag(value: Any) -> bool:
@@ -56,7 +62,7 @@ def _flag(value: Any) -> bool:
     return bool(value)
 
 
-def _add(acc: Dict[Hashable, Acc], key: Hashable, value: float, synthetic: bool) -> None:
+def _add(acc: Dict[_Key, Acc], key: _Key, value: float, synthetic: bool) -> None:
     total, tainted = acc.get(key, (0.0, False))
     acc[key] = (total + value, tainted or synthetic)
 
@@ -113,9 +119,9 @@ def aggregate_canonical_points(
     cells = _cells(rows, CANONICAL_METRIC_FOR_KPI[kpi_id], as_of, include_synthetic)
     if kpi_id == SHARE_KPI_ID:
         return _share_points(cells, kpi_meta)
-    national: Dict[Hashable, Acc] = {}
-    per_brand: Dict[Hashable, Acc] = {}
-    per_region: Dict[Hashable, Acc] = {}
+    national: Dict[str, Acc] = {}
+    per_brand: Dict[Pair, Acc] = {}
+    per_region: Dict[Pair, Acc] = {}
     for (brand, region, month), (value, synthetic) in cells.items():
         _add(national, month, value, synthetic)
         _add(per_brand, (brand, month), value, synthetic)
@@ -128,9 +134,9 @@ def aggregate_canonical_points(
 
 
 def _share_points(cells: Dict[Cell, Acc], kpi_meta: Any) -> List[Dict[str, Any]]:
-    portfolio: Dict[Hashable, Acc] = {}
-    portfolio_region: Dict[Hashable, Acc] = {}
-    per_brand: Dict[Hashable, Acc] = {}
+    portfolio: Dict[str, Acc] = {}
+    portfolio_region: Dict[Pair, Acc] = {}
+    per_brand: Dict[Pair, Acc] = {}
     for (brand, region, month), (value, synthetic) in cells.items():
         _add(portfolio, month, value, synthetic)
         _add(portfolio_region, (region, month), value, synthetic)
