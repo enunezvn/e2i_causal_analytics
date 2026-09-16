@@ -59,6 +59,12 @@ logger = logging.getLogger(__name__)
 # on the feature value itself, which is what it has always done — see _calculate_heterogeneity.
 _NUMERIC_AXES = frozenset({"decile"})
 
+# Training rows at which the confidence heuristic's evidence term saturates (#2104). The
+# same knee the causalml executor uses (``n_train / 1000``) and the estimator's default
+# minimum training size (``DEFAULT_MIN_TRAINING_SAMPLES``): a region-targeted cohort
+# estimate (~800-1500 rows live) still scores below a cohort-wide one (~4000 rows).
+CONFIDENCE_N_SATURATION = 1000.0
+
 
 class SimulationEngine:
     """
@@ -264,8 +270,10 @@ class SimulationEngine:
                 "below threshold (0.70). Results may be unreliable."
             )
 
-        # Calculate confidence score
-        simulation_confidence = self._calculate_simulation_confidence(n_twins, std_error, ate)
+        # Confidence follows the estimate's own evidence, never the twin count (#2104).
+        simulation_confidence = self._calculate_simulation_confidence(
+            estimate.n_train, std_error, ate
+        )
 
         execution_time_ms = int((time.time() - start_time) * 1000)
 
@@ -455,14 +463,15 @@ class SimulationEngine:
 
     def _calculate_simulation_confidence(
         self,
-        n_twins: int,
+        n_train: int,
         std_error: float,
         ate: float,
     ) -> float:
         """Calculate confidence score for simulation results."""
         # Factors contributing to confidence:
-        # 1. Sample size (more = better)
-        size_score = min(1.0, n_twins / 10000)
+        # 1. Evidence: the rows the estimator fit on (cohort rows / the labeled frame),
+        #    never the twin count, which is a compute knob (#2104). Saturates at the knee.
+        size_score = min(1.0, n_train / CONFIDENCE_N_SATURATION)
 
         # 2. Precision (lower std error = better)
         precision_score = max(0, 1 - std_error / (abs(ate) + 0.001))

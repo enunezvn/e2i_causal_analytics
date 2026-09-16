@@ -344,9 +344,8 @@ class CohortCausalEstimator:
         # The subgroup heterogeneity the engine reports is now on the same footing: it
         # comes from ``cate_by_axis`` below, which declares region alone and carries the
         # cohort rows behind each region's effect, so by_specialty / by_decile /
-        # by_adoption_stage are no longer averaged over the GENERATED TWINS (#2054).
-        # Still outstanding from #2054: the simulation confidence heuristic rewards twin
-        # count, which is a compute knob rather than evidence about the effect.
+        # by_adoption_stage are no longer averaged over the GENERATED TWINS (#2054), and
+        # the simulation confidence follows ``n_train`` below, not the twin count (#2104).
         if eff.target_regions:
             assert eff.target_ate is not None  # set whenever target_regions is non-empty
             assert eff.target_ci_lower is not None and eff.target_ci_upper is not None

@@ -585,10 +585,10 @@ class TestConfidenceScore:
     def test_confidence_bounded_regardless_of_twin_count(self, email_campaign_config):
         """Confidence stays within [0, 1] for both small and large populations.
 
-        The new std_error/CI are training-evidence-bound (driven by the labeled
-        frame's sample size, not the twin count), so confidence no longer rises
-        with more twins. We therefore only assert the structural [0, 1] bound for
-        both sizes rather than a (no-longer-true) size-monotonicity inequality.
+        This only pins the structural [0, 1] bound on the real (fitted) estimator. That
+        confidence does NOT move with the twin count is pinned separately, by
+        ``test_confidence_is_invariant_to_twin_count_at_fixed_n_train`` below, on a stub
+        estimate whose evidence (``n_train``, CI) is held fixed (#2104).
         """
         small_twins = [
             DigitalTwin(
@@ -628,6 +628,86 @@ class TestConfidenceScore:
 
         assert 0.0 <= small_result.simulation_confidence <= 1.0
         assert 0.0 <= large_result.simulation_confidence <= 1.0
+
+    @staticmethod
+    def _population(n: int) -> TwinPopulation:
+        twins = [
+            DigitalTwin(
+                twin_type=TwinType.HCP,
+                brand=Brand.REMIBRUTINIB,
+                features={"specialty": "rheumatology", "decile": i % 10 + 1},
+                baseline_outcome=0.1,
+                baseline_propensity=0.5,
+            )
+            for i in range(min(n, 100))
+        ] * (n // min(n, 100))
+        return TwinPopulation(
+            twin_type=TwinType.HCP,
+            brand=Brand.REMIBRUTINIB,
+            twins=twins,
+            size=len(twins),
+            model_id=uuid4(),
+        )
+
+    @staticmethod
+    def _confidence(n_twins: int, n_train: int, email_campaign_config) -> float:
+        """simulation_confidence for ``n_twins`` twins scored by a FIXED estimate.
+
+        The stub estimator returns the same ATE / CI (so the same std_error) whatever the
+        twin count and reports ``n_train`` as the rows it fit on; every input to the
+        confidence heuristic except the twin count and ``n_train`` is therefore held.
+        """
+        from src.digital_twin.effect.estimate import PROVENANCE_COHORT, EffectEstimate
+
+        class _FixedEstimator:
+            def estimate(self, frame, twin_df):
+                return EffectEstimate(
+                    ate=0.15,
+                    ate_ci_lower=0.10,
+                    ate_ci_upper=0.20,
+                    att=None,
+                    atc=None,
+                    per_twin_uplift=np.full(len(twin_df), 0.15),
+                    auuc=None,
+                    qini=None,
+                    feature_importances=None,
+                    n_train=n_train,
+                    estimator_type="stub",
+                    data_provenance=PROVENANCE_COHORT,
+                )
+
+        engine = SimulationEngine(
+            TestConfidenceScore._population(n_twins),
+            effect_provider=SyntheticEffectDataProvider(n=300, true_ate=0.15, seed=42),
+            effect_estimator=_FixedEstimator(),  # type: ignore[arg-type]
+            model_fidelity_score=0.8,
+        )
+        result = engine.simulate(
+            email_campaign_config, calculate_heterogeneity=False, use_cache=False
+        )
+        assert result.status == SimulationStatus.COMPLETED, result.error_message
+        return result.simulation_confidence
+
+    def test_confidence_is_invariant_to_twin_count_at_fixed_n_train(self, email_campaign_config):
+        """The twin count is a compute knob, not evidence: with the estimate's own training
+        rows, interval and fidelity held fixed, 100 / 10,000 / 100,000 twins must score the
+        SAME confidence (#2104). On the twin-count heuristic these were 0.003/0.3/0.3 apart
+        on the size term alone."""
+        at_100 = self._confidence(100, 800, email_campaign_config)
+        at_10k = self._confidence(10_000, 800, email_campaign_config)
+        at_100k = self._confidence(100_000, 800, email_campaign_config)
+
+        assert at_100 == at_10k == at_100k
+
+    def test_confidence_rises_with_n_train_and_saturates(self, email_campaign_config):
+        """Confidence follows the rows the estimator fit on: more evidence below the
+        saturation knee (1000 rows) scores strictly higher; past the knee it is flat."""
+        at_200 = self._confidence(150, 200, email_campaign_config)
+        at_1000 = self._confidence(150, 1000, email_campaign_config)
+        at_5000 = self._confidence(150, 5000, email_campaign_config)
+
+        assert at_200 < at_1000
+        assert at_1000 == at_5000
 
 
 # =============================================================================
