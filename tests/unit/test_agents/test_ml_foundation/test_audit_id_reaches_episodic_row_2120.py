@@ -45,11 +45,20 @@ _TARGETS = [
                 "experiment_id": _EXPERIMENT,
                 "scope_spec": {"experiment_id": _EXPERIMENT},
                 "success_criteria": {},
+                "inferred_problem_type": "binary_classification",
             },
             "input_data": {
                 "problem_description": "predict discontinuation",
                 "business_objective": "retain patients",
                 "target_outcome": "fewer discontinuations",
+            },
+            # store_scope_definition reads these from ``state`` (memory_hooks.py
+            # :332-345, :356) for the row body, summary and kpi_category. Under
+            # ``state=output`` they were None/[] -- a second defect this lane fixes.
+            "row_state_keys": {
+                "business_objective": "retain patients",  # from input_data
+                "inferred_problem_type": "binary_classification",  # from the graph
+                "use_case": "commercial_targeting",  # initial_state default
             },
         },
         id="scope_definer",
@@ -194,6 +203,11 @@ async def test_run_hands_the_caller_audit_id_to_the_episodic_hook(monkeypatch, c
         f"keys={sorted(state)}"
     )
     assert str(state["audit_workflow_id"]) == _AUDIT
+    for key, expected in case.get("row_state_keys", {}).items():
+        assert state.get(key) == expected, (
+            f"{case['module']}: the hook's state lacks {key!r} for the row body; "
+            f"got {state.get(key)!r}"
+        )
 
 
 @pytest.mark.unit
