@@ -274,7 +274,7 @@ class ScopeDefinerAgent:
 
             # Record the scope definition to episodic memory (#749 — store_scope_definition
             # was defined but never called from run() and used a non-existent insert API).
-            await self._update_episodic_memory(output)
+            await self._update_episodic_memory(output, final_state)
 
             # Log execution time
             duration = (datetime.now() - start_time).total_seconds()
@@ -445,7 +445,9 @@ class ScopeDefinerAgent:
         except Exception as e:
             logger.debug(f"Failed to update semantic memory: {e}")
 
-    async def _update_episodic_memory(self, output: Dict[str, Any]) -> None:
+    async def _update_episodic_memory(
+        self, output: Dict[str, Any], final_state: Dict[str, Any]
+    ) -> None:
         """Record the scope definition to EPISODIC memory (#749).
 
         ``store_scope_definition`` was defined but never called from ``run()`` AND
@@ -454,6 +456,9 @@ class ScopeDefinerAgent:
         ``None`` (#2099): the audit workflow id is a correlation handle, not a
         conversation, and it is persisted in the episodic ``raw_content``. The
         non-UUID ``experiment_id`` is never used as a session either.
+        ``final_state`` is the graph's final state, handed to the hook as ``state`` so
+        the audit workflow id (#2099 -> ``raw_content``) reaches the row; ``output`` is
+        the agent's public return and does not carry it (#2120).
         """
         try:
             experiment_id = output.get("experiment_id")
@@ -465,6 +470,8 @@ class ScopeDefinerAgent:
             # raw_content instead and this column records an honest NULL.
             session_id = None
             hooks = ScopeDefinerMemoryHooks()
-            await hooks.store_scope_definition(session_id=session_id, result=output, state=output)
+            await hooks.store_scope_definition(
+                session_id=session_id, result=output, state=final_state
+            )
         except Exception as e:
             logger.debug(f"Failed to update episodic memory: {e}")
