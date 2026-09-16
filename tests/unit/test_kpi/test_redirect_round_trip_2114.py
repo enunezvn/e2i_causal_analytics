@@ -117,10 +117,7 @@ def _named_targets(message: str, refusing_id: str) -> List[str]:
 
 def _bound_the_axis(calls: List[Dict[str, Any]], value: str) -> bool:
     """POSITIVE evidence that the ask reached a query carrying the requested axis."""
-    return any(
-        any(str(param) == value for param in (call.get("params") or []))
-        for call in calls
-    )
+    return any(any(str(param) == value for param in (call.get("params") or [])) for call in calls)
 
 
 @pytest.mark.parametrize("brand", _BRANDS, ids=lambda b: str(b))
