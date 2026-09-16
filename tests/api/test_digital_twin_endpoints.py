@@ -41,8 +41,9 @@ def identified_cohort():
     The route builds a cohort provider from ``repo.client`` and honestly 422s
     ("No effect data available ...") when that returns None — which a bare MagicMock
     client guarantees, because the loader awaits it. Patch the source module (the
-    route imports the function locally), exactly as the unit route tests do, so these
-    tests exercise the simulate path they were written for.
+    route imports the function locally) at the same seam as the unit route tests'
+    ``_default_identified_cohort`` (theirs is autouse via monkeypatch; this one is
+    opt-in), so these tests exercise the simulate path they were written for.
     """
     with patch(
         "src.digital_twin.effect.cohort_loader.build_cohort_provider_or_none",
@@ -300,6 +301,11 @@ class TestRunSimulation:
             response = client.post("/api/digital-twin/simulate", json=simulate_request)
 
         assert response.status_code == 200
+        # The filter must reach the engine: the route hands it over as the
+        # ``population_filter`` kwarg (a PopulationFilter), and the mocked engine
+        # discards it, so status alone cannot see a regions regression.
+        passed_filter = mock_engine.simulate.call_args.kwargs["population_filter"]
+        assert passed_filter.regions == ["northeast"]
 
     def test_run_simulation_invalid_brand(self, simulate_request):
         """Should return 422 for invalid brand."""
