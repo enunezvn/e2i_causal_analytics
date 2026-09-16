@@ -60,6 +60,17 @@ def _planted_cohort(n_per_region: int = 300, seed: int = 3):
     return df.drop(columns="_tau")
 
 
+def _scoped_client(client):
+    """Stand-in for ``loop_scoped_async_supabase_client`` yielding ``client``."""
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _scoped():
+        yield client
+
+    return _scoped
+
+
 def _region_population(n_per_region: int = 130):
     import numpy as np
 
@@ -312,8 +323,8 @@ class TestSimulateInterventionFailsClosed:
         # Force the fail-closed path: a reachable client, a usable cohort, but NO active
         # trained model.
         monkeypatch.setattr(
-            "src.memory.services.factories.get_async_supabase_client",
-            AsyncMock(return_value=MagicMock()),
+            "src.memory.services.factories.loop_scoped_async_supabase_client",
+            _scoped_client(MagicMock()),
         )
         monkeypatch.setattr(
             "src.digital_twin.effect.cohort_loader.load_cohort_frame",
@@ -327,12 +338,15 @@ class TestSimulateInterventionFailsClosed:
 
         out = tool_module.simulate_intervention.invoke(
             {
-                "intervention_type": "speaker_program_invitation",  # mock would score ~0.14 -> deploy
+                # The planted cohort identifies email_campaign, so the gate passes and the
+                # missing model is what the tool meets.
+                "intervention_type": "email_campaign",
                 "brand": "Kisqali",
                 "target_population": "hcp",
                 "twin_count": 10000,
             }
         )
+        fake_repo.list_active_models.assert_awaited_once()
         # No fabricated success: a missing model yields refine/error + a fidelity warning.
         assert out["recommendation"] != "deploy"
         assert out["fidelity_warning"] is True
@@ -357,8 +371,8 @@ class TestSimulateInterventionFailsClosed:
 
         # A usable cohort, so the failure is raised past the identification gate (#2025).
         monkeypatch.setattr(
-            "src.memory.services.factories.get_async_supabase_client",
-            AsyncMock(return_value=MagicMock()),
+            "src.memory.services.factories.loop_scoped_async_supabase_client",
+            _scoped_client(MagicMock()),
         )
         monkeypatch.setattr(
             "src.digital_twin.effect.cohort_loader.load_cohort_frame",
@@ -403,8 +417,8 @@ class TestSimulateInterventionEstimatesOnTheCohort:
         load = AsyncMock(return_value=_planted_cohort())
         monkeypatch.setattr("src.digital_twin.effect.cohort_loader.load_cohort_frame", load)
         monkeypatch.setattr(
-            "src.memory.services.factories.get_async_supabase_client",
-            AsyncMock(return_value=MagicMock()),
+            "src.memory.services.factories.loop_scoped_async_supabase_client",
+            _scoped_client(MagicMock()),
         )
         monkeypatch.setattr(
             tool_module, "_get_or_create_twins", lambda *a, **k: _region_population()
@@ -436,8 +450,8 @@ class TestSimulateInterventionEstimatesOnTheCohort:
             AsyncMock(return_value=pd.DataFrame()),
         )
         monkeypatch.setattr(
-            "src.memory.services.factories.get_async_supabase_client",
-            AsyncMock(return_value=MagicMock()),
+            "src.memory.services.factories.loop_scoped_async_supabase_client",
+            _scoped_client(MagicMock()),
         )
         generated = []
         monkeypatch.setattr(

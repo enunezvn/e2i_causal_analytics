@@ -324,6 +324,17 @@ def _region_population(n_per_region: int = 130):
     return TwinPopulation(twin_type=TwinType.HCP, brand=Brand.KISQALI, twins=twins, size=len(twins))
 
 
+def _scoped_client(client):
+    """Stand-in for ``loop_scoped_async_supabase_client`` yielding ``client``."""
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _scoped():
+        yield client
+
+    return _scoped
+
+
 def _compute_on_cohort(cohort, generate):
     """Run the worker compute with only the model registry and the database read replaced;
     the engine, the cohort provider and the estimator run for real."""
@@ -335,8 +346,8 @@ def _compute_on_cohort(cohort, generate):
         patch("src.digital_twin.twin_generator.TwinGenerator.generate", generate),
         patch("src.digital_twin.effect.cohort_loader.load_cohort_frame", load),
         patch(
-            "src.memory.services.factories.get_async_supabase_client",
-            new=AsyncMock(return_value=MagicMock()),
+            "src.memory.services.factories.loop_scoped_async_supabase_client",
+            new=_scoped_client(MagicMock()),
         ),
     ):
         result = run_simulation_compute(

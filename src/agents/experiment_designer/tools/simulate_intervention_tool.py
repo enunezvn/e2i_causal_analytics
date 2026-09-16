@@ -141,12 +141,14 @@ def _get_or_create_twins(
         return _twin_cache[cache_key]
 
     from src.digital_twin import twin_persistence
-    from src.memory.services.factories import get_async_supabase_client
+    from src.memory.services.factories import loop_scoped_async_supabase_client
 
     async def _resolve_and_hydrate() -> Any:
-        client = await get_async_supabase_client()
-        repo = TwinRepository(supabase_client=client)
-        actives = await repo.list_active_models(twin_type=twin_type, brand=brand.value)
+        # A client for this loop only: the cached client's pool is bound to the first loop
+        # that used it, and asyncio.run closes a loop per call (#2025).
+        async with loop_scoped_async_supabase_client() as client:
+            repo = TwinRepository(supabase_client=client)
+            actives = await repo.list_active_models(twin_type=twin_type, brand=brand.value)
         if not actives:
             raise RuntimeError(
                 f"No trained twin model for {brand.value}/{twin_type.value}; "
