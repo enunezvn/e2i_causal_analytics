@@ -604,8 +604,10 @@ class TestStoredSubgroupsBasis:
 
     def test_detail_response_literal_matches_the_enum(self):
         """Drift pin: a new enum member would pass from_row, fail pydantic on the detail
-        response and be swallowed into a 500 by the route's except. The frontend union is
-        pinned by tsc against the regenerated api.ts."""
+        response and be swallowed into a 500 by the route's except. The frontend's handwritten
+        union is pinned to the generated contract by a vitest ``expectTypeOf`` in
+        DigitalTwin.test.tsx (the API client imports the handwritten type, so tsc alone
+        never compares the two)."""
         from typing import get_args
 
         from src.api.routes.digital_twin import SimulationDetailResponse

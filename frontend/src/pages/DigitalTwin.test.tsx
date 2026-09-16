@@ -11,7 +11,7 @@
  * `2.4s / 68% / 87%` stat cards. These tests pin that honesty.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, expectTypeOf } from 'vitest';
 import { render, screen, waitFor, act, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -25,6 +25,7 @@ import {
   type SimulationResponse,
   type SimulationDetailResponse,
 } from '@/types/digital-twin';
+import type { components } from '@/types/generated/api';
 
 // Mock the digital twin hooks (including useSimulation for history-detail fetch)
 vi.mock('@/hooks/api/use-digital-twin', () => ({
@@ -748,6 +749,41 @@ describe('DigitalTwin', () => {
     const title = screen.getByText(/Confidence: 83%/).getAttribute('title') ?? '';
     expect(title).toMatch(/Confidence blends the evidence behind this estimate/);
     expect(title).not.toMatch(/more twins does not raise|follows the twin sample/i);
+  });
+
+  // A STORED simulation (the detail carries `subgroups_basis`; a fresh run does not) shows
+  // the score persisted when it ran, computed by the heuristic in force at that time — the
+  // current-heuristic wording above would be false for it (#2104, codex r2).
+  it('says a stored legacy detail carries the score of its time, scored on twin count (#2104)', async () => {
+    await openHistoryDetail({
+      ...mockDetail,
+      data_provenance: 'cohort_estimated_synthetic_gold_v1',
+      subgroups_basis: 'twin_weighted_legacy',
+    });
+    const title = screen.getByText(/Confidence: 83%/).getAttribute('title') ?? '';
+    expect(title).toMatch(/score stored when the simulation ran.*heuristic in force at that time/i);
+    expect(title).toMatch(/scored on the generated twin count/i);
+    expect(title).not.toMatch(/more twins does not raise/i);
+  });
+
+  it('says a stored cohort_rows detail carries the score of its time, without the invariance claim (#2104)', async () => {
+    await openHistoryDetail({
+      ...mockDetail,
+      data_provenance: 'cohort_estimated_synthetic_gold_v1',
+      subgroups_basis: 'cohort_rows',
+    });
+    const title = screen.getByText(/Confidence: 83%/).getAttribute('title') ?? '';
+    expect(title).toMatch(/score stored when the simulation ran.*heuristic in force at that time/i);
+    expect(title).not.toMatch(/scored on the generated twin count/i);
+    expect(title).not.toMatch(/more twins does not raise/i);
+  });
+
+  it('pins the handwritten subgroups_basis union to the generated OpenAPI contract (#2104)', () => {
+    // The API client imports the handwritten type, so tsc alone never compares the two;
+    // this type-level assertion does (checked by tsc, a no-op at runtime).
+    expectTypeOf<SimulationDetailResponse['subgroups_basis']>().toEqualTypeOf<
+      components['schemas']['SimulationDetailResponse']['subgroups_basis']
+    >();
   });
 
   it('does NOT show a SYNTHETIC badge for a non-synthetic provenance', () => {
