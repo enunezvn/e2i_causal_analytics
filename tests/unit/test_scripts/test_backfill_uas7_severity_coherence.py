@@ -44,14 +44,33 @@ def test_plan_recomputes_with_the_generator_function():
     assert "uncontrolled-CSU axis flips" in report(rows)
 
 
-def test_new_generator_rows_are_never_selected_even_in_a_mixed_export():
+def test_rows_at_or_after_the_cutoff_refuse_until_vouched_for():
+    """Codex r2: a weekly append BEFORE the deploy writes old-generator rows after the
+    fixed cutoff; silently excluding them would leave them incoherent forever."""
+    old = _live(2700, seed=1)
+    newer = _live(300, seed=2).assign(created_at=_NEW)
+    with pytest.raises(SystemExit, match="300 Remibrutinib rows were created at/after"):
+        plan(pd.concat([old, newer], ignore_index=True))
+
+
+def test_vouched_newer_rows_are_excluded_even_in_a_mixed_export():
     """Codex r1 HIGH: a mixed cohort passes any correlation band. Selection is by the
-    fixed cutoff, so rows the copula generator wrote are never remapped."""
+    cutoff, so rows the copula generator wrote are never remapped."""
     old = _live(2700, seed=1)
     new = _live(300, seed=2, applied=True).assign(created_at=_NEW)
-    rows = plan(pd.concat([old, new], ignore_index=True))
+    rows = plan(pd.concat([old, new], ignore_index=True), newer_rows_are_new_generator=True)
     assert set(rows["patient_id"]) == set(old["patient_id"])
     assert pd.Timestamp(_NEW) > OLD_GENERATOR_CUTOFF > pd.Timestamp(_OLD)
+
+
+def test_a_later_cutoff_includes_pre_deploy_appends_and_an_earlier_one_is_refused():
+    old = _live(2700, seed=1)
+    pre_deploy_append = _live(300, seed=2).assign(created_at="2026-09-21T03:00:00Z")
+    deploy = pd.Timestamp("2026-09-22T10:00:00Z")
+    rows = plan(pd.concat([old, pre_deploy_append], ignore_index=True), deploy)
+    assert len(rows) == 3000
+    with pytest.raises(SystemExit, match="may not precede"):
+        plan(old, pd.Timestamp("2026-09-15T00:00:00Z"))
 
 
 def test_refuses_a_second_run_on_the_same_rows():
@@ -96,6 +115,10 @@ def test_sql_is_one_guarded_compare_and_set_over_the_staged_cohort():
     # The whole cohort is staged (the correlation guard reads it), not only changed rows.
     assert sum(ln.startswith("('scvpt_") for ln in sql.splitlines()) == len(rows)
     assert f"IF updated <> {n_changed} THEN" in sql
+    # Codex r2: EVERY staged row (changed or not) is locked and verified first.
+    assert "FOR UPDATE OF pj" in sql
+    assert f"IF matched <> {len(rows)} THEN" in sql
+    assert sql.index("IF matched <>") < sql.index("UPDATE patient_journeys pj SET")
     for predicate in (
         "pj.is_synthetic",
         f"pj.created_at < '{OLD_GENERATOR_CUTOFF.isoformat()}'::timestamptz",

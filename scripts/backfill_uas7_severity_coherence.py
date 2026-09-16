@@ -13,11 +13,17 @@ columns — the same function the generator calls, not a re-draw.
 
 WHICH ROWS
 ----------
-Exactly the rows created before :data:`OLD_GENERATOR_CUTOFF`. The copula did not exist
-before that instant, so no row older than it can hold a mapped value, and the set is
-the same on every run. A correlation is NOT used to decide which rows are old (a cohort
-mixing both generators passes any correlation band); it only detects that this fixed
-set was already rewritten, and refuses.
+The rows created before ``--cutoff`` (default :data:`OLD_GENERATOR_CUTOFF`; an explicit
+cutoff may only be LATER, e.g. the deployed api container's StartedAt). The copula did
+not exist before 2026-09-16, so no older row can hold a mapped value. A correlation is
+NOT used to decide which rows are old (a cohort mixing both generators passes any
+correlation band); it only detects that the selected set was already rewritten.
+
+Rows created AT OR AFTER the cutoff are ambiguous: a weekly append that ran before the
+deploy wrote them with the OLD generator, one after it with the new. The script refuses
+while any exist, unless the operator has checked them against the deploy time and passes
+``--newer-rows-are-new-generator`` (otherwise raise ``--cutoff`` to the deploy time so
+the old-generator ones are included).
 
 ROLLOUT (all three, in order)
 -----------------------------
@@ -26,14 +32,19 @@ ROLLOUT (all three, in order)
    UAS7 >= 28 axis moves (1,106 live rows cross 28), so the persistence labels must be
    re-derived; without ``--execute`` that script is a dry run.
 3. Gold-standard retrain: the weekly ``scripts/reseed_synthetic.sh`` cron runs
-   ``scripts/retrain_goldstd.sh``; until it does, the Remibrutinib persistence model is
-   serving a fit to the old labels.
+   ``scripts/retrain_goldstd.sh`` (staging models + metric trends); until it does, the
+   Remibrutinib persistence model is a fit to the old labels.
+4. Serving layer, when it should catch up: ``scripts/sync_goldstd_serving.py`` in its
+   documented order (SHAP bundles, Feast marker clear + full materialize, bentoml
+   restart, SHAP cache refresh last). ``retrain_goldstd.sh`` deliberately does not do
+   this, so it is the same step every weekly append already leaves to an operator.
 
 SAFETY
 ------
 * One psql transaction. The plan is staged in a temp table with every computation
-  input (old UAS7, severity) and the row is updated only if all of them still match,
-  the row is synthetic, Remibrutinib and older than the cutoff (compare-and-set).
+  input (old UAS7, severity). EVERY staged row, changed or not, is locked and must
+  still exist and match (synthetic, Remibrutinib, older than the cutoff, same severity,
+  same UAS7) before anything is updated; then the changed rows are compare-and-set.
   ``IS DISTINCT FROM`` skips unchanged values so the ``updated_at`` trigger fires only
   on real changes. It asserts the updated count and the resulting correlation over the
   whole staged cohort (NULL fails) before COMMIT.
@@ -101,10 +112,27 @@ def _validate(rows: pd.DataFrame) -> None:
         raise SystemExit("REFUSING: urticaria_severity_uas7 not an integer in 16..42")
 
 
-def plan(live: pd.DataFrame) -> pd.DataFrame:
-    """Old-generator rows with old/new UAS7. Raises when they were already rewritten."""
-    rows = live[pd.to_datetime(live["created_at"], utc=True) < OLD_GENERATOR_CUTOFF].copy()
-    rows = rows[rows["urticaria_severity_uas7"].notna()]
+def plan(
+    live: pd.DataFrame,
+    cutoff: pd.Timestamp = OLD_GENERATOR_CUTOFF,
+    *,
+    newer_rows_are_new_generator: bool = False,
+) -> pd.DataFrame:
+    """Old-generator rows with old/new UAS7. Raises when they were already rewritten or
+    when rows at/after the cutoff exist and have not been vouched for."""
+    if cutoff < OLD_GENERATOR_CUTOFF:
+        raise SystemExit(f"REFUSING: --cutoff may not precede {OLD_GENERATOR_CUTOFF}.")
+    live = live[live["urticaria_severity_uas7"].notna()]
+    created = pd.to_datetime(live["created_at"], utc=True)
+    newer = created >= cutoff
+    if newer.any() and not newer_rows_are_new_generator:
+        raise SystemExit(
+            f"REFUSING: {int(newer.sum())} Remibrutinib rows were created at/after the cutoff "
+            f"{cutoff} (earliest {created[newer].min()}). A weekly append before the deploy "
+            f"wrote them with the OLD generator. Raise --cutoff to the deployed api "
+            f"container's StartedAt, or pass --newer-rows-are-new-generator once checked."
+        )
+    rows = live[~newer].copy()
     if rows.empty:
         raise SystemExit("No Remibrutinib rows with UAS7 created before the cutoff.")
     _validate(rows)
@@ -125,7 +153,7 @@ def plan(live: pd.DataFrame) -> pd.DataFrame:
 
 
 def report(rows: pd.DataFrame) -> str:
-    lines = [f"rows selected: {len(rows)}  rho={UAS7_SEVERITY_RHO}  cutoff={OLD_GENERATOR_CUTOFF}"]
+    lines = [f"rows selected: {len(rows)}  rho={UAS7_SEVERITY_RHO}"]
     for col in ("uas7_old", "uas7_new"):
         by_tier = rows.groupby("segment_assignment")[col]
         lines.append(
@@ -139,8 +167,9 @@ def report(rows: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
-def to_sql(rows: pd.DataFrame) -> str:
-    """One transaction: stage the whole cohort, compare-and-set changed rows, assert, commit."""
+def to_sql(rows: pd.DataFrame, cutoff: pd.Timestamp = OLD_GENERATOR_CUTOFF) -> str:
+    """One transaction: stage the whole cohort, lock and verify EVERY staged row, then
+    compare-and-set the changed ones, assert, commit."""
     _validate(rows)
     values = ",\n".join(
         f"('{pid}', {float(sev)!r}, {int(o)}, {int(n)})"
@@ -157,14 +186,25 @@ CREATE TEMP TABLE _uas7_plan (
 INSERT INTO _uas7_plan VALUES
 {values};
 DO $$
-DECLARE updated int; c double precision;
+DECLARE matched int; updated int; c double precision;
 BEGIN
+  PERFORM 1 FROM patient_journeys pj JOIN _uas7_plan p USING (patient_id) FOR UPDATE OF pj;
+  SELECT count(*) INTO matched
+  FROM patient_journeys pj JOIN _uas7_plan p USING (patient_id)
+  WHERE pj.brand::text = 'Remibrutinib'
+    AND pj.is_synthetic
+    AND pj.created_at < '{cutoff.isoformat()}'::timestamptz
+    AND pj.disease_severity = p.severity
+    AND pj.urticaria_severity_uas7 = p.uas7_old;
+  IF matched <> {len(rows)} THEN
+    RAISE EXCEPTION 'expected all {len(rows)} staged rows unchanged since the export, % match', matched;
+  END IF;
   UPDATE patient_journeys pj SET urticaria_severity_uas7 = p.uas7_new
   FROM _uas7_plan p
   WHERE pj.patient_id = p.patient_id
     AND pj.brand::text = 'Remibrutinib'
     AND pj.is_synthetic
-    AND pj.created_at < '{OLD_GENERATOR_CUTOFF.isoformat()}'::timestamptz
+    AND pj.created_at < '{cutoff.isoformat()}'::timestamptz
     AND pj.disease_severity = p.severity
     AND pj.urticaria_severity_uas7 = p.uas7_old
     AND pj.urticaria_severity_uas7 IS DISTINCT FROM p.uas7_new;
@@ -188,11 +228,27 @@ def main() -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     ap.add_argument("--in-csv", required=True, help="Export of the live Remibrutinib rows.")
+    ap.add_argument(
+        "--cutoff",
+        default=str(OLD_GENERATOR_CUTOFF),
+        help="Rows created before this are old-generator rows (never earlier than the default).",
+    )
+    ap.add_argument(
+        "--newer-rows-are-new-generator",
+        action="store_true",
+        help="Operator checked: every row at/after --cutoff was written by the new generator.",
+    )
     ap.add_argument("--backup-dir", default=str(_PROJECT_ROOT / "data" / "backups"))
     ap.add_argument("--sql-out", help="Write the transactional UPDATE here (nothing is applied).")
     args = ap.parse_args()
 
-    rows = plan(pd.read_csv(args.in_csv))
+    cutoff = pd.Timestamp(args.cutoff).tz_convert("UTC")
+    rows = plan(
+        pd.read_csv(args.in_csv),
+        cutoff,
+        newer_rows_are_new_generator=args.newer_rows_are_new_generator,
+    )
+    print(f"cutoff: {cutoff}")
     print(report(rows))
 
     backup = Path(args.backup_dir)
@@ -203,7 +259,7 @@ def main() -> int:
     print(f"backup: {path}")
 
     if args.sql_out:
-        Path(args.sql_out).write_text(to_sql(rows))
+        Path(args.sql_out).write_text(to_sql(rows, cutoff))
         print(f"sql: {args.sql_out}  (apply with psql -v ON_ERROR_STOP=1)")
     return 0
 
