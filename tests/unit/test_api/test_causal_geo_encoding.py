@@ -4,14 +4,15 @@ from unittest.mock import AsyncMock, patch
 
 import pandas as pd
 import pytest
+from fastapi import HTTPException
 
-from src.api.routes import causal as causal_routes
-from src.api.routes.causal import (
+from src.api.routes.causal import loaders as causal_loaders
+from src.api.routes.causal.datasets import (
     _CAUSAL_CATEGORICAL_COLUMNS,
     _CAUSAL_DATASET_SPECS,
     _CAUSAL_NUMERIC_COLUMNS,
-    _one_hot_categoricals,
 )
+from src.api.routes.causal.loaders import _one_hot_categoricals
 
 # _load_agent_estimation_frame does a FUNCTION-LOCAL import of
 # get_async_supabase_client, so patch the SOURCE module.
@@ -69,7 +70,7 @@ async def test_loader_expands_geographic_region_into_dummies():
         },
     ]
     with patch(_CLIENT_FACTORY, AsyncMock(return_value=_FakeClient(rows))):
-        df, select_cols = await causal_routes._load_agent_estimation_frame(
+        df, select_cols = await causal_loaders._load_agent_estimation_frame(
             dataset="patient_journeys",
             treatment_var="treatment_arm",
             outcome_var="persistent_180d",
@@ -89,8 +90,8 @@ async def test_loader_expands_geographic_region_into_dummies():
 @pytest.mark.asyncio
 async def test_loader_rejects_unallowed_column_still_400():
     with patch(_CLIENT_FACTORY, AsyncMock(return_value=_FakeClient([]))):
-        with pytest.raises(causal_routes.HTTPException) as ei:
-            await causal_routes._load_agent_estimation_frame(
+        with pytest.raises(HTTPException) as ei:
+            await causal_loaders._load_agent_estimation_frame(
                 dataset="patient_journeys",
                 treatment_var="treatment_arm",
                 outcome_var="persistent_180d",

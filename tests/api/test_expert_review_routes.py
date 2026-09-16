@@ -23,6 +23,11 @@ import src.api.routes.expert_review as expert_review_route
 from src.api.dependencies.auth import require_operator
 from src.api.main import app
 
+#: The structure version a resolve body must name (#1991 debt 3, codex round-1
+#: HIGH): the resolution is bound to the version the reviewer's form displayed,
+#: so every resolve request carries it and the fake records it.
+HASH = "h" * 64
+
 
 class _FakeExpertReviewRepo:
     """In-memory fake mirroring the ExpertReviewRepository surface the route uses."""
@@ -33,9 +38,13 @@ class _FakeExpertReviewRepo:
             "pending": 0,
             "approved": 0,
             "rejected": 0,
+            # Stored status since migration 140 (#1991 debt 3): a resolution,
+            # counted apart from ``pending``.
+            "superseded": 0,
             "expired": 0,
             "expiring_soon": 0,
         }
+        self.versions_by_review: Dict[str, List[Dict[str, Any]]] = {}
         self.submit_calls: List[Dict[str, Any]] = []
         self.submit_return: bool = True
         self.rows_by_id: Dict[str, Dict[str, Any]] = {}
@@ -55,6 +64,20 @@ class _FakeExpertReviewRepo:
             raise self.read_error
         return list(self.pending_rows)
 
+    async def get_versions_for_reviews(
+        self, review_ids: List[str]
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """#1991 debt 3: the queue reads every row's structure versions in ONE
+        call. ``versions_by_review`` is empty by default, so each row reports
+        the never-moved shape (version 1, changed at creation)."""
+        if self.read_error is not None:
+            raise self.read_error
+        return {
+            rid: list(self.versions_by_review[rid])
+            for rid in review_ids
+            if rid in self.versions_by_review
+        }
+
     async def submit_review(
         self,
         review_id: str,
@@ -66,6 +89,9 @@ class _FakeExpertReviewRepo:
         validity_days: int = 90,
         reviewer_name: Optional[str] = None,
         reviewer_email: Optional[str] = None,
+        *,
+        expected_dag_version_hash: str,
+        expected_adjustment_set_hash: Optional[str],
     ) -> bool:
         self.submit_calls.append(
             {
@@ -78,6 +104,8 @@ class _FakeExpertReviewRepo:
                 "validity_days": validity_days,
                 "reviewer_name": reviewer_name,
                 "reviewer_email": reviewer_email,
+                "expected_dag_version_hash": expected_dag_version_hash,
+                "expected_adjustment_set_hash": expected_adjustment_set_hash,
             }
         )
         return self.submit_return
@@ -90,8 +118,26 @@ class _FakeExpertReviewRepo:
     async def get_by_id(self, id: str, **kwargs: Any) -> Optional[Dict[str, Any]]:
         return self.rows_by_id.get(id)
 
-    async def update_agent_assessment(self, review_id: str, assessment: Dict[str, Any]) -> bool:
-        self.assessment_writes.append({"review_id": review_id, "assessment": assessment})
+    async def update_agent_assessment(
+        self,
+        review_id: str,
+        assessment: Dict[str, Any],
+        *,
+        for_dag_version_hash: Optional[str] = None,
+        for_adjustment_set_hash: Optional[str] = None,
+    ) -> bool:
+        """#1991 debt 3 (codex rounds 1 and 2): the cache write is filtered on
+        the WHOLE version the build GRADED -- the DAG hash and the adjustment-set
+        hash -- so a build that finished after the review advanced writes
+        nothing, including after an advance that changed only the covariates."""
+        self.assessment_writes.append(
+            {
+                "review_id": review_id,
+                "assessment": assessment,
+                "for_dag_version_hash": for_dag_version_hash,
+                "for_adjustment_set_hash": for_adjustment_set_hash,
+            }
+        )
         return self.assessment_write_return
 
 
@@ -162,6 +208,8 @@ class TestResolveReview:
                 "checklist": {"conf_complete": True, "edge_plausible": True},
                 "comments": {"note": "looks good"},
                 "validity_days": 90,
+                "dag_version_hash": HASH,
+                "adjustment_set_hash": None,
             },
         )
         assert resp.status_code == 200, resp.text
@@ -183,7 +231,12 @@ class TestResolveReview:
         review_id = "33333333-3333-3333-3333-333333333333"
         resp = client.post(
             f"/api/expert-reviews/{review_id}/resolve",
-            json={"approval_status": "rejected", "checklist": {}},
+            json={
+                "approval_status": "rejected",
+                "checklist": {},
+                "dag_version_hash": HASH,
+                "adjustment_set_hash": None,
+            },
         )
         assert resp.status_code == 200, resp.text
         assert resp.json()["approval_status"] == "rejected"
@@ -202,7 +255,12 @@ class TestResolveReview:
         }
         resp = client.post(
             "/api/expert-reviews/66666666-6666-6666-6666-666666666666/resolve",
-            json={"approval_status": "rejected", "checklist": {}},
+            json={
+                "approval_status": "rejected",
+                "checklist": {},
+                "dag_version_hash": HASH,
+                "adjustment_set_hash": None,
+            },
         )
         assert resp.status_code == 200, resp.text
         call = fake_repo.submit_calls[0]
@@ -233,7 +291,12 @@ class TestResolveReview:
         }
         resp = client.post(
             "/api/expert-reviews/77777777-7777-7777-7777-777777777777/resolve",
-            json={"approval_status": "approved", "checklist": {}},
+            json={
+                "approval_status": "approved",
+                "checklist": {},
+                "dag_version_hash": HASH,
+                "adjustment_set_hash": None,
+            },
         )
         assert resp.status_code == 200, resp.text
         call = fake_repo.submit_calls[0]
@@ -243,7 +306,12 @@ class TestResolveReview:
     def test_bad_approval_status_is_422(self, client, fake_repo):
         resp = client.post(
             "/api/expert-reviews/44444444-4444-4444-4444-444444444444/resolve",
-            json={"approval_status": "blocked", "checklist": {}},
+            json={
+                "approval_status": "blocked",
+                "checklist": {},
+                "dag_version_hash": HASH,
+                "adjustment_set_hash": None,
+            },
         )
         assert resp.status_code == 422
         # repo must NOT have been called when validation fails
@@ -260,9 +328,45 @@ class TestResolveReview:
         fake_repo.submit_return = False
         resp = client.post(
             "/api/expert-reviews/55555555-5555-5555-5555-555555555555/resolve",
-            json={"approval_status": "approved", "checklist": {}},
+            json={
+                "approval_status": "approved",
+                "checklist": {},
+                "dag_version_hash": HASH,
+                "adjustment_set_hash": None,
+            },
         )
         assert resp.status_code == 404, resp.text
+
+    def test_stale_version_409_detail_reaches_the_frontends_message_field(self, client, fake_repo):
+        """Codex round-1 HIGH: the 409 must TELL the reviewer to reload.
+
+        This is the only resolve test mounted on the REAL app, so it is where the
+        handler chain is observable: src/api/main.py maps a 409 to ConflictError
+        and preserves the detail verbatim as ``message`` -- the field
+        frontend/src/lib/api-client.ts reads into ``ApiError.message``, which is
+        what ResolveForm's "Failed to submit review" banner renders. A body that
+        carried only ``detail`` would show the reviewer a bare status code.
+        """
+        rid = "88888888-8888-8888-8888-888888888888"
+        fake_repo.submit_return = False
+        fake_repo.rows_by_id[rid] = {
+            "review_id": rid,
+            "approval_status": "pending",
+            "dag_version_hash": "a" * 64,  # advanced since the form was opened
+        }
+        resp = client.post(
+            f"/api/expert-reviews/{rid}/resolve",
+            json={
+                "approval_status": "approved",
+                "checklist": {},
+                "dag_version_hash": HASH,
+                "adjustment_set_hash": None,
+            },
+        )
+        assert resp.status_code == 409, resp.text
+        message = resp.json()["message"]
+        assert "advanced to a new structure version" in message
+        assert "reload the review" in message
 
 
 class TestStoreOutageIsHonest:
@@ -270,7 +374,7 @@ class TestStoreOutageIsHonest:
     an empty queue or zero counts, and never a raw 500. The app's catch-all
     classifies by message keyword ("connection"/"unavailable" -> 503, else
     500), which is not a contract -- so the route maps it itself, mirroring
-    routes/causal.py ("Causal data store unavailable", 503) and
+    routes/causal/catalog.py ("Causal data store unavailable", 503) and
     routes/digital_twin.py (503 + Retry-After)."""
 
     @pytest.fixture
@@ -309,6 +413,7 @@ class TestReviewSummary:
             "pending": 3,
             "approved": 7,
             "rejected": 1,
+            "superseded": 38,
             "expired": 2,
             "expiring_soon": 1,
         }
@@ -318,6 +423,9 @@ class TestReviewSummary:
             "pending": 3,
             "approved": 7,
             "rejected": 1,
+            # Migration 140 resolved the BLOCK-band backlog to this status; the
+            # page must be able to show it, not fold it into another bucket.
+            "superseded": 38,
             "expired": 2,
             "expiring_soon": 1,
         }

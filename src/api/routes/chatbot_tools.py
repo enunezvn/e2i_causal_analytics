@@ -27,6 +27,7 @@ from langchain_core.tools import tool
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.agents.tool_composer import compose_query
+from src.api.routes.chat_identity import _composer_context, owned_conversation, resolve_tool_user_id
 from src.api.routes.chatbot_dspy import (
     CHATBOT_DSPY_ROUTING_ENABLED,
     VALID_AGENTS,
@@ -87,11 +88,11 @@ def reset_raw_user_query(token: "contextvars.Token[Optional[str]]") -> None:
 # tools with the model's args only, and the model cannot know the frontend thread
 # id, so orchestrator_tool / tool_composer_tool used to invent ``chatbot-<ts>`` /
 # ``composer-<ts>`` ids that look like sessions but belong to no conversation.
-# Each chat brain binds the real id before its tools run: copilotkit's execute()
-# (AG-UI — re-exported there as ``_session_id_context``) and chatbot_graph's tools
-# node (/chat/stream). Declared here rather than in copilotkit.py because
-# copilotkit already imports this module: no import cycle, and chatbot_graph does
-# not pull in the CopilotKit SDK to reach it.
+# Both graphs' tools node (``SessionBoundToolNode`` in chat_session_binding) binds
+# the real id from graph state before the tools run; copilotkit re-exports the var
+# as ``_session_id_context`` for its own readers and the chat bridge. Declared here
+# rather than in copilotkit.py because copilotkit already imports this module: no
+# import cycle, and chatbot_graph does not pull in the CopilotKit SDK to reach it.
 chat_session_id_context: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "e2i_chat_session_id", default=None
 )
@@ -106,16 +107,16 @@ def reset_chat_session_id(token: "contextvars.Token[Optional[str]]") -> None:
     chat_session_id_context.reset(token)
 
 
-def _resolve_session_id(tool_arg: Optional[str]) -> Optional[str]:
+def _resolve_session_id() -> Optional[str]:
     """The session a tool call belongs to — never an invented one.
 
-    The chat handler's binding wins: inside a chat turn the ``session_id`` tool
-    argument can only be a model guess (the input schema's example even offers
-    one). The argument is honoured only when no chat session is bound, i.e. a
-    direct caller. With neither, ``None``: an unattributable call records NULL
-    instead of an id that looks like a real conversation.
+    The turn's tools node binds it (#2064/#2077). #2077 removed the ``session_id``
+    tool argument this used to fall back on: inside chat it could only ever be a
+    model guess, and it was already outranked by the binding. Unbound means
+    ``None`` — an unattributable call records NULL instead of an id that looks
+    like a real conversation.
     """
-    return chat_session_id_context.get() or tool_arg or None
+    return chat_session_id_context.get()
 
 
 # Try to import Opik for tracing
@@ -278,7 +279,7 @@ class AgentRoutingInput(BaseModel):
 class ConversationMemoryInput(BaseModel):
     """Input schema for conversation_memory_tool."""
 
-    session_id: str = Field(description="Session ID to retrieve history for")
+    session_id: Optional[str] = Field(default=None, description="Omit for the current conversation")
     message_count: int = Field(
         default=10,
         ge=1,
@@ -293,7 +294,6 @@ class ConversationMemoryInput(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
-                "session_id": "sess_abc123def456",
                 "message_count": 10,
                 "include_tool_calls": True,
             }
@@ -350,10 +350,6 @@ class OrchestratorToolInput(BaseModel):
         default=None,
         description="Region context for the query, resolved case-insensitively against the actual data values (e.g., Northeast)",
     )
-    session_id: Optional[str] = Field(
-        default=None,
-        description="Session ID for context continuity",
-    )
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -362,7 +358,6 @@ class OrchestratorToolInput(BaseModel):
                 "target_agent": "causal_impact",
                 "brand": "Kisqali",
                 "region": "Northeast",
-                "session_id": "sess_abc123",
             }
         }
     )
@@ -384,10 +379,6 @@ class ToolComposerToolInput(BaseModel):
             "Region context for the query, resolved case-insensitively against the "
             "actual geographic_region values in the data (US census regions)."
         ),
-    )
-    session_id: Optional[str] = Field(
-        default=None,
-        description="Session ID for context continuity",
     )
     data_source: Optional[str] = Field(
         default=None,
@@ -411,7 +402,6 @@ class ToolComposerToolInput(BaseModel):
                 "query": "Compare TRx trends across Kisqali, Fabhalta, and Remibrutinib, then explain causal factors",
                 "brand": None,
                 "region": "Northeast",
-                "session_id": "sess_abc123",
                 "max_parallel": 3,
             }
         }
@@ -1383,7 +1373,7 @@ async def agent_routing_tool(
 
 @tool(args_schema=ConversationMemoryInput)
 async def conversation_memory_tool(
-    session_id: str,
+    session_id: Optional[str] = None,
     message_count: int = 10,
     include_tool_calls: bool = True,
 ) -> Dict[str, Any]:
@@ -1394,19 +1384,19 @@ async def conversation_memory_tool(
     - Recent messages in a conversation
     - Tool calls and results
     - Agent attributions
-    - RAG context used
 
     Use this tool to provide context-aware responses based on
     previous conversation turns.
 
     Args:
-        session_id: Session ID to retrieve history for
+        session_id: Omit for the current conversation; name one only to read another you own
         message_count: Number of recent messages (1-50)
         include_tool_calls: Whether to include tool call details
 
     Returns:
         Dict with conversation history and metadata
     """
+    session_id = session_id or _resolve_session_id()
     logger.info(f"Conversation memory: session={session_id}, count={message_count}")
 
     try:
@@ -1414,9 +1404,9 @@ async def conversation_memory_tool(
         msg_repo = get_chatbot_message_repository(client)
         conv_repo = get_chatbot_conversation_repository(client)
 
-        # Get conversation metadata
-        conversation = await conv_repo.get_by_session_id(session_id)
-        if not conversation:
+        # #2107: the caller must own it; a refusal reads as "not found" below.
+        conversation = await owned_conversation(conv_repo, session_id)
+        if not conversation or session_id is None:
             return {
                 "success": False,
                 "error": "Conversation not found",
@@ -1575,7 +1565,6 @@ async def orchestrator_tool(
     target_agent: Optional[str] = None,
     brand: Optional[str] = None,
     region: Optional[str] = None,
-    session_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Execute a query through the E2I orchestrator and 22-agent system.
@@ -1602,7 +1591,6 @@ async def orchestrator_tool(
         target_agent: Optional specific agent to route to
         brand: Brand context, resolved case-insensitively against the actual data values
         region: Region context, resolved case-insensitively against the actual data values
-        session_id: Session ID for context continuity
 
     Returns:
         Dict with orchestrator response, agents dispatched, and confidence
@@ -1654,13 +1642,16 @@ async def orchestrator_tool(
             user_context["raw_user_query"] = raw_user_query
 
         # #2064: the real chat session, or None — never a synthesized id.
-        effective_session_id = _resolve_session_id(session_id)
+        effective_session_id = _resolve_session_id()
 
         # Call the orchestrator
         orchestrator_result = await orchestrator.run(
             {
                 "query": query,
                 "session_id": effective_session_id,
+                # #2077: the turn's user, or None — reaches composer_episodes.user_id
+                # through the dispatcher, and is what #2095's owner gate compares.
+                "user_id": resolve_tool_user_id(effective_session_id),
                 "user_context": user_context,
             }
         )
@@ -1754,30 +1745,11 @@ def _resolve_cohort_frame(
     return cohort_resolution.resolve_cohort_frame(brand, region, data_source=data_source)
 
 
-def _composer_context(
-    *,
-    brand: Optional[str],
-    region: Optional[str],
-    session_id: Optional[str],
-    max_parallel: int,
-) -> Dict[str, Any]:
-    """The context the chat tool hands the Tool Composer, marked with who called (spec §5.3)."""
-    return {
-        "brand": brand,
-        "region": region,
-        # #2064: absent stays None, so an unattributable composition records NULL.
-        "session_id": session_id,
-        "max_parallel": max_parallel,
-        "entry_point": "chat_tool",
-    }
-
-
 @tool(args_schema=ToolComposerToolInput)
 async def tool_composer_tool(
     query: str,
     brand: Optional[str] = None,
     region: Optional[str] = None,
-    session_id: Optional[str] = None,
     max_parallel: int = 3,
     data_source: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -1805,7 +1777,6 @@ async def tool_composer_tool(
         query: Multi-faceted query requiring decomposition
         brand: Brand context, resolved case-insensitively against the actual data values
         region: Region context, resolved case-insensitively against the actual data values
-        session_id: Session ID for context continuity
         max_parallel: Maximum parallel tool executions (1-5)
 
     Returns:
@@ -1814,12 +1785,16 @@ async def tool_composer_tool(
     logger.info(f"Tool composer: query={redact_query(query)}, brand={brand}")
     # #2064: the real chat session, or None — used by the composition and by the
     # orchestrator fallback below alike.
-    session_id = _resolve_session_id(session_id)
+    session_id = _resolve_session_id()
 
     try:
         # Build context for Tool Composer
         context: Dict[str, Any] = _composer_context(
-            brand=brand, region=region, session_id=session_id, max_parallel=max_parallel
+            brand=brand,
+            region=region,
+            session_id=session_id,
+            user_id=resolve_tool_user_id(session_id),
+            max_parallel=max_parallel,
         )
 
         # Issue #810: KPI-aware data resolution. When the query targets a defined
@@ -1926,6 +1901,8 @@ async def tool_composer_tool(
                     {
                         "query": query,
                         "session_id": session_id,
+                        # #2077: same identity as the composition it replaces.
+                        "user_id": resolve_tool_user_id(session_id),
                         "user_context": {"brand": brand, "region": region},
                     }
                 )
@@ -2011,27 +1988,27 @@ class KpiCalculateInput(BaseModel):
         description=(
             "Optional severity tier filter: one of low_severity, "
             "medium_severity, high_severity. Served ONLY by TRx, NRx, NBRx, "
-            "TRx share, conversion rate and CATE (#1911) -- any other KPI "
-            "returns an error, the filter is never silently dropped. Mutually "
-            "exclusive with region/therapy_line."
+            "conversion rate and CATE (#1911) -- any other KPI (TRx share "
+            "included) returns an error, the filter is never silently dropped. "
+            "Mutually exclusive with region/therapy_line."
         ),
     )
     therapy_line: Optional[str] = Field(
         default=None,
         description=(
             "Optional line-of-therapy filter: one of '0', '1', '2', '3'. "
-            "Served ONLY by TRx, NRx, NBRx, TRx share and conversion rate "
-            "(#1911) -- any other KPI returns an error, the filter is never "
-            "silently dropped. Mutually exclusive with region/segment."
+            "Served ONLY by TRx, NRx, NBRx and conversion rate (#1911) -- any "
+            "other KPI (TRx share included) returns an error, the filter is "
+            "never silently dropped. Mutually exclusive with region/segment."
         ),
     )
     biologic: Optional[str] = Field(
         default=None,
         description=(
             "Optional biologic-status filter: 'naive' or 'experienced'. "
-            "Served ONLY by TRx, NRx, NBRx and TRx share (#1911) -- any other "
-            "KPI returns an error, the filter is never silently dropped. "
-            "AVAILABLE FOR REMIBRUTINIB ONLY -- for any other brand the tool "
+            "Served ONLY by TRx, NRx and NBRx (#1911) -- any other KPI (TRx "
+            "share included) returns an error, the filter is never silently "
+            "dropped. AVAILABLE FOR REMIBRUTINIB ONLY -- for any other brand the tool "
             "returns an error (the data is 100% NULL by design); do NOT retry "
             "or fabricate a split. Mutually exclusive with "
             "region/segment/therapy_line/ige_tier."
@@ -2042,8 +2019,8 @@ class KpiCalculateInput(BaseModel):
         description=(
             "Optional IgE-tertile filter: 'low', 'medium', or 'high' "
             "(data-driven tertiles, not a clinical threshold). Served ONLY by "
-            "TRx, NRx, NBRx and TRx share (#1911) -- any other KPI returns an "
-            "error, the filter is never silently dropped. AVAILABLE FOR "
+            "TRx, NRx and NBRx (#1911) -- any other KPI (TRx share included) "
+            "returns an error, the filter is never silently dropped. AVAILABLE FOR "
             "REMIBRUTINIB ONLY -- other brands return an error; do NOT fabricate. "
             "Mutually exclusive with region/segment/therapy_line/biologic."
         ),
@@ -2065,9 +2042,9 @@ class KpiCalculateInput(BaseModel):
         description=(
             "Time window, e.g. 'last 3 months', 'last year', 'Q1 2025', or "
             "'2025-01-01 to 2025-03-31'. Supported for TRx/NRx/NBRx (alone or "
-            "combined with any ONE axis), TRx share and conversion rate (alone "
-            "or combined with segment/therapy_line; NOT with region/biologic/"
-            "ige_tier -- the tool errors honestly), and the trigger-"
+            "combined with any ONE axis), TRx share (alone only) and conversion "
+            "rate (alone or with segment/therapy_line; other combinations error "
+            "honestly), and the trigger-"
             "effectiveness KPIs (alone or combined with brand/trigger_type/"
             "region -- migration 120). ALWAYS pass this when the user names "
             "a period. Omit for the engine's default window (the most recent "
@@ -2346,8 +2323,8 @@ _PATIENT_AXIS_LABELS: Dict[str, str] = {
 # re-derives every set by running the real calculators against a recording
 # client, so the sets cannot drift from the code:
 #   * BusinessImpactCalculator._resolve_windowed_call binds all four axes for
-#     WS3-BI-005 TRx / -006 NRx / -007 NBRx / -008 TRx share (migrations
-#     105/108/111).
+#     WS3-BI-005 TRx / -006 NRx / -007 NBRx (migrations 105/108). WS3-BI-008
+#     TRx share is in NO set: src.kpi.share_axis says why (2026-09-16).
 #   * BusinessImpactCalculator._calc_conversion_rate (WS3-BI-009) binds
 #     segment and therapy_line (migration 111) and REFUSES biologic/ige_tier
 #     itself (triggers carry no biologic/IgE dimension). It is left OUT of
@@ -2363,14 +2340,10 @@ _PATIENT_AXIS_LABELS: Dict[str, str] = {
 #     CM-002 here, so refusing it would drop a combination the calculator
 #     serves. It reads none of the other three axes.
 _PATIENT_AXIS_KPI_IDS: Dict[str, frozenset[str]] = {
-    "segment": frozenset(
-        {"WS3-BI-005", "WS3-BI-006", "WS3-BI-007", "WS3-BI-008", "WS3-BI-009", "CM-002"}
-    ),
-    "therapy_line": frozenset(
-        {"WS3-BI-005", "WS3-BI-006", "WS3-BI-007", "WS3-BI-008", "WS3-BI-009"}
-    ),
-    "biologic": frozenset({"WS3-BI-005", "WS3-BI-006", "WS3-BI-007", "WS3-BI-008"}),
-    "ige_tier": frozenset({"WS3-BI-005", "WS3-BI-006", "WS3-BI-007", "WS3-BI-008"}),
+    "segment": frozenset({"WS3-BI-005", "WS3-BI-006", "WS3-BI-007", "WS3-BI-009", "CM-002"}),
+    "therapy_line": frozenset({"WS3-BI-005", "WS3-BI-006", "WS3-BI-007", "WS3-BI-009"}),
+    "biologic": frozenset({"WS3-BI-005", "WS3-BI-006", "WS3-BI-007"}),
+    "ige_tier": frozenset({"WS3-BI-005", "WS3-BI-006", "WS3-BI-007"}),
 }
 
 
@@ -2378,20 +2351,24 @@ def _patient_axis_refusal(kpi: Any, axis: str) -> Dict[str, Any]:
     """The #1911 refusal for a patient axis on a KPI whose calculator does not
     bind it. The served KPIs are named in registry order (volume KPIs first)
     and the hint offers both ways out (#1565: a next step, not a dead end)."""
+    from src.kpi import share_axis as sa
     from src.kpi.registry import get_registry
 
     label = _PATIENT_AXIS_LABELS[axis]
     served_ids = _PATIENT_AXIS_KPI_IDS[axis]
     served = ", ".join(k.name for k in get_registry().get_all() if k.id in served_ids)
+    error = f"{axis} ({label}) applies only to {served}, not {kpi.name}."
+    hint = f"Ask for {kpi.name} without the {label} filter, or ask for one of {served} by {label}."
+    if kpi.id == sa.TRX_SHARE_KPI_ID:  # why, and the real answer (src.kpi.share_axis)
+        error += " " + sa.share_axis_reason(axis, label)
+        hint = f"{sa.share_axis_next_step(sa.TRX_NAME, label)} {hint}"
     return {
         "success": False,
         "query_type": "kpi_calculate",
         "kpi_id": kpi.id,
         "kpi_name": kpi.name,
-        "error": f"{axis} ({label}) applies only to {served}, not {kpi.name}.",
-        "hint": (
-            f"Ask for {kpi.name} without the {label} filter, or ask for one of {served} by {label}."
-        ),
+        "error": error,
+        "hint": hint,
     }
 
 
@@ -2468,9 +2445,9 @@ async def kpi_calculate_tool(
     share, conversion rate, or the trigger-effectiveness KPIs over that period
     — ALWAYS pass it when the user names one. A window composes with any ONE
     axis for the volume KPIs, with the ``segment`` / ``therapy_line`` axes for
-    share and conversion (e.g. per-tier conversion rate over the last year) and
-    with ``region`` for the trigger-effectiveness KPIs; it does NOT compose with
-    region/biologic/ige_tier for share or conversion (the tool errors honestly).
+    conversion (e.g. per-tier conversion rate over the last year) and with
+    ``region`` for the trigger-effectiveness KPIs; share takes a window ALONE
+    only (any other combination errors honestly).
     The engine reports back ``window_status`` ("applied" when the
     requested window was honored, "not_applicable" when the KPI has no time
     dimension, "default" when no window was requested), plus ``window_requested``
@@ -2501,20 +2478,20 @@ async def kpi_calculate_tool(
             region-scoped ("applied") or global ("not_applicable" — never
             present those as region-specific).
         segment: optional severity tier filter (low_severity, medium_severity,
-            high_severity), served ONLY by TRx, NRx, NBRx, TRx share,
-            conversion rate and CATE (#1911) -- any other KPI returns an error
-            (never a silent drop); mutually exclusive with region/therapy_line.
+            high_severity), served ONLY by TRx, NRx, NBRx, conversion rate
+            and CATE (#1911) -- any other KPI returns an error (never a silent
+            drop); mutually exclusive with region/therapy_line.
         therapy_line: optional line-of-therapy filter ('0'-'3'), served ONLY
-            by TRx, NRx, NBRx, TRx share and conversion rate (#1911) -- any
+            by TRx, NRx, NBRx and conversion rate (#1911) -- any
             other KPI returns an error (never a silent drop); mutually
             exclusive with region/segment.
         biologic: optional biologic-status filter ('naive'/'experienced'),
-            served ONLY by TRx, NRx, NBRx and TRx share (#1911) and
+            served ONLY by TRx, NRx and NBRx (#1911) and
             REMIBRUTINIB ONLY -- returns an error for any other KPI or brand
             (data is NULL by design; never a silent drop); mutually exclusive
             with the other axes.
         ige_tier: optional IgE-tertile filter ('low'/'medium'/'high',
-            data-driven), served ONLY by TRx, NRx, NBRx and TRx share (#1911)
+            data-driven), served ONLY by TRx, NRx and NBRx (#1911)
             and REMIBRUTINIB ONLY -- returns an error for any other KPI or
             brand (never a silent drop); mutually exclusive with the other
             axes.

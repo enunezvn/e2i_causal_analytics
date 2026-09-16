@@ -20,8 +20,9 @@
  * - S5: Demo Mode (API offline) applies the same scoping to SAMPLE_KPIS.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { screen, fireEvent, within } from '@testing-library/react';
+import type { QueryClient } from '@tanstack/react-query';
 import { renderWithAllProviders } from '@/test/utils';
 import Home from './Home';
 
@@ -52,6 +53,32 @@ vi.mock('@/hooks/api/use-monitoring', () => ({
   useAlerts: vi.fn(),
   useBrandModelSummary: vi.fn(),
 }));
+// #2081: Home renders <CausalValueChains brand region /> (which calls
+// useCausalValueChains) and reads useGraphStats directly — two REAL,
+// unmocked TanStack queries this file otherwise takes no notice of. Every
+// other Home dependency above is mocked at its OWN hook module, so its API
+// function never runs; useAgentStatus is likewise real but its API function
+// (getAgentStatus) goes through the already-mocked getValidated below, so it
+// never reaches the network either. use-graph is the only pair whose network
+// call is left genuinely unmocked. It also matters that use-graph's queryFns
+// (src/hooks/api/use-graph.ts) never thread TanStack's `signal` through to
+// axios, so queryClient cancellation cannot actually abort the in-flight XHR
+// once it starts (this is not unique to use-graph — useKPIList's queryFn
+// omits it too — it only matters here because use-graph is the one hook pair
+// whose request actually fires). useCausalValueChains also RE-FETCHES on
+// brand/region change, which selectBrand() triggers mid test, so a request
+// can still be resolving when the test/environment tears down, matching
+// CI's `ReferenceError: ProgressEvent is not defined` from mswjs's
+// XMLHttpRequestController.respondWith (mechanism + evidence: commit body).
+// Mock both, so no real network call originates from this file at all.
+//
+// ExecutiveSummary.tsx:70 is a second useGraphStats consumer (destructures
+// isLoading/error) also rendered by Home — mocking the hook moves it from
+// its loading state to loaded-empty in every test here.
+vi.mock('@/hooks/api/use-graph', () => ({
+  useGraphStats: vi.fn(),
+  useCausalValueChains: vi.fn(),
+}));
 vi.mock('@/lib/api-client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api-client')>();
   return { ...actual, getValidated: vi.fn() };
@@ -68,6 +95,7 @@ import { useHomeExecutiveInsights } from '@/hooks/api/use-home-executive-insight
 import { useOpportunities } from '@/hooks/api/use-gaps';
 import { useHomeKpiInsight } from '@/hooks/api/use-insights';
 import { useAlerts, useBrandModelSummary } from '@/hooks/api/use-monitoring';
+import { useGraphStats, useCausalValueChains } from '@/hooks/api/use-graph';
 import { getValidated } from '@/lib/api-client';
 
 /** Reset all Home hooks to their honest "no data yet" defaults. */
@@ -121,6 +149,16 @@ function resetHomeHookDefaults() {
   (useBrandModelSummary as ReturnType<typeof vi.fn>).mockReturnValue({
     data: undefined,
     isLoading: false,
+  });
+  (useGraphStats as ReturnType<typeof vi.fn>).mockReturnValue({
+    data: undefined,
+    isLoading: false,
+    error: null,
+  });
+  (useCausalValueChains as ReturnType<typeof vi.fn>).mockReturnValue({
+    data: undefined,
+    isLoading: false,
+    isError: false,
   });
   (getValidated as ReturnType<typeof vi.fn>).mockResolvedValue({ agents: [], total: 0 });
 }
@@ -194,11 +232,41 @@ function bannerStat(label: string): string | null | undefined {
   return labelEl.parentElement?.querySelector('.font-semibold')?.textContent;
 }
 
+// Belt-and-suspenders alongside the use-graph mocks above (#2081): capture
+// each test's QueryClient so afterEach can cancel + clear it. cancelQueries()
+// cannot abort an in-flight XHR here (use-graph's queryFns don't thread
+// TanStack's `signal` to axios — see the vi.mock comment above), so this does
+// NOT by itself fix the flake; it only stops a real query's resolved data
+// (its API function is mocked, but the TanStack query around it is real)
+// from being written into a torn-down QueryClient's cache.
+let activeQueryClient: QueryClient | undefined;
+
+function renderHome() {
+  const result = renderWithAllProviders(<Home />);
+  activeQueryClient = result.queryClient;
+  return result;
+}
+
 describe('Home automatic brand scoping of the KPI grid', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetHomeHookDefaults();
     localStorage.clear();
+  });
+
+  afterEach(() => {
+    activeQueryClient?.cancelQueries();
+    activeQueryClient?.clear();
+    activeQueryClient = undefined;
+  });
+
+  // #2081: the flake is a teardown race (a real query still resolving after
+  // the test ends), so a regression that deletes the use-graph vi.mock above
+  // would not fail any assertion in THIS suite today — the mock's absence is
+  // otherwise invisible. Pin it directly.
+  it('mocks useGraphStats and useCausalValueChains (guards the #2081 fix)', () => {
+    expect(vi.isMockFunction(useGraphStats)).toBe(true);
+    expect(vi.isMockFunction(useCausalValueChains)).toBe(true);
   });
 
   // ==========================================================================
@@ -207,7 +275,7 @@ describe('Home automatic brand scoping of the KPI grid', () => {
 
   it("shows every brand's cards first-class under the All selector", () => {
     mockLiveKpis(BRAND_KPIS);
-    renderWithAllProviders(<Home />);
+    renderHome();
 
     expect(screen.getByText('Remi - AH Uncontrolled %')).toBeInTheDocument();
     expect(screen.getByText('Fabhalta - % PNH Tested')).toBeInTheDocument();
@@ -223,7 +291,7 @@ describe('Home automatic brand scoping of the KPI grid', () => {
 
   it("scopes other brands' cards out of the grid automatically under a selected brand", async () => {
     mockLiveKpis(BRAND_KPIS);
-    renderWithAllProviders(<Home />);
+    renderHome();
     await selectBrand('Remibrutinib');
 
     expect(screen.getByText('Remi - AH Uncontrolled %')).toBeInTheDocument();
@@ -240,7 +308,7 @@ describe('Home automatic brand scoping of the KPI grid', () => {
       { id: 'WS3-BI-001', name: 'TRx Growth', workstream: 'ws3_business', value: 5.2 },
       ...BRAND_KPIS,
     ]);
-    renderWithAllProviders(<Home />);
+    renderHome();
     await selectBrand('Fabhalta');
 
     // Business is the first (active) tab: the brandless KPI renders.
@@ -259,7 +327,7 @@ describe('Home automatic brand scoping of the KPI grid', () => {
       { ...BRAND_KPIS[1], status: 'warning' },
       { ...BRAND_KPIS[2], status: 'good' },
     ]);
-    renderWithAllProviders(<Home />);
+    renderHome();
     await selectBrand('Remibrutinib');
 
     // Selected brand: only the own-brand card is counted.
@@ -273,7 +341,7 @@ describe('Home automatic brand scoping of the KPI grid', () => {
       { id: 'WS3-BI-001', name: 'TRx Growth', workstream: 'ws3_business', value: 5.2 },
       { id: 'BR-003', name: 'Fabhalta - % PNH Tested', workstream: 'brand_specific', brand: 'Fabhalta', value: 63 },
     ]);
-    renderWithAllProviders(<Home />);
+    renderHome();
 
     // 'All': the Brand tab is present.
     expect(screen.getByRole('tab', { name: /Brand$/ })).toBeInTheDocument();
@@ -294,7 +362,7 @@ describe('Home automatic brand scoping of the KPI grid', () => {
       { id: 'WS3-BI-001', name: 'TRx Growth', workstream: 'ws3_business', value: 5.2 },
       ...BRAND_KPIS,
     ]);
-    renderWithAllProviders(<Home />);
+    renderHome();
     expect(screen.getByText(/Showing 4 of 4 defined KPIs/)).toBeInTheDocument();
 
     await selectBrand('Remibrutinib');
@@ -311,7 +379,7 @@ describe('Home automatic brand scoping of the KPI grid', () => {
     // Pathological guard: a brand with NO own-brand computed card. Real data
     // keeps >=1 own-brand card per brand, but the empty-state path must hold.
     mockLiveKpis([BRAND_KPIS[1], BRAND_KPIS[2]]); // Fabhalta + Kisqali only
-    renderWithAllProviders(<Home />);
+    renderHome();
     await selectBrand('Remibrutinib');
 
     expect(screen.queryByText('Fabhalta - % PNH Tested')).not.toBeInTheDocument();
@@ -339,7 +407,7 @@ describe('Home automatic brand scoping of the KPI grid', () => {
     });
 
     it('filters the sibling-brand sample card under a selected brand (parity with live path)', async () => {
-      renderWithAllProviders(<Home />);
+      renderHome();
 
       // Demo mode is announced, and under 'All' nothing is filtered.
       expect(screen.getByText('API Offline (using sample data)')).toBeInTheDocument();

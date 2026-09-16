@@ -40,7 +40,8 @@ def dgp():
     print(f"dgp: wrote {n} frames in {time.time()-t0:.1f}s")
 
 async def live():
-    from src.api.routes.causal import _CAUSAL_DATASET_SPECS, _brand_scoped_covariates, _load_agent_estimation_frame
+    from src.api.routes.causal.datasets import _CAUSAL_DATASET_SPECS, _brand_scoped_covariates
+    from src.api.routes.causal.loaders import _load_agent_estimation_frame
     pairs = [
         ("live_all_treatment_arm_persistent_180d", "treatment_arm", "persistent_180d", None, (0.019, 0.152)),
         ("live_remi_treatment_arm_treatment_initiated", "treatment_arm", "treatment_initiated", "Remibrutinib", (0.117, 0.236)),

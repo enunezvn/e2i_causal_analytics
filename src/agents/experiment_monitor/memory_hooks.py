@@ -373,7 +373,7 @@ class ExperimentMonitorMemoryHooks:
 
     async def store_alert(
         self,
-        session_id: str,
+        session_id: Optional[str],
         alert: Dict[str, Any],
         state: Dict[str, Any],
     ) -> Optional[str]:
@@ -459,7 +459,7 @@ class ExperimentMonitorMemoryHooks:
 
     async def store_monitoring_check(
         self,
-        session_id: str,
+        session_id: Optional[str],
         result: Dict[str, Any],
         state: Dict[str, Any],
     ) -> Optional[str]:
@@ -708,7 +708,7 @@ async def contribute_to_memory(
         result: ExperimentMonitorOutput dictionary
         state: ExperimentMonitorState dictionary
         memory_hooks: Optional memory hooks instance (creates new if not provided)
-        session_id: Session identifier (generates UUID if not provided)
+        session_id: Session identifier; None records an honest NULL (#2076)
 
     Returns:
         Dictionary with counts of stored memories:
@@ -716,13 +716,8 @@ async def contribute_to_memory(
         - check_stored: 1 if check stored (significant events only), 0 otherwise
         - working_cached: 1 if cached, 0 otherwise
     """
-    import uuid
-
     if memory_hooks is None:
         memory_hooks = get_experiment_monitor_memory_hooks()
-
-    if session_id is None:
-        session_id = str(uuid.uuid4())
 
     counts = {
         "alerts_stored": 0,
@@ -737,7 +732,9 @@ async def contribute_to_memory(
 
     experiment_ids = state.get("experiment_ids")
 
-    # 1. Always cache in working memory
+    # 1. Always cache in working memory. NOT guarded on the session (#2076): the
+    # key is ``experiment_monitor:status:{experiment_ids}``, so this write is
+    # session-independent and must happen whether or not a session is in play.
     cached = await memory_hooks.cache_monitoring_status(experiment_ids, result)
     if cached:
         counts["working_cached"] = 1

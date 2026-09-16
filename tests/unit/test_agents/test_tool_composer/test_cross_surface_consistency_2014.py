@@ -101,7 +101,7 @@ def test_an_econml_ols_estimate_reads_the_same_on_the_tool_and_the_api() -> None
     # EconML's OLS wrapper built its CI with 1.96 * ate_std; the tool back-derived the SE
     # from that width with the exact quantile, and /causal/treatment-effects uses ate_std
     # directly - so the same estimate had two p-values that can straddle 0.05.
-    from src.api.routes.causal import _te_pvalue_from_z
+    from src.api.routes.causal._common import _te_pvalue_from_z
     from src.causal_engine.energy_score.estimator_selector import (
         EstimatorConfig,
         EstimatorType,

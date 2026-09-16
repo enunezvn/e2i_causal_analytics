@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.api.routes.causal import _adjusted_partial_corr
+from src.api.routes.causal.catalog import _adjusted_partial_corr
 
 
 @pytest.mark.unit

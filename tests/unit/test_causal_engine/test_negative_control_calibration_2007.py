@@ -4,7 +4,7 @@ Calibration pin for ``RefutationRunner._run_negative_control_test`` (rule
 ``negative_control_ci_vs_zero``: PASSED when the control's CI includes 0,
 WARNING when it excludes 0 and |nc| < |original|, FAILED when it excludes 0 and
 |nc| >= |original|) and for the registry that decides WHICH arm gets a control
-(``src/api/routes/causal.py::_CAUSAL_NEGATIVE_CONTROL_OUTCOMES``, imported, not
+(``src/api/routes/causal/datasets.py::_CAUSAL_NEGATIVE_CONTROL_OUTCOMES``, imported, not
 retyped). The DGP frame, the 11 planted truths and the 9 structural nulls are
 the ones ``test_sensitivity_calibration.py`` pins (imported), at n = 1500, the
 live estimation row cap; every fit is PRODUCTION's LinearDML (RF nuisances from
@@ -56,7 +56,7 @@ import pytest
 from econml.dml import LinearDML
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 
-from src.api.routes.causal import _CAUSAL_NEGATIVE_CONTROL_OUTCOMES
+from src.api.routes.causal.datasets import _CAUSAL_NEGATIVE_CONTROL_OUTCOMES
 from src.causal_engine.nuisance_config import linear_dml_rf_params
 from src.causal_engine.refutation_runner import (
     RefutationRunner,
@@ -87,6 +87,18 @@ PRODUCTION_SEED = 42
 SEEDS = (42, 7, 123, 2024, 99, 314)
 MIN_RESPONDING_SEEDS = 5  # declared control: CI excludes 0 on >= 5/6 seeds
 MAX_CHANCE_SEEDS = 1  # undeclared candidate / adjusted control: <= 1/6 (alpha 0.05)
+# 2026-09-16 (Remibrutinib UAS7 follows disease_severity, dgp.clinical_severity): on
+# THIS frame (Remibrutinib only, seed 21) rep_detailing_high's would-be control now
+# responds to omitted confounding. Measured leaf 50: s42 +0.0651, s7 +0.0625,
+# s123 +0.0663, s2024 +0.0728, s99 +0.0501 (CI touches 0), s314 +0.0606 -> 5/6;
+# at rho 0 the same fits read 0/6 (+0.041, the #2031 record). It stays UNDECLARED on
+# purpose: the registry is keyed by treatment, not brand, and Kisqali / Fabhalta rows
+# carry no UAS7; measured on their own seed-21 frames the same omitted fits read
+# Kisqali 0/6 (+0.015..+0.031) and Fabhalta 0/6 (+0.005..+0.026), pinned below. A
+# global declaration would put a control that cannot respond on two brands -- the
+# false assurance #2031 removed. Undeclared,
+# the runner emits SKIPPED no_negative_control_declared: an honest null.
+REMI_ONLY_RESPONDERS = {("rep_detailing_high", "persistent_180d")}
 # The recorded omitted-fit movement per declared control: the 6-SEED MEAN at
 # leaf 50 (#2031; the single-seed leaf-5 record was copay +0.0517, psp +0.0895,
 # rep +0.0577). The fits are seeded, so a drift beyond RECORD_TOL is a changed
@@ -370,7 +382,19 @@ def test_undeclared_arms_are_absent_because_their_controls_do_not_respond(scored
     assert {r["arm"] for r in rows} == set(UNDECLARED_ARMS), _undeclared_table(rows)
     # #2031: was 4 (sample_dropped x1, trigger_accepted x3); rep_detailing_high adds 3.
     assert len(rows) == 7, _undeclared_table(rows)
-    responders = [r for r in rows if r["responding_seeds"] > MAX_CHANCE_SEEDS]
+    remi_only = [r for r in rows if (r["arm"], r["outcome"]) in REMI_ONLY_RESPONDERS]
+    # Both halves: the recorded pair really does respond here (so the exception is not
+    # hiding a stale claim), and every other undeclared candidate still does not.
+    assert len(remi_only) == len(REMI_ONLY_RESPONDERS), _undeclared_table(rows)
+    assert all(r["responding_seeds"] >= MIN_RESPONDING_SEEDS for r in remi_only), _undeclared_table(
+        remi_only
+    )
+    responders = [
+        r
+        for r in rows
+        if r["responding_seeds"] > MAX_CHANCE_SEEDS
+        and (r["arm"], r["outcome"]) not in REMI_ONLY_RESPONDERS
+    ]
     assert not responders, (
         "a would-be control for an undeclared arm now RESPONDS to omitted confounding on "
         f"more than {MAX_CHANCE_SEEDS}/{len(SEEDS)} seeds; re-measure before declaring it:\n"
@@ -384,3 +408,21 @@ def test_undeclared_arms_are_absent_because_their_controls_do_not_respond(scored
             + _undeclared_table([r for r in rows if r["arm"] == arm])
             + "); a control that cannot move under confounding is false assurance"
         )
+
+
+@pytest.mark.parametrize("brand", ["Kisqali", "Fabhalta"])
+def test_remi_only_responders_do_not_respond_on_the_other_brands(brand):
+    """Codex r5: the exception above rests on the pair NOT responding off-Remibrutinib;
+    measure it on each brand's own frame (same seed, n, DGP) instead of inferring it."""
+    from src.ml.synthetic.config import Brand, DGPType
+    from src.ml.synthetic.generators import GeneratorConfig, PatientGenerator
+
+    df = PatientGenerator(
+        GeneratorConfig(
+            seed=21, n_records=N_ROWS, brand=Brand(brand), dgp_type=DGPType.HETEROGENEOUS
+        )
+    ).generate()
+    for arm, outcome in sorted(REMI_ONLY_RESPONDERS):
+        fits = {s: fit_omitted(df, arm, outcome, s) for s in SEEDS}
+        responding = sum(excludes_zero(ci) for _, ci in fits.values())
+        assert responding <= MAX_CHANCE_SEEDS, (brand, arm, outcome, _seeds_fmt(fits))

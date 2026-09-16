@@ -2116,7 +2116,8 @@ class TestContributeToMemory:
         assert counts["episodic_stored"] == 1
 
     @pytest.mark.asyncio
-    async def test_ci_contribute_generates_session_id(self):
+    async def test_ci_contribute_without_session_id(self):
+        """#2076: no session id is minted; the failed-status skip still holds."""
         hooks = ci_hooks.CausalImpactMemoryHooks()
         counts = await ci_hooks.contribute_to_memory(
             result={"status": "failed"},
@@ -2717,8 +2718,8 @@ class TestEdgeCases:
         assert counts["semantic_stored"] == 0
 
     @pytest.mark.asyncio
-    async def test_hs_contribute_generates_session_id(self):
-        """Health score generates UUID session_id when not provided."""
+    async def test_hs_contribute_without_session_id(self):
+        """#2076: a session-less contribution is not minted a uuid."""
         hooks = hs_hooks.HealthScoreMemoryHooks()
 
         with patch.object(hooks, "cache_health_check", new_callable=AsyncMock, return_value=False):

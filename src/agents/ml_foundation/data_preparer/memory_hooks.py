@@ -265,7 +265,7 @@ class DataPreparerMemoryHooks:
 
     async def store_qc_report(
         self,
-        session_id: str,
+        session_id: Optional[str],
         result: Dict[str, Any],
         state: Dict[str, Any],
         brand: Optional[str] = None,
@@ -277,6 +277,14 @@ class DataPreparerMemoryHooks:
 
             content = {
                 "experiment_id": state.get("experiment_id"),
+                # The audit chain's workflow id used to be persisted AS the session
+                # (#2099). It is a real correlation handle but not a conversation,
+                # so it keeps its value here. Absent when the state has none.
+                **(
+                    {"audit_workflow_id": str(state["audit_workflow_id"])}
+                    if state.get("audit_workflow_id")
+                    else {}
+                ),
                 "report_id": result.get("report_id"),
                 "qc_status": result.get("qc_status"),
                 "overall_score": state.get("overall_score"),
@@ -420,13 +428,16 @@ async def contribute_to_memory(
     Returns:
         Dictionary with counts of stored memories
     """
-    import uuid
-
     if memory_hooks is None:
         memory_hooks = get_data_preparer_memory_hooks()
 
     if session_id is None:
-        session_id = state.get("session_id") or str(uuid.uuid4())
+        # No mint (#2076). An absent session id stays None: the episodic writer
+        # coerces it to an honest NULL for the nullable ``session_id`` column
+        # rather than recording a uuid that belongs to no conversation. A falsy
+        # state value normalises to None too, so the session-KEYED Redis writes
+        # below are skipped instead of keyed on an empty string.
+        session_id = state.get("session_id") or None
 
     counts = {
         "episodic_stored": 0,
@@ -446,9 +457,12 @@ async def contribute_to_memory(
         "gate_passed": result.get("gate_passed"),
         "overall_score": state.get("overall_score"),
     }
-    cached = await memory_hooks.cache_qc_report(session_id, qc_report)
-    if cached:
-        counts["working_cached"] = 1
+    # Skipped without a session (#2076): the cache key embeds the session id, so a
+    # session-less write would land under a key no reader can ever ask for.
+    if session_id is not None:
+        cached = await memory_hooks.cache_qc_report(session_id, qc_report)
+        if cached:
+            counts["working_cached"] = 1
 
     # 2. Store in episodic memory
     memory_id = await memory_hooks.store_qc_report(

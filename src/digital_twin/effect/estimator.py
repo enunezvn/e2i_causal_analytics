@@ -19,7 +19,11 @@ import pandas as pd
 from src.causal_engine.errors import EstimationError
 from src.causal_engine.uplift import UpliftConfig, UpliftRandomForest
 from src.digital_twin.effect.errors import EffectDataUnavailable
-from src.digital_twin.effect.estimate import PROVENANCE_SYNTHETIC, EffectEstimate
+from src.digital_twin.effect.estimate import (
+    PROVENANCE_SYNTHETIC,
+    SUBGROUP_AXES,
+    EffectEstimate,
+)
 from src.digital_twin.effect.provider import TrainingFrame
 
 logger = logging.getLogger(__name__)
@@ -117,4 +121,11 @@ class TwinEffectEstimator:
             n_train=len(df),
             estimator_type="uplift_random_forest",
             data_provenance=self.provenance,
+            # Every subgroup axis is resolved by the per-twin scores themselves (#2054):
+            # ``model.predict(x_twin)`` scores each twin over ALL its confounders, so the
+            # score varies inside every subgroup and the engine's per-twin group average is
+            # a real subgroup effect on the same twin-weighted population as this headline
+            # ``ate`` (the mean of those same scores). Empty mappings = "resolved, nothing
+            # precomputed to report in place of the grouping".
+            cate_by_axis={axis: {} for axis in SUBGROUP_AXES},
         )

@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 class PredictionMemoryContext:
     """Context retrieved from memory systems for prediction synthesis."""
 
-    session_id: str
+    session_id: Optional[str]
     working_memory: List[Dict[str, Any]] = field(default_factory=list)
     episodic_context: List[Dict[str, Any]] = field(default_factory=list)
     cached_predictions: List[Dict[str, Any]] = field(default_factory=list)
@@ -119,7 +119,7 @@ class PredictionSynthesizerMemoryHooks:
 
     async def get_context(
         self,
-        session_id: str,
+        session_id: Optional[str],
         entity_id: str,
         entity_type: str,
         prediction_target: str,
@@ -130,7 +130,8 @@ class PredictionSynthesizerMemoryHooks:
         Retrieve context from working and episodic memory.
 
         Args:
-            session_id: Session identifier for working memory lookup
+            session_id: Session identifier for working memory lookup; None skips
+                the session-keyed read (#2099)
             entity_id: Entity being predicted (HCP ID, territory ID, etc.)
             entity_type: Type of entity (hcp, territory, patient)
             prediction_target: What is being predicted
@@ -165,8 +166,11 @@ class PredictionSynthesizerMemoryHooks:
             prediction_target=prediction_target,
         )
 
+        # A session-less run still reads episodic/semantic memory, so this line
+        # stays -- it just stops saying "session None" (#2099).
+        scope = f"session {session_id}" if session_id else "a session-less run"
         logger.info(
-            f"Retrieved prediction context for session {session_id}: "
+            f"Retrieved prediction context for {scope}: "
             f"working={len(context.working_memory)}, "
             f"cached={len(context.cached_predictions)}, "
             f"episodic={len(context.episodic_context)}"
@@ -176,11 +180,15 @@ class PredictionSynthesizerMemoryHooks:
 
     async def _get_working_memory_context(
         self,
-        session_id: str,
+        session_id: Optional[str],
         limit: int = 10,
     ) -> List[Dict[str, Any]]:
-        """Retrieve recent conversation from working memory."""
-        if not self.working_memory:
+        """Retrieve recent conversation from working memory.
+
+        Without a session there is no conversation to retrieve: reading under a
+        minted id only ever returns empty, so return empty directly (#2099).
+        """
+        if session_id is None or not self.working_memory:
             return []
 
         try:
@@ -287,7 +295,7 @@ class PredictionSynthesizerMemoryHooks:
 
     async def cache_prediction(
         self,
-        session_id: str,
+        session_id: Optional[str],
         entity_id: str,
         entity_type: str,
         prediction_target: str,
@@ -297,7 +305,8 @@ class PredictionSynthesizerMemoryHooks:
         Cache prediction result in working memory.
 
         Args:
-            session_id: Session identifier
+            session_id: Session identifier, or None. The entity cache is written
+                either way; only the session-keyed copy needs a session (#2076).
             entity_id: Entity being predicted
             entity_type: Type of entity
             prediction_target: What was predicted
@@ -322,13 +331,18 @@ class PredictionSynthesizerMemoryHooks:
                 json.dumps(prediction_result, default=str),
             )
 
-            # Also cache by session
-            session_key = f"prediction_synthesizer:session:{session_id}"
-            await redis.setex(
-                session_key,
-                self.CACHE_TTL_SECONDS,
-                json.dumps(prediction_result, default=str),
-            )
+            # Also cache by session -- but ONLY when there is one (#2076). The
+            # entity key above carries no session and is read back by
+            # ``_get_cached_predictions`` on every run, so it must never be
+            # collateral of a missing session; this copy would land under
+            # ``prediction_synthesizer:session:None`` and no reader could ask for it.
+            if session_id is not None:
+                session_key = f"prediction_synthesizer:session:{session_id}"
+                await redis.setex(
+                    session_key,
+                    self.CACHE_TTL_SECONDS,
+                    json.dumps(prediction_result, default=str),
+                )
 
             logger.debug(f"Cached prediction for entity {entity_type}:{entity_id}")
             return True
@@ -401,7 +415,7 @@ class PredictionSynthesizerMemoryHooks:
 
     async def store_prediction(
         self,
-        session_id: str,
+        session_id: Optional[str],
         result: Dict[str, Any],
         state: Dict[str, Any],
     ) -> Optional[str]:
@@ -630,20 +644,15 @@ async def contribute_to_memory(
         result: PredictionSynthesizerOutput dictionary
         state: PredictionSynthesizerState dictionary
         memory_hooks: Optional memory hooks instance (creates new if not provided)
-        session_id: Session identifier (generates UUID if not provided)
+        session_id: Session identifier; None records an honest NULL (#2076)
 
     Returns:
         Dictionary with counts of stored memories:
         - episodic_stored: 1 if prediction stored, 0 otherwise
         - working_cached: 1 if cached, 0 otherwise
     """
-    import uuid
-
     if memory_hooks is None:
         memory_hooks = get_prediction_synthesizer_memory_hooks()
-
-    if session_id is None:
-        session_id = str(uuid.uuid4())
 
     counts = {
         "episodic_stored": 0,
@@ -660,7 +669,9 @@ async def contribute_to_memory(
     entity_type = state.get("entity_type", "")
     prediction_target = state.get("prediction_target", "")
 
-    # 1. Cache in working memory
+    # 1. Cache in working memory. NOT guarded on the session (#2076):
+    # ``cache_prediction`` writes an entity key that carries no session and is read
+    # back by every run, and guards its session-keyed copy internally.
     if entity_id and entity_type and prediction_target:
         cached = await memory_hooks.cache_prediction(
             session_id=session_id,

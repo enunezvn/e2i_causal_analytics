@@ -323,8 +323,8 @@ class SimulationResults(BaseModel):
     average effect over the cohort rows in them, with its 95% interval over those rows).
     ``cohort_effect`` / ``cohort_ci_*`` are always the engine's cohort-wide numbers — the
     ones ``/digital-twin/simulate`` returns, which a region filter does not change
-    (measured). ``region_effects`` are per-region effects for the simulated twins' regions
-    that the cohort covers: point estimates. ``recommendation`` / ``recommendation_rationale``
+    (measured). ``region_effects`` are per-region effects over each region's COHORT rows,
+    for the regions answered: point estimates. ``recommendation`` / ``recommendation_rationale``
     apply the engine's CI-based DEPLOY / REFINE / SKIP policy to the headline effect.
     ``recommended_sample_size`` is the per-arm n of a two-sided, equal-allocation experiment
     powered to detect the headline effect on the continuous outcome, sized from the outcome's
@@ -4023,16 +4023,18 @@ def _simulate_population(
     regions: List[str],
     model_id: Any,
 ) -> Tuple[Any, Optional[_TargetedEffect]]:
-    """Run the engine on a twin population and, for a targeted request that completed, the
-    inference on the targeted regions."""
+    """Run the engine on a twin population, scoped to ``regions`` as the route scopes it, and
+    (for a targeted request that completed) the inference on those regions."""
     from src.digital_twin.effect.cohort_causal_estimator import CohortCausalEstimator
     from src.digital_twin.models.simulation_models import InterventionConfig, PopulationFilter
     from src.digital_twin.simulation_engine import SimulationEngine
 
+    # Targeted inference first: its refusal for an unestimable region is the precise one.
+    targeted = _targeted_effect(frame, regions) if regions else None
     engine = SimulationEngine(
         population=population,
         effect_provider=provider,
-        effect_estimator=CohortCausalEstimator(),
+        effect_estimator=CohortCausalEstimator(target_regions=regions),
     )
     # Pin the model id the way the route does (the engine derives it from the population).
     engine.model_id = model_id
@@ -4043,9 +4045,8 @@ def _simulate_population(
         population_filter=PopulationFilter(regions=regions) if regions else None,
         use_cache=False,
     )
-    if not regions or getattr(result.status, "value", result.status) != "completed":
-        return result, None
-    return result, _targeted_effect(frame, regions)
+    done = getattr(result.status, "value", result.status) == "completed"
+    return result, (targeted if done else None)
 
 
 def _simulation_results(
@@ -4061,8 +4062,7 @@ def _simulation_results(
 
     ``frame`` is the provider's ``TrainingFrame`` for this intervention; the contrast it
     describes is stated in ``assumptions`` so the effect cannot be read as anything else.
-    Region effects are reported only for regions the cohort covers: the estimator gives a
-    twin in an uncovered region the cohort ATE, which is not that region's effect.
+    Region effects come from the estimate's own declared region axis: cohort rows, not twins.
     """
     from src.digital_twin.effect.recommendation import experiment_size
 
@@ -4121,8 +4121,8 @@ def _simulation_results(
         f"Data provenance: {result.data_provenance} — a synthetic-gold cohort, not "
         "real-world data.",
         scope_note,
-        f"region_effects are the per-region effects for the {result.twin_count} simulated "
-        "twins' regions that the cohort covers: point estimates without an interval.",
+        "region_effects are the causal forest's per-region effects, each over that region's "
+        "cohort rows: point estimates without an interval, independent of the twin count.",
         f"Recommendation policy (applied to effect): {rationale}",
         size_note,
     ]
@@ -4134,9 +4134,9 @@ def _simulation_results(
         effect=effect,
         ci_lower=ci_lower,
         ci_upper=ci_upper,
-        cohort_effect=float(result.simulated_ate),
-        cohort_ci_lower=float(result.simulated_ci_lower),
-        cohort_ci_upper=float(result.simulated_ci_upper),
+        cohort_effect=result.cohort_wide_ate,
+        cohort_ci_lower=result.cohort_wide_ci_lower,
+        cohort_ci_upper=result.cohort_wide_ci_upper,
         region_effects=region_effects,
         twin_count=int(result.twin_count),
         recommendation=recommendation,

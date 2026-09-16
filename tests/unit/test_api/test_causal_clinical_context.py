@@ -5,12 +5,25 @@ patched so no live HTTP runs."""
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
-from src.api.routes import causal as causal_routes
+from src.api.routes.causal import catalog as causal_routes
 from src.api.schemas.causal import ClinicalContext
+
+# #1991 debt 4: the route no longer builds a ClinicalContextService at import —
+# ``catalog._get_clinical_context_service()`` builds it on first use and caches it
+# in ``catalog._clinical_context_service``. Seeding that cache with a stub is the
+# ONE patch point that serves every reader, whichever module's binding of the
+# accessor it calls, because the accessor resolves the global in ``catalog``.
+_clinical_context_service = SimpleNamespace(get_context=lambda *a, **k: None)
+
+
+@pytest.fixture(autouse=True)
+def _stub_clinical_context_service(monkeypatch):
+    monkeypatch.setattr(causal_routes, "_clinical_context_service", _clinical_context_service)
 
 
 @pytest.mark.unit
@@ -58,9 +71,7 @@ async def test_endpoint_returns_assembled_context_for_known_brand():
         "real_world_evidence": None,
         "honesty_label": "estimate = synthetic; context = real, cited",
     }
-    with patch.object(
-        causal_routes._clinical_context_service, "get_context", return_value=fake_ctx
-    ):
+    with patch.object(_clinical_context_service, "get_context", return_value=fake_ctx):
         with patch.object(
             causal_routes,
             "_list_dataset_brands",
@@ -105,9 +116,7 @@ async def test_endpoint_surfaces_seminal_rwe_through_schema():
         },
         "honesty_label": "estimate = synthetic; context = real, cited",
     }
-    with patch.object(
-        causal_routes._clinical_context_service, "get_context", return_value=fake_ctx
-    ):
+    with patch.object(_clinical_context_service, "get_context", return_value=fake_ctx):
         with patch.object(
             causal_routes,
             "_list_dataset_brands",
@@ -157,9 +166,7 @@ async def test_endpoint_stays_200_when_service_degrades():
         "real_world_evidence": None,
         "honesty_label": "estimate = synthetic; context = real, cited",
     }
-    with patch.object(
-        causal_routes._clinical_context_service, "get_context", return_value=degraded
-    ):
+    with patch.object(_clinical_context_service, "get_context", return_value=degraded):
         with patch.object(causal_routes, "_list_dataset_brands", return_value=["Fabhalta"]):
             resp = await causal_routes.get_clinical_context(
                 brand="Fabhalta", outcome="treatment_initiated", user={"sub": "t"}
@@ -210,7 +217,7 @@ _ANALYSIS_CTX = {
 @pytest.mark.asyncio
 async def test_endpoint_forwards_the_treatment_to_the_service():
     with (
-        patch.object(causal_routes._clinical_context_service, "get_context") as mock_get,
+        patch.object(_clinical_context_service, "get_context") as mock_get,
         patch.object(causal_routes, "_list_dataset_brands", return_value=["Kisqali"]),
     ):
         mock_get.return_value = _ANALYSIS_CTX
@@ -231,7 +238,7 @@ async def test_endpoint_surfaces_the_analysis_framing_fields():
     declared on the schema is silently DROPPED. Pin the whole analysis frame."""
     with (
         patch.object(
-            causal_routes._clinical_context_service,
+            _clinical_context_service,
             "get_context",
             return_value=_ANALYSIS_CTX,
         ),
@@ -264,8 +271,12 @@ def _wire_client():
 
     from src.api.dependencies.auth import require_viewer
 
+    # The /causal prefix lives on the package aggregator, not on the per-concern
+    # sub-router (#1991 debt 4), so mount the composed router the app mounts.
+    from src.api.routes.causal import router as causal_package_router
+
     app = FastAPI()
-    app.include_router(causal_routes.router)
+    app.include_router(causal_package_router)
     app.dependency_overrides[require_viewer] = lambda: {"role": "viewer"}
     return TestClient(app)
 
@@ -274,7 +285,7 @@ def _wire_client():
 def test_treatment_is_a_real_query_param_on_the_wire():
     with (
         patch.object(
-            causal_routes._clinical_context_service,
+            _clinical_context_service,
             "get_context",
             return_value=_ANALYSIS_CTX,
         ) as mock_get,
@@ -306,9 +317,7 @@ def test_endpoint_treatment_is_optional_brand_level_view_still_works():
     payload = dict(_ANALYSIS_CTX)
     payload.update({"our_treatment": None, "treatment_context": None, "analysis_framing": None})
     with (
-        patch.object(
-            causal_routes._clinical_context_service, "get_context", return_value=payload
-        ) as mock_get,
+        patch.object(_clinical_context_service, "get_context", return_value=payload) as mock_get,
         patch.object(causal_routes, "_list_dataset_brands", return_value=["Kisqali"]),
     ):
         response = _wire_client().get(
@@ -374,7 +383,7 @@ async def test_endpoint_asks_for_the_causal_evidence_block():
     (the leaderboard fan-out deliberately does not pay for it)."""
     with (
         patch.object(
-            causal_routes._clinical_context_service, "get_context", return_value=_EVIDENCE_CTX
+            _clinical_context_service, "get_context", return_value=_EVIDENCE_CTX
         ) as mock_get,
         patch.object(causal_routes, "_list_dataset_brands", return_value=["Kisqali"]),
     ):
@@ -392,9 +401,7 @@ async def test_endpoint_asks_for_the_causal_evidence_block():
 @pytest.mark.asyncio
 async def test_causal_evidence_survives_the_schema():
     with (
-        patch.object(
-            causal_routes._clinical_context_service, "get_context", return_value=_EVIDENCE_CTX
-        ),
+        patch.object(_clinical_context_service, "get_context", return_value=_EVIDENCE_CTX),
         patch.object(causal_routes, "_list_dataset_brands", return_value=["Kisqali"]),
     ):
         ctx = await causal_routes.get_clinical_context(
@@ -425,7 +432,7 @@ async def test_commercial_lever_evidence_state_reaches_the_client_verbatim():
         "note": "Copay support is a commercial access/promotion lever.",
     }
     with (
-        patch.object(causal_routes._clinical_context_service, "get_context", return_value=payload),
+        patch.object(_clinical_context_service, "get_context", return_value=payload),
         patch.object(causal_routes, "_list_dataset_brands", return_value=["Kisqali"]),
     ):
         ctx = await causal_routes.get_clinical_context(

@@ -11,7 +11,7 @@ Endpoints (all ``require_operator`` — OD-1):
 - GET  /expert-reviews/pending            -> oldest-first pending queue
 - POST /expert-reviews/{review_id}/resolve -> approve/reject + checklist/comments
 - GET  /expert-reviews/summary            -> status counts
-- GET  /expert-reviews/{review_id}        -> one review (any status) + same-structure history
+- GET  /expert-reviews/{review_id}        -> one review (any status) + estimand history + versions
 
 Persistence: ``ExpertReviewRepository`` over an ASYNC Supabase (service-role)
 client. The repo methods are ``await self.client.table(...).execute()`` so the
@@ -29,7 +29,7 @@ import logging
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, TypeVar
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple, Type, TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ValidationError
@@ -40,6 +40,7 @@ from src.api.errors import user_safe_503_detail
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.api.schemas.expert_review import (
     AgentAssessmentResponse,
+    DagChanges,
     ExpertReviewDetailResponse,
     PendingReviewItem,
     PendingReviewsResponse,
@@ -47,7 +48,10 @@ from src.api.schemas.expert_review import (
     ResolveReviewResponse,
     ReviewRecord,
     ReviewSummaryResponse,
+    ReviewVersion,
+    parse_json_column,
 )
+from src.causal_engine.dag_hash import effective_adjustment_hash, get_dag_changes
 
 if TYPE_CHECKING:
     from src.repositories.expert_review import ExpertReviewRepository
@@ -59,8 +63,8 @@ logger = logging.getLogger(__name__)
 # value). The app's catch-all classifies exceptions by message keyword
 # ("connection"/"unavailable" -> 503, otherwise a generic 500), which is not a
 # contract, so these routes map a store failure themselves with the existing
-# HTTPException(503) pattern (routes/causal.py, routes/digital_twin.py). The
-# app's StarletteHTTPException handler MASKS a 503 detail unless it is marked
+# HTTPException(503) pattern (routes/causal/catalog.py, routes/digital_twin.py).
+# The app's StarletteHTTPException handler MASKS a 503 detail unless it is marked
 # with errors.user_safe_503_detail(); this one names no internals, so it is
 # marked and reaches the client as the response ``message``. The handler
 # forwards HTTPException headers (#1999), so the 503 sends the ``Retry-After``
@@ -136,6 +140,210 @@ def _validate_review_row(model: Type[_ReviewModelT], row: Dict[str, Any]) -> _Re
         ) from exc
 
 
+def _snapshot_or_500(raw: Any, review_id: Any) -> Optional[Dict[str, Any]]:
+    """A stored ``dag_structure_json`` as a dict, ``None`` when the column is NULL.
+
+    The raw value is sometimes a ``json.dumps`` string (the repo's write path),
+    so it goes through ``parse_json_column`` -- the schema's single definition of
+    how this column is read.
+
+    ``expert_reviews.dag_structure_json`` carries NO CHECK constraint (migration
+    137 added none; only the versions table's column is constrained to
+    object-or-NULL), so a stored ARRAY or number reaches here intact and
+    ``get_dag_changes`` would call ``.get`` on it -- an ``AttributeError``, which
+    surfaces as a bare 500 with no detail. Raise the same honest 500
+    ``_validate_review_row`` raises instead: the store answered fine, the ROW is
+    malformed, and the message names the row and the column so an operator can
+    find it.
+    """
+    if raw is None:
+        return None
+    parsed = parse_json_column(raw)
+    if not isinstance(parsed, dict):
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"expert review {review_id} has a malformed dag_structure_json: "
+                "expected a JSON object"
+            ),
+        )
+    return parsed
+
+
+def _changes_between(
+    prev_snapshot: Any,
+    cur_snapshot: Any,
+    *,
+    prev_id: Any = None,
+    cur_id: Any = None,
+) -> DagChanges:
+    """The structural delta between two stored snapshots (#1991 debt 3).
+
+    A NULL snapshot diffs as ``{}``, so the delta against "no recorded
+    structure" is everything-added -- what the timeline should show, not a
+    crash. Its HASH, though, is reported as None rather than the sha256 of the
+    empty graph: that digest is a real-looking 64-character value matching no
+    row in the database, and an operator comparing it to the version's stored
+    ``dag_version_hash`` would be reading a fabricated one. No recorded
+    structure has no hash.
+    """
+    prev = _snapshot_or_500(prev_snapshot, prev_id)
+    cur = _snapshot_or_500(cur_snapshot, cur_id)
+    changes = get_dag_changes(prev or {}, cur or {})
+    if prev is None:
+        changes["old_hash"] = None
+    if cur is None:
+        changes["new_hash"] = None
+    return DagChanges(**changes)
+
+
+def _current_version_index(
+    entries: Sequence[Tuple[Optional[str], Optional[str], Any]],
+    dag_version_hash: Optional[str],
+    adjustment_set_hash: Optional[str],
+    review_snapshot: Any,
+) -> Optional[int]:
+    """Which timeline entry is the review's CURRENT version (codex round 3).
+
+    ``expert_review_versions`` is a TIMELINE of facts; the review row is the
+    authority on which structure it covers, and the two can disagree. A run
+    that recorded its version and then LOST the compare-and-set advance leaves
+    its row after the winner's (timeline ``... C, B`` while the review is on
+    C), so "the last entry" is not "the version under review" -- rendering its
+    delta would show the reviewer a change they are not being asked to approve,
+    and reporting its timestamp would date a move that never happened.
+
+    The review's identity is the PAIR: ``compute_dag_hash`` excludes adjustment
+    sets, so the DAG hash alone cannot see a covariate-only advance. Among the
+    entries carrying the review's hash we therefore take the LAST whose
+    covariate set is equal as well. The LAST, because a revert A -> B -> A
+    appends A a second time and the review then points at the NEWER A -- whose
+    ``changes`` is the B -> A delta the reviewer is actually being shown.
+
+    THE RULE: compare the EFFECTIVE adjustment on BOTH sides (codex round 5).
+    ``effective_adjustment_hash`` reads the stored hash when there is one and
+    otherwise derives it from the snapshot beside it, so each side is asked the
+    same question -- "which covariate set does this actually name?" -- rather
+    than one side being taken at face value and the other cross-examined. Two
+    sides are equal when their effective values are, and None == None matches
+    only when BOTH are genuinely unknown: unknown matches unknown, it is not a
+    wildcard.
+
+    Why EFFECTIVE and not the raw columns: a NULL adjustment half means "not
+    recorded", NOT "conditions on nothing" -- the canonical empty set is a real
+    hash, ``sha256("[]")``. Migration 141 backfilled every pre-existing version
+    with a NULL hash while COPYING its snapshot, so on those rows the snapshot
+    is the only place the covariate set is written down. Reading NULL as a value
+    equal to another NULL therefore matched rows that name different structures.
+
+    This one rule subsumes the round-4 fallback (a review that has learned its
+    hash still resolves to the backfilled row whose snapshot derives it) and
+    closes round 5's finding 1 from the other side: a review whose OWN adjustment
+    column is NULL but whose snapshot names A is not unknown, so an
+    information-free ``(h, NULL, NULL)`` row -- which a structureless run used to
+    record -- no longer matches it. Naming that row would render "the previous
+    snapshot disappeared" beside the reviewer's real graph A, and would date the
+    queue's "last changed" to a move that never happened. It also works in the
+    direction the fallback could not: a NULL-adjustment review whose snapshot
+    derives C matches a row that states C outright.
+
+    A LEGITIMATE no-structure recording still matches: when the review carries
+    neither a hash nor a snapshot and the row carries neither either, both
+    effective values are None and the row IS the review's version.
+
+    An EMPTY ``dag_version_hash`` is treated as absent, like None: the column
+    the entries carry is NOT NULL and non-empty, so no entry could match it
+    anyway, and "" is the review row saying nothing about its structure.
+
+    None when nothing matches: a review minted before the versions table, or an
+    old-image mint whose first version was never recorded. Callers show no delta
+    and no change date rather than guess.
+
+    Takes normalized ``(dag_version_hash, adjustment_set_hash, snapshot)``
+    triples plus the REVIEW's own snapshot, not the entries themselves, so the
+    ONE definition of this rule serves both the detail route (validated
+    ``ReviewVersion`` models) and the pending queue (raw stored rows, which it
+    deliberately never validates -- it reads one timestamp off them, and a
+    malformed row must not 500 the whole queue; a snapshot that is not a dict,
+    or whose adjustment data is malformed, simply proves nothing).
+    """
+    if not dag_version_hash:
+        return None
+    wanted = effective_adjustment_hash(adjustment_set_hash, review_snapshot)
+    for index in reversed(range(len(entries))):
+        entry_hash, entry_adjustment, snapshot = entries[index]
+        if entry_hash != dag_version_hash:
+            continue
+        if effective_adjustment_hash(entry_adjustment, snapshot) == wanted:
+            return index
+    return None
+
+
+def _current_version_id(
+    versions: List[ReviewVersion],
+    dag_version_hash: Optional[str],
+    adjustment_set_hash: Optional[str],
+    review_snapshot: Any,
+) -> Optional[str]:
+    """The ``version_id`` of the review's current version, or None.
+
+    See ``_current_version_index`` for the selection rule.
+    """
+    index = _current_version_index(
+        [
+            (
+                v.dag_version_hash,
+                v.adjustment_set_hash,
+                # The VALIDATED snapshot as a plain dict, so the shared
+                # derivation reads it exactly as it reads the queue's raw
+                # column. ``DagStructureSnapshot`` keeps unknown keys
+                # (extra="allow"), so nothing is lost on the way through.
+                None if v.dag_structure_json is None else v.dag_structure_json.model_dump(),
+            )
+            for v in versions
+        ],
+        dag_version_hash,
+        adjustment_set_hash,
+        review_snapshot,
+    )
+    return None if index is None else versions[index].version_id
+
+
+def _last_changed_at(row: Dict[str, Any], versions: List[Dict[str, Any]]) -> Any:
+    """When the structure the review is CURRENTLY on was recorded.
+
+    RAW stored version rows (the pending queue never validates them), so the
+    pair is read with ``.get``. Falls back to the review's own ``created_at``
+    when nothing matches -- including the empty timeline of a review minted
+    before migration 141.
+
+    Every snapshot the rule weighs -- the version rows' AND the review's own,
+    which is what names its covariate set when its adjustment column is NULL --
+    goes through ``parse_json_column``, the module's single definition of how
+    this column is read, and what the detail route's validated model applies too, so
+    the two callers read the same stored row the same way. The detail
+    additionally validates it and turns a malformed snapshot into a named 500
+    rather than a derivation; migration 141's object-or-NULL CHECK makes that
+    unreachable for rows this table can hold. It only parses; it validates
+    nothing and cannot raise, and a value that is not an object comes back as
+    something the derivation reads as "proves nothing".
+    """
+    index = _current_version_index(
+        [
+            (
+                v.get("dag_version_hash"),
+                v.get("adjustment_set_hash"),
+                parse_json_column(v.get("dag_structure_json")),
+            )
+            for v in versions
+        ],
+        row.get("dag_version_hash"),
+        row.get("adjustment_set_hash"),
+        parse_json_column(row.get("dag_structure_json")),
+    )
+    return row.get("created_at") if index is None else versions[index].get("created_at")
+
+
 router = APIRouter(
     prefix="/expert-reviews",
     tags=["Expert Review"],
@@ -181,13 +389,57 @@ async def list_pending_reviews(
     Each row carries the metadata an operator needs to decide
     (treatment/outcome/brand/analysis_context/dag_version_hash) — the v1 UI is
     metadata + approve/reject, no DAG graph render (OD-2).
+
+    ``version_count`` / ``last_changed_at`` (#1991 debt 3) come from ONE batched
+    ``expert_review_versions`` read, so an operator can see that a pending
+    review's structure moved under them since it was queued. The count is every
+    recorded version; the date is the CURRENT version's, never the timeline's
+    last, which can belong to a version the review is not on.
     """
     repo = await _get_expert_review_repo()
     try:
         rows = await repo.get_pending_reviews(brand=brand, reviewer_id=reviewer_id, limit=limit)
     except Exception as e:  # store failure (R3): honest 503, never an empty queue
         raise _store_unavailable("pending-queue read", e) from e
-    reviews = [_validate_review_row(PendingReviewItem, row) for row in rows]
+    # ONE batched versions read for the whole page (#1991 debt 3): the queue
+    # serves up to 200 rows, and a per-row get_versions would be 200 round trips.
+    try:
+        versions_by_review = await repo.get_versions_for_reviews(
+            [row["review_id"] for row in rows if row.get("review_id")]
+        )
+    except Exception as e:  # store failure (R3): honest 503, never "never changed"
+        raise _store_unavailable("pending-queue versions read", e) from e
+    reviews = []
+    for row in rows:
+        # The batched read keys its mapping by ``str(review_id)`` (``get_versions_for_reviews``),
+        # so a row whose id is missing or not a string can never match a key -- the
+        # empty list is the same answer the lookup would give, said without asking.
+        review_id = row.get("review_id")
+        versions = versions_by_review.get(review_id, []) if isinstance(review_id, str) else []
+        reviews.append(
+            _validate_review_row(
+                PendingReviewItem,
+                {
+                    **row,
+                    # No version rows means the review was minted before the
+                    # versions table (mig 141) -- it is at version 1, changed
+                    # when it was created. Never 0: that reads as "no structure".
+                    "version_count": len(versions) or 1,
+                    # WHEN the structure under review landed -- the CURRENT
+                    # version's timestamp, not the timeline's last (codex round
+                    # 3). The tail can belong to a run that recorded its version
+                    # and then lost the compare-and-set advance, and its
+                    # timestamp is the NEWEST: reporting it would tell the
+                    # operator their review moved at a moment it did not. When
+                    # no recorded version carries the review's pair the date is
+                    # unknown, and the review's own creation is the honest
+                    # answer -- exactly as for a review with no timeline at all.
+                    # ``version_count`` stays len(versions): the rows WERE
+                    # recorded, orphan included.
+                    "last_changed_at": _last_changed_at(row, versions),
+                },
+            )
+        )
     return PendingReviewsResponse(reviews=reviews, total=len(reviews))
 
 
@@ -219,6 +471,20 @@ async def resolve_review(
     fabricated 200. A genuine persistence error also returns False -> 404, which
     is still a correct non-200 (never a fake success); the repo logs the
     distinction (zero-row WARNING vs exception ERROR).
+
+    Version binding (codex rounds 1 and 2): the PAIR
+    ``(request.dag_version_hash, request.adjustment_set_hash)`` is the structure
+    the reviewer's form displayed, and ``submit_review`` filters the UPDATE on
+    BOTH, so a review a concurrent run advanced (migration 141) is NOT resolved
+    by a form opened on the old version. Both halves are needed because
+    ``compute_dag_hash`` excludes adjustment sets: an ADJUSTMENT-ONLY advance
+    leaves the hash equal, and the hash-only filter let a reviewer sign off
+    covariates they were never shown. The repo keeps its boolean; a False is
+    disambiguated HERE by ONE extra read: still pending on a DIFFERENT pair ->
+    409 (reload and resolve the current version), anything else -> the existing
+    404. The read is only on the failure path, so the happy path still costs one
+    write. A re-read that itself fails is treated as the 404 case -- fail-closed,
+    never a fabricated 200.
     """
     # The resolver's identity, from the verified token (dependencies/auth.py
     # builds ``id`` / ``email`` / ``user_metadata`` from the Supabase user).
@@ -238,8 +504,32 @@ async def resolve_review(
         validity_days=request.validity_days,
         reviewer_name=reviewer_name or None,
         reviewer_email=reviewer_email or None,
+        expected_dag_version_hash=request.dag_version_hash,
+        expected_adjustment_set_hash=request.adjustment_set_hash,
     )
     if not success:
+        current = await _current_review_row(repo, review_id)
+        # EITHER half having moved is an advance (codex round-2 HIGH 1): an
+        # adjustment-only advance leaves the DAG hash equal, so comparing it
+        # alone reported 404 "already resolved" for a row that is pending on a
+        # structure this form never displayed. The adjustment comparison is
+        # NULL-aware by construction -- both sides are Optional[str] and None ==
+        # None is the "still unknown" case, which is a match, not a mismatch.
+        if (
+            current is not None
+            and current.get("approval_status") == "pending"
+            and (
+                current.get("dag_version_hash") != request.dag_version_hash
+                or current.get("adjustment_set_hash") != request.adjustment_set_hash
+            )
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Review {review_id} has advanced to a new structure version since this "
+                    "form was opened; reload the review and resolve the current version."
+                ),
+            )
         raise HTTPException(
             status_code=404,
             detail=(
@@ -252,6 +542,26 @@ async def resolve_review(
         approval_status=request.approval_status,
         success=True,
     )
+
+
+async def _current_review_row(
+    repo: "ExpertReviewRepository", review_id: str
+) -> Optional[Dict[str, Any]]:
+    """The review row as it stands, or None -- the failure-path read that tells a
+    STALE resolution (409) from a gone/resolved one (404).
+
+    A read that raises answers None: the caller then reports the conservative
+    404 rather than propagating a store outage as a 500 on a request whose write
+    already did nothing. The distinction is only ever used to pick an error code.
+    """
+    try:
+        return await repo.get_by_id(review_id)
+    except Exception as read_err:  # noqa: BLE001 - only the error CODE depends on this
+        logger.warning(
+            f"Resolve of review {review_id} failed and the disambiguating re-read also "
+            f"failed ({read_err}); reporting 404 rather than guessing 409"
+        )
+        return None
 
 
 async def _get_validation_rows(validation_ids: List[str]) -> List[Dict[str, Any]]:
@@ -381,6 +691,15 @@ async def _build_under_lock(
     the SAFE 503 (``_reread_row``): building from the stale snapshot could
     overwrite a result persisted meanwhile.
 
+    The persist is bound to the STRUCTURE VERSION the build graded (codex
+    round-1 HIGH): the row's ``dag_version_hash`` is captured before the build
+    and passed to ``update_agent_assessment``, so a build that finishes after a
+    refutation run advanced the review (migration 141) writes nothing and the
+    response says ``persisted: false`` rather than filing a grading of the old
+    DAG and the old evidence under the new structure. The advance itself already
+    CLEARS the cached assessment (``append_version``), so the request-level cache
+    short-circuit above cannot serve the previous structure's grading either.
+
     Worker shutdown (#1999, measured): uvicorn waits for every request task
     before it sends the lifespan shutdown, and the request task awaits this one
     (a disconnect does not cancel it), so a graceful stop (SIGTERM, a
@@ -429,6 +748,20 @@ async def _build_under_lock(
             )
         # Build from the row as it is NOW (the snapshot can be up to a full wait old).
         source = row or review
+        # The structure this build GRADES, captured before it starts (codex
+        # round-1 HIGH). A refutation run can append a version and advance the
+        # review while the (blocking, LM-backed) build runs; persisting then
+        # would file a grading of h1's DAG and h1's evidence under h2. The
+        # persist below carries this hash as a filter, so a stale build is
+        # refused by the row rather than by a re-read that could itself race.
+        source_hash = source.get("dag_version_hash")
+        # The adjustment half of that same captured version (codex round-2 HIGH
+        # 2). Without it the guard missed an ADJUSTMENT-ONLY advance: the DAG
+        # hash never moves, so a build that graded (h1, adj-W) still persisted
+        # after the advance to (h1, adj-Z) had cleared the cache, and the review
+        # UI showed a grading of covariates the review no longer covers, marked
+        # persisted=true.
+        source_adj = source.get("adjustment_set_hash")
         validation_ids = source.get("related_validation_ids") or []
         validations = await _get_validation_rows(validation_ids)
         # run_signature is a BLOCKING LM call; keep the event loop free.
@@ -440,7 +773,21 @@ async def _build_under_lock(
             _GENERATION_ID_KEY: uuid.uuid4().hex,
             _GENERATED_AT_KEY: datetime.now(timezone.utc).isoformat(),
         }
-        persisted = await repo.update_agent_assessment(review_id, assessment)
+        # A None ``source_hash`` OMITS the filter rather than matching NULL: the
+        # column is nullable (a pre-141 row that never carried a hash), and such
+        # a row has no version to bind to, so filtering on it would refuse every
+        # write instead of guarding one. That row gets the pre-#1991 behaviour.
+        # The two halves travel together: the repository applies the adjustment
+        # filter only when the hash one is given, so a NULL ``source_adj`` under
+        # a real ``source_hash`` still guards -- it asserts "the review's
+        # adjustment set was unknown when this build started", which is a
+        # precondition, not an absence of one.
+        persisted = await repo.update_agent_assessment(
+            review_id,
+            assessment,
+            for_dag_version_hash=source_hash,
+            for_adjustment_set_hash=source_adj,
+        )
         # No p99 exists for this build anywhere; record the elapsed seconds so the
         # lock TTL (120 s, nginx proxy_read_timeout) can be revisited on data.
         logger.info(
@@ -502,7 +849,7 @@ async def get_summary(
     brand: Optional[str] = Query(None, description="Filter by brand"),
     user: Dict[str, Any] = Depends(require_operator),
 ) -> ReviewSummaryResponse:
-    """Return status counts (pending/approved/rejected/expired/expiring_soon).
+    """Return status counts (pending/approved/rejected/superseded/expired/expiring_soon).
 
     A store failure is 503 (R3) -- never all-zero counts with a 200.
     """
@@ -515,6 +862,9 @@ async def get_summary(
         pending=summary.get("pending", 0),
         approved=summary.get("approved", 0),
         rejected=summary.get("rejected", 0),
+        # Partition member since migration 140 (BLOCK-band reviews resolved to
+        # ``superseded``); a resolution, never a queue item.
+        superseded=summary.get("superseded", 0),
         expired=summary.get("expired", 0),
         expiring_soon=summary.get("expiring_soon", 0),
     )
@@ -523,7 +873,7 @@ async def get_summary(
 @router.get(
     "/{review_id}",
     response_model=ExpertReviewDetailResponse,
-    summary="One expert review (any status) with its same-structure history",
+    summary="One expert review (any status) with its estimand history and version timeline",
     operation_id="get_expert_review",
     responses={
         404: {"model": ErrorResponse, "description": "Review not found"},
@@ -534,14 +884,24 @@ async def get_expert_review(
     review_id: str,
     user: Dict[str, Any] = Depends(require_operator),
 ) -> ExpertReviewDetailResponse:
-    """Return one review row in any status plus every review of the same DAG structure.
+    """Return one review row in any status, its ESTIMAND history and its structure timeline.
 
     Powers the linked-review card the causal drill-down deep-links to
     (``/expert-reviews?review=<id>``), so a run whose structure is pending,
-    approved or rejected always resolves to its record. ``history`` is the full
-    same-hash (and same-brand) list, newest first, expired included -- the read
-    ``ExpertReviewGate.check_rejection`` performs. Declared LAST in this module
-    so it cannot shadow ``/pending`` and ``/summary``.
+    approved or rejected always resolves to its record.
+
+    ``history`` is every review of the same ESTIMAND (migration 140), newest
+    first, expired included. A row minted before that migration carries no
+    ``estimand_key`` and falls back to the same-hash (and same-brand) list --
+    the read ``ExpertReviewGate.check_rejection`` performs.
+
+    ``versions`` is this review's ``expert_review_versions`` timeline (migration
+    141), oldest first, each row carrying the diff against the one before it.
+    ``current_version_id`` names the entry the review row itself is on, which is
+    not always the last one: a client renders THAT row's delta, never the
+    tail's.
+
+    Declared LAST in this module so it cannot shadow ``/pending`` and ``/summary``.
     """
     # A malformed id is 404, not 503 (review 2026-09-09, measured live):
     # ``expert_reviews.review_id`` is a uuid column, so a non-UUID string makes
@@ -567,16 +927,81 @@ async def get_expert_review(
         raise _store_unavailable("review read", e) from e
     if not row:
         raise HTTPException(status_code=404, detail=f"Review {review_id} was not found.")
+    estimand_key = row.get("estimand_key")
     dag_hash = row.get("dag_version_hash")
     history_rows: List[Dict[str, Any]] = []
-    if dag_hash:
-        try:
+    try:
+        if estimand_key:
+            # The estimand IS the review's identity since migration 140: a
+            # structure change advances the SAME review, so the hash-keyed read
+            # would drop every earlier structure of this question.
+            history_rows = await repo.get_reviews_for_estimand(estimand_key)
+        elif dag_hash:
+            # Pre-140 rows carry no estimand_key; the same-hash history (the
+            # read the gate's rejection probe performs) is all there is.
             history_rows = await repo.get_reviews_for_dag(
                 dag_hash, include_expired=True, brand=row.get("brand")
             )
-        except Exception as e:
-            raise _store_unavailable("review history read", e) from e
+    except Exception as e:
+        raise _store_unavailable("review history read", e) from e
+
+    try:
+        version_rows = await repo.get_versions(canonical_id)
+    except Exception as e:  # store failure (R3): honest 503, never "never changed"
+        raise _store_unavailable("review versions read", e) from e
+
+    # Oldest-first timeline: each version diffs against the one before it, and
+    # the FIRST carries None -- it has no predecessor, and an everything-added
+    # diff there would read as a real structure change.
+    versions: List[ReviewVersion] = []
+    for index, version_row in enumerate(version_rows):
+        changes = (
+            None
+            if index == 0
+            else _changes_between(
+                version_rows[index - 1].get("dag_structure_json"),
+                version_row.get("dag_structure_json"),
+                prev_id=version_rows[index - 1].get("review_id"),
+                cur_id=version_row.get("review_id"),
+            )
+        )
+        versions.append(_validate_review_row(ReviewVersion, {**version_row, "changes": changes}))
+
+    # ``history`` is newest-first, so each row's predecessor is the NEXT element;
+    # the last (oldest) review of the estimand has none.
+    history: List[ReviewRecord] = []
+    for index, history_row in enumerate(history_rows):
+        changes_from_previous = (
+            None
+            if index + 1 >= len(history_rows)
+            else _changes_between(
+                history_rows[index + 1].get("dag_structure_json"),
+                history_row.get("dag_structure_json"),
+                prev_id=history_rows[index + 1].get("review_id"),
+                cur_id=history_row.get("review_id"),
+            )
+        )
+        history.append(
+            _validate_review_row(
+                ReviewRecord, {**history_row, "changes_from_previous": changes_from_previous}
+            )
+        )
+
+    review = _validate_review_row(ReviewRecord, row)
     return ExpertReviewDetailResponse(
-        review=_validate_review_row(ReviewRecord, row),
-        history=[_validate_review_row(ReviewRecord, r) for r in history_rows],
+        review=review,
+        history=history,
+        versions=versions,
+        # The review row -- not the tail of the timeline -- is the authority on
+        # which version is under review; see ``_current_version_id``.
+        current_version_id=_current_version_id(
+            versions,
+            review.dag_version_hash,
+            review.adjustment_set_hash,
+            # The review's OWN snapshot, as a plain dict: when its adjustment
+            # column is NULL this is the only place its covariate set is
+            # written down, and the rule needs the EFFECTIVE value on this side
+            # too. ``model_dump()`` matches how the entries' snapshots are read.
+            None if review.dag_structure_json is None else review.dag_structure_json.model_dump(),
+        ),
     )

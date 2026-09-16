@@ -23,8 +23,8 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from src.api.routes import causal as causal_module
-from src.api.routes.causal import (
+from src.api.routes.causal import pipelines as causal_module
+from src.api.routes.causal.pipelines import (
     _build_pipeline_input_parallel,
     _build_pipeline_input_sequential,
 )

@@ -104,8 +104,15 @@ pytestmark = pytest.mark.timeout(120)
 # OUTER floor IS a real regression: re-measure, do not lower the floor again (Phase 1's
 # own docstring instruction). Do NOT bundle a re-pin with an estimator change — that hits
 # all 12 gold-standard models and fail-closes /shap (backlog #43 blast-radius note).
+#
+# REMIBRUTINIB RE-PIN 2026-09-16 (a deliberate DGP change, not a regression): UAS7 now
+# follows disease_severity (dgp.clinical_severity, rho 0.4). The uncontrolled-CSU axis
+# pulls persistence UP while severity pulls it DOWN, so correlating them cancels part of
+# the signal. Paired on the faithful path (seed 42, n=20000, same box): rho 0 -> 0.7647,
+# rho 0.4 -> 0.7556, delta -0.0091. The pin moves by that DELTA (0.7751 - 0.0091), not to
+# the local absolute, because this box already read 0.7647 against the 0.7751 pin at rho 0.
 _PERSISTENCE_AUC_BASELINE = {
-    Brand.REMIBRUTINIB: 0.7751,
+    Brand.REMIBRUTINIB: 0.7660,
     Brand.FABHALTA: 0.7827,
     Brand.KISQALI: 0.7701,
 }

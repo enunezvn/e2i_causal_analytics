@@ -211,7 +211,22 @@ async def run_conversational_bridge(
                         "messages": _prepare_bridge_messages(query, history),
                         "session_id": bridge_session_id,
                     },
-                    config={"configurable": {"thread_id": f"bridge~{session_id}"}},
+                    config={
+                        "configurable": {
+                            "thread_id": f"bridge~{session_id}",
+                            # #2077: the tools belong to the REAL conversation, not
+                            # to the shadow. State and the contextvar keep the
+                            # shadow id (both persistence readers key on them), so
+                            # the tools' session travels on the invocation config —
+                            # LangGraph drops input keys that are not state
+                            # channels, and the AG-UI state schema is pinned.
+                            # LangGraph copies configurable into checkpoint
+                            # metadata; harmless here — create_e2i_chat_agent
+                            # compiles a FRESH in-process MemorySaver per call
+                            # (copilotkit.py:~4286), discarded with the graph.
+                            "tool_session_id": session_id,
+                        }
+                    },
                 ),
                 timeout=effective_timeout,
             )

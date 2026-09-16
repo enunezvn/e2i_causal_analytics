@@ -605,8 +605,10 @@ class TestOrchestratorTool:
 
     @pytest.mark.asyncio
     @patch("src.api.routes.chatbot_tools.get_orchestrator")
-    async def test_uses_provided_session_id(self, mock_get_orchestrator):
-        """Test that provided session ID is used."""
+    async def test_uses_the_bound_session_not_one_the_model_supplies(self, mock_get_orchestrator):
+        """#2077: the tool takes no session argument; the turn's binding is the source."""
+        from src.api.routes.chatbot_tools import reset_chat_session_id, set_chat_session_id
+
         mock_orchestrator = MagicMock()
         mock_orchestrator.run = AsyncMock(
             return_value={
@@ -618,16 +620,20 @@ class TestOrchestratorTool:
         )
         mock_get_orchestrator.return_value = mock_orchestrator
 
-        result = await orchestrator_tool.ainvoke(
-            {"query": "Test query", "session_id": "custom-session-123"}
-        )
+        token = set_chat_session_id("bound-session-123")
+        try:
+            result = await orchestrator_tool.ainvoke(
+                {"query": "Test query", "session_id": "custom-session-123"}
+            )
+        finally:
+            reset_chat_session_id(token)
 
         assert result["success"] is True
-        assert result["context"]["session_id"] == "custom-session-123"
+        assert result["context"]["session_id"] == "bound-session-123"
 
-        # Verify session_id was passed to orchestrator
+        # The model's guess never reaches the orchestrator.
         call_args = mock_orchestrator.run.call_args[0][0]
-        assert call_args["session_id"] == "custom-session-123"
+        assert call_args["session_id"] == "bound-session-123"
 
     @pytest.mark.asyncio
     @patch("src.api.routes.chatbot_tools.get_orchestrator")

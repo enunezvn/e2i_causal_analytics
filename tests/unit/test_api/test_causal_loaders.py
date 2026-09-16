@@ -1,4 +1,4 @@
-"""Unit tests for the shared _coerce_estimation_row helper in causal.py.
+"""Unit tests for the shared _coerce_estimation_row helper in causal/loaders.py.
 
 These tests verify the helper's exact semantics in isolation. The existing
 _load_agent_estimation_frame tests (test_causal_brands.py etc.) continue to
@@ -6,7 +6,7 @@ pass unchanged, proving P1 behavior is byte-for-byte preserved after the
 inline loop is replaced by a call to this helper.
 """
 
-from src.api.routes.causal import _coerce_estimation_row
+from src.api.routes.causal.loaders import _coerce_estimation_row
 
 
 def _row(**kw):

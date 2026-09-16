@@ -29,11 +29,11 @@ from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, StateGraph
-from langgraph.prebuilt import ToolNode
 
 from src.agents.factory import build_agent_roster_block
 from src.agents.multi_faceted import is_multi_faceted_facet_score
 from src.api.routes.chat_bridge import build_bridge_preamble, run_conversational_bridge
+from src.api.routes.chat_session_binding import SessionBoundToolNode
 from src.api.routes.chatbot_dspy import (
     CHATBOT_COGNITIVE_RAG_ENABLED,
     CHATBOT_DSPY_SYNTHESIS_ENABLED,
@@ -44,11 +44,7 @@ from src.api.routes.chatbot_dspy import (
     synthesize_response_dspy,
 )
 from src.api.routes.chatbot_state import ChatbotState, IntentType, create_initial_state
-from src.api.routes.chatbot_tools import (
-    E2I_CHATBOT_TOOLS,
-    reset_chat_session_id,
-    set_chat_session_id,
-)
+from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS
 from src.api.routes.chatbot_tracer import (
     ChatbotTraceContext,
     get_chatbot_tracer,
@@ -237,27 +233,6 @@ def _timed_node(name: str, target: Any) -> Any:
 
     timed.__name__ = f"timed_{name}"
     return timed
-
-
-class _SessionBoundToolNode:
-    """Run the tools with this turn's real session bound for them (#2064).
-
-    ToolNode invokes tools with the model's args only, so ``orchestrator_tool``
-    and ``tool_composer_tool`` cannot see ``state["session_id"]`` and used to
-    invent a ``chatbot-<ts>`` id instead. Binding it in the chat-session
-    contextvar — the channel AG-UI's execute() already sets — lets them use the
-    real conversation. The binding is reset when the tools finish.
-    """
-
-    def __init__(self, tool_node: ToolNode) -> None:
-        self._tool_node = tool_node
-
-    async def ainvoke(self, state: ChatbotState, config: Optional[RunnableConfig] = None) -> Any:
-        token = set_chat_session_id(state.get("session_id"))
-        try:
-            return await self._tool_node.ainvoke(state, config)
-        finally:
-            reset_chat_session_id(token)
 
 
 def _build_latency_span_payload(
@@ -484,8 +459,8 @@ Use tools proactively:
 - Use `clinical_context_tool` for a brand's REAL FDA-label indications, mechanism, pivotal endpoints, and competitor landscape (OpenFDA / ChEMBL / ClinicalTrials.gov / PubMed) — call it for any label / indication / mechanism / competitive-landscape question, then frame it commercially
 - Use `document_retrieval_tool` for searching the knowledge base
 - Use `conversation_memory_tool` to reference previous conversation context
-- BREAKDOWN GUIDANCE: For NRx/TRx/NBRx/TRx-share/conversion-rate patient-segment breakdowns, call `kpi_calculate_tool` once per bucket of ONE axis and present the results as a table. Axes: `segment` ∈ {low_severity, medium_severity, high_severity}; `therapy_line` ∈ {0,1,2,3}; and FOR REMIBRUTINIB ONLY (volume KPIs and share, NOT conversion rate) `biologic` ∈ {naive, experienced} and `ige_tier` ∈ {low, medium, high}. A volume axis's buckets sum to the head-line KPI, so the breakdown reconciles with the total (rates/shares don't sum — their numerators/denominators do). When the user names a period ("last year", "Q1 2025"), ALWAYS pass `window` too — it composes with `segment`/`therapy_line` for TRx/NRx/NBRx, TRx share, and conversion rate. Use exactly one axis per breakdown — they are mutually exclusive.
-- HONESTY GUARD: Clinical context is background framing only — never present a clinical sub-population as a data breakdown unless a tool actually returned per-bucket values. Biologic status (`biologic`) and IgE tier (`ige_tier`) are REAL breakdown axes for REMIBRUTINIB ONLY; for Kisqali/Fabhalta `kpi_calculate_tool` returns an error because the data is NULL by design — say it is unavailable for that brand and do NOT fabricate a split or guess. The real breakdown axes are severity tier (`segment`), line-of-therapy (`therapy_line`), biologic status and IgE tier (Remibrutinib only), plus geographic `region`. TRx Share is the brand's share of the TRACKED PORTFOLIO's prescriptions (Fabhalta + Kisqali + Remibrutinib, cross-indication) — NOT market share vs external competitors; competitor brands (e.g. Xolair, Dupixent) are not in the data model, so NEVER attribute the share complement to named competitors.
+- BREAKDOWN GUIDANCE: For NRx/TRx/NBRx/conversion-rate patient-segment breakdowns, call `kpi_calculate_tool` once per bucket of ONE axis and present the results as a table. Axes: `segment` ∈ {low_severity, medium_severity, high_severity}; `therapy_line` ∈ {0,1,2,3}; and FOR REMIBRUTINIB ONLY (volume KPIs, NOT conversion rate) `biologic` ∈ {naive, experienced} and `ige_tier` ∈ {low, medium, high}. TRx share is NOT defined on a patient axis (each patient is on one tracked brand, so a per-bucket portfolio share mixes indications; the tool refuses it): for a "share by tier / line / biologic status / IgE tier" ask, call TRx once per bucket and present each bucket's TRx with its % of the brand's TRx total, labelled the within-brand mix. A volume axis's buckets sum to the head-line KPI, so the breakdown reconciles with the total (rates don't sum — their numerators/denominators do). When the user names a period ("last year", "Q1 2025"), ALWAYS pass `window` too — it composes with `segment`/`therapy_line` for TRx/NRx/NBRx and conversion rate. Use exactly one axis per breakdown — they are mutually exclusive.
+- HONESTY GUARD: Clinical context is background framing only — never present a clinical sub-population as a data breakdown unless a tool actually returned per-bucket values. Biologic status (`biologic`) and IgE tier (`ige_tier`) are REAL breakdown axes for REMIBRUTINIB ONLY; for Kisqali/Fabhalta `kpi_calculate_tool` returns an error because the data is NULL by design — say it is unavailable for that brand and do NOT fabricate a split or guess. The real breakdown axes are severity tier (`segment`), line-of-therapy (`therapy_line`), biologic status and IgE tier (Remibrutinib only), plus geographic `region` — for TRx share only `region` applies, and a within-brand mix computed from TRx buckets is never a share. TRx Share is the brand's share of the TRACKED PORTFOLIO's prescriptions (Fabhalta + Kisqali + Remibrutinib, cross-indication) — NOT market share vs external competitors; competitor brands (e.g. Xolair, Dupixent) are not in the data model, so NEVER attribute the share complement to named competitors.
 - ROI DISPERSION (#1532): the ROI headline is a pooled point estimate and carries NO interval — never invent one. When the response includes `temporal_variability_band`, present each slice's band as "the range of its monthly ROI values over the past 12 months" with its `n` — it measures recent temporal variability, NOT a confidence interval and NOT uncertainty about the current value; for slices with `band_suppressed: true`, state only the n and that the band is suppressed.
 - SCALE GUARD (#1640): every KPI figure arrives with a `measure_basis` naming the substrate it was computed from. TWO FIGURES ARE COMPARABLE ONLY IF THEIR `measure_basis.comparison_key` MATCHES — that field, not `substrate`. They differ on purpose: a materialized history series is READ from `kpi_history` (its `substrate`) but RESTS on whatever the backfill drew it from (`materialized_from`, reduced to tables in `comparison_key`). Comparing on `substrate` would call a TRx history and an ROI history comparable because both are read from the same table, and would wrongly fence ROI history against stored ROI when both rest on `business_metrics`. If `measure_basis.mixed_sources` is true the series spans more than one substrate and is comparable with NOTHING — say so rather than comparing it. `kpi_calculate_tool` computes volume KPIs from the `treatment_events` ledger; `e2i_data_query_tool(query_type='kpi')` returns stored `business_metrics` rows, whose `value` is a MODELED market-scale level — measured, the national business_metrics TRx total is ~73x the trailing-30-day event count for the same brand. They are different quantities sharing a name. NEVER present one as a check, correction, total, or share-of for the other; never divide or sum across them; and never call the gap a discontinuity or a data error. If an answer needs both, give each its own row with its substrate stated, and say plainly that they measure different things. When a figure carries no `measure_basis`, treat it as NOT comparable rather than assuming it agrees.
 
@@ -2820,7 +2795,7 @@ def create_e2i_chatbot_graph() -> Any:
     )  # Routes complex queries to specialized agents
     add_timed_node("clarify", clarify_node)  # #1407 multi-turn ask-back
     add_timed_node("generate", generate_node)
-    add_timed_node("tools", _SessionBoundToolNode(ToolNode(E2I_CHATBOT_TOOLS)))
+    add_timed_node("tools", SessionBoundToolNode(E2I_CHATBOT_TOOLS))
     add_timed_node("finalize", finalize_node)
 
     # Set entry point

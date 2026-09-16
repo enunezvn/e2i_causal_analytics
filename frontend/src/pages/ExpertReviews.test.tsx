@@ -235,6 +235,12 @@ const STRUCTURE: {
   outcome_nodes: ['y'],
 };
 
+/** The structure a concurrent run advanced the review to: STRUCTURE plus `w`. */
+const STRUCTURE_ADVANCED: typeof STRUCTURE = {
+  ...STRUCTURE,
+  nodes: ['t', 'y', 'c', 'w'],
+};
+
 // Typed so the literal verdicts stay `AssessmentVerdict` when the fixture is
 // handed to the typed queue mock (untyped, they widen to `string`).
 const ASSESSMENT: AgentAssessment = {
@@ -428,6 +434,7 @@ const DETAIL: ExpertReviewDetailResponse = {
     { review_id: 'rev-rejected', approval_status: 'rejected', created_at: '2026-07-13T10:00:00Z', reviewer_name: 'Dr. No' },
     { review_id: 'rev-older', approval_status: 'pending', created_at: '2026-07-01T10:00:00Z' },
   ],
+  versions: [],
 };
 
 describe('ExpertReviews linked review (lane 1)', () => {
@@ -653,5 +660,216 @@ describe('ExpertReviews linked review (lane 1)', () => {
     render(<ExpertReviews />, { wrapper: createWrapper('/expert-reviews?review=%20%20') });
     expect(screen.queryByTestId('linked-review')).not.toBeInTheDocument();
     expect(vi.mocked(useExpertReview)).not.toHaveBeenCalled();
+  });
+});
+
+// #1991 debt 3 — the estimand's version timeline reaches the queue: a
+// per-review version count, the summary's `superseded` partition member, and
+// the structure diff of the newest version inside the expanded row.
+describe('ExpertReviews estimand versions (#1991 debt 3)', () => {
+  it('shows a Versions column, defaulting to 1 for a review with no count', () => {
+    mockQueue({
+      reviews: [
+        { ...mockPending.reviews[0], review_id: 'rev-multi', version_count: 3, last_changed_at: '2026-06-09T00:00:00Z' },
+        { ...mockPending.reviews[0], review_id: 'rev-single' },
+      ],
+      total: 2,
+    });
+    render(<ExpertReviews />, { wrapper: createWrapper() });
+    expect(screen.getByRole('columnheader', { name: 'Versions' })).toBeInTheDocument();
+    const rows = screen.getAllByRole('row');
+    expect(within(rows[1]).getByText('3')).toBeInTheDocument();
+    // last_changed_at is later than created_at, so the row says WHEN it last moved.
+    expect(within(rows[1]).getByText('2026-06-09')).toBeInTheDocument();
+    expect(within(rows[2]).getByText('1')).toBeInTheDocument();
+    expect(within(rows[2]).queryByText('2026-06-09')).toBeNull();
+  });
+
+  it('counts superseded reviews in the summary badges', () => {
+    vi.mocked(useReviewSummary).mockReturnValue({
+      data: { pending: 3, approved: 1, rejected: 0, superseded: 2, expired: 0, expiring_soon: 1 },
+      isError: false,
+    } as never);
+    mockQueue({ reviews: [], total: 0 });
+    render(<ExpertReviews />, { wrapper: createWrapper() });
+    expect(screen.getByText('Superseded: 2')).toBeInTheDocument();
+  });
+
+  it('says the version history failed to load instead of silently dropping the diff', async () => {
+    // The Versions cell still says 3, so a missing diff must be explained: an
+    // operator cannot otherwise tell "one version" from "the read failed".
+    vi.mocked(useExpertReview).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: { status: 503, message: 'Expert-review store unavailable. Retry shortly.' },
+    } as never);
+    renderWithRow({ dag_structure_json: STRUCTURE, version_count: 3 });
+    await userEvent.setup().click(screen.getByRole('button', { name: /^review$/i }));
+    expect(await screen.findByText('Version history unavailable')).toBeInTheDocument();
+    expect(screen.getByText('Expert-review store unavailable. Retry shortly.')).toBeInTheDocument();
+  });
+
+  it('stays quiet about a failed history read when the review has only one version', async () => {
+    vi.mocked(useExpertReview).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+      error: { status: 503, message: 'Expert-review store unavailable. Retry shortly.' },
+    } as never);
+    renderWithRow({ dag_structure_json: STRUCTURE, version_count: 1 });
+    await userEvent.setup().click(screen.getByRole('button', { name: /^review$/i }));
+    expect(await screen.findByTestId('causal-dag')).toBeInTheDocument();
+    // A single version has no diff to lose, so the failure costs the operator nothing.
+    expect(screen.queryByText('Version history unavailable')).toBeNull();
+  });
+
+  it("renders the CURRENT version's diff in the expanded row from the detail response", async () => {
+    vi.mocked(useExpertReview).mockReturnValue({
+      data: {
+        review: { ...mockPending.reviews[0], approval_status: 'pending', dag_structure_json: STRUCTURE },
+        history: [],
+        current_version_id: 'v2',
+        versions: [
+          { version_id: 'v1', dag_version_hash: 'aaaa1111', changes: null },
+          {
+            version_id: 'v2',
+            dag_version_hash: 'bbbb2222',
+            changes: {
+              nodes_added: ['W'],
+              nodes_removed: [],
+              edges_added: [['W', 'T']],
+              edges_removed: [],
+              adjustment_sets_added: [],
+              adjustment_sets_removed: [],
+              is_changed: true,
+            },
+          },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    } as never);
+    renderWithRow({ dag_structure_json: STRUCTURE, version_count: 2 });
+    await userEvent.setup().click(screen.getByRole('button', { name: /^review$/i }));
+    expect(await screen.findByText('Changed since the previous version')).toBeInTheDocument();
+    expect(screen.getByText('+ W')).toBeInTheDocument();
+    expect(vi.mocked(useExpertReview)).toHaveBeenCalledWith('rev-1');
+  });
+
+  it('binds the graph, the diff and the resolve pair to ONE snapshot when the queue and the detail have skewed', async () => {
+    // The queue row was read before a concurrent run advanced the review. Once
+    // the detail has loaded it is the authority on all three: the graph the
+    // reviewer sees, the delta they are asked to approve, and the version pair
+    // the resolve request echoes back to the pair guard. Taking the graph or
+    // the form from the stale queue item would let an operator approve a
+    // structure they never saw.
+    const mutate = vi.fn();
+    vi.mocked(useResolveReview).mockReturnValue(mockResolveReturn({ mutate }) as never);
+    vi.mocked(useExpertReview).mockReturnValue({
+      data: {
+        review: {
+          ...mockPending.reviews[0],
+          approval_status: 'pending',
+          // BOTH halves differ from the queue item's: the detail's structure has
+          // a fourth node, and the DAG hash covers nodes and edges, so it cannot
+          // be the queue's hash.
+          dag_version_hash: 'h2bbbb-detail',
+          adjustment_set_hash: 'zzzz-detail',
+          dag_structure_json: STRUCTURE_ADVANCED,
+        },
+        history: [],
+        // NOT the tail: the named entry is the middle one, so the diff assertion
+        // below pins SELECTION BY ID, not "the last version".
+        current_version_id: 'v2',
+        versions: [
+          { version_id: 'v1', dag_version_hash: 'h1aaaa', adjustment_set_hash: 'wwww-queue', changes: null },
+          {
+            version_id: 'v2',
+            dag_version_hash: 'h2bbbb-detail',
+            adjustment_set_hash: 'zzzz-detail',
+            changes: {
+              nodes_added: ['W'],
+              nodes_removed: [],
+              edges_added: [],
+              edges_removed: [],
+              adjustment_sets_added: [['W']],
+              adjustment_sets_removed: [],
+              is_changed: true,
+            },
+          },
+          // The orphan a lost compare-and-set left after the current version.
+          {
+            version_id: 'v3',
+            dag_version_hash: 'h3cccc-orphan',
+            adjustment_set_hash: 'yyyy-orphan',
+            changes: {
+              nodes_added: ['ORPHAN'],
+              nodes_removed: ['W'],
+              edges_added: [],
+              edges_removed: [],
+              adjustment_sets_added: [],
+              adjustment_sets_removed: [['W']],
+              is_changed: true,
+            },
+          },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    } as never);
+    renderWithRow({
+      dag_version_hash: 'h1aaaa',
+      adjustment_set_hash: 'wwww-queue',
+      dag_structure_json: STRUCTURE,
+      version_count: 3,
+    });
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /^review$/i }));
+
+    // the DETAIL's graph (4 nodes), not the queue item's (3)
+    const dag = await screen.findByTestId('causal-dag');
+    expect(dag).toHaveAttribute('data-nodes', '4');
+    // the CURRENT version's delta, not the orphan tail's
+    expect(screen.getByText('Changed since the previous version')).toBeInTheDocument();
+    expect(screen.getByText('+ W')).toBeInTheDocument();
+    expect(screen.queryByText('+ ORPHAN')).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: /approve/i }));
+    expect(mutate).toHaveBeenCalledTimes(1);
+    const [vars] = mutate.mock.calls[0];
+    // the DETAIL's pair, both halves — never the queue item's
+    expect(vars.body.dag_version_hash).toBe('h2bbbb-detail');
+    expect(vars.body.adjustment_set_hash).toBe('zzzz-detail');
+  });
+
+  it('falls back to the queue item for BOTH the graph and the form until the detail loads', async () => {
+    // Before the detail arrives the only consistent pair the page holds is the
+    // queue item's own. Graph and form come from it TOGETHER, and no diff is
+    // shown -- the timeline that would name the current version has not loaded.
+    const mutate = vi.fn();
+    vi.mocked(useResolveReview).mockReturnValue(mockResolveReturn({ mutate }) as never);
+    vi.mocked(useExpertReview).mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isError: false,
+    } as never);
+    renderWithRow({
+      dag_version_hash: 'h1aaaa',
+      adjustment_set_hash: 'wwww-queue',
+      dag_structure_json: STRUCTURE,
+      version_count: 2,
+    });
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: /^review$/i }));
+    const dag = await screen.findByTestId('causal-dag');
+    expect(dag).toHaveAttribute('data-nodes', '3');
+    expect(screen.queryByText('Changed since the previous version')).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: /approve/i }));
+    const [vars] = mutate.mock.calls[0];
+    expect(vars.body.adjustment_set_hash).toBe('wwww-queue');
   });
 });

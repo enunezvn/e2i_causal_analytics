@@ -139,13 +139,22 @@ async def index_operational_corpus(
         event_type: a VALID ``memory_event_type`` value (default 'system_event').
         agent_name: a VALID ``e2i_agent_name`` value (default 'corpus_ingestion',
             added in migration 041).
-        session_id: optional shared session id (one is generated if omitted) so
-            a batch is traceable/removable.
+        session_id: the CALLER's real chat session, forwarded verbatim, or
+            ``None`` (the default, and what the beat job passes) -- NEVER
+            generated here. Until #2117 a missing session was replaced by a
+            fresh uuid so "a batch is traceable", which stored a session that
+            belongs to no conversation on every row. The batch is traceable
+            instead through ``raw_content.ingestion_batch_id`` below; nothing
+            in this module reads the session column (dedup keys on
+            ``description`` + ``agent_name`` in ``_existing_corpus_descriptions``,
+            reconciliation on ``memory_id`` in ``_plan_corpus_reconciliation``).
 
     Returns:
         The inserted episodic ``memory_id``s.
     """
-    sid = session_id or str(uuid.uuid4())
+    # A batch identity is legitimately minted (it names THIS call, not a
+    # conversation); it lives only in raw_content, never in the session column.
+    batch_id = str(uuid.uuid4())
     inserted: list[str] = []
     for text, brand, region in rows:
         mem = EpisodicMemoryInput(
@@ -153,10 +162,18 @@ async def index_operational_corpus(
             description=text,
             agent_name=agent_name,
             e2i_refs=E2IEntityReferences(brand=brand, region=region),
+            raw_content={"ingestion_batch_id": batch_id},
         )
-        mid = await insert_episodic_memory_with_text(memory=mem, text_to_embed=text, session_id=sid)
+        mid = await insert_episodic_memory_with_text(
+            memory=mem, text_to_embed=text, session_id=session_id
+        )
         inserted.append(mid)
-    logger.info("indexed %d operational-corpus rows (session=%s)", len(inserted), sid)
+    logger.info(
+        "indexed %d operational-corpus rows (ingestion_batch_id=%s, session=%s)",
+        len(inserted),
+        batch_id,
+        session_id,
+    )
     return inserted
 
 

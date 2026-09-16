@@ -75,7 +75,7 @@ _TRIGGER_EDGES: Tuple[Tuple[str, str, List[str]], ...] = (
 # confounded effects for five commercial levers on the patient cohort
 # (copay_support / psp_enrolled / rep_detailing_high / sample_dropped /
 # trigger_accepted — the treatment_arm.ARM_REGISTRY SSOT), and
-# ``_CAUSAL_DATASET_SPECS['patient_journeys']`` (src/api/routes/causal.py)
+# ``_CAUSAL_DATASET_SPECS['patient_journeys']`` (src/api/routes/causal/datasets.py)
 # ALREADY allowlists every arm as a treatment AND its backdoor confounders. But
 # the discovery leaderboard enumerates ONLY (treatment, outcome) pairs present in
 # ``causal_paths`` (``_discover_candidate_questions``), and until now only
@@ -144,10 +144,12 @@ N_COMM_ARM_ROWS = len(_COMM_ARM_EDGES) * len(_BRANDS)
 # NEGATIVE band (axis=1 -> more discontinuation -> lower persistence, mirroring
 # _COMMERCIAL_EDGES competitor_activity's negative bands); Remibrutinib is INVERTED
 # (2026-07-28 user decision) — uncontrolled-CSU patients are stickier, so a POSITIVE band
-# (axis=1 -> higher persistence). Backdoor = disease_severity is NOT de-confounding (each axis is drawn
-# independent of severity — the naive contrast is already unbiased) but a strong
-# PROGNOSTIC precision covariate for ANCOVA-style variance reduction (the nba_triggers
-# baseline_covariate rationale). Content-addressed (scp_f*) -> idempotent targeted
+# (axis=1 -> higher persistence). Backdoor = disease_severity. For Fabhalta and Kisqali the
+# axis is drawn independent of severity, so there it is a PROGNOSTIC precision covariate
+# (ANCOVA-style variance reduction, the nba_triggers baseline_covariate rationale). For
+# Remibrutinib it is a TRUE CONFOUNDER since 2026-09-16: UAS7 follows severity
+# (dgp.clinical_severity, rho 0.4), so the naive contrast is biased (+0.072 on the live
+# cohort vs a planted +0.152) and the severity-adjusted estimate recovers it (+0.154). Content-addressed (scp_f*) -> idempotent targeted
 # upsert, no full reseed; a later reseed cannot silently rewrite it. Fabhalta's token
 # ("fab") + band reproduce its shipped prod path_id + effect bit-for-bit.
 #   (brand, token, treatment, outcome, confounders_controlled, band_lo, band_hi)

@@ -11,7 +11,7 @@
  * `2.4s / 68% / 87%` stat cards. These tests pin that honesty.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, expectTypeOf } from 'vitest';
 import { render, screen, waitFor, act, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -25,6 +25,7 @@ import {
   type SimulationResponse,
   type SimulationDetailResponse,
 } from '@/types/digital-twin';
+import type { components } from '@/types/generated/api';
 
 // Mock the digital twin hooks (including useSimulation for history-detail fetch)
 vi.mock('@/hooks/api/use-digital-twin', () => ({
@@ -146,6 +147,7 @@ const mockDetail: SimulationDetailResponse = {
     top_segments: [],
   },
   intervention_config: {},
+  subgroups_basis: 'per_twin',
   completed_at: '2026-06-04T10:05:00Z',
 };
 
@@ -700,6 +702,91 @@ describe('DigitalTwin', () => {
     });
     render(<DigitalTwin />, { wrapper: createWrapper() });
     expect(screen.getByText(/^SYNTHETIC$/)).toBeInTheDocument();
+  });
+
+  // The confidence badge's title is selected by the result's data_provenance (#2104):
+  // on the cohort path the evidence is the cohort rows, so more twins cannot raise it;
+  // on the synthetic path the training frame is drawn from the twins, so it follows
+  // the twin sample. Fixture confidence 0.83 -> "Confidence: 83%".
+  it('explains on a cohort-path confidence badge that more twins do not raise it (#2104)', () => {
+    (useRunSimulation as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      isPending: false,
+      data: { ...mockRunResult, data_provenance: 'cohort_estimated_synthetic_gold_v1' },
+      isSuccess: true,
+      isError: false,
+    });
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+    expect(screen.getByText(/Confidence: 83%/)).toHaveAttribute(
+      'title',
+      expect.stringMatching(/cohort rows.*more twins does not raise/i)
+    );
+  });
+
+  it('explains on a synthetic-path confidence badge that it follows the twin sample (#2104)', () => {
+    (useRunSimulation as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      isPending: false,
+      data: { ...mockRunResult, data_provenance: 'synthetic_uplift_v1' },
+      isSuccess: true,
+      isError: false,
+    });
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+    const title = screen.getByText(/Confidence: 83%/).getAttribute('title') ?? '';
+    expect(title).toMatch(/twins the estimator fit on.*follows the twin sample/i);
+    expect(title).not.toMatch(/more twins does not raise/i);
+  });
+
+  it('keeps the confidence badge explanation neutral when the provenance is unknown (#2104)', () => {
+    (useRunSimulation as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      isPending: false,
+      data: { ...mockRunResult, data_provenance: null },
+      isSuccess: true,
+      isError: false,
+    });
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+    const title = screen.getByText(/Confidence: 83%/).getAttribute('title') ?? '';
+    expect(title).toMatch(/Confidence blends the evidence behind this estimate/);
+    expect(title).not.toMatch(/more twins does not raise|follows the twin sample/i);
+  });
+
+  // A STORED simulation (the detail carries `subgroups_basis`; a fresh run does not) shows
+  // the score persisted when it ran, computed by the heuristic in force at that time — the
+  // current-heuristic wording above would be false for it (#2104, codex r2).
+  it('says a stored legacy detail carries the score of its time, scored on twin count (#2104)', async () => {
+    await openHistoryDetail({
+      ...mockDetail,
+      data_provenance: 'cohort_estimated_synthetic_gold_v1',
+      subgroups_basis: 'twin_weighted_legacy',
+    });
+    const title = screen.getByText(/Confidence: 83%/).getAttribute('title') ?? '';
+    expect(title).toMatch(/score stored when this simulation ran.*heuristic in force at that time/i);
+    expect(title).toMatch(/scored the evidence on the generated twin count/i);
+    expect(title).not.toMatch(/more twins does not raise/i);
+    // Its evidence term WAS the twin count: no training-row claim may open the sentence.
+    expect(title).not.toMatch(/rows the estimator fit on/i);
+  });
+
+  it('says a stored cohort_rows detail carries the score of its time, without the invariance claim (#2104)', async () => {
+    await openHistoryDetail({
+      ...mockDetail,
+      data_provenance: 'cohort_estimated_synthetic_gold_v1',
+      subgroups_basis: 'cohort_rows',
+    });
+    const title = screen.getByText(/Confidence: 83%/).getAttribute('title') ?? '';
+    expect(title).toMatch(/score stored when this simulation ran.*heuristic in force at that time/i);
+    expect(title).not.toMatch(/generated twin count/i);
+    expect(title).not.toMatch(/more twins does not raise/i);
+    expect(title).not.toMatch(/rows the estimator fit on/i);
+  });
+
+  it('pins the handwritten subgroups_basis union to the generated OpenAPI contract (#2104)', () => {
+    // The API client imports the handwritten type, so tsc alone never compares the two;
+    // this type-level assertion does (checked by tsc, a no-op at runtime).
+    expectTypeOf<SimulationDetailResponse['subgroups_basis']>().toEqualTypeOf<
+      components['schemas']['SimulationDetailResponse']['subgroups_basis']
+    >();
   });
 
   it('does NOT show a SYNTHETIC badge for a non-synthetic provenance', () => {

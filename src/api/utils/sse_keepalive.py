@@ -52,8 +52,9 @@ having none, because without it *every* long turn is severed, blocked loop or no
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
-from typing import AsyncGenerator, AsyncIterable, TypeVar
+from typing import AsyncGenerator, AsyncIterable, AsyncIterator, TypeVar
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,20 @@ SSEFrame = str | bytes | memoryview
 T = TypeVar("T", bound=SSEFrame)
 
 
+async def _pull_next(iterator: AsyncIterator[T]) -> T:
+    """One frame from ``iterator``, as a real coroutine.
+
+    ``__anext__`` is typed (and, for a hand-written iterator, may be
+    implemented) as returning an arbitrary awaitable, while
+    ``loop.create_task`` — unlike ``ensure_future`` — accepts only a coroutine
+    and ``TypeError``s on anything else. Wrapping keeps the tolerance
+    ``ensure_future`` gave us, which #1669's third-party ``body_iterator``
+    call site depends on. ``StopAsyncIteration`` propagates out of here
+    unchanged; only ``StopIteration`` is special-cased inside coroutines.
+    """
+    return await iterator.__anext__()
+
+
 async def with_sse_keepalive(
     source: AsyncIterable[T],
     interval_seconds: float = SSE_KEEPALIVE_INTERVAL_SECONDS,
@@ -141,13 +156,40 @@ async def with_sse_keepalive(
         ``__anext__`` keeps running across as many keepalives as it needs.
         Cancellation happens only when the consumer goes away, where tearing the
         graph run down is the desired behaviour (it frees the heavy-compute slot).
+
+        Every frame pull runs in ONE shared context (#2100). Pulling a frame
+        needs a task, and a task copies the current context at creation and
+        throws its writes away when it finishes — so each pull used to start
+        from the request context again, and every contextvar the body set while
+        producing one frame was invisible to the code producing the next. The
+        body here is a whole chat turn: ``execute()`` binds the session, the run
+        id, the user's verbatim query and the LLM attribution before its first
+        yield, and the graph nodes that read them run on a later pull. That is
+        what silently broke — #2064 for the session id, then #2100 for chat
+        usage attribution, conversation ownership and per-message token counts
+        (production emitted no ``surface='chat'`` usage row between 2026-08-16
+        and the fix). Before the keepalive existed the whole body ran in the
+        request task and none of this arose; one shared context restores those
+        semantics instead of asking every caller to re-bind.
+
+        It is a *copy*, so nothing the body writes leaks back to the request
+        task or to another request. Re-entering it is safe because only one
+        pull task is ever live: the loop below waits on the SAME task across
+        keepalive timeouts and creates the next one only after the previous
+        finished.
+
+        Deliberately unchanged: frames still pass through untouched and in
+        order, and a timeout still never cancels the pending pull.
     """
     iterator = source.__aiter__()
+    frame_context = contextvars.copy_context()
     pending: asyncio.Task[T] | None = None
     try:
         while True:
             if pending is None:
-                pending = asyncio.ensure_future(iterator.__anext__())
+                pending = asyncio.get_running_loop().create_task(
+                    _pull_next(iterator), context=frame_context
+                )
 
             done, _ = await asyncio.wait({pending}, timeout=interval_seconds)
 

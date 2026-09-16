@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 class ExplanationContext:
     """Context retrieved from all memory systems for explanation generation."""
 
-    session_id: str
+    session_id: Optional[str]
     working_memory: List[Dict[str, Any]] = field(default_factory=list)
     episodic_context: List[Dict[str, Any]] = field(default_factory=list)
     semantic_context: Dict[str, Any] = field(default_factory=dict)
@@ -132,7 +132,7 @@ class ExplanationMemoryHooks:
 
     async def get_context(
         self,
-        session_id: str,
+        session_id: Optional[str],
         query: str,
         brand: Optional[str] = None,
         region: Optional[str] = None,
@@ -142,7 +142,8 @@ class ExplanationMemoryHooks:
         Retrieve context from all three memory systems.
 
         Args:
-            session_id: Session identifier for working memory lookup
+            session_id: Session identifier for working memory lookup; None
+                skips the session-keyed read (#2099)
             query: Query text for episodic similarity search
             brand: Optional brand filter for episodic search
             region: Optional region filter for episodic search
@@ -167,8 +168,11 @@ class ExplanationMemoryHooks:
         # 3. Get semantic memory (entity relationships)
         context.semantic_context = await self._get_semantic_context(query)
 
+        # A session-less run still reads episodic/semantic memory, so this line
+        # stays -- it just stops saying "session None" (#2099).
+        scope = f"session {session_id}" if session_id else "a session-less run"
         logger.info(
-            f"Retrieved context for session {session_id}: "
+            f"Retrieved context for {scope}: "
             f"working={len(context.working_memory)}, "
             f"episodic={len(context.episodic_context)}, "
             f"semantic_entities={len(context.semantic_context.get('entities', []))}"
@@ -178,11 +182,15 @@ class ExplanationMemoryHooks:
 
     async def _get_working_memory_context(
         self,
-        session_id: str,
+        session_id: Optional[str],
         limit: int = 10,
     ) -> List[Dict[str, Any]]:
-        """Retrieve recent conversation from working memory."""
-        if not self.working_memory:
+        """Retrieve recent conversation from working memory.
+
+        Without a session there is no conversation to retrieve: reading under a
+        minted id only ever returns empty, so return empty directly (#2099).
+        """
+        if session_id is None or not self.working_memory:
             return []
 
         try:
@@ -416,7 +424,7 @@ class ExplanationMemoryHooks:
 
     async def store_explanation(
         self,
-        session_id: str,
+        session_id: Optional[str],
         explanation: Dict[str, Any],
         brand: Optional[str] = None,
         region: Optional[str] = None,
@@ -577,7 +585,7 @@ async def contribute_to_memory(
         result: ExplainerOutput dictionary
         state: ExplainerState dictionary
         memory_hooks: Optional memory hooks instance (creates new if not provided)
-        session_id: Session identifier (generates UUID if not provided)
+        session_id: Session identifier; None records an honest NULL (#2076)
         brand: Optional brand context
         region: Optional region context
 
@@ -586,13 +594,16 @@ async def contribute_to_memory(
         - episodic_stored: 1 if explanation stored, 0 otherwise
         - working_cached: 1 if cached, 0 otherwise
     """
-    import uuid
-
     if memory_hooks is None:
         memory_hooks = get_explanation_memory_hooks()
 
     if session_id is None:
-        session_id = state.get("session_id") or str(uuid.uuid4())
+        # No mint (#2076). An absent session id stays None: the episodic writer
+        # coerces it to an honest NULL for the nullable ``session_id`` column
+        # rather than recording a uuid that belongs to no conversation. A falsy
+        # state value normalises to None too, so the session-KEYED Redis writes
+        # below are skipped instead of keyed on an empty string.
+        session_id = state.get("session_id") or None
 
     counts = {
         "episodic_stored": 0,
@@ -618,9 +629,12 @@ async def contribute_to_memory(
     }
 
     # 1. Cache in working memory
-    cached = await memory_hooks.cache_explanation(session_id, explanation_data)
-    if cached:
-        counts["working_cached"] = 1
+    # Skipped without a session (#2076): the cache key embeds the session id, so a
+    # session-less write would land under a key no reader can ever ask for.
+    if session_id is not None:
+        cached = await memory_hooks.cache_explanation(session_id, explanation_data)
+        if cached:
+            counts["working_cached"] = 1
 
     # 2. Store in episodic memory
     memory_id = await memory_hooks.store_explanation(

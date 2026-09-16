@@ -1,7 +1,7 @@
 """Shared statistical helpers for the causal pipeline.
 
 #27: the causal pipeline hardcoded a 95% CI (+/- 1.96 sigma) in several places
-(``src/api/routes/causal.py`` consensus CI, the CATE estimator fallback, the
+(``src/api/routes/causal/pipelines.py`` consensus CI, the CATE estimator fallback, the
 hierarchical segment-CATE normal-approximation CIs) without ever exposing the
 confidence level, so the frontend could not honestly label its intervals. This
 module centralizes the z-score so the magic number lives in ONE place.

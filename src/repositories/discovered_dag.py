@@ -32,7 +32,6 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Dict, List, Mapping, Optional, cast
-from uuid import UUID
 
 import numpy as np
 import pandas as pd
@@ -46,6 +45,7 @@ from src.repositories.provenance import (
     apply_provenance_filter,
     deployment_includes_synthetic,
 )
+from src.utils.session_ids import coerce_session_uuid
 from src.utils.type_helpers import parse_supabase_rows
 
 logger = logging.getLogger(__name__)
@@ -108,12 +108,22 @@ def resolve_frame_provenance(frame: Optional[pd.DataFrame], state: Mapping[str, 
 
 
 def _as_uuid_str(value: Any) -> Optional[str]:
+    """The session uuid for the uuid-typed ``discovered_dags.session_id`` column.
+
+    #2116: the chat session reaches this row RAW. On the plain routes that is
+    the composite ``{user}~{session}``, which a bare ``UUID()`` parse turned
+    into ``None`` -- while discovery and the episodic writer both recover the
+    trailing session uuid from the same id, so the DAG row was un-joinable to
+    the episodic row by session. The shared coercion returns a bare uuid in
+    canonical form (an uppercase or unhyphenated spelling is canonicalised, and
+    then also kept in ``metadata.session_id_raw``), recovers the trailing uuid
+    of a composite (``~bridge`` too) and yields ``None`` for a malformed id
+    rather than mis-associating it.
+    """
     if value is None or value == "":
         return None
-    try:
-        return str(UUID(str(value)))
-    except (ValueError, AttributeError, TypeError):
-        return None
+    coerced = coerce_session_uuid(value)
+    return str(coerced) if coerced is not None else None
 
 
 def _matrix_or_none(matrix: Any) -> Optional[List[List[int]]]:
@@ -218,7 +228,10 @@ def build_discovered_dag_payload(
         "success": bool(discovery_result.success),
         "algorithm_agreement": discovery_result.algorithm_agreement,
     }
-    if session_id and session_uuid is None:
+    # Keep the raw id visible whenever the column cannot hold it as given: a
+    # non-uuid id (column NULL) and, since #2116, a composite whose user
+    # segment the column loses when only the session uuid is stored.
+    if session_id and str(session_id) != session_uuid:
         metadata["session_id_raw"] = str(session_id)
 
     algorithm_runs = [

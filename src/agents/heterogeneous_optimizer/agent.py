@@ -173,8 +173,14 @@ class HeterogeneousOptimizerAgent:
         # Validate input
         self._validate_input(input_data)
 
-        # Generate session ID if not provided
-        session_id = input_data.get("session_id") or str(uuid.uuid4())
+        # No session is minted here (#2099). The memory path takes the caller's
+        # session or None -- an invented uuid would key the working-memory read
+        # on a conversation that does not exist and land in
+        # episodic_memories.session_id as an identity no caller can match. The
+        # two tracers do need a per-run handle, so they get their own run id
+        # below; neither needs that handle to claim to be a session.
+        session_id = input_data.get("session_id") or None
+        run_id = session_id or str(uuid.uuid4())
 
         # Retrieve memory context (if enabled)
         memory_context = None
@@ -200,7 +206,7 @@ class HeterogeneousOptimizerAgent:
         # the frame's lifetime is exactly the graph run.
         initial_state = self._build_initial_state(input_data, session_id, memory_context)
         try:
-            return await self._execute_workflow(input_data, initial_state, session_id)
+            return await self._execute_workflow(input_data, initial_state, session_id, run_id)
         finally:
             release_frame(initial_state.get("tier0_frame_ref"))
 
@@ -208,11 +214,16 @@ class HeterogeneousOptimizerAgent:
         self,
         input_data: Dict[str, Any],
         initial_state: HeterogeneousOptimizerState,
-        session_id: str,
+        session_id: Optional[str],
+        run_id: str,
     ) -> Dict[str, Any]:
         """Run the graph with the configured tracking wrappers (split out of
         ``run()`` so the #1734 frame-registry release can wrap it in one
-        ``try/finally``)."""
+        ``try/finally``).
+
+        ``session_id`` is the caller's session or None and goes only to memory;
+        ``run_id`` is the per-run correlation handle for Opik and MLflow (#2099).
+        """
         # Get trackers
         tracker = self._get_mlflow_tracker()
         opik_tracer = self._get_opik_tracer()
@@ -240,7 +251,7 @@ class HeterogeneousOptimizerAgent:
                 outcome_var=input_data.get("outcome_var"),
                 segment_vars=input_data.get("segment_vars"),
                 brand=input_data.get("brand"),
-                session_id=session_id,
+                session_id=run_id,
             ) as trace_ctx:
                 # Execute with MLflow tracking if available
                 if tracker:
@@ -250,7 +261,7 @@ class HeterogeneousOptimizerAgent:
                         region=input_data.get("region"),
                         treatment_var=input_data.get("treatment_var"),
                         outcome_var=input_data.get("outcome_var"),
-                        query_id=session_id,
+                        query_id=run_id,
                     ):
                         # Execute workflow
                         final_state = cast(
@@ -293,7 +304,7 @@ class HeterogeneousOptimizerAgent:
                     region=input_data.get("region"),
                     treatment_var=input_data.get("treatment_var"),
                     outcome_var=input_data.get("outcome_var"),
-                    query_id=session_id,
+                    query_id=run_id,
                 ):
                     final_state = cast(
                         "HeterogeneousOptimizerState", await self.graph.ainvoke(initial_state)
@@ -369,14 +380,15 @@ class HeterogeneousOptimizerAgent:
     def _build_initial_state(
         self,
         input_data: Dict[str, Any],
-        session_id: str,
+        session_id: Optional[str],
         memory_context: Optional[Any] = None,
     ) -> HeterogeneousOptimizerState:
         """Build initial state from input data.
 
         Args:
             input_data: Input dictionary
-            session_id: Session identifier for memory operations
+            session_id: Session identifier for memory operations, or None when
+                the caller had no session (#2099)
             memory_context: Optional CATEAnalysisContext from memory hooks
 
         Returns:
@@ -499,6 +511,10 @@ class HeterogeneousOptimizerAgent:
             "policy_recommendations": final_state.get("policy_recommendations", []),
             "expected_total_lift": final_state.get("expected_total_lift", 0.0),
             "optimal_allocation_summary": final_state.get("optimal_allocation_summary", ""),
+            # Hierarchical node (#2027): the nested aggregate and the segments it
+            # left out; both keys are declared on HeterogeneousOptimizerOutput.
+            "nested_ci": final_state.get("nested_ci"),
+            "nested_ci_excluded_segments": final_state.get("nested_ci_excluded_segments", []),
             # Feature importance
             "feature_importance": final_state.get("feature_importance", {}),
             # Summaries

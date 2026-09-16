@@ -300,7 +300,6 @@ class TestOrchestratorToolInput:
         assert input_data.target_agent is None
         assert input_data.brand is None
         assert input_data.region is None
-        assert input_data.session_id is None
 
     def test_create_full_input(self):
         """Test creating input with all fields."""
@@ -309,13 +308,14 @@ class TestOrchestratorToolInput:
             target_agent="experiment_designer",
             brand="Kisqali",
             region="APAC",
-            session_id="session-789",
         )
         assert input_data.query == "Run experiment design"
         assert input_data.target_agent == "experiment_designer"
         assert input_data.brand == "Kisqali"
         assert input_data.region == "APAC"
-        assert input_data.session_id == "session-789"
+        # #2077: no session_id — the model cannot know the thread, and the tools
+        # node binds the real one.
+        assert "session_id" not in OrchestratorToolInput.model_fields
 
 
 # =============================================================================
@@ -338,14 +338,14 @@ class TestToolComposerToolInput:
             query="Multi-faceted analysis",
             brand="Fabhalta",
             region="EU",
-            session_id="session-abc",
             max_parallel=5,
         )
         assert input_data.query == "Multi-faceted analysis"
         assert input_data.brand == "Fabhalta"
         assert input_data.region == "EU"
-        assert input_data.session_id == "session-abc"
         assert input_data.max_parallel == 5
+        # #2077: no session_id — see OrchestratorToolInput above.
+        assert "session_id" not in ToolComposerToolInput.model_fields
 
     def test_max_parallel_validation(self):
         """Test max_parallel must be 1-5."""

@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 class OptimizationContext:
     """Context retrieved from memory systems for optimization."""
 
-    session_id: str
+    session_id: Optional[str]
     working_memory: List[Dict[str, Any]] = field(default_factory=list)
     cached_optimization: Optional[Dict[str, Any]] = None
     similar_optimizations: List[Dict[str, Any]] = field(default_factory=list)
@@ -120,7 +120,7 @@ class ResourceOptimizerMemoryHooks:
 
     async def get_context(
         self,
-        session_id: str,
+        session_id: Optional[str],
         resource_type: str,
         objective: str,
         constraints: Optional[List[Dict[str, Any]]] = None,
@@ -129,7 +129,8 @@ class ResourceOptimizerMemoryHooks:
         Retrieve context from working and procedural memory.
 
         Args:
-            session_id: Session identifier for working memory lookup
+            session_id: Session identifier for working memory lookup; None
+                skips the two session-keyed reads (#2099)
             resource_type: Type of resource being optimized
             objective: Optimization objective
             constraints: List of constraints for pattern matching
@@ -158,8 +159,11 @@ class ResourceOptimizerMemoryHooks:
             constraints=constraints,
         )
 
+        # A session-less run still reads episodic/semantic memory, so this line
+        # stays -- it just stops saying "session None" (#2099).
+        scope = f"session {session_id}" if session_id else "a session-less run"
         logger.info(
-            f"Retrieved optimization context for session {session_id}: "
+            f"Retrieved optimization context for {scope}: "
             f"cached={context.cached_optimization is not None}, "
             f"similar={len(context.similar_optimizations)}, "
             f"patterns={len(context.learned_patterns)}"
@@ -169,11 +173,15 @@ class ResourceOptimizerMemoryHooks:
 
     async def _get_working_memory_context(
         self,
-        session_id: str,
+        session_id: Optional[str],
         limit: int = 10,
     ) -> List[Dict[str, Any]]:
-        """Retrieve recent conversation from working memory."""
-        if not self.working_memory:
+        """Retrieve recent conversation from working memory.
+
+        Without a session there is no conversation to retrieve: reading under a
+        minted id only ever returns empty, so return empty directly (#2099).
+        """
+        if session_id is None or not self.working_memory:
             return []
 
         try:
@@ -185,10 +193,14 @@ class ResourceOptimizerMemoryHooks:
 
     async def _get_cached_optimization(
         self,
-        session_id: str,
+        session_id: Optional[str],
     ) -> Optional[Dict[str, Any]]:
-        """Get cached optimization result from current session."""
-        if not self.working_memory:
+        """Get cached optimization result from current session.
+
+        The cache key embeds the session id, so without one there is no key a
+        writer could ever have populated (#2099).
+        """
+        if session_id is None or not self.working_memory:
             return None
 
         try:
@@ -375,7 +387,7 @@ class ResourceOptimizerMemoryHooks:
 
     async def store_optimization_pattern(
         self,
-        session_id: str,
+        session_id: Optional[str],
         result: Dict[str, Any],
         state: Dict[str, Any],
     ) -> Optional[str]:
@@ -494,7 +506,7 @@ class ResourceOptimizerMemoryHooks:
 
     async def store_optimization(
         self,
-        session_id: str,
+        session_id: Optional[str],
         result: Dict[str, Any],
         state: Dict[str, Any],
     ) -> Optional[str]:
@@ -600,7 +612,7 @@ async def contribute_to_memory(
         result: ResourceOptimizerOutput dictionary
         state: ResourceOptimizerState dictionary
         memory_hooks: Optional memory hooks instance (creates new if not provided)
-        session_id: Session identifier (generates UUID if not provided)
+        session_id: Session identifier; None records an honest NULL (#2076)
 
     Returns:
         Dictionary with counts of stored memories:
@@ -608,13 +620,8 @@ async def contribute_to_memory(
         - working_cached: 1 if cached, 0 otherwise
         - pattern_learned: 1 if pattern stored, 0 otherwise
     """
-    import uuid
-
     if memory_hooks is None:
         memory_hooks = get_resource_optimizer_memory_hooks()
-
-    if session_id is None:
-        session_id = str(uuid.uuid4())
 
     counts = {
         "episodic_stored": 0,
@@ -628,9 +635,12 @@ async def contribute_to_memory(
         return counts
 
     # 1. Cache in working memory
-    cached = await memory_hooks.cache_optimization(session_id, result)
-    if cached:
-        counts["working_cached"] = 1
+    # Skipped without a session (#2076): the cache key embeds the session id, so a
+    # session-less write would land under a key no reader can ever ask for.
+    if session_id is not None:
+        cached = await memory_hooks.cache_optimization(session_id, result)
+        if cached:
+            counts["working_cached"] = 1
 
     # 2. Store in episodic memory
     memory_id = await memory_hooks.store_optimization(

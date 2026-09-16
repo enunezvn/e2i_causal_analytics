@@ -252,7 +252,7 @@ class ModelSelectorMemoryHooks:
 
     async def store_model_selection(
         self,
-        session_id: str,
+        session_id: Optional[str],
         result: Dict[str, Any],
         state: Dict[str, Any],
         brand: Optional[str] = None,
@@ -264,6 +264,14 @@ class ModelSelectorMemoryHooks:
 
             content = {
                 "experiment_id": state.get("experiment_id"),
+                # The audit chain's workflow id used to be persisted AS the session
+                # (#2099). It is a real correlation handle but not a conversation,
+                # so it keeps its value here. Absent when the state has none.
+                **(
+                    {"audit_workflow_id": str(state["audit_workflow_id"])}
+                    if state.get("audit_workflow_id")
+                    else {}
+                ),
                 "algorithm_name": result.get("algorithm_name"),
                 "algorithm_family": result.get("algorithm_family"),
                 "algorithm_class": result.get("algorithm_class"),
@@ -375,13 +383,16 @@ async def contribute_to_memory(
     region: Optional[str] = None,
 ) -> Dict[str, int]:
     """Contribute model selection results to memory systems."""
-    import uuid
-
     if memory_hooks is None:
         memory_hooks = get_model_selector_memory_hooks()
 
     if session_id is None:
-        session_id = state.get("session_id") or str(uuid.uuid4())
+        # No mint (#2076). An absent session id stays None: the episodic writer
+        # coerces it to an honest NULL for the nullable ``session_id`` column
+        # rather than recording a uuid that belongs to no conversation. A falsy
+        # state value normalises to None too, so the session-KEYED Redis writes
+        # below are skipped instead of keyed on an empty string.
+        session_id = state.get("session_id") or None
 
     counts = {
         "episodic_stored": 0,
@@ -400,9 +411,12 @@ async def contribute_to_memory(
         "algorithm_family": result.get("algorithm_family"),
         "selection_score": result.get("selection_score"),
     }
-    cached = await memory_hooks.cache_model_selection(session_id, selection)
-    if cached:
-        counts["working_cached"] = 1
+    # Skipped without a session (#2076): the cache key embeds the session id, so a
+    # session-less write would land under a key no reader can ever ask for.
+    if session_id is not None:
+        cached = await memory_hooks.cache_model_selection(session_id, selection)
+        if cached:
+            counts["working_cached"] = 1
 
     # 2. Store in episodic memory
     memory_id = await memory_hooks.store_model_selection(

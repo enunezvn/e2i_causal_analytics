@@ -34,6 +34,24 @@ def _patch_async_supabase_client():
         yield
 
 
+@pytest.fixture
+def identified_cohort():
+    """Direction-2 identification gate: make it PASS for the /simulate success tests.
+
+    The route builds a cohort provider from ``repo.client`` and honestly 422s
+    ("No effect data available ...") when that returns None — which a bare MagicMock
+    client guarantees, because the loader awaits it. Patch the source module (the
+    route imports the function locally) at the same seam as the unit route tests'
+    ``_default_identified_cohort`` (theirs is autouse via monkeypatch; this one is
+    opt-in), so these tests exercise the simulate path they were written for.
+    """
+    with patch(
+        "src.digital_twin.effect.cohort_loader.build_cohort_provider_or_none",
+        new=AsyncMock(return_value=MagicMock()),
+    ):
+        yield
+
+
 # =============================================================================
 # FIXTURES
 # =============================================================================
@@ -100,6 +118,13 @@ def mock_simulation_result():
     result.created_at = datetime.now(timezone.utc)
     result.is_significant = MagicMock(return_value=True)
     result.effect_direction = MagicMock(return_value="positive")
+    # The response mapping reads these SimulationResult fields (#705 H5b, #2053); a
+    # MagicMock attribute fails ``SimulationResponse`` validation (a ValueError → 400).
+    result.data_provenance = "cohort_estimated_synthetic_gold_v1"
+    result.target_regions = []
+    result.cohort_ate = None
+    result.cohort_ci_lower = None
+    result.cohort_ci_upper = None
     return result
 
 
@@ -190,7 +215,9 @@ def mock_fidelity_record():
 class TestRunSimulation:
     """Tests for POST /digital-twin/simulate."""
 
-    def test_run_simulation_success(self, simulate_request, mock_simulation_result):
+    def test_run_simulation_success(
+        self, simulate_request, mock_simulation_result, identified_cohort
+    ):
         """Should run simulation and return results."""
         mock_generator = MagicMock()
         mock_generator.generate = MagicMock(return_value=[])
@@ -232,7 +259,9 @@ class TestRunSimulation:
         assert "recommendation" in data
         assert data["status"] == "completed"
 
-    def test_run_simulation_with_population_filters(self, simulate_request, mock_simulation_result):
+    def test_run_simulation_with_population_filters(
+        self, simulate_request, mock_simulation_result, identified_cohort
+    ):
         """Should run simulation with population filters."""
         simulate_request["population_filters"] = {
             "specialties": ["oncology", "hematology"],
@@ -272,6 +301,11 @@ class TestRunSimulation:
             response = client.post("/api/digital-twin/simulate", json=simulate_request)
 
         assert response.status_code == 200
+        # The filter must reach the engine: the route hands it over as the
+        # ``population_filter`` kwarg (a PopulationFilter), and the mocked engine
+        # discards it, so status alone cannot see a regions regression.
+        passed_filter = mock_engine.simulate.call_args.kwargs["population_filter"]
+        assert passed_filter.regions == ["northeast"]
 
     def test_run_simulation_invalid_brand(self, simulate_request):
         """Should return 422 for invalid brand."""
@@ -335,49 +369,45 @@ class TestGetSimulation:
 
     def test_get_simulation_success(self):
         """Should return simulation details."""
-        mock_result = MagicMock()
-        mock_result.simulation_id = UUID("550e8400-e29b-41d4-a716-446655440000")
-        mock_result.model_id = UUID("660e8400-e29b-41d4-a716-446655440000")
-        mock_result.twin_count = 10000
-        mock_result.simulated_ate = 0.085
-        mock_result.simulated_ci_lower = 0.065
-        mock_result.simulated_ci_upper = 0.105
-        mock_result.simulated_std_error = 0.010
-        mock_result.effect_size_cohens_d = 0.25
-        mock_result.statistical_power = 0.85
-        mock_result.recommendation = MagicMock(value="deploy")
-        mock_result.recommendation_rationale = "Significant effect"
-        mock_result.recommended_sample_size = 5000
-        mock_result.recommended_duration_weeks = 8
-        mock_result.simulation_confidence = 0.92
-        mock_result.fidelity_warning = False
-        mock_result.fidelity_warning_reason = None
-        mock_result.model_fidelity_score = 0.88
-        mock_result.status = MagicMock(value="completed")
-        mock_result.error_message = None
-        mock_result.execution_time_ms = 1500
-        mock_result.created_at = datetime.now(timezone.utc)
-        mock_result.completed_at = datetime.now(timezone.utc)
-        mock_result.is_significant = MagicMock(return_value=True)
-        mock_result.effect_direction = MagicMock(return_value="positive")
-        mock_result.population_filters = MagicMock()
-        mock_result.population_filters.to_dict = MagicMock(return_value={"deciles": [1, 2, 3]})
-        mock_result.intervention_config = MagicMock()
-        mock_result.intervention_config.intervention_type = "email_campaign"
-        mock_result.intervention_config.model_dump = MagicMock(
-            return_value={"intervention_type": "email_campaign"}
-        )
-        mock_result.intervention_config.extra_params = {"brand": "Remibrutinib", "twin_type": "hcp"}
-
-        mock_effect_het = MagicMock()
-        mock_effect_het.by_specialty = {"oncology": {"ate": 0.12}}
-        mock_effect_het.by_decile = {"1": {"ate": 0.15}}
-        mock_effect_het.by_region = {"northeast": {"ate": 0.10}}
-        mock_effect_het.by_adoption_stage = {"early": {"ate": 0.14}}
-        mock_effect_het.get_top_segments = MagicMock(
-            return_value=[{"segment": "oncology_d1", "ate": 0.18}]
-        )
-        mock_result.effect_heterogeneity = mock_effect_het
+        # repo.get_simulation returns the RAW twin_simulations ROW (a dict), not a
+        # SimulationResult (#705 H5b/H11); the route maps from it with ``.get``.
+        # Mirror the real row shape (as the unit route tests do).
+        mock_result = {
+            "simulation_id": "550e8400-e29b-41d4-a716-446655440000",
+            "model_id": "660e8400-e29b-41d4-a716-446655440000",
+            "intervention_type": "email_campaign",
+            "intervention_config": {"intervention_type": "email_campaign", "channel": "email"},
+            "brand": "Remibrutinib",
+            "twin_count": 10000,
+            "simulated_ate": 0.085,
+            "simulated_ci_lower": 0.065,
+            "simulated_ci_upper": 0.105,
+            "simulated_std_error": 0.010,
+            "effect_size_cohens_d": 0.25,
+            "statistical_power": 0.85,
+            "recommendation": "deploy",
+            "recommendation_rationale": "Significant effect",
+            "recommended_sample_size": 5000,
+            "recommended_duration_weeks": 8,
+            "simulation_confidence": 0.92,
+            "fidelity_warning": False,
+            "fidelity_warning_reason": None,
+            "model_fidelity_score": 0.88,
+            "simulation_status": "completed",
+            "data_provenance": "cohort_estimated_synthetic_gold_v1",
+            "error_message": None,
+            "execution_time_ms": 1500,
+            "created_at": datetime.now(timezone.utc),
+            "completed_at": datetime.now(timezone.utc),
+            "population_filters": {"deciles": [1, 2, 3]},
+            "effect_heterogeneity": {
+                "by_specialty": {"oncology": {"ate": 0.12}},
+                "by_decile": {"1": {"ate": 0.15}},
+                "by_region": {"northeast": {"ate": 0.10}},
+                "by_adoption_stage": {"early": {"ate": 0.14}},
+                "top_segments": [{"segment": "oncology_d1", "ate": 0.18}],
+            },
+        }
 
         mock_repo = MagicMock()
         mock_repo.get_simulation = AsyncMock(return_value=mock_result)

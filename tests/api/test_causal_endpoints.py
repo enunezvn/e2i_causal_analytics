@@ -242,7 +242,7 @@ class TestRunHierarchicalAnalysis:
         """
         secret = "psycopg2.OperationalError: FATAL db-internal.prod:5432 password authentication"
         with patch(
-            "src.api.routes.causal._execute_hierarchical_analysis",
+            "src.api.routes.causal.hierarchical._execute_hierarchical_analysis",
             new=AsyncMock(side_effect=RuntimeError(secret)),
         ):
             response = client.post(

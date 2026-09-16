@@ -326,7 +326,7 @@ class GapAnalyzerMemoryHooks:
 
     async def store_gap_analysis(
         self,
-        session_id: str,
+        session_id: Optional[str],
         result: Dict[str, Any],
         state: Dict[str, Any],
         region: Optional[str] = None,
@@ -567,7 +567,7 @@ async def contribute_to_memory(
         result: GapAnalyzerOutput dictionary
         state: GapAnalyzerState dictionary
         memory_hooks: Optional memory hooks instance (creates new if not provided)
-        session_id: Session identifier (generates UUID if not provided)
+        session_id: Session identifier; None records an honest NULL (#2076)
         region: Optional region context
 
     Returns:
@@ -575,13 +575,8 @@ async def contribute_to_memory(
         - episodic_stored: 1 if analysis stored, 0 otherwise
         - working_cached: 1 if cached, 0 otherwise
     """
-    import uuid
-
     if memory_hooks is None:
         memory_hooks = get_gap_analyzer_memory_hooks()
-
-    if session_id is None:
-        session_id = str(uuid.uuid4())
 
     counts = {
         "episodic_stored": 0,
@@ -595,9 +590,12 @@ async def contribute_to_memory(
         return counts
 
     # 1. Cache in working memory
-    cached = await memory_hooks.cache_gap_analysis(session_id, result)
-    if cached:
-        counts["working_cached"] = 1
+    # Skipped without a session (#2076): the cache key embeds the session id, so a
+    # session-less write would land under a key no reader can ever ask for.
+    if session_id is not None:
+        cached = await memory_hooks.cache_gap_analysis(session_id, result)
+        if cached:
+            counts["working_cached"] = 1
 
     # 2. Store in episodic memory
     memory_id = await memory_hooks.store_gap_analysis(

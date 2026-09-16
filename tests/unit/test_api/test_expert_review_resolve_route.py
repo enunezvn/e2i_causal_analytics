@@ -54,7 +54,14 @@ def _client(monkeypatch, repo: _Repo, operator: Optional[Dict[str, Any]]) -> Tes
 def _resolve(client: TestClient, status: str = "rejected") -> Dict[str, Any]:
     r = client.post(
         f"/api/expert-reviews/{RID}/resolve",
-        json={"approval_status": status, "checklist": {"confounders_complete": True}},
+        json={
+            "approval_status": status,
+            "checklist": {"confounders_complete": True},
+            "dag_version_hash": "h" * 64,
+            # Required KEY since codex round 2; null is the review's own "no
+            # known adjustment set", which this fixture row is.
+            "adjustment_set_hash": None,
+        },
     )
     assert r.status_code == 200, r.text
     assert r.json() == {"review_id": RID, "approval_status": status, "success": True}
@@ -106,3 +113,232 @@ def test_operator_without_usable_identity_records_nothing(monkeypatch, operator)
     call = repo.submit_calls[0]
     assert call["reviewer_name"] is None
     assert call["reviewer_email"] is None
+
+
+# --------------------------------------------------------------------------
+# H1 (codex round-1): the resolution binds to the version the reviewer SAW
+# --------------------------------------------------------------------------
+
+
+class _HashRepo:
+    """``submit_review`` that honours the expected-hash compare-and-set, over a
+    row store the route's disambiguating re-read can see."""
+
+    def __init__(self, row: Optional[Dict[str, Any]]) -> None:
+        self.row = dict(row) if row is not None else None
+        self.submit_calls: List[Dict[str, Any]] = []
+
+    async def submit_review(self, **kwargs: Any) -> bool:
+        self.submit_calls.append(kwargs)
+        if self.row is None or self.row.get("approval_status") != "pending":
+            return False
+        return (
+            self.row.get("dag_version_hash"),
+            self.row.get("adjustment_set_hash"),
+        ) == (
+            kwargs["expected_dag_version_hash"],
+            kwargs["expected_adjustment_set_hash"],
+        )
+
+    async def get_by_id(self, review_id: str, **_: Any) -> Optional[Dict[str, Any]]:
+        return dict(self.row) if self.row is not None else None
+
+
+def _post(client: TestClient, body: Dict[str, Any]):
+    return client.post(f"/api/expert-reviews/{RID}/resolve", json=body)
+
+
+@pytest.mark.unit
+def test_matching_hash_resolves_and_reaches_submit_review(monkeypatch):
+    """The hash the form displayed is passed through as the compare-and-set."""
+    repo = _HashRepo({"review_id": RID, "approval_status": "pending", "dag_version_hash": "h1"})
+    client = _client(monkeypatch, repo, {"id": "op-1"})
+    r = _post(
+        client,
+        {
+            "approval_status": "approved",
+            "checklist": {},
+            "dag_version_hash": "h1",
+            "adjustment_set_hash": None,
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert repo.submit_calls[0]["expected_dag_version_hash"] == "h1"
+    assert repo.submit_calls[0]["expected_adjustment_set_hash"] is None
+
+
+@pytest.mark.unit
+def test_stale_hash_on_a_still_pending_review_is_409(monkeypatch):
+    """The review advanced to h2 while the reviewer's form sat on h1. Approving
+    h1's form must NOT sign off h2 -- the structure nobody looked at."""
+    repo = _HashRepo({"review_id": RID, "approval_status": "pending", "dag_version_hash": "h2"})
+    client = _client(monkeypatch, repo, {"id": "op-1"})
+    r = _post(
+        client,
+        {
+            "approval_status": "approved",
+            "checklist": {},
+            "dag_version_hash": "h1",
+            "adjustment_set_hash": None,
+        },
+    )
+    assert r.status_code == 409, r.text
+    # Bare app (no src.api.main handlers): the body is FastAPI's own ``detail``.
+    # That the REAL app maps a 409 detail to the ``message`` field the frontend
+    # api-client reads is pinned in tests/api/test_expert_review_routes.py.
+    detail = r.json()["detail"]
+    assert "advanced to a new structure version" in detail
+    assert "reload the review" in detail
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "row",
+    [
+        None,
+        {"review_id": RID, "approval_status": "approved", "dag_version_hash": "h1"},
+    ],
+    ids=["nonexistent", "already-resolved"],
+)
+def test_missing_or_resolved_review_is_still_404(monkeypatch, row):
+    """404 is unchanged: 409 is ONLY the "pending but advanced" case. An
+    already-resolved row is not resolvable at any hash."""
+    repo = _HashRepo(row)
+    client = _client(monkeypatch, repo, {"id": "op-1"})
+    r = _post(
+        client,
+        {
+            "approval_status": "approved",
+            "checklist": {},
+            "dag_version_hash": "h1",
+            "adjustment_set_hash": None,
+        },
+    )
+    assert r.status_code == 404, r.text
+    assert "not found or is not resolvable" in r.json()["detail"]
+
+
+@pytest.mark.unit
+def test_a_body_without_the_hash_is_rejected_unvalidated(monkeypatch):
+    """The binding is REQUIRED: a caller that omits it cannot resolve blind."""
+    repo = _HashRepo({"review_id": RID, "approval_status": "pending", "dag_version_hash": "h1"})
+    client = _client(monkeypatch, repo, {"id": "op-1"})
+    assert _post(client, {"approval_status": "approved", "checklist": {}}).status_code == 422
+    assert repo.submit_calls == []
+    # ... and an empty string is not a hash either
+    assert (
+        _post(
+            client,
+            {
+                "approval_status": "approved",
+                "checklist": {},
+                "dag_version_hash": "",
+                "adjustment_set_hash": None,
+            },
+        ).status_code
+        == 422
+    )
+
+
+# --------------------------------------------------------------------------
+# Codex round 2 -- the binding is the PAIR, so an ADJUSTMENT-ONLY advance is
+# caught too. compute_dag_hash EXCLUDES adjustment sets, so these cases all
+# share an UNCHANGED DAG hash: the half that used to be the whole filter.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_an_adjustment_only_advance_on_a_still_pending_review_is_409(monkeypatch):
+    """The review advanced from (h1, adj-W) to (h1, adj-Z) while the form sat
+    open. The DAG hash is IDENTICAL, so the round-1 filter matched and the
+    approval landed on covariates the reviewer never saw."""
+    repo = _HashRepo(
+        {
+            "review_id": RID,
+            "approval_status": "pending",
+            "dag_version_hash": "h1",
+            "adjustment_set_hash": "adj-Z",
+        }
+    )
+    client = _client(monkeypatch, repo, {"id": "op-1"})
+    r = _post(
+        client,
+        {
+            "approval_status": "approved",
+            "checklist": {},
+            "dag_version_hash": "h1",
+            "adjustment_set_hash": "adj-W",
+        },
+    )
+    assert r.status_code == 409, r.text
+    assert "advanced to a new structure version" in r.json()["detail"]
+
+
+@pytest.mark.unit
+def test_the_exact_pair_resolves(monkeypatch):
+    repo = _HashRepo(
+        {
+            "review_id": RID,
+            "approval_status": "pending",
+            "dag_version_hash": "h1",
+            "adjustment_set_hash": "adj-W",
+        }
+    )
+    client = _client(monkeypatch, repo, {"id": "op-1"})
+    r = _post(
+        client,
+        {
+            "approval_status": "approved",
+            "checklist": {},
+            "dag_version_hash": "h1",
+            "adjustment_set_hash": "adj-W",
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert repo.submit_calls[0]["expected_adjustment_set_hash"] == "adj-W"
+
+
+@pytest.mark.unit
+def test_an_explicit_null_pair_resolves_a_row_with_no_known_adjustment_set(monkeypatch):
+    """The null half is a real value, not an absence: a review whose adjustment
+    set is UNKNOWN is resolvable by a form that echoes that same unknown."""
+    repo = _HashRepo(
+        {
+            "review_id": RID,
+            "approval_status": "pending",
+            "dag_version_hash": "h1",
+            "adjustment_set_hash": None,
+        }
+    )
+    client = _client(monkeypatch, repo, {"id": "op-1"})
+    r = _post(
+        client,
+        {
+            "approval_status": "approved",
+            "checklist": {},
+            "dag_version_hash": "h1",
+            "adjustment_set_hash": None,
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert repo.submit_calls[0]["expected_adjustment_set_hash"] is None
+
+
+@pytest.mark.unit
+def test_a_body_missing_the_adjustment_key_is_422_not_a_null_default(monkeypatch):
+    """A MISSING key and an explicit null are different facts. Defaulting the
+    missing one to null would let an old client -- one that cannot know about
+    adjustment sets at all -- resolve every null-carrying row as if it had
+    displayed one, which is the defect this key exists to close."""
+    repo = _HashRepo(
+        {
+            "review_id": RID,
+            "approval_status": "pending",
+            "dag_version_hash": "h1",
+            "adjustment_set_hash": None,
+        }
+    )
+    client = _client(monkeypatch, repo, {"id": "op-1"})
+    r = _post(client, {"approval_status": "approved", "checklist": {}, "dag_version_hash": "h1"})
+    assert r.status_code == 422, r.text
+    assert repo.submit_calls == []

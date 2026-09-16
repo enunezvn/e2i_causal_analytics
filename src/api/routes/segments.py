@@ -1688,11 +1688,11 @@ async def _segment_question_options(
     Lists follow the curated spec order (stable dropdowns). Raises on registry
     unavailability — the caller falls back to the flat curated lists.
     """
-    from src.api.routes.causal import (
+    from src.api.routes.causal.datasets import (
         _CAUSAL_DATASET_SPECS,
         _brand_scoped_covariates,
-        _get_causal_path_repo,
     )
+    from src.api.routes.causal.loaders import _get_causal_path_repo
 
     spec = _CAUSAL_DATASET_SPECS[_SEGMENT_HTE_DATASET]
     t_order = {c: i for i, c in enumerate(spec["treatment"])}
@@ -1751,7 +1751,7 @@ async def get_segment_datasets(
     ``options_source="curated_fallback"``; an unavailable brand list returns
     ``[]`` (FE shows "All brands"). An unknown brand is a 400.
     """
-    from src.api.routes.causal import (
+    from src.api.routes.causal.datasets import (
         _CAUSAL_DATASET_SPECS,
         _COLUMN_DEFINITIONS,
         _brand_scoped_covariates,
@@ -1763,7 +1763,7 @@ async def get_segment_datasets(
 
     brands: List[str] = []
     try:
-        from src.api.routes.causal import _list_dataset_brands
+        from src.api.routes.causal.datasets import _list_dataset_brands
 
         brands = await _list_dataset_brands(_SEGMENT_HTE_DATASET)
     except Exception as e:  # pragma: no cover - fail-soft, FE shows "All brands"
@@ -1846,7 +1846,7 @@ async def get_segment_analysis(analysis_id: str) -> SegmentAnalysisResponse:
 #
 # Clinical-HTE rebuild (2026-06-20): the Segment Analysis page is agent-driven
 # over the curated ``patient_journeys`` gold-standard substrate (the same SSOT
-# the /causal pages use — see src/api/routes/causal.py ``_CAUSAL_DATASET_SPECS``).
+# the /causal pages use — see src/api/routes/causal/datasets.py ``_CAUSAL_DATASET_SPECS``).
 # The route loads the frame SERVER-SIDE (provenance-aware: ``apply_provenance_filter``
 # INCLUDES the is_synthetic=true gold-standard rows on this synthetic-showcase
 # deployment), bands the continuous clinical columns, and passes the prepared
@@ -1904,7 +1904,7 @@ def _segment_effect_modifiers(
     the column from X alone recovered +0.140. The causal page dedups the same way
     on its submit path.
     """
-    from src.api.routes.causal import _brand_scoped_covariates
+    from src.api.routes.causal.datasets import _brand_scoped_covariates
 
     scoped = _brand_scoped_covariates(list(_SEGMENT_HTE_EFFECT_MODIFIERS), brand)
     return [c for c in scoped if c not in (treatment_var, outcome_var)]
@@ -2058,12 +2058,12 @@ async def _segment_question_adjustment(
     Fail-soft: if the registry cannot be read the default W is used and the run
     says so (the frame loader remains the fail-closed gate for the substrate).
     """
-    from src.api.routes.causal import (
+    from src.api.routes.causal.datasets import (
         _CAUSAL_DATASET_SPECS,
         _CAUSAL_NUMERIC_COLUMNS,
         _brand_scoped_covariates,
-        _get_causal_path_repo,
     )
+    from src.api.routes.causal.loaders import _get_causal_path_repo
 
     default_w = list(_SEGMENT_HTE_CONFOUNDERS)
     try:
@@ -2202,7 +2202,7 @@ async def _load_segment_hte_frame(
 ) -> "pd.DataFrame":  # type: ignore[name-defined] # noqa: F821
     """Load the REAL gold-standard ``patient_journeys`` frame for the HTE agent.
 
-    Mirrors ``causal.py._load_agent_estimation_frame`` for the patient_journeys
+    Mirrors ``causal/loaders.py._load_agent_estimation_frame`` for the patient_journeys
     dataset, with two deliberate differences for the segment-analysis use-case:
 
     * ``geographic_region`` is kept as a RAW string column (NOT one-hot encoded):
@@ -2229,12 +2229,12 @@ async def _load_segment_hte_frame(
     """
     import pandas as pd
 
-    # SSOT for the curated allowlist lives in causal.py (single source of truth).
-    from src.api.routes.causal import (
+    # SSOT for the curated allowlist lives in causal/datasets.py (single source of truth).
+    from src.api.routes.causal.datasets import (
         _CAUSAL_DATASET_SPECS,
         _CAUSAL_NUMERIC_DERIVATIONS,
-        _coerce_estimation_row,
     )
+    from src.api.routes.causal.loaders import _coerce_estimation_row
 
     spec = _CAUSAL_DATASET_SPECS[_SEGMENT_HTE_DATASET]
     allowed = set(spec["treatment"]) | set(spec["outcome"]) | set(spec["covariate"])
@@ -2299,7 +2299,7 @@ async def _load_segment_hte_frame(
         fetch_cols = list(dict.fromkeys([*select_cols, "brand"]))
 
     query = client.table(_SEGMENT_HTE_DATASET).select(",".join(fetch_cols))
-    # Provenance-aware, env-gated (mirrors causal.py's loader): apply_provenance_filter
+    # Provenance-aware, env-gated (mirrors causal/loaders.py's loader): apply_provenance_filter
     # skips the is_synthetic=False predicate when deployment_includes_synthetic()
     # (E2I_INCLUDE_SYNTHETIC) is set, so on this synthetic-gold showcase it LOADS the
     # gold-standard rows. Deliberately NOT include_synthetic=True — hardcoding True
@@ -2478,7 +2478,7 @@ async def _execute_segment_analysis(
     # post-hoc grouping). ecog is a segment dimension only for Kisqali; the banded
     # (disease_severity_band/age_band) + universal (geographic_region/academic_hcp)
     # dimensions always survive.
-    from src.api.routes.causal import _brand_scoped_covariates
+    from src.api.routes.causal.datasets import _brand_scoped_covariates
 
     effect_modifiers = _segment_effect_modifiers(
         request.brand, treatment_var=treatment_var, outcome_var=outcome_var

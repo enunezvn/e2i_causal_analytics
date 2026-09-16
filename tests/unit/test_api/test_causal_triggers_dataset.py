@@ -8,7 +8,7 @@ triggers grain without DB access.
 
 import pytest
 
-from src.api.routes.causal import (
+from src.api.routes.causal.datasets import (
     _CAUSAL_BRAND_COLUMN,
     _CAUSAL_DATASET_SPECS,
     _CAUSAL_FILL_ZERO_OUTCOMES,
@@ -53,7 +53,7 @@ def test_nba_triggers_brand_column_is_brand_id():
 
 @pytest.mark.unit
 def test_nba_triggers_physical_table_is_triggers():
-    from src.api.routes.causal import _CAUSAL_PHYSICAL_TABLE
+    from src.api.routes.causal.datasets import _CAUSAL_PHYSICAL_TABLE
 
     assert _CAUSAL_PHYSICAL_TABLE["nba_triggers"] == "triggers"
 
@@ -62,7 +62,7 @@ def test_nba_triggers_physical_table_is_triggers():
 # _coerce_estimation_row — trigger semantics locked via the SSOT maps
 # ---------------------------------------------------------------------------
 
-from src.api.routes.causal import (  # noqa: E402 — after registration tests
+from src.api.routes.causal.loaders import (  # noqa: E402 — after registration tests
     _coerce_estimation_row,
 )
 

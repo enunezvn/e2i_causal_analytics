@@ -87,7 +87,8 @@ class TestMemoryWiringEnabled:
 
         assert len(recorder) == 1
         assert recorder[0]["state"].get("check_scope") == "full"
-        # No session passed -> None reaches the hook, which generates a UUID.
+        # No session passed -> None reaches the hook, which records an honest
+        # NULL rather than minting a uuid (#2076).
         assert recorder[0]["session_id"] is None
 
     @pytest.mark.asyncio

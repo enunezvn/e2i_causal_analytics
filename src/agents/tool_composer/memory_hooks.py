@@ -314,7 +314,7 @@ class ToolComposerMemoryHooks:
 
     async def store_composition(
         self,
-        session_id: str,
+        session_id: Optional[str],
         result: Dict[str, Any],
         brand: Optional[str] = None,
         region: Optional[str] = None,
@@ -752,7 +752,7 @@ async def contribute_to_memory(
 
     Args:
         result: CompositionResult dictionary
-        session_id: Session identifier (generates UUID if not provided)
+        session_id: Session identifier; None records an honest NULL (#2076)
         memory_hooks: Optional memory hooks instance (creates new if not provided)
         brand: Optional brand context
         region: Optional region context
@@ -763,13 +763,8 @@ async def contribute_to_memory(
         - procedural_stored: 1 if pattern stored, 0 otherwise
         - working_cached: 1 if cached, 0 otherwise
     """
-    import uuid
-
     if memory_hooks is None:
         memory_hooks = get_tool_composer_memory_hooks()
-
-    if session_id is None:
-        session_id = str(uuid.uuid4())
 
     counts = {
         "episodic_stored": 0,
@@ -780,13 +775,16 @@ async def contribute_to_memory(
     composition_id = result.get("composition_id", "unknown")
 
     # 1. Cache in working memory
-    cached = await memory_hooks.cache_composition_result(
-        session_id=session_id,
-        composition_id=composition_id,
-        result=result,
-    )
-    if cached:
-        counts["working_cached"] = 1
+    # Skipped without a session (#2076): the cache key embeds the session id, so a
+    # session-less write would land under a key no reader can ever ask for.
+    if session_id is not None:
+        cached = await memory_hooks.cache_composition_result(
+            session_id=session_id,
+            composition_id=composition_id,
+            result=result,
+        )
+        if cached:
+            counts["working_cached"] = 1
 
     # 2. Store in episodic memory
     memory_id = await memory_hooks.store_composition(

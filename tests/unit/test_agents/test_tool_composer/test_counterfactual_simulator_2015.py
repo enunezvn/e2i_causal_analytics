@@ -235,7 +235,12 @@ def test_a_target_region_the_cohort_does_not_cover_is_refused(engine):
     run = SimulationEngine(
         population=_population(), effect_provider=no_west, effect_estimator=CohortCausalEstimator()
     ).simulate(InterventionConfig(intervention_type="email_campaign"), use_cache=False)
-    assert run.effect_heterogeneity.by_region["west"]["ate"] == pytest.approx(run.simulated_ate)
+    # The fallback stays out of the REPORTED region effects at the source (#2054): the
+    # engine reports only the axes the estimate resolves, and this estimate resolves the
+    # three regions it was fitted on. A west entry here would be the cohort ATE wearing
+    # west's label, which is what this test's docstring forbids.
+    assert "west" not in run.effect_heterogeneity.by_region
+    assert set(run.effect_heterogeneity.by_region) == {"northeast", "south", "midwest"}
     out = tr._simulation_results(
         run, brand="Kisqali", intervention_type="email_campaign", frame=frame, targeted=None
     )
@@ -728,3 +733,56 @@ def test_the_page_and_the_tool_state_the_same_size_for_the_same_run(provider):
         assert page.recommended_sample_size == _independent_n_per_arm(frame, [], page.simulated_ate)
         sizes.append(page.recommended_sample_size)
     assert sizes[0] == sizes[1]
+
+
+def test_a_targeted_request_reports_only_the_asked_regions_effects(provider):
+    """#2054: the tool filters the twins to the asked regions, so the estimate behind the
+    numbers it reports must be scoped to them too. Reporting all four cohort regions beside
+    a midwest headline states effects for populations the request did not ask about, and the
+    model sees them (``region_effects`` is in the tool output the LLM reads).
+
+    ``cohort_effect`` must stay cohort-wide throughout, as its contract says: a region filter
+    does not change it. Scoping the estimate moves ``simulated_ate`` onto the targeted rows
+    and leaves the cohort-wide pair in ``cohort_*`` (#2023), which is where it comes from.
+    """
+    from uuid import uuid4
+
+    frame = _frame(provider)
+    result, targeted = tr._simulate_population(
+        _population(),
+        provider=provider,
+        frame=frame,
+        intervention_type="email_campaign",
+        regions=["midwest"],
+        model_id=uuid4(),
+    )
+    out = tr._simulation_results(
+        result, brand="Kisqali", intervention_type="email_campaign", frame=frame, targeted=targeted
+    )
+
+    assert set(out.region_effects) == {"midwest"}
+    assert out.region_effects["midwest"] == pytest.approx(PLANTED["midwest"], abs=0.07)
+    # The headline is midwest's, and the cohort-wide number is still the cohort's.
+    assert out.effect == pytest.approx(PLANTED["midwest"], abs=0.07)
+    assert out.cohort_effect == pytest.approx(np.mean(list(PLANTED.values())), abs=0.05)
+    assert out.cohort_ci_lower < out.cohort_effect < out.cohort_ci_upper
+
+
+def test_an_uncovered_targeted_region_is_refused_as_not_estimable(provider):
+    """The refusal for a region the cohort cannot contrast stays EFFECT_NOT_ESTIMABLE
+    (#2021): a caller must be able to tell "this region has no evidence" from "the
+    simulation broke". Scoping the estimator makes the engine itself fail on such a
+    region, so the targeted inference is taken first and its precise refusal wins."""
+    from uuid import uuid4
+
+    no_west = CohortEffectDataProvider(_cohort().query("region != 'west'"))
+    with pytest.raises(ToolRefusalError, match="west") as caught:
+        tr._simulate_population(
+            _population(),
+            provider=no_west,
+            frame=_frame(no_west),
+            intervention_type="email_campaign",
+            regions=["west"],
+            model_id=uuid4(),
+        )
+    assert caught.value.reason_code is ReasonCode.EFFECT_NOT_ESTIMABLE

@@ -21,10 +21,7 @@ import types
 
 import pytest
 
-from src.api.routes import causal as causal_module
-
-pytestmark = pytest.mark.integration
-
+from src.api.routes.causal import hierarchical as hierarchical_module
 
 # =============================================================================
 # Static-source regression pin (cheapest assertion: forbid the primitive)
@@ -34,7 +31,7 @@ pytestmark = pytest.mark.integration
 class TestNoNpRandomInHierarchicalSource:
     def test_execute_hierarchical_has_no_np_random(self):
         """_execute_hierarchical_analysis must not fabricate input via np.random."""
-        source = inspect.getsource(causal_module._execute_hierarchical_analysis)
+        source = inspect.getsource(hierarchical_module._execute_hierarchical_analysis)
         assert "np.random" not in source, (
             "C1 regression: np.random fabrication reintroduced in _execute_hierarchical_analysis"
         )
@@ -44,7 +41,7 @@ class TestNoNpRandomInHierarchicalSource:
 
     def test_run_hierarchical_endpoint_exposes_demo_mode(self):
         """The handler must expose a demo_mode gate (sibling-endpoint idiom)."""
-        sig = inspect.signature(causal_module.run_hierarchical_analysis)
+        sig = inspect.signature(hierarchical_module.run_hierarchical_analysis)
         assert "demo_mode" in sig.parameters, (
             "C1 regression: run_hierarchical_analysis must expose a demo_mode gate"
         )
@@ -245,18 +242,22 @@ class TestNestedCIUsesTrueSE_H6:
     """
 
     def test_api_handler_builds_ate_std_from_cate_se(self):
-        """Source pin: _execute_hierarchical_analysis must prefer seg.cate_se."""
-        source = inspect.getsource(causal_module._execute_hierarchical_analysis)
-        # The corrected bridge must reference cate_se as the SE source.
-        assert "seg.cate_se" in source, (
-            "H6 regression: API hierarchical handler must feed the true SE "
-            "(seg.cate_se) into SegmentEstimate.ate_std, not raw cate_std"
+        """Source pin: _execute_hierarchical_analysis feeds ONLY seg.cate_se as the SE.
+
+        #2027 tightened H6: there is no fallback at all. A segment without a
+        measured SE / CI is excluded from the nested aggregate (see
+        ``test_hierarchical_nested_ci_excluded_2027.py``), never bridged with
+        ``cate_std`` (a dispersion), an invented 0.01, or a ±0.1 interval.
+        """
+        source = inspect.getsource(hierarchical_module._execute_hierarchical_analysis)
+        assert "ate_std=seg.cate_se," in source, (
+            "H6/#2027: API ate_std must be exactly the true SE (seg.cate_se)"
         )
-        # The corrected, full expression must be present verbatim.
-        assert (
-            "ate_std=(seg.cate_se if seg.cate_se is not None else (seg.cate_std or 0.01))" in source
-        ), "H6: API ate_std must be the cate_se-preferring expression"
-        # The buggy raw-dispersion bridge must be gone.
+        assert "ci_lower=seg.cate_ci_lower," in source and "ci_upper=seg.cate_ci_upper," in source
+        for invented in ("or 0.01", "cate_std or", "- 0.1", "+ 0.1", "cate_ci_lower or"):
+            assert invented not in source, (
+                f"#2027 regression: the API bridge invents uncertainty again ({invented!r})"
+            )
         assert "ate_std=seg.cate_std or 0.01" not in source, (
             "H6 regression: API handler still feeds raw cate_std as the standard error"
         )

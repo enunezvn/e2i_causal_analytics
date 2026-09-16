@@ -4,10 +4,26 @@ and rows without a brand / estimate are skipped (no fetch)."""
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
-from src.api.routes import causal as causal_routes
+from src.api.routes.causal import catalog as causal_catalog
+from src.api.routes.causal import discovery as causal_routes
 from src.api.schemas.causal import DiscoveredEffect
+
+# #1991 debt 4: the route no longer builds a ClinicalContextService at import —
+# ``catalog._get_clinical_context_service()`` builds it on first use and caches it
+# in ``catalog._clinical_context_service``. Seeding that cache with a stub is the
+# ONE patch point that serves every reader, whichever module's binding of the
+# accessor it calls, because the accessor resolves the global in ``catalog``.
+_clinical_context_service = SimpleNamespace(get_context=lambda *a, **k: None)
+
+
+@pytest.fixture(autouse=True)
+def _stub_clinical_context_service(monkeypatch):
+    monkeypatch.setattr(causal_catalog, "_clinical_context_service", _clinical_context_service)
+
 
 _PAYLOAD = {
     "brand": "Kisqali",
@@ -39,7 +55,7 @@ _PAYLOAD = {
 @pytest.mark.asyncio
 async def test_attach_clinical_context_happy_path(monkeypatch):
     monkeypatch.setattr(
-        causal_routes._clinical_context_service,
+        _clinical_context_service,
         "get_context",
         lambda b, o, treatment=None: _PAYLOAD,
     )
@@ -63,7 +79,7 @@ async def test_attach_clinical_context_fail_open(monkeypatch):
     def _boom(brand, outcome, treatment=None):
         raise RuntimeError("clinical-context API unavailable")
 
-    monkeypatch.setattr(causal_routes._clinical_context_service, "get_context", _boom)
+    monkeypatch.setattr(_clinical_context_service, "get_context", _boom)
     eff = DiscoveredEffect(
         treatment="treatment_arm",
         outcome="persistent_180d",
@@ -84,7 +100,7 @@ async def test_attach_clinical_context_skips_without_brand_or_estimate(monkeypat
         calls["n"] += 1
         return _PAYLOAD
 
-    monkeypatch.setattr(causal_routes._clinical_context_service, "get_context", _track)
+    monkeypatch.setattr(_clinical_context_service, "get_context", _track)
     no_brand = DiscoveredEffect(treatment="t", outcome="o", status="pending")
     no_estimate = DiscoveredEffect(treatment="t", outcome="o", brand="Kisqali", status="running")
     await causal_routes._attach_clinical_context(no_brand)
@@ -108,7 +124,7 @@ async def test_attach_clinical_context_passes_the_row_treatment(monkeypatch):
         seen["args"] = (brand, outcome, treatment)
         return _PAYLOAD
 
-    monkeypatch.setattr(causal_routes._clinical_context_service, "get_context", _capture)
+    monkeypatch.setattr(_clinical_context_service, "get_context", _capture)
     eff = DiscoveredEffect(
         treatment="copay_support",
         outcome="persistent_180d",

@@ -39,7 +39,22 @@ GOVERNED_FILES = [
     "src/agents/tool_composer/decomposer.py",
     "src/agents/tool_composer/synthesizer.py",
     "src/agents/orchestrator/nodes/intent_classifier.py",
-    "src/api/routes/causal.py",
+    # causal.py became a package (#1991 debt 4). The guard fires only on a
+    # logger.<level>() call, so every module that inherited the flat file's code
+    # AND carries a ``logger`` is governed — the whole package except _common.py
+    # (constants + pure numeric helpers, no logger, no request surface) and
+    # __init__.py (the aggregator router only). Caution: QUERY_NAMES includes
+    # ``question``, and discovery/agent handle causal QUESTION objects (a
+    # treatment/outcome pair), not user query text — examine a hit in those two
+    # before wrapping it in redact_query.
+    "src/api/routes/causal/activity.py",
+    "src/api/routes/causal/agent.py",
+    "src/api/routes/causal/catalog.py",
+    "src/api/routes/causal/datasets.py",
+    "src/api/routes/causal/discovery.py",
+    "src/api/routes/causal/hierarchical.py",
+    "src/api/routes/causal/loaders.py",
+    "src/api/routes/causal/pipelines.py",
     "src/rag/evaluation.py",
 ]
 

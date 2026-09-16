@@ -361,18 +361,20 @@ def test_chat_tool_marks_its_compositions():
     from src.api.routes import chatbot_tools
 
     context = chatbot_tools._composer_context(
-        brand="Kisqali", region="NE", session_id="s", max_parallel=3
+        brand="Kisqali", region="NE", session_id="s", user_id="u", max_parallel=3
     )
     assert context["entry_point"] == "chat_tool"
     assert (
         context["brand"],
         context["region"],
         context["session_id"],
+        context["user_id"],
         context["max_parallel"],
     ) == (
         "Kisqali",
         "NE",
         "s",
+        "u",
         3,
     )
     # The tool builds its composer context through that helper (and nowhere else).

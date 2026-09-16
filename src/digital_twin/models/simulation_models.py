@@ -240,6 +240,30 @@ class SimulationResult(BaseModel):
             raise ValueError("cohort CI lower bound must be <= upper bound")
         return self
 
+    @property
+    def cohort_wide_ate(self) -> float:
+        """The cohort-wide effect, whatever this result is scoped to.
+
+        When regions were targeted the headline is those regions' effect and the
+        cohort-wide estimate rides along in ``cohort_*`` (#2023); otherwise the headline
+        IS the cohort-wide estimate and ``cohort_*`` is None because nothing was narrowed
+        away. A caller wanting "the number a region filter does not change" reads these
+        three rather than picking a field per scope and getting it wrong in one of them.
+        """
+        return float(self.simulated_ate if self.cohort_ate is None else self.cohort_ate)
+
+    @property
+    def cohort_wide_ci_lower(self) -> float:
+        """Lower bound of :attr:`cohort_wide_ate`'s interval."""
+        v = self.simulated_ci_lower if self.cohort_ci_lower is None else self.cohort_ci_lower
+        return float(v)
+
+    @property
+    def cohort_wide_ci_upper(self) -> float:
+        """Upper bound of :attr:`cohort_wide_ate`'s interval."""
+        v = self.simulated_ci_upper if self.cohort_ci_upper is None else self.cohort_ci_upper
+        return float(v)
+
     def is_significant(self, threshold: float = 0.05) -> bool:
         """Check if effect is statistically significant (CI doesn't include 0)."""
         return self.simulated_ci_lower > 0 or self.simulated_ci_upper < 0

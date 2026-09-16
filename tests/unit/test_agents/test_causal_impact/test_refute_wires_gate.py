@@ -51,6 +51,7 @@ class _CapturingRepo:
 
     def __init__(self) -> None:
         self.create_kwargs: dict | None = None
+        self.appended: list[tuple] = []
 
     async def get_dag_approval(self, dag_hash, brand=None):
         return None
@@ -58,9 +59,23 @@ class _CapturingRepo:
     async def get_reviews_for_dag(self, dag_hash, include_expired=False, brand=None):
         return []
 
+    async def get_reviews_for_estimand(self, estimand_key, include_expired=True):
+        # #1991 debt 3: check_approval reads the estimand's history.
+        return []
+
     async def create_review(self, **kwargs):
         self.create_kwargs = kwargs
         return "rev-captured"
+
+    async def append_version(self, review_id, **kwargs):
+        self.appended.append((review_id, kwargs.get("dag_version_hash")))
+        return True
+
+    async def get_latest_version(self, review_id):
+        """No timeline yet (#1991 debt 3). Without this the gate's version read
+        raises AttributeError, which it swallows as UNKNOWN -- so every mint here
+        would log a warning and take the OUTAGE path instead of the normal one."""
+        return None
 
 
 class TestRefuteBuildsRepoBackedGate:
@@ -212,13 +227,18 @@ class TestBypassNeverClaimsApproval:
         """The approval note is kept for a REAL approval (row id present)."""
 
         class _ApprovedRepo(_CapturingRepo):
-            async def get_dag_approval(self, dag_hash, brand=None):
-                return {
-                    "review_id": "rev-approved",
-                    "approved_at": "2026-01-01T00:00:00Z",
-                    "valid_until": "2099-01-01",
-                    "reviewer_name": "Dr. Structure",
-                }
+            async def get_reviews_for_estimand(self, estimand_key, include_expired=True):
+                return [
+                    {
+                        "review_id": "rev-approved",
+                        "approval_status": "approved",
+                        # The approval covers THIS structure version.
+                        "dag_version_hash": "x",
+                        "approved_at": "2026-01-01T00:00:00Z",
+                        "valid_until": "2099-01-01",
+                        "reviewer_name": "Dr. Structure",
+                    }
+                ]
 
         gate = ExpertReviewGate(repository=_ApprovedRepo())
         node = RefutationNode(expert_review_gate=gate)

@@ -33,7 +33,9 @@ class TestHeterogeneousOptimizationTrainingSignal:
         signal = HeterogeneousOptimizationTrainingSignal()
 
         assert signal.signal_id == ""
-        assert signal.session_id == ""
+        # #2099: an absent session is None, not an empty string. The signal
+        # feeds learning_signals.session_id, where "" was never a real identity.
+        assert signal.session_id is None
         assert signal.query == ""
         assert signal.treatment_var == ""
         assert signal.outcome_var == ""

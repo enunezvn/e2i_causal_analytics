@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.api.routes.causal import _is_randomized_treatment
+from src.api.routes.causal.datasets import _is_randomized_treatment
 from src.api.schemas.causal import AgentCausalAnalysisRequest
 
 
@@ -50,7 +50,7 @@ async def test_task_threads_randomized_design_into_initial_state(monkeypatch):
     import pandas as pd
 
     import src.agents.causal_impact.graph as graph_mod
-    from src.api.routes import causal as causal_routes
+    from src.api.routes.causal import agent as causal_routes
 
     captured: dict = {}
 
@@ -77,7 +77,7 @@ async def test_task_defaults_randomized_design_false(monkeypatch):
     import pandas as pd
 
     import src.agents.causal_impact.graph as graph_mod
-    from src.api.routes import causal as causal_routes
+    from src.api.routes.causal import agent as causal_routes
 
     captured: dict = {}
 

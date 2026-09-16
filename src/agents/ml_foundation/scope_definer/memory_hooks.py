@@ -292,7 +292,7 @@ class ScopeDefinerMemoryHooks:
 
     async def store_scope_definition(
         self,
-        session_id: str,
+        session_id: Optional[str],
         result: Dict[str, Any],
         state: Dict[str, Any],
         brand: Optional[str] = None,
@@ -320,6 +320,14 @@ class ScopeDefinerMemoryHooks:
 
             content = {
                 "experiment_id": result.get("experiment_id"),
+                # The audit chain's workflow id used to be persisted AS the session
+                # (#2099). It is a real correlation handle but not a conversation,
+                # so it keeps its value here. Absent when the state has none.
+                **(
+                    {"audit_workflow_id": str(state["audit_workflow_id"])}
+                    if state.get("audit_workflow_id")
+                    else {}
+                ),
                 "experiment_name": result.get("experiment_name"),
                 "problem_type": state.get("inferred_problem_type"),
                 "target_variable": state.get("inferred_target_variable"),
@@ -558,13 +566,16 @@ async def contribute_to_memory(
     Returns:
         Dictionary with counts of stored memories
     """
-    import uuid
-
     if memory_hooks is None:
         memory_hooks = get_scope_definer_memory_hooks()
 
     if session_id is None:
-        session_id = state.get("session_id") or str(uuid.uuid4())
+        # No mint (#2076). An absent session id stays None: the episodic writer
+        # coerces it to an honest NULL for the nullable ``session_id`` column
+        # rather than recording a uuid that belongs to no conversation. A falsy
+        # state value normalises to None too, so the session-KEYED Redis writes
+        # below are skipped instead of keyed on an empty string.
+        session_id = state.get("session_id") or None
 
     counts = {
         "episodic_stored": 0,
@@ -579,9 +590,12 @@ async def contribute_to_memory(
 
     # 1. Cache in working memory
     scope_spec = result.get("scope_spec", {})
-    cached = await memory_hooks.cache_scope_definition(session_id, scope_spec)
-    if cached:
-        counts["working_cached"] = 1
+    # Skipped without a session (#2076): the cache key embeds the session id, so a
+    # session-less write would land under a key no reader can ever ask for.
+    if session_id is not None:
+        cached = await memory_hooks.cache_scope_definition(session_id, scope_spec)
+        if cached:
+            counts["working_cached"] = 1
 
     # 2. Store in episodic memory
     memory_id = await memory_hooks.store_scope_definition(

@@ -127,7 +127,7 @@ class TestHierarchicalAnalysis:
         path resolves a real DataFrame from filters.estimation_data_records and
         raises 503 when none is present (matching the sibling endpoints). The
         labeled demo path and the real-data path are covered by
-        tests/api/test_hierarchical_defab.py.
+        tests/unit/test_api/test_routes/test_hierarchical_defab.py.
         """
         response = client.post(
             "/causal/hierarchical/analyze",
@@ -942,7 +942,7 @@ class TestHealthAnalysisActivity:
     def _reset_activity_cache(self):
         """The health activity read is memoized (review M1); clear the cache
         before each test so per-test monkeypatched values are read fresh."""
-        import src.api.routes.causal as causal_route
+        import src.api.routes.causal.activity as causal_route
 
         causal_route._activity_cache["expires_at"] = 0.0
         causal_route._activity_cache["value"] = (0, None)
@@ -954,7 +954,7 @@ class TestHealthAnalysisActivity:
         """The handler must read the live episodic count + most-recent timestamp,
         not return the hardcoded ``analysis_count_24h=0`` / ``last_analysis=None``.
         """
-        import src.api.routes.causal as causal_route
+        import src.api.routes.causal.activity as causal_route
 
         recorded: dict = {}
 
@@ -996,7 +996,7 @@ class TestHealthAnalysisActivity:
         REAL 0 / None (honest empty), never a fabricated number — and must not
         500 on the empty episodic read.
         """
-        import src.api.routes.causal as causal_route
+        import src.api.routes.causal.activity as causal_route
 
         async def fake_count(**kwargs):
             return 0
@@ -1019,7 +1019,7 @@ class TestHealthAnalysisActivity:
         the activity fields fall back to 0/None (honest unknown), not a fabricated
         value, and the rest of the health payload is still served.
         """
-        import src.api.routes.causal as causal_route
+        import src.api.routes.causal.activity as causal_route
 
         async def boom(**kwargs):
             raise RuntimeError("episodic store unreachable")
@@ -1068,7 +1068,7 @@ class TestCausalHistory:
         """The endpoint must return the REAL recent causal-analysis rows from
         episodic_memories, mapped to history items — not an empty stub.
         """
-        import src.api.routes.causal as causal_route
+        import src.api.routes.causal.activity as causal_route
 
         recorded: dict = {}
 
@@ -1116,7 +1116,7 @@ class TestCausalHistory:
 
     def test_history_empty_is_honest_empty(self, viewer_client, monkeypatch):
         """No rows -> a real empty history (total 0), not a fabricated series."""
-        import src.api.routes.causal as causal_route
+        import src.api.routes.causal.activity as causal_route
 
         async def fake_recent(**kwargs):
             return []
@@ -1133,7 +1133,7 @@ class TestCausalHistory:
     def test_history_500_on_episodic_read_failure(self, viewer_client, monkeypatch):
         """A failure reading the episodic store surfaces as a 500 (generic detail)
         rather than an empty list that the UI would mistake for 'no analyses'."""
-        import src.api.routes.causal as causal_route
+        import src.api.routes.causal.activity as causal_route
 
         async def boom(**kwargs):
             raise RuntimeError("episodic store unreachable")
@@ -1149,7 +1149,7 @@ class TestCausalHistory:
     def test_history_skips_rows_missing_memory_id_or_timestamp(self, viewer_client, monkeypatch):
         """Rows without a memory_id (PK) or a parseable timestamp are dropped — not
         emitted with a blank key or a fabricated time."""
-        import src.api.routes.causal as causal_route
+        import src.api.routes.causal.activity as causal_route
 
         async def fake_recent(**kwargs):
             return [

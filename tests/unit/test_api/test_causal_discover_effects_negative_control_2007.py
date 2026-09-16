@@ -23,7 +23,8 @@ import pandas as pd
 import pytest
 
 from src.api.dependencies.durable_job_store import DurableJobStore
-from src.api.routes import causal as causal_routes
+from src.api.routes.causal import agent as causal_agent
+from src.api.routes.causal import discovery as causal_routes
 from src.api.schemas.causal import AgentCausalAnalysisResponse
 from tests.unit.test_api.test_causal_discover_effects_select_cancel import (
     _completed_agent_response,
@@ -64,7 +65,9 @@ def task_env(monkeypatch):
         "test:agent-nc", AgentCausalAnalysisResponse, redis_factory=store._redis_factory
     )
     monkeypatch.setattr(causal_routes, "_discover_effects_store", store)
-    monkeypatch.setattr(causal_routes, "_agent_analysis_store", agent_store)
+    # One binding: discovery reads the store through ``agent``'s namespace, so
+    # patching the agent global reaches the discovery reader too.
+    monkeypatch.setattr(causal_agent, "_agent_analysis_store", agent_store)
 
     async def identity_prerank(dataset, questions):
         return list(questions)
@@ -96,7 +99,7 @@ def task_env(monkeypatch):
         )
 
     monkeypatch.setattr(causal_routes, "_load_agent_estimation_frame", fake_load)
-    monkeypatch.setattr(causal_routes, "_run_agent_analysis_task", fake_agent)
+    monkeypatch.setattr(causal_agent, "_run_agent_analysis_task", fake_agent)
     return {"store": store, "loads": loads, "agent_calls": agent_calls}
 
 

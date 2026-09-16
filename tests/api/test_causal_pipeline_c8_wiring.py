@@ -33,7 +33,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.api.main import app
-from src.api.routes import causal as causal_module
+from src.api.routes.causal import _common as causal_common
+from src.api.routes.causal import pipelines as causal_module
 from src.api.schemas.causal import (
     ParallelPipelineResponse,
     SequentialPipelineResponse,
@@ -432,21 +433,30 @@ class TestNoHardcodedValuesInWiring:
 
     def test_no_random_uniform_in_real_wiring_path(self):
         """The wiring path MUST NOT use random.uniform (regression of F-005 fix)."""
+        # (module, name) rather than a name list: the helpers live in different
+        # modules since the #1991 debt-4 split, and a name this guard cannot
+        # resolve is asserted rather than skipped — a hasattr guard here went
+        # vacuous the moment a helper moved. "_build_pipeline_input" was never
+        # an attribute (the real names are the two suffixed ones), so it was
+        # already skipping silently before the split.
         forbidden_helpers = (
-            "_run_real_sequential_pipeline",
-            "_run_real_parallel_pipeline",
-            "_build_pipeline_input",
-            "_resolve_pipeline_dataframe",
+            (causal_module, "_run_real_sequential_pipeline"),
+            (causal_module, "_run_real_parallel_pipeline"),
+            (causal_module, "_build_pipeline_input_sequential"),
+            (causal_module, "_build_pipeline_input_parallel"),
+            (causal_common, "_resolve_pipeline_dataframe"),
         )
-        for helper_name in forbidden_helpers:
-            if hasattr(causal_module, helper_name):
-                helper_source = inspect.getsource(getattr(causal_module, helper_name))
-                assert "random.uniform" not in helper_source, (
-                    f"C-8 regression: random.uniform reintroduced in {helper_name}"
-                )
-                assert "np.random.seed" not in helper_source, (
-                    f"C-8 regression: np.random.seed reintroduced in {helper_name}"
-                )
+        for owner, helper_name in forbidden_helpers:
+            assert hasattr(owner, helper_name), (
+                f"{helper_name} is no longer on {owner.__name__}: this guard would be vacuous"
+            )
+            helper_source = inspect.getsource(getattr(owner, helper_name))
+            assert "random.uniform" not in helper_source, (
+                f"C-8 regression: random.uniform reintroduced in {helper_name}"
+            )
+            assert "np.random.seed" not in helper_source, (
+                f"C-8 regression: np.random.seed reintroduced in {helper_name}"
+            )
 
     def test_no_fixed_ate_constant_in_wiring(self):
         """No `ate=0.12`-style hardcoded effect values in any new helper."""

@@ -514,12 +514,13 @@ class CausalImpactState(TypedDict):
     refutation_passed: NotRequired[bool]
     needs_review: NotRequired[bool]  # REVIEW-band gate: borderline-robust, not "passed"
     gate_decision: NotRequired[str]  # refutation gate: "proceed" | "review" | "block"
-    review_caveat: NotRequired[str]  # band-specific caveat surfaced for REVIEW/BLOCK/halt
+    review_caveat: NotRequired[str]  # band-specific caveat surfaced for REVIEW/rejection/halt
     # ExpertReviewGate decision value: proceed | renewal_required | pending_review |
-    # rejected | blocked | unavailable (ReviewGateDecision). Set on REVIEW/BLOCK
-    # bands and on a PROCEED band ONLY when a human rejection was found (#1971).
+    # rejected | blocked | unavailable (ReviewGateDecision). Set on the REVIEW
+    # band and, on PROCEED or BLOCK, ONLY when a human rejection was found
+    # (#1971; #1991 debt 3 stopped the BLOCK band consulting the gate at all).
     expert_review_decision: NotRequired[str | None]
-    expert_review_id: NotRequired[str | None]  # expert_reviews row id (REVIEW/BLOCK/rejected)
+    expert_review_id: NotRequired[str | None]  # expert_reviews row id (REVIEW/rejected)
     # #1971: True when the RefutationNode WITHHELD the estimate on the
     # expert-review gate -- a human REJECTED the DAG structure (any band), or
     # CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL=true and a REVIEW-band structure holds

@@ -11,7 +11,7 @@ import pytest
 
 @pytest.mark.unit
 def test_copay_is_offered_as_a_treatment_with_a_label():
-    from src.api.routes.causal import _CAUSAL_DATASET_SPECS, _COLUMN_LABELS
+    from src.api.routes.causal.datasets import _CAUSAL_DATASET_SPECS, _COLUMN_LABELS
 
     spec = _CAUSAL_DATASET_SPECS["patient_journeys"]
     assert "copay_support" in spec["treatment"]
@@ -29,7 +29,7 @@ def test_insurance_access_label_marks_itself_as_derived():
     guard against the label silently reverting to a bare metric name, without
     pinning harmless copy edits.
     """
-    from src.api.routes.causal import _COLUMN_LABELS
+    from src.api.routes.causal.datasets import _COLUMN_LABELS
 
     label = _COLUMN_LABELS["insurance_access_score"]
     assert "derived" in label.lower(), (
@@ -40,7 +40,7 @@ def test_insurance_access_label_marks_itself_as_derived():
 
 @pytest.mark.unit
 def test_copay_curated_outcomes_are_offered():
-    from src.api.routes.causal import _CAUSAL_DATASET_SPECS
+    from src.api.routes.causal.datasets import _CAUSAL_DATASET_SPECS
 
     outcomes = set(_CAUSAL_DATASET_SPECS["patient_journeys"]["outcome"])
     assert {"adherent_180d", "low_gap_180d", "persistent_180d"} <= outcomes
@@ -49,7 +49,7 @@ def test_copay_curated_outcomes_are_offered():
 @pytest.mark.unit
 def test_new_columns_are_float_coerced():
     """Un-coerced columns reach the executors as strings/None and drop rows."""
-    from src.api.routes.causal import _CAUSAL_NUMERIC_COLUMNS
+    from src.api.routes.causal.datasets import _CAUSAL_NUMERIC_COLUMNS
 
     numeric = _CAUSAL_NUMERIC_COLUMNS["patient_journeys"]
     assert {"copay_support", "insurance_access_score"} <= numeric
@@ -59,7 +59,7 @@ def test_new_columns_are_float_coerced():
 def test_post_treatment_proxies_stay_out_of_the_adjustment_set():
     """Regression guard for the 2026-06-29 adversarial correction: adjusting on
     adherence_rate/gap_days overcontrols and collapses the effect to a fake ~0."""
-    from src.api.routes.causal import _CAUSAL_DATASET_SPECS
+    from src.api.routes.causal.datasets import _CAUSAL_DATASET_SPECS
 
     covariates = set(_CAUSAL_DATASET_SPECS["patient_journeys"]["covariate"])
     assert "adherence_rate" not in covariates

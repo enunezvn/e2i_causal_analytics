@@ -9,6 +9,7 @@ from src.digital_twin.effect.estimate import (
     PROVENANCE_COHORT,
     PROVENANCE_RWD,
     PROVENANCE_SYNTHETIC,
+    SUBGROUP_AXES,
     EffectEstimate,
 )
 from src.digital_twin.effect.estimator import TwinEffectEstimator
@@ -38,6 +39,7 @@ __all__ = [
     "PROVENANCE_SYNTHETIC",
     "PROVENANCE_RWD",
     "PROVENANCE_COHORT",
+    "SUBGROUP_AXES",
     "TwinEffectEstimator",
     "SegmentEffect",
     "segment_by_uplift_quantiles",

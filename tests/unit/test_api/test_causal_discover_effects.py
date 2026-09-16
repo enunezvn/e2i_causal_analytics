@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.api.routes import causal as causal_routes
-from src.api.routes.causal import (
+from src.api.routes.causal import discovery as causal_routes
+from src.api.routes.causal.discovery import (
     _effect_confidence_score,
     _effect_from_agent_response,
     _effect_status_from_gate,
@@ -414,7 +414,7 @@ def test_column_label_helper_is_the_served_label_ssot():
     """``_column_label`` is what GET /causal/variables and GET /segments/datasets
     serve per column: the curated label, else the auto-label (underscores ->
     spaces, first letter capitalised)."""
-    from src.api.routes.causal import _COLUMN_LABELS, _column_label
+    from src.api.routes.causal.datasets import _COLUMN_LABELS, _column_label
 
     assert _column_label("sample_dropped") == _COLUMN_LABELS["sample_dropped"]
     assert _column_label("sample_dropped") == "Product samples provided (rep sample drop)"
@@ -434,7 +434,8 @@ def test_effect_summary_uses_curated_column_labels():
     """The summary sentence names the treatment and outcome by their curated
     labels, never the raw column — the leaderboard row above it renders the
     label, so the two must agree."""
-    from src.api.routes.causal import _COLUMN_LABELS, _effect_summary
+    from src.api.routes.causal.datasets import _COLUMN_LABELS
+    from src.api.routes.causal.discovery import _effect_summary
 
     s = _effect_summary("sample_dropped", "treatment_initiated", 0.092, "proceed", True, None)
     assert s is not None

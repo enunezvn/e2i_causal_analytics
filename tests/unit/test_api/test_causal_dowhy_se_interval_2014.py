@@ -21,7 +21,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.api.routes import causal as causal_routes
+from src.api.routes.causal import _common as causal_common
+from src.api.routes.causal import activity as causal_routes
+from src.api.routes.causal import pipelines as causal_pipelines
 from src.causal.stats import z_score_for_confidence
 
 
@@ -34,7 +36,7 @@ def _frame(n: int = 600, seed: int = 2014) -> pd.DataFrame:
 
 
 def _run_dowhy() -> tuple:
-    pipeline = causal_routes._SurfaceCSequentialPipeline(fail_fast=False)
+    pipeline = causal_pipelines._SurfaceCSequentialPipeline(fail_fast=False)
     output = asyncio.run(
         pipeline.execute(
             {
@@ -62,18 +64,18 @@ def test_sequential_pipeline_dowhy_stage_carries_the_interval_from_its_se() -> N
     assert se is not None and dowhy["standard_error_method"] == "ols_hc1"
     z = z_score_for_confidence(0.95)
 
-    payload = causal_routes._extract_library_payload("dowhy", output, state=state)
+    payload = causal_pipelines._extract_library_payload("dowhy", output, state=state)
 
     assert payload["ci_lower"] == pytest.approx(effect - z * se, rel=1e-12)
     assert payload["ci_upper"] == pytest.approx(effect + z * se, rel=1e-12)
-    assert payload["p_value"] == pytest.approx(causal_routes._te_pvalue_from_z(effect, se))
+    assert payload["p_value"] == pytest.approx(causal_common._te_pvalue_from_z(effect, se))
     assert payload["standard_error"] == se
     assert payload["standard_error_method"] == "ols_hc1"
 
 
 def test_dowhy_interval_helper_returns_nothing_without_an_se() -> None:
-    assert causal_routes._dowhy_interval({"causal_effect": 0.3, "standard_error": None}) is None
-    assert causal_routes._dowhy_interval({"causal_effect": 0.3, "standard_error": 0.0}) is None
+    assert causal_common._dowhy_interval({"causal_effect": 0.3, "standard_error": None}) is None
+    assert causal_common._dowhy_interval({"causal_effect": 0.3, "standard_error": 0.0}) is None
 
 
 def test_treatment_effects_dowhy_fallback_reports_the_interval() -> None:

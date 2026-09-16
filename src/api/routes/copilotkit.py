@@ -142,9 +142,9 @@ Changelog:
     1.21.1 - Fixed session_id not reaching chat_node() for message persistence.
              Root cause: AG-UI LangGraph's state management may not preserve custom
              fields from RunAgentInput.state when passing to graph nodes.
-             Fix: Use Python contextvars to pass session_id across async boundaries.
-             The context var is set in execute() and read in chat_node() as the
-             primary source, with state and config.thread_id as fallbacks.
+             Fix: execute() sets a session contextvar that chat_node() reads first,
+             with state and config.thread_id as fallbacks. (#2064 made graph
+             state the channel; #2100 revived the var, and the two now agree.)
     1.21.0 - Added message persistence to Supabase chatbot_messages table.
              All user messages, assistant responses, tool calls, and synthesized responses
              are now persisted using ChatbotMessageRepository. This enables:
@@ -325,7 +325,6 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
-from langgraph.prebuilt import ToolNode
 from pydantic import BaseModel, Field
 
 from src.agents.factory import build_agent_roster_block
@@ -340,6 +339,8 @@ from src.api.dependencies.auth import (
     verify_supabase_token,
 )
 from src.api.middleware.tracing import get_request_id  # Phase 1 G08
+from src.api.routes import chat_identity
+from src.api.routes.chat_session_binding import SessionBoundToolNode
 from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS, set_raw_user_query
 from src.api.routes.chatbot_tools import chat_session_id_context as _session_id_context
 from src.api.routes.synthesis_guard import (
@@ -362,11 +363,11 @@ from src.utils.tool_evidence import evidence_tool_count
 
 logger = logging.getLogger(__name__)
 
-# ``_session_id_context`` (imported above) passes session_id across async
-# boundaries, because AG-UI LangGraph may not preserve custom state fields.
-# #2064: the variable is declared in chatbot_tools so the chat tools read the
-# same binding (tools only ever see the model's args); this name stays for its
-# existing readers here and in chat_bridge.
+# ``_session_id_context`` (imported above) is declared in chatbot_tools so the
+# chat tools read the same binding. AG-UI's execute() and the chat bridge bind
+# it; /chat/stream binds its tools from state, via SessionBoundToolNode. The
+# keepalive's per-frame tasks used to drop it on the AG-UI route, which is why
+# graph STATE is the channel the nodes read (#2064); #2100 gave them one context.
 
 # Per-run discriminator for frontend_message_id stamping: the session key is
 # the conversation threadId, so overlapping streams in the same conversation
@@ -1197,14 +1198,14 @@ class LangGraphAgent(_LangGraphAGUIAgent):
         # state's run_id into _persist_message_sync as the fallback.
         state_with_session["run_id"] = run_id
 
-        # CRITICAL (v1.21.1): Also set session_id in context var for reliable cross-async access
-        # AG-UI LangGraph may not preserve custom state fields, so use contextvars as fallback
+        # Also bind the context var (v1.21.1). The keepalive's per-frame tasks
+        # used to drop it (#2064), so state above is the channel; #2100 revived it.
         _session_id_context.set(persistent_session_id)
         _run_id_context.set(run_id)
         # Attribute this run's LLM usage to the chat user/session (admin
         # observability, spec 2026-07-12). Both capture hooks read this
-        # contextvar; the user_id is derived from the session prefix and the
-        # anonymous UUID maps to NULL — attribution is honest-only.
+        # contextvar; the user_id is the verified request user (#2077), the
+        # session prefix only as fallback, else NULL — attribution is honest-only.
         set_chat_attribution(persistent_session_id, run_id)
         dbg(f"Set session_id in state and context var: {persistent_session_id[:20]}...")
 
@@ -2543,6 +2544,10 @@ async def run_causal_analysis(
             result = await orchestrator.run(
                 {
                     "query": query,
+                    # #2105: None on the SDK action paths (action/{name}, actions/execute), the
+                    # only ones reaching this handler: identity bound, no session. Never minted.
+                    "session_id": _session_id_context.get(),
+                    "user_id": chat_identity.resolve_tool_user_id(_session_id_context.get()),
                     "user_context": {
                         "brand": brand,
                         "intervention": intervention,
@@ -3391,8 +3396,8 @@ You help users with:
 You MUST use tools proactively when users ask about data:
 - Use `e2i_data_query_tool` for KPI metrics, causal chains, agent analyses (an agent's ACTIVITY LOG — runs, confidences, timestamps; NOT the system health score), triggers
 - Use kpi_calculate_tool to COMPUTE a KPI value for a brand/period (NRx, TRx, NBRx, market share, conversion rate, ROI). Pass the brand and any time window the user names, and state which brand and window your answer covers.
-- BREAKDOWN GUIDANCE: For NRx/TRx/NBRx/TRx-share/conversion-rate patient-segment breakdowns, call `kpi_calculate_tool` once per bucket of ONE axis and present the results as a table. Axes: `segment` ∈ {low_severity, medium_severity, high_severity}; `therapy_line` ∈ {0,1,2,3}; and FOR REMIBRUTINIB ONLY (volume KPIs and share, NOT conversion rate) `biologic` ∈ {naive, experienced} and `ige_tier` ∈ {low, medium, high}. A volume axis's buckets sum to the head-line KPI, so the breakdown reconciles with the total (rates/shares don't sum — their numerators/denominators do). When the user names a period ("last year", "Q1 2025"), ALWAYS pass `window` too — it composes with `segment`/`therapy_line` for TRx/NRx/NBRx, TRx share, and conversion rate. Use exactly one axis per breakdown — they are mutually exclusive.
-- HONESTY GUARD: Clinical context is background framing only — never present a clinical sub-population as a data breakdown unless a tool actually returned per-bucket values. Biologic status (`biologic`) and IgE tier (`ige_tier`) are REAL breakdown axes for REMIBRUTINIB ONLY; for Kisqali/Fabhalta `kpi_calculate_tool` returns an error because the data is NULL by design — say it is unavailable for that brand and do NOT fabricate a split or guess. The real breakdown axes are severity tier (`segment`), line-of-therapy (`therapy_line`), biologic status and IgE tier (Remibrutinib only), plus geographic `region`. TRx Share is the brand's share of the TRACKED PORTFOLIO's prescriptions (Fabhalta + Kisqali + Remibrutinib, cross-indication) — NOT market share vs external competitors; competitor brands (e.g. Xolair, Dupixent) are not in the data model, so NEVER attribute the share complement to named competitors.
+- BREAKDOWN GUIDANCE: For NRx/TRx/NBRx/conversion-rate patient-segment breakdowns, call `kpi_calculate_tool` once per bucket of ONE axis and present the results as a table. Axes: `segment` ∈ {low_severity, medium_severity, high_severity}; `therapy_line` ∈ {0,1,2,3}; and FOR REMIBRUTINIB ONLY (volume KPIs, NOT conversion rate) `biologic` ∈ {naive, experienced} and `ige_tier` ∈ {low, medium, high}. TRx share is NOT defined on a patient axis (each patient is on one tracked brand, so a per-bucket portfolio share mixes indications; the tool refuses it): for a "share by tier / line / biologic status / IgE tier" ask, call TRx once per bucket and present each bucket's TRx with its % of the brand's TRx total, labelled the within-brand mix. A volume axis's buckets sum to the head-line KPI, so the breakdown reconciles with the total (rates don't sum — their numerators/denominators do). When the user names a period ("last year", "Q1 2025"), ALWAYS pass `window` too — it composes with `segment`/`therapy_line` for TRx/NRx/NBRx and conversion rate. Use exactly one axis per breakdown — they are mutually exclusive.
+- HONESTY GUARD: Clinical context is background framing only — never present a clinical sub-population as a data breakdown unless a tool actually returned per-bucket values. Biologic status (`biologic`) and IgE tier (`ige_tier`) are REAL breakdown axes for REMIBRUTINIB ONLY; for Kisqali/Fabhalta `kpi_calculate_tool` returns an error because the data is NULL by design — say it is unavailable for that brand and do NOT fabricate a split or guess. The real breakdown axes are severity tier (`segment`), line-of-therapy (`therapy_line`), biologic status and IgE tier (Remibrutinib only), plus geographic `region` — for TRx share only `region` applies, and a within-brand mix computed from TRx buckets is never a share. TRx Share is the brand's share of the TRACKED PORTFOLIO's prescriptions (Fabhalta + Kisqali + Remibrutinib, cross-indication) — NOT market share vs external competitors; competitor brands (e.g. Xolair, Dupixent) are not in the data model, so NEVER attribute the share complement to named competitors.
 - ROI DISPERSION (#1532): the ROI headline is a pooled point estimate and carries NO interval — never invent one. When the response includes `temporal_variability_band`, present each slice's band as "the range of its monthly ROI values over the past 12 months" with its `n` — it measures recent temporal variability, NOT a confidence interval and NOT uncertainty about the current value; for slices with `band_suppressed: true`, state only the n and that the band is suppressed.
 - SCALE GUARD (#1640): every KPI figure arrives with a `measure_basis` naming the substrate it was computed from. TWO FIGURES ARE COMPARABLE ONLY IF THEIR `measure_basis.comparison_key` MATCHES — that field, not `substrate`. They differ on purpose: a materialized history series is READ from `kpi_history` (its `substrate`) but RESTS on whatever the backfill drew it from (`materialized_from`, reduced to tables in `comparison_key`). Comparing on `substrate` would call a TRx history and an ROI history comparable because both are read from the same table, and would wrongly fence ROI history against stored ROI when both rest on `business_metrics`. If `measure_basis.mixed_sources` is true the series spans more than one substrate and is comparable with NOTHING — say so rather than comparing it. `kpi_calculate_tool` computes volume KPIs from the `treatment_events` ledger; `e2i_data_query_tool(query_type='kpi')` returns stored `business_metrics` rows, whose `value` is a MODELED market-scale level — measured, the national business_metrics TRx total is ~73x the trailing-30-day event count for the same brand. They are different quantities sharing a name. NEVER present one as a check, correction, total, or share-of for the other; never divide or sum across them; and never call the gap a discontinuity or a data error. If an answer needs both, give each its own row with its substrate stated, and say plainly that they measure different things. When a figure carries no `measure_basis`, treat it as NOT comparable rather than assuming it agrees.
 - Use `causal_analysis_tool` for understanding metric drivers. When the user names a treatment/exposure ("rep visits"), query the registry by the USER'S variable phrasing first (e.g. `kpi_name='rep visit'`) before narrowing by outcome/brand or substituting a "closest match" variable; if you do substitute, every headline and confidence claim must name the substituted variable, never the user's.
@@ -3558,8 +3563,8 @@ def create_e2i_chat_agent(
 
         messages = state.get("messages", [])
 
-        # Get session_id with priority: context var (most reliable) > state > config
-        # Context var is set in execute() and persists across async boundaries
+        # Get session_id with priority: context var > state > config. Since #2100
+        # the var reaches here too; execute() sets both, nothing checks they match.
         session_id = _session_id_context.get()
         session_id_source = "context_var" if session_id else None
 
@@ -4258,7 +4263,7 @@ def create_e2i_chat_agent(
     # in test_copilotkit_classifier_stream_leak_1636.py fails loudly if the two
     # drift apart.
     workflow.add_node("chat", chat_node)
-    workflow.add_node(_TOOL_NODE_NAME, ToolNode(E2I_CHATBOT_TOOLS))
+    workflow.add_node(_TOOL_NODE_NAME, SessionBoundToolNode(E2I_CHATBOT_TOOLS))
     workflow.add_node("synthesize", synthesize_node)
 
     # Set entry point
@@ -4703,9 +4708,9 @@ async def copilotkit_custom_handler(
                 # Extract parameters - check both nested body and top level (AG-UI protocol varies)
                 # Some SDK versions send {"method": "agent/run", "body": {"threadId": ..., "messages": [...]}}
                 # Others send {"method": "agent/run", "threadId": ..., "messages": [...]}
-                thread_id = (
-                    body_data.get("threadId") or body_json.get("threadId") or str(uuid.uuid4())
-                )
+                thread_id = await chat_identity.owned_thread_id(body_json, request, TESTING_MODE)
+                if thread_id is None:
+                    return JSONResponse(status_code=403, content={"error": "threadId not yours"})
                 state = body_data.get("state") or body_json.get("state") or {}
                 messages = body_data.get("messages") or body_json.get("messages") or []
                 actions = (
@@ -4851,15 +4856,14 @@ async def copilotkit_custom_handler(
     # non-OPTIONS request that does is execution- or state-shaped. OPTIONS (CORS
     # preflight) is exempt, matching the middleware.
     #
-    # FAIL-SAFE guard: skip re-auth ONLY when identity is already known-good. A
-    # successful ``_require_auth_for_copilotkit_execution`` sets
-    # ``request.state.user`` (both the TESTING_MODE and JWT branches), while
-    # every failure raises BEFORE any assignment — so ``request.state.user is
-    # None`` reliably means "identity not yet established". Guarding on it
-    # avoids the duplicate Supabase round-trip when the root-POST branch already
-    # authenticated and then fell through here on a later exception, WITHOUT
-    # ever letting an unauthenticated sub-path pass: unknown identity ⇒ gate runs.
-    if method != "OPTIONS" and getattr(request.state, "user", None) is None:
+    # FAIL-SAFE guard: skip re-auth ONLY when identity is already known-good.
+    # ``_require_auth_for_copilotkit_execution`` sets ``request.state.user`` on
+    # success, as does JWTAuthMiddleware, and every failure raises BEFORE any
+    # assignment — so no user there reliably means "identity not yet established"
+    # and the gate runs. #2077: ``bind_verified_request_user`` reports that AND
+    # carries the verified id into the attribution channel, which only the gate
+    # used to populate — a middleware-authenticated sub-path left chat NULL-owned.
+    if method != "OPTIONS" and not chat_identity.bind_verified_request_user(request):
         try:
             await _require_auth_for_copilotkit_execution(request)
         except AuthError as auth_exc:
@@ -4876,6 +4880,10 @@ async def copilotkit_custom_handler(
         body_bytes = await request.body()
     except:  # noqa: E722
         body_bytes = b""
+
+    # #2077: same thread-ownership policy as the root branch, which never ran here.
+    if await chat_identity.sdk_thread_denied(body_bytes, request, TESTING_MODE, method):
+        return JSONResponse(status_code=403, content={"error": "threadId not yours"})
 
     # For all other paths, delegate to SDK handler
     # ALWAYS reconstruct request since we consumed the body above (line 1219)
@@ -5093,7 +5101,7 @@ _EMPTY_STREAM_FALLBACK = (
 )
 
 
-def _resolve_chat_identity(authenticated_user: Dict[str, Any], body_user_id: Optional[str]) -> str:
+async def _resolve_chat_identity(authenticated_user: dict, chat_request: ChatRequest) -> str:
     """Resolve the authoritative chat identity from the authenticated token.
 
     Finding 1 [HIGH IDOR]: ``ChatRequest.user_id`` was a required request-body
@@ -5103,21 +5111,23 @@ def _resolve_chat_identity(authenticated_user: Dict[str, Any], body_user_id: Opt
     is always taken from the authenticated token (``require_viewer`` →
     ``user["id"]``).
 
-    For backward compatibility the body may still carry ``user_id``; if it is
-    present and disagrees with the token identity it is treated as an
-    impersonation attempt and rejected with 403 (skipped in testing mode, which
-    deliberately bypasses real auth).
+    The body may still carry ``user_id`` for backward compatibility, and it may
+    carry a ``session_id`` whose ``{owner}~`` prefix is an owner claim of exactly
+    the same weight. Either one disagreeing with the token identity is an
+    impersonation attempt; ``reject_identity_mismatch`` (chat_identity, #2077)
+    holds that policy and raises 403, skipped in testing mode.
 
     Args:
         authenticated_user: The user dict from ``require_viewer``.
-        body_user_id: The (optional, non-authoritative) ``user_id`` from the body.
+        chat_request: The request, whose ``user_id`` / ``session_id`` are claims.
+
+    #2119: also finalises the request's session/request ids and binds LLM attribution here.
 
     Returns:
         The authoritative user id to use for all downstream calls.
 
     Raises:
-        HTTPException: 403 if a mismatching body ``user_id`` is supplied
-            (production only).
+        HTTPException: 403 if either claim disagrees (production only).
     """
     token_user_id = (authenticated_user or {}).get("id")
     if not token_user_id:
@@ -5127,17 +5137,9 @@ def _resolve_chat_identity(authenticated_user: Dict[str, Any], body_user_id: Opt
             detail="Authenticated user identity is missing.",
         )
 
-    if body_user_id and body_user_id != token_user_id and not TESTING_MODE:
-        logger.warning(
-            "[Chatbot] Rejected user_id mismatch (possible impersonation): "
-            "body user_id does not match authenticated identity"
-        )
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Request user_id does not match the authenticated user.",
-        )
-
-    return str(token_user_id)
+    return await chat_identity.bind_plain_chat_turn(
+        token_user_id, chat_request, TESTING_MODE, get_request_id()
+    )
 
 
 def _resolve_chat_brand(authenticated_user: Dict[str, Any], requested_brand: Optional[str]) -> str:
@@ -5195,13 +5197,8 @@ async def _stream_chat_response(
     try:
         from src.api.routes.chatbot_graph import LATENCY_SPAN_KEY, stream_chatbot
 
-        # Yield session_id first. Identity is the AUTHENTICATED user id
-        # (Finding 1 — never trust request.user_id for identity).
+        # Yield session_id first; bind_plain_chat_turn finalised it (#2119).
         session_id = request.session_id
-        if not session_id:
-            import uuid
-
-            session_id = f"{authenticated_user_id}~{uuid.uuid4()}"
 
         yield f"data: {json.dumps({'type': 'session_id', 'data': session_id})}\n\n"
 
@@ -5437,7 +5434,7 @@ async def stream_chat(
         }
     """
     # Finding 1: derive identity from the authenticated token, never the body.
-    authenticated_user_id = _resolve_chat_identity(_user, chat_request.user_id)
+    authenticated_user_id = await _resolve_chat_identity(_user, chat_request)
     # H1 (#694): a brand_context outside the caller's grants would let them poison
     # another tenant's scoped causal-graph view via store_causal_path -> reject.
     chat_request.brand_context = _resolve_chat_brand(_user, chat_request.brand_context)
@@ -5449,9 +5446,6 @@ async def stream_chat(
         f"[Chatbot] Streaming request: query={redact_query(chat_request.query)}, "
         f"user={authenticated_user_id}, request_id={effective_request_id}"
     )
-
-    # Update the request with the effective request_id
-    chat_request.request_id = effective_request_id
 
     # #1659: every frame below originates from a LangGraph node-completion
     # update, and the orchestrator is ONE node that ainvokes a nested graph — so
@@ -5513,14 +5507,13 @@ async def chat(
     # Finding 1: derive identity from the authenticated token, never the body.
     # (Outside the try/except so a 403 propagates instead of being swallowed
     # into a 200 error body.)
-    authenticated_user_id = _resolve_chat_identity(_user, chat_request.user_id)
+    authenticated_user_id = await _resolve_chat_identity(_user, chat_request)
     # H1 (#694): a brand_context outside the caller's grants would let them poison
     # another tenant's scoped causal-graph view via store_causal_path -> reject.
     chat_request.brand_context = _resolve_chat_brand(_user, chat_request.brand_context)
 
     # Phase 1 G08: Use middleware request_id if not provided in body
     effective_request_id = chat_request.request_id or get_request_id() or "unknown"
-    chat_request.request_id = effective_request_id
 
     logger.info(
         f"[Chatbot] Chat request: query={redact_query(chat_request.query)}, "
@@ -5729,8 +5722,6 @@ async def submit_feedback(
         )
 
     try:
-        import os
-
         from supabase import create_client
 
         from src.memory.services.factories import get_async_supabase_client
@@ -5742,8 +5733,7 @@ async def submit_feedback(
 
         if not service_url or not service_key:
             return FeedbackResponse(
-                success=False,
-                error="Server configuration error: missing Supabase credentials",
+                success=False, error="Server configuration error: missing Supabase credentials"
             )
 
         # Resolve the rated message row. Two paths:
@@ -5754,11 +5744,13 @@ async def submit_feedback(
         #      (The old client fabricated an id via parseInt(uuid)||Date.now(),
         #      which either failed this lookup or collided with a real row from
         #      a DIFFERENT session — silently mis-attributed feedback.)
-        # Using service key client to bypass RLS policies.
         session_id = None
         resolved_message_id = request.message_id
         matched_row: Optional[dict] = None
         lookup_error = None
+        # Path (b): gate the CALLER'S session before any message read (#2109).
+        if request.session_id and request.message_id is None:
+            await chat_identity.refuse_foreign_thread(request.session_id, _user.get("id"))
         try:
             service_client = create_client(service_url, service_key)
             if resolved_message_id is not None:
@@ -5874,6 +5866,7 @@ async def submit_feedback(
                 success=False,
                 error=lookup_error or f"Could not find session for message_id {request.message_id}",
             )
+        await chat_identity.refuse_foreign_thread(session_id, _user.get("id"))
 
         # The persisted message row is the authority on attribution (trust
         # boundary — the old client hardcoded agent_name='copilotkit' on every
@@ -5931,12 +5924,11 @@ async def submit_feedback(
                 error="Failed to save feedback - no result returned",
             )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"[Feedback] Error submitting feedback: {e}")
-        return FeedbackResponse(
-            success=False,
-            error=str(e),
-        )
+        return FeedbackResponse(success=False, error=str(e))
 
 
 @router.get("/feedback/stats", summary="Get feedback statistics", operation_id="get_feedback_stats")

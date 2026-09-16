@@ -29,7 +29,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from enum import Enum
-from typing import TYPE_CHECKING, Annotated, Any, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Annotated, Any, Dict, List, Literal, Optional, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -439,6 +439,16 @@ class SimulationDetailResponse(SimulationResponse):
 
     population_filters: Dict[str, Any]
     effect_heterogeneity: EffectHeterogeneityResponse
+    subgroups_basis: Literal["cohort_rows", "per_twin", "twin_weighted_legacy", "unknown"] = Field(
+        description=(
+            "How effect_heterogeneity was computed (#2104): 'cohort_rows' (declared axes over "
+            "the cohort rows behind the estimate, #2054), 'per_twin' (synthetic-path per-twin "
+            "scores), 'twin_weighted_legacy' (a row stored before #2097 whose by_specialty / "
+            "by_decile / by_adoption_stage averaged region CATEs over the generated twins and "
+            "whose stored simulation_confidence was scored on twin count; the stored JSON is "
+            "served unchanged), 'unknown' (no provenance recorded)."
+        ),
+    )
     intervention_config: Dict[str, Any]
     completed_at: Optional[datetime] = None
 
@@ -929,8 +939,7 @@ async def run_simulation(
         if heavy_offload_enabled():
             # Direction 2: the offload worker reconstructs the engine WITHOUT the cohort
             # provider built above, so it would fabricate a synthetic effect for identified
-            # interventions. Fail HONESTLY until the worker runs the same cohort-causal
-            # path, rather than offload a fabricated estimate.
+            # interventions. Fail HONESTLY until the worker runs the same cohort-causal path.
             # (Offload is DARK by default; the inline path below is the real estimator.
             # Follow-up: thread the cohort frame into the worker to restore offload.)
             raise HTTPException(
@@ -941,34 +950,26 @@ async def run_simulation(
                 ),
             )
         else:
-            # P1 inline path (default + fallback). Twin generation + simulation
-            # are the heavy, blocking, ~1.3 GiB part of this request. Bound
-            # concurrency to one in-flight heavy op per worker (OOM guard) AND run
-            # the blocking work off the event loop so it cannot stall the worker.
-            # If the per-worker slot budget is exhausted, heavy_compute_slot()
-            # raises HeavyComputeSaturated on enter (mapped to a 503 + Retry-After
-            # by the app exception handler) — nothing is queued.
+            # P1 inline path (default + fallback). Twin generation + simulation are the
+            # heavy, blocking, ~1.3 GiB part of this request: one in-flight heavy op per
+            # worker (OOM guard), run off the event loop. When the per-worker slot budget
+            # is exhausted heavy_compute_slot() raises HeavyComputeSaturated on enter
+            # (mapped to a 503 + Retry-After by the app exception handler); nothing queues.
             generator = await _load_trained_generator(
                 twin_type=twin_type, brand=brand, model_row=model_row
             )
 
-            # Direction 2: estimate the effect DIRECTLY on the brand's cohort via a DML
-            # causal estimate (CohortCausalEstimator) over the raw cohort frame supplied
-            # by the cohort_provider built above the offload/inline split. No synthetic
-            # injected-effect handoff; honest DML inference CI. (Unidentified
-            # interventions were already rejected by the identification gate.)
+            # Direction 2: estimate the effect DIRECTLY on the brand's cohort via a DML causal
+            # estimate over the raw cohort frame from the cohort_provider built above the
+            # offload/inline split; honest DML CI, no synthetic injected-effect handoff.
             from src.digital_twin.effect.cohort_causal_estimator import (
                 CohortCausalEstimator,
             )
 
-            # A region filter subsets the TWINS; on its own it left the effect estimated
-            # over the brand-wide cohort, so a filtered run returned the cohort-wide ATE,
-            # CI and recommendation unchanged while the chat simulator answered the same
-            # region-targeted question with that region's own estimate (#2023). Scope the
-            # estimator to the filtered regions so both surfaces state the same number.
-            # This moves the ATE, CI, SE, recommendation and sample size onto the targeted
-            # regions; the subgroup heterogeneity below stays twin-weighted and
-            # simulation_confidence still rewards twin count (both pre-#2023).
+            # A region filter subsets the TWINS; scope the estimator to the same regions so
+            # this surface and the chat simulator state the same ATE, CI, SE, recommendation
+            # and sample size (#2023). The subgroup heterogeneity reports only the axes the
+            # estimate resolves (#2054); confidence follows its training rows (#2104).
             target_regions = list(pop_filter.regions) if pop_filter else []
 
             def _do_sim():
@@ -1456,11 +1457,7 @@ async def get_simulation(
             raise HTTPException(status_code=404, detail=f"Simulation {simulation_id} not found")
 
         # repo.get_simulation returns the RAW twin_simulations row (a dict), not a
-        # SimulationResult object. The prior handler accessed it as an object
-        # (result.simulation_id / .is_significant()) under # type: ignore[attr-defined],
-        # which 500'd on every real row — masked only because twin_simulations was
-        # 0 rows. R1 makes rows persist, so this is now a live bug (#705 H5b/H11).
-        # Map from the dict; derive the fields the row does not persist.
+        # SimulationResult (#705 H5b/H11). Map from it; derive what the row does not persist.
         ci_lower = float(result.get("simulated_ci_lower", 0.0) or 0.0)
         ci_upper = float(result.get("simulated_ci_upper", 0.0) or 0.0)
         ate = float(result.get("simulated_ate", 0.0) or 0.0)
@@ -1475,6 +1472,8 @@ async def get_simulation(
             sim_brand is None or not resolve_brand_for_read(user, sim_brand)[0]
         ):
             raise HTTPException(status_code=404, detail=f"Simulation {simulation_id} not found")
+
+        from src.digital_twin.twin_repository import StoredSubgroupsBasis  # legacy rows, #2104
 
         scope = _stored_estimate_scope(result)
         eh = result.get("effect_heterogeneity") or {}
@@ -1517,6 +1516,7 @@ async def get_simulation(
             completed_at=result.get("completed_at"),
             population_filters=result.get("population_filters") or {},
             effect_heterogeneity=heterogeneity,
+            subgroups_basis=StoredSubgroupsBasis.from_row(result).value,
             intervention_config=result.get("intervention_config") or {},
             data_provenance=result.get("data_provenance"),  # #705 H5b
             estimate_scope=EstimateScopeEnum(scope.scope.value),  # #2053

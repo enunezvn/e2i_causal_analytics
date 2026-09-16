@@ -29,7 +29,7 @@ import inspect
 
 import pytest
 
-from src.api.routes import causal as causal_module
+from src.api.routes.causal import pipelines as causal_module
 
 # =============================================================================
 # Static-source regression pins (cheapest assertion: forbid the primitive)
@@ -182,7 +182,7 @@ class TestSequentialPipelineDefaultPath503:
 
     def test_no_real_data_backend_constant_explains_intent(self):
         """Source-level pin: the 503 detail constant must explicitly explain why."""
-        from src.api.routes.causal import _NO_REAL_DATA_BACKEND_DETAIL
+        from src.api.routes.causal._common import _NO_REAL_DATA_BACKEND_DETAIL
 
         detail_lower = _NO_REAL_DATA_BACKEND_DETAIL.lower()
         assert "real data" in detail_lower, (

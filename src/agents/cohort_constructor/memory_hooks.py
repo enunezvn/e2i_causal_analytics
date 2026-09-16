@@ -331,7 +331,7 @@ class CohortConstructorMemoryHooks:
 
     async def store_cohort_result(
         self,
-        session_id: str,
+        session_id: Optional[str],
         result: Dict[str, Any],
         state: Dict[str, Any],
         region: Optional[str] = None,
@@ -728,13 +728,16 @@ async def contribute_to_memory(
     Returns:
         Dictionary with counts of stored memories
     """
-    import uuid
-
     if memory_hooks is None:
         memory_hooks = get_cohort_constructor_memory_hooks()
 
     if session_id is None:
-        session_id = state.get("session_id") or str(uuid.uuid4())
+        # No mint (#2076). An absent session id stays None: the episodic writer
+        # coerces it to an honest NULL for the nullable ``session_id`` column
+        # rather than recording a uuid that belongs to no conversation. A falsy
+        # state value normalises to None too, so the session-KEYED Redis writes
+        # below are skipped instead of keyed on an empty string.
+        session_id = state.get("session_id") or None
 
     counts = {
         "episodic_stored": 0,
@@ -753,9 +756,12 @@ async def contribute_to_memory(
     brand = config.get("brand", "unknown")
 
     # 1. Cache result in working memory
-    cached = await memory_hooks.cache_cohort_result(session_id, result)
-    if cached:
-        counts["working_cached"] = 1
+    # Skipped without a session (#2076): the cache key embeds the session id, so a
+    # session-less write would land under a key no reader can ever ask for.
+    if session_id is not None:
+        cached = await memory_hooks.cache_cohort_result(session_id, result)
+        if cached:
+            counts["working_cached"] = 1
 
     # 2. Store in episodic memory
     memory_id = await memory_hooks.store_cohort_result(

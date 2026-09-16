@@ -38,17 +38,21 @@ _AXIS_PROBE: Dict[str, str] = {
 # The human-readable spec: the KPIs whose calculator BINDS each axis to a query.
 # Kept literal here on purpose (a reviewer can read it) and pinned three ways
 # below -- to the tool's constant and to the calculators' actual binding.
-_VOLUME_AND_SHARE = frozenset({"WS3-BI-005", "WS3-BI-006", "WS3-BI-007", "WS3-BI-008"})
+# TRx Share (WS3-BI-008) is NOT served on any patient axis: every patient is on
+# one tracked brand, so a per-bucket portfolio share mixes indications (and is
+# always 100% on the Remibrutinib-only biologic/IgE axes) -- the 2026-09-16
+# session_1789548670222_fcscf3u incident. The calculator refuses it too.
+_VOLUME = frozenset({"WS3-BI-005", "WS3-BI-006", "WS3-BI-007"})
 _SERVED: Dict[str, frozenset] = {
-    # _resolve_windowed_call (005..008) + _calc_conversion_rate (009, migration
+    # _resolve_windowed_call (005..007) + _calc_conversion_rate (009, migration
     # 111) + _calc_cate (CM-002 binds ml_predictions.segment_assignment, same
     # low/medium/high_severity label space -- verified on the prod substrate).
-    "segment": _VOLUME_AND_SHARE | {"WS3-BI-009", "CM-002"},
-    "therapy_line": _VOLUME_AND_SHARE | {"WS3-BI-009"},
+    "segment": _VOLUME | {"WS3-BI-009", "CM-002"},
+    "therapy_line": _VOLUME | {"WS3-BI-009"},
     # WS3-BI-009 REFUSES these two itself (triggers carry no biologic/IgE
     # dimension), so it does not bind them and stays outside the set.
-    "biologic": _VOLUME_AND_SHARE,
-    "ige_tier": _VOLUME_AND_SHARE,
+    "biologic": _VOLUME,
+    "ige_tier": _VOLUME,
 }
 
 _ALL_KPI_IDS: List[str] = [k.id for k in get_registry().get_all()]
@@ -170,6 +174,28 @@ async def test_refusal_text_is_the_documented_contract(monkeypatch):
     assert resp["error"].index("Total Prescriptions (TRx)") < resp["error"].index(
         "Conditional ATE (CATE)"
     )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("axis", sorted(_AXIS_PROBE))
+async def test_trx_share_by_patient_axis_refusal_points_to_the_within_brand_mix(monkeypatch, axis):
+    """The motivating ask (2026-09-16): "Remibrutinib TRx Share by severity tier
+    and biologic status". The refusal must say WHY (one tracked brand per
+    patient) and offer the brand's own TRx by that axis as the answer."""
+    from src.api.routes.chatbot_tools import _PATIENT_AXIS_LABELS, kpi_calculate_tool
+
+    reached: Dict[str, Any] = {}
+    _install(monkeypatch, _RaisingCalc(reached))
+    resp = await kpi_calculate_tool.ainvoke(
+        {"kpi_name": "TRx share", "brand": "Remibrutinib", axis: _AXIS_PROBE[axis]}
+    )
+    assert reached == {}
+    assert resp["success"] is False and resp["kpi_id"] == "WS3-BI-008"
+    label = _PATIENT_AXIS_LABELS[axis]
+    assert "one tracked brand" in resp["error"]
+    assert f"Total Prescriptions (TRx) by {label}" in resp["hint"]
+    assert "within-brand mix" in resp["hint"]
 
 
 # =============================================================================

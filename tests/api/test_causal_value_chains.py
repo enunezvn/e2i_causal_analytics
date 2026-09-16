@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.api.main import app
-from src.api.routes.causal import (
+from src.api.routes.causal.activity import (
     _causal_path_to_graphpath,
     _chain_node_sequence,
     _chain_score,
