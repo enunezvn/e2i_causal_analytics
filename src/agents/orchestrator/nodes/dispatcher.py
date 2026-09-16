@@ -2226,6 +2226,7 @@ def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str,
 
     from src.services.kpi_resolution import (
         KPI_SEMANTIC_NOTES,
+        mask_kpi_mentions,
         recognize_distinct_metric,
         recognize_kpi_span,
     )
@@ -2243,11 +2244,8 @@ def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str,
         # "TRx drivers", "NRx determinants" — a right-headed causal compound;
         # a bare value does not answer it.
         return None
-    masked = (
-        normalized_query[:match_start]
-        + " " * (match_end - match_start)
-        + normalized_query[match_end:]
-    )
+    # Every mention this KPI owns, not just the first span (#2114 codex r8).
+    masked = mask_kpi_mentions(normalized_query, kpi.id, match_start, match_end)
     if recognize_distinct_metric(masked, exclude_id=kpi.id, original_query=query) is not None:
         # "TRx and NRx" names TWO metrics — one value presented as the whole
         # answer is a wrong answer; fail closed (the bridge answers multi-KPI
@@ -2441,7 +2439,11 @@ def _causal_path_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str
     if not isinstance(query, str) or not query.strip():
         return None
 
-    from src.services.kpi_resolution import recognize_distinct_metric, recognize_kpi_span
+    from src.services.kpi_resolution import (
+        mask_kpi_mentions,
+        recognize_distinct_metric,
+        recognize_kpi_span,
+    )
 
     match = recognize_kpi_span(query)
     if match is None:
@@ -2464,11 +2466,8 @@ def _causal_path_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str
         # a head the registry does not model — binding TRx drivers would answer
         # a different question. Fail closed instead.
         return None
-    masked = (
-        normalized_query[:match_start]
-        + " " * (match_end - match_start)
-        + normalized_query[match_end:]
-    )
+    # Every mention this KPI owns, not just the first span (#2114 codex r8).
+    masked = mask_kpi_mentions(normalized_query, kpi.id, match_start, match_end)
     second = recognize_distinct_metric(masked, exclude_id=kpi.id, original_query=query)
     if second is not None:
         # Two distinct metrics in a causal ask (codex iter-5). The "on <Y>"

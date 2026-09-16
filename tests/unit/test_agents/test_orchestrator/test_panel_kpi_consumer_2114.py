@@ -91,3 +91,71 @@ def test_the_1475_guards_are_still_armed_over_panel_phrasings(query, why, calcul
     refusal from an engine failure swallowed by the fail-closed except."""
     assert _kpi_lookup_evidence({"query": query}) is None, f"{query!r} answered; {why}"
     assert calculator.calls == [], f"{query!r} reached the engine; the guard did not refuse it"
+
+
+# --- codex r8 MEDIUM: a REPEATED panel mention falsely refused -----------------------------
+# Task 11 introduced a SECOND vocabulary (`_PANEL_MEMBER_ALIASES`) and taught only the
+# RESOLVER about it. The multi-KPI veto masks the first matched span, then rescans with the
+# STRICT vocabulary — which does not know "panel nrx" — so a second "NRx panel" had its
+# embedded "nrx" read as the canonical WS3-BI-006 and the ask was refused as two metrics.
+# Measured pre-fix, all FOUR members (the review named three):
+#     "...NRx panel ... the NRx panel?"        -> (012, 006) REFUSED
+#     "...NBRx panel ... the NBRx panel?"      -> (013, 007) REFUSED
+#     "...TRx share panel ... the TRx share panel?" -> (014, 008) REFUSED
+#     "...TRx panel ... the TRx panel?"        -> (011, 005) REFUSED
+#
+# THE TRAP: the broken case and a LEGITIMATE two-KPI refusal are INDISTINGUISHABLE by the
+# scanner's output — both return (012, 006):
+#     "What is NRx panel for Kisqali, the NRx panel?"  must ANSWER
+#     "What is NRx panel and NRx for Kisqali?"         must REFUSE
+# The distinguishing fact is POSITIONAL: whether that "nrx" lies INSIDE an occurrence owned
+# by the resolved KPI. So both classes are pinned here; a fix that only makes the first class
+# pass is half a fix, and one keyed on "the second hit is a canonical embedded in a panel
+# phrase" would break the legitimate veto.
+
+
+@pytest.mark.parametrize(
+    "query,expected_id",
+    [
+        ("What is NRx panel for Kisqali, the NRx panel?", "WS3-BI-012"),
+        ("What is NBRx panel for Kisqali, the NBRx panel?", "WS3-BI-013"),
+        ("What is TRx share panel for Kisqali, the TRx share panel?", "WS3-BI-014"),
+        ("What is TRx panel for Kisqali, the TRx panel?", "WS3-BI-011"),
+        # The SAME KPI named by TWO different aliases — the residual case the
+        # review's ownership prototype could not fix, because "panel nrx" was
+        # absent from the veto's vocabulary and masking cannot mask what it
+        # cannot see.
+        ("What is panel NRx and NRx panel for Kisqali?", "WS3-BI-012"),
+    ],
+)
+def test_a_repeated_panel_mention_still_answers(query, expected_id, calculator):
+    """A repeated mention of the SAME KPI binds — the established #1475 contract
+    (test_explainer_evidence_binding_1475.py pins it for the canonical KPIs)."""
+    evidence = _kpi_lookup_evidence({"query": query})
+    assert calculator.calls == [expected_id], (query, calculator.calls)
+    assert evidence, f"{query!r} produced no evidence — it did not answer"
+
+
+def test_the_canonical_repeat_control_still_answers(calculator):
+    """POSITIVE CONTROL on the pre-existing behaviour this must not disturb: the
+    canonical repeat already bound before Task 11 and must still bind."""
+    assert _kpi_lookup_evidence({"query": "What is TRx for Kisqali, the TRx?"}) is not None
+    assert calculator.calls == ["WS3-BI-005"]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "What is TRx and NRx for Kisqali?",
+        "What is NRx panel and NRx for Kisqali?",
+        "What is TRx and TRx panel for Kisqali?",
+        "What is TRx panel and NRx panel for Kisqali?",
+        "What is TRx share and TRx share panel for Kisqali?",
+    ],
+)
+def test_two_genuinely_distinct_metrics_still_refuse(query, calculator):
+    """The other half of the boundary. These name TWO different KPIs; one value
+    presented as the whole answer is a wrong answer, so the veto must still fire
+    and must fire BEFORE the engine is consulted."""
+    assert _kpi_lookup_evidence({"query": query}) is None, f"{query!r} answered"
+    assert calculator.calls == [], f"{query!r} reached the engine"

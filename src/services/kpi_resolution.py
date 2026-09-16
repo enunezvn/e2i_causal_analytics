@@ -493,6 +493,15 @@ def _strict_metric_vocabulary() -> Tuple[Tuple[str, str], ...]:
     vocab: Dict[str, str] = {}
     for alias, kpi_id in _ALIASES.items():
         vocab.setdefault(alias, kpi_id)
+    # #2114 codex r8: the panel MEMBER discriminators belong here too. Task 11 added
+    # them as a SECOND resolver vocabulary and taught only `recognize_kpi_span` about
+    # them, so the resolver and this veto scanner disagreed about which phrases name
+    # which KPI -- "panel nrx" RESOLVED to WS3-BI-012 while being invisible here.
+    # Measured consequence: after the first span was masked, a repeated "NRx panel"
+    # had its EMBEDDED "nrx" read as the canonical WS3-BI-006 and the ask was refused
+    # as two metrics. One vocabulary, one answer.
+    for alias, kpi_id in _PANEL_MEMBER_ALIASES.items():
+        vocab.setdefault(alias, kpi_id)
     for kpi in get_registry().get_all():
         raw_name = str(kpi.name)
         base = " ".join(
@@ -549,6 +558,44 @@ def _case_sensitive_metric_abbrevs() -> Tuple[Tuple[str, str], ...]:
             if lowered in _ABBREV_BLOCKLIST and sum(1 for c in token if c.isupper()) >= 2:
                 out.append((token, kpi.id))
     return tuple(out)
+
+
+def mask_kpi_mentions(normalized_query: str, kpi_id: str, start: int, end: int) -> str:
+    """Blank the matched span AND every other mention the SAME KPI owns.
+
+    The multi-KPI veto masks the recognized span and rescans; anything still found is
+    a SECOND metric and the ask fails closed. Masking only the FIRST span made a
+    repeated mention of the same KPI look like two (#2114 codex r8): in
+    "What is NRx panel for Kisqali, the NRx panel?" the second occurrence survived,
+    the scanner skipped it as ``exclude_id`` and then matched the EMBEDDED "nrx" as
+    the canonical WS3-BI-006. Measured on all four panel KPIs.
+
+    Ownership, not pattern-shape, is what separates that from a real two-metric ask.
+    Both produce the identical scanner output ``(012, 006)``:
+
+        "What is NRx panel for Kisqali, the NRx panel?"   must ANSWER
+        "What is NRx panel and NRx for Kisqali?"          must REFUSE
+
+    The difference is POSITIONAL -- whether the canonical token lies INSIDE an
+    occurrence this KPI owns. So every occurrence of every phrase owned by
+    ``kpi_id`` is blanked, longest phrase first (so "trx share panel" is consumed
+    before "trx panel" could claim part of it), and a canonical mention standing on
+    its own survives to trigger the veto exactly as before.
+
+    Length-preserving: blanks replace characters one for one, so the #1475
+    governing-head guards and the probe keep the query's coordinates.
+    """
+    masked = normalized_query[:start] + " " * (end - start) + normalized_query[end:]
+    owned = sorted(
+        (phrase for phrase, owner in _strict_metric_vocabulary() if owner == kpi_id),
+        key=len,
+        reverse=True,
+    )
+    for phrase in owned:
+        pattern = rf"(?<![\w'-]){re.escape(phrase)}{_PLURAL_SUFFIX}(?![\w'-])"
+        for m in reversed(list(re.finditer(pattern, masked))):
+            masked = masked[: m.start()] + " " * (m.end() - m.start()) + masked[m.end() :]
+    return masked
 
 
 def recognize_distinct_metric(

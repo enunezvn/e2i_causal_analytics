@@ -64,24 +64,57 @@ def test_the_family_phrase_is_an_explicit_decision_not_a_registry_accident():
 
 
 @pytest.mark.parametrize(
-    "query,expected_id,expected_span_text",
+    "query,expected_id,expected_start,expected_end",
     [
-        ("NRx panel", "WS3-BI-012", "nrx panel"),
-        ("cost of NRx panel", "WS3-BI-012", "nrx panel"),
-        ("NBRx panel drivers", "WS3-BI-013", "nbrx panel"),
-        ("TRx share panel for Kisqali", "WS3-BI-014", "trx share panel"),
-        ("What is Kisqali TRx?", "WS3-BI-005", "trx"),
+        # offset 0 — the easy shape, and the one that hides span bugs
+        ("NRx panel", "WS3-BI-012", 0, 9),
+        ("NBRx panel drivers", "WS3-BI-013", 0, 10),
+        ("TRx share panel for Kisqali", "WS3-BI-014", 0, 15),
+        # NON-ZERO offsets: the only shape that can witness a span bug whose
+        # wrong answer happens to equal the right one at position 0
+        ("cost of NRx panel", "WS3-BI-012", 8, 17),
+        ("What is Kisqali TRx?", "WS3-BI-005", 16, 19),
+        ("for Kisqali, the NRx panel please", "WS3-BI-012", 17, 26),
+        ("what about NBRx panel in the west region", "WS3-BI-013", 11, 21),
+        # INFLECTION: the span must cover the plural suffix. Substring equality
+        # against "nrx panel" is satisfied by a TRUNCATED [0:9]; only the exact
+        # end coordinate catches it.
+        ("NRx panels", "WS3-BI-012", 0, 10),
+        # REPEATED occurrence: the FIRST is the match. Two identical occurrences
+        # are indistinguishable under substring equality; coordinates separate them.
+        ("the NRx panel and the NRx panel", "WS3-BI-012", 4, 13),
+        # the other two alias shapes, at non-zero and zero offsets
+        ("show me panel NBRx for Kisqali", "WS3-BI-013", 8, 18),
+        ("patient panel TRx share by severity", "WS3-BI-014", 0, 23),
     ],
 )
-def test_the_span_points_at_the_matched_alias(query, expected_id, expected_span_text):
+def test_the_span_points_at_the_matched_alias(query, expected_id, expected_start, expected_end):
     """The #1475 governing-head guards slice this span: 'cost of X' makes X a modifier,
     'X drivers' makes X a causal outcome. A pre-pass that resolves the right id with the
-    wrong span breaks those guards silently, so pin the span, not just the id."""
+    wrong span breaks those guards silently, so pin the span, not just the id.
+
+    EXACT COORDINATES, not substring equality (#2114 codex r8 LOW-1). The earlier form
+    asserted `normalized[start:end] == "nrx panel"`, which is also satisfied by
+    `m.start(), m.start() + len(alias)` — so suffix truncation on an inflected match was
+    invisible and two identical occurrences could not be told apart. Substring equality
+    pins WHAT was matched; only coordinates pin WHERE.
+
+    Measured, then written as literals — never derived in the assertion, or the test
+    would compute the same wrong answer as the code.
+
+    Offsets here are 0, 0, 0, 8, 16, 17, 11, 0, 4, 8, 0 — deliberately a MIX. A fixture
+    set whose matches all start at 0 is blind to an entire class of span error, because
+    the wrong answer coincides with the right one there.
+    """
     match = recognize_kpi_span(query)
     assert match is not None, query
     kpi, normalized, start, end = match
     assert kpi.id == expected_id, (query, kpi.id)
-    assert normalized[start:end] == expected_span_text, (query, normalized[start:end])
+    assert (start, end) == (expected_start, expected_end), (
+        query,
+        (start, end),
+        normalized[start:end],
+    )
 
 
 def test_member_aliases_are_matched_before_the_generic_alias_loop():
