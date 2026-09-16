@@ -75,7 +75,8 @@ def test_a_pre_2097_cohort_row_is_annotated_twin_weighted_legacy_and_served_unch
     detail = _read_detail(_row(data_provenance=PROVENANCE_COHORT, effect_heterogeneity=eh))
 
     assert detail.subgroups_basis == "twin_weighted_legacy"
-    # Annotated, not migrated: the stored JSON comes back verbatim.
+    # Annotated, not migrated: the stored JSON comes back verbatim, and the twin-scored
+    # confidence is not recomputed (unchanged apart from the 3-dp rounding every row gets).
     assert detail.effect_heterogeneity.by_specialty == _LEGACY_SPECIALTY
     assert detail.effect_heterogeneity.by_region == _REGION
     assert detail.simulation_confidence == 0.8

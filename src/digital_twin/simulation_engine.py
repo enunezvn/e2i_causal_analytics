@@ -63,6 +63,12 @@ _NUMERIC_AXES = frozenset({"decile"})
 # same knee the causalml executor uses (``n_train / 1000``) and the estimator's default
 # minimum training size (``DEFAULT_MIN_TRAINING_SAMPLES``): a region-targeted cohort
 # estimate (~800-1500 rows live) still scores below a cohort-wide one (~4000 rows).
+# What the twin count can still reach, by path: on the COHORT path nothing — n_train is
+# the cohort rows, the CI is the DML inference interval on them and the ATE is a CATE
+# average over them. On the SYNTHETIC path the twins ARE the data by construction: the
+# provider draws its training frame from the twins' covariates (n_train = the provider's
+# frame size), the uplift model is refit on that draw and the ATE is the mean of the
+# per-twin predictions, so the precision term varies with the twin sample.
 CONFIDENCE_N_SATURATION = 1000.0
 
 
@@ -235,8 +241,9 @@ class SimulationEngine:
         ate = estimate.ate
         ci_lower = estimate.ate_ci_lower
         ci_upper = estimate.ate_ci_upper
-        # SE consistent with the training-evidence CI (CI = ate +/- 1.96*SE),
-        # so it does not shrink with the twin count.
+        # SE consistent with the training-evidence CI (CI = ate +/- 1.96*SE), so it does
+        # not shrink as more twins are scored (synthetic path: the frame is drawn from
+        # the twins, so a different twin sample can still refit to a different width).
         std_error = float((ci_upper - ci_lower) / (2 * 1.96))
 
         # Calculate heterogeneous effects from the per-twin uplift scores
@@ -270,7 +277,8 @@ class SimulationEngine:
                 "below threshold (0.70). Results may be unreliable."
             )
 
-        # Confidence follows the estimate's own evidence, never the twin count (#2104).
+        # Confidence follows the estimate's own evidence, not the twin count as such
+        # (#2104; see CONFIDENCE_N_SATURATION for what each path's evidence is).
         simulation_confidence = self._calculate_simulation_confidence(
             estimate.n_train, std_error, ate
         )
@@ -469,8 +477,9 @@ class SimulationEngine:
     ) -> float:
         """Calculate confidence score for simulation results."""
         # Factors contributing to confidence:
-        # 1. Evidence: the rows the estimator fit on (cohort rows / the labeled frame),
-        #    never the twin count, which is a compute knob (#2104). Saturates at the knee.
+        # 1. Evidence: the rows the estimator fit on — the cohort rows, or the synthetic
+        #    provider's frame — not the twin count, which on the cohort path is only a
+        #    compute knob (#2104). Saturates at CONFIDENCE_N_SATURATION.
         size_score = min(1.0, n_train / CONFIDENCE_N_SATURATION)
 
         # 2. Precision (lower std error = better)

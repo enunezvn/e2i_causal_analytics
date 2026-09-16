@@ -394,8 +394,9 @@ class StoredSubgroupsBasis(str, Enum):
 
     The stored JSON is never rewritten: the detail read annotates it with this label so a
     reader can tell a pre-#2097 cohort row (twin-weighted subgroups, confidence scored on
-    twin count) from a cohort-path row. No created_at cutoff is needed — the data alone
-    separates them (see LEGACY_TWIN_WEIGHTED_AXES).
+    twin count) from a cohort-path row. The stored confidence is not recomputed either —
+    it is served as every row's is, rounded to 3 dp by the route. No created_at cutoff is
+    needed — the data alone separates them (see LEGACY_TWIN_WEIGHTED_AXES).
     """
 
     COHORT_ROWS = "cohort_rows"  # declared axes over the cohort rows behind the estimate

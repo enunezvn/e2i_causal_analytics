@@ -689,10 +689,12 @@ class TestConfidenceScore:
         return result.simulation_confidence
 
     def test_confidence_is_invariant_to_twin_count_at_fixed_n_train(self, email_campaign_config):
-        """The twin count is a compute knob, not evidence: with the estimate's own training
-        rows, interval and fidelity held fixed, 100 / 10,000 / 100,000 twins must score the
-        SAME confidence (#2104). On the twin-count heuristic these were 0.003/0.3/0.3 apart
-        on the size term alone."""
+        """For a FIXED estimate (same n_train, ATE, interval and fidelity) 100 / 10,000 /
+        100,000 twins must score the SAME confidence: the heuristic no longer reads the twin
+        count (#2104). This pins the heuristic, not the estimators: on the cohort path the
+        estimate is fixed by the cohort rows, so this is the live invariant; on the
+        synthetic path the estimate itself is refit on a frame drawn from the twins, so
+        the precision term there can move with the twin sample by construction."""
         at_100 = self._confidence(100, 800, email_campaign_config)
         at_10k = self._confidence(10_000, 800, email_campaign_config)
         at_100k = self._confidence(100_000, 800, email_campaign_config)

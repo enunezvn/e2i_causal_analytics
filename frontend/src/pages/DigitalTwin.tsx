@@ -366,6 +366,26 @@ function provenanceLabel(provenance: string): string {
   }
 }
 
+/**
+ * Title for the confidence badge, selected by `data_provenance` (#2104). Confidence blends
+ * the rows the estimator fit on, the interval's precision and model fidelity. On the cohort
+ * path those rows are the brand cohort, so generating more twins cannot raise it; on the
+ * synthetic path the training frame is drawn from the twins themselves, so it follows the
+ * twin sample. Unknown provenance (a legacy or error row) gets the neutral sentence only.
+ */
+function confidenceTitle(provenance: string | null | undefined): string {
+  const base =
+    'Confidence blends the evidence behind this estimate: the rows the estimator fit on, the precision of the 95% interval, and model fidelity.';
+  switch (provenance) {
+    case 'cohort_estimated_synthetic_gold_v1':
+      return `${base} Here those rows are the brand cohort rows the estimator fit on. Generating more twins does not raise it.`;
+    case 'synthetic_uplift_v1':
+      return `${base} Here the training frame is drawn from the twins the estimator fit on, so it follows the twin sample rather than a cohort.`;
+    default:
+      return base;
+  }
+}
+
 /** Regions a stored simulation was filtered to, read from its detail payload's population_filters. */
 function filteredRegions(simulation: AnySimulation): string[] {
   const regions = 'population_filters' in simulation ? simulation.population_filters?.regions : undefined;
@@ -486,7 +506,7 @@ function SimulationResultPanel({ simulation }: { simulation: AnySimulation }) {
             )}
             <span
               className="text-xs text-[var(--color-text-tertiary)]"
-              title="Confidence blends the evidence behind this estimate — the cohort rows the estimator fit on, the precision of the 95% interval, and model fidelity. Generating more twins does not raise it."
+              title={confidenceTitle(simulation.data_provenance)}
             >
               Confidence: {(simulation.simulation_confidence * 100).toFixed(0)}%
             </span>

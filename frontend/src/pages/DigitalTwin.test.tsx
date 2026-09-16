@@ -702,20 +702,51 @@ describe('DigitalTwin', () => {
     expect(screen.getByText(/^SYNTHETIC$/)).toBeInTheDocument();
   });
 
-  it('explains on the confidence badge that it follows the evidence, not the twin count (#2104)', () => {
+  // The confidence badge's title is selected by the result's data_provenance (#2104):
+  // on the cohort path the evidence is the cohort rows, so more twins cannot raise it;
+  // on the synthetic path the training frame is drawn from the twins, so it follows
+  // the twin sample. Fixture confidence 0.83 -> "Confidence: 83%".
+  it('explains on a cohort-path confidence badge that more twins do not raise it (#2104)', () => {
     (useRunSimulation as ReturnType<typeof vi.fn>).mockReturnValue({
       mutate: mockMutate,
       isPending: false,
-      data: mockRunResult,
+      data: { ...mockRunResult, data_provenance: 'cohort_estimated_synthetic_gold_v1' },
       isSuccess: true,
       isError: false,
     });
     render(<DigitalTwin />, { wrapper: createWrapper() });
-    // 0.83 -> "Confidence: 83%"; the title carries the explanation.
     expect(screen.getByText(/Confidence: 83%/)).toHaveAttribute(
       'title',
       expect.stringMatching(/cohort rows.*more twins does not raise/i)
     );
+  });
+
+  it('explains on a synthetic-path confidence badge that it follows the twin sample (#2104)', () => {
+    (useRunSimulation as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      isPending: false,
+      data: { ...mockRunResult, data_provenance: 'synthetic_uplift_v1' },
+      isSuccess: true,
+      isError: false,
+    });
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+    const title = screen.getByText(/Confidence: 83%/).getAttribute('title') ?? '';
+    expect(title).toMatch(/twins the estimator fit on.*follows the twin sample/i);
+    expect(title).not.toMatch(/more twins does not raise/i);
+  });
+
+  it('keeps the confidence badge explanation neutral when the provenance is unknown (#2104)', () => {
+    (useRunSimulation as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      isPending: false,
+      data: { ...mockRunResult, data_provenance: null },
+      isSuccess: true,
+      isError: false,
+    });
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+    const title = screen.getByText(/Confidence: 83%/).getAttribute('title') ?? '';
+    expect(title).toMatch(/Confidence blends the evidence behind this estimate/);
+    expect(title).not.toMatch(/more twins does not raise|follows the twin sample/i);
   });
 
   it('does NOT show a SYNTHETIC badge for a non-synthetic provenance', () => {
