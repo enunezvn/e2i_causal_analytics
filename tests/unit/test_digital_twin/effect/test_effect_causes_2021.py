@@ -5,8 +5,9 @@ the tool refused them all under one generic reason code. The exception now carri
 ``EffectCause`` and numeric details, which the tool maps to a per-cause code.
 
 The contract lives in ``src/digital_twin/effect/errors.py``, which both the twin engine and the
-tool composer import; it must stay standard-library only so importing it never pulls in the
-tool composer package (~564 MB).
+tool composer import. The dependency runs one way: the tool composer depends on the twin package,
+never the reverse, so ``errors.py`` stays standard-library only and importing it never loads the
+tool composer or the API.
 """
 
 from __future__ import annotations
@@ -14,7 +15,6 @@ from __future__ import annotations
 import ast
 import copy
 import pickle
-import subprocess
 import sys
 from pathlib import Path
 
@@ -145,16 +145,124 @@ def f():
     ]
 
 
-def test_importing_the_errors_module_does_not_import_the_tool_composer_package():
-    code = (
-        "import sys, src.digital_twin.effect.errors; "
-        "print('src.agents.tool_composer' in sys.modules)"
-    )
-    out = subprocess.run(
-        [sys.executable, "-c", code],
-        capture_output=True,
-        text=True,
-        check=True,
-        cwd=REPO_ROOT,
-    )
-    assert out.stdout.strip() == "False"
+_NEVER_LOADED = ("src.agents.tool_composer", "src.api")
+
+
+def _is_type_checking(test: ast.expr) -> bool:
+    return getattr(test, "id", getattr(test, "attr", None)) == "TYPE_CHECKING"
+
+
+def _module_file(root: Path, name: str) -> Path | None:
+    path = root.joinpath(*name.split("."))
+    if (path / "__init__.py").is_file():
+        return path / "__init__.py"
+    return path.with_suffix(".py") if path.with_suffix(".py").is_file() else None
+
+
+def _import_time_imports(module: str, path: Path):
+    """``(lineno, name)`` for every ``src`` import that runs when ``module`` is imported: module
+    and class bodies, including ``if``/``try`` arms, but not function bodies or ``TYPE_CHECKING``
+    blocks. ``from x import y`` also yields ``x.y``, which is loaded when ``y`` is a submodule."""
+    package = module if path.name == "__init__.py" else module.rpartition(".")[0]
+    stack = list(ast.parse(path.read_text(encoding="utf-8")).body)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        if isinstance(node, ast.If) and _is_type_checking(node.test):
+            stack.extend(node.orelse)
+            continue
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            anchor = package.split(".")[: len(package.split(".")) - node.level + 1]
+            base = ".".join((anchor if node.level else []) + ([node.module] if node.module else []))
+            names = [base] + [f"{base}.{alias.name}" for alias in node.names]
+        else:
+            stack.extend(ast.iter_child_nodes(node))
+            continue
+        yield from ((node.lineno, name) for name in names if name.split(".")[0] == "src")
+
+
+def _import_closure(root: Path, start: str) -> dict:
+    """Every ``src`` module importing ``start`` loads, mapped to the ``module:line`` that imported
+    it (None for ``start`` and its parent packages). Static, so it costs no import."""
+    reached: dict = {}
+    queue = [(start, None)]
+    while queue:
+        name, via = queue.pop()
+        parts = name.split(".")
+        for depth in range(1, len(parts) + 1):
+            module = ".".join(parts[:depth])
+            path = _module_file(root, module)
+            if path is None or module in reached:
+                continue
+            reached[module] = via
+            queue.extend(
+                (imported, f"{module}:{line}")
+                for line, imported in _import_time_imports(module, path)
+            )
+    return reached
+
+
+def _forbidden_chains(reached: dict) -> list:
+    chains = []
+    for module in sorted(reached):
+        if not any(module == p or module.startswith(p + ".") for p in _NEVER_LOADED):
+            continue
+        chain, via = [module], reached[module]
+        while via:
+            chain.append(via)
+            via = reached[via.split(":")[0]]
+        chains.append(" <- ".join(chain))
+    return chains
+
+
+def test_importing_the_errors_module_never_loads_the_tool_composer_or_the_api():
+    """Replaces a subprocess import (15 s, ~560 MB, since it runs the twin package's
+    ``__init__``) with the same question answered statically, transitive imports included: the
+    twin package reaches ``src.agents.factory`` through ``src.mlops.opik_connector``, so only a
+    closure, not a scan of ``src/digital_twin``, can see a path into the tool composer."""
+    reached = _import_closure(REPO_ROOT, "src.digital_twin.effect.errors")
+    # Floors, so a resolver that stopped following imports cannot pass vacuously.
+    assert "src.digital_twin.simulation_engine" in reached
+    assert "src.causal_engine" in reached
+    assert len(reached) >= 100
+    assert _forbidden_chains(reached) == []
+
+
+def test_the_import_closure_names_a_transitive_path_into_the_tool_composer(tmp_path):
+    files = {
+        "src/__init__.py": "",
+        "src/twin/__init__.py": "from . import errors\nfrom .engine import run\n",
+        "src/twin/engine.py": (
+            "from typing import TYPE_CHECKING\n"
+            "import src.shared.helpers\n"
+            "if TYPE_CHECKING:\n"
+            "    import src.api.types\n"
+            "def run():\n"
+            "    import src.api.routes\n"
+        ),
+        "src/twin/errors.py": "import enum\n",
+        "src/shared/__init__.py": "",
+        "src/shared/helpers.py": "\nfrom src.agents.tool_composer import reason_codes\n",
+        "src/agents/__init__.py": "",
+        "src/agents/tool_composer/__init__.py": "",
+        "src/agents/tool_composer/reason_codes.py": "",
+        "src/api/__init__.py": "",
+        "src/api/types.py": "",
+        "src/api/routes.py": "",
+    }
+    for relative, text in files.items():
+        (tmp_path / relative).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / relative).write_text(text, encoding="utf-8")
+
+    chains = _forbidden_chains(_import_closure(tmp_path, "src.twin.errors"))
+
+    # Found through the package __init__ and a relative import; the TYPE_CHECKING and
+    # function-body imports of src.api never run at import time, so they are not reported.
+    assert chains == [
+        "src.agents.tool_composer <- src.shared.helpers:2 <- src.twin.engine:2 <- src.twin:2",
+        "src.agents.tool_composer.reason_codes <- src.shared.helpers:2 <- src.twin.engine:2"
+        " <- src.twin:2",
+    ]

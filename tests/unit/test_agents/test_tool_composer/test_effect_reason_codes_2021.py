@@ -82,38 +82,40 @@ def _loader_details():
     for frame in frames:
         usability = assess_cohort_frame(frame, "email_campaign")
         assert usability.cause is not None
-        yield dict(usability.details)
+        yield usability.cause, dict(usability.details)
 
 
 def _estimator_details(monkeypatch):
     cohort = _cohort()
     constant = cohort.copy()
     constant["email_campaign_count"] = 3.0
-    cases = [
-        (cohort.drop(columns="email_campaign_count"), {}),
-        (cohort.drop(columns="region"), {}),
-        (cohort.drop(columns="market_share"), {}),
-        (cohort.head(20), {}),
-        (constant, {}),
+    frames = [
+        cohort.drop(columns="email_campaign_count"),
+        cohort.drop(columns="region"),
+        cohort.drop(columns="market_share"),
+        cohort.head(20),
+        constant,
     ]
-    for frame, kwargs in cases:
+    for frame in frames:
         with pytest.raises(EffectDataUnavailable) as caught:
-            estimate_cohort_effect(frame, "email_campaign_count", **kwargs)
-        yield caught.value.details
+            estimate_cohort_effect(frame, "email_campaign_count")
+        yield caught.value.cause, caught.value.details
+    # "atlantis" is refused as not covered before the targeted interval is computed, so that
+    # case yields a coverage_gap payload; "west" below reaches the interval and its failure.
     for forest, targets in ((_FitRaises, []), (_TargetIntervalRaises, ["atlantis"])):
         monkeypatch.setattr("econml.dml.CausalForestDML", forest)
         with pytest.raises(EffectDataUnavailable) as caught:
             estimate_cohort_effect(cohort, "email_campaign_count", target_regions=targets)
-        yield caught.value.details
+        yield caught.value.cause, caught.value.details
     monkeypatch.setattr("econml.dml.CausalForestDML", _TargetIntervalRaises)
     with pytest.raises(EffectDataUnavailable) as caught:
         estimate_cohort_effect(cohort, "email_campaign_count", target_regions=["west"])
-    yield caught.value.details
+    yield caught.value.cause, caught.value.details
     with pytest.raises(EffectDataUnavailable) as caught:
         CohortEffectDataProvider(cohort.drop(columns="email_campaign_count")).get_training_frame(
             "email_campaign", brand="Kisqali", twin_type="hcp"
         )
-    yield caught.value.details
+    yield caught.value.cause, caught.value.details
 
 
 def test_every_loader_and_estimator_details_payload_is_storable(monkeypatch, caplog):
@@ -121,8 +123,12 @@ def test_every_loader_and_estimator_details_payload_is_storable(monkeypatch, cap
     refusal would stand, but its counts would be lost."""
     payloads = list(_loader_details()) + list(_estimator_details(monkeypatch))
     assert len(payloads) == 13
+    # Every cause a tool-path refusal can carry details for; intervention_not_identified has none.
+    assert {cause for cause, _ in payloads} == set(EffectCause) - {
+        EffectCause.INTERVENTION_NOT_IDENTIFIED
+    }
     caplog.set_level(logging.ERROR, logger=_ERRORS_LOGGER)
-    for details in payloads:
+    for _, details in payloads:
         assert details, "every tool-path cause carries its counts"
         assert validate_details(details) == details
         refusal = ToolRefusalError("m", reason_code=ReasonCode.NO_USABLE_ROWS, details=details)

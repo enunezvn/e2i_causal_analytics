@@ -19,6 +19,7 @@ from src.digital_twin.effect.cohort_loader import (
 )
 from src.digital_twin.effect.errors import EffectCause
 from src.digital_twin.effect.provider import (
+    COHORT_CONFOUNDERS,
     COHORT_ESTIMABLE_INTERVENTIONS,
     COHORT_MIN_ROWS,
     CohortEffectDataProvider,
@@ -186,6 +187,21 @@ def _rows(n_rows, n_usable, *, null_treatment=0):
     [
         pytest.param(
             pd.DataFrame, "digital_engagement", EffectCause.EMPTY_COHORT, {"n_rows": 0}, id="empty"
+        ),
+        # ``DataFrame.empty`` is also true for rows without columns; those rows are not an
+        # empty cohort, they are a cohort missing every column.
+        pytest.param(
+            lambda: pd.DataFrame(index=range(5)),
+            "digital_engagement",
+            EffectCause.REQUIRED_COLUMN_MISSING,
+            _columns(
+                5,
+                treatment=False,
+                outcome=False,
+                region=False,
+                missing_confounders=len(COHORT_CONFOUNDERS),
+            ),
+            id="rows-without-columns",
         ),
         pytest.param(
             lambda: _frame().drop(columns="engagement_score"),

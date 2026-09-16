@@ -1,7 +1,8 @@
 """Fail-closed exceptions for the twin effect engine (CLAUDE.md anti-mocking).
 
-Standard library only: the tool composer imports this module, and a heavier import here
-would load on every tool registration (pinned by ``test_effect_causes_2021``).
+Standard library only. The tool composer imports this module, and the dependency runs one way:
+the tool composer depends on the twin package, never the reverse, so nothing here may lead an
+import back into it (pinned statically by ``test_effect_causes_2021``).
 """
 
 from __future__ import annotations

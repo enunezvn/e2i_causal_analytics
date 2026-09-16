@@ -127,7 +127,7 @@ def assess_cohort_frame(df: pd.DataFrame, intervention_type: str) -> CohortUsabi
         return CohortUsability(None, EffectCause.INTERVENTION_NOT_IDENTIFIED)
     treatment_col = INTERVENTION_TREATMENT_MAP[intervention_type]
     n_rows = int(len(df))
-    if df.empty:
+    if n_rows == 0:
         return CohortUsability(None, EffectCause.EMPTY_COHORT, {"n_rows": n_rows})
     # Usable rows must have the treatment, outcome, region AND the required confounders
     # non-null — aligned with what the direct estimator needs (it fails closed otherwise),

@@ -233,6 +233,8 @@ def test_estimator_refuses_a_target_region_the_cohort_cannot_estimate():
 
 # ---------------------------------------------------------------------------
 # #2021 9b: each refusal names its cause; the message is unchanged
+# (the fit-failure and target-inference causes are asserted in test_refusal_text_is_authored_2020.py,
+# next to its _FitRaises / _TargetIntervalRaises fakes)
 # ---------------------------------------------------------------------------
 
 
