@@ -23,9 +23,6 @@ import pytest
 
 from src.api.routes.causal import hierarchical as hierarchical_module
 
-pytestmark = pytest.mark.integration
-
-
 # =============================================================================
 # Static-source regression pin (cheapest assertion: forbid the primitive)
 # =============================================================================

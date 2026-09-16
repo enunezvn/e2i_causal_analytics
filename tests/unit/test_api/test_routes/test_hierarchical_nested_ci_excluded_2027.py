@@ -29,8 +29,6 @@ from fastapi.testclient import TestClient
 from src.api.main import app
 from src.causal_engine.hierarchical import HierarchicalAnalyzer
 
-pytestmark = pytest.mark.integration
-
 # The wire-level reason code (a literal on purpose: it is the contract consumers
 # branch on, not the name of the constant that emits it).
 NO_MEASURED_UNCERTAINTY = "no_measured_uncertainty"
