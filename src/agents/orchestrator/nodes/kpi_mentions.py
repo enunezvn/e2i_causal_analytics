@@ -323,11 +323,28 @@ def _scope_span(tokens: list[str], index: int) -> tuple[int, Optional[str]]:
     if region_from_text(token):
         return 1, "region"
     if index + 1 < len(tokens):
-        pair = f"{token} {tokens[index + 1]}"
-        if brand_from_text(pair):
-            return 2, "brand"
-        if region_from_text(pair):
-            return 2, "region"
+        # ⚠ THE PAIR IS ONLY A PHRASE WHEN THE FIRST TOKEN CHANGES THE ANSWER.
+        # These resolvers match a brand or region ANYWHERE in the string handed
+        # to them, so "cost kisqali" resolves to Kisqali and would be eaten whole
+        # -- carrying the very noun #2139 refuses inside a "scope" span (r12).
+        # Comparing the pair against the SECOND TOKEN ALONE separates them:
+        #
+        #   'new england'  pair=northeast  second=None      -> phrase, accept
+        #   'mid west'     pair=midwest    second=west      -> phrase, accept
+        #   'cost kisqali' pair=Kisqali    second=Kisqali   -> substring, reject
+        #   'target west'  pair=west       second=west      -> substring, reject
+        #
+        # "reject when the second token resolves at all" was the obvious rule and
+        # is WRONG: it would refuse "mid west" and "south west", whose second
+        # token resolves to a DIFFERENT region. Measured before choosing.
+        following = tokens[index + 1]
+        pair = f"{token} {following}"
+        pair_resolution = (brand_from_text(pair), region_from_text(pair))
+        if pair_resolution != (brand_from_text(following), region_from_text(following)):
+            if pair_resolution[0]:
+                return 2, "brand"
+            if pair_resolution[1]:
+                return 2, "region"
     return 0, None
 
 

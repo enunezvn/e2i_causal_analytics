@@ -1103,3 +1103,78 @@ def test_a_scope_noun_does_not_chain_or_cross_dimensions(query, why, calculator)
 def test_the_matching_appositive_still_binds(query, expected_id, why, calculator):
     assert _kpi_lookup_evidence({"query": query}), f"{query!r} refused; {why}"
     assert calculator.calls == [expected_id], (query, why, calculator.calls)
+
+
+# --- r12 MEDIUM: the two-token scope window swallowed the #2139 defect noun ----------------
+# `_scope_span` tried `f"{token} {tokens[index+1]}"`, and `brand_from_text` matches a brand
+# ANYWHERE in the string it is given. So "cost kisqali" resolved to Kisqali and the pair was
+# consumed as one scope span — "What is NRx panel cost Kisqali?" ANSWERED, with the very noun
+# #2139 exists to refuse sitting inside the "scope". Substring extraction was being read as
+# whole-span membership. Every prior test put the brand FIRST, which is why it survived.
+#
+# ⚠ THE OBVIOUS GUARD IS WRONG, AND MEASURING IT IS WHAT SHOWED THAT. "Reject the pair when
+# the second token resolves alone" would break real phrases:
+#
+#     'south west'  whole->south      second 'west'->west     <- second DOES resolve alone
+#     'mid west'    whole->midwest    second 'west'->west     <- and to a DIFFERENT region
+#     'new england' whole->northeast  second 'england'->None
+#     'cost kisqali' whole->Kisqali   second 'kisqali'->Kisqali  <- identical: the defect
+#
+# The operational meaning of "genuine multi-word phrase" is that THE FIRST TOKEN CHANGES THE
+# RESOLUTION. Accept the pair only when the pair resolves to something the second token alone
+# does not — which admits "south west" and "mid west" and rejects "cost kisqali".
+
+
+@pytest.mark.parametrize(
+    "query,why",
+    [
+        ("What is NRx panel cost Kisqali?", "the brand matched inside the pair, not as it"),
+        ("What is TRx accuracy Kisqali?", "same, canonical KPI"),
+        ("What is TRx price Fabhalta?", "same, a different brand"),
+        ("What is TRx target west?", "region form: 'west' alone resolves identically"),
+    ],
+)
+def test_a_quantity_noun_before_a_brand_is_not_a_scope_span(query, why, calculator):
+    assert _kpi_lookup_evidence({"query": query}) is None, f"{query!r} answered; {why}"
+    assert calculator.calls == [], f"{query!r} called the calculator; {why}"
+
+
+@pytest.mark.parametrize(
+    "query,expected_id,why",
+    [
+        ("What is TRx new england?", "WS3-BI-005", "second token resolves to nothing"),
+        ("What is TRx north east?", "WS3-BI-005", "second token resolves to nothing"),
+        ("What is TRx mid west?", "WS3-BI-005", "second RESOLVES, but to a different region"),
+        ("What is TRx south west?", "WS3-BI-005", "second RESOLVES, but to a different region"),
+    ],
+)
+def test_a_genuine_multi_word_region_phrase_still_binds(query, expected_id, why, calculator):
+    """The two rows that make this a real test are 'mid west' and 'south west': they are the
+    ones the obvious guard would have broken, and they are green on base as well as after."""
+    assert _kpi_lookup_evidence({"query": query}), f"{query!r} refused; {why}"
+    assert calculator.calls == [expected_id], (query, why, calculator.calls)
+
+
+def test_a_trailing_phrase_word_after_a_resolved_region_still_over_refuses(calculator):
+    """A MEASURED PRE-EXISTING OVER-REFUSAL, found while pinning the phrase rows above, and
+    pinned rather than quietly fixed because the fix belongs to a different mechanism.
+
+    "What is TRx west coast?" REFUSES, although `region_scan` binds the whole query to
+    'west'. The single-token branch consumes "west" first, so the pair branch never sees
+    "west coast", and "coast" is then judged alone and refuses.
+
+    PROVENANCE, measured with a per-commit control (not inferred from the diff):
+
+        f3663f2d6  (11g, flat _SCOPE_NOUNS)  REFUSES
+        9340bcd15  (11h+correction)          REFUSES
+        9259cf5e2  (r12 HIGH-b, keyed)       REFUSES
+
+    So it arrived with `_scope_span` in 11g and is NOT a regression of the keying change.
+    It cannot be closed by the r12-MEDIUM rule above: "west coast" and "Kisqali tier" are
+    STRUCTURALLY IDENTICAL to these resolvers — first token resolves, pair resolves to the
+    same value — and one must bind while the other must refuse. Separating them needs the
+    resolver's own multi-word phrase vocabulary (`_FREE_TEXT_REGION_PHRASES`), which is a
+    different mechanism from anything in this commit. Fail-closed, so the lesser evil under
+    this lane's ordering; reported for its own decision rather than absorbed here."""
+    assert _kpi_lookup_evidence({"query": "What is TRx west coast?"}) is None
+    assert calculator.calls == []
