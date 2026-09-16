@@ -24,8 +24,10 @@ from src.kpi.models import (
     Workstream,
 )
 from src.kpi.share_axis import (
+    BRAND_ONLY_AXIS_BRANDS,
     TRX_NAME,
     TRX_SHARE_KPI_ID,
+    brand_scoped_axis_refusal,
     requested_patient_axis,
     share_axis_next_step,
     share_axis_reason,
@@ -50,11 +52,17 @@ logger = logging.getLogger(__name__)
 # brands in the DGP (``clinical_codes.BRAND_ELIGIBILITY_FIELDS`` -- Remibrutinib /
 # CSU); every other brand is 100% NULL by design. A breakdown on those axes for a
 # non-eligible brand would be fabricated, so the calculator fails closed rather
-# than return a silent 0 (which is indistinguishable from a genuine zero). Kept
-# as a local constant (not imported from the synthetic DGP module) to keep the
-# serving path decoupled -- a consistency test locks it to the SSOT, mirroring
+# than return a silent 0 (which is indistinguishable from a genuine zero). Still
+# NOT imported from the synthetic DGP module -- the serving path stays decoupled
+# and test_biologic_ige_routing locks this name to the SSOT, mirroring
 # ``causal._BRAND_CLINICAL_COVARIATES``.
-_BIOLOGIC_AXIS_BRANDS: frozenset[str] = frozenset({"Remibrutinib"})
+#
+# ⚠ AN ALIAS SINCE #2114, NOT A SECOND COPY. The value moved to
+# ``share_axis.BRAND_ONLY_AXIS_BRANDS`` so the REDIRECT BUILDERS can consult it
+# before naming a destination (codex r13 MEDIUM 2: canonical TRx was sending
+# "Kisqali by biologic status" to a panel KPI that refuses the same ask). This
+# name stays because the SSOT consistency test locks the serving path through it.
+_BIOLOGIC_AXIS_BRANDS: frozenset[str] = BRAND_ONLY_AXIS_BRANDS
 
 
 class BusinessImpactCalculator(KPICalculatorBase):
@@ -176,7 +184,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
             context["data_through"] = result[0]["data_through"]
 
     @staticmethod
-    def _guard_brand_scoped_axis(axis_label: str, brand: str | None) -> None:
+    def _guard_brand_scoped_axis(axis: str, brand: str | None) -> None:
         """Fail closed when a biologic-status / IgE breakdown is requested for a
         brand whose DGP does not populate those columns.
 
@@ -189,20 +197,9 @@ class BusinessImpactCalculator(KPICalculatorBase):
         case-insensitive; the underlying SQL ``brand::text = $1`` is
         case-sensitive, so a canonical-cased brand ("Remibrutinib") is expected.
         """
-        eligible = ", ".join(sorted(_BIOLOGIC_AXIS_BRANDS))
-        norm = (brand or "").strip()
-        if not norm:
-            raise RuntimeError(
-                f"{axis_label} breakdown requires a brand and is available only for "
-                f"{eligible}: the biologic-status / IgE columns are unpopulated for "
-                f"every other brand by design."
-            )
-        if norm.title() not in _BIOLOGIC_AXIS_BRANDS:
-            raise RuntimeError(
-                f"{axis_label} breakdown is not available for {norm}: biologic-status / "
-                f"IgE data exists only for {eligible} (other brands are 100% NULL by "
-                f"design -- reporting a split would fabricate it)."
-            )
+        refusal = brand_scoped_axis_refusal(axis, brand)
+        if refusal is not None:
+            raise RuntimeError(refusal)
 
     def _resolve_windowed_call(
         self,
@@ -256,7 +253,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
                 [brand, therapy_line, window["start"], window["end"]],
             )
         if biologic is not None:
-            self._guard_brand_scoped_axis("biologic-status", brand)
+            self._guard_brand_scoped_axis("biologic", brand)
             if window is None:
                 return biologic_query_id(base_query_id), [brand, biologic]
             return (
@@ -264,7 +261,7 @@ class BusinessImpactCalculator(KPICalculatorBase):
                 [brand, biologic, window["start"], window["end"]],
             )
         if ige_tier is not None:
-            self._guard_brand_scoped_axis("IgE-tier", brand)
+            self._guard_brand_scoped_axis("ige_tier", brand)
             if window is None:
                 return ige_tier_query_id(base_query_id), [brand, ige_tier]
             return (
@@ -497,9 +494,19 @@ class BusinessImpactCalculator(KPICalculatorBase):
         axis = requested_patient_axis(context)
         if axis is not None:
             key, label = axis
+            # ⚠ CHECK THE DESTINATION BEFORE NAMING IT (#2114, codex r13 MEDIUM 2):
+            # panel TRx carries the axis but not for every brand, so on a
+            # brand-scoped axis asked for another brand there is no next step to
+            # offer. Say what the limit is instead of sending the user on.
+            brand_limit = brand_scoped_axis_refusal(key, brand)
+            next_step = (
+                f"And no KPI can: {brand_limit}"
+                if brand_limit is not None
+                else share_axis_next_step(TRX_NAME, label)
+            )
             raise RuntimeError(
                 f"KPI {TRX_SHARE_KPI_ID}: TRx share is not defined by {label}. "
-                f"{share_axis_reason(key, label)} {share_axis_next_step(TRX_NAME, label)}"
+                f"{share_axis_reason(key, label)} {next_step}"
             )
 
         window = context.get("window")

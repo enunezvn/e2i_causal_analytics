@@ -2347,21 +2347,21 @@ _PATIENT_AXIS_KPI_IDS: Dict[str, frozenset[str]] = {
 }
 
 
-def _patient_axis_refusal(kpi: Any, axis: str) -> Dict[str, Any]:
-    """The #1911 refusal for a patient axis on a KPI whose calculator does not
-    bind it. The served KPIs are named in registry order (volume KPIs first)
-    and the hint offers both ways out (#1565: a next step, not a dead end)."""
+def _patient_axis_refusal(kpi: Any, axis: str, brand: Optional[str]) -> Dict[str, Any]:
+    """The #1911 refusal for a patient axis on a KPI whose calculator does not bind
+    it. The WORDING lives in ``src.kpi.share_axis`` ("stated once for every
+    surface"), and the BRAND goes with it: on a brand-scoped axis asked for another
+    brand there is no destination to offer, so none is named (#2114)."""
     from src.kpi import share_axis as sa
-    from src.kpi.registry import get_registry
 
-    label = _PATIENT_AXIS_LABELS[axis]
-    served_ids = _PATIENT_AXIS_KPI_IDS[axis]
-    served = ", ".join(k.name for k in get_registry().get_all() if k.id in served_ids)
-    error = f"{axis} ({label}) applies only to {served}, not {kpi.name}."
-    hint = f"Ask for {kpi.name} without the {label} filter, or ask for one of {served} by {label}."
-    if kpi.id in sa.SHARE_REDIRECTS:  # why, and the real answer (src.kpi.share_axis)
-        error += " " + sa.share_axis_reason_for(kpi.id, axis, label)
-        hint = f"{sa.share_axis_next_step(sa.SHARE_REDIRECTS[kpi.id][1], label)} {hint}"
+    error, hint = sa.patient_axis_refusal_text(
+        kpi.id,
+        kpi.name,
+        axis,
+        label=_PATIENT_AXIS_LABELS[axis],
+        served_ids=_PATIENT_AXIS_KPI_IDS[axis],
+        brand=brand,
+    )
     return {
         "success": False,
         "query_type": "kpi_calculate",
@@ -2661,7 +2661,7 @@ async def kpi_calculate_tool(
         ("ige_tier", ige_tier),
     ):
         if _axis_value and kpi.id not in _PATIENT_AXIS_KPI_IDS[_axis]:
-            return _patient_axis_refusal(kpi, _axis)
+            return _patient_axis_refusal(kpi, _axis, brand)
 
     # Parse the requested window BEFORE touching the calculator: an unparseable
     # window is a user-input error, not a calculation error, so fail fast with a

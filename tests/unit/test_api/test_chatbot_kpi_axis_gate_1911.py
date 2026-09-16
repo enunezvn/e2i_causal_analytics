@@ -302,18 +302,31 @@ async def test_calculator_side_brand_guard_for_biologic_axes_still_fires(monkeyp
                 )
             ], (kpi_name, axis, bound)
 
-    # The other side of the flip: canonical TRx is refused by the TOOL gate, so
-    # no calculator is built at all. `_RaisingCalc` records any attribute touch,
-    # which is a stronger discriminator than the absence of a phrase.
-    reached: Dict[str, Any] = {}
-    _install(monkeypatch, _RaisingCalc(reached))
+    # The other side of the flip: canonical TRx is refused by the TOOL gate, so no
+    # calculator is built AT ALL. The tripwire is the FACTORY, not an already-built
+    # instance: codex r13 (LOW 4) pointed out that `_RaisingCalc` behind
+    # `lambda: calc` proves only that no ATTRIBUTE was touched, which is a weaker
+    # claim than "never constructed" — the lambda would have run unobserved.
+    import src.api.routes.kpi as kpi_route
+
+    built: Dict[str, Any] = {}
+
+    def _factory_must_not_run() -> Any:
+        built["called"] = True
+        raise AssertionError("the tool built a calculator for an axis it had refused")
+
+    monkeypatch.setattr(kpi_route, "get_kpi_calculator", _factory_must_not_run, raising=False)
     for axis in ("biologic", "ige_tier"):
         resp = await kpi_calculate_tool.ainvoke(
             {"kpi_name": "TRx", "brand": "Kisqali", axis: _AXIS_PROBE[axis]}
         )
-        assert reached == {}, (axis, reached)
+        assert built == {}, (axis, built)
         assert resp["success"] is False and resp["kpi_id"] == "WS3-BI-005"
-        assert "applies only to" in resp["error"], resp  # the axis gate spoke
+        # The axis gate spoke — and since biologic/IgE exist for Remibrutinib only,
+        # it must NOT advertise the panel KPIs to a Kisqali asker (#2114 dead end 4).
+        assert "cannot be applied to" in resp["error"], resp
+        assert "Remibrutinib" in resp["error"], resp
+        assert "TRx Panel" not in resp["error"], resp
 
 
 @pytest.mark.unit

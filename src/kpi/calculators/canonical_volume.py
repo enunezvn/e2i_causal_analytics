@@ -42,13 +42,37 @@ def refuse_patient_axis(kpi_id: str, context: Mapping[str, Any]) -> None:
     KEYED TO THE SHARE ALONE: 005/006/007 are not shares, have no share reason to
     give, and keep the generic refusal verbatim.
     """
-    from src.kpi.share_axis import SHARE_REDIRECTS, share_axis_reason_for
+    from src.kpi.share_axis import (
+        SHARE_REDIRECTS,
+        brand_scoped_axis_refusal,
+        share_axis_reason_for,
+    )
 
     for axis in PATIENT_AXES:
         if context.get(axis) is not None:
             panel = CANONICAL_TO_PANEL[kpi_id]
+            label = dict(SHARE_AXIS_LABELS).get(axis, axis)
+            # ⚠ CHECK THE DESTINATION BEFORE NAMING IT (#2114, codex r13 MEDIUM 2).
+            # biologic / IgE exist for one brand only, so for any other brand the
+            # panel KPI cannot answer this ask either: naming it would send the
+            # user somewhere that refuses the same question. State the limit and
+            # stop, which is the ONE-hop answer main gave before the axes moved.
+            brand_limit = brand_scoped_axis_refusal(axis, context.get("brand"))
+            if brand_limit is not None:
+                reason = (
+                    f"{share_axis_reason_for(kpi_id, axis, label)} And no KPI can: "
+                    if kpi_id in SHARE_REDIRECTS
+                    else (
+                        "its canonical series is brand x region x calendar month "
+                        "(business_metrics). Nor can any other KPI here: "
+                    )
+                )
+                joiner = "." if kpi_id in SHARE_REDIRECTS else ":"
+                raise RuntimeError(
+                    f"KPI {kpi_id} does not support the {axis} breakdown{joiner} "
+                    f"{reason}{brand_limit}"
+                )
             if kpi_id in SHARE_REDIRECTS:
-                label = dict(SHARE_AXIS_LABELS).get(axis, axis)
                 raise RuntimeError(
                     f"KPI {kpi_id} does not support the {axis} breakdown. "
                     f"{share_axis_reason_for(kpi_id, axis, label)} "

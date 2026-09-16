@@ -89,6 +89,89 @@ PATIENT_AXES: Tuple[Tuple[str, str], ...] = (
 #: Axes populated for one brand only, where the share is identically 100%.
 _BRAND_ONLY_AXES = frozenset({"biologic", "ige_tier"})
 
+#: ⚠ ONE OWNER FOR "WHICH BRAND CARRIES THE BRAND-SCOPED AXES" (#2114, codex r13).
+#: The DGP populates ``biologic_experienced`` / ``ige_level`` for these brands only;
+#: every other brand is 100% NULL by design (#1216 refuses to fabricate the split).
+#: This used to live as ``_BIOLOGIC_AXIS_BRANDS`` inside
+#: ``BusinessImpactCalculator``, where only that calculator could see it — so the
+#: REDIRECT BUILDERS could not check it, and canonical TRx answered "Kisqali by
+#: biologic status" by naming panel TRx, which refuses the same ask for the same
+#: brand. The calculator guard and every redirect builder now read this one helper.
+BRAND_ONLY_AXIS_BRANDS: frozenset[str] = frozenset({"Remibrutinib"})
+
+#: The guard's own hyphenated labels, kept so the shipped #1216 wording is unchanged.
+_BRAND_ONLY_AXIS_LABELS: Mapping[str, str] = {
+    "biologic": "biologic-status",
+    "ige_tier": "IgE-tier",
+}
+
+
+def brand_scoped_axis_refusal(axis: str, brand: Optional[str]) -> Optional[str]:
+    """``None`` when ``axis`` can be answered for ``brand`` by SOME KPI; otherwise
+    the reason NO KPI can answer it.
+
+    This is a statement about the SUBSTRATE, not about one KPI: it is what makes a
+    redirect checkable before it is offered. A builder that names a destination
+    without consulting it can promise an ask that is impossible for the brand in
+    hand — which is exactly what happened (defect 4 of the dead-end family).
+
+    The membership check is case-insensitive; the underlying SQL ``brand::text = $1``
+    is case-sensitive, so a canonical-cased brand ("Remibrutinib") is expected.
+    """
+    if axis not in _BRAND_ONLY_AXES:
+        return None
+    label = _BRAND_ONLY_AXIS_LABELS[axis]
+    eligible = ", ".join(sorted(BRAND_ONLY_AXIS_BRANDS))
+    norm = (brand or "").strip()
+    if not norm:
+        return (
+            f"{label} breakdown requires a brand and is available only for "
+            f"{eligible}: the biologic-status / IgE columns are unpopulated for "
+            f"every other brand by design."
+        )
+    if norm.title() not in BRAND_ONLY_AXIS_BRANDS:
+        return (
+            f"{label} breakdown is not available for {norm}: biologic-status / "
+            f"IgE data exists only for {eligible} (other brands are 100% NULL by "
+            f"design -- reporting a split would fabricate it)."
+        )
+    return None
+
+
+def patient_axis_refusal_text(
+    kpi_id: str,
+    kpi_name: str,
+    axis: str,
+    *,
+    label: str,
+    served_ids: Any,
+    brand: Optional[str],
+) -> Tuple[str, str]:
+    """``(error, hint)`` for a patient axis whose calculator does not bind it — the
+    #1911 chat refusal, worded HERE so this module's first line stays true.
+
+    ``served_ids`` are the KPIs that do bind the axis; their registry names are what
+    the refusal offers. The BRAND is a parameter because the offer depends on it: a
+    brand-scoped axis asked for a brand whose columns are NULL by design has NO
+    destination, and naming one advertises an ask that refuses again (#2114 dead
+    end 4, codex r13 MEDIUM 2). In that case the limit is stated and no KPI named.
+    """
+    from src.kpi.registry import get_registry
+
+    limit = brand_scoped_axis_refusal(axis, brand)
+    if limit is not None:
+        return (
+            f"{axis} ({label}) cannot be applied to {kpi_name}: {limit}",
+            f"Ask for {kpi_name} without the {label} filter.",
+        )
+    served = ", ".join(k.name for k in get_registry().get_all() if k.id in served_ids)
+    error = f"{axis} ({label}) applies only to {served}, not {kpi_name}."
+    hint = f"Ask for {kpi_name} without the {label} filter, or ask for one of {served} by {label}."
+    if kpi_id in SHARE_REDIRECTS:  # why, and the real answer
+        error += " " + share_axis_reason_for(kpi_id, axis, label)
+        hint = f"{share_axis_next_step(SHARE_REDIRECTS[kpi_id][1], label)} {hint}"
+    return error, hint
+
 
 def requested_patient_axis(context: Mapping[str, Any]) -> Optional[Tuple[str, str]]:
     """The first patient axis set in ``context``. ``is not None``, not truthiness:
