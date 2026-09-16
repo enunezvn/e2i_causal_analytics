@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from scripts import backfill_brand_axis_persistence as bf
 from scripts.backfill_uas7_severity_coherence import (
     OLD_GENERATOR_CUTOFF,
     plan,
@@ -24,12 +25,28 @@ def _live(n: int = 3000, *, seed: int = 0, applied: bool = False) -> pd.DataFram
     draw = rng.integers(16, 43, n)
     uas7 = uas7_from_severity(draw, sev) if applied else draw
     tier = np.where(sev > 7, "high_severity", np.where(sev > 4, "medium_severity", "low_severity"))
+    # Live labels are drawn independently of the regeneration stream: the live
+    # Remibrutinib labels never came from it (34% disagree), which is the whole reason
+    # the rollout applies a delta instead of the full re-derivation.
+    persistent = rng.integers(0, 2, n)
     return pd.DataFrame(
         {
             "patient_id": [f"scvpt_{seed}_{i:06d}" for i in range(n)],
+            "brand": "Remibrutinib",
+            "treatment_arm": rng.integers(0, 2, n),
             "disease_severity": sev,
-            "urticaria_severity_uas7": uas7,
+            "academic_hcp": rng.integers(0, 2, n),
+            "geographic_region": rng.choice(["northeast", "south", "midwest", "west"], n),
             "segment_assignment": tier,
+            "insurance_type": rng.choice(["commercial", "medicare", "medicaid"], n),
+            "age_at_diagnosis": rng.integers(18, 80, n),
+            "comorbidity_burden": rng.integers(0, 4, n),
+            "prior_therapy_lines": rng.integers(0, 3, n),
+            "copay_support": rng.integers(0, 2, n),
+            "psp_enrolled": rng.integers(0, 2, n),
+            "persistent_180d": persistent,
+            "discontinued_180d": 1 - persistent,
+            "urticaria_severity_uas7": uas7,
             "created_at": _OLD,
         }
     )
@@ -135,3 +152,86 @@ def test_sql_is_one_guarded_compare_and_set_over_the_staged_cohort():
     assert "JOIN _uas7_plan p USING (patient_id)" in sql
     assert "IF c IS NULL OR" in sql
     assert " IN (" not in sql  # no interpolated id list
+
+
+def _regenerated(rows: pd.DataFrame, uas7_col: str) -> pd.Series:
+    frame = rows.assign(urticaria_severity_uas7=rows[uas7_col])
+    regen = bf.regenerate(frame, bf._AXES["Remibrutinib"])
+    return regen.set_index("patient_id").loc[rows["patient_id"], "persistent_180d"]
+
+
+def test_labels_move_only_where_the_uas7_change_moves_the_regenerated_label():
+    """The live labels never came from the regeneration stream, so a full re-derivation
+    rewrote 3,132 of 8,863 live labels. Only the change the new UAS7 CAUSES is applied:
+    where regenerate(new UAS7) != regenerate(old UAS7) the label becomes the new one,
+    everywhere else the live label stays."""
+    live = _live(3000)
+    rows = plan(live)
+    r0 = _regenerated(rows, "uas7_old").to_numpy()
+    r1 = _regenerated(rows, "uas7_new").to_numpy()
+    moved = r0 != r1
+    expected = np.where(moved, r1, rows["persistent_180d"].to_numpy())
+
+    assert moved.any() and not moved.all()
+    assert np.array_equal(rows["persist_new"].to_numpy(), expected)
+    assert np.array_equal(rows["disc_new"].to_numpy(), 1 - expected)
+    assert np.array_equal(rows["persist_old"].to_numpy(), live["persistent_180d"].to_numpy())
+    label_changes = int((rows["persist_new"] != rows["persist_old"]).sum())
+    full_regen_churn = int((r1 != rows["persistent_180d"].to_numpy()).sum())
+    assert 0 < label_changes <= int(moved.sum()) < full_regen_churn
+    assert "persistence labels changed" in report(rows)
+
+
+def test_positive_control_a_rewrite_that_ignores_the_live_labels_is_caught():
+    """Teeth: the full re-derivation (the old rollout step) must NOT satisfy the delta."""
+    rows = plan(_live(3000))
+    full = _regenerated(rows, "uas7_new").to_numpy()
+    assert not np.array_equal(rows["persist_new"].to_numpy(), full)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda f: f.loc.__setitem__((4, "persistent_180d"), 2),
+        lambda f: f.loc.__setitem__((4, "discontinued_180d"), f.loc[4, "persistent_180d"]),
+        lambda f: f.loc.__setitem__((4, "persistent_180d"), np.nan),
+    ],
+    ids=["non-binary", "not-complementary", "missing"],
+)
+def test_refuses_persistence_labels_that_are_not_complementary_binary(mutate):
+    live = _live(200)
+    mutate(live)
+    with pytest.raises(SystemExit, match="persistent_180d"):
+        plan(live)
+
+
+def test_refuses_an_export_without_the_persistence_covariates():
+    with pytest.raises(SystemExit, match="treatment_arm"):
+        plan(_live(200).drop(columns=["treatment_arm"]))
+
+
+def test_sql_moves_labels_in_the_same_guarded_transaction():
+    rows = plan(_live(3000))
+    sql = to_sql(rows)
+    uas7_changed = rows["uas7_old"] != rows["uas7_new"]
+    label_changed = rows["persist_old"] != rows["persist_new"]
+    n_any = int((uas7_changed | label_changed).sum())
+    n_labels = int(label_changed.sum())
+    assert n_labels > 0
+    assert f"IF updated <> {n_any} THEN" in sql
+    for fragment in (
+        # every staged row's old labels are verified before anything is written
+        "AND pj.persistent_180d = p.persist_old",
+        "AND pj.discontinued_180d = p.disc_old",
+        "persistent_180d = p.persist_new",
+        "discontinued_180d = p.disc_new",
+        # a label can move while UAS7 does not (mean-centred axis pull)
+        "OR pj.persistent_180d IS DISTINCT FROM p.persist_new",
+        f"IF relabelled <> {n_labels} THEN",
+    ):
+        assert fragment in sql, fragment
+    assert sql.index("AND pj.persistent_180d = p.persist_old") < sql.index(
+        "UPDATE patient_journeys pj SET"
+    )
+    # after the update every staged row carries exactly its planned values
+    assert "pj.persistent_180d IS DISTINCT FROM p.persist_new" in sql.split("GET DIAGNOSTICS")[1]
