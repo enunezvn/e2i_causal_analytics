@@ -234,17 +234,6 @@ def reason_for(kpi_id: str, axis: str) -> str:
 # =============================================================================
 
 
-def _names(ids) -> str:
-    registry = get_registry()
-    names = sorted(
-        (registry.get(i).name for i in ids if registry.get(i) is not None),
-        key=str,
-    )
-    if len(names) <= 1:
-        return "".join(names)
-    return ", ".join(names[:-1]) + " and " + names[-1]
-
-
 def short_names(ids) -> str:
     """Registry names shortened to the parenthesised short form where one exists —
     "Observed Rx Events - Patient Panel TRx (TRx Panel)" reads as "TRx Panel"."""
