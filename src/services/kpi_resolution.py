@@ -560,6 +560,57 @@ def _case_sensitive_metric_abbrevs() -> Tuple[Tuple[str, str], ...]:
     return tuple(out)
 
 
+def vocabulary_occurrences(normalized_query: str) -> List[Tuple[int, int, str]]:
+    """Every vocabulary phrase occurrence, with overlaps resolved LONGEST-WINS.
+
+    An OWNERSHIP map over the original text, computed before anything is masked
+    (#2114 codex r9). "trx share panel" and "trx share" both match the same
+    region; the longer phrase owns it, so that region belongs to WS3-BI-014 and
+    not to WS3-BI-008. Ties go to the leftmost occurrence.
+
+    This exists because masking is DESTRUCTIVE: 11a masked every occurrence of
+    every phrase the resolved KPI owned, one phrase at a time, and so masked
+    "trx share" out of the MIDDLE of "trx share panel" -- leaving an orphan
+    "panel" the scanner could not recognise and losing a genuine two-KPI veto.
+    Ownership has to be settled on the intact string first.
+    """
+    claims: List[Tuple[int, int, str]] = []
+    for phrase, kpi_id in _strict_metric_vocabulary():
+        pattern = rf"(?<![\w'-]){re.escape(phrase)}{_PLURAL_SUFFIX}(?![\w'-])"
+        for m in re.finditer(pattern, normalized_query):
+            claims.append((m.start(), m.end(), kpi_id))
+    claims.sort(key=lambda c: (-(c[1] - c[0]), c[0]))
+    kept: List[Tuple[int, int, str]] = []
+    for start, end, kpi_id in claims:
+        if any(start < k_end and k_start < end for k_start, k_end, _ in kept):
+            continue
+        kept.append((start, end, kpi_id))
+    return sorted(kept)
+
+
+def owned_mention_spans(
+    normalized_query: str, kpi_id: str, start: int, end: int
+) -> List[Tuple[int, int]]:
+    """The spans ``kpi_id`` genuinely owns, the resolver's own match included.
+
+    The match is appended when no owning occurrence covers it: ``recognize_kpi_span``
+    can return a span the strict vocabulary does not produce (the reverse-share
+    regex at step 0), and that span is this KPI's by construction.
+    """
+    spans = [(s, e) for s, e, owner in vocabulary_occurrences(normalized_query) if owner == kpi_id]
+    if not any(s <= start and end <= e for s, e in spans):
+        spans.append((start, end))
+    return sorted(set(spans))
+
+
+def mask_spans(normalized_query: str, spans: Iterable[Tuple[int, int]]) -> str:
+    """Blank ``spans``, length-preserving so every coordinate stays valid."""
+    masked = normalized_query
+    for start, end in sorted(spans, reverse=True):
+        masked = masked[:start] + " " * (end - start) + masked[end:]
+    return masked
+
+
 def mask_kpi_mentions(normalized_query: str, kpi_id: str, start: int, end: int) -> str:
     """Blank the matched span AND every other mention the SAME KPI owns.
 
@@ -585,17 +636,7 @@ def mask_kpi_mentions(normalized_query: str, kpi_id: str, start: int, end: int) 
     Length-preserving: blanks replace characters one for one, so the #1475
     governing-head guards and the probe keep the query's coordinates.
     """
-    masked = normalized_query[:start] + " " * (end - start) + normalized_query[end:]
-    owned = sorted(
-        (phrase for phrase, owner in _strict_metric_vocabulary() if owner == kpi_id),
-        key=len,
-        reverse=True,
-    )
-    for phrase in owned:
-        pattern = rf"(?<![\w'-]){re.escape(phrase)}{_PLURAL_SUFFIX}(?![\w'-])"
-        for m in reversed(list(re.finditer(pattern, masked))):
-            masked = masked[: m.start()] + " " * (m.end() - m.start()) + masked[m.end() :]
-    return masked
+    return mask_spans(normalized_query, owned_mention_spans(normalized_query, kpi_id, start, end))
 
 
 def recognize_distinct_metric(

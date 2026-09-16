@@ -2224,9 +2224,9 @@ def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str,
     if not KPI_VALUE_LOOKUP_RE.search(query):
         return None
 
+    from src.agents.orchestrator.nodes.kpi_mentions import masked_or_refusal
     from src.services.kpi_resolution import (
         KPI_SEMANTIC_NOTES,
-        mask_kpi_mentions,
         recognize_distinct_metric,
         recognize_kpi_span,
     )
@@ -2235,17 +2235,12 @@ def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str,
     if match is None:
         return None
     kpi, normalized_query, match_start, match_end = match
-    of_head = _kpi_governing_of_head(normalized_query, match_start)
-    if of_head is not None and of_head not in _VALUE_OF_HEADS:
-        # "cost of TRx", "drivers of TRx", ... — the KPI is not the asked-about
-        # value; let Branch B (or the fail-closed default) handle it.
+    masked = masked_or_refusal(normalized_query, kpi.id, match_start, match_end)
+    if masked is None:
+        # A governing "of"-head ("cost of TRx"), a causal right-head ("TRx
+        # drivers"), or either on ANY later occurrence this KPI owns: the KPI is
+        # not the asked-about value (#1475; #2114 codex r9 added the later ones).
         return None
-    if _kpi_right_head(normalized_query, match_end) in _CAUSAL_OF_HEADS:
-        # "TRx drivers", "NRx determinants" — a right-headed causal compound;
-        # a bare value does not answer it.
-        return None
-    # Every mention this KPI owns, not just the first span (#2114 codex r8).
-    masked = mask_kpi_mentions(normalized_query, kpi.id, match_start, match_end)
     if recognize_distinct_metric(masked, exclude_id=kpi.id, original_query=query) is not None:
         # "TRx and NRx" names TWO metrics — one value presented as the whole
         # answer is a wrong answer; fail closed (the bridge answers multi-KPI
@@ -2439,11 +2434,8 @@ def _causal_path_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str
     if not isinstance(query, str) or not query.strip():
         return None
 
-    from src.services.kpi_resolution import (
-        mask_kpi_mentions,
-        recognize_distinct_metric,
-        recognize_kpi_span,
-    )
+    from src.agents.orchestrator.nodes.kpi_mentions import owned_mask
+    from src.services.kpi_resolution import recognize_distinct_metric, recognize_kpi_span
 
     match = recognize_kpi_span(query)
     if match is None:
@@ -2466,8 +2458,7 @@ def _causal_path_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str
         # a head the registry does not model — binding TRx drivers would answer
         # a different question. Fail closed instead.
         return None
-    # Every mention this KPI owns, not just the first span (#2114 codex r8).
-    masked = mask_kpi_mentions(normalized_query, kpi.id, match_start, match_end)
+    masked = owned_mask(normalized_query, kpi.id, match_start, match_end)
     second = recognize_distinct_metric(masked, exclude_id=kpi.id, original_query=query)
     if second is not None:
         # Two distinct metrics in a causal ask (codex iter-5). The "on <Y>"

@@ -159,3 +159,99 @@ def test_two_genuinely_distinct_metrics_still_refuse(query, calculator):
     and must fire BEFORE the engine is consulted."""
     assert _kpi_lookup_evidence({"query": query}) is None, f"{query!r} answered"
     assert calculator.calls == [], f"{query!r} reached the engine"
+
+
+# --- codex r9: 11a's masking FAILS OPEN in two ways -----------------------------------------
+# 11a decided everything from the FIRST mention and then erased ALL mentions. Masking is
+# DESTRUCTIVE, and it destroyed the evidence the later checks depend on. Both defects are the
+# same shape one level down — a PER-OCCURRENCE fact gone by the time it is needed:
+#
+#   M1  WHO OWNS this occurrence.   "trx share" (008) was masked out of the MIDDLE of
+#       "trx share panel" (014), leaving an orphan "panel" the scanner cannot recognise, so a
+#       genuine two-KPI ask ANSWERED with one number.
+#         masked: 'what is the                      and           panel?'
+#   M2  WHAT GOVERNS this occurrence. The #1475 head checks run on the FIRST match only; every
+#       later mention was then masked, so a later "cost of" / "drivers" context was gone before
+#       anything could see it.
+#
+# WORSE IN KIND than the false refusal 11a fixed: that failed CLOSED (a refusal the user did
+# not deserve); these fail OPEN — a plausible value returned for a question never asked.
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        # M1: the resolved KPI's phrase sits INSIDE a longer phrase owned by another KPI
+        "What is the share of Kisqali TRx and TRx share panel?",
+        "What is the share of Kisqali TRx and the TRx share panel please?",
+    ],
+)
+def test_masking_must_not_steal_an_occurrence_owned_by_another_kpi(query, calculator):
+    """Two genuinely distinct KPIs (008 and 014). Ownership of an occurrence belongs to the
+    LONGEST vocabulary phrase covering it, not to whichever KPI resolved first."""
+    assert _kpi_lookup_evidence({"query": query}) is None, f"{query!r} answered — veto lost"
+    assert calculator.calls == [], f"{query!r} reached the engine"
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        # M2: a LATER mention of the SAME KPI sits in a disqualifying context
+        "What is NRx panel and the cost of NRx panel?",
+        "What is NRx panel and NRx panel drivers?",
+    ],
+)
+def test_a_later_mention_in_a_guarded_context_is_not_a_redundant_repeat(query, calculator):
+    """A repeated mention binds only when the repeat is genuinely redundant. "cost of X" and
+    "X drivers" are not: the ask contains a sub-ask a bare value does not answer, so the
+    #1475 guards must see EVERY owned occurrence, not just the first."""
+    assert _kpi_lookup_evidence({"query": query}) is None, f"{query!r} answered"
+    assert calculator.calls == [], f"{query!r} reached the engine"
+
+
+# --- asking what property ALL the rows above share, and breaking it ------------------------
+# The r9 lesson was that a 12-case matrix looked exhaustive while every row shared a hidden
+# structural property: single-owner phrases, and repeats in the SAME governing context. The
+# rows above fix those two, but they acquired properties of their own — in every cross-owner
+# case the longer phrase came SECOND, in every guarded case the guard came on the LATER
+# mention, and every case had exactly TWO owned mentions. These break all three. They passed
+# first time; they are here so the next change cannot quietly reintroduce a positional or
+# arity assumption.
+
+
+@pytest.mark.parametrize(
+    "query,why",
+    [
+        (
+            "What is TRx share panel and the share of Kisqali TRx?",
+            "cross-owner, LONGER phrase FIRST — ownership must not depend on order",
+        ),
+        (
+            "What is the cost of NRx panel and NRx panel?",
+            "the guard is on the FIRST mention, a clean repeat follows",
+        ),
+        (
+            "What is NRx panel and NRx panel and the cost of NRx panel?",
+            "THREE owned mentions, the third guarded — arity must not matter",
+        ),
+        (
+            "What is panel NRx and the share of Kisqali TRx?",
+            "cross-owner where neither phrase is the resolved KPI's longest",
+        ),
+        (
+            "What is NRx panel and the cost of TRx share panel?",
+            "the guarded later mention belongs to a DIFFERENT owner",
+        ),
+    ],
+)
+def test_the_boundary_holds_regardless_of_position_arity_or_owner(query, why, calculator):
+    assert _kpi_lookup_evidence({"query": query}) is None, f"{query!r} answered; {why}"
+    assert calculator.calls == [], f"{query!r} reached the engine; {why}"
+
+
+def test_three_clean_owned_mentions_still_answer(calculator):
+    """The ANSWER side of the arity probe: redundancy is redundancy however often
+    it repeats, so long as no occurrence carries a disqualifying context."""
+    query = "What is NRx panel and NRx panel and the NRx panel?"
+    assert _kpi_lookup_evidence({"query": query}) is not None, query
+    assert calculator.calls == ["WS3-BI-012"]
