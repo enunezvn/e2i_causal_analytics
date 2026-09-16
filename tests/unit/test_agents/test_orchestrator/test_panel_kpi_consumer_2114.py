@@ -784,3 +784,230 @@ def test_a_preposition_behind_a_period_token_still_binds(causal_registry):
     for any battery row — it can be closed later without reversing anything here."""
     assert _causal_kpi_id("what drives NRx panel time to fill?") == "WS3-BI-012"
     assert causal_registry
+
+
+# --- 11g: the VALUE path's right-head gap (#2139), and an 11e regression it exposed ---------
+# ENUMERATED FIRST, through the real `_kpi_lookup_evidence`, before a line was designed.
+#
+# ⚠ THE CAUSAL RULE CANNOT BE TRANSPLANTED HERE, and the enumeration is what proved it. On the
+# causal path a bare open-class noun after the mention names ANOTHER QUANTITY. On the value
+# path it is routinely SCOPE — "What is TRx Kisqali?", "What is NRx panel west region?" both
+# bind today and must keep binding. A closed-class allowlist would refuse every one of them.
+#
+# ⚠ AND "forecast" REFUSING IS NOT EVIDENCE OF A HEAD GUARD. `KPI_VALUE_LOOKUP_PATTERN`
+# (intent_classifier.py:536) opens with a whole-query negative lookahead —
+#     (?s)\A(?!.*(?:predict|expect|forecast|project|likelihood|probabilit|what will))
+# — so those queries die at the ENTRY GATE and never reach `masked_or_refusal`. Reading that
+# refusal as a working right-head rule would be a check that cannot fail for the reason you
+# care about. For the same reason NO refusal test below may rely on the entry gate: every one
+# uses a lead-in the gate admits ("what is", "show me"), so the refusal is THIS fix's doing.
+#
+# THE DISCRIMINATOR IS "DOES THE PLATFORM RESOLVE THIS INTO SCOPE AT ALL", and the measurement
+# that makes refusing the unresolved ones safe is what reaches the calculator:
+#
+#     What is NRx panel for Kisqali?        -> context {'brand': 'Kisqali'}
+#     What is NRx panel in the west region? -> context {'region': 'west'}
+#     What is NRx panel oncology?           -> context {}      <- qualifier SILENTLY DROPPED
+#     What is TRx patients?                 -> context {}      <- same
+#     What is NRx panel cost?               -> context {}      <- same
+#
+# "oncology" and "patients" are NOT legitimate answers being protected: the platform ignores
+# the qualifier and returns the national figure, exactly as it does for "cost". Refusing them
+# closes a second fail-open rather than costing an answer. Scope membership comes from the
+# resolver the value path itself consults (`brand_from_text` / `region_from_text` /
+# `PATIENT_AXES`), never a copied word list, so it cannot drift from the registry.
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        # open-class QUANTITY nouns — the #2139 defect proper
+        "What is NRx panel cost?",
+        "What is TRx cost?",
+        "What is NRx panel accuracy?",
+        "What is TRx price?",
+        "What is NRx panel target?",
+        "What is TRx trend?",
+        "What is NRx panel uplift?",
+        "What is TRx benchmark?",
+        "What is NRx panel variance?",
+        "What is TRx performance?",
+        # the 11f period class, on this path too
+        "What is NRx panel month cost?",
+        "What is TRx q3 performance?",
+        "What is NRx panel last quarter cost?",
+        # surface forms of the compound
+        "What is NRx panel's cost?",
+        "What is NRx panel unit cost?",
+        "What is NRx panel cost-per-script?",
+        # a resolvable scope token followed by a quantity — scope does not license the noun
+        "What is TRx Kisqali cost?",
+        "What is NRx panel west cost?",
+        # an alternative admitted lead-in, so the gate is not doing the work
+        "show me the NRx panel cost",
+    ],
+)
+def test_an_unsupported_right_head_fails_closed_on_the_value_path(query, calculator):
+    """The calculator must never be consulted: a figure computed for the KPI is not an answer
+    to a question about its cost, and returning one is the fail-open #2139 describes."""
+    assert _kpi_lookup_evidence({"query": query}) is None, f"{query!r} answered"
+    assert calculator.calls == [], f"{query!r} called the calculator; that is not a refusal"
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "What is NRx panel oncology?",
+        "What is TRx patients?",
+        "What is NRx panel HCPs?",
+        "What is TRx specialty?",
+    ],
+)
+def test_a_qualifier_the_platform_cannot_resolve_fails_closed(query, calculator):
+    """DECLARED SCOPE BEYOND #2139's STATED DEFECT: these are dropped-scope fail-opens, not
+    right-head ones. Same shape, adjacent cause. Measured: each reaches the calculator with
+    context {} today — the qualifier is discarded and a national figure returned — so they
+    are indistinguishable from "cost" to any honest discriminator, and keeping them binding
+    would mean whitelisting tokens we have measured to be ignored."""
+    assert _kpi_lookup_evidence({"query": query}) is None, f"{query!r} answered"
+    assert calculator.calls == [], f"{query!r} called the calculator"
+
+
+@pytest.mark.parametrize(
+    "query,expected_id,why",
+    [
+        # ⭐ THE TRANSPLANT'S OWN DISPROOF — pinned so nobody reintroduces the causal rule here
+        ("What is TRx Kisqali?", "WS3-BI-005", "bare BRAND is scope on this path"),
+        ("What is NRx panel west region?", "WS3-BI-012", "bare REGION is scope"),
+        ("What is TRx northeast?", "WS3-BI-005", "census region, bare"),
+        ("What is TRx new england?", "WS3-BI-005", "two-token region phrase"),
+        ("What is NRx panel segment?", "WS3-BI-012", "a served PATIENT_AXES axis"),
+        ("What is TRx therapy_line?", "WS3-BI-005", "a served PATIENT_AXES axis"),
+        # prepositional scope
+        ("What is NRx panel for Kisqali?", "WS3-BI-012", "preposition"),
+        ("What is TRx by severity?", "WS3-BI-005", "preposition"),
+        ("What is NRx panel in the west region?", "WS3-BI-012", "preposition"),
+        ("What is TRx per brand?", "WS3-BI-005", "preposition"),
+        ("What is NRx panel across brands?", "WS3-BI-012", "preposition"),
+        ("What is TRx with high adherence?", "WS3-BI-005", "preposition"),
+        ("What is NRx panel within the cohort?", "WS3-BI-012", "preposition"),
+        ("What is TRx among new patients?", "WS3-BI-005", "preposition"),
+        ("What is NRx panel at the HCP level?", "WS3-BI-012", "preposition"),
+        # temporal
+        ("What is NRx panel in Q3?", "WS3-BI-012", "preposition then period"),
+        ("What is TRx last quarter?", "WS3-BI-005", "determiner then period"),
+        ("What is NRx panel this year?", "WS3-BI-012", "determiner then period"),
+        ("What is TRx since January?", "WS3-BI-005", "preposition then month"),
+        ("What is NRx panel q3?", "WS3-BI-012", "bare period token"),
+        ("What is TRx q3 2026?", "WS3-BI-005", "period chain"),
+        # comparison / end of string
+        ("What is NRx panel versus last quarter?", "WS3-BI-012", "comparison"),
+        ("What is TRx vs the prior period?", "WS3-BI-005", "comparison"),
+        ("What is TRx?", "WS3-BI-005", "end of string"),
+        ("show me the NRx panel", "WS3-BI-012", "another admitted lead-in"),
+    ],
+)
+def test_the_value_path_over_refusal_battery(query, expected_id, why, calculator):
+    """THE OVER-REFUSAL BATTERY FOR THIS PATH. Every row binds on 6d321cbcf as well as after,
+    so it is a guard on the fix and not a constraint the fix was fitted to."""
+    evidence = _kpi_lookup_evidence({"query": query})
+    assert calculator.calls == [expected_id], (query, why, calculator.calls)
+    assert evidence, f"{query!r} produced no evidence; {why}"
+
+
+@pytest.mark.parametrize(
+    "query,expected_id",
+    [
+        ("what drives TRx Kisqali?", "WS3-BI-005"),
+        ("what drives NRx panel Kisqali?", "WS3-BI-012"),
+        ("what drives NRx panel west?", "WS3-BI-012"),
+        ("what drives TRx northeast?", "WS3-BI-005"),
+        ("what drives NRx panel segment?", "WS3-BI-012"),
+    ],
+)
+def test_bare_scope_binds_on_the_causal_path_too(query, expected_id, causal_registry):
+    """AN 11e REGRESSION, LANE-CAUSED, found by enumerating the OTHER path — and measured at
+    three commits with a control proving which implementation was loaded:
+
+        9bd77796c  no right-head check     "what drives TRx Kisqali?" -> 005, 1 call
+        1ef6cdf3c  11e single-token        -> None, 0 calls   <- INTRODUCED HERE
+        6d321cbcf  11f walk                -> None, 0 calls   <- inherited, not caused
+
+    11e's allowlist admitted only function words and period tokens, so a bare brand or region
+    read as an open-class noun and a perfectly ordinary scoped causal ask started refusing.
+    My 11e and 11f batteries could not see it: every scoped row in both used a PREPOSITION.
+    Same genus as the fixture blindness those commits each found in their predecessor."""
+    assert _causal_kpi_id(query) == expected_id, query
+    assert causal_registry, f"{query!r} never reached the registry"
+
+
+def test_scope_does_not_license_a_quantity_behind_it_on_the_causal_path(causal_registry):
+    """The scope token is consumed and the decision DEFERRED, exactly as a period token is —
+    it does not license whatever follows. Without this the 11e repair would reopen r11."""
+    assert _causal_kpi_id("what drives TRx Kisqali cost?") is None
+    assert causal_registry == []
+
+
+# --- what property do ALL the 11g rows share? ----------------------------------------------
+# Every binding row above was ONE scope token, sitting DIRECTLY after the mention, resolved by
+# the brand-or-region route. Three properties, each breakable. Asking this question before
+# declaring done has found a live defect six rounds running — and this round it ran AHEAD of
+# the code, disproving the transplant before a line was written.
+
+
+@pytest.mark.parametrize(
+    "query,expected_id,why",
+    [
+        ("What is TRx urticaria?", "WS3-BI-005", "brand via the INDICATION route, not a name"),
+        ("What is TRx Kisqali west?", "WS3-BI-005", "two scope tokens in a row"),
+        ("What is NRx panel q3 kisqali?", "WS3-BI-012", "scope AFTER a period token"),
+    ],
+)
+def test_scope_binds_in_shapes_the_new_rows_did_not_cover(query, expected_id, why, calculator):
+    assert _kpi_lookup_evidence({"query": query}), f"{query!r} refused; {why}"
+    assert calculator.calls == [expected_id], (query, why, calculator.calls)
+
+
+@pytest.mark.parametrize(
+    "query,why",
+    [
+        ("What is TRx west region cost?", "scope + scope-noun does not license a quantity"),
+        ("What is NRx panel kisqali accuracy?", "scope does not license a quantity"),
+        ("What is TRx new england cost?", "a two-token region does not license a quantity"),
+        ("What is NRx panel level?", "a scope NOUN with no resolved scope before it"),
+    ],
+)
+def test_scope_defers_the_decision_it_does_not_license_what_follows(query, why, calculator):
+    """`_SCOPE_NOUNS` is reachable only immediately after a resolver-confirmed token, so it
+    cannot open a hole on its own: "level" alone still refuses, as an unresolved qualifier."""
+    assert _kpi_lookup_evidence({"query": query}) is None, f"{query!r} answered; {why}"
+    assert calculator.calls == [], f"{query!r} called the calculator; {why}"
+
+
+@pytest.mark.parametrize(
+    "query,expected_id",
+    [
+        ("What is NRx panel for Kisqali in the west region?", "WS3-BI-012"),
+        ("What is TRx for Kisqali, given that access issues ate into field time?", "WS3-BI-005"),
+        ("show me the NRx panel for Kisqali across the northeast", "WS3-BI-012"),
+    ],
+)
+def test_a_preposition_ends_the_walk_before_any_scope_lookahead(query, expected_id, calculator):
+    """CAUGHT BY GATE B, NOT BY THIS FILE — `test_explainer_evidence_binding_1475.py`'s
+    "What drives TRx for Kisqali, given that access issues ate into field time?" went RED.
+
+    `_scope_span`'s two-token window matched "for kisqali" as a unit, so the walk stepped
+    PAST the preposition and judged the prose behind it, refusing on "given". Every
+    prepositional row in my own battery ended immediately after the brand ("for Kisqali?"),
+    so the walk hit end-of-string and bound — the RIGHT answer for the WRONG reason, which is
+    precisely what a fixture set blind through its choice of inputs produces. These rows put
+    prose behind the brand so the ordering is pinned, not incidental."""
+    assert _kpi_lookup_evidence({"query": query}), f"{query!r} refused"
+    assert calculator.calls == [expected_id], (query, calculator.calls)
+
+
+def test_a_preposition_ends_the_walk_on_the_causal_path_too(causal_registry):
+    """The #1475 row's own shape, pinned here as well so this file can catch it next time."""
+    q = "what drives TRx for Kisqali, given that access issues ate into field time?"
+    assert _causal_kpi_id(q) == "WS3-BI-005"
+    assert causal_registry

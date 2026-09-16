@@ -240,6 +240,64 @@ _PERIOD_MODIFIERS = frozenset(
 #: The same token shape ``_kpi_right_head`` reads, applied to the whole tail.
 _TAIL_TOKEN_RE = re.compile(r"[\w'-]+")
 
+#: Generic nouns that trail a RESOLVED scope token and name its kind: "west
+#: region", "Kisqali brand". Consumable ONLY immediately after a token the
+#: resolver bound (see ``_scope_span``), so they can never open a hole on their
+#: own -- "What is NRx panel level?" still refuses, because "level" names a
+#: qualifier the platform does not resolve either (#2114 11g / #2139).
+_SCOPE_NOUNS = frozenset(
+    {
+        "region",
+        "regions",
+        "brand",
+        "brands",
+        "market",
+        "markets",
+        "area",
+        "areas",
+        "territory",
+        "territories",
+        "cohort",
+        "cohorts",
+        "tier",
+        "tiers",
+        "axis",
+        "axes",
+    }
+)
+
+
+def _scope_span(tokens: list[str], index: int) -> int:
+    """How many tokens at ``index`` the PLATFORM ITSELF resolves as scope (0 if none).
+
+    Membership comes from the resolver the value path already consults two lines
+    later -- ``brand_from_text`` / ``region_from_text`` / ``PATIENT_AXES`` -- and
+    never from a word list copied into this module, which would drift from the
+    registry the day a brand is added (#2114 11g).
+
+    Two tokens are tried when one does not resolve, for the multi-word census
+    phrases ("new england", "west coast"); one is preferred when it suffices, so
+    "Kisqali cost" consumes only "Kisqali" and still refuses on "cost".
+    """
+    from src.kpi.volume_family import PATIENT_AXES
+    from src.services.query_entities import brand_from_text, region_from_text
+
+    token = tokens[index]
+    if token in PATIENT_AXES:
+        return 1
+    if brand_from_text(token) or region_from_text(token):
+        return 1
+    if index + 1 < len(tokens):
+        # Normalisation turns "_" into a space, so a two-word axis reaches the
+        # walk split -- "therapy_line" and "therapy line" normalise identically
+        # to "therapy line". Rejoin before asking PATIENT_AXES (measured, 11g).
+        if f"{token}_{tokens[index + 1]}" in PATIENT_AXES:
+            return 2
+        pair = f"{token} {tokens[index + 1]}"
+        if brand_from_text(pair) or region_from_text(pair):
+            return 2
+    return 0
+
 
 def _tail_changes_the_quantity(
     normalized_query: str, span_end: int, causal_heads: frozenset
@@ -269,22 +327,41 @@ def _tail_changes_the_quantity(
     """
     tokens = _TAIL_TOKEN_RE.findall(normalized_query[span_end:])
     index = 0
+    after_scope = False
     while index < len(tokens):
         token = tokens[index]
         if token in causal_heads:
             return False
         if _PERIOD_TOKEN_RE.match(token):
             index += 1
+            after_scope = False
             continue
         following = tokens[index + 1] if index + 1 < len(tokens) else None
-        if (
-            token in _PERIOD_MODIFIERS
-            and following is not None
-            and _PERIOD_TOKEN_RE.match(following)
-        ):
+        # A FUNCTION WORD IS DECIDED BEFORE ANY SCOPE LOOKAHEAD, and the order is
+        # load-bearing. `_scope_span`'s two-token window would otherwise swallow
+        # "for kisqali" whole, carrying the walk PAST the preposition into
+        # whatever prose follows -- "TRx for Kisqali, given that access issues
+        # ate into field time" then refused on "given". A preposition opens a
+        # phrase and ends the walk; it is never part of a scope span.
+        if token in _RIGHT_HEAD_FUNCTION_WORDS:
+            if (
+                token in _PERIOD_MODIFIERS
+                and following is not None
+                and _PERIOD_TOKEN_RE.match(following)
+            ):
+                index += 1
+                after_scope = False
+                continue
+            return False
+        if after_scope and token in _SCOPE_NOUNS:
             index += 1
             continue
-        return token not in _RIGHT_HEAD_FUNCTION_WORDS
+        consumed = _scope_span(tokens, index)
+        if consumed:
+            index += consumed
+            after_scope = True
+            continue
+        return True
     return False
 
 
@@ -358,5 +435,14 @@ def masked_or_refusal(normalized_query: str, kpi_id: str, start: int, end: int) 
         if of_head is not None and of_head not in _VALUE_OF_HEADS:
             return None
         if _kpi_right_head(normalized_query, span_end) in _CAUSAL_OF_HEADS:
+            return None
+        # 11g / #2139: an unsupported right-head compound ("NRx panel cost") was
+        # never checked on this path either. The accepted set is NOT the causal
+        # one -- no causal heads here, since "drivers" is declined above -- so the
+        # walk is passed an EMPTY accepted-head set. The enumeration is in
+        # test_panel_kpi_consumer_2114.py: a bare noun here is usually SCOPE, and
+        # the walk defers to the platform's own resolver to tell scope from a
+        # second quantity.
+        if _tail_changes_the_quantity(normalized_query, span_end, frozenset()):
             return None
     return mask_spans(normalized_query, spans)
