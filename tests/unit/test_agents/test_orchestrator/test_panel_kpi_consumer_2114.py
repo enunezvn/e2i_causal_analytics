@@ -738,6 +738,24 @@ def test_the_period_walk_does_not_over_refuse(query, expected_id, why, causal_re
 def test_every_period_modifier_is_already_a_binding_token():
     """THE WALK MAY ONLY EVER REFUSE MORE, NEVER BIND MORE — pinned, not left to inspection.
 
+    CORRECTION appended to 6a5eab03d, whose body says "RED-FIRST: 12 failed / 104 passed".
+    12 + 104 = 116; this file collects 117. That run predated THIS test, so it is the same
+    defect 1ef6cdf3c corrected one commit earlier — a measurement bound to the tree it ran
+    against, cited for a later one — caught the same way, by arithmetic across two numbers
+    rather than by a re-run. Re-measured on 1ef6cdf3c (`cp` + `sha256sum -c`, positive
+    control: `_PERIOD_MODIFIERS` and `_tail_changes_the_quantity` absent on base, the 11e
+    helper `_right_head_changes_the_quantity` present):
+
+        13 failed / 104 passed
+         1  test_a_period_right_head_no_longer_licenses_the_noun_behind_it  (the inverted pin)
+        11  test_a_noun_behind_a_period_chain_still_fails_closed            (every row)
+         1  test_every_period_modifier_is_already_a_binding_token           (this test)
+
+    Said precisely, because it matters: THIS row's red is not a behavioural red. It fails on
+    base because `_PERIOD_MODIFIERS` does not exist there — it is a structural pin of the new
+    design, so it could not have been red for the reason the other twelve are. The twelve are
+    the behavioural teeth.
+
     The single-token rule bound on any function word. The walk steps over a modifier when a
     period token follows, and could therefore run off the end and BIND something that used to
     refuse — but only if a modifier were not already a binding token. This subset relation is
