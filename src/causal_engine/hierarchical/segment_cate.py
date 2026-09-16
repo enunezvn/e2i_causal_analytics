@@ -241,8 +241,8 @@ class SegmentCATECalculator:
 
             # H6: derive the TRUE SE of the segment ATE from the segment-MEAN CI
             # (which shrinks with n) instead of using cate_std (the per-unit CATE
-            # dispersion, which does NOT shrink with n).
-            cate_se = self._se_from_ci(ci_lower, ci_upper, cate_std, n_samples)
+            # dispersion, which does NOT shrink with n). No CI -> no SE (#2142).
+            cate_se = self._se_from_ci(ci_lower, ci_upper)
 
             return SegmentCATEResult(
                 segment_id=segment_id,
@@ -371,7 +371,7 @@ class SegmentCATECalculator:
         cate_std = float(np.std(cate_values))
 
         # Confidence intervals
-        ci_lower, ci_upper = self._compute_ci(model, X_clean, cate_values, cate_mean, cate_std)
+        ci_lower, ci_upper = self._compute_ci(model, X_clean)
 
         return cate_values, cate_mean, cate_std, ci_lower, ci_upper, "causal_forest"
 
@@ -407,7 +407,7 @@ class SegmentCATECalculator:
         cate_mean = float(np.mean(cate_values))
         cate_std = float(np.std(cate_values))
 
-        ci_lower, ci_upper = self._compute_ci(model, X, cate_values, cate_mean, cate_std)
+        ci_lower, ci_upper = self._compute_ci(model, X)
 
         return cate_values, cate_mean, cate_std, ci_lower, ci_upper, "linear_dml"
 
@@ -589,18 +589,20 @@ class SegmentCATECalculator:
         self,
         ci_lower: Optional[float],
         ci_upper: Optional[float],
-        cate_std: float,
-        n_samples: int,
     ) -> Optional[float]:
-        """True standard error of the segment ATE (H6).
+        """True standard error of the segment ATE (H6), or None when unmeasured.
 
         Every estimator's ``ci_lower``/``ci_upper`` is a CI of the segment MEAN
-        effect (EconML ``conf_int_mean`` for inference-capable estimators,
-        bootstrap for the meta-learners, or a normal ``mean ± z·std/√n``
-        fallback). All of these SHRINK with n, so the SE = half-width / z is a
-        valid standard error — unlike ``np.std(cate_values)`` (the per-unit CATE
-        dispersion), which does NOT shrink with n and made the nested CIs ~√n too
-        wide and the heterogeneity stats wrong.
+        effect (EconML ``ate_inference`` for inference-capable estimators, the
+        normal difference-in-means interval for the meta-learners). Both SHRINK
+        with n, so the SE = half-width / z is a valid standard error — unlike
+        ``np.std(cate_values)`` (the per-unit CATE dispersion), which does NOT
+        shrink with n.
+
+        Without an interval there is no measured SE: return None (#2142). The old
+        ``cate_std / √n`` stand-in is the spread of fitted CATEs, not sampling
+        uncertainty (measured 12-20x smaller than EconML's own SE), and None lets
+        the aggregating bridges exclude and list the segment (#2027).
         """
         from scipy.stats import norm
 
@@ -614,48 +616,37 @@ class SegmentCATECalculator:
             # weight downstream.
             if np.isfinite(se) and se > 0:
                 return float(se)
-        # Fallback: SE of the mean = std / √n (shrinks with n). Return None (no
-        # usable SE) for a degenerate constant-prediction segment (cate_std=0,
-        # e.g. OLS) rather than 0 — the bridge then falls back without producing
-        # a zero SE.
-        n = max(int(n_samples), 1)
-        fallback = float(cate_std) / np.sqrt(n)
-        return fallback if np.isfinite(fallback) and fallback > 0 else None
+        return None
 
-    def _compute_ci(
-        self,
-        model: Any,
-        X: NDArray[np.float64],
-        cate_values: NDArray[np.float64],
-        cate_mean: float,
-        cate_std: float,
-    ) -> tuple:
-        """Compute confidence interval from model inference if available."""
+    def _compute_ci(self, model: Any, X: NDArray[np.float64]) -> tuple:
+        """CI of the segment mean effect from the model's own inference, or (None, None).
+
+        ``ate_inference(X)`` is EconML's population summary of the effect over
+        ``X``; its ``conf_int_mean`` is the sampling CI of the mean effect. #2142:
+        this used ``effect_inference(X).conf_int_mean``, which econml 0.16's
+        ``NormalInferenceResults`` does not have, so every segment silently took a
+        ``cate_mean ± z·cate_std/√n`` fallback — the dispersion of fitted CATEs, not
+        the estimator's uncertainty. A model without usable inference now yields no
+        interval rather than that stand-in.
+        """
         if not self.config.compute_ci:
             return None, None
 
+        if not hasattr(model, "ate_inference"):
+            logger.warning(
+                "Segment CATE model %s has no ate_inference; no CI (fail closed)",
+                type(model).__name__,
+            )
+            return None, None
         try:
-            # Try to get CI from model's inference method
-            if hasattr(model, "effect_inference"):
-                inf = model.effect_inference(X)
-                if hasattr(inf, "conf_int_mean"):
-                    ci = inf.conf_int_mean(alpha=1 - self.config.ci_confidence_level)
-                    return float(ci[0]), float(ci[1])
-        except Exception:
-            pass
-
-        # Fallback to normal approximation. #27: derive z from the configured
-        # confidence level (scipy-exact) so a 0.90 request yields ~1.645, not the
-        # old binary 1.96-or-2.576 which silently produced a 99% z for ANY
-        # non-0.95 level (e.g. a 0.90 request got 2.576) -- mislabeling the CI.
-        z = z_score_for_confidence(self.config.ci_confidence_level)
-        n = len(cate_values)
-        se = cate_std / np.sqrt(n) if n > 0 else cate_std
-
-        ci_lower = cate_mean - z * se
-        ci_upper = cate_mean + z * se
-
-        return ci_lower, ci_upper
+            ci = model.ate_inference(X).conf_int_mean(alpha=1 - self.config.ci_confidence_level)
+            lower, upper = float(np.squeeze(ci[0])), float(np.squeeze(ci[1]))
+        except Exception as e:
+            logger.warning("Segment CATE inference failed; no CI (fail closed): %s", e)
+            return None, None
+        if not (np.isfinite(lower) and np.isfinite(upper)):
+            return None, None
+        return lower, upper
 
     def _compute_ci_bootstrap(
         self,

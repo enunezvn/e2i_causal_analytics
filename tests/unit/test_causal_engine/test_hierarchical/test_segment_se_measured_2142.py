@@ -48,7 +48,12 @@ async def test_linear_dml_segment_se_is_econml_mean_effect_stderr():
     from econml.dml import LinearDML
     from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 
-    rf = dict(n_estimators=50, min_samples_leaf=5, min_impurity_decrease=1e-7, random_state=42)
+    rf = {
+        "n_estimators": 50,
+        "min_samples_leaf": 5,
+        "min_impurity_decrease": 1e-7,
+        "random_state": 42,
+    }
     ref = LinearDML(
         model_y=RandomForestRegressor(**rf),
         model_t=RandomForestClassifier(**rf),
@@ -82,14 +87,7 @@ async def test_causal_forest_segment_se_is_not_the_dispersion_stand_in():
 
 def test_model_without_inference_yields_no_interval():
     calc = SegmentCATECalculator(SegmentCATEConfig())
-    cate_values = np.array([0.1, 0.5] * 10)
-    lo, hi = calc._compute_ci(
-        object(),
-        X=None,
-        cate_values=cate_values,
-        cate_mean=float(cate_values.mean()),
-        cate_std=float(cate_values.std()),
-    )
+    lo, hi = calc._compute_ci(object(), X=np.zeros((20, 1)))
     assert lo is None and hi is None
 
 
@@ -99,14 +97,7 @@ def test_inference_that_raises_yields_no_interval():
             raise ValueError("inference unavailable")
 
     calc = SegmentCATECalculator(SegmentCATEConfig())
-    cate_values = np.array([0.1, 0.5] * 10)
-    lo, hi = calc._compute_ci(
-        _Broken(),
-        X=np.zeros((20, 1)),
-        cate_values=cate_values,
-        cate_mean=float(cate_values.mean()),
-        cate_std=float(cate_values.std()),
-    )
+    lo, hi = calc._compute_ci(_Broken(), X=np.zeros((20, 1)))
     assert lo is None and hi is None
 
 
