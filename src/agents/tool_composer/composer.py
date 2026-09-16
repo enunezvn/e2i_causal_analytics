@@ -55,7 +55,7 @@ from .models.composition_models import (
     SynthesisInput,
 )
 from .planner import PlanningError, ToolPlanner
-from .reason_codes import ReasonCode, canonical_sentence
+from .reason_codes import user_safe_failure_text
 from .serialization import dump_json_safe
 from .synthesizer import ResponseSynthesizer
 
@@ -67,9 +67,6 @@ logger = logging.getLogger(__name__)
 # returned to the caller verbatim (no synthesis pass to compress it).
 _MAX_FAILURE_REASON_CHARS = 2000
 _TRUNCATION_MARKER = "…(truncated)"
-# #2020: the only outcome classes a TOOL authors. The executor sets these two solely in the arm
-# that catches ToolRefusalError / ToolInputError, and since #2021 always with a reason code.
-_TOOL_AUTHORED_CLASSES = frozenset({"refused", "input_rejected"})
 
 
 def _truncate(text: str, limit: int = _MAX_FAILURE_REASON_CHARS) -> str:
@@ -1266,31 +1263,30 @@ class ToolComposer:
                 getattr(step, "tool_name", None) or getattr(output, "tool_name", None) or "unknown"
             )
             failed_tools.append(tool_name)
-            raw = str(getattr(output, "error", None) or "").strip()
+            raw = getattr(output, "error", None)
             reason_code = getattr(step, "reason_code", None)
-            if not raw and not reason_code:
+            # The rule lives in ``user_safe_failure_text`` so the synthesis prompt applies it too.
+            fragment, withheld = user_safe_failure_text(
+                getattr(step, "outcome_class", None), reason_code, raw
+            )
+            if fragment is None:
                 # Nothing to withhold and nothing to say: no reason fragment, as before #2020.
                 continue
-            # One rule: verbatim only when tool-authored, non-empty AND carrying a KNOWN code (the
-            # refusal arm's constructor fails soft to tool_error, so an unknown code on an authored
-            # class came from a foreign producer); otherwise the code's canonical sentence.
-            authored = getattr(step, "outcome_class", None) in _TOOL_AUTHORED_CLASSES
-            if authored and raw and reason_code in ReasonCode:
-                trusted_reasons.append(f"{tool_name}: {raw}")
+            # Relies on the helper's contract: ``withheld`` is the raw text the fragment replaced,
+            # else None.
+            if withheld is None and str(raw or "").strip():
+                # Text was present and nothing was withheld, so the fragment is the refusal itself.
+                trusted_reasons.append(f"{tool_name}: {fragment}")
                 continue
-            # Not trusted: not tool-authored, uncoded or carrying a code outside the closed set, or authored with no text.
-            if raw:
+            if withheld is not None:
                 logger.warning(
                     "Step %s tool %r failed with non-user-facing text (reason_code=%s): %s",
                     getattr(step, "step_id", "?"),
                     tool_name,
                     reason_code,
-                    raw,
+                    withheld,
                 )
-            # ``reason_code`` is a plain string on the model, so only a closed-set value is rendered;
-            # anything else renders as tool_error in both the sentence and the tag.
-            code = str(reason_code) if reason_code in ReasonCode else ReasonCode.TOOL_ERROR.value
-            canonical_reasons.append(f"{tool_name}: {canonical_sentence(code)} [{code}]")
+            canonical_reasons.append(f"{tool_name}: {fragment}")
         # Verbatim refusals FIRST: the answer is truncated from the end, canonical fragments are
         # often longer than the raw text they replaced, and #1574's scope sits at the end of its
         # refusal — joined last, a mixed trace can push that scope past the budget.

@@ -129,6 +129,16 @@ class ToolReliability:
     p95_latency_ms: Optional[float] = None
     last_executed_at: Optional[str] = None
     most_common_health_error: Optional[str] = None
+    # #2021: the most common CLOSED code among this tool's refusals in the window. Its sibling
+    # above names health failures by exception class; this names declines-to-answer by
+    # category. A code, never a sentence: rendering happens at read time (D1′).
+    most_common_refusal_reason: Optional[str] = None
+    # Refusals in the window that carry a code. Pre-043 refusals are uncoded, so the most common
+    # code can name a minority of n_refused; None when the database predates ml/043.
+    n_refused_coded: Optional[int] = None
+    # How many coded refusals carry most_common_refusal_reason: a 1-of-3 tie winner and a 3-of-3
+    # majority name the same code. None when the database predates ml/043 or nothing is coded.
+    n_most_common_refusal_reason: Optional[int] = None
 
     @classmethod
     def from_row(cls, row: Mapping[str, Any]) -> "ToolReliability":
@@ -169,6 +179,13 @@ class ToolReliability:
             if row.get("last_executed_at") is not None
             else None,
             most_common_health_error=row.get("most_common_health_error"),
+            most_common_refusal_reason=row.get("most_common_refusal_reason"),
+            n_refused_coded=int(row["n_refused_coded"])
+            if row.get("n_refused_coded") is not None
+            else None,
+            n_most_common_refusal_reason=int(row["n_most_common_refusal_reason"])
+            if row.get("n_most_common_refusal_reason") is not None
+            else None,
             **counts,
         )
 

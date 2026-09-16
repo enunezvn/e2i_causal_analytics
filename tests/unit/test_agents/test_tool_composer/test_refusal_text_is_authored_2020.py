@@ -19,8 +19,9 @@ from __future__ import annotations
 import ast
 import logging
 import textwrap
+from collections import Counter
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -36,7 +37,7 @@ from src.digital_twin.effect.cohort_causal_estimator import (
     CohortCausalEstimator,
     estimate_cohort_effect,
 )
-from src.digital_twin.effect.errors import EffectDataUnavailable
+from src.digital_twin.effect.errors import EffectCause, EffectDataUnavailable
 from src.digital_twin.effect.estimator import TwinEffectEstimator
 from src.digital_twin.effect.provider import CohortEffectDataProvider, SyntheticEffectDataProvider
 from src.digital_twin.models.simulation_models import InterventionConfig
@@ -56,10 +57,43 @@ from tests.unit.test_digital_twin.test_engine_real_effect import _population as 
 SENTINEL = "LIBTEXT_SENTINEL"
 REPO_ROOT = Path(__file__).resolve().parents[4]
 
+# Messages that are now authored end to end, pinned whole.
+REFUTATION_NOT_A_FRAME = (
+    "refutation_runner: supplied data is not a DataFrame. Refusing to fabricate refutation results."
+)
+SENSITIVITY_NOT_A_FRAME = (
+    "sensitivity_analyzer: supplied data is not a DataFrame. Refusing to fabricate the "
+    "sensitivity benchmark inputs."
+)
+POWER_UNREPRESENTABLE = (
+    "power_calculator: the requested design is outside the range the calculation can "
+    "represent; check the effect size, alpha, power and the design's rate or cluster size."
+)
+COHORT_NOT_ESTIMABLE = (
+    "cohort causal estimation failed for 'engagement_score': the causal forest could not "
+    "estimate an effect on this cohort."
+)
+TARGET_REGION_NO_INTERVAL = (
+    "target-region inference failed for 'engagement_score': the causal forest could not "
+    "compute an interval on the targeted rows."
+)
+UPLIFT_NOT_FITTED = (
+    "TwinEffectEstimator: the uplift model could not be fitted on the training frame."
+)
 
-def _assert_authored(err: BaseException, caplog, *, kept: List[str], library_text: str) -> None:
+
+def _assert_authored(
+    err: BaseException,
+    caplog,
+    *,
+    library_text: str,
+    exact: Optional[str] = None,
+    kept: Sequence[str] = (),
+) -> None:
     message = str(err)
     assert library_text not in message, message
+    if exact is not None:
+        assert message == exact
     for words in kept:
         assert words in message, (words, message)
     assert library_text in caplog.text
@@ -89,15 +123,7 @@ def test_refutation_runner_non_frame_text_is_logged_not_refused(caplog):
     with caplog.at_level(logging.WARNING):
         with pytest.raises(ToolRefusalError) as caught:
             tr.refutation_runner(treatment="t", outcome="y", estimation_data=_NotAFrame())
-    _assert_authored(
-        caught.value,
-        caplog,
-        kept=[
-            "refutation_runner: supplied data is not a DataFrame",
-            "Refusing to fabricate refutation results.",
-        ],
-        library_text=SENTINEL,
-    )
+    _assert_authored(caught.value, caplog, exact=REFUTATION_NOT_A_FRAME, library_text=SENTINEL)
     assert caught.value.reason_code is ReasonCode.INVALID_INPUT_TYPE
     assert isinstance(caught.value.__cause__, RuntimeError)
 
@@ -113,15 +139,7 @@ def test_sensitivity_non_frame_text_is_logged_not_refused(caplog):
                 outcome="y",
                 estimation_data=_NotAFrame(),
             )
-    _assert_authored(
-        caught.value,
-        caplog,
-        kept=[
-            "sensitivity_analyzer: supplied data is not a DataFrame",
-            "Refusing to fabricate the sensitivity benchmark inputs.",
-        ],
-        library_text=SENTINEL,
-    )
+    _assert_authored(caught.value, caplog, exact=SENSITIVITY_NOT_A_FRAME, library_text=SENTINEL)
     assert caught.value.reason_code is ReasonCode.INVALID_INPUT_TYPE
     assert isinstance(caught.value.__cause__, RuntimeError)
 
@@ -227,13 +245,38 @@ def test_power_overflow_text_is_logged_not_refused(caplog, kwargs, library_text)
     with caplog.at_level(logging.WARNING):
         with pytest.raises(ToolInputError) as caught:
             tr.power_calculator(**kwargs)
+    _assert_authored(caught.value, caplog, exact=POWER_UNREPRESENTABLE, library_text=library_text)
+    assert caught.value.reason_code is ReasonCode.INVALID_INPUT_VALUE
+    assert isinstance(caught.value.__cause__, OverflowError)
+
+
+@pytest.mark.parametrize(
+    ("name", "kwargs"),
+    [
+        ("effect_size", {"effect_size": 10**400}),
+        ("alpha", {"effect_size": 0.5, "alpha": 10**400}),
+        ("power", {"effect_size": 0.5, "power": 10**400}),
+    ],
+    ids=["effect_size", "alpha", "power"],
+)
+def test_power_input_too_large_for_a_float_is_refused_with_a_code(caplog, name, kwargs):
+    # #2021: these escaped as a bare OverflowError from ``_power_number``, outside the refusal
+    # ``try`` -- uncoded, so retried and charged to the circuit breaker, with Python's text.
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(ToolInputError) as caught:
+            tr.power_calculator(**kwargs)
     _assert_authored(
         caught.value,
         caplog,
-        kept=["power_calculator: ", "outside the range the calculation can represent"],
-        library_text=library_text,
+        exact=(
+            f"power_calculator: {name} is too large to be represented as a finite number. No "
+            "sample size can be computed from it."
+        ),
+        library_text="int too large",
     )
-    assert caught.value.reason_code is ReasonCode.INVALID_INPUT_VALUE
+    assert name in str(caught.value)
+    assert "0" * 20 not in str(caught.value)
+    assert caught.value.reason_code is ReasonCode.NON_FINITE_INPUT
     assert isinstance(caught.value.__cause__, OverflowError)
 
 
@@ -282,14 +325,12 @@ def test_cohort_fit_failure_text_is_logged_not_raised(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING):
         with pytest.raises(EffectDataUnavailable) as caught:
             estimate_cohort_effect(_make_confounded_cohort(n_per_region=100), "engagement_score")
-    _assert_authored(
-        caught.value,
-        caplog,
-        kept=["cohort causal estimation failed for 'engagement_score'"],
-        library_text=SENTINEL,
-    )
+    _assert_authored(caught.value, caplog, exact=COHORT_NOT_ESTIMABLE, library_text=SENTINEL)
     assert isinstance(caught.value.__cause__, RuntimeError)
     assert str(caught.value.__cause__) == SENTINEL
+    # #2021 9b: the cause and its counts ride along; neither reads the library exception.
+    assert caught.value.cause is EffectCause.ESTIMATION_FAILED
+    assert caught.value.details == {"n_usable_rows": 400, "is_target_inference": False}
 
 
 def test_cohort_target_region_failure_text_is_logged_not_raised(monkeypatch, caplog):
@@ -301,13 +342,14 @@ def test_cohort_target_region_failure_text_is_logged_not_raised(monkeypatch, cap
                 "engagement_score",
                 target_regions=["west"],
             )
-    _assert_authored(
-        caught.value,
-        caplog,
-        kept=["target-region inference failed for 'engagement_score'"],
-        library_text=SENTINEL,
-    )
+    _assert_authored(caught.value, caplog, exact=TARGET_REGION_NO_INTERVAL, library_text=SENTINEL)
     assert str(caught.value.__cause__) == SENTINEL
+    assert caught.value.cause is EffectCause.TARGET_INFERENCE_FAILED
+    assert caught.value.details == {
+        "n_usable_rows": 400,
+        "is_target_inference": True,
+        "n_target_rows": 100,
+    }
 
 
 def test_targeted_effect_passes_the_authored_estimator_text_through(monkeypatch, caplog):
@@ -323,7 +365,9 @@ def test_targeted_effect_passes_the_authored_estimator_text_through(monkeypatch,
         kept=["counterfactual_simulator: target-region inference failed", "No effect is returned."],
         library_text=SENTINEL,
     )
-    assert caught.value.reason_code is ReasonCode.EFFECT_NOT_ESTIMABLE
+    # #2021 9b: the estimator's cause maps to its own code, and its counts ride along.
+    assert caught.value.reason_code is ReasonCode.ESTIMATOR_FAILED
+    assert caught.value.details["is_target_inference"] is True
 
 
 def _failed_uplift(self, *_args, **_kwargs) -> UpliftResult:
@@ -344,15 +388,10 @@ def test_uplift_fit_failure_text_is_logged_not_raised(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING):
         with pytest.raises(EstimationError) as caught:
             estimator.estimate(frame, frame.df[frame.confounders])
-    _assert_authored(
-        caught.value,
-        caplog,
-        kept=["TwinEffectEstimator: uplift fit failed"],
-        library_text=SENTINEL,
-    )
+    _assert_authored(caught.value, caplog, exact=UPLIFT_NOT_FITTED, library_text=SENTINEL)
 
 
-def _uplift_engine(monkeypatch):
+def _uplift_engine(monkeypatch, brand: str):
     monkeypatch.setattr(UpliftRandomForest, "estimate", _failed_uplift)
     provider = _synthetic_frame_provider()
     engine = SimulationEngine(
@@ -362,11 +401,10 @@ def _uplift_engine(monkeypatch):
             n_estimators=25, max_depth=3, min_training_samples=100
         ),
     )
-    frame = provider.get_training_frame("email_campaign", brand="Remibrutinib", twin_type="hcp")
-    return engine, frame
+    return engine, provider.get_training_frame("email_campaign", brand=brand, twin_type="hcp")
 
 
-def _cohort_engine(monkeypatch):
+def _cohort_engine(monkeypatch, brand: str):
     monkeypatch.setattr("econml.dml.CausalForestDML", _FitRaises)
     provider = CohortEffectDataProvider(_region_cohort())
     engine = SimulationEngine(
@@ -374,12 +412,29 @@ def _cohort_engine(monkeypatch):
         effect_provider=provider,
         effect_estimator=CohortCausalEstimator(),
     )
-    return engine, provider.get_training_frame("email_campaign", brand="Kisqali", twin_type="hcp")
+    return engine, provider.get_training_frame("email_campaign", brand=brand, twin_type="hcp")
 
 
-@pytest.mark.parametrize("build", [_uplift_engine, _cohort_engine], ids=["uplift", "cohort"])
-def test_failed_simulation_refusal_carries_no_estimator_library_text(monkeypatch, caplog, build):
-    engine, frame = build(monkeypatch)
+@pytest.mark.parametrize(
+    ("build", "brand", "code", "cause", "details"),
+    [
+        # EstimationError names no cause, and its diagnostic details may hold text: never read.
+        (_uplift_engine, "Remibrutinib", ReasonCode.SIMULATION_INCOMPLETE, None, {}),
+        # #2021 9b (Part B): the engine keeps the estimator's cause and counts.
+        (
+            _cohort_engine,
+            "Kisqali",
+            ReasonCode.ESTIMATOR_FAILED,
+            "estimation_failed",
+            {"n_usable_rows": 1200, "is_target_inference": False},
+        ),
+    ],
+    ids=["uplift", "cohort"],
+)
+def test_failed_simulation_refusal_carries_no_estimator_library_text(
+    monkeypatch, caplog, build, brand, code, cause, details
+):
+    engine, frame = build(monkeypatch, brand)
     with caplog.at_level(logging.WARNING):
         result = engine.simulate(
             InterventionConfig(intervention_type="email_campaign"), use_cache=False
@@ -388,7 +443,7 @@ def test_failed_simulation_refusal_carries_no_estimator_library_text(monkeypatch
         with pytest.raises(ToolRefusalError) as caught:
             tr._simulation_results(
                 result,
-                brand="Kisqali",
+                brand=brand,
                 intervention_type="email_campaign",
                 frame=frame,
                 targeted=None,
@@ -399,34 +454,44 @@ def test_failed_simulation_refusal_carries_no_estimator_library_text(monkeypatch
         kept=["did not complete: Effect estimation failed: ", "No effect is returned."],
         library_text=SENTINEL,
     )
-    assert caught.value.reason_code is ReasonCode.SIMULATION_INCOMPLETE
+    assert caught.value.reason_code is code
+    assert caught.value.details == details
+    assert result.error_cause == cause
+    assert result.error_details == details
 
 
 # ---------------------------------------------------------------------------
 # AST guard: no coded refusal interpolates a caught exception
+# (the helper's own self-tests are in tests/unit/test_ast_guards.py)
 # ---------------------------------------------------------------------------
 
 CODED_REFUSALS = frozenset(
     {"ToolRefusalError", "ToolInputError", "EffectDataUnavailable", "EstimationError"}
 )
 
-# Keyed by (enclosing function, caught types) — never by line. Each handler here catches an
-# exception whose text is authored, so passing it through keeps the refusal authored.
-ALLOWED: Dict[Tuple[str, Tuple[str, ...]], str] = {
-    ("sensitivity_analyzer", ("ValueError",)): (
+AllowKey = Tuple[str, Optional[str], Tuple[str, ...]]
+
+# Keyed by (file, enclosing function, caught types) — never by line. Function names repeat across
+# the guarded files (``estimate`` is defined twice), so the file is part of the key. Each handler
+# here catches an exception whose text is authored, so passing it through keeps the refusal
+# authored; an entry covers exactly one handler, so a second one of the same shape is flagged.
+ALLOWED: Dict[AllowKey, str] = {
+    ("tool_registrations.py", "sensitivity_analyzer", ("ValueError",)): (
         "evalue.classify on already-derived floats raises only evalue's own ValueErrors "
         "(_finite / _orient / _validate_outcome_std / the CI and covariates_measured checks)"
     ),
-    ("_point_only_sensitivity", ("ValueError",)): (
+    ("tool_registrations.py", "_point_only_sensitivity", ("ValueError",)): (
         "point_e_value / joint_confounding_benchmark / measured_confounding_benchmark on derived "
         "floats raise only evalue's own ValueErrors; e_value_from_rr returns before sqrt when "
         "r <= 1 and rr_from_smd's math.exp can raise only OverflowError"
     ),
-    ("_targeted_effect", ("EffectDataUnavailable",)): (
+    ("tool_registrations.py", "_targeted_effect", ("EffectDataUnavailable",)): (
         "estimate_cohort_effect raises EffectDataUnavailable with authored text only; its econml "
-        "wraps log the library error instead (pinned above)"
+        "wraps log the library error instead (pinned above). The same raise also reads exc.cause "
+        "(a closed EffectCause, mapped to a code) and exc.details (counts and flags, re-validated "
+        "by ToolRefusalError), neither of which carries text (#2021 9b)"
     ),
-    ("power_calculator", ("PowerCalculationError",)): (
+    ("tool_registrations.py", "power_calculator", ("PowerCalculationError",)): (
         "power_analysis_lib raises PowerCalculationError with authored text, pinned by "
         "test_power_calculator_2015's match=reason; ArithmeticError has its own clause"
     ),
@@ -440,8 +505,32 @@ def _guarded_files() -> List[Path]:
     )
 
 
-def _unallowed(found: List[CaughtInterpolation]) -> List[CaughtInterpolation]:
-    return [site for site in found if (site.function, site.caught_types) not in ALLOWED]
+def _key(file_name: str, site: CaughtInterpolation) -> AllowKey:
+    return (file_name, site.function, site.caught_types)
+
+
+def _unallowed(
+    found: Dict[str, List[CaughtInterpolation]],
+) -> Dict[str, List[CaughtInterpolation]]:
+    return {
+        name: [site for site in sites if _key(name, site) not in ALLOWED]
+        for name, sites in found.items()
+    }
+
+
+def _allowlist_match_counts(found: Dict[str, List[CaughtInterpolation]]) -> Dict[AllowKey, int]:
+    """How many real sites each entry matches: 0 is a stale entry that would silently allow a
+    future site, 2 or more lets a second handler through under the first one's reason."""
+    counts = Counter(_key(name, site) for name, sites in found.items() for site in sites)
+    return {key: counts[key] for key in ALLOWED}
+
+
+def _scan(file_name: str, source: str) -> Dict[str, List[CaughtInterpolation]]:
+    return {
+        file_name: caught_exception_interpolations(
+            ast.parse(textwrap.dedent(source)), CODED_REFUSALS
+        )
+    }
 
 
 def test_no_coded_refusal_interpolates_a_caught_exception():
@@ -451,45 +540,56 @@ def test_no_coded_refusal_interpolates_a_caught_exception():
         path.name: caught_exception_interpolations(ast.parse(path.read_text()), CODED_REFUSALS)
         for path in files
     }
-    assert {name: _unallowed(sites) for name, sites in found.items()} == {
-        name: [] for name in found
-    }
-    sites = [site for per_file in found.values() for site in per_file]
-    # A function on the allowlist holds allowlisted handlers only.
-    allowed_functions = {function for function, _caught in ALLOWED}
-    assert [
-        site
-        for site in sites
-        if site.function in allowed_functions and (site.function, site.caught_types) not in ALLOWED
-    ] == []
-    # Every entry still names a real handler; a stale one would silently allow a future site.
-    assert set(ALLOWED) <= {(site.function, site.caught_types) for site in sites}
+    assert _unallowed(found) == {name: [] for name in found}
+    assert _allowlist_match_counts(found) == dict.fromkeys(ALLOWED, 1)
+
+
+def test_allowlist_flags_a_second_handler_under_an_allowlisted_key():
+    found = _scan(
+        "tool_registrations.py",
+        """\
+        def sensitivity_analyzer():
+            try:
+                pass
+            except ValueError as exc:
+                raise ToolRefusalError(f"sensitivity_analyzer refused its inputs: {exc}")
+            try:
+                pass
+            except ValueError as exc:
+                raise ToolRefusalError(f"pandas said: {exc}")
+        """,
+    )
+    assert _unallowed(found) == {"tool_registrations.py": []}
+    key = ("tool_registrations.py", "sensitivity_analyzer", ("ValueError",))
+    assert _allowlist_match_counts(found)[key] == 2
 
 
 def test_allowlist_does_not_admit_the_unsplit_power_handler():
-    source = textwrap.dedent(
+    found = _scan(
+        "tool_registrations.py",
         """\
         def power_calculator():
             try:
                 pass
             except (PowerCalculationError, ArithmeticError) as exc:
                 raise ToolInputError(f"power_calculator: {exc}")
-        """
+        """,
     )
-    assert _unallowed(caught_exception_interpolations(ast.parse(source), CODED_REFUSALS)) == [
-        CaughtInterpolation(
-            5,
-            "power_calculator",
-            ("PowerCalculationError", "ArithmeticError"),
-            "ToolInputError",
-            "exc",
-        )
-    ]
+    assert _unallowed(found) == {
+        "tool_registrations.py": [
+            CaughtInterpolation(
+                5,
+                "power_calculator",
+                ("PowerCalculationError", "ArithmeticError"),
+                "ToolInputError",
+                "exc",
+            )
+        ]
+    }
 
 
 def test_allowlist_is_keyed_by_caught_type_not_function_alone():
-    source = textwrap.dedent(
-        """\
+    source = """\
         def sensitivity_analyzer():
             try:
                 pass
@@ -500,140 +600,11 @@ def test_allowlist_is_keyed_by_caught_type_not_function_alone():
             except Exception as exc:
                 raise ToolRefusalError(f"refused: {exc}")
         """
-    )
-    found = caught_exception_interpolations(ast.parse(source), CODED_REFUSALS)
-    assert [site.line for site in found] == [5, 9]
-    assert [site.line for site in _unallowed(found)] == [9]
-
-
-# ---------------------------------------------------------------------------
-# Guard self-tests: each form the helper follows, flagged and allowed
-# ---------------------------------------------------------------------------
-
-
-def _in_handler(body: str) -> str:
-    return "try:\n    pass\nexcept Exception as e:\n" + textwrap.indent(
-        textwrap.dedent(body), "    "
-    )
-
-
-def _flagged(body: str) -> List[Tuple[int, str, str]]:
-    found = caught_exception_interpolations(ast.parse(_in_handler(body)), CODED_REFUSALS)
-    return [(site.line, site.raised, site.name) for site in found]
-
-
-@pytest.mark.parametrize(
-    ("body", "line"),
-    [
-        ('msg = "failed: "\nmsg += str(e)\nraise ToolRefusalError(msg)\n', 6),
-        ("print((d := str(e)))\nraise ToolRefusalError(d)\n", 5),
-        ("if (d := str(e)):\n    raise ToolRefusalError(d)\n", 5),
-        ("for arg in e.args:\n    raise ToolRefusalError(arg)\n", 5),
-        ('err = ToolRefusalError(f"{e}")\nraise err\n', 5),
-        ('err = ToolRefusalError(f"{e}")\nalias = err\nraise alias\n', 6),
-        ('def build():\n    return f"{e}"\nraise ToolRefusalError(build())\n', 6),
-        ('def build():\n    raise ToolRefusalError(f"{e}")\n', 5),
-        ("with open(str(e)) as handle:\n    raise ToolRefusalError(handle)\n", 5),
-        ('msg = str(e)\nif cond:\n    msg = "fixed"\nraise ToolRefusalError(msg)\n', 7),
-        ("while cond:\n    raise ToolRefusalError(msg)\n    msg = str(e)\n", 5),
-    ],
-    ids=[
-        "augassign",
-        "walrus",
-        "walrus-in-test",
-        "for-over-args",
-        "prebuilt-instance",
-        "prebuilt-alias",
-        "nested-def-called",
-        "nested-def-raises",
-        "with-as",
-        "rebound-on-one-branch-only",
-        "loop-carries-taint-back",
-    ],
-)
-def test_helper_flags_derived_forms(body, line):
-    raised = "ToolRefusalError"
-    assert _flagged(body) == [(line, raised, "e")]
-
-
-@pytest.mark.parametrize(
-    "body",
-    [
-        'msg = "failed"\nmsg += "!"\nraise ToolRefusalError(msg) from e\n',
-        'if (d := "fixed"):\n    raise ToolRefusalError(d)\n',
-        'for arg in ("a", "b"):\n    raise ToolRefusalError(arg)\n',
-        'err = ToolRefusalError("fixed")\nraise err from e\n',
-        'err = ValueError(f"{e}")\nraise err\n',
-        'def build():\n    return "fixed"\nraise ToolRefusalError(build())\n',
-        'def build(e):\n    return str(e)\nraise ToolRefusalError(build("fixed"))\n',
-        "raise ToolRefusalError(type(e).__name__)\n",
-        "raise ToolRefusalError(e.__class__.__name__)\n",
-        'raise ToolRefusalError(f"{type(e)}")\n',
-        'e = "fixed"\nraise ToolRefusalError(f"{e}")\n',
-        'msg = str(e)\nmsg = "fixed"\nraise ToolRefusalError(msg)\n',
-        'msg = {}\nmsg["k"] = 1\nraise ToolRefusalError(msg)\n',
-    ],
-    ids=[
-        "augassign-untainted",
-        "walrus-untainted",
-        "for-over-literal",
-        "prebuilt-authored",
-        "prebuilt-other-class",
-        "nested-def-untainted",
-        "nested-def-shadowing-param",
-        "type-name",
-        "class-name",
-        "type-repr",
-        "handler-name-rebound",
-        "derived-name-rebound",
-        "subscript-store-untainted",
-    ],
-)
-def test_helper_allows_what_does_not_render_the_exception(body):
-    assert _flagged(body) == []
-
-
-def test_helper_reports_a_nested_handler_once_under_its_own_clause():
-    source = textwrap.dedent(
-        """\
-        def tool():
-            try:
-                pass
-            except Exception as e:
-                try:
-                    pass
-                except (ValueError, errors.EffectDataUnavailable) as e:
-                    raise ToolRefusalError(f"{e}")
-        """
-    )
-    assert caught_exception_interpolations(ast.parse(source), CODED_REFUSALS) == [
-        CaughtInterpolation(
-            8, "tool", ("ValueError", "EffectDataUnavailable"), "ToolRefusalError", "e"
-        )
-    ]
-
-
-def test_helper_carries_a_nested_handlers_bindings_to_the_outer_scan():
-    body = "try:\n    pass\nexcept ValueError:\n    msg = str(e)\nraise ToolRefusalError(msg)\n"
-    assert _flagged(body) == [(8, "ToolRefusalError", "e")]
-
-
-def test_helper_names_the_enclosing_function_and_caught_types():
-    source = textwrap.dedent(
-        """\
-        try:
-            pass
-        except RuntimeError as e:
-            raise ToolRefusalError(str(e))
-
-        async def outer():
-            try:
-                pass
-            except (KeyError, module.LookupFailure) as exc:
-                raise EstimationError(repr(exc))
-        """
-    )
-    assert caught_exception_interpolations(ast.parse(source), CODED_REFUSALS) == [
-        CaughtInterpolation(4, None, ("RuntimeError",), "ToolRefusalError", "e"),
-        CaughtInterpolation(10, "outer", ("KeyError", "LookupFailure"), "EstimationError", "exc"),
+    found = _scan("tool_registrations.py", source)
+    assert [site.line for site in found["tool_registrations.py"]] == [5, 9]
+    assert [site.line for site in _unallowed(found)["tool_registrations.py"]] == [9]
+    # The same function and caught type in another guarded file is not the allowlisted handler.
+    assert [site.line for site in _unallowed(_scan("estimator.py", source))["estimator.py"]] == [
+        5,
+        9,
     ]

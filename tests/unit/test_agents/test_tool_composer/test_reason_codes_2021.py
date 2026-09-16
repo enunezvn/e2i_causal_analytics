@@ -3,6 +3,7 @@
 import copy
 import logging
 import pickle
+import re
 from collections.abc import Mapping
 from enum import Enum, StrEnum
 
@@ -11,8 +12,10 @@ import pytest
 from src.agents.tool_composer.errors import ToolInputError, ToolRefusalError
 from src.agents.tool_composer.reason_codes import (
     CANONICAL_SENTENCES,
+    EXECUTOR_ASSIGNED,
     ReasonCode,
     canonical_sentence,
+    known_sentence,
     validate_details,
 )
 
@@ -68,6 +71,9 @@ _WIRE_VALUES_2021 = frozenset(
         "degenerate_design",
         "simulation_incomplete",
         "effect_not_estimable",
+        "missing_required_column",
+        "no_treatment_contrast",
+        "estimator_failed",
         "missing_required_input",
         "invalid_input_type",
         "invalid_input_value",
@@ -88,11 +94,28 @@ def test_wire_values_may_grow_but_never_shrink_or_rename():
 
     upstream_step_failed removed 2026-09-12 before first deploy; never persisted.
     """
-    assert len(_WIRE_VALUES_2021) == 32
+    assert len(_WIRE_VALUES_2021) == 35
     current = {c.value for c in ReasonCode}
     assert current >= _WIRE_VALUES_2021, sorted(_WIRE_VALUES_2021 - current)
     for member in ReasonCode:
         assert member.value == member.name.lower(), member
+
+
+def test_the_twin_effect_causes_have_their_own_codes_9b():
+    """#2021 9b: three counterfactual_simulator causes had no existing code whose sentence is
+    true for them. They are tool-authored codes, never executor-assigned."""
+    sentences = {code.value: sentence for code, sentence in CANONICAL_SENTENCES.items()}
+    expected = {
+        "missing_required_column": "a column the estimate requires is not present in the data",
+        "no_treatment_contrast": (
+            "the treatment does not split the rows into a treated and a comparison group"
+        ),
+        "estimator_failed": (
+            "the effect estimator could not produce an estimate from data that passed its checks"
+        ),
+    }
+    assert {value: sentences.get(value) for value in expected} == expected
+    assert not {c.value for c in EXECUTOR_ASSIGNED} & set(expected)
 
 
 def test_a_code_formats_as_its_wire_value():
@@ -184,6 +207,21 @@ def test_details_accepts_ints_finite_floats_and_booleans():
 def test_details_key_count_is_still_bounded():
     with pytest.raises(ValueError, match="details"):
         validate_details({f"n_{i}": i for i in range(9)})
+
+
+def test_details_key_length_matches_the_043_reducer():
+    """ml/043's reducer keeps only keys matching ``_DETAIL_KEY``, anchored, and so at most 64
+    characters, and drops the rest silently; the Python rule must refuse them first."""
+    from src.agents.tool_composer.reason_codes import _DETAIL_KEY
+
+    prefixes, max_tail = re.fullmatch(
+        r"\(([a-z|]+)\)_\[a-z0-9_\]\{1,(\d+)\}", _DETAIL_KEY.pattern
+    ).groups()
+    longest = max(prefixes.split("|"), key=len) + "_" + "x" * int(max_tail)
+    assert len(longest) == 64
+    assert validate_details({longest: 1}) == {longest: 1}
+    with pytest.raises(ValueError, match="details"):
+        validate_details({longest + "x": 1})
 
 
 def test_numpy_scalars_are_normalized_to_builtins():
@@ -452,3 +490,14 @@ def test_a_coded_error_survives_pickle_and_deepcopy():
         assert clone.details == {"n_rows": 0}
         assert clone.__notes__ == ["n"]
         assert isinstance(clone, RuntimeError)
+
+
+def test_known_sentence_renders_only_codes_this_build_knows():
+    """Read-side rendering: an unknown code must not be relabelled as a tool failure."""
+    assert (
+        known_sentence("non_binary_treatment")
+        == CANONICAL_SENTENCES[ReasonCode.NON_BINARY_TREATMENT]
+    )
+    assert known_sentence(ReasonCode.COVERAGE_GAP) == CANONICAL_SENTENCES[ReasonCode.COVERAGE_GAP]
+    assert known_sentence(None) is None
+    assert known_sentence("a_code_this_build_does_not_know") is None

@@ -291,19 +291,20 @@ def simulate_intervention(
         return _format_output(result)
 
     except Exception as e:
+        # The raw text stays in the log: the node copies these fields into the experiment_designer
+        # warnings, which reach the answer, and library text means nothing to a reader (#2020).
         logger.error(f"Simulation failed: {e}", exc_info=True)
         return {
             "simulation_id": "error",
             "recommendation": "refine",
-            "recommendation_rationale": f"Simulation failed: {str(e)}. "
-            "Please check inputs and try again.",
+            "recommendation_rationale": "Simulation failed. Please check inputs and try again.",
             "simulated_ate": 0.0,
             "confidence_interval": (0.0, 0.0),
             "recommended_sample_size": None,
             "recommended_duration_weeks": duration_weeks,
             "simulation_confidence": 0.0,
             "fidelity_warning": True,
-            "fidelity_warning_reason": str(e),
+            "fidelity_warning_reason": "the twin simulation could not be completed",
             "top_segments": [],
         }
 

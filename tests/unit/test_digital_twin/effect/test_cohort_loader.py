@@ -9,12 +9,17 @@ drives ``available_for_effect`` in ``GET /digital-twin/intervention-types``).
 """
 
 import numpy as np
+import pandas as pd
+import pytest
 
+from src.digital_twin.effect import cohort_loader
 from src.digital_twin.effect.cohort_loader import (
     build_cohort_provider_or_none,
     cohort_treatment_availability,
 )
+from src.digital_twin.effect.errors import EffectCause
 from src.digital_twin.effect.provider import (
+    COHORT_CONFOUNDERS,
     COHORT_ESTIMABLE_INTERVENTIONS,
     COHORT_MIN_ROWS,
     CohortEffectDataProvider,
@@ -143,6 +148,133 @@ async def test_returns_none_on_db_error_never_raises():
     client = _FakeClient(_FakeResult(data=None), raise_on_execute=True)
     provider = await build_cohort_provider_or_none(client, "digital_engagement", "Remibrutinib")
     assert provider is None
+
+
+def _frame(n: int = 600) -> pd.DataFrame:
+    return pd.DataFrame(_cohort_rows(n))
+
+
+def _all_null_treatment() -> pd.DataFrame:
+    frame = _frame()
+    frame["engagement_score"] = np.nan
+    return frame
+
+
+def _columns(n_rows=600, *, treatment=True, outcome=True, region=True, missing_confounders=0):
+    return {
+        "n_rows": n_rows,
+        "has_treatment_column": treatment,
+        "has_outcome_column": outcome,
+        "has_region_column": region,
+        "n_missing_confounder_columns": missing_confounders,
+    }
+
+
+def _rows(n_rows, n_usable, *, null_treatment=0):
+    return {
+        "n_rows": n_rows,
+        "n_usable_rows": n_usable,
+        "n_min_usable_rows": COHORT_MIN_ROWS,
+        "n_null_treatment_rows": null_treatment,
+        "n_null_outcome_rows": 0,
+        "n_null_region_rows": 0,
+        "n_null_confounder_rows": 0,
+    }
+
+
+@pytest.mark.parametrize(
+    ("build", "intervention", "cause", "details"),
+    [
+        pytest.param(
+            pd.DataFrame, "digital_engagement", EffectCause.EMPTY_COHORT, {"n_rows": 0}, id="empty"
+        ),
+        # ``DataFrame.empty`` is also true for rows without columns; those rows are not an
+        # empty cohort, they are a cohort missing every column.
+        pytest.param(
+            lambda: pd.DataFrame(index=range(5)),
+            "digital_engagement",
+            EffectCause.REQUIRED_COLUMN_MISSING,
+            _columns(
+                5,
+                treatment=False,
+                outcome=False,
+                region=False,
+                missing_confounders=len(COHORT_CONFOUNDERS),
+            ),
+            id="rows-without-columns",
+        ),
+        pytest.param(
+            lambda: _frame().drop(columns="engagement_score"),
+            "digital_engagement",
+            EffectCause.REQUIRED_COLUMN_MISSING,
+            _columns(treatment=False),
+            id="no-treatment-column",
+        ),
+        pytest.param(
+            lambda: _frame().drop(columns="market_share"),
+            "digital_engagement",
+            EffectCause.REQUIRED_COLUMN_MISSING,
+            _columns(missing_confounders=1),
+            id="no-confounder-column",
+        ),
+        # Before #2021 9b this raised KeyError from dropna: the outcome was never checked.
+        pytest.param(
+            lambda: _frame().drop(columns="conversion_rate"),
+            "digital_engagement",
+            EffectCause.REQUIRED_COLUMN_MISSING,
+            _columns(outcome=False),
+            id="no-outcome-column",
+        ),
+        pytest.param(
+            lambda: _frame().drop(columns="region"),
+            "digital_engagement",
+            EffectCause.REQUIRED_COLUMN_MISSING,
+            _columns(region=False),
+            id="no-region-column",
+        ),
+        pytest.param(
+            lambda: _frame().head(100),
+            "digital_engagement",
+            EffectCause.TOO_FEW_USABLE_ROWS,
+            _rows(100, 100),
+            id="too-few-rows",
+        ),
+        pytest.param(
+            _all_null_treatment,
+            "digital_engagement",
+            EffectCause.TOO_FEW_USABLE_ROWS,
+            _rows(600, 0, null_treatment=600),
+            id="all-null-treatment",
+        ),
+        pytest.param(
+            _frame,
+            "not_a_lever",
+            EffectCause.INTERVENTION_NOT_IDENTIFIED,
+            {},
+            id="not-identified",
+        ),
+    ],
+)
+def test_an_unusable_cohort_names_its_cause(build, intervention, cause, details):
+    """#2021 9b: one ``None`` used to cover every cause; the refusal's code needs to know which."""
+    usability = cohort_loader.assess_cohort_frame(build(), intervention)
+    assert usability.provider is None
+    assert usability.cause is cause
+    assert dict(usability.details) == details
+
+
+def test_a_usable_cohort_gets_a_provider_and_no_cause():
+    frame = _frame()
+    usability = cohort_loader.assess_cohort_frame(frame, "digital_engagement")
+    assert isinstance(usability.provider, CohortEffectDataProvider)
+    assert len(usability.provider._cohort) == len(frame)
+    assert usability.cause is None
+    assert dict(usability.details) == {}
+
+
+def test_the_optional_wrapper_refuses_a_cohort_without_its_outcome_column():
+    frame = _frame().drop(columns="conversion_rate")
+    assert cohort_loader.cohort_provider_from_frame(frame, "digital_engagement") is None
 
 
 async def test_availability_true_per_intervention_when_counts_meet_threshold():

@@ -192,6 +192,13 @@ export interface ToolComposerToolRow {
   p95_latency_ms: number | null;
   declared_latency_ms: number | null;
   most_common_health_error: string | null;
+  // #2021: the tool's most common CODED refusal reason; null means none of its refusals in the
+  // window carry a code. n_refused_coded / n_most_common_refusal_reason are counts, not
+  // defaults — null means UNKNOWN (pre-ml/043), never 0.
+  most_common_refusal_reason?: string | null;
+  most_common_refusal_sentence?: string | null;
+  n_refused_coded?: number | null;
+  n_most_common_refusal_reason?: number | null;
   last_executed_at: string | null;
 }
 
@@ -199,6 +206,12 @@ export interface ToolComposerStepClass {
   step_number: number | null;
   tool_name: string | null;
   outcome_class: string | null;
+  // #2021: the step's closed reason code and its catalogue sentence; null sentence with a
+  // non-null code means a code this build does not know.
+  reason_code?: string | null;
+  reason?: string | null;
+  // #2050: the numeric diagnostics recorded with the refusal; empty or absent when none were.
+  reason_details?: Record<string, number | boolean>;
 }
 
 export interface ToolComposerRecentFailure {

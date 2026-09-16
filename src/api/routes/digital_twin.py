@@ -41,6 +41,7 @@ from src.api.dependencies.auth import (
     require_viewer,
     resolve_brand_for_read,
 )
+from src.api.routes.digital_twin_rejections import Decile, rejected_request
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 
 if TYPE_CHECKING:
@@ -243,7 +244,7 @@ class InterventionConfigRequest(BaseModel):
     )
     personalization_level: str = Field(default="standard", description="none, standard, high")
     target_segment: Optional[str] = Field(None, description="Target segment identifier")
-    target_deciles: List[int] = Field(default=[1, 2, 3], description="Target deciles (1-10)")
+    target_deciles: List[Decile] = Field(default=[1, 2, 3], description="Target deciles (1-10)")
     target_specialties: List[str] = Field(default=[], description="Target specialty list")
     target_regions: List[str] = Field(default=[], description="Target region list")
     intensity_multiplier: float = Field(
@@ -1043,12 +1044,11 @@ async def run_simulation(
         # into a 500 by the broad handler below.
         raise
     except HeavyComputeSaturated:
-        # Reject fast under load — surfaced as 503 + Retry-After by the app
-        # exception handler. Must precede the broad handlers so it is not
-        # swallowed into a 500.
+        # Reject fast under load — surfaced as 503 + Retry-After by the app exception handler.
+        # Must precede the broad handlers so it is not swallowed into a 500.
         raise
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise rejected_request(logger, "simulation", "request", e)
     except Exception as e:
         logger.error(f"Simulation failed: {e}")
         raise HTTPException(status_code=500, detail="Simulation failed")
@@ -1401,8 +1401,8 @@ async def compare_scenarios(
     except HeavyComputeSaturated:
         # Reject fast under load (mapped to 503 + Retry-After by the app handler).
         raise
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError as e:  # e.g. ``Brand(scenario.brand)``: "'X' is not a valid Brand"
+        raise rejected_request(logger, "scenario comparison", "scenario", e)
     except Exception as e:
         logger.error(f"Scenario comparison failed: {e}")
         raise HTTPException(status_code=500, detail="Scenario comparison failed")

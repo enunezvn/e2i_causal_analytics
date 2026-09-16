@@ -212,6 +212,12 @@ class SimulationResult(BaseModel):
     # Status
     status: SimulationStatus = SimulationStatus.COMPLETED
     error_message: Optional[str] = None
+    # Why a FAILED run's effect could not be estimated (#2021 9b): an EffectCause value and its
+    # counts, set only when the effect engine named one. They give the chat tool's refusal its
+    # reason code. Not persisted (the repository writes an explicit column list) and not in the
+    # /simulate response (built field by field).
+    error_cause: Optional[str] = None
+    error_details: Dict[str, Any] = Field(default_factory=dict)
 
     # Performance metrics
     execution_time_ms: int = Field(ge=0)

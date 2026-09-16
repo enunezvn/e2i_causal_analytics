@@ -32,7 +32,7 @@ from src.agents.tool_composer.decomposer import DecompositionError, QueryDecompo
 from src.agents.tool_composer.executor import ExecutionError, PlanExecutor
 from src.agents.tool_composer.models.composition_models import DecompositionResult, SubQuestion
 from src.agents.tool_composer.planner import PlanningError, ToolPlanner
-from tests.unit.ast_guards import CaughtInterpolation, caught_exception_interpolations
+from tests.unit.ast_guards import caught_exception_interpolations
 
 SENTINEL = "LIBTEXT_SENTINEL"
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -326,6 +326,7 @@ async def test_agent_output_error_is_a_fixed_sentence(mock_llm_client, monkeypat
 
 # ---------------------------------------------------------------------------
 # AST guard: no phase error interpolates the exception its handler caught
+# (the helper's own self-tests are in tests/unit/test_ast_guards.py)
 # ---------------------------------------------------------------------------
 
 
@@ -336,48 +337,3 @@ def test_no_phase_error_interpolates_a_caught_exception():
         for name in PHASE_MODULES
     }
     assert violations == {name: [] for name in PHASE_MODULES}
-
-
-@pytest.mark.parametrize(
-    "raise_line",
-    [
-        'raise PlanningError(f"failed: {e}") from e',
-        "raise PlanningError(str(e))",
-        "raise PlanningError(repr(e))",
-        'raise PlanningError("failed: %s" % e)',
-        'raise PlanningError("failed: {}".format(e))',
-        "raise PlanningError(message=e.args[0])",
-    ],
-    ids=["fstring", "str", "repr", "percent", "format", "attribute-kwarg"],
-)
-def test_guard_flags_every_reference_form(raise_line):
-    source = f"try:\n    pass\nexcept Exception as e:\n    {raise_line}\n"
-    assert caught_exception_interpolations(ast.parse(source), PHASE_ERRORS) == [
-        CaughtInterpolation(4, None, ("Exception",), "PlanningError", "e")
-    ]
-
-
-def test_guard_follows_a_local_built_from_the_exception():
-    source = (
-        "try:\n    pass\nexcept Exception as e:\n"
-        '    detail = f"{e}"\n    message = "failed: " + detail\n'
-        "    raise executor.ExecutionError(message)\n"
-    )
-    assert caught_exception_interpolations(ast.parse(source), PHASE_ERRORS) == [
-        CaughtInterpolation(6, None, ("Exception",), "ExecutionError", "e")
-    ]
-
-
-@pytest.mark.parametrize(
-    "handler",
-    [
-        'except Exception as e:\n    raise PlanningError("fixed sentence") from e',
-        "except PlanningError:\n    raise",
-        'except Exception as e:\n    raise ValueError(f"not a phase error: {e}")',
-        'except Exception as e:\n    logger.warning("x: %s", e)\n    raise PlanningError("fixed")',
-    ],
-    ids=["from-cause", "bare-reraise", "other-class", "logged-only"],
-)
-def test_guard_allows_what_does_not_render_the_exception(handler):
-    source = f"try:\n    pass\n{handler}\n"
-    assert caught_exception_interpolations(ast.parse(source), PHASE_ERRORS) == []
