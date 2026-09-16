@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple, cast
 
 import numpy as np
 
-from src.agents.causal_impact.nodes import _dowhy_order
+from src.agents.causal_impact.nodes import _dowhy_order, _reconstruction_columns
 from src.agents.causal_impact.nodes._compute_budget import (
     ComputeBudgetExpired,
     run_bounded_with_budget,
@@ -1915,13 +1915,10 @@ class RefutationNode:
                     f"Using estimation data for refutation (shape: {estimation_data.shape})"  # type: ignore[union-attr]
                 )
 
-            # F-014 fix (#416): reconstruct CausalModel from estimation_data
-            # so refutation runs REAL DoWhy refuters (placebo, random_common_cause,
-            # data_subset, bootstrap) — NOT the deleted ``_mock_*`` paths.
-            # Iter-2 (codex H3): rebuild uses the SAME estimator (resolved
-            # from estimation_result.selected_estimator / .method) that
-            # produced the reported ATE — not a hardcoded linear regression.
-            # Fail-closed: ``RefutationError`` propagates to caller's except block.
+            # F-014 fix (#416): reconstruct a REAL CausalModel from estimation_data (placebo,
+            # random_common_cause, data_subset, bootstrap; no ``_mock_*`` paths) with the SAME
+            # estimator that produced the reported ATE (codex H3: selected_estimator / .method)
+            # and on the SAME columns (#2155). Fail-closed: ``RefutationError`` -> except block.
             common_causes = cast(
                 List[str],
                 state.get("confounders") or estimation_result.get("covariates_adjusted") or [],
@@ -1932,6 +1929,9 @@ class RefutationNode:
             # columns or the refuters critique a different model.
             common_causes = _effective_reconstruction_common_causes(
                 common_causes, cast(Dict[str, Any], estimation_result)
+            )
+            _reconstruction_columns.require_estimate_columns(  # #2155: same model or refuse
+                common_causes, estimation_result, _effective_reconstruction_common_causes
             )
             # Cooperative compute deadline (orphan-fix): the offloaded refutation
             # suite runs in a worker thread that the API task's asyncio.wait_for
