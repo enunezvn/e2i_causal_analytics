@@ -355,11 +355,14 @@ async def test_axis_rules_window_composition_matches_calculators():
     assert suffix(ige_qid).endswith("_ige_tier_windowed")
 
     # 2. TRx Share / Conversion Rate: a window does NOT compose with region.
-    for kpi_id in ("WS3-BI-008", "WS3-BI-009"):
+    # ⚠ WS3-BI-014, not 008: `_calc_trx_share` is the PANEL share's handler now
+    # (business_impact.py:110); canonical 008 dispatches to `_calc_canonical_volume`.
+    # The guard being exercised is the same one; only the KPI that owns it moved.
+    for kpi_id in ("WS3-BI-014", "WS3-BI-009"):
         kpi = get_registry().get(kpi_id)
         assert kpi is not None, kpi_id
         context = {"brand": "Kisqali", "window": window, "region": "west"}
-        guard = calc._calc_trx_share if kpi_id == "WS3-BI-008" else calc._calc_conversion_rate
+        guard = calc._calc_trx_share if kpi_id == "WS3-BI-014" else calc._calc_conversion_rate
         with pytest.raises(RuntimeError, match=kpi_id):
             guard(dict(context))
         # calculate() records the guard instead of re-raising, so the chat layer
@@ -426,8 +429,11 @@ async def test_axis_rules_patient_axes_match_calculators(monkeypatch):
     # TRx Share (WS3-BI-008) is refused on every patient axis: each patient is on
     # one tracked brand, so a per-bucket portfolio share mixes indications
     # (session_1789548670222_fcscf3u, 2026-09-16).
-    three = {"WS3-BI-005", "WS3-BI-006", "WS3-BI-007"}
-    assert {short(i) for i in three} == {"TRx", "NRx", "NBRx"}
+    # ⚠ THE PANEL TRIO, not the canonical one (#2114, owner #11). Canonical
+    # 005/006/007 no longer bind any patient axis -- `refuse_patient_axis` turns
+    # them away -- so the KPIs this sentence may name are 011/012/013.
+    three = {"WS3-BI-011", "WS3-BI-012", "WS3-BI-013"}
+    assert {short(i) for i in three} == {"TRx Panel", "NRx Panel", "NBRx Panel"}
     assert short("WS3-BI-008") == "TRx Share"
     assert short("WS3-BI-009") == "Conversion Rate" and short("CM-002") == "CATE"
 
