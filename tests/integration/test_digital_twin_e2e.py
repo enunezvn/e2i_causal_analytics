@@ -16,7 +16,7 @@ Run with: pytest -n 1 tests/integration/test_digital_twin_e2e.py -v
 """
 
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import numpy as np
@@ -381,6 +381,18 @@ class TestFidelityValidationWorkflow:
 
 class TestRetrainingTriggerWorkflow:
     """Tests for automatic retraining trigger workflow."""
+
+    @pytest.fixture(autouse=True)
+    def _no_broker_enqueue(self):
+        """Keep ``trigger_retraining`` off the live Celery app (#2056).
+
+        Unpatched, ``execute_twin_retraining.delay`` sits in celery's Redis reconnect loops
+        (~20 s) wherever the broker is unreachable or rejects the URL. These tests assert the
+        job the service creates; queueing is covered in test_retraining_service_queueing.py.
+        """
+        with patch("src.tasks.ab_testing_tasks.execute_twin_retraining") as mock_task:
+            mock_task.delay = MagicMock(return_value=MagicMock(id="test-task-id"))
+            yield mock_task
 
     @pytest.mark.asyncio
     async def test_fidelity_triggers_retrain_evaluation(self, retraining_service, mock_repository):
