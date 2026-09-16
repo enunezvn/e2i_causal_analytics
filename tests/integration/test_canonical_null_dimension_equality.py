@@ -4,7 +4,31 @@ Planted business_metrics rows (canonical_sql_harness: a TEMP shadow table, rolle
 include a NULL-region and a NULL-brand row in the frontier month. For all four KPIs,
 national and region scopes, and both synthetic modes, the generated headline statement
 (chosen by canonical_query_call, twin resolved like the calculator), the history
-aggregation and the monthly series agree, and none counts the NULL rows. Skips without docker.
+aggregation and the monthly series agree, and none counts the NULL rows.
+
+⚠ THIS GATE RUNS ONLY ON THE BOX — a green CI says NOTHING about it. The
+``integration-tests`` job has no ``supabase-db`` (no ``services:`` block; Redis comes
+from apt), so ``PlantedBusinessMetrics.__init__`` probes ``docker exec supabase-db``
+and SKIPS there. Unlike ``test_canonical_headline_history_equality_live.py``, whose
+skip had to be built because its precondition is the DEPLOYED statement, this one
+skips for free because the harness owns the probe. Nothing but a manual run on the
+box exercises it.
+
+Measured 2026-09-16 on the box (18 passed):
+* isolation PROVEN, not assumed — ``public.business_metrics`` count 22043 before and
+  22043 after, the 7777/8888 sentinels and ``metric_id LIKE 'planted-%'`` both 0, and
+  zero leftover ``pg_temp%`` tables. The 18 exact-value passes are the control in the
+  OTHER direction: had the TEMP shadow not taken effect the statements would have read
+  the 22043 real rows and every expected value would have been wrong, so a check that
+  only confirmed "the count did not move" would also have been satisfied by a run that
+  read nothing at all;
+* teeth PROVEN — with ``DIMENSIONED_ROW_SQL = "true"`` (verified to reach the
+  GENERATED sql, not just the source), 16 of 18 fail with the NULL rows counted:
+  Kisqali national 7977 vs 200, northeast 9148 vs 260, and both shares because the
+  NULL rows move the denominator. The 2 survivors are the Kisqali/south pair, which
+  SHOULD survive: the NULL-region row has no region and the NULL-brand row is
+  northeast, so neither is in that scope — a plant that cannot reach a scope proves
+  nothing about it, and "2 passed" is not a weak spot.
 """
 
 from datetime import date
