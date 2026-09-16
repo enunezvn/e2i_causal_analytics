@@ -392,8 +392,12 @@ async def test_axis_rules_window_composition_matches_calculators():
 
     # The sentence's three families partition the windowable set exactly.
     c = await make_catalog()
-    volume = {"WS3-BI-005", "WS3-BI-006", "WS3-BI-007"}
-    share_conversion = {"WS3-BI-008", "WS3-BI-009"}
+    # ⚠ FOUR families now, not three (#2114): the lane made the PANEL KPIs windowable
+    # too, so the partition must name them or they fall into "triggers". Measured:
+    # 13 windowable ids = canonical trio + canonical share + conversion + panel trio
+    # + panel share + the four trigger KPIs.
+    volume = {"WS3-BI-005", "WS3-BI-006", "WS3-BI-007", "WS3-BI-011", "WS3-BI-012", "WS3-BI-013"}
+    share_conversion = {"WS3-BI-008", "WS3-BI-009", "WS3-BI-014"}
     assert volume <= c.windowable_kpi_ids
     assert share_conversion <= c.windowable_kpi_ids
     triggers = c.windowable_kpi_ids - volume - share_conversion

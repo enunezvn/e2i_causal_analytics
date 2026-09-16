@@ -245,9 +245,10 @@ AXIS_RULES = (
     "NEITHER share supports a patient axis: TRx Share Panel because each patient is on one tracked "
     "brand (a share by tier is TRx Panel by tier as the within-brand mix), and canonical TRx Share "
     "because it carries no patient dimension at all; both redirect to TRx Panel by that axis. "
-    "The time window composes with any one axis for TRx Panel, NRx Panel and NBRx Panel; only with "
-    "segment/therapy_line for Conversion Rate; with no axis for either share; and only with region "
-    "for Trigger Precision, Acceptance Rate, Override Rate and Trigger Funnel Conversion. "
+    "The time window composes with any one axis for TRx Panel, NRx Panel and NBRx Panel; with region "
+    "for canonical TRx, NRx, NBRx and TRx Share; only with segment/therapy_line for Conversion Rate; "
+    "with no axis at all for TRx Share Panel; and only with region for Trigger Precision, "
+    "Acceptance Rate, Override Rate and Trigger Funnel Conversion. "
     "TRx share is share of the tracked 3-brand portfolio, NOT share versus competitors."
 )
 
