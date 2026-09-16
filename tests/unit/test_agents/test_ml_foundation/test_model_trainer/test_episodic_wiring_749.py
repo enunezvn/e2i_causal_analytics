@@ -39,7 +39,7 @@ def test_update_episodic_memory_invokes_store_training_result_with_null_session(
     with patch("src.agents.ml_foundation.model_trainer.agent.ModelTrainerMemoryHooks") as HookCls:
         hook = HookCls.return_value
         hook.store_training_result = AsyncMock(return_value="mem-1")
-        asyncio.run(agent._update_episodic_memory(_DATA))
+        asyncio.run(agent._update_episodic_memory(_DATA, _DATA))
 
     hook.store_training_result.assert_awaited_once()
     kwargs = hook.store_training_result.await_args.kwargs
@@ -57,4 +57,4 @@ def test_update_episodic_memory_degrades_gracefully_on_error():
         "src.agents.ml_foundation.model_trainer.agent.ModelTrainerMemoryHooks",
         side_effect=RuntimeError("supabase unreachable"),
     ):
-        asyncio.run(agent._update_episodic_memory(_DATA))  # must not raise
+        asyncio.run(agent._update_episodic_memory(_DATA, _DATA))  # must not raise
