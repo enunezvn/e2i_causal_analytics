@@ -105,10 +105,9 @@ def _refuse_unmodelable_outcome(y_arr: Any, outcome_var: str) -> None:
 
     Raises:
         ExecutorDataUnavailable: the outcome has no rows (#2066), is entirely
-            NaN, or CausalML's internal ``y = (y > 0)`` binarization would
-            collapse it to a single class (#2063) -- named as non-finite
-            rather than as a binarization problem when +/-inf is what the
-            collapsing values hold (#2066).
+            NaN, holds +/-inf without being constant (#2066), or CausalML's
+            internal ``y = (y > 0)`` binarization would collapse it to a
+            single class (#2063).
     """
     import numpy as np
 
@@ -150,6 +149,30 @@ def _refuse_unmodelable_outcome(y_arr: Any, outcome_var: str) -> None:
             f"check the join/filter that produced this column."
         )
 
+    # Refuse a non-constant outcome holding +/-inf FOR BEING non-finite (#2066).
+    #
+    # Left to the binarization gate below, a collapsing one such as
+    # `{-inf, 0}` was sent to "recode to 0/1, or DoWhy/EconML" -- a remedy
+    # that leaves the infinity in place. A non-collapsing one is refused by
+    # the uplift wrapper too (`Input y contains infinity`, measured
+    # 2026-09-16), so this changes only the message it gets, not whether it
+    # fits. A constant all-inf column keeps the constant diagnosis below,
+    # whose literal `inf` is the reader's best clue.
+    y_valid = y_arr[~np.isnan(y_arr)]
+    pos_inf = int(np.isposinf(y_valid).sum())
+    neg_inf = int(np.isneginf(y_valid).sum())
+    inf_count = pos_inf + neg_inf
+    if inf_count > 0 and len(np.unique(y_valid)) > 1:
+        nan_clause = f", and is NaN in {nan_count} of {len(y_arr)} rows" if nan_count > 0 else ""
+        raise ExecutorDataUnavailable(
+            f"CausalMLExecutor: outcome '{outcome_var}' contains {inf_count} "
+            f"infinite value{'s' if inf_count != 1 else ''} ({pos_inf} +inf, "
+            f"{neg_inf} -inf) in {len(y_arr)} rows{nan_clause}. A non-finite "
+            f"outcome is a data problem: check the join/filter/transform that "
+            f"produced this column and remove the non-finite values before "
+            f"estimating this outcome with any library."
+        )
+
     # Fail closed when CausalML's internal binarization collapses the outcome
     # to a single class (#2063).
     #
@@ -186,30 +209,7 @@ def _refuse_unmodelable_outcome(y_arr: Any, outcome_var: str) -> None:
         # non-NaN values only, since over NaN they print `nan` and count NaN
         # as a distinct outcome value. For a NaN-free column this is the
         # whole column.
-        y_valid = y_arr[~np.isnan(y_arr)]
         distinct_outcomes, positive_fraction, information_lost = _binarization_stats(y_valid)
-        # A collapsing, NON-constant outcome holding +/-inf is a data problem
-        # before it is a binarization one: "recode to 0/1, or DoWhy/EconML"
-        # leaves the infinity in place (#2066). Scoped like the NaN gate above:
-        # a non-collapsing column holding inf never reaches this branch and is
-        # refused truthfully by the uplift wrapper (`Input y contains
-        # infinity`, measured 2026-09-16), and a constant all-inf column keeps
-        # the constant diagnosis, whose literal `inf` is the clue.
-        pos_inf = int(np.isposinf(y_valid).sum())
-        neg_inf = int(np.isneginf(y_valid).sum())
-        if distinct_outcomes > 1 and pos_inf + neg_inf > 0:
-            inf_count = pos_inf + neg_inf
-            nan_clause = (
-                f", and is NaN in {nan_count} of {len(y_arr)} rows" if nan_count > 0 else ""
-            )
-            raise ExecutorDataUnavailable(
-                f"CausalMLExecutor: outcome '{outcome_var}' contains {inf_count} "
-                f"infinite value{'s' if inf_count != 1 else ''} ({pos_inf} +inf, "
-                f"{neg_inf} -inf) in {len(y_arr)} rows{nan_clause}. This is a "
-                f"data problem, not a binarization one: check the join/filter/"
-                f"transform that produced this column and remove the non-finite "
-                f"values before estimating this outcome with any library."
-            )
         # A genuinely binary 0/1 outcome NEVER reaches this branch -- its
         # positive fraction is strictly between 0 and 1 -- so the
         # distinct-value count says which of three different problems the

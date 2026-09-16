@@ -1197,12 +1197,13 @@ class TestCausalMLOutcomeGatesOnEmptyAndInfiniteOutcomes:
     ``len(df) == 0`` check in the extractor hides that today; the helper must
     not depend on it.
 
-    Infinite: measured 2026-09-16 at b5d33c2eb, a NON-collapsing outcome
-    holding +/-inf already fails closed truthfully at the uplift wrapper
-    (``Input y contains infinity``), so it is passed through (the same scoping
-    #2063 applied to partial NaN). A COLLAPSING non-constant outcome holding
-    -inf was instead diagnosed as a binarization problem and sent to "recode
-    to 0/1, or DoWhy/EconML" -- a remedy that leaves the infinity in place.
+    Infinite: measured 2026-09-16 at b5d33c2eb, a COLLAPSING non-constant
+    outcome holding -inf was diagnosed as a binarization problem and sent to
+    "recode to 0/1, or DoWhy/EconML" -- a remedy that leaves the infinity in
+    place. The owner's proposal on the issue: one non-finite check before the
+    binarization classification, constant all-inf outcomes excluded. A
+    non-collapsing outcome holding inf was already refused by the uplift
+    wrapper (``Input y contains infinity``); it now gets the same message.
     """
 
     def test_empty_outcome_is_refused_as_empty_not_as_all_nan(self):
@@ -1259,17 +1260,35 @@ class TestCausalMLOutcomeGatesOnEmptyAndInfiniteOutcomes:
 
         assert "is constant" in str(excinfo.value)
 
-    @pytest.mark.parametrize("bad", [np.inf, -np.inf])
-    def test_non_collapsing_outcome_with_an_infinity_passes_to_the_fitters_own_check(self, bad):
-        """POSITIVE CONTROL -- the wrapper already names it (measured above)."""
+    def test_nan_with_a_constant_infinite_remainder_keeps_the_constant_diagnosis(self):
+        """POSITIVE CONTROL -- constant after dropping NaN is still constant."""
+        with pytest.raises(ExecutorDataUnavailable) as excinfo:
+            _refuse_unmodelable_outcome(np.array([np.nan, -np.inf, -np.inf]), "sales")
+
+        msg = str(excinfo.value)
+        assert "the non-NaN values are constant" in msg, msg
+        assert "infinite value" not in msg, msg
+
+    @pytest.mark.parametrize(
+        ("bad", "inf_phrase"),
+        [(np.inf, "(1 +inf, 0 -inf)"), (-np.inf, "(0 +inf, 1 -inf)")],
+        ids=["pos_inf", "neg_inf"],
+    )
+    @pytest.mark.asyncio
+    async def test_non_collapsing_outcome_with_an_infinity_is_refused_before_any_fit(
+        self, bad, inf_phrase
+    ):
         df = _make_continuous_positive_outcome_frame()
         df["sales"] = np.where(df["marketing_spend"] > 0, 3.0, -1.0)
         df.loc[df.index[5], "sales"] = bad
         state = _make_pipeline_state(filters={"dataframe": df}, confounders=["age", "income"])
 
-        _X_df, _t, y_arr, _names, _groups = _extract_uplift_inputs_from_state(state)
+        with patch("src.causal_engine.pipeline.executors.causalml._fit_uplift_model") as fit:
+            result = await CausalMLExecutor().execute(state, _make_pipeline_config())
 
-        assert int(np.isinf(y_arr).sum()) == 1
+        assert result["success"] is False
+        assert f"contains 1 infinite value {inf_phrase} in 240 rows" in result["error"]
+        fit.assert_not_called()
 
 
 # =============================================================================
