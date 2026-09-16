@@ -158,6 +158,8 @@ class HeterogeneousOptimizerState(TypedDict):
     # ========================================================================
     hierarchical_segment_results: Optional[List[Dict[str, Any]]]  # Per-segment CATE results
     nested_ci: Optional[Dict[str, Any]]  # Nested confidence interval aggregation
+    # #2027: segments left out of the nested CI (no measured SE and/or CI bound)
+    nested_ci_excluded_segments: Optional[List[Dict[str, Any]]]
     segment_heterogeneity_score: Optional[float]  # I² statistic (0-100)
     overall_hierarchical_ate: Optional[float]  # Aggregate ATE from hierarchical analysis
     overall_hierarchical_ci_lower: Optional[float]  # Lower CI bound
@@ -351,6 +353,7 @@ class HeterogeneousOptimizerOutput(TypedDict):
     # B9.4: Hierarchical nesting results (EconML within CausalML segments)
     hierarchical_segment_results: Optional[List[Dict[str, Any]]]
     nested_ci: Optional[Dict[str, Any]]
+    nested_ci_excluded_segments: Optional[List[Dict[str, Any]]]  # #2027
     segment_heterogeneity_score: Optional[float]  # I² statistic
     overall_hierarchical_ate: Optional[float]
     overall_hierarchical_ci_lower: Optional[float]
