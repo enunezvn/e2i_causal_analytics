@@ -211,6 +211,13 @@ def _stored_estimate_scope(row: Dict[str, Any]) -> "StoredEstimateScope":
     return StoredEstimateScope.from_row(row)
 
 
+def _stored_filter_regions(row: Dict[str, Any]) -> List[str]:
+    """Regions a stored row's population filter named (#2079). The filter, not the scope."""
+    filters = row.get("population_filters")
+    regions = filters.get("regions") if isinstance(filters, dict) else None
+    return [r for r in regions if isinstance(r, str)] if isinstance(regions, list) else []
+
+
 def _round4(value: Optional[float]) -> Optional[float]:
     return None if value is None else round(float(value), 4)
 
@@ -496,6 +503,9 @@ class SimulationHistoryItem(BaseModel):
     # Scope of ate_estimate (#2053); see SimulationResponse.estimate_scope.
     estimate_scope: EstimateScopeEnum
     target_regions: List[str] = Field(default=[])
+    # The stored population filter's regions (#2079): lets an 'unknown'-scope card say its
+    # effect may cover only these regions, as the detail view does. Never a scope.
+    filter_regions: List[str] = Field(default=[])
 
 
 class SimulationHistoryResponse(BaseModel):
@@ -1198,6 +1208,7 @@ async def get_simulation_history(
                     data_provenance=sim.get("data_provenance"),
                     estimate_scope=EstimateScopeEnum(scope.scope.value),
                     target_regions=scope.target_regions,
+                    filter_regions=_stored_filter_regions(sim),
                 )
             )
 

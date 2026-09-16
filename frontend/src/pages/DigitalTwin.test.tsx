@@ -617,9 +617,8 @@ describe('DigitalTwin', () => {
     expect(screen.getByText('ATE')).toBeInTheDocument();
   });
 
-  it('names a region-scoped history row and leaves unknown and cohort rows plain (#2053)', async () => {
-    // History rows carry no population filter, so an unknown row cannot tell whether it was
-    // region-filtered; only the detail view can, and only it notes the unrecorded scope.
+  it('names a region-scoped history row and leaves unfiltered unknown and cohort rows plain (#2053)', async () => {
+    // An unknown row with no regions filter (filter_regions absent or empty) stays plain.
     (useSimulationHistory as ReturnType<typeof vi.fn>).mockReturnValue({
       data: {
         ...mockHistory,
@@ -659,6 +658,57 @@ describe('DigitalTwin', () => {
     const rowOf = (ate: string) =>
       screen.getByText((_, el) => el?.tagName === 'P' && !!el.textContent?.startsWith(`ATE: ${ate}`));
     expect(rowOf('0.09').textContent).toMatch(/northeast/);
+    expect(rowOf('0.01').textContent).toBe('ATE: 0.01');
+    expect(rowOf('0.04').textContent).toBe('ATE: 0.04');
+  });
+
+  it('notes the unrecorded scope on a region-filtered unknown history row only (#2079)', async () => {
+    // The history payload now carries the stored regions filter, so a card applies the
+    // detail view's rule: an unknown-scope row filtered to regions may cover only them.
+    (useSimulationHistory as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        ...mockHistory,
+        simulations: [
+          {
+            ...mockHistory.simulations[0],
+            estimate_scope: EstimateScope.UNKNOWN,
+            target_regions: [],
+            filter_regions: ['midwest'],
+          },
+          {
+            ...mockHistory.simulations[1],
+            estimate_scope: EstimateScope.UNKNOWN,
+            target_regions: [],
+            filter_regions: [],
+          },
+          {
+            simulation_id: 'real-sim-003',
+            created_at: '2026-06-02T09:00:00Z',
+            intervention_type: InterventionType.SAMPLE_DISTRIBUTION,
+            brand: 'Kisqali',
+            ate_estimate: 0.04,
+            recommendation_type: RecommendationType.SKIP,
+            // A cohort-wide row keeps a plain ATE whatever its filter said.
+            estimate_scope: EstimateScope.COHORT,
+            target_regions: [],
+            filter_regions: ['south'],
+          },
+        ],
+        total: 3,
+      },
+      isLoading: false,
+      isFetching: false,
+    });
+    const user = userEvent.setup();
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+    await act(async () => {
+      await user.click(screen.getByRole('button', { name: /History/i }));
+    });
+
+    const rowOf = (ate: string) =>
+      screen.getByText((_, el) => el?.tagName === 'P' && !!el.textContent?.startsWith(`ATE: ${ate}`));
+    // The qualifier is a separate span spaced by margin, so textContent has no space before it.
+    expect(rowOf('0.09').textContent).toBe('ATE: 0.09· scope not recorded — may cover only midwest');
     expect(rowOf('0.01').textContent).toBe('ATE: 0.01');
     expect(rowOf('0.04').textContent).toBe('ATE: 0.04');
   });

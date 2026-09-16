@@ -18791,6 +18791,11 @@ export interface components {
              * @default []
              */
             target_regions: string[];
+            /**
+             * Filter Regions
+             * @default []
+             */
+            filter_regions: string[];
         };
         /**
          * SimulationHistoryResponse
