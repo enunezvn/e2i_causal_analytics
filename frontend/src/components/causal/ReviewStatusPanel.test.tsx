@@ -15,10 +15,12 @@ const SWITCH_HALT =
   'Estimate withheld: CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL=true requires an active expert approval of the DAG structure for a REVIEW-band estimate, and this structure holds none (gate decision: pending_review). Re-run once the review is resolved.';
 const GATE_BLOCKED = 'Refutation gate BLOCKED — the estimate did not survive robustness checks.';
 // #1995: the agent's band + HITL sentence, now carried in refutation.review_caveat.
+// #2091: the node's current wording. An approval rides a REVIEW-band run (BLOCK
+// builds review fields only from a rejection, and no longer queues anything).
 const APPROVAL_CAVEAT =
-  'Refutation gate is BLOCK (failed robustness, confidence=0.41). This estimate did not pass and has been routed to expert review for adjudication. The DAG structure was expert-approved by admin@e2i.local (valid until 2027-03-09); that approval covers the DAG structure, not this estimate\'s statistical robustness.';
+  'Refutation gate is REVIEW (borderline robust, confidence=0.55). Only a PROCEED re-run promotes this estimate to a validated result; expert approval covers the DAG structure, not this estimate\'s statistical robustness. The DAG structure was expert-approved by admin@e2i.local (valid until 2027-03-09); that approval covers the DAG structure, not this estimate\'s statistical robustness.';
 const REJECTION_CAVEAT =
-  'Refutation gate is BLOCK (failed robustness, confidence=0.41). This estimate did not pass and has been routed to expert review for adjudication. The DAG structure was REJECTED by expert review by Dr. No (review rev-rejected): collider. A rejected structure is not re-queued; revise the DAG (a changed structure gets its own review) or ask an operator to queue a new review for this hash.';
+  'Refutation gate is BLOCK (failed robustness, confidence=0.41). This estimate did not pass and is not queued for review: expert approval covers the DAG structure and cannot clear a failed robustness suite. The DAG structure was REJECTED by expert review by Dr. No (review rev-rejected): collider. A rejected structure is not re-queued; revise the DAG (a changed structure gets its own review) or ask an operator to queue a new review for this hash.';
 const REJECTION_HALT =
   'Estimate withheld: a domain expert REJECTED this DAG structure, and an estimate built on a rejected structure is not a valid causal estimate whatever its refutation verdict. ' +
   REJECTION_CAVEAT;
@@ -93,21 +95,24 @@ describe('ReviewStatusPanel', () => {
     expect(screen.queryByText(/Refutation gate BLOCKED/)).not.toBeInTheDocument();
   });
 
-  // #1995: a BLOCK-band run never halts (the statistical gate already withheld
-  // the estimate), so its warnings carry no "Estimate withheld" line — the
-  // approval / rejection sentence reaches the panel only via the caveat prop.
+  // #1995: a run that did not halt (a BLOCK-band rejection — the statistical
+  // gate already withheld the estimate — or a REVIEW-band approval with the
+  // switch off) carries no "Estimate withheld" line, so the approval /
+  // rejection sentence reaches the panel only via the caveat prop.
   it('shows the approval caveat (reviewer + validity window) when no halt line exists', () => {
     renderWithAllProviders(
       <ReviewStatusPanel
         decision="proceed"
         reviewId="rev-approved"
         reviewCaveat={APPROVAL_CAVEAT}
-        warnings={[GATE_BLOCKED, APPROVAL_CAVEAT]}
+        warnings={[APPROVAL_CAVEAT]}
       />
     );
     expect(screen.getByText('Structure approved')).toBeInTheDocument();
+    // getByText throws on a second match: the caveat renders once although
+    // warnings also carries it.
     expect(screen.getByText(APPROVAL_CAVEAT, { exact: true })).toBeInTheDocument();
-    expect(screen.queryByText(/Refutation gate BLOCKED/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Estimate withheld/)).not.toBeInTheDocument();
   });
 
   it('shows the rejection caveat (reviewer + reason) when no halt line exists', () => {
