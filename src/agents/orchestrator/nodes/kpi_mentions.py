@@ -285,6 +285,50 @@ _SCOPE_APPOSITIVES = {
 }
 
 
+#: Longest declared phrase the resolver knows ("chronic spontaneous urticaria").
+_MAX_SCOPE_WINDOW = 3
+
+
+def _declared_phrase_dimension(window: str) -> Optional[str]:
+    """The dimension whose vocabulary declares ``window`` AS A WHOLE, else None.
+
+    ⚠ ASK THE RESOLVER WHAT IT KNOWS, NOT WHAT IT RETURNS. `brand_from_text` and
+    `region_from_text` SEARCH: they answer 'Kisqali' for "cost kisqali" and for
+    "kisqali tier" alike, because a brand appears somewhere inside. Reading that
+    as "this window is scope" is substring extraction mistaken for membership,
+    and it is what let a quantity noun ride inside a scope span (r12).
+
+    ``fullmatch`` against the resolver's own patterns asks the honest question:
+
+        'west coast'    region phrase, declared       -> region
+        'mid west'      region phrase, declared       -> region
+        'breast cancer' indication phrase, declared   -> brand
+        'hr+'           indication alias, declared    -> brand
+        'kisqali tier'  Kisqali matched a SUBSTRING   -> None
+        'cost kisqali'  ditto                         -> None
+
+    THIS ONE RULE SUBSUMES the "first token changes the answer" heuristic it
+    replaces -- measured, not assumed: every row that heuristic was written for
+    ("cost kisqali", "accuracy kisqali", "price fabhalta", "target west") is
+    rejected here because no pattern matches the whole window, and the phrases it
+    had to spare ("mid west", "south west") are declared and so survive. One
+    honest rule in place of two heuristics.
+    """
+    from src.services.query_entities import (
+        _REGION_PHRASE_RE,
+        INDICATION_TO_BRAND,
+        SUPPORTED_BRANDS,
+    )
+
+    if _REGION_PHRASE_RE.fullmatch(window):
+        return "region"
+    if any(re.fullmatch(re.escape(brand), window, re.I) for brand in SUPPORTED_BRANDS):
+        return "brand"
+    if any(re.fullmatch(pattern, window, re.I) for pattern, _brand in INDICATION_TO_BRAND):
+        return "brand"
+    return None
+
+
 def _scope_span(tokens: list[str], index: int) -> tuple[int, Optional[str]]:
     """How many tokens at ``index`` the PLATFORM ITSELF resolves as scope, and WHICH
     dimension bound them -- ``(0, None)`` when nothing resolves.
@@ -331,40 +375,17 @@ def _scope_span(tokens: list[str], index: int) -> tuple[int, Optional[str]]:
     hat. "region" is likewise NOT a patient axis: it is the second text channel,
     which is why "in the west region" arrives as ``{'region': 'west'}``.
 
-    Two tokens are tried when one does not resolve, for the multi-word census
-    phrases ("new england", "west coast"); one is preferred when it suffices, so
-    "Kisqali cost" consumes only "Kisqali" and still refuses on "cost".
+    WINDOWS ARE TRIED LONGEST-FIRST, which is the resolver's OWN preference order:
+    ``_build_region_phrase_re``'s docstring says "Longest-first alternation lets
+    'west coast' win over 'west' at the same position". An earlier version tried
+    the single token first and said the opposite -- "one is preferred when it
+    suffices" -- so "west coast" lost its second half and then refused on
+    "coast", destroying an answer main returns correctly (r12-7).
     """
-    from src.services.query_entities import brand_from_text, region_from_text
-
-    token = tokens[index]
-    if brand_from_text(token):
-        return 1, "brand"
-    if region_from_text(token):
-        return 1, "region"
-    if index + 1 < len(tokens):
-        # ⚠ THE PAIR IS ONLY A PHRASE WHEN THE FIRST TOKEN CHANGES THE ANSWER.
-        # These resolvers match a brand or region ANYWHERE in the string handed
-        # to them, so "cost kisqali" resolves to Kisqali and would be eaten whole
-        # -- carrying the very noun #2139 refuses inside a "scope" span (r12).
-        # Comparing the pair against the SECOND TOKEN ALONE separates them:
-        #
-        #   'new england'  pair=northeast  second=None      -> phrase, accept
-        #   'mid west'     pair=midwest    second=west      -> phrase, accept
-        #   'cost kisqali' pair=Kisqali    second=Kisqali   -> substring, reject
-        #   'target west'  pair=west       second=west      -> substring, reject
-        #
-        # "reject when the second token resolves at all" was the obvious rule and
-        # is WRONG: it would refuse "mid west" and "south west", whose second
-        # token resolves to a DIFFERENT region. Measured before choosing.
-        following = tokens[index + 1]
-        pair = f"{token} {following}"
-        pair_resolution = (brand_from_text(pair), region_from_text(pair))
-        if pair_resolution != (brand_from_text(following), region_from_text(following)):
-            if pair_resolution[0]:
-                return 2, "brand"
-            if pair_resolution[1]:
-                return 2, "region"
+    for size in range(min(_MAX_SCOPE_WINDOW, len(tokens) - index), 0, -1):
+        dimension = _declared_phrase_dimension(" ".join(tokens[index : index + size]))
+        if dimension is not None:
+            return size, dimension
     return 0, None
 
 

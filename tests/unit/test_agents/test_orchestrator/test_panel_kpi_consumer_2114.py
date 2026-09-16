@@ -1204,29 +1204,29 @@ def test_a_genuine_multi_word_region_phrase_still_binds(query, expected_id, why,
     assert calculator.calls == [expected_id], (query, why, calculator.calls)
 
 
-def test_a_trailing_phrase_word_after_a_resolved_region_still_over_refuses(calculator):
-    """A MEASURED PRE-EXISTING OVER-REFUSAL, found while pinning the phrase rows above, and
-    pinned rather than quietly fixed because the fix belongs to a different mechanism.
+def test_the_west_coast_regression_is_closed_and_my_label_was_wrong():
+    """THE RECORD OF A RETRACTED CLAIM, kept because the mistake is the lesson.
 
-    "What is TRx west coast?" REFUSES, although `region_scan` binds the whole query to
-    'west'. The single-token branch consumes "west" first, so the pair branch never sees
-    "west coast", and "coast" is then judged alone and refuses.
+    This slot held a test pinning "What is TRx west coast?" as REFUSING, described as a
+    "measured PRE-EXISTING over-refusal ... fail-closed, so the lesser evil". Both halves
+    were wrong, and r12-7 fixed the behaviour it was pinning.
 
-    PROVENANCE, measured with a per-commit control (not inferred from the diff):
+    THE PROVENANCE WAS WRONG BECAUSE OF HOW I MEASURED IT. My table ran f3663f2d6,
+    9340bcd15 and 9259cf5e2 — ALL THREE ARE LANE COMMITS — and concluded "pre-existing".
+    Two commits inside a lane cannot establish that; it needs a commit OLDER than the
+    suspect, and `kpi_mentions.py` does not exist on origin/main at all. Measured properly:
 
-        f3663f2d6  (11g, flat _SCOPE_NOUNS)  REFUSES
-        9340bcd15  (11h+correction)          REFUSES
-        9259cf5e2  (r12 HIGH-b, keyed)       REFUSES
+        origin/main (00be72b68)  ANSWERS WS3-BI-005  context={'region': 'west'}
+        eb7a726a5   (this lane)  REFUSES
 
-    So it arrived with `_scope_span` in 11g and is NOT a regression of the keying change.
-    It cannot be closed by the r12-MEDIUM rule above: "west coast" and "Kisqali tier" are
-    STRUCTURALLY IDENTICAL to these resolvers — first token resolves, pair resolves to the
-    same value — and one must bind while the other must refuse. Separating them needs the
-    resolver's own multi-word phrase vocabulary (`_FREE_TEXT_REGION_PHRASES`), which is a
-    different mechanism from anything in this commit. Fail-closed, so the lesser evil under
-    this lane's ordering; reported for its own decision rather than absorbed here."""
-    assert _kpi_lookup_evidence({"query": "What is TRx west coast?"}) is None
-    assert calculator.calls == []
+    So it was LANE-CAUSED. And "the lesser evil" was wrong too: main returns a correctly
+    scoped answer, so the lane was destroying a working answer, not declining a doubtful
+    one. A refusal is only the lesser evil when the alternative is a wrong answer.
+
+    The behaviour is now covered by test_a_declared_resolver_phrase_binds_whole; this
+    function exists so the retraction is legible where the false claim was made.
+    """
+    assert True  # documentation-only: the behavioural assertions live above
 
 
 # --- r12 MEDIUM: a determiner licensed everything behind it --------------------------------
@@ -1368,3 +1368,77 @@ def test_a_split_compound_alias_binds_because_both_halves_resolve(calculator):
     finding — here caught by red-first rather than shipped in a docstring."""
     assert _kpi_lookup_evidence({"query": "What is NRx panel HR+/HER2-?"})
     assert calculator.calls == ["WS3-BI-012"], calculator.calls
+
+
+# --- r12-7: the lane INVERTED the resolver's own preference order --------------------------
+# `_FREE_TEXT_REGION_PHRASES` (query_entities.py:189) contains "west coast", and
+# `_build_region_phrase_re`'s docstring says: "Longest-first alternation lets 'west coast'
+# win over 'west' at the same position." `_scope_span` said the opposite — "one is preferred
+# when it suffices" — so the single-token branch consumed "west" and left "coast" to be
+# judged alone. The lane destroyed a working answer:
+#
+#     origin/main (00be72b68)  'What is TRx west coast?'  ANSWERS WS3-BI-005 {'region':'west'}
+#     eb7a726a5                'What is TRx west coast?'  REFUSES
+#
+# ⚠ I LABELLED THIS "PRE-EXISTING" AND I WAS WRONG. My table ran f3663f2d6, 9340bcd15 and
+# 9259cf5e2 — ALL THREE ARE LANE COMMITS, and `kpi_mentions.py` does not exist on main at
+# all. Two commits inside a lane cannot establish provenance; that needs a commit OLDER than
+# the suspect. The same error this lane has now made three times, and the one its own memory
+# rule names. It is LANE-CAUSED, and not "the lesser evil": main answers correctly.
+#
+# THE RULE IS NOW WHOLE-SPAN PHRASE MEMBERSHIP — does a resolver pattern FULLMATCH the
+# window — asked longest-first, which is what the resolver itself does. "west coast" is a
+# declared phrase; "kisqali tier" resolves only because the resolver matched a SUBSTRING.
+# Ask what the resolver KNOWS, not what it RETURNS.
+
+
+@pytest.mark.parametrize(
+    "query,expected_id,scope,why",
+    [
+        ("What is TRx west coast?", "WS3-BI-005", ("region",), "a declared region phrase"),
+        ("What is NRx panel west coast?", "WS3-BI-012", ("region",), "same, panel KPI"),
+        ("What is TRx mid west?", "WS3-BI-005", ("region",), "phrase, second token resolves"),
+        ("What is TRx south west?", "WS3-BI-005", ("region",), "phrase, second token resolves"),
+        ("What is TRx new england?", "WS3-BI-005", ("region",), "phrase, guarded by journal"),
+        ("What is TRx north east?", "WS3-BI-005", ("region",), "phrase"),
+        ("What is TRx northeast?", "WS3-BI-005", ("region",), "single-word phrase"),
+        ("What is TRx Kisqali?", "WS3-BI-005", ("brand",), "named brand, whole span"),
+        ("What is NRx panel HR+?", "WS3-BI-012", ("brand",), "indication alias, whole span"),
+        ("What is TRx breast cancer?", "WS3-BI-005", ("brand",), "MULTI-WORD indication phrase"),
+        (
+            "What is TRx chronic spontaneous urticaria?",
+            "WS3-BI-005",
+            ("brand",),
+            "THREE-token indication phrase — the only row exercising _MAX_SCOPE_WINDOW",
+        ),
+        (
+            "What is TRx paroxysmal nocturnal?",
+            "WS3-BI-005",
+            ("brand",),
+            "two-token indication phrase, a third brand",
+        ),
+    ],
+)
+def test_a_declared_resolver_phrase_binds_whole(query, expected_id, scope, why, calculator):
+    assert _kpi_lookup_evidence({"query": query}), f"{query!r} refused; {why}"
+    assert calculator.calls == [expected_id], (query, why, calculator.calls)
+    assert tuple(sorted(calculator.contexts[0])) == scope, (query, why, calculator.contexts)
+
+
+@pytest.mark.parametrize(
+    "query,why",
+    [
+        ("What is NRx panel Kisqali tier?", "'kisqali tier' is a SUBSTRING hit, not a phrase"),
+        ("What is NRx panel cost Kisqali?", "'cost kisqali' likewise"),
+        ("What is TRx target west?", "'target west' likewise"),
+        ("What is TRx accuracy Kisqali?", "likewise"),
+        ("What is TRx triple negative?", "no resolver pattern matches it at all"),
+        ("What is TRx cost?", "#2139 must stay closed"),
+        ("What is NRx panel west coast cost?", "a phrase does not license a quantity behind it"),
+    ],
+)
+def test_a_substring_hit_is_still_not_a_scope_span(query, why, calculator):
+    """THE SET THAT IS THE TEST: every phrase above must bind and every substring hit must
+    refuse, under ONE rule rather than two heuristics."""
+    assert _kpi_lookup_evidence({"query": query}) is None, f"{query!r} answered; {why}"
+    assert calculator.calls == [], f"{query!r} called the calculator; {why}"
