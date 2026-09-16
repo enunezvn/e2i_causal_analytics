@@ -704,9 +704,9 @@ class TestConfidenceScore:
     def test_confidence_rises_with_n_train_and_saturates(self, email_campaign_config):
         """Confidence follows the rows the estimator fit on: more evidence below the
         saturation knee (1000 rows) scores strictly higher; past the knee it is flat."""
-        at_200 = self._confidence(150, 200, email_campaign_config)
-        at_1000 = self._confidence(150, 1000, email_campaign_config)
-        at_5000 = self._confidence(150, 5000, email_campaign_config)
+        at_200 = self._confidence(100, 200, email_campaign_config)
+        at_1000 = self._confidence(100, 1000, email_campaign_config)
+        at_5000 = self._confidence(100, 5000, email_campaign_config)
 
         assert at_200 < at_1000
         assert at_1000 == at_5000

@@ -146,6 +146,7 @@ const mockDetail: SimulationDetailResponse = {
     top_segments: [],
   },
   intervention_config: {},
+  subgroups_basis: 'per_twin',
   completed_at: '2026-06-04T10:05:00Z',
 };
 

@@ -62,7 +62,8 @@ _NUMERIC_AXES = frozenset({"decile"})
 # Training rows at which the confidence heuristic's evidence term saturates (#2104). The
 # same knee the causalml executor uses (``n_train / 1000``) and the estimator's default
 # minimum training size (``DEFAULT_MIN_TRAINING_SAMPLES``): a region-targeted cohort
-# estimate (~800-1500 rows live) still scores below a cohort-wide one (~4000 rows).
+# estimate on a region under the knee (~800-1000 rows live) scores below a cohort-wide
+# one (~4000 rows); south (~1500 rows) saturates with the cohort.
 # What the twin count can still reach, by path: on the COHORT path nothing — n_train is
 # the cohort rows, the CI is the DML inference interval on them and the ATE is a CATE
 # average over them. On the SYNTHETIC path the twins ARE the data by construction: the

@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 
 from src.repositories.base import BaseRepository
 
-from .effect.estimate import PROVENANCE_COHORT, SUBGROUP_AXES
+from .effect.estimate import PROVENANCE_COHORT, PROVENANCE_RWD, PROVENANCE_SYNTHETIC, SUBGROUP_AXES
 from .models.simulation_models import (
     EstimateScope,
     FidelityGrade,
@@ -389,6 +389,12 @@ class StoredEstimateScope(BaseModel):
 LEGACY_TWIN_WEIGHTED_AXES: tuple[str, ...] = tuple(a for a in SUBGROUP_AXES if a != "region")
 
 
+# The provenances whose estimator scores every twin itself (``TwinEffectEstimator``), so the
+# engine's per-twin grouping is the legitimate subgroup basis. Anything else that is not the
+# cohort provenance is UNKNOWN rather than assumed per-twin.
+_PER_TWIN_PROVENANCES = frozenset({PROVENANCE_SYNTHETIC, PROVENANCE_RWD})
+
+
 class StoredSubgroupsBasis(str, Enum):
     """How a stored simulation's effect_heterogeneity was computed (#2104 item 3).
 
@@ -402,15 +408,15 @@ class StoredSubgroupsBasis(str, Enum):
     COHORT_ROWS = "cohort_rows"  # declared axes over the cohort rows behind the estimate
     PER_TWIN = "per_twin"  # synthetic path: per-twin scores grouped by the twin's features
     TWIN_WEIGHTED_LEGACY = "twin_weighted_legacy"  # pre-#2097 cohort row, JSON untouched
-    UNKNOWN = "unknown"  # no provenance recorded
+    UNKNOWN = "unknown"  # no provenance recorded, or one this reader does not know
 
     @classmethod
     def from_row(cls, row: Dict[str, Any]) -> "StoredSubgroupsBasis":
         provenance = row.get("data_provenance")
-        if provenance is None:
-            return cls.UNKNOWN
-        if provenance != PROVENANCE_COHORT:
+        if provenance in _PER_TWIN_PROVENANCES:
             return cls.PER_TWIN
+        if provenance != PROVENANCE_COHORT:
+            return cls.UNKNOWN  # fail closed: None, or a provenance this reader cannot place
         eh = row.get("effect_heterogeneity") or {}
         if any(eh.get(f"by_{axis}") for axis in LEGACY_TWIN_WEIGHTED_AXES):
             return cls.TWIN_WEIGHTED_LEGACY

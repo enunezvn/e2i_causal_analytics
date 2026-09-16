@@ -584,6 +584,36 @@ class TestStoredSubgroupsBasis:
         )
         assert StoredSubgroupsBasis.from_row(row) is StoredSubgroupsBasis.PER_TWIN
 
+    def test_rwd_row_is_per_twin(self):
+        from src.digital_twin.effect.estimate import PROVENANCE_RWD
+        from src.digital_twin.twin_repository import StoredSubgroupsBasis
+
+        assert (
+            StoredSubgroupsBasis.from_row(self._row(PROVENANCE_RWD))
+            is StoredSubgroupsBasis.PER_TWIN
+        )
+
+    def test_unrecognised_provenance_is_unknown_not_per_twin(self):
+        """Fail closed: only the two provenances that take the per-twin path (synthetic, rwd)
+        are labelled per_twin; a future or foreign provenance string says nothing about how
+        its subgroups were computed."""
+        from src.digital_twin.twin_repository import StoredSubgroupsBasis
+
+        row = self._row("some_future_estimator_v9")
+        assert StoredSubgroupsBasis.from_row(row) is StoredSubgroupsBasis.UNKNOWN
+
+    def test_detail_response_literal_matches_the_enum(self):
+        """Drift pin: a new enum member would pass from_row, fail pydantic on the detail
+        response and be swallowed into a 500 by the route's except. The frontend union is
+        pinned by tsc against the regenerated api.ts."""
+        from typing import get_args
+
+        from src.api.routes.digital_twin import SimulationDetailResponse
+        from src.digital_twin.twin_repository import StoredSubgroupsBasis
+
+        literal = SimulationDetailResponse.model_fields["subgroups_basis"].annotation
+        assert set(get_args(literal)) == {m.value for m in StoredSubgroupsBasis}
+
     def test_row_without_provenance_is_unknown(self):
         from src.digital_twin.twin_repository import StoredSubgroupsBasis
 
