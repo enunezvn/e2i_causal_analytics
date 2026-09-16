@@ -433,9 +433,18 @@ async def test_axis_rules_patient_axes_match_calculators(monkeypatch):
 
     # 1. Prose <-> tool allowlist: the sentence's three clauses ARE the sets.
     sentence = next(s for s in cat.AXIS_RULES.split(". ") if "patient axes are served" in s)
-    assert "TRx, NRx and NBRx (all four axes)" in sentence
-    assert "never TRx Share" in sentence
+    # ⚠ THE PROSE MOVED WITH THE CONTRACT (#2114, owner #11/#14), so these pins move
+    # with it — the guard is "prose matches the calculators", and the calculators
+    # changed. The PANEL KPIs serve the patient axes now; canonical TRx/NRx/NBRx do
+    # not. This test is doing its job: it caught SHIPPED PROMPT TEXT that would have
+    # had the model promise a canonical breakdown the tool then refuses.
+    assert "TRx Panel, NRx Panel and NBRx Panel (all four axes)" in sentence
+    # Still pinned: neither share is offered on a patient axis. "never TRx Share"
+    # became ambiguous once two shares existed, so the pin names the property
+    # instead of the old phrase.
+    assert "NEITHER share supports a patient axis" in cat.AXIS_RULES
     assert "TRx Share (all four axes)" not in sentence
+    assert "TRx Share Panel (all four axes)" not in sentence
     assert "Conversion Rate (segment/therapy_line only)" in sentence
     assert "CATE by segment" in sentence
     assert "NO other KPI" in sentence
