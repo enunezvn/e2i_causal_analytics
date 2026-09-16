@@ -3,8 +3,8 @@
 ``RefutationNode._review_fields`` (src/agents/causal_impact/nodes/refutation.py)
 writes ``review_caveat`` -- the band sentence plus the HITL sentence naming the
 approval (reviewer, validity window) or rejection (reviewer, reason), or the
-queued / blocked / unavailable variant -- on every REVIEW/BLOCK gate consult and
-on a PROCEED-band rejection. Until this change it never left state: the halt
+queued / blocked / unavailable variant -- on every REVIEW-band gate consult and
+on a BLOCK- or PROCEED-band rejection. Until this change it never left state: the halt
 message embeds it verbatim, but the halt is raised only on REJECTED (REVIEW and
 PROCEED bands) and on the REVIEW band with the approval switch on -- never on
 the BLOCK band, where the statistical gate already withheld the estimate. So a
@@ -18,26 +18,75 @@ halt line already carries the caveat verbatim, so it must appear exactly once.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from src.api.schemas.causal import AgentCausalAnalysisRequest
+from src.causal_engine.refutation_runner import GateDecision
 
 GATE_BLOCKED = "Refutation gate BLOCKED — the estimate did not survive robustness checks."
 
 APPROVAL_CAVEAT = (
-    "Refutation gate is BLOCK (failed robustness, confidence=0.41). This estimate did "
-    "not pass and has been routed to expert review for adjudication. The DAG structure "
-    "was expert-approved by admin@e2i.local (valid until 2027-03-09); that approval "
-    "covers the DAG structure, not this estimate's statistical robustness."
+    "Refutation gate is REVIEW (borderline robust, confidence=0.55). Only a PROCEED "
+    "re-run promotes this estimate to a validated result; expert approval covers the "
+    "DAG structure, not this estimate's statistical robustness. The DAG structure was "
+    "expert-approved by admin@e2i.local (valid until 2027-03-09); that approval covers "
+    "the DAG structure, not this estimate's statistical robustness."
 )
 
 REJECTION_CAVEAT = (
     "Refutation gate is BLOCK (failed robustness, confidence=0.41). This estimate did "
-    "not pass and has been routed to expert review for adjudication. The DAG structure "
-    "was REJECTED by expert review by Dr. No (review rev-rejected): collider. A "
+    "not pass and is not queued for review: expert approval covers the DAG structure "
+    "and cannot clear a failed robustness suite. The DAG structure was REJECTED by expert review by Dr. No (review rev-rejected): collider. A "
     "rejected structure is not re-queued; revise the DAG (a changed structure gets its "
     "own review) or ask an operator to queue a new review for this hash."
 )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "fixture, band, confidence, decision, result",
+    [
+        (
+            APPROVAL_CAVEAT,
+            GateDecision.REVIEW,
+            0.55,
+            "proceed",
+            SimpleNamespace(
+                review_id="rev-approved",
+                reviewer_name="admin@e2i.local",
+                valid_until="2027-03-09",
+                is_approved=True,
+            ),
+        ),
+        (
+            REJECTION_CAVEAT,
+            GateDecision.BLOCK,
+            0.41,
+            "rejected",
+            SimpleNamespace(
+                review_id="rev-rejected",
+                reviewer_name="Dr. No",
+                rejection_reason="collider",
+                is_approved=False,
+            ),
+        ),
+    ],
+    ids=["review-band-approval", "block-band-rejection"],
+)
+def test_fixture_caveats_are_what_the_node_emits(fixture, band, confidence, decision, result):
+    """#2091: the caveat fixtures below are opaque to the route, so nothing else
+    stops them documenting a sentence the node no longer writes (they quoted the
+    pre-debt-3 BLOCK wording "routed to expert review" long after BLOCK stopped
+    queueing). Pin each to the node's own composition for its band + decision --
+    and a BLOCK-band approval is not a case: BLOCK builds fields only from a
+    rejection."""
+    from src.agents.causal_impact.nodes.refutation import RefutationNode
+
+    suite = SimpleNamespace(gate_decision=band, confidence_score=confidence)
+    emitted = RefutationNode._band_caveat(suite) + RefutationNode._review_note(decision, result)
+    assert fixture == emitted
 
 
 def _req() -> AgentCausalAnalysisRequest:
@@ -90,12 +139,15 @@ def _response(state):
 
 
 @pytest.mark.unit
-def test_block_band_approval_caveat_reaches_both_surfaces():
-    """BLOCK gate on an expert-approved structure: the approval sentence (reviewer +
-    validity window) is in the structured field AND in warnings; the statistical
-    verdict is untouched -- status stays failed and the BLOCKED warning stays."""
+def test_review_band_approval_caveat_reaches_both_surfaces():
+    """REVIEW gate on an expert-approved structure, approval switch off (no halt):
+    the approval sentence (reviewer + validity window) is in the structured field
+    AND in warnings; the statistical verdict is untouched -- status stays
+    needs_review. (#2091: this was a BLOCK-band approval, which the node no longer
+    produces -- BLOCK builds review fields only from a rejection.)"""
     resp = _response(
-        _block_state(
+        _state(
+            refutation_results={"gate_decision": "review", "tests_passed": 2, "total_tests": 3},
             expert_review_decision="proceed",
             expert_review_id="rev-approved",
             review_caveat=APPROVAL_CAVEAT,
@@ -104,8 +156,8 @@ def test_block_band_approval_caveat_reaches_both_surfaces():
     assert resp.refutation.review_caveat == APPROVAL_CAVEAT
     assert APPROVAL_CAVEAT in resp.warnings
     assert resp.warnings.count(APPROVAL_CAVEAT) == 1
-    assert resp.status == "failed"
-    assert GATE_BLOCKED in resp.warnings
+    assert resp.status == "needs_review"
+    assert GATE_BLOCKED not in resp.warnings
     assert resp.refutation.expert_review_decision == "proceed"
     assert resp.refutation.expert_review_id == "rev-approved"
 

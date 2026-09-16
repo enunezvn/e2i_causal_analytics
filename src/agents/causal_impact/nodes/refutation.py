@@ -1525,7 +1525,7 @@ class RefutationNode:
             return _STRUCTURE_REJECTED, rejection
         return _STRUCTURE_CLEAR, None
 
-    async def _review_fields_for_band(
+    async def _review_band_fields(
         self,
         state: CausalImpactState,
         suite: "RefutationSuite",
@@ -2277,7 +2277,7 @@ class RefutationNode:
                 # H2: consult the ExpertReviewGate and flag needs_review + caveat
                 # so a REVIEW band is NOT surfaced/persisted as robust/validated.
                 # A structure the probe found REJECTED is not re-consulted (#1971).
-                review_fields = await self._review_fields_for_band(
+                review_fields = await self._review_band_fields(
                     state, suite, validation_ids, rejection
                 )
                 # #1971: a human rejection halts; a missing approval halts only
