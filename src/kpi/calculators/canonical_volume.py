@@ -24,12 +24,36 @@ CANONICAL_VOLUME_STATEMENTS: Mapping[str, Tuple[str, str]] = {
 }
 SHARE_KPI_ID = "WS3-BI-008"
 
+#: (context key, human label) -- reused from share_axis so the wording cannot drift.
+from src.kpi.share_axis import PATIENT_AXES as SHARE_AXIS_LABELS  # noqa: E402
+
 
 def refuse_patient_axis(kpi_id: str, context: Mapping[str, Any]) -> None:
-    """Raise when a patient axis is requested on a canonical volume KPI."""
+    """Raise when a patient axis is requested on a canonical volume KPI.
+
+    ⚠ THE CANONICAL SHARE GETS ITS OWN REASON HERE TOO (owner #14, #2114). This is
+    /api/kpis; ``_patient_axis_refusal`` is chat; and ``share_axis``'s first line is
+    "stated ONCE FOR EVERY SURFACE". Owner #14 already decided the substance -- 008
+    gets a substrate-true reason and redirects to panel TRx WS3-BI-011 -- so making
+    this surface obey it is implementation of #14, not an extension of it. Until now
+    a caller asking /api/kpis for canonical share by segment got the generic message
+    with no reason of its own and no next step, while chat gave both.
+
+    KEYED TO THE SHARE ALONE: 005/006/007 are not shares, have no share reason to
+    give, and keep the generic refusal verbatim.
+    """
+    from src.kpi.share_axis import SHARE_REDIRECTS, share_axis_reason_for
+
     for axis in PATIENT_AXES:
         if context.get(axis) is not None:
             panel = CANONICAL_TO_PANEL[kpi_id]
+            if kpi_id in SHARE_REDIRECTS:
+                label = dict(SHARE_AXIS_LABELS).get(axis, axis)
+                raise RuntimeError(
+                    f"KPI {kpi_id} does not support the {axis} breakdown. "
+                    f"{share_axis_reason_for(kpi_id, axis, label)} "
+                    f"Ask for {SHARE_REDIRECTS[kpi_id][1]} by {label} instead."
+                )
             raise RuntimeError(
                 f"KPI {kpi_id} does not support the {axis} breakdown: its canonical series is "
                 f"brand x region x calendar month (business_metrics). Patient-axis splits exist "
