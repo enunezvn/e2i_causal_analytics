@@ -5,7 +5,6 @@ with a valid UUID session_id and degrades gracefully.
 """
 
 import asyncio
-import uuid
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -35,18 +34,19 @@ _DATA = {
 
 
 @pytest.mark.unit
-def test_update_episodic_memory_invokes_store_training_result_with_uuid_session():
+def test_update_episodic_memory_invokes_store_training_result_with_null_session():
     agent = ModelTrainerAgent()
     with patch("src.agents.ml_foundation.model_trainer.agent.ModelTrainerMemoryHooks") as HookCls:
         hook = HookCls.return_value
         hook.store_training_result = AsyncMock(return_value="mem-1")
-        asyncio.run(agent._update_episodic_memory(_DATA))
+        asyncio.run(agent._update_episodic_memory(_DATA, _DATA))
 
     hook.store_training_result.assert_awaited_once()
     kwargs = hook.store_training_result.await_args.kwargs
-    # session_id MUST be a valid UUID (the column is uuid) — uses audit_workflow_id
-    uuid.UUID(kwargs["session_id"])
-    assert kwargs["session_id"] == "11111111-1111-1111-1111-111111111111"
+    # session_id is an honest NULL (#2099). The column is uuid, but it means
+    # "which conversation", and the audit_workflow_id this used to pass is the
+    # audit chain's identity — it now travels in the episodic raw_content.
+    assert kwargs["session_id"] is None
     assert "result" in kwargs and "state" in kwargs
 
 
@@ -57,4 +57,4 @@ def test_update_episodic_memory_degrades_gracefully_on_error():
         "src.agents.ml_foundation.model_trainer.agent.ModelTrainerMemoryHooks",
         side_effect=RuntimeError("supabase unreachable"),
     ):
-        asyncio.run(agent._update_episodic_memory(_DATA))  # must not raise
+        asyncio.run(agent._update_episodic_memory(_DATA, _DATA))  # must not raise

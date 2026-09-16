@@ -23,6 +23,13 @@ from src.kpi.models import (
     KPIStatus,
     Workstream,
 )
+from src.kpi.share_axis import (
+    TRX_NAME,
+    TRX_SHARE_KPI_ID,
+    requested_patient_axis,
+    share_axis_next_step,
+    share_axis_reason,
+)
 from src.kpi.synthetic_mode import (
     biologic_query_id,
     brand_region_query_id,
@@ -471,11 +478,15 @@ class BusinessImpactCalculator(KPICalculatorBase):
         is NOT market share against external competitors; competitor brands
         (e.g. Xolair, Dupixent) are not in the data model at all.
 
-        Region/segment/therapy_line routing goes through
-        `_resolve_windowed_call`. Windowed variants exist for the plain and
-        segment/line-scoped reads (migration 111); region/biologic/ige_tier
-        have no windowed sibling, so a window combined with those axes fails
-        loud rather than silently dropping either filter.
+        Region routing goes through `_resolve_windowed_call`; a windowed
+        variant exists for the plain read only (migration 111), so a window
+        combined with region fails loud rather than silently dropping either
+        filter.
+
+        PATIENT AXES ARE REFUSED before any query (severity tier, line of
+        therapy, biologic status, IgE tier): each patient is on one tracked
+        brand, so a per-bucket portfolio share mixes indications. See
+        :mod:`src.kpi.share_axis`.
         """
         brand = context.get("brand")
         if not brand:
@@ -483,17 +494,20 @@ class BusinessImpactCalculator(KPICalculatorBase):
             # undefined, not zero. Fail loud rather than fabricate a plausible 0% share.
             raise RuntimeError("KPI WS3-BI-014 unavailable: no brand specified for TRx share")
 
-        window = context.get("window")
-        if window is not None and (
-            context.get("region")
-            or context.get("biologic") is not None
-            or context.get("ige_tier") is not None
-        ):
+        axis = requested_patient_axis(context)
+        if axis is not None:
+            key, label = axis
             raise RuntimeError(
-                "KPI WS3-BI-014: a time window on TRx share can be combined only "
-                "with the severity-tier (segment) or line-of-therapy axis; "
-                "windowed region/biologic/IgE-tier share variants are not "
-                "registered (migration 111 covers plain/segment/line only)."
+                f"KPI {TRX_SHARE_KPI_ID}: TRx share is not defined by {label}. "
+                f"{share_axis_reason(key, label)} {share_axis_next_step(TRX_NAME, label)}"
+            )
+
+        window = context.get("window")
+        if window is not None and context.get("region"):
+            raise RuntimeError(
+                f"KPI {TRX_SHARE_KPI_ID}: a time window on TRx share cannot be combined "
+                "with region; no windowed region share variant is registered (migration "
+                "111 covers the plain read only)."
             )
 
         query_id, params = self._resolve_windowed_call(
@@ -501,10 +515,6 @@ class BusinessImpactCalculator(KPICalculatorBase):
             brand=brand,
             region=context.get("region"),
             window=window,
-            segment=context.get("segment"),
-            therapy_line=context.get("therapy_line"),
-            biologic=context.get("biologic"),
-            ige_tier=context.get("ige_tier"),
             context=context,
         )
         result = self._execute_query(query_id, params)

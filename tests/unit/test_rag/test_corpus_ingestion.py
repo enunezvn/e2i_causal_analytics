@@ -459,3 +459,75 @@ def test_reconcile_skipped_on_bounded_scan(
     store = _reconcile_store()
     _run_index(monkeypatch, store, latest_per_combo=False, limit_per_brand=1)
     assert store.get("_deleted", []) == []
+
+
+# ---------------------------------------------------------------------------
+# #2117: the corpus batch id lives in raw_content, never in the session column
+# ---------------------------------------------------------------------------
+
+_OPERATIONAL_ROWS: list[tuple[str, str | None, str | None]] = [
+    (
+        "trx for Kisqali in the west for calendar month 2026-08 (August 2026, monthly grain): "
+        "value 48654.99, target 65800.04, achievement 73.9%.",
+        "kisqali",
+        "west",
+    ),
+    (
+        "nrx for Kisqali in the east for calendar month 2026-08 (August 2026, monthly grain): "
+        "value 1200.0, target 1500.0, achievement 80.0%.",
+        "kisqali",
+        "east",
+    ),
+]
+
+
+def _run_operational(
+    monkeypatch: pytest.MonkeyPatch,
+    rows: list[tuple[str, str | None, str | None]],
+    **kwargs: Any,
+) -> list[dict[str, Any]]:
+    """Run index_operational_corpus against a recording writer; return each insert."""
+    inserts: list[dict[str, Any]] = []
+
+    async def _fake_insert(*, memory: Any, text_to_embed: str, session_id: Any = None) -> str:
+        inserts.append({"memory": memory, "text": text_to_embed, "session_id": session_id})
+        return str(_uuid.uuid4())
+
+    monkeypatch.setattr(ci, "insert_episodic_memory_with_text", _fake_insert)
+    asyncio.run(ci.index_operational_corpus(rows, **kwargs))
+    return inserts
+
+
+def test_operational_corpus_without_a_session_writes_null_and_keeps_a_batch_id_in_raw_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The beat job (corpus_ingestion_tasks -> index_business_metrics) passes no
+    session: the rows must land with a NULL session, not a minted uuid that
+    belongs to no conversation. The batch stays traceable through ONE
+    ``raw_content.ingestion_batch_id`` shared by every row of the call."""
+    inserts = _run_operational(monkeypatch, _OPERATIONAL_ROWS)
+
+    assert len(inserts) == 2
+    assert [i["session_id"] for i in inserts] == [None, None]
+    batch_ids = {i["memory"].raw_content["ingestion_batch_id"] for i in inserts}
+    assert len(batch_ids) == 1
+    _uuid.UUID(batch_ids.pop())  # a real batch identity, not a placeholder string
+
+    # A second call is a second batch.
+    again = _run_operational(monkeypatch, _OPERATIONAL_ROWS[:1])
+    assert again[0]["memory"].raw_content["ingestion_batch_id"] not in batch_ids | {
+        i["memory"].raw_content["ingestion_batch_id"] for i in inserts
+    }
+
+
+def test_operational_corpus_forwards_a_supplied_session_verbatim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A caller that really has a session gets it forwarded RAW (the writer's
+    ``_coerce_session_id`` recovers the uuid); the batch id is still recorded."""
+    session = "46d40f52-39ac-4b79-b3a4-1f1292059a00~a59e835e-2b1c-4f7d-9c0e-3d5a6b7c8d9e"
+
+    inserts = _run_operational(monkeypatch, _OPERATIONAL_ROWS, session_id=session)
+
+    assert [i["session_id"] for i in inserts] == [session, session]
+    assert all(_uuid.UUID(i["memory"].raw_content["ingestion_batch_id"]) for i in inserts)

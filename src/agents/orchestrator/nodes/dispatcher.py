@@ -3243,8 +3243,8 @@ class DispatcherNode:
                 # async boundary. Safe: all 12 INPUT_RESOLVERS (and their callees)
                 # are pure-sync — none touch the event loop or write a contextvar
                 # the caller reads back — so the thread's copied context is
-                # sufficient (same rationale as the ``run_in_executor`` offload of
-                # sync agents below).
+                # sufficient (same rationale as the ``to_thread`` offload of sync
+                # agents below).
                 resolved = await asyncio.to_thread(resolver, agent_input, dispatch)
                 if isinstance(resolved, NeedsStructuredInput):
                     latency = int((time.time() - start_time) * 1000)
@@ -3344,17 +3344,16 @@ class DispatcherNode:
                     coro = method(agent_input)
                 raw_result = await asyncio.wait_for(coro, timeout=timeout_seconds)
             else:
-                # asyncio.get_event_loop() is deprecated in Python 3.12+ when
-                # called outside a running loop; this dispatch path is always
-                # inside an active loop (we're in an async method), so
-                # get_running_loop() is the correct API.
-                loop = asyncio.get_running_loop()
+                # #2119: to_thread, not a bare run_in_executor. Same default
+                # executor and timeout, but the call runs under a COPY of this
+                # task's context, so the turn's LLM attribution and bound session
+                # reach the worker thread (a bare executor call starts from none).
                 if spec.uses_kwargs:
                     call = functools.partial(method, **agent_input)
                 else:
                     call = functools.partial(method, agent_input)
                 raw_result = await asyncio.wait_for(
-                    loop.run_in_executor(None, call), timeout=timeout_seconds
+                    asyncio.to_thread(call), timeout=timeout_seconds
                 )
 
             latency = int((time.time() - start_time) * 1000)

@@ -280,7 +280,7 @@ class ModelSelectorAgent:
 
             # Record the model selection to episodic memory (#749 — store_model_selection
             # was defined but never called from run() and used a non-existent insert API).
-            await self._update_episodic_memory(output)
+            await self._update_episodic_memory(output, final_state)
 
             # Log execution time
             duration = (datetime.now(timezone.utc) - start_time).total_seconds()
@@ -520,20 +520,32 @@ class ModelSelectorAgent:
         except Exception as e:
             logger.debug(f"Failed to update semantic memory: {e}")
 
-    async def _update_episodic_memory(self, output: Dict[str, Any]) -> None:
+    async def _update_episodic_memory(
+        self, output: Dict[str, Any], final_state: Dict[str, Any]
+    ) -> None:
         """Record the model selection to EPISODIC memory (#749).
 
         ``store_model_selection`` was defined but never called from ``run()`` AND
         called a non-existent ``insert_episodic_memory`` signature — both fixed
-        (compat shim + migration 039). Graceful degradation. ``session_id`` is the
-        ``audit_workflow_id`` (uuid column) or a fresh UUID.
+        (compat shim + migration 039). Graceful degradation. ``session_id`` is always
+        ``None`` (#2099): the audit workflow id is a correlation handle, not a
+        conversation, and it is persisted in the episodic ``raw_content``.
+        ``final_state`` is the graph's final state, handed to the hook as ``state`` so
+        the audit workflow id (#2099 -> ``raw_content``) reaches the row; ``output`` is
+        the agent's public return and does not carry it (#2120).
         """
         try:
             experiment_id = output.get("experiment_id")
             if not experiment_id:
                 return
-            session_id = str(output.get("audit_workflow_id") or uuid4())
+            # No session here (#2099). The audit workflow id is the audit
+            # chain's identity, not a conversation, and episodic_memories
+            # .session_id means "which conversation" -- so it travels in
+            # raw_content instead and this column records an honest NULL.
+            session_id = None
             hooks = ModelSelectorMemoryHooks()
-            await hooks.store_model_selection(session_id=session_id, result=output, state=output)
+            await hooks.store_model_selection(
+                session_id=session_id, result=output, state=final_state
+            )
         except Exception as e:
             logger.debug(f"Failed to update episodic memory: {e}")

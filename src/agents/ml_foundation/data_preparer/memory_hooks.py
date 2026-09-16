@@ -277,6 +277,14 @@ class DataPreparerMemoryHooks:
 
             content = {
                 "experiment_id": state.get("experiment_id"),
+                # The audit chain's workflow id used to be persisted AS the session
+                # (#2099). It is a real correlation handle but not a conversation,
+                # so it keeps its value here. Absent when the state has none.
+                **(
+                    {"audit_workflow_id": str(state["audit_workflow_id"])}
+                    if state.get("audit_workflow_id")
+                    else {}
+                ),
                 "report_id": result.get("report_id"),
                 "qc_status": result.get("qc_status"),
                 "overall_score": state.get("overall_score"),

@@ -366,6 +366,41 @@ function provenanceLabel(provenance: string): string {
   }
 }
 
+/**
+ * Title for the confidence badge (#2104). Confidence blends the rows the estimator fit on,
+ * the interval's precision and model fidelity.
+ *
+ * A STORED simulation is told apart from a fresh run by `subgroups_basis`, which only the
+ * detail response carries (never a `created_at` cutoff): its score was persisted when it
+ * ran, by the heuristic in force at that time — for a `twin_weighted_legacy` row one that
+ * scored on the generated twin count — so the current-heuristic sentences would be false.
+ * A fresh run's sentence is selected by `data_provenance`: on the cohort path the rows are
+ * the brand cohort, so generating more twins cannot raise it; on the synthetic path the
+ * training frame is drawn from the twins, so it follows the twin sample. Unknown provenance
+ * gets the neutral sentence only.
+ */
+function confidenceTitle(simulation: AnySimulation): string {
+  const base =
+    'Confidence blends the evidence behind this estimate: the rows the estimator fit on, the precision of the 95% interval, and model fidelity.';
+  if ('subgroups_basis' in simulation) {
+    // Its own opening: a legacy row's evidence term WAS the generated twin count, so the
+    // shared "rows the estimator fit on" sentence would be false before the qualification.
+    const stored =
+      'Confidence is the score stored when this simulation ran, computed by the confidence heuristic in force at that time: its evidence, the precision of the 95% interval, and model fidelity.';
+    return simulation.subgroups_basis === 'twin_weighted_legacy'
+      ? `${stored} That heuristic scored the evidence on the generated twin count.`
+      : stored;
+  }
+  switch (simulation.data_provenance) {
+    case 'cohort_estimated_synthetic_gold_v1':
+      return `${base} Here those rows are the brand cohort rows the estimator fit on. Generating more twins does not raise it.`;
+    case 'synthetic_uplift_v1':
+      return `${base} Here the training frame is drawn from the twins the estimator fit on, so it follows the twin sample rather than a cohort.`;
+    default:
+      return base;
+  }
+}
+
 /** Regions a stored simulation was filtered to, read from its detail payload's population_filters. */
 function filteredRegions(simulation: AnySimulation): string[] {
   const regions = 'population_filters' in simulation ? simulation.population_filters?.regions : undefined;
@@ -484,7 +519,10 @@ function SimulationResultPanel({ simulation }: { simulation: AnySimulation }) {
                 SYNTHETIC
               </span>
             )}
-            <span className="text-xs text-[var(--color-text-tertiary)]">
+            <span
+              className="text-xs text-[var(--color-text-tertiary)]"
+              title={confidenceTitle(simulation)}
+            >
               Confidence: {(simulation.simulation_confidence * 100).toFixed(0)}%
             </span>
           </div>

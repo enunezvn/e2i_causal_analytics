@@ -28,14 +28,18 @@ ALLOWLIST: dict[str, int] = {
     "src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py": 4238,
     "src/agents/ml_foundation/model_deployer/nodes/registry_manager.py": 1670,
     "src/agents/ml_foundation/model_trainer/nodes/evaluator.py": 4026,
-    "src/agents/orchestrator/nodes/dispatcher.py": 3701,
+    # 3700: MEASURED from the merged tree, and neither side's number — the lane
+    # shrank dispatcher.py to 3701 while main shrank it to 3772 from a common
+    # 3773, and the merge keeps both reductions. Taking either branch's pin here
+    # would have failed the ratchet's own `n == pin` assertion.
+    "src/agents/orchestrator/nodes/dispatcher.py": 3700,
     "src/agents/tool_composer/executor.py": 1684,
     "src/agents/tool_composer/tool_registrations.py": 4854,
     "src/api/main.py": 1692,
     "src/api/routes/chatbot_dspy.py": 4182,
     "src/api/routes/chatbot_graph.py": 3190,
-    "src/api/routes/chatbot_tools.py": 3055,
-    "src/api/routes/copilotkit.py": 6144,
+    "src/api/routes/chatbot_tools.py": 3054,
+    "src/api/routes/copilotkit.py": 6142,
     "src/api/routes/digital_twin.py": 1975,
     "src/api/routes/experiments.py": 1595,
     "src/api/routes/explain.py": 2822,
@@ -45,7 +49,7 @@ ALLOWLIST: dict[str, int] = {
     "src/api/routes/predictions.py": 1519,
     "src/api/routes/resource_optimizer.py": 1549,
     "src/api/routes/segments.py": 2934,
-    "src/api/schemas/causal.py": 2153,
+    "src/api/schemas/causal.py": 2147,
     "src/causal_engine/energy_score/estimator_selector.py": 1926,
     "src/causal_engine/refutation_runner.py": 3166,
     "src/data/causal_role_classifier.py": 6525,

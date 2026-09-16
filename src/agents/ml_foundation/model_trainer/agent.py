@@ -652,7 +652,7 @@ class ModelTrainerAgent:
 
         # Record this training run to episodic memory (#749 — store_training_result
         # was defined but never called from run() and used a non-existent insert API).
-        await self._update_episodic_memory(output)
+        await self._update_episodic_memory(output, final_state)
 
         # Log completion
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
@@ -836,22 +836,34 @@ class ModelTrainerAgent:
         except Exception as e:
             logger.debug(f"Failed to update semantic memory: {e}")
 
-    async def _update_episodic_memory(self, output: Dict[str, Any]) -> None:
+    async def _update_episodic_memory(
+        self, output: Dict[str, Any], final_state: Dict[str, Any]
+    ) -> None:
         """Record the training run to EPISODIC memory (#749).
 
         ``store_training_result`` was defined but never called from ``run()`` AND
         called a non-existent ``insert_episodic_memory`` signature — both fixed
-        (compat shim + migration 039). Graceful degradation. ``session_id`` is the
-        ``audit_workflow_id`` (the episodic ``session_id`` column is ``uuid``) or a
-        fresh UUID — never the non-UUID ``experiment_id``.
+        (compat shim + migration 039). Graceful degradation. ``session_id`` is always
+        ``None`` (#2099): the audit workflow id is a correlation handle, not a
+        conversation, and it is persisted in the episodic ``raw_content``. The
+        non-UUID ``experiment_id`` is never used as a session either.
+        ``final_state`` is the graph's final state, handed to the hook as ``state`` so
+        the audit workflow id (#2099 -> ``raw_content``) reaches the row; ``output`` is
+        the agent's public return and does not carry it (#2120).
         """
         try:
             experiment_id = output.get("experiment_id")
             if not experiment_id:
                 return
-            session_id = str(output.get("audit_workflow_id") or uuid4())
+            # No session here (#2099). The audit workflow id is the audit
+            # chain's identity, not a conversation, and episodic_memories
+            # .session_id means "which conversation" -- so it travels in
+            # raw_content instead and this column records an honest NULL.
+            session_id = None
             hooks = ModelTrainerMemoryHooks()
-            await hooks.store_training_result(session_id=session_id, result=output, state=output)
+            await hooks.store_training_result(
+                session_id=session_id, result=output, state=final_state
+            )
         except Exception as e:
             logger.debug(f"Failed to update episodic memory: {e}")
 

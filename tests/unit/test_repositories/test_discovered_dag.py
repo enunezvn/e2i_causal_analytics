@@ -604,3 +604,38 @@ async def test_find_by_query_id_filters_on_query_id():
     repo = DiscoveredDagRepository(supabase_client=client)
     await repo.find_by_query_id("analysis-123", include_synthetic=True)
     assert ("eq", ("query_id", "analysis-123")) in client.query.calls
+
+
+# ---------------------------------------------------------------------------
+# #2116 Part C: a composite chat session joins the DAG row to the episodic row
+# ---------------------------------------------------------------------------
+
+_USER_2116 = "46d40f52-39ac-4b79-b3a4-1f1292059a00"
+_SESSION_2116 = "a59e835e-2b1c-4f7d-9c0e-3d5a6b7c8d9e"
+_COMPOSITE_2116 = f"{_USER_2116}~{_SESSION_2116}"
+
+
+def test_payload_recovers_the_session_uuid_from_a_composite_chat_id():
+    """A plain-route turn carries ``{user}~{session}``. Discovery and the episodic
+    writer both store the trailing session uuid; the DAG row must store the same
+    value or it is un-joinable to them by session. The raw composite stays
+    visible in metadata because the column cannot hold the user segment."""
+    payload = _payload(session_id=_COMPOSITE_2116)
+
+    assert payload["session_id"] == _SESSION_2116
+    assert payload["metadata"]["session_id_raw"] == _COMPOSITE_2116
+
+
+def test_payload_keeps_a_bare_uuid_session_unchanged_with_no_raw_copy():
+    payload = _payload(session_id=_SESSION_2116)
+
+    assert payload["session_id"] == _SESSION_2116
+    assert "session_id_raw" not in payload["metadata"]
+
+
+def test_payload_nulls_a_malformed_composite_and_keeps_it_visible():
+    """``user~garbage`` must not mis-associate to the user segment."""
+    payload = _payload(session_id=f"{_USER_2116}~garbage")
+
+    assert payload["session_id"] is None
+    assert payload["metadata"]["session_id_raw"] == f"{_USER_2116}~garbage"

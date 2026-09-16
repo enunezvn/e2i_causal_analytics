@@ -1356,7 +1356,7 @@ class TestCausalMLBinarizationDiscriminatorIsTheRecodingItself:
     `{0, 2}` and `{-1, 1}` have 2 distinct values, so they pass #2063's
     collapse gate AND a `distinct > 2` condition — yet `y = (y > 0)` still
     changes their values, the fit is on the derived indicator, and the stage
-    payload would have labelled the result `identified_estimand = "ate"`.
+    payload would have labelled the result `estimand = "ate"`.
     A false estimand label is exactly the harm this issue is about, so the
     discriminator is the recoding itself: does `(y > 0)` differ from `y`?
     """
@@ -1420,3 +1420,150 @@ class TestCausalMLBinarizationDiscriminatorIsTheRecodingItself:
         assert result["success"] is True, result.get("error")
         assert _binarization_warnings(result) == [], result["warnings"]
         assert result["result"]["outcome_binarized"] is False
+
+
+# =============================================================================
+# The binarization notice rides only a result that reports an `ate` (#2106)
+# =============================================================================
+
+
+def _make_mixed_sign_outcome_frame_with_one_nan(n: int = 240, seed: int = 2106) -> pd.DataFrame:
+    """A continuous outcome on both sides of zero, with ONE NaN.
+
+    Both sides of zero means the column does not collapse under CausalML's
+    binarization, so the #2063 gate passes it and #2067's notice fires. The
+    single NaN is the case the extractor's NaN gate deliberately leaves to
+    the fitter: sklearn's ``check_X_y`` (called by causalml's
+    ``UpliftTreeClassifier.fit``, ``causalml/inference/tree/uplift.pyx:458``)
+    raises ``Input y contains NaN``, the wrapper's ``estimate`` catches it
+    into ``success=False`` (``src/causal_engine/uplift/base.py:369``), and
+    ``_fit_uplift_model`` re-raises it as ``RuntimeError``.
+    """
+    rng = np.random.default_rng(seed)
+    y = rng.normal(0.0, 1.0, size=n)
+    y[0] = np.nan
+    return pd.DataFrame(
+        {
+            "marketing_spend": np.arange(n) % 2,
+            "sales": y,
+            "age": rng.normal(50.0, 10.0, size=n),
+            "income": rng.normal(60000.0, 15000.0, size=n),
+        }
+    )
+
+
+class TestCausalMLBinarizationNoticeRidesOnlyAReportedAte:
+    """#2106 item 2: the notice talks about "the reported `ate`"; a fit that
+    raised reported no `ate`, so the notice must not ride that result.
+
+    The executor computes the notice before the fit (it needs the outcome
+    array, and its discriminator feeds the payload) but must attach it to
+    ``warnings`` only once the fit has returned. On the unfixed code the
+    NaN-bearing frame below fails closed at the fitter's own check with the
+    notice already appended — a warning about a number the result does not
+    contain.
+    """
+
+    @pytest.mark.asyncio
+    async def test_fit_refused_for_nan_carries_no_binarization_notice(self):
+        # REAL fit: the refusal must come from the fitter's NaN check, not a
+        # stand-in, so `_fit_uplift_model` is not patched here.
+        executor = CausalMLExecutor()
+        state = _make_pipeline_state(
+            filters={"dataframe": _make_mixed_sign_outcome_frame_with_one_nan()},
+            confounders=["age", "income"],
+        )
+
+        result = await executor.execute(state, _make_pipeline_config())
+
+        assert result["success"] is False
+        assert "NaN" in (result["error"] or ""), result["error"]
+        assert result["result"] is None
+        assert not any("binarized" in w for w in result["warnings"]), result["warnings"]
+
+    @pytest.mark.asyncio
+    async def test_same_frame_without_the_nan_still_carries_the_notice(self):
+        # POSITIVE CONTROL on the same frame through the REAL fit (nothing
+        # patched; measured 3.2 s at n=240): drop the NaN and the forest fits
+        # the binarized outcome, the result carries a real `ate`, and the
+        # notice is attached to it.
+        frame = _make_mixed_sign_outcome_frame_with_one_nan()
+        frame.loc[frame.index[0], "sales"] = 0.5
+        executor = CausalMLExecutor()
+        state = _make_pipeline_state(
+            filters={"dataframe": frame},
+            confounders=["age", "income"],
+        )
+
+        result = await executor.execute(state, _make_pipeline_config())
+
+        assert result["success"] is True, result.get("error")
+        assert isinstance(result["result"]["ate"], float)
+        assert np.isfinite(result["result"]["ate"])
+        assert len(_binarization_warnings(result)) == 1, result["warnings"]
+        assert result["result"]["outcome_binarized"] is True
+
+    @pytest.mark.asyncio
+    async def test_post_fit_failure_carries_no_binarization_notice(self):
+        # codex r1 MEDIUM: a fit that returned is not yet a result that
+        # reports an `ate`. Anything the success path calls AFTER the fit can
+        # still raise into the generic fail-closed handler; the confidence
+        # helper is the unguarded one nearest the return. Such a result has
+        # `result=None`, so the notice must not ride it either.
+        frame = _make_mixed_sign_outcome_frame_with_one_nan()
+        frame.loc[frame.index[0], "sales"] = 0.5
+        executor = CausalMLExecutor()
+        state = _make_pipeline_state(
+            filters={"dataframe": frame},
+            confounders=["age", "income"],
+        )
+        with (
+            patch(
+                "src.causal_engine.pipeline.executors.causalml._fit_uplift_model",
+                side_effect=_fake_fit_uplift_model,
+            ),
+            patch(
+                "src.causal_engine.pipeline.executors.causalml._compute_uplift_metrics_safe",
+                return_value={"auuc": 0.51, "qini": 0.02},
+            ),
+            patch(
+                "src.causal_engine.pipeline.executors.causalml._confidence_from_uplift_result",
+                side_effect=RuntimeError("confidence helper exploded after the fit"),
+            ),
+        ):
+            result = await executor.execute(state, _make_pipeline_config())
+
+        assert result["success"] is False
+        assert "confidence helper exploded" in (result["error"] or ""), result["error"]
+        assert result["result"] is None
+        assert not any("binarized" in w for w in result["warnings"]), result["warnings"]
+
+    @pytest.mark.asyncio
+    async def test_metrics_failure_keeps_success_and_the_notice_precedes_it(self):
+        # A metrics failure keeps `success=True` with a real `ate`, so the
+        # notice IS attached — and stays first, ahead of the metrics warning,
+        # as it was when it was appended before the metrics step.
+        frame = _make_mixed_sign_outcome_frame_with_one_nan()
+        frame.loc[frame.index[0], "sales"] = 0.5
+        executor = CausalMLExecutor()
+        state = _make_pipeline_state(
+            filters={"dataframe": frame},
+            confounders=["age", "income"],
+        )
+        with (
+            patch(
+                "src.causal_engine.pipeline.executors.causalml._fit_uplift_model",
+                side_effect=_fake_fit_uplift_model,
+            ),
+            patch(
+                "src.causal_engine.pipeline.executors.causalml._compute_uplift_metrics_safe",
+                side_effect=RuntimeError("metrics exploded"),
+            ),
+        ):
+            result = await executor.execute(state, _make_pipeline_config())
+
+        assert result["success"] is True, result.get("error")
+        assert result["result"]["auuc"] is None and result["result"]["qini"] is None
+        assert len(result["warnings"]) == 2, result["warnings"]
+        assert "binarized outcome" in result["warnings"][0], result["warnings"]
+        assert "Uplift metrics unavailable" in result["warnings"][1], result["warnings"]

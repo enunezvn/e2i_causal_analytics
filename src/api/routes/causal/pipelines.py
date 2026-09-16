@@ -845,6 +845,19 @@ def _get_stage_latency_ms(
     return int(output.get("total_latency_ms") or 0)
 
 
+# #2106: the two spellings of DoWhy's nonparametric-ATE identification label
+# that reach `identified_estimand`. Literals, not `str(EstimandType...)`: dowhy
+# is a heavy import and this route module is imported by the app at startup,
+# so it must not pull dowhy in at import time; the 2067 test derives the first
+# spelling from the library, so a DoWhy `__str__` change is caught there.
+_DOWHY_NONPARAMETRIC_ATE_LABELS = frozenset(
+    {
+        "EstimandType.NONPARAMETRIC_ATE",  # str(EstimandType.NONPARAMETRIC_ATE): prod
+        "nonparametric-ate",  # EstimandType.NONPARAMETRIC_ATE.value
+    }
+)
+
+
 def _extract_library_payload(
     library: str,
     output: PipelineOutput,
@@ -867,6 +880,26 @@ def _extract_library_payload(
     EconML's empty/error payload — reading it for DoWhy would drop the
     real DoWhy data. The per-library state fields preserve every executor's
     result.
+
+    Payload keys (#2106 — one vocabulary per key, never two):
+        ``identified_estimand``: DoWhy's identification label, copied verbatim
+            from its executor: ``_extract_estimand_label`` (dowhy.py) returns
+            ``str(estimand_type)``, which for DoWhy's plain-Enum
+            ``EstimandType`` is
+            ``EstimandType.NONPARAMETRIC_ATE`` on the real executor — not the
+            enum's value ``nonparametric-ate`` — else the estimand's class
+            name. DoWhy ONLY — it is the estimand DoWhy identified from the
+            graph, an identification step the other libraries never perform;
+            the pipeline orchestrator reads it into ``identification_method``.
+        ``estimand``: what the stage's reported ``effect_estimate`` ESTIMATES,
+            in one vocabulary for every branch that can say: ``"ate"`` for an
+            average treatment effect on the outcome as named,
+            ``"risk_difference_on_indicator_y_gt_0"`` for CausalML's
+            binarized case. DoWhy derives it only from the one identification
+            whose mapping is certain (nonparametric ATE, in either spelling of
+            ``_DOWHY_NONPARAMETRIC_ATE_LABELS`` → ``ate``); CausalML takes it
+            from the executor's ``outcome_binarized`` discriminator. EconML
+            carries no estimand claim today, and none is invented.
     """
     result_payload = _read_library_result_from_state(library, state)
     if result_payload is None:
@@ -900,6 +933,17 @@ def _extract_library_payload(
         estimand = result_payload.get("identified_estimand")
         if isinstance(estimand, str):
             payload["identified_estimand"] = estimand
+            # #2106: name what the effect ESTIMATES next to what was
+            # IDENTIFIED. DoWhy's nonparametric ATE is the one identification
+            # whose estimated quantity is certain (an ATE on the outcome as
+            # named). It arrives in two spellings: the real executor emits
+            # `str(estimand_type)` (`_extract_estimand_label`, dowhy.py), and
+            # DoWhy's `EstimandType` is a plain Enum, so prod carries "EstimandType.NONPARAMETRIC_ATE"
+            # (the deployed api's dowhy stage in the #2067 live cert); the
+            # enum's value is "nonparametric-ate". Any other label keeps its
+            # identification claim and gets no guessed `estimand`.
+            if estimand in _DOWHY_NONPARAMETRIC_ATE_LABELS:
+                payload["estimand"] = "ate"
     elif library == "econml":
         ate = result_payload.get("ate") or result_payload.get("overall_ate")
         if isinstance(ate, (int, float)):
@@ -914,6 +958,11 @@ def _extract_library_payload(
         if isinstance(method, str):
             payload["method"] = method
     elif library == "causalml":
+        # This stage is NOT a member of the ATE consensus (#2027):
+        # `effect_estimate` is the mean model-predicted uplift, served with
+        # ci_lower / ci_upper / p_value = None (the only interval CausalML
+        # has is a dispersion) and labelled by `data_provenance` +
+        # `estimand` below. `consensus_effect` is DoWhy + EconML only.
         ate = result_payload.get("ate")
         if isinstance(ate, (int, float)):
             payload["effect_estimate"] = float(ate)
@@ -929,11 +978,12 @@ def _extract_library_payload(
         # indicator (y > 0), not an ATE on the column the caller named. The
         # executor decides this before the fit; a payload that carries no
         # discriminator gets no estimand claim rather than a guessed one.
+        # #2106: the key is `estimand` (what the number estimates), never
+        # `identified_estimand` — CausalML performs no identification step,
+        # and that key is DoWhy's identification label (see the docstring).
         binarized = result_payload.get("outcome_binarized")
         if isinstance(binarized, bool):
-            payload["identified_estimand"] = (
-                "risk_difference_on_indicator_y_gt_0" if binarized else "ate"
-            )
+            payload["estimand"] = "risk_difference_on_indicator_y_gt_0" if binarized else "ate"
             distinct = result_payload.get("outcome_distinct_values")
             if isinstance(distinct, int):
                 payload["outcome_distinct_values"] = distinct

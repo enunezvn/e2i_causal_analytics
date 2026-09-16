@@ -29,7 +29,11 @@ from src.agents.causal_impact.nodes.adjustment_set_policy import (
 )
 from src.agents.causal_impact.nodes.estimation import estimate_causal_effect
 from src.agents.causal_impact.nodes.graph_builder import build_causal_graph
-from src.agents.causal_impact.nodes.interpretation import InterpretationNode, interpret_results
+from src.agents.causal_impact.nodes.interpretation import (
+    InterpretationNode,
+    confidence_label_to_score,
+    interpret_results,
+)
 from src.agents.causal_impact.nodes.refutation import refute_causal_estimate
 from src.agents.causal_impact.nodes.sensitivity import analyze_sensitivity
 from src.agents.causal_impact.state import CausalImpactState, spread_safe
@@ -41,6 +45,60 @@ logger = logging.getLogger(__name__)
 
 # Type variable for node functions
 F = TypeVar("F", bound=Callable[..., Any])
+
+
+def _refutation_suite_score(result: Dict[str, Any]) -> Optional[float]:
+    """The ``confidence_score`` of the ``refutation`` audit row (#2127).
+
+    Definition (owner decision 2026-09-15): the confidence of a causal_impact
+    estimate is the refutation-suite score —
+    ``RefutationRunner._calculate_confidence_score``, the weighted mean over
+    the suite's tests (PASSED 1.0 / WARNING 0.6 / FAILED 0) that decides
+    PROCEED / REVIEW / BLOCK (BLOCK < 0.50). SKIPPED tests carry no evidence
+    and are excluded from that mean (``_calculate_confidence_score``); a
+    FAILED critical test BLOCKs regardless of the score
+    (``_determine_gate_decision``), so a BLOCK row can carry a high score.
+    ``RefutationNode.execute`` returns
+    it as ``refutation_confidence``, the sibling of ``refutation_results``
+    whose ``confidence_adjustment`` is the same ``RefutationSuite
+    .confidence_score``; the explicit key is read here. The interpretation
+    row's grade (#2123) is derived from the same refutation evidence together
+    with statistical significance and the sensitivity result (the
+    ``confidence`` rule in ``nodes/interpretation.py``); the estimation row
+    stays NULL by definition.
+
+    Stored AS RETURNED — no clamping, rescaling or default (an int 0/1 is
+    coerced to 0.0/1.0, the same value in the NUMERIC column; ``float()`` also
+    gives mypy a concrete return type for the ``Dict[str, Any]`` read). Absent → None
+    silently. Provenance, not outcome, decides whether a score exists: the
+    node's two ``except`` returns set the ``refutation_error`` KEY (its value
+    may be empty — the generic handler stores ``str(e)``, "" for a bare
+    exception — so presence, not truthiness, is the marker) and spread the
+    input state, so that return carries no trustworthy fresh score of this
+    invocation (only what it inherited; the exception may have followed a
+    computed suite, e.g. in persistence) and the caller records NULL even
+    if the incoming state carried one. A completed return
+    could carry the key only by inheriting it from the input state, which
+    the compiled graph does not produce (no node before refutation writes
+    it). A COMPLETED suite that BLOCKs or is withheld on the expert-review
+    gate also fails closed
+    (status failed + error_message, so its row's action_type is
+    ``refutation_error`` too) but carries its own fresh score, which IS
+    recorded — a ``refutation_error`` row therefore carries a score (BLOCK /
+    halt) or NULL (exception). Anything but a number in [0, 1] is not a
+    value this row may carry → None plus one WARNING.
+    """
+    score = result.get("refutation_confidence")
+    if score is None:
+        return None
+    if isinstance(score, bool) or not isinstance(score, (int, float)) or not (0.0 <= score <= 1.0):
+        logger.warning(
+            "refutation_confidence=%r is not a number in [0, 1]; recording NULL on the "
+            "refutation audit row (not a value this row may carry) (#2127)",
+            score,
+        )
+        return None
+    return float(score)
 
 
 def traced_node(node_name: str) -> Callable[[F], F]:
@@ -125,6 +183,16 @@ def traced_node(node_name: str) -> Callable[[F], F]:
                         "has_error": bool(result.get(f"{node_name}_error")),
                     }
 
+                    # A fail-closed node (``{node}_error`` key, or status
+                    # flipped to failed with an error payload) is recorded as
+                    # ``<node>_error`` like a raising node — the one readable
+                    # execution outcome in audit_chain_entries; see
+                    # audit_chain_mixin.node_failed_closed (2026-09-06).
+                    # Outcome only: it names the row (``refutation_error``);
+                    # whether that row carries a score is decided by
+                    # provenance in the refutation branch (#2127).
+                    failed_closed = node_failed_closed(node_name, state, result)
+
                     # Add node-specific output fields
                     validation_passed = None
                     confidence_score = None
@@ -141,13 +209,40 @@ def traced_node(node_name: str) -> Callable[[F], F]:
                         output_summary["statistical_significance"] = est.get(
                             "statistical_significance"
                         )
-                        confidence_score = est.get("confidence")
+                        # confidence_score stays NULL BY DEFINITION (#2127): in
+                        # this agent's vocabulary an estimate has precision (SE,
+                        # CI, p-value), not confidence — confidence is the
+                        # refutation-suite score, recorded on the refutation
+                        # row below. EstimationResult has no ``confidence`` key
+                        # (the old ``est.get("confidence")`` read was dead on
+                        # 177/177 live rows), and the service only appends
+                        # entries (``AuditChainService.add_entry``), so this
+                        # row is not revisited.
                     elif node_name == "refutation":
                         ref = result.get("refutation_results", {})
                         output_summary["tests_passed"] = ref.get("tests_passed")
                         output_summary["overall_robust"] = ref.get("overall_robust")
                         output_summary["gate_decision"] = ref.get("gate_decision")
                         validation_passed = ref.get("overall_robust")
+                        # The confidence of a causal_impact estimate IS the
+                        # refutation-suite score (#2127); see the helper. Gated
+                        # on PROVENANCE, not on the failed-closed outcome: the
+                        # node's two ``except`` returns set the
+                        # ``refutation_error`` KEY (its value may be empty — the
+                        # generic handler stores ``str(e)``, "" for a bare
+                        # exception, so presence, not truthiness, is the
+                        # marker) and spread the input state — no trustworthy
+                        # fresh score of this invocation, only what it
+                        # inherited — so a ``refutation_confidence`` key alone
+                        # could carry a stale score. A completed BLOCK / expert-review
+                        # halt also fails closed (status failed + error_message
+                        # → the same refutation_error action_type) but carries
+                        # its own fresh score, which IS recorded.
+                        confidence_score = (
+                            None
+                            if "refutation_error" in result
+                            else _refutation_suite_score(result)
+                        )
                         # add_entry calls refutation_results.to_dict() internally
                         # (audit_chain.py:345); the refutation node persists a
                         # dict via RefutationSuite.to_legacy_format() so we wrap
@@ -184,7 +279,12 @@ def traced_node(node_name: str) -> Callable[[F], F]:
                         interp = result.get("interpretation", {})
                         output_summary["causal_confidence"] = interp.get("causal_confidence")
                         output_summary["depth_level"] = interp.get("depth_level")
-                        confidence_score = interp.get("causal_confidence")
+                        # causal_confidence is a LABEL (high/medium/low/N/A);
+                        # the audit column is numeric(5,4). Use the node's own
+                        # mapping; N/A / unknown → NULL, never a guess (#2123).
+                        confidence_score = confidence_label_to_score(
+                            interp.get("causal_confidence")
+                        )
 
                     span.set_output(output_summary)
 
@@ -193,12 +293,6 @@ def traced_node(node_name: str) -> Callable[[F], F]:
                     if latency_key in result:
                         span.set_attribute("node_latency_ms", result[latency_key])
 
-                    # A fail-closed node (``{node}_error`` key, or status
-                    # flipped to failed with an error payload) is recorded as
-                    # ``<node>_error`` like a raising node — the one readable
-                    # execution outcome in audit_chain_entries; see
-                    # audit_chain_mixin.node_failed_closed (2026-09-06).
-                    failed_closed = node_failed_closed(node_name, state, result)
                     if failed_closed:
                         output_summary["has_error"] = True
                         validation_passed = False
@@ -402,8 +496,10 @@ def should_continue_after_refutation(
 
     Contract: gate_decision determines flow, fail-CLOSED (H1).
 
-    A refutation that ERRORED or FAILED sets ``refutation_error`` /
-    ``status="failed"`` but NO ``refutation_results`` — previously the gate then
+    A refutation that ERRORED sets ``refutation_error`` / ``status="failed"``
+    with NO ``refutation_results``, while a completed BLOCK or expert-review
+    halt sets ``status="failed"`` WITH ``refutation_results`` and a suite score
+    (#2127) — previously the gate then
     defaulted to ``"proceed"`` and carried a never-validated estimate forward to
     sensitivity → interpretation → a "completed" result. Route those to the
     error handler instead. Only PROCEED/REVIEW continue to sensitivity; BLOCK
@@ -741,11 +837,11 @@ def _extract_mlflow_metrics(state: Dict[str, Any], total_latency_ms: float) -> D
     # Overall confidence
     interpretation = state.get("interpretation", {})
     if interpretation.get("causal_confidence"):
-        # Map confidence levels to numeric values for tracking
-        confidence_map = {"low": 0.33, "medium": 0.66, "high": 1.0}
-        confidence_str = interpretation["causal_confidence"].lower()
-        if confidence_str in confidence_map:
-            metrics["causal_confidence"] = confidence_map[confidence_str]
+        # Map confidence levels to numeric values for tracking — the node's
+        # mapping; an unknown label leaves the metric unset (#2123 dedupe).
+        confidence_value = confidence_label_to_score(interpretation["causal_confidence"])
+        if confidence_value is not None:
+            metrics["causal_confidence"] = confidence_value
 
     return metrics
 

@@ -61,6 +61,7 @@ from src.utils.llm_attribution import (
     get_authenticated_user_id,
     resolve_session_user_id,
     set_authenticated_user,
+    set_chat_attribution,
 )
 
 logger = logging.getLogger(__name__)
@@ -153,6 +154,32 @@ def _owner_denies(owner: Optional[str], token_user_id: Optional[str]) -> bool:
     return True
 
 
+async def refuse_foreign_thread(thread_id: Optional[str], token_user_id: Optional[str]) -> None:
+    """Raise 403 when ``thread_owner_denied`` says the thread is someone else's; otherwise return.
+
+    The raising form of the gate, for a route whose broad ``except`` RETURNS a
+    200 error body rather than falling through to another handler (the #2107
+    ``owned_thread_id`` case): ``submit_feedback`` (#2109). Its rules are the
+    bool helper's — no row, own thread and the anonymous sentinel allow; a
+    lookup failure allows with a WARNING; a foreign owner refuses — with the
+    same status and detail string as the AG-UI gates (their body key is
+    ``error``, this one's is ``detail``).
+
+    The caller's ``except HTTPException: raise`` clause, placed ahead of its
+    broad ``except Exception``, is what lets the 403 out instead of a 200
+    ``{"success": false}`` body.
+
+    Existence oracle, accepted: a refused caller learns the thread exists. The
+    ``session_id`` path reads no MESSAGE before the gate (a prefix match ahead
+    of it was a content oracle; the gate reads the conversation row), so what
+    remains is thread existence there (ids generated as random v4 uuids) and
+    ``message_id`` existence on the other path (sequential ints, countable).
+    What a foreign caller can DO shrank: it used to rate the row and succeed.
+    """
+    if await thread_owner_denied(thread_id, token_user_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="threadId not yours")
+
+
 async def owned_conversation(
     conversation_repository: Any, session_id: Optional[str]
 ) -> Optional[Dict[str, Any]]:
@@ -178,10 +205,18 @@ async def owned_conversation(
     into the tool's own ``except``, which is today's behaviour for a store that
     is down — unlike the route seams, there is a handler here already.
 
-    #2105 owns replacing the model-supplied argument with the bound session;
-    until then this is what makes keeping it safe.
+    #2105 made the argument optional, defaulting to the bound session; this is
+    what keeps a model that still names one honest.
     """
     if not session_id:
+        # #2105: nothing named (or an empty id) and nothing bound for this turn.
+        # An empty session channel inside the graph is the #2100 regression
+        # class, and the tool answers "not found" without looking, so the
+        # operator has to be able to see that this is why.
+        logger.warning(
+            "[Chat] conversation_memory_tool called with no conversation named and none "
+            "bound for this turn; answering not-found without a lookup (#2105)."
+        )
         return None
     conversation: Optional[Dict[str, Any]] = await conversation_repository.get_by_session_id(
         session_id
@@ -354,6 +389,66 @@ async def authorize_chat_identity(
         )
     set_authenticated_user(token_user_id)
     return str(token_user_id)
+
+
+class ChatTurn(Protocol):
+    """A plain chat request whose turn ids the route seam finalises IN PLACE.
+
+    ``ChatClaims`` is read-only because the claim checks only read. This is the
+    writable view the same ``ChatRequest`` satisfies: ``session_id`` and
+    ``request_id`` are ``Optional[str]`` on the model, so the invariant mutable
+    members match exactly, and ``user_id`` stays a read-only property because
+    nothing here writes it.
+    """
+
+    @property
+    def user_id(self) -> Optional[str]: ...
+
+    session_id: Optional[str]
+    request_id: Optional[str]
+
+
+async def bind_plain_chat_turn(
+    token_user_id: str,
+    chat_request: ChatTurn,
+    testing_mode: bool,
+    fallback_request_id: Optional[str],
+) -> str:
+    """Authorize a plain chat turn, finalise its ids on the request, bind attribution.
+
+    #2119: ``set_chat_attribution`` had one caller, inside the AG-UI
+    ``execute()``. ``/chat`` and ``/chat/stream`` bound the identity channel
+    (``authorize_chat_identity``) and nothing else, so every metered LLM call
+    those turns made (zero-token calls are skipped, ``llm_usage_callback.py:~63``)
+    recorded ``surface='other'`` with a NULL user and session, and their
+    assistant rows drained no token usage.
+
+    The attribution needs the turn's session id, and on these routes the id did
+    not exist yet where the binding has to be made: the REQUEST task, before the
+    ``StreamingResponse`` is built or ``run_chatbot`` is awaited — the context
+    the keepalive wrapper copies once for every frame pull (#2100) and the
+    dispatcher's thread offload of a sync agent now copies too (#2119 Part D).
+    ``_stream_chat_response`` and ``create_initial_state`` each minted the id
+    later, downstream of the graph's creation. So the session is minted HERE
+    now, in the exact ``{user}~{uuid4}`` shape both of those used, and written
+    back onto the request: the stream route's mint is deleted, and
+    ``create_initial_state``'s cannot fire from these routes because the request
+    always carries a session by then. ``request_id`` is finalised the same way,
+    with the expression both routes already use, so the value bound here is the
+    value the routes log and pass to the graph; the response's ``X-Request-ID``
+    header is the tracing middleware's own id when tracing is on
+    (``tracing.py:~253``), unchanged from before.
+
+    Returns the verified identity, as ``authorize_chat_identity`` does; its 403s
+    propagate unchanged, and nothing is bound when it refuses.
+    """
+    identity = await authorize_chat_identity(token_user_id, chat_request, testing_mode)
+    session_id = chat_request.session_id or f"{identity}~{uuid.uuid4()}"
+    request_id = chat_request.request_id or fallback_request_id or "unknown"
+    chat_request.session_id = session_id
+    chat_request.request_id = request_id
+    set_chat_attribution(session_id, request_id)
+    return identity
 
 
 def _thread_ids(body: Any) -> List[str]:

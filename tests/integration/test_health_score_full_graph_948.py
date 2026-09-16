@@ -26,6 +26,7 @@ The pure-logic regressions split out of these tests stay in the unit lane:
 adapter tests still in ``test_api/test_routes/test_health_score.py``.
 """
 
+import os
 from unittest.mock import patch
 
 import pytest
@@ -42,7 +43,30 @@ from src.api.routes.health_score import (
     _execute_health_check,
 )
 
-pytestmark = pytest.mark.integration
+# Residual of #2101: the real route helper builds ``HealthScoreAgent`` with
+# ``enable_memory=True``, so this graph WRITES real ``episodic_memories`` rows.
+# On a developer/prod box the gate stays closed unless explicitly opted in
+# (same E2I_DB_INTEGRATION switch as the other real-DB tests, 879/883/1450),
+# so a bare ``pytest`` never touches the live table. In CI the gate is OPEN:
+# PR #948 / #952 re-homed these regressions here precisely so they run on the
+# integration lane, and that job (backend-tests.yml ``integration-tests``) has
+# no Supabase/Postgres service at all -- it starts only apt Redis and an MLflow
+# server, and points SUPABASE_URL at a dead localhost:54321 with a fake key --
+# so the episodic write has nowhere to land and ``store_health_check`` logs a
+# warning instead of raising. GitHub Actions always exports ``CI=true`` (read
+# the same way in test_staleness_alerts_e2e.py).
+_GATE = os.environ.get("E2I_DB_INTEGRATION") == "1" or os.environ.get("CI") == "true"
+
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not _GATE,
+        reason=(
+            "faithful real-DB full-graph test (writes episodic_memories); "
+            "runs in CI (CI=true) or with E2I_DB_INTEGRATION=1"
+        ),
+    ),
+]
 
 
 @pytest.fixture(autouse=True)

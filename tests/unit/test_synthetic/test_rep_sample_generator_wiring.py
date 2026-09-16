@@ -59,8 +59,11 @@ _PRE_P3_INVARIANT = {
         # persistence columns (verified: every other column above held byte-identical).
         # 2026-07-28: re-pinned again — axis INVERTED positive (main -0.55 / exp_mult 2.08);
         # still ONLY these two columns move (22/24 held byte-identical).
-        "discontinued_180d": "369cbe7c78b8208b",
-        "persistent_180d": "6275ec3f5ed8f6ab",
+        # Re-pinned 2026-09-16: Remibrutinib UAS7 follows disease_severity
+        # (dgp.clinical_severity), which moves its UAS7 >= 28 persistence axis. Every
+        # other pinned column held (test_uas7_severity_coherence pins the changed set).
+        "discontinued_180d": "b85c1c0b3f053b2b",
+        "persistent_180d": "24c7419e57a86721",
     },
     "Kisqali:7": {
         "patient_journey_id": "9d37ed3c10cda091",

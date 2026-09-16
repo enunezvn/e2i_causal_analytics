@@ -10,7 +10,7 @@ import asyncio
 import logging
 import time
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from src.agents.causal_impact.state import (
     CausalImpactState,
@@ -23,6 +23,30 @@ if TYPE_CHECKING:
     from src.services.clinical_context import ClinicalContextService
 
 logger = logging.getLogger(__name__)
+
+# The single label→number mapping for ``causal_confidence``. Shared by the
+# DSPy training signal (``InterpretationNode._confidence_to_score``), the
+# MLflow metrics block (``graph._extract_mlflow_metrics``) and the audit-chain
+# wrapper (``graph.traced_node``): ``audit_chain_entries.confidence_score`` is
+# ``numeric(5,4)`` and refused the categorical label, so the interpretation
+# entry was never written — 0 of 177 workflows in the 7 days to 2026-09-15
+# (#2123).
+_CONFIDENCE_LABEL_SCORES: Dict[str, float] = {"low": 0.33, "medium": 0.66, "high": 1.0}
+
+
+def confidence_label_to_score(
+    label: Optional[str], *, default: Optional[float] = None
+) -> Optional[float]:
+    """Map a ``causal_confidence`` label (case-insensitive) to its numeric score.
+
+    ``low`` → 0.33, ``medium`` → 0.66, ``high`` → 1.0. Anything else —
+    ``None``, ``"N/A"`` (the interpretation node's not-applicable marker) or an
+    unknown string — returns ``default``, which is ``None`` so the audit row
+    carries NULL rather than a guess.
+    """
+    if not isinstance(label, str):
+        return default
+    return _CONFIDENCE_LABEL_SCORES.get(label.lower(), default)
 
 
 @lru_cache(maxsize=1)
@@ -813,9 +837,12 @@ class InterpretationNode:
             logger.warning(f"DSPy signal collection failed (non-fatal): {e}")
 
     def _confidence_to_score(self, confidence: str) -> float:
-        """Convert confidence level string to numeric score."""
-        confidence_map = {"low": 0.33, "medium": 0.66, "high": 1.0}
-        return confidence_map.get(confidence.lower(), 0.5)
+        """Convert confidence level string to numeric score (DSPy signal path:
+        an unknown label keeps its historical 0.5 default)."""
+        score = confidence_label_to_score(confidence, default=0.5)
+        # Narrows Optional[float] to float for mypy; default=0.5 means the None
+        # branch is unreachable.
+        return 0.5 if score is None else score
 
 
 # Standalone function for LangGraph integration

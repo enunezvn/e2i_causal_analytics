@@ -2544,6 +2544,10 @@ async def run_causal_analysis(
             result = await orchestrator.run(
                 {
                     "query": query,
+                    # #2105: None on the SDK action paths (action/{name}, actions/execute), the
+                    # only ones reaching this handler: identity bound, no session. Never minted.
+                    "session_id": _session_id_context.get(),
+                    "user_id": chat_identity.resolve_tool_user_id(_session_id_context.get()),
                     "user_context": {
                         "brand": brand,
                         "intervention": intervention,
@@ -3392,8 +3396,8 @@ You help users with:
 You MUST use tools proactively when users ask about data:
 - Use `e2i_data_query_tool` for KPI metrics, causal chains, agent analyses (an agent's ACTIVITY LOG — runs, confidences, timestamps; NOT the system health score), triggers
 - Use kpi_calculate_tool to COMPUTE a KPI value for a brand/period (NRx, TRx, NBRx, market share, conversion rate, ROI). Pass the brand and any time window the user names, and state which brand and window your answer covers.
-- BREAKDOWN GUIDANCE: For NRx/TRx/NBRx/TRx-share/conversion-rate patient-segment breakdowns, call `kpi_calculate_tool` once per bucket of ONE axis and present the results as a table. Axes: `segment` ∈ {low_severity, medium_severity, high_severity}; `therapy_line` ∈ {0,1,2,3}; and FOR REMIBRUTINIB ONLY (volume KPIs and share, NOT conversion rate) `biologic` ∈ {naive, experienced} and `ige_tier` ∈ {low, medium, high}. A volume axis's buckets sum to the head-line KPI, so the breakdown reconciles with the total (rates/shares don't sum — their numerators/denominators do). When the user names a period ("last year", "Q1 2025"), ALWAYS pass `window` too — it composes with `segment`/`therapy_line` for TRx/NRx/NBRx, TRx share, and conversion rate. Use exactly one axis per breakdown — they are mutually exclusive.
-- HONESTY GUARD: Clinical context is background framing only — never present a clinical sub-population as a data breakdown unless a tool actually returned per-bucket values. Biologic status (`biologic`) and IgE tier (`ige_tier`) are REAL breakdown axes for REMIBRUTINIB ONLY; for Kisqali/Fabhalta `kpi_calculate_tool` returns an error because the data is NULL by design — say it is unavailable for that brand and do NOT fabricate a split or guess. The real breakdown axes are severity tier (`segment`), line-of-therapy (`therapy_line`), biologic status and IgE tier (Remibrutinib only), plus geographic `region`. TRx Share is the brand's share of the TRACKED PORTFOLIO's prescriptions (Fabhalta + Kisqali + Remibrutinib, cross-indication) — NOT market share vs external competitors; competitor brands (e.g. Xolair, Dupixent) are not in the data model, so NEVER attribute the share complement to named competitors.
+- BREAKDOWN GUIDANCE: For NRx/TRx/NBRx/conversion-rate patient-segment breakdowns, call `kpi_calculate_tool` once per bucket of ONE axis and present the results as a table. Axes: `segment` ∈ {low_severity, medium_severity, high_severity}; `therapy_line` ∈ {0,1,2,3}; and FOR REMIBRUTINIB ONLY (volume KPIs, NOT conversion rate) `biologic` ∈ {naive, experienced} and `ige_tier` ∈ {low, medium, high}. TRx share is NOT defined on a patient axis (each patient is on one tracked brand, so a per-bucket portfolio share mixes indications; the tool refuses it): for a "share by tier / line / biologic status / IgE tier" ask, call TRx once per bucket and present each bucket's TRx with its % of the brand's TRx total, labelled the within-brand mix. A volume axis's buckets sum to the head-line KPI, so the breakdown reconciles with the total (rates don't sum — their numerators/denominators do). When the user names a period ("last year", "Q1 2025"), ALWAYS pass `window` too — it composes with `segment`/`therapy_line` for TRx/NRx/NBRx and conversion rate. Use exactly one axis per breakdown — they are mutually exclusive.
+- HONESTY GUARD: Clinical context is background framing only — never present a clinical sub-population as a data breakdown unless a tool actually returned per-bucket values. Biologic status (`biologic`) and IgE tier (`ige_tier`) are REAL breakdown axes for REMIBRUTINIB ONLY; for Kisqali/Fabhalta `kpi_calculate_tool` returns an error because the data is NULL by design — say it is unavailable for that brand and do NOT fabricate a split or guess. The real breakdown axes are severity tier (`segment`), line-of-therapy (`therapy_line`), biologic status and IgE tier (Remibrutinib only), plus geographic `region` — for TRx share only `region` applies, and a within-brand mix computed from TRx buckets is never a share. TRx Share is the brand's share of the TRACKED PORTFOLIO's prescriptions (Fabhalta + Kisqali + Remibrutinib, cross-indication) — NOT market share vs external competitors; competitor brands (e.g. Xolair, Dupixent) are not in the data model, so NEVER attribute the share complement to named competitors.
 - ROI DISPERSION (#1532): the ROI headline is a pooled point estimate and carries NO interval — never invent one. When the response includes `temporal_variability_band`, present each slice's band as "the range of its monthly ROI values over the past 12 months" with its `n` — it measures recent temporal variability, NOT a confidence interval and NOT uncertainty about the current value; for slices with `band_suppressed: true`, state only the n and that the band is suppressed.
 - SCALE GUARD (#1640): every KPI figure arrives with a `measure_basis` naming the substrate it was computed from. TWO FIGURES ARE COMPARABLE ONLY IF THEIR `measure_basis.comparison_key` MATCHES — that field, not `substrate`. They differ on purpose: a materialized history series is READ from `kpi_history` (its `substrate`) but RESTS on whatever the backfill drew it from (`materialized_from`, reduced to tables in `comparison_key`). Comparing on `substrate` would call a TRx history and an ROI history comparable because both are read from the same table, and would wrongly fence ROI history against stored ROI when both rest on `business_metrics`. If `measure_basis.mixed_sources` is true the series spans more than one substrate and is comparable with NOTHING — say so rather than comparing it. `kpi_calculate_tool` computes volume KPIs from the `treatment_events` ledger; `e2i_data_query_tool(query_type='kpi')` returns stored `business_metrics` rows, whose `value` is a MODELED market-scale level — measured, the national business_metrics TRx total is ~73x the trailing-30-day event count for the same brand. They are different quantities sharing a name. NEVER present one as a check, correction, total, or share-of for the other; never divide or sum across them; and never call the gap a discontinuity or a data error. If an answer needs both, give each its own row with its substrate stated, and say plainly that they measure different things. When a figure carries no `measure_basis`, treat it as NOT comparable rather than assuming it agrees.
 - Use `causal_analysis_tool` for understanding metric drivers. When the user names a treatment/exposure ("rep visits"), query the registry by the USER'S variable phrasing first (e.g. `kpi_name='rep visit'`) before narrowing by outcome/brand or substituting a "closest match" variable; if you do substitute, every headline and confidence claim must name the substituted variable, never the user's.
@@ -5117,6 +5121,8 @@ async def _resolve_chat_identity(authenticated_user: dict, chat_request: ChatReq
         authenticated_user: The user dict from ``require_viewer``.
         chat_request: The request, whose ``user_id`` / ``session_id`` are claims.
 
+    #2119: also finalises the request's session/request ids and binds LLM attribution here.
+
     Returns:
         The authoritative user id to use for all downstream calls.
 
@@ -5131,7 +5137,9 @@ async def _resolve_chat_identity(authenticated_user: dict, chat_request: ChatReq
             detail="Authenticated user identity is missing.",
         )
 
-    return await chat_identity.authorize_chat_identity(token_user_id, chat_request, TESTING_MODE)
+    return await chat_identity.bind_plain_chat_turn(
+        token_user_id, chat_request, TESTING_MODE, get_request_id()
+    )
 
 
 def _resolve_chat_brand(authenticated_user: Dict[str, Any], requested_brand: Optional[str]) -> str:
@@ -5189,13 +5197,8 @@ async def _stream_chat_response(
     try:
         from src.api.routes.chatbot_graph import LATENCY_SPAN_KEY, stream_chatbot
 
-        # Yield session_id first. Identity is the AUTHENTICATED user id
-        # (Finding 1 — never trust request.user_id for identity).
+        # Yield session_id first; bind_plain_chat_turn finalised it (#2119).
         session_id = request.session_id
-        if not session_id:
-            import uuid
-
-            session_id = f"{authenticated_user_id}~{uuid.uuid4()}"
 
         yield f"data: {json.dumps({'type': 'session_id', 'data': session_id})}\n\n"
 
@@ -5444,9 +5447,6 @@ async def stream_chat(
         f"user={authenticated_user_id}, request_id={effective_request_id}"
     )
 
-    # Update the request with the effective request_id
-    chat_request.request_id = effective_request_id
-
     # #1659: every frame below originates from a LangGraph node-completion
     # update, and the orchestrator is ONE node that ainvokes a nested graph — so
     # without a keepalive this body is silent for the whole turn. Measured on
@@ -5514,7 +5514,6 @@ async def chat(
 
     # Phase 1 G08: Use middleware request_id if not provided in body
     effective_request_id = chat_request.request_id or get_request_id() or "unknown"
-    chat_request.request_id = effective_request_id
 
     logger.info(
         f"[Chatbot] Chat request: query={redact_query(chat_request.query)}, "
@@ -5723,8 +5722,6 @@ async def submit_feedback(
         )
 
     try:
-        import os
-
         from supabase import create_client
 
         from src.memory.services.factories import get_async_supabase_client
@@ -5736,8 +5733,7 @@ async def submit_feedback(
 
         if not service_url or not service_key:
             return FeedbackResponse(
-                success=False,
-                error="Server configuration error: missing Supabase credentials",
+                success=False, error="Server configuration error: missing Supabase credentials"
             )
 
         # Resolve the rated message row. Two paths:
@@ -5748,11 +5744,13 @@ async def submit_feedback(
         #      (The old client fabricated an id via parseInt(uuid)||Date.now(),
         #      which either failed this lookup or collided with a real row from
         #      a DIFFERENT session — silently mis-attributed feedback.)
-        # Using service key client to bypass RLS policies.
         session_id = None
         resolved_message_id = request.message_id
         matched_row: Optional[dict] = None
         lookup_error = None
+        # Path (b): gate the CALLER'S session before any message read (#2109).
+        if request.session_id and request.message_id is None:
+            await chat_identity.refuse_foreign_thread(request.session_id, _user.get("id"))
         try:
             service_client = create_client(service_url, service_key)
             if resolved_message_id is not None:
@@ -5868,6 +5866,7 @@ async def submit_feedback(
                 success=False,
                 error=lookup_error or f"Could not find session for message_id {request.message_id}",
             )
+        await chat_identity.refuse_foreign_thread(session_id, _user.get("id"))
 
         # The persisted message row is the authority on attribution (trust
         # boundary — the old client hardcoded agent_name='copilotkit' on every
@@ -5925,12 +5924,11 @@ async def submit_feedback(
                 error="Failed to save feedback - no result returned",
             )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"[Feedback] Error submitting feedback: {e}")
-        return FeedbackResponse(
-            success=False,
-            error=str(e),
-        )
+        return FeedbackResponse(success=False, error=str(e))
 
 
 @router.get("/feedback/stats", summary="Get feedback statistics", operation_id="get_feedback_stats")
