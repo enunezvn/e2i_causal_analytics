@@ -125,19 +125,33 @@ def test_the_showcase_flag_selects_the_synthetic_twins(monkeypatch):
     ],
 )
 @pytest.mark.parametrize(
-    "kpi_id,panel_id",
+    "kpi_id,target",
     [
         ("WS3-BI-005", "WS3-BI-011"),
         ("WS3-BI-006", "WS3-BI-012"),
         ("WS3-BI-007", "WS3-BI-013"),
-        ("WS3-BI-008", "WS3-BI-014"),
+        # ⚠ 008 DOES NOT FOLLOW THE ID MAPPING — OWNER DECISION #14. Its panel
+        # counterpart is the panel SHARE 014, which refuses patient axes itself,
+        # so naming it was a dead-end redirect: the user was sent to a KPI that
+        # also cannot answer. Both shares now point at panel TRx WS3-BI-011,
+        # whose buckets sum to the brand total. And the share branch names its
+        # target by REGISTRY NAME, not by id, so the expectation is the full
+        # name: a fragment ("TRx Panel") would keep matching if the destination
+        # moved again, which is how a substring match gets read as identity.
+        ("WS3-BI-008", "Observed Rx Events - Patient Panel TRx (TRx Panel)"),
     ],
 )
-def test_patient_axes_are_refused_before_any_query_naming_the_panel(kpi_id, panel_id, axis, value):
+def test_patient_axes_are_refused_before_any_query_naming_the_panel(kpi_id, target, axis, value):
     result, calls = _calc(kpi_id, {"brand": "Remibrutinib", axis: value})
     assert calls == []
     assert result.value is None
-    assert panel_id in result.error and axis in result.error
+    assert target in result.error and axis in result.error
+    if kpi_id == "WS3-BI-008":
+        # Its OWN reason, true of business_metrics -- and NOT the panel sentence,
+        # which owner #14 ruled false of 008's substrate.
+        assert "no patient dimension" in result.error, result.error
+        assert "one tracked brand" not in result.error, result.error
+        assert "WS3-BI-014" not in result.error, result.error
 
 
 def test_share_requires_a_brand_and_reads_the_share_key():

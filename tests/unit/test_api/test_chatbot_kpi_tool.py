@@ -453,7 +453,13 @@ async def test_kpi_calculate_tool_unknown_brand_fails_before_calculator(monkeypa
 @pytest.mark.asyncio
 async def test_kpi_calculate_tool_passes_segment_into_context(monkeypatch):
     """A severity-tier filter must reach the calculator under ``context['segment']``
-    (migration 105 -- BusinessImpactCalculator._resolve_windowed_call routes on it)."""
+    (migration 105 -- BusinessImpactCalculator._resolve_windowed_call routes on it).
+
+    ⚠ ASKS FOR THE PANEL KPI SINCE #2114: the axis is threaded for the KPI whose
+    calculator BINDS it, and the lane moved the patient panel to WS3-BI-011..013.
+    Canonical NRx now refuses a patient axis at the tool gate -- pinned over the
+    whole registry in test_chatbot_kpi_axis_gate_1911.py, so it is not re-asserted
+    here. What this file pins is the THREADING, which is KPI-agnostic."""
     import src.api.routes.kpi as kpi_route
     from src.api.routes.chatbot_tools import kpi_calculate_tool
 
@@ -467,7 +473,7 @@ async def test_kpi_calculate_tool_passes_segment_into_context(monkeypatch):
     monkeypatch.setattr(kpi_route, "get_kpi_calculator", lambda: _FakeCalc(), raising=False)
 
     resp = await kpi_calculate_tool.ainvoke(
-        {"kpi_name": "NRx", "brand": "Remibrutinib", "segment": "low_severity"}
+        {"kpi_name": "NRx Panel", "brand": "Remibrutinib", "segment": "low_severity"}
     )
     assert resp["success"] is True
     ctx = captured["context"]
@@ -479,7 +485,7 @@ async def test_kpi_calculate_tool_passes_segment_into_context(monkeypatch):
 @pytest.mark.asyncio
 async def test_kpi_calculate_tool_passes_therapy_line_into_context(monkeypatch):
     """A line-of-therapy filter must reach the calculator under
-    ``context['therapy_line']`` (migration 105). Line 0 is a real, commonly-populated
+    ``context['therapy_line']`` (migration 105, panel KPI since #2114). Line 0 is a real, commonly-populated
     bucket -- the tool threads it with a truthy check on the (non-empty) string, so
     "0" is included, mirroring how the base compute core guards with ``is not None``."""
     import src.api.routes.kpi as kpi_route
@@ -495,7 +501,7 @@ async def test_kpi_calculate_tool_passes_therapy_line_into_context(monkeypatch):
     monkeypatch.setattr(kpi_route, "get_kpi_calculator", lambda: _FakeCalc(), raising=False)
 
     resp = await kpi_calculate_tool.ainvoke(
-        {"kpi_name": "NRx", "brand": "Remibrutinib", "therapy_line": "0"}
+        {"kpi_name": "NRx Panel", "brand": "Remibrutinib", "therapy_line": "0"}
     )
     assert resp["success"] is True
     ctx = captured["context"]
@@ -507,7 +513,7 @@ async def test_kpi_calculate_tool_passes_therapy_line_into_context(monkeypatch):
 @pytest.mark.asyncio
 async def test_kpi_calculate_tool_passes_biologic_into_context(monkeypatch):
     """A biologic-status filter must reach the calculator under
-    ``context['biologic']`` (migration 108 -- Remibrutinib-only axis)."""
+    ``context['biologic']`` (migration 108 -- Remibrutinib-only axis, panel KPI since #2114)."""
     import src.api.routes.kpi as kpi_route
     from src.api.routes.chatbot_tools import kpi_calculate_tool
 
@@ -521,7 +527,7 @@ async def test_kpi_calculate_tool_passes_biologic_into_context(monkeypatch):
     monkeypatch.setattr(kpi_route, "get_kpi_calculator", lambda: _FakeCalc(), raising=False)
 
     resp = await kpi_calculate_tool.ainvoke(
-        {"kpi_name": "NRx", "brand": "Remibrutinib", "biologic": "experienced"}
+        {"kpi_name": "NRx Panel", "brand": "Remibrutinib", "biologic": "experienced"}
     )
     assert resp["success"] is True
     ctx = captured["context"]
@@ -533,7 +539,7 @@ async def test_kpi_calculate_tool_passes_biologic_into_context(monkeypatch):
 @pytest.mark.asyncio
 async def test_kpi_calculate_tool_passes_ige_tier_into_context(monkeypatch):
     """An IgE-tertile filter must reach the calculator under
-    ``context['ige_tier']`` (migration 108 -- Remibrutinib-only axis)."""
+    ``context['ige_tier']`` (migration 108 -- Remibrutinib-only axis, panel KPI since #2114)."""
     import src.api.routes.kpi as kpi_route
     from src.api.routes.chatbot_tools import kpi_calculate_tool
 
@@ -547,7 +553,7 @@ async def test_kpi_calculate_tool_passes_ige_tier_into_context(monkeypatch):
     monkeypatch.setattr(kpi_route, "get_kpi_calculator", lambda: _FakeCalc(), raising=False)
 
     resp = await kpi_calculate_tool.ainvoke(
-        {"kpi_name": "NRx", "brand": "Remibrutinib", "ige_tier": "low"}
+        {"kpi_name": "NRx Panel", "brand": "Remibrutinib", "ige_tier": "low"}
     )
     assert resp["success"] is True
     ctx = captured["context"]

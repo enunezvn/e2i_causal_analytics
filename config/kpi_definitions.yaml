@@ -929,7 +929,9 @@ ws3_business:
       reported. Brands differ in size, so no portfolio-wide target applies
       (threshold intentionally null; the event-era 0.30 target assumed a third
       each). The series is seasonal, but the season cancels in a share.
-      Patient-axis splits live on the patient-panel KPI WS3-BI-014.
+      Patient-axis splits live on the patient-panel KPI WS3-BI-011 (the
+      within-brand mix, whose buckets sum to the brand total). NOT on the panel
+      share WS3-BI-014, which has no patient-axis breakdown of its own.
     tables:
       - business_metrics
     columns:
@@ -1051,7 +1053,11 @@ ws3_business:
     measurement_caveat: >-
       Patient-panel share (treatment_events): a different quantity from the
       canonical TRx Share (WS3-BI-008) because the panel seeds the three
-      brands evenly; never compare the two. Carries the patient axes.
+      brands evenly; never compare the two. Carries NO patient axis: every
+      patient is on exactly one tracked brand, so a share within a severity or
+      line-of-therapy bucket divides one indication's prescriptions by another
+      indication's patients, and on the Remibrutinib-only biologic/IgE axes it is
+      identically 100%. Ask for panel TRx (WS3-BI-011) by the axis instead.
     tables:
       - treatment_events
     columns:
