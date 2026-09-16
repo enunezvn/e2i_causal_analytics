@@ -29,6 +29,7 @@ from src.agents.causal_impact.nodes._compute_budget import (
     ComputeBudgetExpired,
     run_bounded_with_budget,
 )
+from src.agents.causal_impact.nodes._dowhy_order import pin_adjustment_order
 from src.agents.causal_impact.nodes.sensitivity_inputs import (
     sensitivity_benchmark_inputs as _sensitivity_benchmark_inputs,
 )
@@ -602,9 +603,7 @@ def _build_dowhy_estimate(
         # adjustment set — that stays fail-closed by design.
         effective_common_causes = common_causes
         if common_causes:
-            from src.agents.causal_impact.nodes.estimation import (
-                _encode_categorical_covariates,
-            )
+            from src.agents.causal_impact.nodes.estimation import _encode_categorical_covariates
 
             encoded_covariates = _encode_categorical_covariates(data[common_causes])
             if list(encoded_covariates.columns) != list(common_causes):
@@ -626,9 +625,9 @@ def _build_dowhy_estimate(
             effect_modifiers=effective_common_causes if effective_common_causes else None,
         )
         identified_estimand = model.identify_effect(proceed_when_unidentifiable=True)
-        # Build the estimate using the SAME method that produced the reported
-        # ATE (resolved above). Refuters now critique the actual reported
-        # estimate, not a separately-fitted linear regression.
+        pin_adjustment_order(identified_estimand, list(effective_common_causes))  # #2084
+        # Build the estimate using the SAME method that produced the reported ATE (resolved
+        # above). Refuters critique the actual reported estimate, not a separate regression.
         # DoWhy 0.14 + EconML 0.16: for a string econml method_name, DoWhy's
         # EconML wrapper does ``estimator_class(**kwargs["init_params"])`` with a
         # *direct* key access (dowhy/causal_estimators/econml.py), so omitting
@@ -678,6 +677,7 @@ def _build_dowhy_estimate(
             method_name=dowhy_method,
             method_params={"init_params": init_params, "fit_params": {}},
             test_significance=False,
+            effect_modifiers=effective_common_causes if effective_common_causes else None,  # #2084
         )
     except Exception as exc:  # noqa: BLE001 — fail-closed wrapper
         raise RefutationError(
