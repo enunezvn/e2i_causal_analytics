@@ -93,10 +93,10 @@ MAX_CHANCE_SEEDS = 1  # undeclared candidate / adjusted control: <= 1/6 (alpha 0
 # s123 +0.0663, s2024 +0.0728, s99 +0.0501 (CI touches 0), s314 +0.0606 -> 5/6;
 # at rho 0 the same fits read 0/6 (+0.041, the #2031 record). It stays UNDECLARED on
 # purpose: the registry is keyed by treatment, not brand, and Kisqali / Fabhalta rows
-# carry no UAS7, so their generator output is byte-identical (verified on all 50
-# columns) and this pair still cannot move there; a pooled cohort dilutes it to the
-# Remibrutinib third. A global declaration would put a control that cannot respond on
-# two brands -- the false assurance #2031 removed. Undeclared,
+# carry no UAS7; measured on their own seed-21 frames the same omitted fits read
+# Kisqali 0/6 (+0.015..+0.031) and Fabhalta 0/6 (+0.005..+0.026), pinned below. A
+# global declaration would put a control that cannot respond on two brands -- the
+# false assurance #2031 removed. Undeclared,
 # the runner emits SKIPPED no_negative_control_declared: an honest null.
 REMI_ONLY_RESPONDERS = {("rep_detailing_high", "persistent_180d")}
 # The recorded omitted-fit movement per declared control: the 6-SEED MEAN at
@@ -386,7 +386,7 @@ def test_undeclared_arms_are_absent_because_their_controls_do_not_respond(scored
     # Both halves: the recorded pair really does respond here (so the exception is not
     # hiding a stale claim), and every other undeclared candidate still does not.
     assert len(remi_only) == len(REMI_ONLY_RESPONDERS), _undeclared_table(rows)
-    assert all(r["responding_seeds"] > MAX_CHANCE_SEEDS for r in remi_only), _undeclared_table(
+    assert all(r["responding_seeds"] >= MIN_RESPONDING_SEEDS for r in remi_only), _undeclared_table(
         remi_only
     )
     responders = [
@@ -408,3 +408,21 @@ def test_undeclared_arms_are_absent_because_their_controls_do_not_respond(scored
             + _undeclared_table([r for r in rows if r["arm"] == arm])
             + "); a control that cannot move under confounding is false assurance"
         )
+
+
+@pytest.mark.parametrize("brand", ["Kisqali", "Fabhalta"])
+def test_remi_only_responders_do_not_respond_on_the_other_brands(brand):
+    """Codex r5: the exception above rests on the pair NOT responding off-Remibrutinib;
+    measure it on each brand's own frame (same seed, n, DGP) instead of inferring it."""
+    from src.ml.synthetic.config import Brand, DGPType
+    from src.ml.synthetic.generators import GeneratorConfig, PatientGenerator
+
+    df = PatientGenerator(
+        GeneratorConfig(
+            seed=21, n_records=N_ROWS, brand=Brand(brand), dgp_type=DGPType.HETEROGENEOUS
+        )
+    ).generate()
+    for arm, outcome in sorted(REMI_ONLY_RESPONDERS):
+        fits = {s: fit_omitted(df, arm, outcome, s) for s in SEEDS}
+        responding = sum(excludes_zero(ci) for _, ci in fits.values())
+        assert responding <= MAX_CHANCE_SEEDS, (brand, arm, outcome, _seeds_fmt(fits))
