@@ -534,3 +534,67 @@ class TestTwinRepository:
 
             mock_list.assert_called_once_with(TwinType.HCP, "Kisqali")
             assert len(result) == 1
+
+
+class TestStoredSubgroupsBasis:
+    """How a stored row's effect_heterogeneity was computed (#2104 item 3).
+
+    The stored JSON is never rewritten; the detail read ANNOTATES it. Post-#2097 the cohort
+    estimator declares region alone and the engine writes ``{}`` for every other axis, so a
+    cohort-provenance row with a populated non-region axis can only predate #2097: its
+    subgroups averaged region CATEs over the generated twins and its confidence was scored
+    on twin count. No created_at cutoff is needed.
+    """
+
+    @staticmethod
+    def _row(provenance, **axes):
+        from src.digital_twin.effect.estimate import PROVENANCE_COHORT
+
+        eh = {"by_specialty": {}, "by_decile": {}, "by_region": {}, "by_adoption_stage": {}}
+        eh.update(axes)
+        return {
+            "data_provenance": (PROVENANCE_COHORT if provenance == "cohort" else provenance),
+            "effect_heterogeneity": eh,
+        }
+
+    def test_cohort_row_with_a_non_region_axis_is_twin_weighted_legacy(self):
+        from src.digital_twin.twin_repository import StoredSubgroupsBasis
+
+        row = self._row(
+            "cohort",
+            by_region={"northeast": {"ate": 0.1, "std": 0.0, "n": 900}},
+            by_specialty={"oncology": {"mean": 0.05, "std": 0.01, "n": 12}},
+        )
+        assert StoredSubgroupsBasis.from_row(row) is StoredSubgroupsBasis.TWIN_WEIGHTED_LEGACY
+
+    def test_cohort_row_with_region_only_is_cohort_rows(self):
+        from src.digital_twin.twin_repository import StoredSubgroupsBasis
+
+        row = self._row("cohort", by_region={"northeast": {"ate": 0.1, "std": 0.0, "n": 900}})
+        assert StoredSubgroupsBasis.from_row(row) is StoredSubgroupsBasis.COHORT_ROWS
+
+    def test_synthetic_row_is_per_twin_even_with_every_axis_populated(self):
+        from src.digital_twin.effect.estimate import PROVENANCE_SYNTHETIC
+        from src.digital_twin.twin_repository import StoredSubgroupsBasis
+
+        row = self._row(
+            PROVENANCE_SYNTHETIC,
+            by_specialty={"oncology": {"mean": 0.05, "std": 0.01, "n": 12}},
+            by_adoption_stage={"laggard": {"mean": 0.04, "std": 0.02, "n": 30}},
+        )
+        assert StoredSubgroupsBasis.from_row(row) is StoredSubgroupsBasis.PER_TWIN
+
+    def test_row_without_provenance_is_unknown(self):
+        from src.digital_twin.twin_repository import StoredSubgroupsBasis
+
+        assert StoredSubgroupsBasis.from_row(self._row(None)) is StoredSubgroupsBasis.UNKNOWN
+        assert StoredSubgroupsBasis.from_row({}) is StoredSubgroupsBasis.UNKNOWN
+
+    def test_legacy_axes_are_every_subgroup_axis_but_region(self):
+        """Drift pin: when a lane makes another axis legitimate on the cohort path (specialty,
+        #2104 item 2) it edits this one constant; the legacy rows stay recognised through
+        by_adoption_stage, which exists in no table and can never be declared."""
+        from src.digital_twin.effect.estimate import SUBGROUP_AXES
+        from src.digital_twin.twin_repository import LEGACY_TWIN_WEIGHTED_AXES
+
+        assert set(LEGACY_TWIN_WEIGHTED_AXES) == set(SUBGROUP_AXES) - {"region"}
