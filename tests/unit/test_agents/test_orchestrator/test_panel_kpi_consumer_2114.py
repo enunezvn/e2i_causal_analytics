@@ -654,14 +654,115 @@ def test_period_and_causal_right_heads_still_bind(query, expected_id, why, causa
     assert causal_registry, f"{query!r} never reached the registry; {why}"
 
 
-def test_a_period_right_head_is_accepted_even_when_a_noun_follows_it(causal_registry):
-    """A KNOWN AND DELIBERATE LIMIT, pinned so it is a decision rather than a surprise.
+def test_a_period_right_head_no_longer_licenses_the_noun_behind_it(causal_registry):
+    """11f REVERSES the limit 11e pinned here one commit earlier, and the reversal is the
+    point of the test.
 
-    "what drives NRx panel q3 performance?" BINDS, because the rule reads only the token
-    immediately after the mention and that token is a period token. One could argue the ask
-    is about "performance". Accepting it is the deliberate choice: the alternative refuses
-    "what drives NRx panel q3?" too, and OVER-REFUSAL is the worse failure here — the mirror
-    of 11a's "mask more", which destroyed five legitimate refusals. Revisit only with a
-    measured case where this costs a real answer."""
-    assert _causal_kpi_id("what drives NRx panel q3 performance?") == "WS3-BI-012"
+    11e pinned "what drives NRx panel q3 performance?" as BINDING, on the reasoning that
+    refusing it would also refuse "what drives NRx panel q3?" and that over-refusal was the
+    worse failure. Both halves were wrong. The second is wrong on this lane's own severity
+    ordering (fail-open outranks fail-closed). The FIRST is wrong on the facts: the two cases
+    are separable, because a period token can be CONSUMED and the decision deferred to what
+    follows it — "q3" then end-of-string binds, "q3" then an open-class noun refuses.
+
+    And the limit was never one row. I pinned the mildest instance available — "performance"
+    is a vague noun — so the pin never tested a sharp one. Measured on 1ef6cdf3c, the same
+    branch bound "month cost", "quarter forecast", "year target" and "2026 revenue": the
+    defect's OWN nouns, reachable through any period token. The pin was concealing a hole of
+    the same class as the defect the commit it shipped in was closing."""
+    assert _causal_kpi_id("what drives NRx panel q3 performance?") is None
+    assert causal_registry == []
+
+
+# --- 11f: the period branch must LOOP, not accept ------------------------------------------
+# 11e accepted a period right-head unconditionally, whatever stood behind it. The fix walks
+# the tail instead: consume period tokens, and consume a determiner ONLY when a period token
+# follows it, then decide on the first token that is neither.
+#
+# ⚠ THE WALK MUST NOT CONSUME PREPOSITIONS, and that is the whole difference between this fix
+# and an over-refusing one. A preposition OPENS A SCOPE PHRASE whose object is an ordinary
+# noun — "for Kisqali", "in the west region", "by severity". Consuming it and then testing its
+# object would refuse the entire battery below. A determiner does not open a phrase; it
+# modifies the period noun ("last quarter", "this year"), so the compound head is still ahead.
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        # a SHARP noun behind one period token — the defect's own vocabulary
+        "what drives NRx panel month cost?",
+        "what drives TRx quarter forecast?",
+        "what drives NRx panel year target?",
+        "what drives NRx panel 2026 revenue?",
+        "what drives TRx q3 accuracy?",
+        # CHAINED period tokens — a single-step recursion would accept these
+        "what drives NRx panel q3 2026 cost?",
+        "what drives TRx h1 2026 forecast?",
+        # a determiner AHEAD of the period token — the other chained shape
+        "what drives NRx panel last quarter cost?",
+        "what drives TRx this year forecast?",
+        "what drives NRx panel next quarter target?",
+        "what drives NRx panel the q3 uplift?",
+    ],
+)
+def test_a_noun_behind_a_period_chain_still_fails_closed(query, causal_registry):
+    """The period token defers the decision; it does not license what stands behind it."""
+    assert _causal_kpi_id(query) is None, f"{query!r} bound an outcome"
+    assert causal_registry == [], f"{query!r} consulted the registry; that is not a refusal"
+
+
+@pytest.mark.parametrize(
+    "query,expected_id,why",
+    [
+        ("what drives NRx panel q3?", "WS3-BI-012", "period then end-of-string"),
+        ("what drives NRx panel q3 2026?", "WS3-BI-012", "period chain then end-of-string"),
+        ("what drives TRx h1 2026?", "WS3-BI-005", "period chain then end-of-string"),
+        ("what drives NRx panel q3 and q4?", "WS3-BI-012", "period then a conjunction"),
+        ("what drives NRx panel q3 drivers?", "WS3-BI-012", "period then a causal head"),
+        ("what drives NRx panel month over month?", "WS3-BI-012", "period then a preposition"),
+        ("what drives NRx panel 2026 vs 2025?", "WS3-BI-012", "period then a comparison"),
+        ("what drives NRx panel last quarter?", "WS3-BI-012", "determiner then period, then EOS"),
+        ("what drives TRx this year?", "WS3-BI-005", "determiner then period, then EOS"),
+        ("what drives NRx panel in Q3 2026?", "WS3-BI-012", "preposition — never reaches the walk"),
+        ("what drives NRx panel this brand?", "WS3-BI-012", "determiner NOT before a period token"),
+    ],
+)
+def test_the_period_walk_does_not_over_refuse(query, expected_id, why, causal_registry):
+    """THE OVER-REFUSAL GUARD FOR THE WALK ITSELF. Every row here binds on 1ef6cdf3c too, so
+    it constrains the fix rather than describing it. The last two are the ones that fail if
+    the walk consumes function words indiscriminately."""
+    assert _causal_kpi_id(query) == expected_id, f"{query!r}; {why}"
+    assert causal_registry, f"{query!r} never reached the registry; {why}"
+
+
+def test_every_period_modifier_is_already_a_binding_token():
+    """THE WALK MAY ONLY EVER REFUSE MORE, NEVER BIND MORE — pinned, not left to inspection.
+
+    The single-token rule bound on any function word. The walk steps over a modifier when a
+    period token follows, and could therefore run off the end and BIND something that used to
+    refuse — but only if a modifier were not already a binding token. This subset relation is
+    what forecloses that, so it is an invariant of the design and not a tidy coincidence."""
+    from src.agents.orchestrator.nodes.kpi_mentions import (
+        _PERIOD_MODIFIERS,
+        _RIGHT_HEAD_FUNCTION_WORDS,
+    )
+
+    assert _PERIOD_MODIFIERS <= _RIGHT_HEAD_FUNCTION_WORDS, sorted(
+        _PERIOD_MODIFIERS - _RIGHT_HEAD_FUNCTION_WORDS
+    )
+
+
+def test_a_preposition_behind_a_period_token_still_binds(causal_registry):
+    """A MEASURED RESIDUAL LIMIT, pinned sharply this time rather than by its mildest case.
+
+    "time" is a period token, so "what drives NRx panel time to fill?" consumes it, meets the
+    preposition "to" and BINDS — although "time to fill" is a metric name, not a scope. The
+    walk stops at prepositions by design (see the battery), so closing this would mean
+    deciding that a preposition behind a period token reads differently from one directly
+    after the mention, and that would also refuse "what drives TRx time to date?".
+
+    Stated as what it is: a narrower hole of the same class, left open deliberately, with the
+    sharp case named rather than a vague one. Unlike 11e's pin, this one is NOT load-bearing
+    for any battery row — it can be closed later without reversing anything here."""
+    assert _causal_kpi_id("what drives NRx panel time to fill?") == "WS3-BI-012"
     assert causal_registry
