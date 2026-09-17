@@ -42,10 +42,30 @@ def _sql() -> str:
 
 
 def test_every_column_pair_is_renamed():
+    """The TABLE renames must be STATIC, the VIEW renames may be dynamic.
+
+    The three table renames were deliberately un-loop-ed: a dynamic
+    ``EXECUTE format('... RENAME COLUMN %I TO %I', ...)`` hides the column names
+    behind placeholders, and the hermetic Feast guard
+    (tests/unit/test_feature_repo/test_data_sources_columns_exist.py) models the
+    canonical schema by TEXT-PARSING these files. Under the dynamic form it still
+    believed business_metrics carried trx_count/nrx_count/total_rx_count and
+    reported the renamed Feast source columns as "absent". So assert the literal
+    static statements, not a placeholder: that text IS the contract the static
+    reader consumes. The view pair literals stay because the view loop is still
+    dynamic and no static reader models view columns.
+    """
     sql = _sql()
     for old, new in RENAMES.items():
-        assert f"['{old}', '{new}']" in sql, old
-    assert "ALTER TABLE public.business_metrics RENAME COLUMN %I TO %I" in sql
+        assert f"['{old}', '{new}']" in sql, f"view-loop pair literal missing for {old}"
+        assert f"ALTER TABLE public.business_metrics RENAME COLUMN {old} TO {new};" in sql, (
+            f"the {old} table rename is not statically declared — a dynamic rename is "
+            "invisible to the Feast guard's text parser"
+        )
+    assert "ALTER TABLE public.business_metrics RENAME COLUMN %I TO %I" not in sql, (
+        "a table rename went back to the dynamic form; keep committed table renames "
+        "statically declarable"
+    )
 
 
 def test_every_split_view_output_column_is_renamed():
@@ -67,9 +87,14 @@ def test_every_rename_is_inside_an_existence_guard():
     unguarded rename is exactly what makes a re-run raise instead of no-op.
     """
     sql = _sql()
-    renames = len(re.findall(r"EXECUTE format\('ALTER (?:TABLE|VIEW)[^']*RENAME COLUMN", sql))
+    dynamic = len(re.findall(r"EXECUTE format\('ALTER (?:TABLE|VIEW)[^']*RENAME COLUMN", sql))
+    static = len(re.findall(r"^\s*ALTER TABLE [^;]*RENAME COLUMN ", sql, re.M))
     guards = len(re.findall(r"IF EXISTS \(\s*\n\s*SELECT 1 FROM information_schema\.columns", sql))
-    assert renames == 2, f"expected the two loop bodies to carry one RENAME each, got {renames}"
+    renames = dynamic + static
+    # PostgreSQL has no RENAME COLUMN IF EXISTS, so idempotency is carried by an
+    # explicit guard per rename: three static table renames + the one view-loop body.
+    assert static == len(RENAMES), f"expected {len(RENAMES)} static table renames, got {static}"
+    assert dynamic == 1, f"expected exactly the view loop to rename dynamically, got {dynamic}"
     assert guards >= renames, f"{renames} renames but only {guards} existence guards"
 
 
