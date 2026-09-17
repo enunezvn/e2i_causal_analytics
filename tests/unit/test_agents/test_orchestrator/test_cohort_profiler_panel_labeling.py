@@ -79,8 +79,68 @@ def test_the_routing_contract_names_the_panel():
     assert "threshold-filtered TRx volume only" not in text
 
 
+#: Every document that DECLARES what this agent measures. A contract doc is read by
+#: people and by routing benchmarks, so a false substrate claim here outlives the code.
+_CONTRACT_DOCS = (
+    "scripts/benchmarks/routing/data/agent_contracts.json",
+    "src/agents/cohort_profiler/CONTRACT_VALIDATION.md",
+    ".claude/contracts/tier0/cohort_profiler.md",
+)
+#: Matches the claim however it is hyphenated or possessive. codex iter1 HIGH: the
+#: earlier check grepped the single literal "platform TRx KPI", which MISSED
+#: "platform TRx-KPI substrate" in CONTRACT_VALIDATION.md -- a proxy for the question
+#: rather than the question. Ask what the sentence CLAIMS, not how it is spelled.
+_PLATFORM_TRX_CLAIM = re.compile(r"platform(?:'s)?[ \-‑]TRx", re.IGNORECASE)
+
+
+@pytest.mark.parametrize("rel", _CONTRACT_DOCS)
+def test_no_contract_document_claims_the_platform_trx_substrate(rel):
+    """After the lane the platform TRx is the canonical business_metrics series, which
+    has NO per-HCP grain. Any document still tying this agent's per-HCP counts to it
+    asserts an equivalence that is false by ~1,300x."""
+    path = REPO / rel
+    assert path.exists(), rel
+    hits = [
+        (i, line.strip()[:140])
+        for i, line in enumerate(path.read_text().splitlines(), 1)
+        if _PLATFORM_TRX_CLAIM.search(line)
+    ]
+    assert hits == [], f"{rel} still claims the platform-TRx substrate: {hits}"
+
+
+@pytest.mark.parametrize("rel", _CONTRACT_DOCS)
+def test_no_contract_document_still_names_the_canonical_nrx_for_this_agent(rel):
+    """``_NRX_KPI_ID`` moved to the patient-panel WS3-BI-012; a contract that still
+    says WS3-BI-006 describes a path the code no longer takes."""
+    text = (REPO / rel).read_text()
+    assert agent._NRX_KPI_ID == "WS3-BI-012", "premise changed — re-derive this guard"
+    assert "WS3-BI-006" not in text, f"{rel} still names the canonical NRx WS3-BI-006"
+
+
+def test_no_contract_document_says_per_hcp_trx_without_naming_the_panel(rel=None):
+    """``per-HCP TRx`` with no ``Panel`` is the two-scales phrasing this lane retires."""
+    offenders = {}
+    for rel in _CONTRACT_DOCS:
+        bad = [
+            (i, line.strip()[:140])
+            for i, line in enumerate((REPO / rel).read_text().splitlines(), 1)
+            if re.search(r"per-HCP TRx(?! Panel)", line)
+        ]
+        if bad:
+            offenders[rel] = bad
+    assert offenders == {}, offenders
+
+
 def test_no_basis_refusal_remains():
-    """Codex r6: detection never changes what executes, so no refusal path or basis field exists."""
+    """A STANDING PROHIBITION on a rejected design — not a lane-regression guard.
+
+    Codex r6 rejected a basis-refusal path: detection never changes what executes, so
+    no refusal branch or ``volume_basis`` field may exist. codex iter1 LOW correctly
+    observed that this passes on ``origin/main`` too, because the rejected design was
+    never shipped anywhere. That is the POINT and not a defect: its job is to stop the
+    rejected option being introduced later, the way a lint rule does. Recorded
+    explicitly so nobody "fixes" it by deleting it after finding it has no lane teeth.
+    """
     assert not hasattr(agent.CohortProfilerAgent, "_basis_unavailable")
     assert not hasattr(ask, "AMBIGUOUS_BASIS_CLARIFICATION")
     assert "volume_basis" not in inspect.getsource(ask) + _source()

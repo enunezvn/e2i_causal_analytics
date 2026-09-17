@@ -62,6 +62,23 @@ def _ask(**kwargs):
     return asyncio.run(chatbot_tools.e2i_data_query_tool.ainvoke(args))
 
 
+def test_the_model_visible_tool_description_matches_what_the_tool_now_does():
+    """codex iter1 HIGH: Task 15A landed LAST and left the SHIPPED contract describing
+    pre-15A behaviour.
+
+    ``StructuredTool.description`` is what the routing model actually reads, so it is
+    asserted here rather than the source docstring — a docstring test would pass on a
+    tool whose description was built some other way. Before 15A the tool returned raw
+    stored rows and NBRx really was unavailable; saying so now both misroutes the model
+    away from a tool that answers correctly, and re-tells the two-shape story this lane
+    exists to retire.
+    """
+    description = chatbot_tools.e2i_data_query_tool.description
+    for stale in ("raw stored rows", "not materialized here"):
+        assert stale not in description, f"stale pre-15A claim in the tool description: {stale!r}"
+    assert "canonical" in description.lower()
+
+
 def test_last_7_days_on_sep_15_refuses_the_august_headline(monkeypatch):
     calc = _world(monkeypatch, date(2026, 9, 15), "2026-08-01")
     out = _ask(time_range="last_7_days")

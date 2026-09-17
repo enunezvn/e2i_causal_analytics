@@ -506,12 +506,12 @@ async def _query_kpis(
     since: datetime,
     limit: int,
 ) -> Dict[str, Any]:
-    """Query KPI metrics from business_metrics table (newest first, windowed).
+    """The volume family answers as the canonical aggregate; every other KPI as rows.
 
-    Synthetic provenance rides the SSOT deployment gate inside
-    ``apply_provenance_filter`` (showcase instances include synthetic rows,
-    real-mode deployments exclude them); ``data_source`` labels the answer
-    honestly either way (kpi_calculate_tool precedent).
+    TRx/NRx/NBRx/TRx share route to ``canonical_volume_stored_rows`` (Task 15A) so one
+    KPI is never answered at two shapes; the rest return stored business_metrics rows,
+    newest first. Synthetic provenance rides the SSOT gate in ``apply_provenance_filter``;
+    ``data_source`` labels the answer honestly either way (kpi_calculate_tool precedent).
     """
     try:
         filters: Dict[str, Any] = {}
@@ -1027,11 +1027,11 @@ async def e2i_data_query_tool(
     Query E2I analytics data across multiple data types.
 
     This tool provides unified access to ALL E2I analytics data including:
-    - KPIs: STORED snapshot rows from business_metrics. For a COMPUTED KPI VALUE
-      for a brand (e.g. "what is the NBRx/NRx/TRx/market share for Kisqali?"),
-      prefer ``kpi_calculate_tool`` — it resolves the KPI definition and calculates
-      from the real substrate, whereas this returns the raw stored rows (and 0 for
-      a derived KPI like NBRx that is not materialized here).
+    - KPIs: TRx / NRx / NBRx / TRx share return the CANONICAL aggregate — the
+      latest complete calendar month, regions summed — the SAME figure
+      ``kpi_calculate_tool`` gives; ``time_range`` is a lookback that gates it,
+      never a reporting window. Any other kpi_name returns stored business_metrics
+      rows. For an explicit reporting window use ``kpi_calculate_tool(window=...)``.
     - Causal chains: Discovered cause-effect relationships
     - Agent analyses: Outputs from the 22-agent system
     - Triggers: Alerts and explanations for metric changes
