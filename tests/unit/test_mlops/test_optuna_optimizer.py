@@ -51,6 +51,11 @@ def disable_optuna_storage(monkeypatch, request):
     if "use_real_optuna_storage_config" in request.fixturenames:
         return
 
+    # Production gives this explicit operator setting precedence over config.
+    # Ordinary unit tests must not inherit a developer/CI backend by accident;
+    # the environment-precedence tests set their own value after this fixture.
+    monkeypatch.delenv("OPTUNA_STORAGE_URL", raising=False)
+
     import src.mlops.optuna_optimizer as optuna_module
 
     # Cache the original function
