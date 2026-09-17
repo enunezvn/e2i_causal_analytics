@@ -377,6 +377,17 @@ def test_upgrade_base_gets_every_tool_the_pre_migration_schema_can_hold(clone_db
     assert db.rows("select count(*) from tool_dependencies") == [str(len(expected_deps))]
 
 
+def test_upgrade_base_sync_raises_on_anything_but_a_schema_refusal(clone_db):
+    """Only a tool the schema itself refuses may be left out. An error that is not a refusal of
+    that tool's row (here: the RPC is missing) aborts, and nothing reduced is committed."""
+    db = clone_db("sync_not_a_refusal")
+    _empty_registry(db)
+    db.execute("alter function sync_tool_registry(jsonb, jsonb, integer) rename to zz_moved_away")
+    with pytest.raises(_pg.DbFixtureError, match=r"not a schema refusal \(42883\)"):
+        _pg.sync_registry_from_code(db, drop_rejected=True)
+    assert db.rows("select count(*) from tool_registry") == ["0"]
+
+
 def test_deployed_template_is_the_base_plus_exactly_the_pending_migrations(
     base_db, deployed_db, pending_migrations
 ):

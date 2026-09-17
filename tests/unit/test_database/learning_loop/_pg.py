@@ -854,6 +854,11 @@ def _sync_call(
     return counts
 
 
+#: SQLSTATE classes a schema refuses a row with: 22 data exception (an enum value the schema does
+#: not have yet), 23 integrity constraint violation (a CHECK not yet widened).
+_SCHEMA_REFUSAL_CLASSES = ("22", "23")
+
+
 def sync_registry_from_code(conn: PgConn, *, drop_rejected: bool = False) -> Any:
     """The DB tool registry rebuilt the way production builds it: the app's own payload
     (``build_sync_payload``) through ``sync_tool_registry``. No prod data rows.
@@ -863,10 +868,18 @@ def sync_registry_from_code(conn: PgConn, *, drop_rejected: bool = False) -> Any
 
     ``drop_rejected`` is for the base in upgrade mode only, and returns ``(counts, rejected)``.
     Production applies the pending migrations BEFORE the new code syncs, so a tool that needs one
-    of them (a new enum value, a widened CHECK) was never in the pre-upgrade registry. Each such
-    tool is found by a trial sync rolled back, and left out with its dependencies; every tool the
-    pre-migration schema accepts is written. The deployed template then syncs the full payload
-    after the migrations, and that one may not drop anything.
+    of them (a new enum value, a widened CHECK) was never in the pre-upgrade registry. When the
+    full sync is refused, each tool is synced ALONE in a rolled-back transaction; only a tool
+    whose own row the schema refuses (SQLSTATE class 22 or 23) is left out, with its
+    dependencies. Any other error, alone or in the final sync of the accepted tools, raises and
+    commits nothing. The deployed template then syncs the full payload after the migrations,
+    and may drop nothing.
+
+    KNOWN LIMIT (#2065, owner decision pending): the pre-upgrade registry is the NEW code's rows,
+    not the previous release's. A pending migration that meets a tool whose category changed, or
+    a removal the startup sync would refuse (MAX_DEPRECATIONS), is not rehearsed as prod meets
+    it. The rows that faithfully are "before this deploy" are prod's own, which this fixture
+    does not copy by design.
     """
     import psycopg
 
@@ -878,28 +891,37 @@ def sync_registry_from_code(conn: PgConn, *, drop_rejected: bool = False) -> Any
         names = {t["name"] for t in kept}
         return [d for d in dependencies if d["consumer"] in names and d["producer"] in names]
 
+    def is_schema_refusal(exc: psycopg.Error) -> bool:
+        return (exc.sqlstate or "")[:2] in _SCHEMA_REFUSAL_CLASSES
+
     try:
         counts = _sync_call(conn, tools, dependencies, commit=True)
         rejected: List[str] = []
     except psycopg.Error as exc:
         if not drop_rejected:
             raise DbFixtureError(f"sync_tool_registry refused the code's payload: {exc}") from exc
-        accepted: List[Dict[str, Any]] = []
+        if not is_schema_refusal(exc):
+            raise DbFixtureError(
+                f"sync_tool_registry failed, not a schema refusal ({exc.sqlstate}): {exc}"
+            ) from exc
         rejected = []
         for tool in tools:
-            trial = accepted + [tool]
             try:
-                _sync_call(conn, trial, deps_among(trial), commit=False)
-            except psycopg.Error:
+                _sync_call(conn, [tool], [], commit=False)
+            except psycopg.Error as alone:
+                if not is_schema_refusal(alone):
+                    raise DbFixtureError(
+                        f"trial sync of {tool['name']} failed, not a schema refusal "
+                        f"({alone.sqlstate}): {alone}"
+                    ) from alone
                 rejected.append(tool["name"])
-                continue
-            accepted.append(tool)
+        accepted = [t for t in tools if t["name"] not in rejected]
         try:
             counts = _sync_call(conn, accepted, deps_among(accepted), commit=True)
         except psycopg.Error as again:
             raise DbFixtureError(
-                f"sync_tool_registry refused even the {len(accepted)} tools it accepted one by "
-                f"one: {again}"
+                f"sync_tool_registry refused the {len(accepted)} tools the schema accepts one "
+                f"by one, so the refusal is not one tool's row: {again}"
             ) from again
     if not isinstance(counts, dict):
         raise DbFixtureError(f"sync_tool_registry returned {counts!r}")
