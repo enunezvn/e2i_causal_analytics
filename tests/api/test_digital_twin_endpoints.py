@@ -94,6 +94,8 @@ def validate_request():
 @pytest.fixture
 def mock_simulation_result():
     """Mock simulation result object."""
+    from src.digital_twin.models.simulation_models import EffectHeterogeneity
+
     result = MagicMock()
     result.simulation_id = UUID("550e8400-e29b-41d4-a716-446655440000")
     result.model_id = UUID("660e8400-e29b-41d4-a716-446655440000")
@@ -125,6 +127,9 @@ def mock_simulation_result():
     result.cohort_ate = None
     result.cohort_ci_lower = None
     result.cohort_ci_upper = None
+    # Keep the response boundary honest: production returns this domain model,
+    # and the API intentionally rejects unconstrained MagicMock values.
+    result.effect_heterogeneity = EffectHeterogeneity()
     return result
 
 

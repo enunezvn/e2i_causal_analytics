@@ -1666,12 +1666,12 @@ async def test_simulate_save_path_uses_injected_client(mock_twin_generator, mock
     fake_client, chain = _fake_supabase_client()
 
     # The REAL SimulationRepository.save_simulation serializes the result; give
-    # the mocked engine result JSON-able population_filters / heterogeneity so
-    # the save reaches the injected client instead of raising on None.to_dict().
+    # the mocked engine result JSON-able population_filters so the save reaches
+    # the injected client instead of raising on None.to_dict(). The shared
+    # fixture already supplies a real EffectHeterogeneity domain value.
     result = mock_simulation_engine.simulate.return_value
     result.population_filters = MagicMock()
     result.population_filters.to_dict.return_value = {}
-    result.effect_heterogeneity.model_dump.return_value = {}
     result.memory_usage_mb = 0.0
 
     # This test targets the SAVE path; bypass model resolution/loading (covered by
