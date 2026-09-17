@@ -74,8 +74,53 @@ def _executable_sql(text: str | None = None) -> str:
 
 def _strip_comments(text: str) -> str:
     """Drop ``--`` line comments. See :func:`_executable_sql` for why every refusal
-    is asked of the executable text rather than the raw file."""
-    return re.sub(r"--.*$", "", text, flags=re.M)
+    is asked of the executable text rather than the raw file.
+
+    Quote-aware, because PostgreSQL is: inside a string literal ``--`` is CONTENT,
+    not a comment. codex iter6 HIGH-1 -- the previous ``re.sub(r"--.*$", ...)`` ran
+    before anything knew where literals were, so it deleted text the server keeps and
+    the allowlist then parsed a DIFFERENT PROGRAM from the one that would execute.
+    The payload below reduced to a single approved COMMENT statement, with
+    ``_unapproved_statements`` returning ``[]``, while PostgreSQL really did drop the
+    table (confirmed in a rollback-only live probe)::
+
+        COMMENT ON COLUMN public.business_metrics.trx_count IS 'safe -- harmless';
+        DROP TABLE pg_temp.codex_allowlist_probe;
+        SELECT ';
+        -- ';
+
+    It also mangled a LEGITIMATE comment containing ``--``, so the bug could fail a
+    correct file as easily as pass a hostile one.
+
+    This is the same defect I had already fixed one round earlier for ``;`` inside a
+    literal, and did not generalise: **anything that decides what is code and what is
+    text has to make that decision in ONE pass.** Two passes that disagree about where
+    the literals are will always be walkable.
+    """
+    out: list[str] = []
+    i = 0
+    in_str = False
+    while i < len(text):
+        ch = text[i]
+        if in_str:
+            if ch == "'" and text[i + 1 : i + 2] == "'":  # '' is an escaped quote
+                out.append("''")
+                i += 2
+                continue
+            if ch == "'":
+                in_str = False
+            out.append(ch)
+        elif ch == "'":
+            in_str = True
+            out.append(ch)
+        elif ch == "-" and text[i + 1 : i + 2] == "-":
+            nl = text.find("\n", i)
+            i = len(text) if nl == -1 else nl  # keep the newline itself
+            continue
+        else:
+            out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 #: Every statement ``rollback_144`` is ALLOWED to contain, as an anchored pattern.
@@ -308,16 +353,44 @@ def test_the_rollback_removes_exactly_what_the_expand_added():
     # See :func:`_unapproved_statements` for why no blacklist here can be anything but
     # a proxy.
     assert _unapproved_statements(rollback) == [], _unapproved_statements(rollback)
-    # ...and the allowlist must actually be exercised: every approved form present.
-    # Without this the test would still pass if the rollback were emptied to a single
-    # NOTIFY -- an allowlist constrains what MAY appear, never what MUST.
-    kinds = {
-        next(i for i, p in enumerate(_ROLLBACK_ALLOWED) if re.fullmatch(p, s))
-        for s in _statements(rollback)
+
+    # ...and the allowlist must be EXERCISED, per subject, not per form. An allowlist
+    # constrains what MAY appear and never what MUST, so without this the rollback
+    # could shrink to a single NOTIFY and still pass.
+    #
+    # codex iter6 HIGH-4: the first version of this counted distinct FORMS, and the
+    # COMMENT form is generic over the three legacy columns. Deleting the nrx_count
+    # and total_rx_count comments left all six forms present and the test green, while
+    # the rollback would leave two columns still labelled "DEPRECATED" after 144 was
+    # removed -- the mislabelling this whole lane exists to end. Count the SUBJECTS.
+    stmts = _statements(rollback)
+    dropped = {
+        mm.group(1)
+        for mm in (re.match(r"ALTER TABLE \S+ DROP COLUMN IF EXISTS (\w+)", s) for s in stmts)
+        if mm
     }
-    assert kinds == set(range(len(_ROLLBACK_ALLOWED))), (
-        f"the rollback no longer uses every approved statement form: {sorted(kinds)}"
+    assert dropped == set(PAIRS.values()), (
+        f"the rollback drops {sorted(dropped)}; it must drop every column 144 added"
     )
+    commented = {
+        mm.group(1)
+        for mm in (
+            re.match(r"COMMENT ON COLUMN public\.business_metrics\.(\w+) IS", s) for s in stmts
+        )
+        if mm
+    }
+    assert commented == set(PAIRS), (
+        f"the rollback restores the comment on {sorted(commented)}; it must restore all "
+        "three legacy columns' comments, or removing 144 leaves them reading DEPRECATED"
+    )
+    for pattern, want, what in (
+        (r"DROP TRIGGER\b", 1, "the sync trigger"),
+        (r"DROP FUNCTION\b", 1, "the sync function"),
+        (r"DELETE FROM public\.schema_migrations\b", 1, "its own ledger row"),
+        (r"NOTIFY\b", 1, "the PostgREST schema reload"),
+    ):
+        got = sum(1 for s in stmts if re.match(pattern, s))
+        assert got == want, f"expected {want} statement retiring {what}, found {got}"
 
     # ...and the flag that makes "in the same transaction" true (codex iter4 MED-1).
     # The ledger DELETE following every schema statement (only NOTIFY comes after
@@ -338,6 +411,69 @@ def test_the_rollback_removes_exactly_what_the_expand_added():
         "the documented apply COMMAND does not use --single-transaction, so nothing "
         "couples the ledger DELETE to the schema change it records"
     )
+
+
+def test_the_statement_allowlist_cannot_be_walked_past():
+    """THE GUARD ON THE GUARD.
+
+    Every payload below is valid PostgreSQL that destroys or exfiltrates data, and
+    every one of them passed some earlier version of this check (codex iter3 HIGH-2,
+    iter4 HIGH-2, iter5 HIGH-1, iter6 HIGH-1 -- four rounds, because each fix closed
+    the examples it was shown instead of the class). They live here rather than in a
+    reviewer's scratch directory so the next person to touch :func:`_statements` or
+    :data:`_ROLLBACK_ALLOWED` finds out immediately.
+
+    The last two matter most: they are not "extra statements" but attacks on the
+    PARSER, which is what a text-based guard really rests on.
+    """
+    base = ROLLBACK.read_text()
+    payloads = {
+        "DROP TABLE": "DROP TABLE public.business_metrics;",
+        "ALTER TABLE ... DROP COLUMN": (
+            "ALTER TABLE public.business_metrics DROP COLUMN metric_id;"
+        ),
+        "DELETE inside a CTE": (
+            "WITH e AS (DELETE FROM public.business_metrics RETURNING metric_id) SELECT 1;"
+        ),
+        "DELETE split across lines": "DELETE\nFROM public.business_metrics;",
+        "TRUNCATE": "TRUNCATE public.business_metrics;",
+        "COPY out to a file": "COPY public.business_metrics TO '/tmp/x.csv';",
+        "UPDATE zeroing the data": "UPDATE public.business_metrics SET trx_count = 0;",
+        "statement hidden after a real literal": (
+            "COMMENT ON COLUMN public.business_metrics.trx_count IS 'x';"
+            " DROP TABLE public.business_metrics;"
+        ),
+        # PARSER attacks: a '--' the server reads as literal content, and a DELETE
+        # spelled by concatenation inside a dollar-quoted body.
+        "'--' inside a string literal": (
+            "COMMENT ON COLUMN public.business_metrics.trx_count IS 'safe -- harmless';\n"
+            "DROP TABLE public.business_metrics;\nSELECT ';\n-- ';"
+        ),
+        "dollar-quoted dynamic DELETE": (
+            "DO $x$ BEGIN EXECUTE 'DE' || 'LETE FROM public.business_metrics'; END $x$;"
+        ),
+        "unterminated literal swallowing the rest": (
+            "COMMENT ON COLUMN public.business_metrics.trx_count IS 'oops;"
+        ),
+    }
+    for name, payload in payloads.items():
+        try:
+            unapproved = _unapproved_statements(f"{base}\n{payload}\n")
+        except AssertionError:
+            continue  # refused by the lexer's own guards, which is a rejection too
+        assert unapproved, f"the allowlist accepts a rollback containing: {name}"
+
+    # ...and it must not cry wolf: a COMMENT whose TEXT names a forbidden statement is
+    # not that statement. The iter4 detector failed this, which is how a guard gets
+    # weakened -- a check that fails on correct input is one someone will loosen.
+    harmless = (
+        f"{base}\nCOMMENT ON COLUMN public.business_metrics.nrx_count IS "
+        "'Never DELETE FROM public.business_metrics';\n"
+    )
+    assert _unapproved_statements(harmless) == []
+    assert _statements("COMMENT ON COLUMN public.t.c IS 'a -- b';") == [
+        "COMMENT ON COLUMN public.t.c IS 'a -- b'"
+    ], "a legitimate '--' inside a literal is being eaten as a comment"
 
 
 def test_the_rollback_is_never_applied_as_a_forward_migration():
