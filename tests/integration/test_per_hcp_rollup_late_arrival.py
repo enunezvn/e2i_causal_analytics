@@ -51,6 +51,17 @@ def planted(db_conn: Any) -> Any:
     hcps = {"a": f"hcplate_{rid}_a", "b": f"hcplate_{rid}_b"}
     with db_conn:
         with db_conn.cursor() as cur:
+            # The territory phase cross-joins EVERY territory with the planted dates and the
+            # teardown deletes territory_metrics rows on those dates, so none may exist before.
+            cur.execute(
+                "SELECT count(*) FROM territory_metrics WHERE metric_date IN (%s, %s)",
+                (TUESDAY, MONDAY),
+            )
+            assert cur.fetchone()[0] == 0, (
+                "territory_metrics already holds rows on the planted 2019 dates"
+            )
+    with db_conn:
+        with db_conn.cursor() as cur:
             for hcp_id in hcps.values():
                 cur.execute(
                     "INSERT INTO hcp_profiles (hcp_id, territory_id, geographic_region, sales_rep_id) "
@@ -72,6 +83,9 @@ def planted(db_conn: Any) -> Any:
     yield {"rid": rid, **hcps}
     with db_conn:
         with db_conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM territory_metrics WHERE metric_date IN (%s, %s)", (TUESDAY, MONDAY)
+            )
             cur.execute("DELETE FROM business_metrics WHERE hcp_id LIKE %s", (f"hcplate_{rid}_%",))
             cur.execute("DELETE FROM triggers WHERE trigger_id LIKE %s", (f"trlate_{rid}_%",))
             cur.execute(
@@ -109,6 +123,17 @@ def _rows(db_conn: Any, rid: str) -> dict:
                 (f"hcplate_{rid}_%",),
             )
             return {(h, d): (int(n), float(s)) for h, d, n, s in cur.fetchall()}
+
+
+def _territory(db_conn: Any, rid: str) -> dict:
+    with db_conn:
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "SELECT metric_date, total_trx, active_hcp_count FROM territory_metrics "
+                "WHERE territory_id = %s",
+                (f"T_LATE_{rid}",),
+            )
+            return {d: (int(trx), int(active)) for d, trx, active in cur.fetchall()}
 
 
 def test_a_late_weekly_batch_rolls_up_under_each_triggers_own_date(
@@ -160,3 +185,98 @@ def test_a_late_weekly_batch_rolls_up_under_each_triggers_own_date(
         after["rows_changed"],
         after["rows_existing"],
     ) == (2, 0, 0, 3)
+
+    # Territory (owner decision #3): the 03:45 run rebuilds both whole dates from the per-HCP rows.
+    from src.etl.territory_metrics_etl import (
+        _run_territory_rollup_impl,
+        preview_territory_rollup,
+    )
+
+    # The pre-fix default (metric_date in the 24 h before Monday 03:45) reaches Sunday only: no planted date.
+    assert (
+        preview_territory_rollup("2019-01-13T03:45:00+00:00", "2019-01-14T03:45:00+00:00")[
+            "metric_dates"
+        ]
+        == 0
+    )
+    territory = _run_territory_rollup_impl(
+        arrived_before="2019-01-14T03:45:00+00:00", request_id="late-arrival-territory"
+    )
+    assert territory["status"] == "completed" and territory["selected_by"] == "arrival", territory
+    # (total_trx, active_hcp_count). Tuesday 01-01: a 2 + b 1 delivered. Monday 01-14: a3 delivered;
+    # its 30-day lookback still holds a's and b's 01-01 triggers, so both HCPs are active.
+    assert _territory(db_conn, rid) == {TUESDAY: (3, 2), MONDAY: (1, 2)}
+    rebuilt = preview_territory_rollup("2019-01-01", "2019-01-15")
+    assert (rebuilt["metric_dates"], rebuilt["rows_new"], rebuilt["rows_changed"]) == (2, 0, 0)
+
+
+def test_the_reconcile_deletes_our_obsolete_row_and_spares_a_foreign_one(
+    db_conn: Any, planted: dict
+) -> None:
+    """THE DISCRIMINATING PAIR for codex r14-04's ownership predicate.
+
+    The spec pins that predicate only by its PRESENCE in the SQL, and presence cannot fail
+    for the reason the clause exists. It also cannot be exercised by live data: both
+    ownership columns are NULL in all 1,840 live rows (measured 2026-09-17), so the
+    "foreign row" branch of the DELETE is never reached by anything real. A predicate
+    nobody exercises is untested — so this plants one.
+
+    Two obsolete territory rows on a date with no per-HCP rows, identical except for
+    ``market_potential``. After the reconcile:
+      * the all-NULL row is GONE   — ours, so ours to delete
+      * the valued row SURVIVES    — someone else's only copy of a budget figure
+      * the preview counted them separately, one each
+
+    ⚠ NEVER EXECUTED. Skip-only like the rest of this module; it runs in Task 31 Step 3.
+    Until then the ownership predicate is pinned by text and by the partition property in
+    the unit suite, and its runtime behaviour is unverified.
+    """
+    from src.etl.territory_metrics_etl import _run_territory_rollup_impl, preview_territory_rollup
+
+    rid = planted["rid"]
+    ours = f"T_LATE_{rid}_OURS"
+    theirs = f"T_LATE_{rid}_THEIRS"
+    orphan_date = date(2019, 1, 20)  # no planted trigger, so no per-HCP row can produce it
+
+    with db_conn:
+        with db_conn.cursor() as cur:
+            for territory_id, market_potential in ((ours, None), (theirs, 42.0)):
+                cur.execute(
+                    """
+                    INSERT INTO territory_metrics (
+                        territory_id, metric_date, total_trx, total_nrx,
+                        active_hcp_count, covered_lives, market_potential, is_synthetic
+                    ) VALUES (%s, %s, 0, 0, 0, 0, %s, true)
+                    """,
+                    (territory_id, orphan_date, market_potential),
+                )
+
+    before = preview_territory_rollup("2019-01-20", "2019-01-21")
+    assert before["rows_obsolete"] == 1, before
+    assert before["rows_obsolete_foreign"] == 1, before
+    assert (ours, "2019-01-20") in before["obsolete_keys"]
+    assert (theirs, "2019-01-20") in before["obsolete_foreign_keys"]
+
+    _run_territory_rollup_impl(
+        start_date="2019-01-20", end_date="2019-01-21", request_id="late-arrival-ownership"
+    )
+
+    with db_conn:
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "SELECT territory_id FROM territory_metrics WHERE metric_date = %s "
+                "AND territory_id IN (%s, %s)",
+                (orphan_date, ours, theirs),
+            )
+            survivors = {row[0] for row in cur.fetchall()}
+    assert survivors == {theirs}, (
+        f"expected only the foreign row to survive, got {survivors}: the ownership "
+        "predicate either deleted someone else's budget figure or spared our stale row"
+    )
+
+    with db_conn:
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM territory_metrics WHERE metric_date = %s AND territory_id IN (%s, %s)",
+                (orphan_date, ours, theirs),
+            )
