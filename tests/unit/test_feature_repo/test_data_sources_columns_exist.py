@@ -3,8 +3,9 @@ exist in the committed canonical schema DDL.
 
 This runs WITHOUT the feast SDK and WITHOUT a live database — it AST-parses
 ``feature_repo/data_sources.py`` for the query strings and text-parses every
-committed ``*.sql`` under ``database/`` (CREATE TABLE + ADD COLUMN), since the
-canonical columns are spread across the base schema and the migrations
+committed FORWARD ``*.sql`` under ``database/`` (CREATE TABLE + ADD/DROP/RENAME
+COLUMN), since the canonical columns are spread across the base schema and the
+migrations
 (e.g. territory_metrics in 031, business_metrics' Feast columns in 033). So
 unlike the feast-gated ``test_data_sources_canonical_tables.py`` (which skips where the app
 image has no feast), this guard actually executes in CI and catches source-query
@@ -31,8 +32,12 @@ _DATA_SOURCES = _ROOT / "feature_repo" / "data_sources.py"
 # Canonical schema DDL is spread across the base schema AND the migrations: the
 # core tables live in database/core, but e.g. territory_metrics is created in
 # migrations/031 and business_metrics' Feast columns are added in migrations/033.
-# Scan every committed *.sql under database/ (CREATE TABLE + ADD COLUMN only) —
-# over-capturing columns can only relax this guard, never produce a false drift.
+# Scan every committed FORWARD *.sql under database/ (CREATE TABLE + ADD/DROP/
+# RENAME COLUMN). Over-capturing columns can only relax this guard — but a RENAME
+# RETIRES a name, so once renames are modelled the scan is no longer purely
+# additive and a stray reverse rename WOULD produce a false drift. That is why
+# only files the migration runner actually applies are scanned; see
+# _is_forward_migration.
 _DATABASE_DIR = _ROOT / "database"
 
 # SQL keywords / functions / cast-types that are never column references.
@@ -149,19 +154,51 @@ def _referenced_columns(query: str) -> set[str]:
     return cols
 
 
+def _is_forward_migration(sql_path: Path) -> bool:
+    """Is this a file the migration runner would actually APPLY?
+
+    Mirrors ``scripts/run_migrations.sh``'s ``apply_dir()`` SAFETY rule verbatim:
+    "rollback_*/*_rollback and *_validation_queries files are NOT forward
+    migrations and are excluded". The DDL model must be built from exactly the
+    files that reach the database, so this is the runner's rule rather than an
+    ad-hoc skip list — if the runner's rule changes, this must follow it.
+
+    This matters because of renames: rollback_144 carries the REVERSE of 144's
+    rename and sorts after it, so an unfiltered scan would model the pre-144
+    names and report a false 'missing column'. (It also stops 30 ADD/DROP COLUMN
+    statements in database/ml/rollback_040-044 from entering the model at all;
+    those happen to touch no guarded table today, so this is a latent-bug fix.)
+    """
+    name = sql_path.name.lower()
+    return not (
+        name.startswith("rollback_") or "_rollback" in name or "_validation_queries" in name
+    )
+
+
 def _ddl_columns() -> dict[str, set[str]]:
-    """{table: columns} from base CREATE TABLE + ALTER TABLE ADD/DROP COLUMN.
+    """{table: columns} from base CREATE TABLE + ALTER TABLE ADD/DROP/RENAME COLUMN.
 
     Files are processed in sorted (≈ migration) order and ALTERs applied in
     statement order, so an ADD-then-DROP (e.g. a transient column) ends up
     correctly absent and a DROP-then-readd ends up present. Remaining over-capture
     can only relax the guard; under-capture would surface immediately as a false
-    'missing column' in this test's own assertions. Actually-dropped/renamed
-    columns in the live DB are covered by the EXPLAIN + FEAST_INTEGRATION backstops.
+    'missing column' in this test's own assertions.
+
+    RENAME COLUMN is modelled too (migration 144, the repo's first). Unlike ADD,
+    a rename is SUBTRACTIVE — it retires the old name — so it is the one statement
+    that can turn over-capture into a false drift. Two things keep it sound: only
+    forward-migration files are scanned (see :func:`_is_forward_migration`), and a
+    rename applies only when the old name is currently modelled, so a rename whose
+    source column this parser never saw cannot invent one. Renames performed by
+    DYNAMIC SQL (``EXECUTE format(...)`` inside a ``DO`` block) remain invisible to
+    any static reader — keep committed renames as plain statements, or the live
+    EXPLAIN + FEAST_INTEGRATION backstops are the only thing left to catch them.
     """
     cols: dict[str, set[str]] = {}
 
     for sql_path in sorted(_DATABASE_DIR.rglob("*.sql")):
+        if not _is_forward_migration(sql_path):
+            continue
         text = sql_path.read_text(errors="ignore")
 
         # CREATE TABLE <t> ( ... );  (CREATE VIEW / MATERIALIZED VIEW won't match)
@@ -195,6 +232,19 @@ def _ddl_columns() -> dict[str, set[str]]:
                     cols.setdefault(table, set()).add(am.group(2).lower())
                 else:
                     cols.get(table, set()).discard(am.group(2).lower())
+
+            # RENAME COLUMN <old> TO <new>, in the same ordered scan. Applied only
+            # when <old> is currently modelled, so a rename this parser never saw
+            # the source of cannot conjure a column out of nothing.
+            for rm in re.finditer(
+                r"\bRENAME COLUMN\s+(?:IF EXISTS\s+)?([a-z_][a-z0-9_]*)\s+TO\s+([a-z_][a-z0-9_]*)",
+                stmt,
+                re.IGNORECASE,
+            ):
+                old, new = rm.group(1).lower(), rm.group(2).lower()
+                if old in cols.get(table, set()):
+                    cols[table].discard(old)
+                    cols[table].add(new)
     return cols
 
 
@@ -260,7 +310,9 @@ class TestCommittedRenamesAreModelled:
         assert "rollback_144_per_hcp_trigger_count_columns.sql" in names
         assert "011_validation_queries.sql" in names
         # ...and it must not swallow real forward migrations.
-        assert _is_forward_migration(_DATABASE_DIR / "migrations" / "033_feast_canonical_schema.sql")
+        assert _is_forward_migration(
+            _DATABASE_DIR / "migrations" / "033_feast_canonical_schema.sql"
+        )
 
 
 @pytest.mark.parametrize("source_name", sorted(_QUERIES))
