@@ -1,56 +1,51 @@
 -- ROLLBACK for migration 144 (canonical TRx lane). NOT a forward migration:
 -- scripts/run_migrations.sh skips rollback_*.sql in apply_dir(), which is what
 -- makes it safe to ship this file beside 144 -- were it applied in sequence, it
--- would rename the columns straight back and 144 would silently do nothing.
--- Apply by hand only when the deploy's container replacement failed (plan Task 29
--- Step 6): it restores the legacy per_hcp_rollup column names the pre-lane
--- containers read.
+-- would remove the columns 144 had just added and 144 would silently do nothing.
 --
--- Symmetric with 144 and guarded the same way, so it is equally safe to re-run:
--- three table columns plus the same column on each of the four split views.
+-- ---------------------------------------------------------------------------
+-- READ THIS BEFORE REACHING FOR IT: IT IS NO LONGER A DEPLOY-RECOVERY STEP
+-- ---------------------------------------------------------------------------
+-- The previous draft of 144 swapped the three column names in place, so a deploy
+-- whose container replacement failed left pre-lane code facing a schema without
+-- the names it reads, and THIS file was the way back. 144 is now an EXPAND: it
+-- only adds columns, and the legacy trx_count / nrx_count / total_rx_count stay
+-- present and correct throughout, kept in sync by
+-- business_metrics_sync_legacy_trigger_counts_trg. A failed container
+-- replacement therefore needs no schema recovery at all -- the pre-lane
+-- containers keep working against the expanded schema, which is the entire point
+-- of the expand/contract split (codex iter1 HIGH-1).
 --
--- DELIBERATELY STILL DYNAMIC. Forward 144 spells its three TABLE renames as plain
--- ALTER TABLE ... RENAME COLUMN statements so that static readers of database/ can
--- see them (the hermetic Feast column guard,
--- tests/unit/test_feature_repo/test_data_sources_columns_exist.py, models the
--- schema by text-parsing these files). Making THIS file match "for consistency"
--- is the natural next edit -- and it would make the reverse renames statically
--- readable too. That is safe ONLY because that guard skips non-forward files via
--- _is_forward_migration, mirroring run_migrations.sh apply_dir(). If you make this
--- file static, read that filter first: without it the reverse renames would be
--- applied after 144's (rollback_* sorts after 144_*) and the guard would report
--- the renamed Feast source columns as absent.
-DO $rollback$
-DECLARE
-    pair text[];
-    split_view text;
-BEGIN
-    FOREACH pair SLICE 1 IN ARRAY ARRAY[
-        ['triggers_delivered_count', 'trx_count'],
-        ['triggers_accepted_count', 'nrx_count'],
-        ['triggers_total_count', 'total_rx_count']
-    ]::text[] LOOP
-        IF EXISTS (
-            SELECT 1 FROM information_schema.columns
-             WHERE table_schema = 'public' AND table_name = 'business_metrics'
-               AND column_name = pair[1]
-        ) THEN
-            EXECUTE format('ALTER TABLE public.business_metrics RENAME COLUMN %I TO %I', pair[1], pair[2]);
-        END IF;
-        FOREACH split_view IN ARRAY ARRAY[
-            'v_train_business_metrics', 'v_test_business_metrics',
-            'v_validation_business_metrics', 'v_holdout_business_metrics'
-        ] LOOP
-            IF EXISTS (
-                SELECT 1 FROM information_schema.columns
-                 WHERE table_schema = 'public' AND table_name = split_view
-                   AND column_name = pair[1]
-            ) THEN
-                EXECUTE format('ALTER VIEW public.%I RENAME COLUMN %I TO %I', split_view, pair[1], pair[2]);
-            END IF;
-        END LOOP;
-    END LOOP;
-END
-$rollback$;
+-- What remains of this file's job is narrow: returning the schema to its exact
+-- pre-144 shape, e.g. to re-rehearse the migration or to abandon the lane. It
+-- removes ONLY what 144 added -- the trigger, its function, and the three
+-- canonical columns. It never touches the legacy columns, which hold the data.
+--
+-- Because the canonical columns are pure copies while the trigger is live, no
+-- information is lost by removing them; re-applying 144 re-derives every value
+-- from the legacy columns via its backfill.
+--
+-- Apply by hand:
+--   docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 \
+--     --single-transaction < database/migrations/rollback_144_per_hcp_trigger_count_columns.sql
+--
+-- Guarded the same way as 144 (IF EXISTS on every statement), so it is equally
+-- safe to re-run. The trigger is removed BEFORE its function, which depends on it.
+
+DROP TRIGGER IF EXISTS business_metrics_sync_legacy_trigger_counts_trg ON public.business_metrics;
+DROP FUNCTION IF EXISTS public.business_metrics_sync_legacy_trigger_counts();
+
+ALTER TABLE public.business_metrics DROP COLUMN IF EXISTS triggers_delivered_count;
+ALTER TABLE public.business_metrics DROP COLUMN IF EXISTS triggers_accepted_count;
+ALTER TABLE public.business_metrics DROP COLUMN IF EXISTS triggers_total_count;
+
+-- The legacy column comments 144 rewrote are restored to a plain description, so
+-- a rolled-back schema does not advertise a deprecation that no longer applies.
+COMMENT ON COLUMN public.business_metrics.trx_count IS
+    'per_hcp_rollup: triggers delivered or viewed for this HCP x brand x day (misnamed by migration 033; never prescriptions)';
+COMMENT ON COLUMN public.business_metrics.nrx_count IS
+    'per_hcp_rollup: triggers accepted or responded (misnamed by migration 033)';
+COMMENT ON COLUMN public.business_metrics.total_rx_count IS
+    'per_hcp_rollup: all triggers generated (misnamed by migration 033)';
 
 NOTIFY pgrst, 'reload schema';

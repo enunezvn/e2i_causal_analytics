@@ -1,21 +1,40 @@
-"""Migration 144: the per_hcp_rollup trigger counts get honest names (canonical TRx lane).
+"""Migration 144: the per_hcp_rollup trigger counts get honest names — by EXPAND, not rename.
 
 Hermetic — reads the migration FILES, never a database. That boundary is the point:
-a file can show that every rename is written inside an existence guard, but only a
-live re-application can show that the second run is a no-op. The rehearsal
+a file can show that every statement is written so a second application is a no-op,
+but only a live re-application can show that it *is* one. The rehearsal
 (BEGIN / apply / apply again / ROLLBACK) is what proves idempotency; these tests
 prove the file is SHAPED so that it can be idempotent, and refuse the shapes that
 cannot be.
 
-Live census 2026-09-17 (read-only), which is what the renames are aimed at:
-``business_metrics`` plus ``v_{train,test,validation,holdout}_business_metrics``
-carry all three legacy columns — 15 relation-columns in total — and nothing else
-does. No index, constraint, default, RLS policy or kpi_query_registry statement
-references them. One function body matched a word-boundary grep,
-``assign_truth_script_conversion``, and reading it showed the match is its OWN CTE
-alias (``COUNT(*) as nrx_count_window`` over ``treatment_events``, surfaced as
-``nrx_count``) — not a reference to ``business_metrics``. A grep is the proxy; the
-body is the capability.
+WHY THIS IS AN EXPAND AND NOT A RENAME (codex iter1 HIGH-1, owner-approved
+2026-09-18). 144 used to RENAME business_metrics.{trx_count,nrx_count,
+total_rx_count} to the triggers_* names. ``.github/workflows/deploy.yml`` applies
+migrations at :956 while the OLD containers are still serving, replaces Feast at
+:1044 and the app services only at :1085 — and a post-flip health failure at :1104
+rolls back ONLY the app services. A rename therefore leaves pre-lane code, which
+reads and WRITES the legacy names (52 references on origin/main, including
+``src/etl/business_metrics_per_hcp_etl.py``'s ``ON CONFLICT DO UPDATE SET
+trx_count = EXCLUDED.trx_count``), running against a schema that no longer has
+them — permanently, with no automated way back.
+
+So 144 now ADDs the canonical columns beside the legacy ones, backfills them, and
+installs a BIDIRECTIONAL row trigger so either name may be read or written by
+either code version for as long as both exist. The legacy columns are retired
+later, by hand, by ``database/deferred/145_*`` — see
+``test_mig145_contract_legacy_per_hcp_columns.py``, which pins that the runner
+cannot apply the contract half in the same deploy as this one.
+
+Live census 2026-09-18 (read-only) behind the numbers above: ``business_metrics``
+holds 22,043 rows, 12,143 of them ``metric_type='per_hcp_rollup'``, and each of
+the three legacy columns is non-NULL on exactly those 12,143 — so the columns are
+populated on per-HCP rollup rows and nowhere else. All three are nullable INTEGER
+with no default, no index, no constraint and no RLS policy, and the table carries
+no other user trigger. The four ``v_{train,test,validation,holdout}_business_metrics``
+views are ``SELECT *`` snapshots that are ALREADY seven columns behind the table
+and have ZERO consumers outside ``database/`` (measured across src/, tests/,
+scripts/, feature_repo/, frontend/src) — which is why the expand leaves them
+untouched and the contract migration recreates them.
 """
 
 import re
@@ -24,107 +43,164 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[3]
 MIGRATION = REPO / "database" / "migrations" / "144_per_hcp_trigger_count_columns.sql"
 ROLLBACK = MIGRATION.parent / "rollback_144_per_hcp_trigger_count_columns.sql"
-RENAMES = {
+#: legacy name -> canonical name. The expand adds the value beside the key.
+PAIRS = {
     "trx_count": "triggers_delivered_count",
     "nrx_count": "triggers_accepted_count",
     "total_rx_count": "triggers_total_count",
 }
-VIEWS = (
-    "v_train_business_metrics",
-    "v_test_business_metrics",
-    "v_validation_business_metrics",
-    "v_holdout_business_metrics",
-)
+SYNC_FUNCTION = "business_metrics_sync_legacy_trigger_counts"
 
 
 def _sql() -> str:
     return MIGRATION.read_text()
 
 
-def test_every_column_pair_is_renamed():
-    """The TABLE renames must be STATIC, the VIEW renames may be dynamic.
+def _executable_sql(text: str | None = None) -> str:
+    """The file with ``--`` line comments stripped.
 
-    The three table renames were deliberately un-loop-ed: a dynamic
-    ``EXECUTE format('... RENAME COLUMN %I TO %I', ...)`` hides the column names
-    behind placeholders, and the hermetic Feast guard
+    Every REFUSAL below ("must not rename", "must not drop", "must not go
+    dynamic") is asked of this, not of the raw text: a prose comment that merely
+    NAMES a forbidden shape — and 144's header names several, because explaining
+    why they are forbidden is the point — is not that shape. Matching the raw file
+    would be a text proxy for a structural property, satisfiable while the real
+    condition is untouched and, worse, failable while the file is correct.
+    ``scripts/run_migrations.sh`` strips ``--`` the same way before its own
+    keyword detection, and for the same reason. Positive assertions keep using
+    the raw text, where a comment can only be an extra match, never a false one.
+    """
+    return re.sub(r"--.*$", "", _sql() if text is None else text, flags=re.M)
+
+
+def test_the_canonical_columns_are_added_statically():
+    """The three ADDs must be STATIC, not dynamic SQL.
+
+    Same reason the renames they replace were un-loop-ed: an
+    ``EXECUTE format('... ADD COLUMN %I ...', ...)`` hides the column names behind
+    placeholders, and the hermetic Feast guard
     (tests/unit/test_feature_repo/test_data_sources_columns_exist.py) models the
-    canonical schema by TEXT-PARSING these files. Under the dynamic form it still
-    believed business_metrics carried trx_count/nrx_count/total_rx_count and
-    reported the renamed Feast source columns as "absent". So assert the literal
-    static statements, not a placeholder: that text IS the contract the static
-    reader consumes. The view pair literals stay because the view loop is still
-    dynamic and no static reader models view columns.
+    canonical schema by TEXT-PARSING these files. Under a dynamic form it would
+    not know business_metrics had gained triggers_delivered_count at all and would
+    report the Feast source columns as "absent". That text IS the contract the
+    static reader consumes, so assert the statements verbatim.
     """
     sql = _sql()
-    for old, new in RENAMES.items():
-        assert f"['{old}', '{new}']" in sql, f"view-loop pair literal missing for {old}"
-        assert f"ALTER TABLE public.business_metrics RENAME COLUMN {old} TO {new};" in sql, (
-            f"the {old} table rename is not statically declared — a dynamic rename is "
+    for canonical in PAIRS.values():
+        assert (
+            f"ALTER TABLE public.business_metrics ADD COLUMN IF NOT EXISTS {canonical} INTEGER;"
+            in sql
+        ), (
+            f"the {canonical} ADD is not statically declared — a dynamic ADD is "
             "invisible to the Feast guard's text parser"
         )
-    assert "ALTER TABLE public.business_metrics RENAME COLUMN %I TO %I" not in sql, (
-        "a table rename went back to the dynamic form; keep committed table renames "
-        "statically declarable"
+    assert not re.search(r"EXECUTE format\([^)]*ADD COLUMN", _executable_sql()), (
+        "a column ADD went dynamic; keep committed schema additions statically declarable"
     )
 
 
-def test_every_split_view_output_column_is_renamed():
-    """A table column rename keeps a view VALID (views bind by attnum) but leaves
-    the view's OUTPUT column under the old name, so each view is renamed too."""
-    sql = _sql()
-    for view in VIEWS:
-        assert f"'{view}'" in sql, view
-    assert "ALTER VIEW public.%I RENAME COLUMN %I TO %I" in sql
+def test_the_expand_renames_nothing():
+    """THE HIGH-1 REGRESSION GUARD.
 
-
-def test_every_rename_is_inside_an_existence_guard():
-    """Guard-to-rename PARITY, not a marker count.
-
-    ``count("IF EXISTS") >= 3`` is satisfiable by three occurrences in a comment,
-    so it cannot fail for the reason it exists. Counting the executable RENAMEs and
-    requiring at least one guard apiece is still structural, but an unguarded
-    rename can no longer hide behind guards belonging to other statements — and an
-    unguarded rename is exactly what makes a re-run raise instead of no-op.
+    A rename is what made 144 deploy-incompatible: it retires the legacy name at
+    :956 while the containers that read and write it are still up, and the
+    :1104 rollback restores those containers onto the migrated schema. The expand
+    half must therefore contain no rename at all — of a table column or a view
+    column. Retiring the legacy names is the deferred contract migration's job.
     """
-    sql = _sql()
-    dynamic = len(re.findall(r"EXECUTE format\('ALTER (?:TABLE|VIEW)[^']*RENAME COLUMN", sql))
-    static = len(re.findall(r"^\s*ALTER TABLE [^;]*RENAME COLUMN ", sql, re.M))
-    guards = len(re.findall(r"IF EXISTS \(\s*\n\s*SELECT 1 FROM information_schema\.columns", sql))
-    renames = dynamic + static
-    # PostgreSQL has no RENAME COLUMN IF EXISTS, so idempotency is carried by an
-    # explicit guard per rename: three static table renames + the one view-loop body.
-    assert static == len(RENAMES), f"expected {len(RENAMES)} static table renames, got {static}"
-    assert dynamic == 1, f"expected exactly the view loop to rename dynamically, got {dynamic}"
-    assert guards >= renames, f"{renames} renames but only {guards} existence guards"
+    sql = _executable_sql()
+    assert "RENAME COLUMN" not in sql.upper(), (
+        "144 renames again — that is exactly the shape codex HIGH-1 rejected; the "
+        "legacy names must survive this deploy so pre-lane containers keep working"
+    )
+    assert "ALTER VIEW" not in sql.upper(), (
+        "the expand must not touch the split views: they are SELECT * snapshots "
+        "with zero consumers, and recreating them is the contract migration's job"
+    )
 
 
-def test_nothing_destructive_and_postgrest_reloads():
+def test_every_legacy_value_is_backfilled_into_its_canonical_column():
+    """Adding a column leaves it NULL on all 12,143 existing rollup rows. Without
+    the backfill the new code reads NULL where a real count exists — a
+    silently-wrong value, which is worse than the mislabel being fixed."""
     sql = _sql()
+    for legacy, canonical in PAIRS.items():
+        assert re.search(
+            rf"UPDATE public\.business_metrics\s*\n?\s*SET\s+{canonical}\s*=\s*{legacy}\b",
+            sql,
+        ), f"no backfill of {legacy} -> {canonical}"
+        # Re-running must touch no row: the WHERE clause has to exclude rows that
+        # already agree, or the second application rewrites the whole table.
+        assert f"{canonical} IS DISTINCT FROM {legacy}" in sql, (
+            f"the {canonical} backfill has no is-distinct guard, so it is not a no-op on re-run"
+        )
+
+
+def test_a_bidirectional_sync_trigger_keeps_both_names_true():
+    """Old containers write the legacy names, new containers write the canonical
+    ones, and BOTH may be live against this schema (the deploy window, and
+    permanently after a :1104 app-only rollback). The trigger is what stops either
+    writer from leaving the other name stale."""
+    sql = _sql()
+    assert f"CREATE OR REPLACE FUNCTION public.{SYNC_FUNCTION}()" in sql
+    # CREATE OR REPLACE TRIGGER is PostgreSQL 14+; the droplet runs 15.8
+    # (confirmed 2026-09-18). It keeps the expand free of any DROP.
+    assert re.search(
+        r"CREATE OR REPLACE TRIGGER\s+\w+\s*\n?\s*BEFORE INSERT OR UPDATE ON public\.business_metrics",
+        sql,
+    ), "no BEFORE INSERT OR UPDATE row trigger on business_metrics"
+    assert "FOR EACH ROW" in sql
+    for legacy, canonical in PAIRS.items():
+        assert f"NEW.{canonical} := NEW.{legacy}" in sql, f"no {legacy} -> {canonical} propagation"
+        assert f"NEW.{legacy} := NEW.{canonical}" in sql, f"no {canonical} -> {legacy} propagation"
+
+
+def test_the_expand_is_purely_additive():
+    """Nothing may be dropped, deleted or truncated by the expand half — that is
+    the entire safety property being bought. ``CREATE OR REPLACE`` is used for the
+    function and the trigger precisely so that not even a DROP TRIGGER appears."""
+    sql = _executable_sql()
     assert not re.search(r"\b(DROP|DELETE|TRUNCATE)\b", sql, re.IGNORECASE)
     assert not re.search(r"^\s*COMMIT\s*;", sql, re.IGNORECASE | re.MULTILINE)
-    assert "NOTIFY pgrst, 'reload schema';" in sql
+    assert "NOTIFY pgrst, 'reload schema';" in _sql()
 
 
-def test_columns_are_documented():
+def test_both_the_canonical_and_the_legacy_columns_are_documented():
+    """The canonical columns say what they count; the legacy ones say they are
+    deprecated aliases kept alive by the trigger until the contract migration, so
+    the next reader of ``\\d business_metrics`` is not left guessing which is real."""
     sql = _sql()
-    for new in RENAMES.values():
-        assert f"COMMENT ON COLUMN public.business_metrics.{new} IS" in sql
+    for legacy, canonical in PAIRS.items():
+        assert f"COMMENT ON COLUMN public.business_metrics.{canonical} IS" in sql
+        assert f"COMMENT ON COLUMN public.business_metrics.{legacy} IS" in sql
+    assert sql.upper().count("DEPRECATED") >= len(PAIRS)
 
 
-def test_the_rollback_reverses_every_rename():
+def test_the_rollback_removes_exactly_what_the_expand_added():
+    """The rollback is no longer part of deploy recovery — that was the rename's
+    problem and the expand does not have it. It exists to return the schema to its
+    pre-144 shape, so it drops the three ADDED columns, the trigger and the
+    function, and touches neither the legacy columns nor their data.
+    """
     rollback = ROLLBACK.read_text()
-    for old, new in RENAMES.items():
-        assert f"['{new}', '{old}']" in rollback
-    assert "ALTER VIEW public.%I RENAME COLUMN %I TO %I" in rollback
-    assert not re.search(r"\b(DROP|DELETE|TRUNCATE)\b", rollback, re.IGNORECASE)
+    for legacy, canonical in PAIRS.items():
+        assert (
+            f"ALTER TABLE public.business_metrics DROP COLUMN IF EXISTS {canonical};" in rollback
+        ), f"{canonical} is not removed by the rollback"
+        assert not re.search(rf"DROP COLUMN[^;]*\b{legacy}\b", rollback), (
+            f"the rollback drops the LEGACY column {legacy} — it must never touch the "
+            "columns that carry the pre-lane data"
+        )
+    assert "DROP TRIGGER IF EXISTS" in rollback
+    assert f"DROP FUNCTION IF EXISTS public.{SYNC_FUNCTION}()" in rollback
+    assert not re.search(r"\b(DELETE|TRUNCATE)\b", rollback, re.IGNORECASE)
 
 
 def test_the_rollback_is_never_applied_as_a_forward_migration():
     """The recovery file undoes 144. If the forward runner picked it up, applying
-    migrations would rename the columns and immediately rename them back — a
-    migration that silently does nothing. The runner's exclusion is what makes
-    shipping the file safe, so assert the runner still excludes this NAME rather
-    than trusting the convention.
+    migrations would add the columns and immediately drop them — a migration that
+    silently does nothing. The runner's exclusion is what makes shipping the file
+    safe, so assert the runner still excludes this NAME rather than trusting the
+    convention.
     """
     runner = (REPO / "scripts" / "run_migrations.sh").read_text()
     patterns = re.search(r"^\s*(\*_validation_queries\.sql\|[^)]*)\)\s*continue", runner, re.M)

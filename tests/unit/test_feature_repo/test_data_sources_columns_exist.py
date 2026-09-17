@@ -3,10 +3,10 @@ exist in the committed canonical schema DDL.
 
 This runs WITHOUT the feast SDK and WITHOUT a live database — it AST-parses
 ``feature_repo/data_sources.py`` for the query strings and text-parses every
-committed FORWARD ``*.sql`` under ``database/`` (CREATE TABLE + ADD/DROP/RENAME
-COLUMN), since the canonical columns are spread across the base schema and the
-migrations (e.g. territory_metrics in 031, business_metrics' Feast columns in
-033). So
+committed FORWARD ``*.sql`` under ``database/`` (CREATE TABLE + ADD/DROP COLUMN),
+since the canonical columns are spread across the base schema and the migrations
+(e.g. territory_metrics in 031, business_metrics' Feast columns in 033, and the
+per_hcp_rollup count columns across the 144/145 expand/contract pair). So
 unlike the feast-gated ``test_data_sources_canonical_tables.py`` (which skips where the app
 image has no feast), this guard actually executes in CI and catches source-query
 column drift at PR time — the failure mode behind #556 (``business_metrics_source``
@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import ast
 import re
+from collections.abc import Iterable
 from pathlib import Path
 
 import pytest
@@ -32,13 +33,27 @@ _DATA_SOURCES = _ROOT / "feature_repo" / "data_sources.py"
 # Canonical schema DDL is spread across the base schema AND the migrations: the
 # core tables live in database/core, but e.g. territory_metrics is created in
 # migrations/031 and business_metrics' Feast columns are added in migrations/033.
-# Scan every committed FORWARD *.sql under database/ (CREATE TABLE + ADD/DROP/
-# RENAME COLUMN). Over-capturing columns can only relax this guard — but a RENAME
-# RETIRES a name, so once renames are modelled the scan is no longer purely
-# additive and a stray reverse rename WOULD produce a false drift. That is why
-# only files the migration runner actually applies are scanned; see
-# _is_forward_migration.
+# Scan every committed FORWARD *.sql under database/ (CREATE TABLE + ADD/DROP
+# COLUMN). Over-capturing columns can only relax this guard — but a DROP RETIRES a
+# name, so the scan is not purely additive and a stray reverse statement WOULD
+# produce a false drift. That is why only files that actually reach the database
+# on the forward path are scanned; see _is_forward_migration.
 _DATABASE_DIR = _ROOT / "database"
+
+# Forward DDL that a HUMAN applies, after the runner's pass — the contract half of
+# an expand/contract pair (database/deferred/145, which retires the legacy
+# per_hcp_rollup count columns that migration 144 expanded away from). These files
+# are real forward DDL; they simply land in a LATER deploy than everything the
+# runner applies, so the model must apply them LAST rather than in the
+# alphabetical position their directory name happens to occupy.
+#
+# This is not cosmetic. Plain sorted order puts "database/deferred/145" ahead of
+# "database/migrations/033", and 033 re-ADDs trx_count — so 145's DROP would be
+# silently undone and the model would carry three columns the canonical schema
+# retires. TestSchemaModelFollowsTheExpandContractPair::
+# test_the_deferred_contract_is_applied_after_everything_the_runner_applies
+# measures exactly that flip.
+_DEFERRED_DIR = _DATABASE_DIR / "deferred"
 
 # SQL keywords / functions / cast-types that are never column references.
 _NON_COLUMN_TOKENS = {
@@ -163,7 +178,7 @@ def _is_forward_migration(sql_path: Path) -> bool:
     files that reach the database, so this is the runner's rule rather than an
     ad-hoc skip list — if the runner's rule changes, this must follow it.
 
-    MEASURED EFFECT (2026-09-17). Stubbing this to ``True`` changes the modelled
+    MEASURED EFFECT (2026-09-17, re-measured 2026-09-18). Stubbing this to ``True`` changes the modelled
     columns of FIVE tables — 28 columns lost, 2 gained — via the 30 static
     ADD/DROP COLUMN statements in ``database/ml/rollback_040-044``, and it moves
     the model in BOTH harmful directions:
@@ -178,11 +193,16 @@ def _is_forward_migration(sql_path: Path) -> bool:
         added by forward migrations ``ml/041``/``ml/042`` and dropped by their
         rollbacks: unfiltered, real columns vanish from the model.
 
-    Note what this filter does NOT do: ``business_metrics`` is byte-identical with
-    or without it, because rollback_144's reverse rename is DYNAMIC and no static
-    reader can see it. The rename case motivated this filter but is not what it
-    currently protects; see TestCommittedRenamesAreModelled for why the rename
-    guard is still kept.
+    THIRD DIRECTION, added 2026-09-18 — and this one is on ``business_metrics``
+    itself. The filter used to have no effect on that table, because rollback_144
+    reversed a rename through ``EXECUTE format(...)``, which no static reader can
+    see. Migration 144 is now an EXPAND, so its rollback is three plain
+    ``ALTER TABLE public.business_metrics DROP COLUMN IF EXISTS
+    triggers_{delivered,accepted,total}_count;`` statements — fully visible to this
+    parser, and sorting AFTER ``144_*`` inside ``database/migrations/``. Unfiltered,
+    the model would lose the three canonical columns every Feast source now selects
+    and fail every source query. See
+    TestSchemaModelFollowsTheExpandContractPair::test_the_rollback_does_not_unbuild_the_expand.
     """
     name = sql_path.name.lower()
     return not (
@@ -190,30 +210,49 @@ def _is_forward_migration(sql_path: Path) -> bool:
     )
 
 
-def _ddl_columns() -> dict[str, set[str]]:
-    """{table: columns} from base CREATE TABLE + ALTER TABLE ADD/DROP/RENAME COLUMN.
+def _scan_order(paths: Iterable[Path]) -> list[Path]:
+    """Sorted, except that by-hand ``database/deferred/`` files come last.
 
-    Files are processed in sorted (≈ migration) order and ALTERs applied in
-    statement order, so an ADD-then-DROP (e.g. a transient column) ends up
-    correctly absent and a DROP-then-readd ends up present. Remaining over-capture
-    can only relax the guard; under-capture would surface immediately as a false
-    'missing column' in this test's own assertions.
+    The model applies statements in file order, so file order has to match the
+    order in which the statements reach the database: everything the runner
+    applies, then the contract migrations a human applies afterwards. See
+    ``_DEFERRED_DIR``.
+    """
+    return sorted(paths, key=lambda p: (_DEFERRED_DIR in p.parents, str(p)))
 
-    RENAME COLUMN is modelled too (migration 144, the repo's first). Unlike ADD,
-    a rename is SUBTRACTIVE — it retires the old name — so it is the one statement
-    that can turn over-capture into a false drift. Two things keep it sound: only
-    forward-migration files are scanned (see :func:`_is_forward_migration`), and a
-    rename applies only when the old name is currently modelled, so a rename whose
-    source column this parser never saw cannot invent one. Renames performed by
-    DYNAMIC SQL (``EXECUTE format(...)`` inside a ``DO`` block) remain invisible to
-    any static reader — keep committed renames as plain statements, or the live
-    EXPLAIN + FEAST_INTEGRATION backstops are the only thing left to catch them.
+
+def _ddl_columns(paths: Iterable[Path] | None = None) -> dict[str, set[str]]:
+    """{table: columns} from base CREATE TABLE + ALTER TABLE ADD/DROP COLUMN.
+
+    Files are processed in :func:`_scan_order` (≈ the order they reach the
+    database) and ALTERs applied in statement order, so an ADD-then-DROP (e.g. a
+    transient column) ends up correctly absent and a DROP-then-readd ends up
+    present. Remaining over-capture can only relax the guard; under-capture would
+    surface immediately as a false 'missing column' in this test's own assertions.
+
+    DROP COLUMN is the one statement that is SUBTRACTIVE, which is what makes the
+    scan order and the forward-only filter load-bearing rather than cosmetic: a
+    DROP read from a file that never runs (a rollback), or read before the ADD it
+    is meant to follow, produces a FALSE drift rather than a harmless extra
+    column. See :func:`_is_forward_migration` and :func:`_scan_order`.
+
+    ``paths``, when given, is used EXACTLY as passed — neither re-sorted nor
+    re-filtered — so a test can build the model over a different file set or a
+    different order and compare. That is the only way to show that the scan order
+    and the forward-only filter change the answer rather than merely sounding like
+    they should.
+
+    Statements written in DYNAMIC SQL (``EXECUTE format(...)`` inside a ``DO``
+    block) are invisible to any static reader; keep committed schema changes as
+    plain statements, or the live EXPLAIN + FEAST_INTEGRATION backstops are the
+    only thing left to catch them.
     """
     cols: dict[str, set[str]] = {}
 
-    for sql_path in sorted(_DATABASE_DIR.rglob("*.sql")):
-        if not _is_forward_migration(sql_path):
-            continue
+    if paths is None:
+        paths = _scan_order(p for p in _DATABASE_DIR.rglob("*.sql") if _is_forward_migration(p))
+
+    for sql_path in paths:
         text = sql_path.read_text(errors="ignore")
 
         # CREATE TABLE <t> ( ... );  (CREATE VIEW / MATERIALIZED VIEW won't match)
@@ -248,18 +287,6 @@ def _ddl_columns() -> dict[str, set[str]]:
                 else:
                     cols.get(table, set()).discard(am.group(2).lower())
 
-            # RENAME COLUMN <old> TO <new>, in the same ordered scan. Applied only
-            # when <old> is currently modelled, so a rename this parser never saw
-            # the source of cannot conjure a column out of nothing.
-            for rm in re.finditer(
-                r"\bRENAME COLUMN\s+(?:IF EXISTS\s+)?([a-z_][a-z0-9_]*)\s+TO\s+([a-z_][a-z0-9_]*)",
-                stmt,
-                re.IGNORECASE,
-            ):
-                old, new = rm.group(1).lower(), rm.group(2).lower()
-                if old in cols.get(table, set()):
-                    cols[table].discard(old)
-                    cols[table].add(new)
     return cols
 
 
@@ -280,62 +307,80 @@ def test_parsers_are_non_vacuous():
         assert _DDL.get(table), f"DDL parser found no columns for {table}"
 
 
-class TestCommittedRenamesAreModelled:
-    """Migration 144 is the repo's FIRST column rename, so this is the first thing
-    ever to exercise renames in the DDL model (measured 2026-09-17: no other
-    ``RENAME COLUMN`` exists under ``database/``).
+class TestSchemaModelFollowsTheExpandContractPair:
+    """Migration 144 is the repo's first EXPAND/CONTRACT pair, and the first thing
+    ever to make this model's two ordering rules matter on a table a Feast source
+    actually reads.
 
-    A rename is the one DDL statement that is SUBTRACTIVE — it retires a name.
-    That is why it cannot simply be added to the ADD/DROP scan: the model's
-    safety argument was "over-capture can only relax the guard", and a rename
-    applied from a NON-FORWARD file (a rollback) would silently reverse a real
-    rename and produce a FALSE 'missing column'.
+    144 (``database/migrations/``, applied by the runner) ADDs
+    ``business_metrics.triggers_{delivered,accepted,total}_count`` beside the
+    legacy ``{trx,nrx,total_rx}_count``. 145 (``database/deferred/``, applied by
+    hand in a LATER deploy) retires the legacy three. The canonical schema a Feast
+    source must target is the end state: canonical present, legacy gone.
 
-    That reversal is REAL BUT CURRENTLY UNREACHABLE, and the reason is an
-    asymmetry this lane created: forward 144 now spells its three table renames
-    statically (so the model can see them) while rollback_144 still performs the
-    reverse renames through ``EXECUTE format(...)``. Measured 2026-09-17 at this
-    commit: 3 statically-readable renames in 144, 0 in rollback_144. So
-    ``business_metrics`` is modelled identically with or without the forward-only
-    filter — the filter's live effect is on five OTHER tables (see
-    :func:`_is_forward_migration`).
-
-    These tests are kept anyway, because the masking is one edit from gone:
-    144 now carries a comment arguing that committed renames should be static,
-    which makes "make the rollback match for consistency" a natural change — and
-    that change arms the reversal immediately. The filter is what holds then.
+    Both halves are plain, statically-readable statements, which is the whole
+    reason this parser can see them — and it is also what arms two failure modes
+    that were unreachable while 144 renamed through dynamic SQL. Each test below
+    builds the model a second way and asserts the answer CHANGES, so none of them
+    can pass for a reason unrelated to the rule it names.
     """
 
-    def test_the_ddl_model_follows_a_committed_column_rename(self):
+    def test_the_canonical_columns_are_modelled(self):
         available = _DDL.get("business_metrics", set())
-        for new in (
+        for canonical in (
             "triggers_delivered_count",
             "triggers_accepted_count",
             "triggers_total_count",
         ):
-            assert new in available, f"{new} missing from the modelled schema"
+            assert canonical in available, f"{canonical} missing from the modelled schema"
 
-    def test_the_retired_names_are_genuinely_absent(self):
-        """Teeth in the FAIL direction: after 144 the old names do not exist, so a
-        source query still naming one MUST be caught (the #556 class, post-rename)."""
+    def test_the_legacy_names_are_retired_by_the_deferred_contract(self):
+        """Teeth in the FAIL direction: the canonical schema these source queries
+        are checked against is the POST-contract one, so a source still naming a
+        legacy column must be caught (the #556 class)."""
         available = _DDL.get("business_metrics", set())
-        for old in ("trx_count", "nrx_count", "total_rx_count"):
-            assert old not in available, f"{old} was retired by migration 144"
+        for legacy in ("trx_count", "nrx_count", "total_rx_count"):
+            assert legacy not in available, f"{legacy} is retired by database/deferred/145"
 
-    def test_a_non_forward_file_does_not_flip_the_model_back(self):
-        """rollback_144 holds the REVERSE rename and sorts AFTER 144 ('1' < 'r').
-        Without the forward-only filter it would undo the rename in the model."""
+    def test_the_deferred_contract_is_applied_after_everything_the_runner_applies(self):
+        """THE ORDERING TEETH. ``database/deferred/145`` sorts BEFORE
+        ``database/migrations/033``, and 033 re-ADDs ``trx_count``. Under plain
+        sorted order the contract's DROP is therefore undone by a migration that
+        predates it by a hundred files, and the model silently carries three
+        retired columns. Measured here rather than asserted in prose.
+        """
+        every = [p for p in _DATABASE_DIR.rglob("*.sql") if _is_forward_migration(p)]
+        naive = _ddl_columns(sorted(every))["business_metrics"]
+        ordered = _ddl_columns(_scan_order(every))["business_metrics"]
+        assert "trx_count" in naive, (
+            "plain sorted order no longer re-adds trx_count — the trap this rule "
+            "guards has moved; re-derive it before trusting _scan_order"
+        )
+        assert "trx_count" not in ordered
+        assert naive - ordered == {"trx_count", "nrx_count", "total_rx_count"}, naive - ordered
+
+    def test_the_rollback_does_not_unbuild_the_expand(self):
+        """rollback_144 now holds three STATIC ``DROP COLUMN`` statements against
+        the columns 144 adds, and sorts AFTER ``144_*``. Without the forward-only
+        filter the model would lose every canonical column the Feast sources
+        select — a false drift on the live table, which is new: while 144 renamed
+        dynamically, the filter had no effect on business_metrics at all."""
         rollback = _DATABASE_DIR / "migrations" / "rollback_144_per_hcp_trigger_count_columns.sql"
         assert rollback.exists(), "the trap this guards is gone; re-check the filter"
         assert not _is_forward_migration(rollback)
-        assert "triggers_delivered_count" in _DDL.get("business_metrics", set())
+        assert "DROP COLUMN IF EXISTS triggers_delivered_count" in rollback.read_text(), (
+            "the rollback no longer removes the expanded columns statically — this "
+            "test's premise, and the filter's third measured direction, have moved"
+        )
+        unfiltered = _ddl_columns(_scan_order(_DATABASE_DIR.rglob("*.sql")))["business_metrics"]
+        assert "triggers_delivered_count" not in unfiltered, (
+            "dropping the forward-only filter no longer costs the canonical columns"
+        )
+        assert "triggers_delivered_count" in _DDL["business_metrics"]
 
     def test_excluding_non_forward_files_changes_the_model_in_both_directions(self):
-        """MODEL-level teeth for the filter, on the tables it actually affects.
-
-        The sibling rename assertions cannot provide these: business_metrics is
-        modelled identically with or without the filter. These two flip when the
-        filter is removed, one per harmful direction.
+        """MODEL-level teeth for the filter on two OTHER tables, one per harmful
+        direction — kept because they are independent of anything this lane did.
 
         Both columns were checked against the LIVE database on 2026-09-17
         (read-only, by the lane dispatcher): tool_performance.attempts EXISTS,
@@ -362,6 +407,9 @@ class TestCommittedRenamesAreModelled:
         assert _is_forward_migration(
             _DATABASE_DIR / "migrations" / "033_feast_canonical_schema.sql"
         )
+        # The deferred contract is FORWARD DDL — it is deferred in ORDER, not
+        # excluded. Confusing the two rules would retire nothing.
+        assert _is_forward_migration(_DEFERRED_DIR / "145_drop_legacy_per_hcp_count_columns.sql")
 
 
 @pytest.mark.parametrize("source_name", sorted(_QUERIES))
