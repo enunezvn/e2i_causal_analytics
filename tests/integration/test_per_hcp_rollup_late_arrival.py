@@ -72,10 +72,12 @@ def planted(db_conn: Any) -> Any:
                     """
                     INSERT INTO patient_journeys (
                         patient_journey_id, patient_id, journey_start_date,
-                        journey_stage, journey_status, brand, geographic_region, hcp_id
+                        journey_stage, journey_status, brand, geographic_region, hcp_id,
+                        adherence_rate, gap_days
                     ) VALUES (
                         %s, %s, %s, 'diagnosis'::journey_stage_type,
-                        'active'::journey_status_type, %s::brand_type, 'northeast'::region_type, %s
+                        'active'::journey_status_type, %s::brand_type, 'northeast'::region_type, %s,
+                        0.42, 7
                     )
                     """,
                     (f"pjlate_{hcp_id}", f"patlate_{hcp_id}", date(2018, 12, 25), BRAND, hcp_id),
@@ -208,6 +210,29 @@ def test_a_late_weekly_batch_rolls_up_under_each_triggers_own_date(
     assert _territory(db_conn, rid) == {TUESDAY: (3, 2), MONDAY: (1, 2)}
     rebuilt = preview_territory_rollup("2019-01-01", "2019-01-15")
     assert (rebuilt["metric_dates"], rebuilt["rows_new"], rebuilt["rows_changed"]) == (2, 0, 0)
+
+    # Adherence (owner decision #6, revised by codex r13-05): the 03:30 run must keep the
+    # known adherence_rate (every journey has a NULL end date, so it is not computable) and
+    # must not touch gap_days at all, which the synthetic DGP owns.
+    from src.etl.patient_adherence_etl import _run_patient_adherence_impl
+
+    adherence = _run_patient_adherence_impl(
+        arrived_before="2019-01-14T03:30:00+00:00", request_id="late-arrival-adherence"
+    )
+    assert adherence["status"] == "completed" and adherence["selected_by"] == "arrival", adherence
+    with db_conn:
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "SELECT hcp_id, adherence_rate, gap_days FROM patient_journeys "
+                "WHERE patient_journey_id LIKE %s",
+                (f"pjlate_hcplate_{rid}_%",),
+            )
+            journeys = {h: (float(rate), gap) for h, rate, gap in cur.fetchall()}
+    # Both planted journeys keep exactly what the fixture wrote. Before the fix, a's would
+    # have been (0.0, ...) from the LEAST/GREATEST clamp; the withdrawn gap rewrite would
+    # have written 13 for a and 0 for b over the generator's 7.
+    assert journeys[a] == (0.42, 7), journeys
+    assert journeys[b] == (0.42, 7), journeys
 
 
 def test_the_reconcile_deletes_our_obsolete_row_and_spares_a_foreign_one(
