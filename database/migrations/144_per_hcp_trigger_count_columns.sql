@@ -38,6 +38,43 @@
 -- application renames nothing and raises nothing.
 -- ----------------------------------------------------------------------------
 
+-- The three TABLE renames are written as PLAIN, STATIC statements on purpose.
+-- They were previously an `EXECUTE format('... RENAME COLUMN %I TO %I', ...)`
+-- inside the loop below, which is invisible to every STATIC reader of database/ —
+-- the column names appear only as %I placeholders. The hermetic Feast guard
+-- (tests/unit/test_feature_repo/test_data_sources_columns_exist.py) models the
+-- canonical schema by text-parsing these files, so a dynamic rename left it
+-- believing business_metrics still had trx_count/nrx_count/total_rx_count and
+-- reported the renamed Feast source columns as "absent". Keep committed renames
+-- statically declarable; PostgreSQL has no RENAME COLUMN IF EXISTS, so each one
+-- carries its own existence guard to stay idempotent.
+-- The VIEW renames below stay dynamic: they loop over four views, and no static
+-- reader models view columns.
+DO $tbl$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'business_metrics'
+           AND column_name = 'trx_count'
+    ) THEN
+        ALTER TABLE public.business_metrics RENAME COLUMN trx_count TO triggers_delivered_count;
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'business_metrics'
+           AND column_name = 'nrx_count'
+    ) THEN
+        ALTER TABLE public.business_metrics RENAME COLUMN nrx_count TO triggers_accepted_count;
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'business_metrics'
+           AND column_name = 'total_rx_count'
+    ) THEN
+        ALTER TABLE public.business_metrics RENAME COLUMN total_rx_count TO triggers_total_count;
+    END IF;
+END $tbl$;
+
 DO $mig$
 DECLARE
     pair text[];
@@ -48,13 +85,6 @@ BEGIN
         ['nrx_count', 'triggers_accepted_count'],
         ['total_rx_count', 'triggers_total_count']
     ]::text[] LOOP
-        IF EXISTS (
-            SELECT 1 FROM information_schema.columns
-             WHERE table_schema = 'public' AND table_name = 'business_metrics'
-               AND column_name = pair[1]
-        ) THEN
-            EXECUTE format('ALTER TABLE public.business_metrics RENAME COLUMN %I TO %I', pair[1], pair[2]);
-        END IF;
         FOREACH split_view IN ARRAY ARRAY[
             'v_train_business_metrics', 'v_test_business_metrics',
             'v_validation_business_metrics', 'v_holdout_business_metrics'

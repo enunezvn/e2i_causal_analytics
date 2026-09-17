@@ -8,6 +8,18 @@
 --
 -- Symmetric with 144 and guarded the same way, so it is equally safe to re-run:
 -- three table columns plus the same column on each of the four split views.
+--
+-- DELIBERATELY STILL DYNAMIC. Forward 144 spells its three TABLE renames as plain
+-- ALTER TABLE ... RENAME COLUMN statements so that static readers of database/ can
+-- see them (the hermetic Feast column guard,
+-- tests/unit/test_feature_repo/test_data_sources_columns_exist.py, models the
+-- schema by text-parsing these files). Making THIS file match "for consistency"
+-- is the natural next edit -- and it would make the reverse renames statically
+-- readable too. That is safe ONLY because that guard skips non-forward files via
+-- _is_forward_migration, mirroring run_migrations.sh apply_dir(). If you make this
+-- file static, read that filter first: without it the reverse renames would be
+-- applied after 144's (rollback_* sorts after 144_*) and the guard would report
+-- the renamed Feast source columns as absent.
 DO $rollback$
 DECLARE
     pair text[];
