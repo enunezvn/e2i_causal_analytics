@@ -24,6 +24,7 @@ from src.kpi.models import (
 from src.kpi.registry import KPIRegistry, get_registry
 from src.kpi.router import CausalLibraryRouter
 from src.kpi.synthetic_mode import kpi_include_synthetic
+from src.kpi.volume_family import KPI_CACHE_BASIS_VERSION
 
 
 class KPICalculatorBase(ABC):
@@ -120,6 +121,26 @@ class KPICalculator:
         self._calculators[workstream] = calculator
         logger.debug(f"Registered calculator for {workstream}")
 
+    @staticmethod
+    def _cache_context(context: dict[str, Any], include_synthetic: bool) -> dict[str, Any]:
+        """Everything that changes a KPI value, as the cache key sees it.
+
+        ``_include_synthetic`` and ``_window`` pick different SQL (see calculate).
+        ``_basis`` is the substrate-contract version (canonical TRx lane): an entry
+        written when WS3-BI-005 counted events can never be served now that it reads
+        the canonical business_metrics series.
+
+        Build EVERY cache context here -- the read as well as the write. A versioned
+        write paired with an unversioned read still serves the pre-lane entry.
+        """
+        window = context.get("window")
+        return {
+            **context,
+            "_include_synthetic": include_synthetic,
+            "_window": (window.get("start"), window.get("end")) if window else None,
+            "_basis": KPI_CACHE_BASIS_VERSION,
+        }
+
     def calculate(
         self,
         kpi_id: str,
@@ -172,11 +193,7 @@ class KPICalculator:
         # (start, end) pair only (not the whole window dict) so the key is a
         # stable, hashable scalar.
         window = context.get("window")
-        cache_context = {
-            **context,
-            "_include_synthetic": include_synthetic,
-            "_window": (window.get("start"), window.get("end")) if window else None,
-        }
+        cache_context = self._cache_context(context, include_synthetic)
 
         # Check cache (unless force_refresh)
         if use_cache and not force_refresh and self._cache.enabled:

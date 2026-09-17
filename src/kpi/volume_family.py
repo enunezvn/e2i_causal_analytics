@@ -62,3 +62,13 @@ DIMENSIONED_ROW_SQL = "brand IS NOT NULL AND region IS NOT NULL"
 def has_dimensions(row: Mapping[str, Any]) -> bool:
     """The Python twin of DIMENSIONED_ROW_SQL (the brand/region enums cannot hold '')."""
     return row.get("brand") not in (None, "") and row.get("region") not in (None, "")
+
+
+#: Substrate-contract version folded into every KPI cache key (codex r1 HIGH, Task 10A).
+#: Bump it whenever a KPI id changes WHAT IT MEASURES, so a Redis entry written under
+#: the old meaning can never be served under the new one. The canonical TRx lane moves
+#: WS3-BI-005..008 from treatment_events counts to the business_metrics series, and the
+#: API stamps measure_basis from the live registry -- so without this an entry written
+#: by the pre-deploy containers would be served, for up to its TTL, wearing the new
+#: basis label. Read at deploy time by prove_state.sh (Task 30) to bind the app tier.
+KPI_CACHE_BASIS_VERSION = "canonical-trx-2026-09-15"
