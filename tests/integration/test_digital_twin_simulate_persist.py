@@ -82,7 +82,7 @@ def _cohort_provider():
             "engagement_score": eng,
             "conversion_rate": conv,
             "market_share": market,
-            "total_rx_count": rng.poisson(80, n).astype(float),
+            "triggers_total_count": rng.poisson(80, n).astype(float),
         }
     )
     return CohortEffectDataProvider(cohort)

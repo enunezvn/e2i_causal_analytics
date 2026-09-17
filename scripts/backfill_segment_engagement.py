@@ -25,7 +25,7 @@ Per per_hcp_rollup row i (one (hcp_id, brand, metric_date) cell):
 
       latent_k_i = intercept_k
                    + b_market_k * (market_share_i - mean(market_share))
-                   + b_volume_k * (log1p(total_rx_count_i) - mean(...))
+                   + b_volume_k * (log1p(triggers_total_count_i) - mean(...))
                    + region_offset_k[region_i]     # access/territory richness
                    + N(0, noise_k)
       T_k_i = domain_transform_k(latent_k_i)       # sigmoid*10 | Poisson | share
@@ -45,7 +45,7 @@ Per per_hcp_rollup row i (one (hcp_id, brand, metric_date) cell):
     above-median binarization the estimators apply at fit time (the digital-twin
     estimator loads a per-brand cohort, so its median IS the within-brand
     median). baseline() is a confounded function of market_share +
-    total_rx_count + a region intercept, so naive contrasts are biased and an
+    triggers_total_count + a region intercept, so naive contrasts are biased and an
     estimator must de-confound to recover tau — the data is NOT
     reverse-correlated or hand-tuned to a pretty number.
 
@@ -173,7 +173,7 @@ TRUE_CATE_BY_REGION: Dict[str, float] = {_NE: 0.45, _W: 0.30, _S: 0.18, _MW: 0.0
 
 _ENG_INTERCEPT: float = 0.0
 _ENG_BETA_MARKET: float = 1.2  # per unit market_share (already ~0..0.3)
-_ENG_BETA_VOLUME: float = 0.35  # per unit log1p(total_rx_count)
+_ENG_BETA_VOLUME: float = 0.35  # per unit log1p(triggers_total_count)
 _ENG_REGION_OFFSET: Dict[str, float] = {_NE: 0.40, _W: 0.10, _S: -0.10, _MW: -0.30}
 _ENG_NOISE_STD: float = 0.8  # on the logit scale
 _ENG_MAX: float = 10.0  # engagement_score domain [0, 10]
@@ -183,7 +183,7 @@ _ENG_MAX: float = 10.0  # engagement_score domain [0, 10]
 # biased -> de-confounding is required to recover each tau_k[region].
 _OUT_BASELINE_INTERCEPT: float = 0.50
 _OUT_BETA_MARKET: float = 0.80  # confounder: market_share -> conversion
-_OUT_BETA_VOLUME: float = 0.06  # confounder: log1p(total_rx_count) -> conversion
+_OUT_BETA_VOLUME: float = 0.06  # confounder: log1p(triggers_total_count) -> conversion
 _OUT_REGION_BASELINE: Dict[str, float] = {  # confounding region intercept (NOT the CATE)
     _NE: 0.20,
     _W: 0.05,
@@ -319,9 +319,9 @@ _COLS = [
     "brand",
     "region",
     "market_share",
-    "total_rx_count",
-    "trx_count",
-    "nrx_count",
+    "triggers_total_count",
+    "triggers_delivered_count",
+    "triggers_accepted_count",
     "conversion_rate",  # current live value -> backup + before/after
     *_TREATMENT_COLUMNS,  # current live values -> backup
     "is_synthetic",
@@ -400,8 +400,8 @@ def generate_dgp(rows: pd.DataFrame, *, seed: int = DEFAULT_SEED) -> pd.DataFram
     df["market_share"] = (
         pd.to_numeric(df["market_share"], errors="coerce").fillna(0.0).astype(float)
     )
-    df["total_rx_count"] = (
-        pd.to_numeric(df["total_rx_count"], errors="coerce").fillna(0).astype(float)
+    df["triggers_total_count"] = (
+        pd.to_numeric(df["triggers_total_count"], errors="coerce").fillna(0).astype(float)
     )
     df["region"] = df["region"].astype(str)
     df["brand"] = df["brand"].astype(str)
@@ -411,7 +411,7 @@ def generate_dgp(rows: pd.DataFrame, *, seed: int = DEFAULT_SEED) -> pd.DataFram
 
     market = df["market_share"].to_numpy(dtype=float)
     market_c = market - float(np.mean(market))
-    logvol = np.log1p(df["total_rx_count"].to_numpy(dtype=float))
+    logvol = np.log1p(df["triggers_total_count"].to_numpy(dtype=float))
     logvol_c = logvol - float(np.mean(logvol))
     region = df["region"].to_numpy(dtype=str)
     brands = df["brand"].to_numpy(dtype=str)
@@ -722,7 +722,7 @@ def write_backup(live: pd.DataFrame, out_dir: Path) -> Path:
 
 def update_rows(client: Any, regen: pd.DataFrame, *, batch_size: int = BATCH_SIZE) -> int:
     """Idempotent per-row UPDATE of every planted column keyed on metric_id.
-    Only the planted columns change; every other column (trx_count,
+    Only the planted columns change; every other column (triggers_delivered_count,
     market_share, region, brand, hcp_id, is_synthetic, ...) is untouched.
     Re-running with the same seed reproduces identical values.
     """

@@ -44,7 +44,7 @@ def _make_confounded_cohort(n_per_region: int = 1500, seed: int = 42) -> pd.Data
                     "region": region,
                     "engagement_score": engagement,
                     "market_share": market,
-                    "total_rx_count": np.expm1(np.abs(logvol) * 2.0),
+                    "triggers_total_count": np.expm1(np.abs(logvol) * 2.0),
                     "_tau": tau,
                 }
             )
@@ -92,7 +92,7 @@ def test_deconfounding_reduces_bias():
     true_ate = float(np.mean(list(TRUE_CATE.values())))
 
     deconfounded = estimate_cohort_effect(
-        cohort, "engagement_score", confounders=("market_share", "total_rx_count")
+        cohort, "engagement_score", confounders=("market_share", "triggers_total_count")
     )
     naive = estimate_cohort_effect(cohort, "engagement_score", confounders=())
 
