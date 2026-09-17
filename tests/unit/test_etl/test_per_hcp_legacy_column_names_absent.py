@@ -1,4 +1,4 @@
-"""No live code path reads the legacy per_hcp_rollup column names (migrations 144/145).
+"""No live code path reads the legacy per_hcp_rollup column names (migrations 144/146).
 
 ``business_metrics.{trx_count,nrx_count,total_rx_count}`` never held prescriptions --
 they hold trigger funnel counts -- so the lane gives them the honest names
@@ -8,7 +8,7 @@ census proof: it fails with the file and line of every remaining reader.
 AMENDED 2026-09-18, and the amendment is why this guard matters MORE than when it was
 written. The change was an in-place rename; codex iter1 HIGH-1 replaced it with an
 expand/contract pair -- migration 144 ADDs the canonical columns beside the legacy ones
-and keeps both true with a bidirectional trigger, and ``database/deferred/145`` retires
+and keeps both true with a bidirectional trigger, and ``database/deferred/146`` retires
 the legacy three by hand in a LATER deploy.
 
 Under the rename, a missed reader announced itself the moment the migration landed, as a

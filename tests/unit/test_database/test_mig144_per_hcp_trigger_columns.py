@@ -21,8 +21,8 @@ them — permanently, with no automated way back.
 So 144 now ADDs the canonical columns beside the legacy ones, backfills them, and
 installs a BIDIRECTIONAL row trigger so either name may be read or written by
 either code version for as long as both exist. The legacy columns are retired
-later, by hand, by ``database/deferred/145_*`` — see
-``test_mig145_contract_legacy_per_hcp_columns.py``, which pins that the runner
+later, by hand, by ``database/deferred/146_*`` — see
+``test_mig146_contract_legacy_per_hcp_columns.py``, which pins that the runner
 cannot apply the contract half in the same deploy as this one.
 
 Live census 2026-09-18 (read-only) behind the numbers above: ``business_metrics``
@@ -69,7 +69,13 @@ def _executable_sql(text: str | None = None) -> str:
     keyword detection, and for the same reason. Positive assertions keep using
     the raw text, where a comment can only be an extra match, never a false one.
     """
-    return re.sub(r"--.*$", "", _sql() if text is None else text, flags=re.M)
+    return _strip_comments(_sql() if text is None else text)
+
+
+def _strip_comments(text: str) -> str:
+    """Drop ``--`` line comments. See :func:`_executable_sql` for why every refusal
+    is asked of the executable text rather than the raw file."""
+    return re.sub(r"--.*$", "", text, flags=re.M)
 
 
 def test_the_canonical_columns_are_added_statically():
@@ -192,7 +198,21 @@ def test_the_rollback_removes_exactly_what_the_expand_added():
         )
     assert "DROP TRIGGER IF EXISTS" in rollback
     assert f"DROP FUNCTION IF EXISTS public.{SYNC_FUNCTION}()" in rollback
-    assert not re.search(r"\b(DELETE|TRUNCATE)\b", rollback, re.IGNORECASE)
+
+    # Exactly ONE DELETE is permitted, and only against the migration ledger: the
+    # rollback retires its own schema_migrations row in the same transaction as the
+    # schema change (codex iter3 HIGH-2). Doing it as a second psql invocation left
+    # a window where the columns were gone while the runner still believed 144 was
+    # applied, so the next deploy would skip re-applying it. Any OTHER delete —
+    # against business_metrics or anything else holding data — is still forbidden,
+    # so this narrows the old blanket ban rather than lifting it.
+    deletes = re.findall(
+        r"^\s*(DELETE FROM[^;]*|TRUNCATE[^;]*);", _strip_comments(rollback), re.M | re.I
+    )
+    assert deletes == [
+        "DELETE FROM public.schema_migrations WHERE filename = "
+        "'144_per_hcp_trigger_count_columns.sql'"
+    ], deletes
 
 
 def test_the_rollback_is_never_applied_as_a_forward_migration():

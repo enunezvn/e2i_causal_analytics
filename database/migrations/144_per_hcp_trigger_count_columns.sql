@@ -35,11 +35,11 @@
 -- versions can run. Nothing is retired here -- not a column, not a view.
 --
 -- The legacy three are retired by the CONTRACT half,
--- database/deferred/145_drop_legacy_per_hcp_count_columns.sql, applied BY HAND
+-- database/deferred/146_drop_legacy_per_hcp_count_columns.sql, applied BY HAND
 -- once this deploy is verified. It lives outside every directory listed in
 -- scripts/run_migrations.sh's MIGRATION_DIRS precisely so that the runner cannot
 -- apply both halves in one pass; tests/unit/test_database/
--- test_mig145_contract_legacy_per_hcp_columns.py pins that separation.
+-- test_mig146_contract_legacy_per_hcp_columns.py pins that separation.
 --
 -- ---------------------------------------------------------------------------
 -- Live census 2026-09-18 (read-only), which is what these statements are aimed at
@@ -177,11 +177,11 @@ COMMENT ON COLUMN public.business_metrics.triggers_accepted_count IS
 COMMENT ON COLUMN public.business_metrics.triggers_total_count IS
     'per_hcp_rollup: all triggers generated (canonical name, migration 144)';
 COMMENT ON COLUMN public.business_metrics.trx_count IS
-    'DEPRECATED alias of triggers_delivered_count. Held in sync by trigger business_metrics_sync_legacy_trigger_counts_trg for pre-lane readers and writers; retired by database/deferred/145. Never prescriptions.';
+    'DEPRECATED alias of triggers_delivered_count. Held in sync by trigger business_metrics_sync_legacy_trigger_counts_trg for pre-lane readers and writers; retired by database/deferred/146. Never prescriptions.';
 COMMENT ON COLUMN public.business_metrics.nrx_count IS
-    'DEPRECATED alias of triggers_accepted_count. Held in sync by trigger business_metrics_sync_legacy_trigger_counts_trg; retired by database/deferred/145.';
+    'DEPRECATED alias of triggers_accepted_count. Held in sync by trigger business_metrics_sync_legacy_trigger_counts_trg; retired by database/deferred/146.';
 COMMENT ON COLUMN public.business_metrics.total_rx_count IS
-    'DEPRECATED alias of triggers_total_count. Held in sync by trigger business_metrics_sync_legacy_trigger_counts_trg; retired by database/deferred/145.';
+    'DEPRECATED alias of triggers_total_count. Held in sync by trigger business_metrics_sync_legacy_trigger_counts_trg; retired by database/deferred/146.';
 
 -- PostgREST caches the schema; reload so the new columns are visible.
 NOTIFY pgrst, 'reload schema';

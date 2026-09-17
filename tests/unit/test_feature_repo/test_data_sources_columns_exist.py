@@ -6,7 +6,7 @@ This runs WITHOUT the feast SDK and WITHOUT a live database — it AST-parses
 committed FORWARD ``*.sql`` under ``database/`` (CREATE TABLE + ADD/DROP COLUMN),
 since the canonical columns are spread across the base schema and the migrations
 (e.g. territory_metrics in 031, business_metrics' Feast columns in 033, and the
-per_hcp_rollup count columns across the 144/145 expand/contract pair). So
+per_hcp_rollup count columns across the 144/146 expand/contract pair). So
 unlike the feast-gated ``test_data_sources_canonical_tables.py`` (which skips where the app
 image has no feast), this guard actually executes in CI and catches source-query
 column drift at PR time — the failure mode behind #556 (``business_metrics_source``
@@ -41,14 +41,14 @@ _DATA_SOURCES = _ROOT / "feature_repo" / "data_sources.py"
 _DATABASE_DIR = _ROOT / "database"
 
 # Forward DDL that a HUMAN applies, after the runner's pass — the contract half of
-# an expand/contract pair (database/deferred/145, which retires the legacy
+# an expand/contract pair (database/deferred/146, which retires the legacy
 # per_hcp_rollup count columns that migration 144 expanded away from). These files
 # are real forward DDL; they simply land in a LATER deploy than everything the
 # runner applies, so the model must apply them LAST rather than in the
 # alphabetical position their directory name happens to occupy.
 #
-# This is not cosmetic. Plain sorted order puts "database/deferred/145" ahead of
-# "database/migrations/033", and 033 re-ADDs trx_count — so 145's DROP would be
+# This is not cosmetic. Plain sorted order puts "database/deferred/146" ahead of
+# "database/migrations/033", and 033 re-ADDs trx_count — so 146's DROP would be
 # silently undone and the model would carry three columns the canonical schema
 # retires. TestSchemaModelFollowsTheExpandContractPair::
 # test_the_deferred_contract_is_applied_after_everything_the_runner_applies
@@ -365,10 +365,10 @@ class TestSchemaModelFollowsTheExpandContractPair:
         legacy column must be caught (the #556 class)."""
         available = _DDL.get("business_metrics", set())
         for legacy in ("trx_count", "nrx_count", "total_rx_count"):
-            assert legacy not in available, f"{legacy} is retired by database/deferred/145"
+            assert legacy not in available, f"{legacy} is retired by database/deferred/146"
 
     def test_the_deferred_contract_is_applied_after_everything_the_runner_applies(self):
-        """THE ORDERING TEETH. ``database/deferred/145`` sorts BEFORE
+        """THE ORDERING TEETH. ``database/deferred/146`` sorts BEFORE
         ``database/migrations/033``, and 033 re-ADDs ``trx_count``. Under plain
         sorted order the contract's DROP is therefore undone by a migration that
         predates it by a hundred files, and the model silently carries three
@@ -391,6 +391,14 @@ class TestSchemaModelFollowsTheExpandContractPair:
         docstring that the difference does not matter, build the model BOTH ways and
         measure it. If this ever fails, the orders have diverged on a real table and
         ``_scan_order`` needs the runner's sequence implemented for real.
+
+        WHAT THIS IS NOT, stated so nobody counts it twice (codex iter3 LOW-1):
+        it is a REPOSITORY INVARIANT, not evidence about this lane. Transplanted
+        onto ``origin/main`` it also passes, because the equivalence it measures
+        does not depend on anything the lane changed. It earns its place by
+        catching a future divergence — the day a directory's files start depending
+        on another directory's — not by demonstrating that this lane is correct.
+        The lane's own teeth are the three tests around it.
         """
         dirs = _runner_dir_order()
         assert "database/migrations" in dirs and len(dirs) >= 8, dirs
@@ -464,7 +472,7 @@ class TestSchemaModelFollowsTheExpandContractPair:
         )
         # The deferred contract is FORWARD DDL — it is deferred in ORDER, not
         # excluded. Confusing the two rules would retire nothing.
-        assert _is_forward_migration(_DEFERRED_DIR / "145_drop_legacy_per_hcp_count_columns.sql")
+        assert _is_forward_migration(_DEFERRED_DIR / "146_drop_legacy_per_hcp_count_columns.sql")
 
 
 @pytest.mark.parametrize("source_name", sorted(_QUERIES))

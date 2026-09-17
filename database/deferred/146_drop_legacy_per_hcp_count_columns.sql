@@ -1,5 +1,5 @@
 -- ============================================================================
--- Migration 145 (CONTRACT): retire the legacy per_hcp_rollup count columns
+-- Migration 146 (CONTRACT): retire the legacy per_hcp_rollup count columns
 -- ============================================================================
 -- This is the second half of the expand/contract pair begun by
 -- database/migrations/144_per_hcp_trigger_count_columns.sql (canonical TRx lane,
@@ -15,7 +15,7 @@
 -- WHY THIS FILE IS NOT IN database/migrations/ -- DO NOT MOVE IT THERE
 -- ---------------------------------------------------------------------------
 -- scripts/run_migrations.sh applies EVERY pending forward *.sql in each of its
--- MIGRATION_DIRS in a single pass. A 145_*.sql committed beside 144 would run
+-- MIGRATION_DIRS in a single pass. A 146_*.sql committed beside 144 would run
 -- seconds after it, the legacy columns would be gone before one container had
 -- been replaced, and the deploy would be exactly as unsafe as the in-place name
 -- swap that HIGH-1 rejected. Expand and contract are only expand/contract if they
@@ -24,7 +24,7 @@
 -- database/deferred/ appears in no MIGRATION_DIRS entry, so the runner cannot see
 -- this file at all -- a structural separation, not a naming convention that a
 -- typo or a new skip-pattern could arm. It is pinned by
--- tests/unit/test_database/test_mig145_contract_legacy_per_hcp_columns.py, which
+-- tests/unit/test_database/test_mig146_contract_legacy_per_hcp_columns.py, which
 -- parses MIGRATION_DIRS out of the runner rather than restating it.
 --
 -- ---------------------------------------------------------------------------
@@ -40,7 +40,7 @@
 --      canonical columns are the ones being written.
 --
 --   docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 \
---     --single-transaction < database/deferred/145_drop_legacy_per_hcp_count_columns.sql
+--     --single-transaction < database/deferred/146_drop_legacy_per_hcp_count_columns.sql
 --
 -- Verify first, in the same shape, with a trailing ROLLBACK instead of a commit.
 --
@@ -52,7 +52,7 @@
 --
 -- IF THIS FILE IS EVER MOVED INTO database/migrations/ (the right end state once
 -- the lane's SHA, not origin/main, is the automated rollback target — codex iter2
--- MED-1), the runner will key it as '145_drop_legacy_per_hcp_count_columns.sql'
+-- MED-1), the runner will key it as '146_drop_legacy_per_hcp_count_columns.sql'
 -- with no 'deferred/' prefix, will not match the row written below, and will apply
 -- it once more. That is harmless by construction: every statement here is
 -- IF EXISTS / OR REPLACE, so the second application changes nothing. Delete the
@@ -119,7 +119,7 @@ CREATE OR REPLACE VIEW public.v_holdout_business_metrics AS
 
 -- Record the application in the same transaction as the change it records.
 INSERT INTO public.schema_migrations(filename)
-VALUES ('deferred/145_drop_legacy_per_hcp_count_columns.sql')
+VALUES ('deferred/146_drop_legacy_per_hcp_count_columns.sql')
 ON CONFLICT DO NOTHING;
 
 NOTIFY pgrst, 'reload schema';

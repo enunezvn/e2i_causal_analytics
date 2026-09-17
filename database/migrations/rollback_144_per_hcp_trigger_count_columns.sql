@@ -48,4 +48,13 @@ COMMENT ON COLUMN public.business_metrics.nrx_count IS
 COMMENT ON COLUMN public.business_metrics.total_rx_count IS
     'per_hcp_rollup: all triggers generated (misnamed by migration 033)';
 
+-- Retire the ledger row in the SAME transaction as the schema change it records
+-- (codex iter3 HIGH-2). The recovery runbook used to do this as a second `psql`
+-- invocation after the rollback had already committed: if that second call failed,
+-- the schema was reverted while the runner still believed the migration was
+-- applied, so the next deploy would skip re-applying it. `&&` supplies ordering,
+-- not atomicity. Applied with `psql --single-transaction`, this line commits with
+-- the rollback or not at all.
+DELETE FROM public.schema_migrations WHERE filename = '144_per_hcp_trigger_count_columns.sql';
+
 NOTIFY pgrst, 'reload schema';

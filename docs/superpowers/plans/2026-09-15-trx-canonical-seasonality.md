@@ -4,7 +4,7 @@
 
 **Goal:** Make `business_metrics` the one canonical source for TRx / NRx / NBRx / TRx Share. Add a deterministic ±8% calendar seasonality and an RNG-isolated `nbrx` series. Move the `treatment_events` counts to their own "Observed Rx Events - Patient Panel" KPIs. Rename the mislabelled per-HCP trigger columns, retire the #1640 two-scales fence, and expose a monthly series read API a forecaster can call.
 
-**Architecture:** The synthetic generator gains two value-only, RNG-free terms (a seasonal profile and a separately seeded `nbrx` pass), so the reseed stays an in-place upsert on `metric_id`. A generated migration (143) registers `canonical_volume_*` statements over `business_metrics`. They always serve the latest complete month and never the in-progress one, and they come with synthetic twins. The same migration re-keys the old event history to the new panel ids. WS3-BI-005..008 route to those statements. The existing event calculators, segmented history, nowcast and patient-axis variants move to the new WS3-BI-011..014. A second migration (144) renames the per_hcp_rollup trigger columns and the four split-view columns. New code lives in unpinned modules; every pinned file is edited net-zero.
+**Architecture:** The synthetic generator gains two value-only, RNG-free terms (a seasonal profile and a separately seeded `nbrx` pass), so the reseed stays an in-place upsert on `metric_id`. A generated migration (143) registers `canonical_volume_*` statements over `business_metrics`. They always serve the latest complete month and never the in-progress one, and they come with synthetic twins. The same migration re-keys the old event history to the new panel ids. WS3-BI-005..008 route to those statements. The existing event calculators, segmented history, nowcast and patient-axis variants move to the new WS3-BI-011..014. A second migration (144) EXPANDS the per_hcp_rollup trigger columns — it adds the canonical names beside the legacy ones and keeps both true with a bidirectional trigger, leaving the four split views untouched — and `database/deferred/146` retires the legacy names by hand in a later deploy (§0.9). New code lives in unpinned modules; every pinned file is edited net-zero.
 
 **Tech Stack:** Python 3.12, pandas/numpy, FastAPI, Supabase Postgres 15.8 (`kpi_query` allowlist RPC), Feast (bind-mounted repo, `feast apply` at container start), React/TypeScript + Vitest, pytest.
 
@@ -103,7 +103,7 @@ Registry totals move from 45 to **49** (direct 21→24, derived 24→25, ws3_bus
 
 - `database/migrations/143_canonical_volume_kpis.sql` is **generated** by `scripts/gen_canonical_volume_registry.py`, and a unit test asserts the committed file equals the generator output. It registers 17 base statements plus 17 `_include_synthetic` twins: `canonical_volume_{trx,nrx,nbrx,trx_share}` × {base, `_region`, `_windowed`, `_windowed_region`}, plus `canonical_volume_monthly_series`. It also re-keys kpi_history rows for 005..008 to 011..014 and runs `NOTIFY pgrst`. Idempotent: `ON CONFLICT DO UPDATE`, and the UPDATE is a no-op on rerun.
 - `database/migrations/144_per_hcp_trigger_count_columns.sql`: **the EXPAND half.** Three static `ALTER TABLE public.business_metrics ADD COLUMN IF NOT EXISTS triggers_{delivered,accepted,total}_count INTEGER;`, a backfill per pair guarded by `IS DISTINCT FROM`, a bidirectional `BEFORE INSERT OR UPDATE ... FOR EACH ROW` sync trigger, column comments on all six, and `NOTIFY pgrst`. It renames nothing, touches no view, and contains no `DROP`. Idempotent through `IF NOT EXISTS` / `CREATE OR REPLACE`.
-- `database/deferred/145_drop_legacy_per_hcp_count_columns.sql`: **the CONTRACT half, applied BY HAND in a LATER deploy.** Retires the three legacy columns, the sync trigger and its function, and rebuilds the four split views. It sits outside every `MIGRATION_DIRS` entry so the runner cannot apply it in the same pass as 144 — see §0.9.
+- `database/deferred/146_drop_legacy_per_hcp_count_columns.sql`: **the CONTRACT half, applied BY HAND in a LATER deploy.** Retires the three legacy columns, the sync trigger and its function, and rebuilds the four split views. It sits outside every `MIGRATION_DIRS` entry so the runner cannot apply it in the same pass as 144 — see §0.9.
 
 ### 0.5 RNG-safe `nbrx` design (read from `business_metrics_generator.py`)
 
@@ -154,7 +154,7 @@ Add + backfill + sync, then retire in a LATER deploy. Two committed halves:
   trigger. On INSERT it fills whichever side the writer left empty; on UPDATE it follows the side that
   changed, legacy winning if a statement ever moved both (no writer in the tree does). Either name may
   therefore be read AND written by either code version, for as long as both can run.
-- **`database/deferred/145` (CONTRACT, by hand, a LATER deploy)** retires the legacy three, the trigger
+- **`database/deferred/146` (CONTRACT, by hand, a LATER deploy)** retires the legacy three, the trigger
   and its function, and rebuilds the four split views.
 
 Why the halves must not ship in one deploy: `scripts/run_migrations.sh` applies EVERY pending forward
@@ -162,7 +162,7 @@ Why the halves must not ship in one deploy: `scripts/run_migrations.sh` applies 
 144 and drop the legacy columns before a single container was replaced — the very failure the expand
 exists to prevent. `database/deferred/` appears in no `MIGRATION_DIRS` entry, which makes the
 separation structural rather than a naming convention;
-`tests/unit/test_database/test_mig145_contract_legacy_per_hcp_columns.py` pins it by PARSING
+`tests/unit/test_database/test_mig146_contract_legacy_per_hcp_columns.py` pins it by PARSING
 `MIGRATION_DIRS` out of the runner rather than restating it.
 
 The four split views are deliberately untouched by the expand: they are `SELECT *` snapshots with ZERO
@@ -208,7 +208,7 @@ The copilotkit comment above `_KPI_SUMMARY_QUERIES` records that the H1 fix repl
 2. **Overlap with lane-refusal-codes** (`claude/2021-2050-2020-refusal-reason-codes`). Both touch `src/digital_twin/effect/cohort_loader.py`, `cohort_causal_estimator.py`, `provider.py`, `tests/unit/test_digital_twin/effect/test_cohort_loader.py`, `test_cohort_causal_estimator.py`, `test_cohort_provider.py`, `tests/unit/test_agents/test_tool_composer/test_counterfactual_simulator_2015.py` and **`frontend/src/types/generated/api.ts`**. That lane's diffs do not touch the `*_rx_count` lines (checked), so these are textual-merge conflicts, not semantic ones. Mitigation: Task 24 runs last among code tasks and re-applies its sed after `git merge origin/main`. api.ts is regenerated, never hand-merged.
 3. **Overlap with lane-2099** (`claude/2099-agent-session-mints`): **no file overlap** (48 files under agent memory hooks, agents and their tests).
 4. **OpenAPI / api.ts drift.** Editing the `description=` strings of `/history/segmented` and `/history/nowcast` and the docstring of `kpi_summary_endpoint` changes `openapi.json`, so `frontend/src/types/generated/api.ts` must be regenerated (Task 20). No response model changes shape. The Home summary route returns an untyped `Dict[str, Any]`.
-5. **Feast materializer.** Renamed fields need `feast apply` (a `feast` container restart) before the next materialize cycle. If the materializer runs between the migration and the restart, its source SELECT hits renamed columns and errors (logged; data is not corrupted). Mitigation: Task 30 restarts `feast` then `feast-materializer` immediately after deploy and reads their logs.
+5. **Feast materializer.** The new field names need `feast apply` (a `feast` container restart) before the next materialize cycle. **REVISED 2026-09-18 (§0.9):** the DATABASE no longer creates this hazard — 144 adds the canonical columns and keeps the legacy ones, so a materializer running between the migration and the restart still finds every column its OLD source SELECT names. The remaining hazard is the reverse direction and it is code-side: a NEW `feature_repo` selecting the canonical columns against a database where 144 has not yet applied. Mitigation is unchanged: Task 30 restarts `feast` then `feast-materializer` immediately after deploy and reads their logs. This hazard returns in full when the CONTRACT half is applied, which is why `database/deferred/146`'s preconditions require the new code to be the only deployable target.
 6. **Deploy skew.** Migrations run before containers are replaced. The §0.16 runbook mitigates this: history writers quiesced, container replacement verified, rehearsed rollback SQL for 143/144, and the canonical backfill before certification.
 7. **KPI cache.** Redis entries (`kpi:result:*`, 300 s) are keyed without a substrate version today (`cache.py:66-80`). Task 10A adds `_basis` to every cache key, so ordinary users can never be served a pre-deploy event-scale WS3-BI-005 value under the canonical basis. `force_refresh` in the certification is no longer the only protection.
 8. **Pinned files.** copilotkit, chatbot_tools and chatbot_graph edits must be exactly net-zero. The ratchet test is in every task gate that touches them.
@@ -257,7 +257,7 @@ Phase 0 ran before this revision and PASSED (evidence `docs/demos/results/2026-0
    - (b) the health check fails and only the app tier reverts, while Feast stays at NEW_SHA (`deploy.yml:1090-1100`);
    - (c) a container `up` fails, and `rollback_to_prev` leaves a possibly partial PREV state.
 
-   Each procedure reconciles the schema (143/144 via the provenance-based restore), app images, the Feast registry and materializer, the KPI cache, and the reseed cron hold. Each ends with `prove_state.sh old|new`, which must exit 0 before the cron is restored.
+   Each procedure reconciles the schema, app images, the Feast registry and materializer, the KPI cache, and the reseed cron hold. Each ends with `prove_state.sh old|new`, which must exit 0 before the cron is restored. **REVISED 2026-09-18 (§0.9):** only **143** is reconciled by rollback — 144 is an EXPAND and is LEFT APPLIED, because pre-lane code reads and writes the legacy names correctly against it. `prove_state.sh` therefore treats the canonical columns as permitted-but-not-required in the `old` state; see its checks.
 5. Cache: the new containers only read `_basis`-versioned keys (Task 10A); old entries expire unread within 300 s. Browser React Query caches self-heal within their `staleTime` (at most 10 min).
 6. Feast: restart `feast` (apply), stop the materializer, clear the `_ts:hcp_conversion_features` markers for the source entity tuples, materialize that one view over its 365-day source window, read the renamed fields online, then restart the materializer.
 7. Reseed execute → canonical + panel backfill (using the API container's synthetic flag) → arbiter → `/gaps/analyze` → certify → restore the crontab line.
@@ -631,7 +631,7 @@ Expected: 12 `view:column` lines (4 views × 3 columns); 4 `v_*_business_metrics
 > `ROLLBACK` restores `trx_count`). The rename was rejected on **deploy safety**, not on mechanics —
 > see §0.9. Running this block today is harmless (it rolls back) but it proves nothing about what
 > ships. The rehearsal that does is the expand/contract one recorded in the Task 21 amendment: apply
-> 144, probe, apply 144 again, apply `database/deferred/145`, probe, `ROLLBACK`.
+> 144, probe, apply 144 again, apply `database/deferred/146`, probe, `ROLLBACK`.
 
 
 ```bash
@@ -9075,12 +9075,12 @@ RENAME_SED='s/\btrx_count\b/triggers_delivered_count/g; s/\bnrx_count\b/triggers
 > - **The four split views are NOT touched.** They are `SELECT *` snapshots, already seven columns
 >   behind the table, with ZERO consumers outside `database/` (measured across src/, tests/, scripts/,
 >   feature_repo/, frontend/src). Leaving them on the legacy names is what pre-lane containers expect.
-> - **`database/deferred/145_drop_legacy_per_hcp_count_columns.sql` = CONTRACT, applied BY HAND in a
+> - **`database/deferred/146_drop_legacy_per_hcp_count_columns.sql` = CONTRACT, applied BY HAND in a
 >   LATER deploy.** It retires the legacy three, the trigger and its function, and rebuilds the four
 >   views. It lives outside every `MIGRATION_DIRS` entry because `run_migrations.sh` applies every
->   pending forward `*.sql` in ONE pass — a `migrations/145` would have dropped the legacy columns
+>   pending forward `*.sql` in ONE pass — a `migrations/146` would have dropped the legacy columns
 >   seconds after adding their replacements and restored the exact hole HIGH-1 rejected.
->   `tests/unit/test_database/test_mig145_contract_legacy_per_hcp_columns.py` pins that separation by
+>   `tests/unit/test_database/test_mig146_contract_legacy_per_hcp_columns.py` pins that separation by
 >   PARSING `MIGRATION_DIRS` out of the runner rather than restating it.
 > - **`rollback_144` now removes what the expand added** (trigger, function, the three canonical
 >   columns) and never touches the legacy columns. It is **no longer a deploy-recovery step** — the
@@ -13174,6 +13174,13 @@ case "$EXPECT" in old|new) ;; *) echo "usage: prove_state.sh old|new"; exit 2 ;;
 IMAGES_PRE="${IMAGES_PRE:-$RB/images_pre.txt}"
 q() { docker exec supabase-db psql -U postgres -d postgres -Atc "$1"; }
 check() { if [ "$2" = "$3" ]; then echo "OK   $1: $2"; else echo "BAD  $1: got [$2] want [$3]"; bad=1; fi; }
+# REVISED 2026-09-18 (codex iter3 HIGH-1). 144 is an EXPAND, so business_metrics carries SIX count
+# columns between the expand deploy and the by-hand contract (database/deferred/146), and a pre-lane
+# container is correct against either three or six. An exact-fingerprint check on that column set
+# therefore fails a CORRECT deploy, which is what this prover is for. `has` asserts the columns that
+# must BE THERE and reports the rest instead of failing on them.
+has() { local missing=""; for want in $3; do case ",$2," in *",$want,"*) ;; *) missing="$missing $want";; esac; done
+        if [ -z "$missing" ]; then echo "OK   $1: [$2] contains all of [$3]"; else echo "BAD  $1: [$2] is missing$missing"; bad=1; fi; }
 STATE_SQL="SELECT md5(string_agg(id::text || kpi_id || brand || region || metric_date || value || coalesce(status, '') || source || is_synthetic, ',' ORDER BY id)) FROM public.kpi_history WHERE kpi_id IN ('WS3-BI-005','WS3-BI-006','WS3-BI-007','WS3-BI-008','WS3-BI-011','WS3-BI-012','WS3-BI-013','WS3-BI-014')"
 mig=$(q "SELECT count(*) FROM public.schema_migrations WHERE filename IN ('143_canonical_volume_kpis.sql','144_per_hcp_trigger_count_columns.sql')")
 reg=$(q "SELECT count(*) FROM public.kpi_query_registry WHERE query_id LIKE 'canonical_volume_%'")
@@ -13438,9 +13445,12 @@ fields=$(docker exec e2i_feast feast --chdir /feast feature-views describe hcp_c
 calc=$(docker exec e2i_api python -c "from src.api.routes.kpi import get_kpi_calculator; r = get_kpi_calculator().calculate('WS3-BI-005', use_cache=False, context={'brand': 'Kisqali'}); print('ok' if r.error is None and r.value is not None else 'error: %s' % r.error)" 2>&1 | tail -1)
 health=$(curl -sf --max-time 5 http://localhost:8000/health >/dev/null && echo up || echo down)
 if [ "$EXPECT" = old ]; then
-  check migrations "$mig" 0
+  # migrations: 0 when 144 never applied (case a2), 1 when the expand is LEFT APPLIED by B1 — both
+  # are valid "old code" states, because old code works against the expanded schema. That tolerance
+  # IS the property the expand bought, so the prover states it rather than failing on it.
+  if [ "$mig" = 0 ] || [ "$mig" = 1 ]; then echo "OK   migrations: $mig (0 = 144 never applied, 1 = expand left applied)"; else echo "BAD  migrations: got [$mig] want 0 or 1"; bad=1; fi
   check canonical_registry_rows "$reg" 0
-  check business_metrics_columns "$cols" "nrx_count,total_rx_count,trx_count"
+  has business_metrics_columns "$cols" "trx_count nrx_count total_rx_count"
   check rekey_audit_table "$audit" f
   check kpi_history_md5 "$(q "$STATE_SQL")" "$(cat "$RB/kpi_history_volume_pre.md5")"
   check canonical_calculator_code "$canon" absent
@@ -13449,7 +13459,9 @@ if [ "$EXPECT" = old ]; then
 elif [ "$EXPECT" = new ]; then
   check migrations "$mig" 2
   check canonical_registry_rows "$reg" 34
-  check business_metrics_columns "$cols" "triggers_accepted_count,triggers_delivered_count,triggers_total_count"
+  # Both name sets are present until the CONTRACT half (database/deferred/146) is applied by hand in a
+  # later deploy; after it, only the canonical three remain. `has` passes in both states.
+  has business_metrics_columns "$cols" "triggers_delivered_count triggers_accepted_count triggers_total_count"
   check rekey_audit_table "$audit" t
   check canonical_calculator_code "$canon" present
   check feast_fields "$fields" "triggers_accepted_count,triggers_delivered_count,triggers_total_count"
@@ -14067,15 +14079,20 @@ The deploy run's step summary (`deploy.yml:1298-1359`) and its job log (actions 
   re-key moved, from `public.kpi_history_rekey_143` (Task 8).
   ```bash
   docker stop e2i_feast_materializer
+  # The rollback file retires its OWN ledger row as its last statement, so the schema change and the
+  # ledger move commit together under --single-transaction (codex iter3 HIGH-2). Do NOT re-add a
+  # separate `q DELETE` after this: `&&` would order the two, not make them atomic, and a failure
+  # between them leaves the runner believing a rolled-back migration is still applied.
   [ "$(q "SELECT count(*) FROM public.schema_migrations WHERE filename = '143_canonical_volume_kpis.sql'")" = 1 ] && docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 --single-transaction < "$RB/rollback_143_canonical_volume_kpis.sql"
-  q "DELETE FROM public.schema_migrations WHERE filename = '143_canonical_volume_kpis.sql' RETURNING filename;"
+  q "SELECT count(*) AS ledger_143_should_be_0 FROM public.schema_migrations WHERE filename = '143_canonical_volume_kpis.sql';"
   ```
 - **B1x — undo the EXPAND too (NOT a recovery step; only to return the schema to its exact pre-144
-  shape, e.g. to re-rehearse the migration).** Run the two statements together or neither: leaving the
-  ledger row while the columns are gone means the next deploy will NOT re-apply 144.
+  shape, e.g. to re-rehearse the migration).** The rollback file retires its own ledger row in the same
+  transaction, so "columns gone but ledger still present" — which would make the next deploy skip 144 —
+  cannot happen half-way. The second command below only REPORTS the result.
   ```bash
-  [ "$(q "SELECT count(*) FROM public.schema_migrations WHERE filename = '144_per_hcp_trigger_count_columns.sql'")" = 1 ] && docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 --single-transaction < "$RB/rollback_144_per_hcp_trigger_count_columns.sql" \
-    && q "DELETE FROM public.schema_migrations WHERE filename = '144_per_hcp_trigger_count_columns.sql' RETURNING filename;"
+  [ "$(q "SELECT count(*) FROM public.schema_migrations WHERE filename = '144_per_hcp_trigger_count_columns.sql'")" = 1 ] && docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 --single-transaction < "$RB/rollback_144_per_hcp_trigger_count_columns.sql"
+  q "SELECT count(*) AS ledger_144_should_be_0 FROM public.schema_migrations WHERE filename = '144_per_hcp_trigger_count_columns.sql';"
   ```
 - **B2 — checkout back** (mirrors `rollback_to_prev`, `deploy.yml:467`; `$RB` is untracked and survives):
   ```bash
@@ -14578,12 +14595,32 @@ check("migrations 143 and 144 recorded", psql(
     "('143_canonical_volume_kpis.sql','144_per_hcp_trigger_count_columns.sql')") == "2")
 check("34 canonical_volume statements registered",
       psql("SELECT count(*) FROM public.kpi_query_registry WHERE query_id LIKE 'canonical_volume_%'") == "34")
-legacy = psql("SELECT count(*) FROM information_schema.columns WHERE table_name LIKE '%business_metrics' "
-              "AND column_name IN ('trx_count','nrx_count','total_rx_count')")
-check("no legacy per_hcp column names on the table or the split views", legacy == "0", legacy)
-honest = psql("SELECT count(*) FROM information_schema.columns WHERE table_name LIKE '%business_metrics' "
-              "AND column_name IN ('triggers_delivered_count','triggers_accepted_count','triggers_total_count')")
-check("honest names on the table and all 4 split views (3 x 5)", honest == "15", honest)
+# REVISED 2026-09-18 (codex iter3 HIGH-1). These two checks were written for the SUPERSEDED one-step
+# rename, which retired the legacy names and renamed the four split views in the same migration. The
+# expand does neither: after a successful deploy the TABLE carries all six count columns and the four
+# `SELECT *` split views still expose the legacy three (they are rebuilt by the CONTRACT half,
+# database/deferred/146, in a later deploy). Asserting `legacy == 0` and `honest == 15` would fail a
+# correct deploy — the exact defect this certification exists to catch, pointed the wrong way.
+legacy_tbl = psql("SELECT count(*) FROM information_schema.columns WHERE table_name = 'business_metrics' "
+                  "AND column_name IN ('trx_count','nrx_count','total_rx_count')")
+honest_tbl = psql("SELECT count(*) FROM information_schema.columns WHERE table_name = 'business_metrics' "
+                  "AND column_name IN ('triggers_delivered_count','triggers_accepted_count','triggers_total_count')")
+check("the canonical per_hcp names are on the table (3)", honest_tbl == "3", honest_tbl)
+check("the legacy names are still on the table, trigger-synced, until the contract half (3)",
+      legacy_tbl == "3", legacy_tbl)
+# The sync trigger is what makes the legacy three safe to keep, so certify it is actually installed
+# rather than inferring it from the columns being present.
+sync = psql("SELECT count(*) FROM pg_trigger WHERE tgrelid='public.business_metrics'::regclass "
+            "AND NOT tgisinternal AND tgname='business_metrics_sync_legacy_trigger_counts_trg'")
+check("the bidirectional sync trigger is installed", sync == "1", sync)
+# ...and it must actually hold: no per_hcp_rollup row may disagree across the two names.
+skew = psql("SELECT count(*) FROM public.business_metrics WHERE trx_count IS DISTINCT FROM triggers_delivered_count "
+            "OR nrx_count IS DISTINCT FROM triggers_accepted_count "
+            "OR total_rx_count IS DISTINCT FROM triggers_total_count")
+check("no row disagrees between the legacy and canonical names", skew == "0", skew)
+views_legacy = psql("SELECT count(*) FROM information_schema.columns WHERE table_name LIKE 'v\\_%business_metrics' "
+                    "AND column_name IN ('trx_count','nrx_count','total_rx_count')")
+check("the split views are untouched by the expand (12 legacy view columns)", views_legacy == "12", views_legacy)
 per_hcp = psql("SELECT count(*) FROM public.business_metrics WHERE metric_type='per_hcp_rollup' AND triggers_total_count IS NOT NULL")
 check("per_hcp_rollup rows readable under the new names", int(per_hcp or 0) > 0, per_hcp)
 trx_months = int(psql("SELECT count(DISTINCT metric_date) FROM public.business_metrics WHERE metric_type='trx'") or 0)

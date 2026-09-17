@@ -1,4 +1,4 @@
-"""Migration 145: the CONTRACT half of the per_hcp_rollup column expand/contract.
+"""Migration 146: the CONTRACT half of the per_hcp_rollup column expand/contract.
 
 144 adds ``business_metrics.triggers_{delivered,accepted,total}_count`` beside the
 legacy ``{trx,nrx,total_rx}_count`` and keeps both true with a row trigger. 145
@@ -6,7 +6,7 @@ retires the legacy three.
 
 THE WHOLE POINT OF THIS MODULE IS THAT 145 MUST NOT RUN IN THE SAME DEPLOY AS 144.
 ``scripts/run_migrations.sh`` applies EVERY pending forward ``*.sql`` in each of its
-``MIGRATION_DIRS`` in one pass, so a ``database/migrations/145_*.sql`` committed
+``MIGRATION_DIRS`` in one pass, so a ``database/migrations/146_*.sql`` committed
 beside 144 would be applied seconds after it — the legacy columns would be gone
 before a single container was replaced, and the deploy would be exactly as unsafe
 as the rename that codex HIGH-1 rejected. Expand/contract is only expand/contract
@@ -26,7 +26,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[3]
 RUNNER = REPO / "scripts" / "run_migrations.sh"
 DEFERRED_DIR = REPO / "database" / "deferred"
-CONTRACT = DEFERRED_DIR / "145_drop_legacy_per_hcp_count_columns.sql"
+CONTRACT = DEFERRED_DIR / "146_drop_legacy_per_hcp_count_columns.sql"
 EXPAND = REPO / "database" / "migrations" / "144_per_hcp_trigger_count_columns.sql"
 LEGACY = ("trx_count", "nrx_count", "total_rx_count")
 CANONICAL = ("triggers_delivered_count", "triggers_accepted_count", "triggers_total_count")
@@ -75,6 +75,36 @@ def test_the_contract_migration_is_outside_every_directory_the_runner_applies():
     assert EXPAND.parent.resolve() in applied, (
         "the EXPAND half must still be auto-applied; only the contract is deferred"
     )
+
+
+def test_the_contract_number_collides_with_no_other_migration():
+    """The contract was first written as 145 — and 145 was ALREADY TAKEN by
+    ``database/migrations/145_drop_trx_share_patient_axis_variants.sql``, which is
+    on origin/main and applied in the live database. Nothing caught it: the two
+    files sit in different directories, so the runner keys them differently and no
+    test compared numbers. It surfaced only from reading the live
+    ``schema_migrations`` ledger.
+
+    It matters because the intended end state (codex iter2 MED-1) is to MOVE this
+    file into ``database/migrations/`` in a later PR, where a duplicate number
+    makes the apply order ambiguous and the history unreadable. Guard the number
+    across every directory under ``database/``, not just this one.
+    """
+    number = CONTRACT.name.split("_", 1)[0]
+    assert number.isdigit(), CONTRACT.name
+    clashes = [
+        q.relative_to(REPO).as_posix()
+        for q in sorted((REPO / "database").rglob(f"{number}_*.sql"))
+        if q.resolve() != CONTRACT.resolve()
+    ]
+    assert not clashes, (
+        f"migration number {number} is already used by {clashes} — renumber the "
+        "contract before it is moved into database/migrations/"
+    )
+    # ...and the guard must be able to SEE a clash: the number it would have
+    # collided with is still there, under a different name.
+    taken = sorted((REPO / "database").rglob("145_*.sql"))
+    assert taken, "the 145 file this guard was written for is gone; re-derive the trap"
 
 
 def test_the_contract_retires_the_legacy_columns_and_the_sync_machinery():
@@ -128,23 +158,63 @@ def test_the_contract_records_itself_in_the_migration_ledger_atomically():
     never sees it (that is the point of ``database/deferred/``). An earlier draft
     left the INSERT as a second, separate command in the header, which can be
     forgotten or fail on its own and leave the ledger disagreeing with the schema.
-    It is now the file's LAST statement, so it commits in the same
-    ``--single-transaction`` as the change it records, or not at all.
+    It now follows every schema statement in the file (only ``NOTIFY`` comes after
+    it), so under the header's own ``--single-transaction`` apply command it commits
+    with the change it records, or not at all.
+
+    codex iter3 LOW-2: an earlier version of this test asserted the ordering but
+    NOT the flag that makes the ordering matter — deleting ``--single-transaction``
+    from the documented command left every assertion green, while the file would
+    then apply statement-by-statement and could commit the DROPs without the ledger
+    row. The flag is the atomicity; it is asserted here.
     """
     sql = CONTRACT.read_text()
     m = re.search(
         r"INSERT INTO public\.schema_migrations\(filename\)\s*\n?\s*"
-        r"VALUES \('deferred/145_drop_legacy_per_hcp_count_columns\.sql'\)",
+        r"VALUES \('deferred/146_drop_legacy_per_hcp_count_columns\.sql'\)",
         sql,
     )
     assert m, "the contract does not record itself in public.schema_migrations"
     assert "ON CONFLICT DO NOTHING" in sql, "re-applying it would raise on the ledger row"
-    last_change = sql.index(
-        "ALTER TABLE public.business_metrics DROP COLUMN IF EXISTS total_rx_count;"
+
+    # THE flag: without it psql commits each statement on its own and the ledger row
+    # is no longer coupled to the change. It must be in the APPLY COMMAND, not merely
+    # somewhere in the header — the header also explains the flag in prose, and a
+    # substring check over the whole header is satisfied by that prose while the
+    # command itself has lost the flag. Reconstruct the command from its comment
+    # lines (it wraps across two with a backslash) and look inside it.
+    head = sql[: sql.index("DROP VIEW")]
+    command_text = " ".join(re.sub(r"^--\s?", "", ln) for ln in head.splitlines())
+    assert re.search(
+        r"docker exec.*?psql.*?--single-transaction.*?<\s*database/deferred/146", command_text
+    ), (
+        "the documented apply COMMAND does not use --single-transaction, so nothing "
+        "couples the ledger row to the schema change it records"
     )
-    assert m.start() > last_change, (
-        "the ledger row is written before the change it records; a failure in "
-        "between would leave the ledger claiming work that did not happen"
+
+    # The INSERT must come after EVERY schema statement, not merely after one of
+    # them; NOTIFY is the only thing allowed to follow.
+    schema_stmts = [
+        mm.start()
+        for mm in re.finditer(
+            r"^\s*(ALTER TABLE|DROP VIEW|DROP TRIGGER|DROP FUNCTION|CREATE OR REPLACE VIEW)",
+            sql,
+            re.M,
+        )
+    ]
+    assert schema_stmts, "no schema statements found — the parser, not the file, is wrong"
+    assert m.start() > max(schema_stmts), (
+        "the ledger row is written before some schema change; a failure in between "
+        "would leave the ledger claiming work that did not happen"
+    )
+    tail = sql[m.end() :]
+    leftovers = [
+        line.strip()
+        for line in tail.splitlines()
+        if line.strip() and not line.strip().startswith("--")
+    ]
+    assert all(ln.startswith(("ON CONFLICT", "VALUES", "NOTIFY", ")", ";")) for ln in leftovers), (
+        f"unexpected statements after the ledger row: {leftovers}"
     )
 
 
