@@ -5,8 +5,8 @@ This runs WITHOUT the feast SDK and WITHOUT a live database — it AST-parses
 ``feature_repo/data_sources.py`` for the query strings and text-parses every
 committed FORWARD ``*.sql`` under ``database/`` (CREATE TABLE + ADD/DROP/RENAME
 COLUMN), since the canonical columns are spread across the base schema and the
-migrations
-(e.g. territory_metrics in 031, business_metrics' Feast columns in 033). So
+migrations (e.g. territory_metrics in 031, business_metrics' Feast columns in
+033). So
 unlike the feast-gated ``test_data_sources_canonical_tables.py`` (which skips where the app
 image has no feast), this guard actually executes in CI and catches source-query
 column drift at PR time — the failure mode behind #556 (``business_metrics_source``
@@ -163,11 +163,26 @@ def _is_forward_migration(sql_path: Path) -> bool:
     files that reach the database, so this is the runner's rule rather than an
     ad-hoc skip list — if the runner's rule changes, this must follow it.
 
-    This matters because of renames: rollback_144 carries the REVERSE of 144's
-    rename and sorts after it, so an unfiltered scan would model the pre-144
-    names and report a false 'missing column'. (It also stops 30 ADD/DROP COLUMN
-    statements in database/ml/rollback_040-044 from entering the model at all;
-    those happen to touch no guarded table today, so this is a latent-bug fix.)
+    MEASURED EFFECT (2026-09-17). Stubbing this to ``True`` changes the modelled
+    columns of FIVE tables — 28 columns lost, 2 gained — via the 30 static
+    ADD/DROP COLUMN statements in ``database/ml/rollback_040-044``, and it moves
+    the model in BOTH harmful directions:
+
+      * FALSE PASS — ``tool_registry.success_rate``. Forward migration
+        ``ml/040_tool_registry_startup_sync.sql:44`` DROPs it; ``ml/rollback_040.sql:57``
+        ADDs it back, and ``rollback_040`` sorts AFTER ``040``, so unfiltered the
+        rollback wins and the model carries a column the forward path removed.
+        A source query naming it would be waved through — the #556 class, with
+        this guard blind to it.
+      * FALSE FAIL — ``tool_performance.attempts`` and ``twin_simulations.cohort_ate``,
+        added by forward migrations ``ml/041``/``ml/042`` and dropped by their
+        rollbacks: unfiltered, real columns vanish from the model.
+
+    Note what this filter does NOT do: ``business_metrics`` is byte-identical with
+    or without it, because rollback_144's reverse rename is DYNAMIC and no static
+    reader can see it. The rename case motivated this filter but is not what it
+    currently protects; see TestCommittedRenamesAreModelled for why the rename
+    guard is still kept.
     """
     name = sql_path.name.lower()
     return not (
@@ -274,8 +289,21 @@ class TestCommittedRenamesAreModelled:
     That is why it cannot simply be added to the ADD/DROP scan: the model's
     safety argument was "over-capture can only relax the guard", and a rename
     applied from a NON-FORWARD file (a rollback) would silently reverse a real
-    rename and produce a FALSE 'missing column'. The file filter is what keeps
-    the model sound once renames are modelled.
+    rename and produce a FALSE 'missing column'.
+
+    That reversal is REAL BUT CURRENTLY UNREACHABLE, and the reason is an
+    asymmetry this lane created: forward 144 now spells its three table renames
+    statically (so the model can see them) while rollback_144 still performs the
+    reverse renames through ``EXECUTE format(...)``. Measured 2026-09-17 at this
+    commit: 3 statically-readable renames in 144, 0 in rollback_144. So
+    ``business_metrics`` is modelled identically with or without the forward-only
+    filter — the filter's live effect is on five OTHER tables (see
+    :func:`_is_forward_migration`).
+
+    These tests are kept anyway, because the masking is one edit from gone:
+    144 now carries a comment arguing that committed renames should be static,
+    which makes "make the rollback match for consistency" a natural change — and
+    that change arms the reversal immediately. The filter is what holds then.
     """
 
     def test_the_ddl_model_follows_a_committed_column_rename(self):
@@ -301,6 +329,27 @@ class TestCommittedRenamesAreModelled:
         assert rollback.exists(), "the trap this guards is gone; re-check the filter"
         assert not _is_forward_migration(rollback)
         assert "triggers_delivered_count" in _DDL.get("business_metrics", set())
+
+    def test_excluding_non_forward_files_changes_the_model_in_both_directions(self):
+        """MODEL-level teeth for the filter, on the tables it actually affects.
+
+        The sibling rename assertions cannot provide these: business_metrics is
+        modelled identically with or without the filter. These two flip when the
+        filter is removed, one per harmful direction.
+
+        Both columns were checked against the LIVE database on 2026-09-17
+        (read-only, by the lane dispatcher): tool_performance.attempts EXISTS,
+        tool_registry.success_rate DOES NOT. That is a snapshot of the live
+        schema on that date, not an invariant — the assertions below are about
+        the MODEL built from committed forward migrations, which is what this
+        guard compares source queries against; the live check is corroboration
+        that the model's answer is the true one.
+        """
+        # FALSE-FAIL direction: added by forward ml/041, dropped by its rollback.
+        assert "attempts" in _DDL.get("tool_performance", set())
+        # FALSE-PASS direction: dropped by forward ml/040:44, re-added by
+        # ml/rollback_040.sql:57, which sorts AFTER it.
+        assert "success_rate" not in _DDL.get("tool_registry", set())
 
     def test_the_forward_only_filter_is_not_vacuous(self):
         """A filter that excludes nothing would pass every test above by accident."""
