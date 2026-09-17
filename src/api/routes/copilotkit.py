@@ -2155,27 +2155,27 @@ async def _ensure_conversation_exists(session_id: str) -> bool:
 # E2I BACKEND ACTIONS
 # =============================================================================
 
-# Fallback sample data when database is unavailable
-# Real KPI substrate for the Home landing tiles. Each metric field maps to a
-# vetted allowlisted query in `public.kpi_query_registry` (migrations 044 + 063),
-# run via the `kpi_query` RPC against REAL tables (treatment_events). This replaces
-# the former synthetic `business_metrics` rollup AND the hardcoded `_FALLBACK_KPIS`
-# sample (an intentional sample fallback, commits 96e2ca24e / 2662a2c04 -- now
-# superseded: showing fabricated/synthetic values as real on the landing page is
-# the exact harm the H1 fix removes).
-#
+# Real KPI substrate for the Home landing tiles. Each metric field maps to a vetted
+# allowlisted query in `public.kpi_query_registry` run via the `kpi_query` RPC --
+# never a hardcoded sample (the old `_FALLBACK_KPIS`, commits 96e2ca24e / 2662a2c04,
+# is gone: fabricated values on the landing page are the harm the H1 fix removed).
+# The volume tiles (TRx / NRx / NBRx / TRx share) read the CANONICAL business_metrics
+# monthly series (migration 143, latest complete month); H1's objection to synthetic
+# business_metrics values is met by the same M4 gate as every tile: the base ids
+# exclude is_synthetic rows, and data_source="synthetic" badges the demo twins.
+# hcp_reach / conversion_rate stay on treatment_events / triggers.
 # field -> (kpi_query registry id, json result key, brand-scoped?, defined-for-"All"?)
-# `defined_for_all=False` marks an inherently per-brand metric (TRx share filters
-# `brand = $1` with no NULL guard, unlike the other queries' `$1 IS NULL OR ...`):
-# for the aggregate "All" view it is N/A, so we return honest None instead of the
-# misleading 0 that a NULL brand would yield from the share SQL.
+# `defined_for_all=False` marks an inherently per-brand metric (TRx share needs a
+# brand): for the aggregate "All" view it is N/A -> honest None, never a misleading 0.
+from src.kpi.home_volume_summary import volume_tile_fields  # noqa: E402
+
 _KPI_SUMMARY_QUERIES: Dict[str, tuple] = {
-    "trx_volume": ("business_impact_trx", "trx", True, True),
-    "nrx_volume": ("business_impact_nrx", "nrx", True, True),
-    "market_share": ("business_impact_trx_share", "share", True, False),
+    "trx_volume": ("canonical_volume_trx", "trx", True, True),
+    "nrx_volume": ("canonical_volume_nrx", "nrx", True, True),
+    "market_share": ("canonical_volume_trx_share", "share", True, False),
     "conversion_rate": ("business_impact_conversion_rate", "conversion_rate", False, True),
     "hcp_reach": ("business_impact_hcp_reach", "hcp_reach", True, True),
-    "patient_starts": ("business_impact_nbrx", "nbrx", True, True),
+    "patient_starts": ("canonical_volume_nbrx", "nbrx", True, True),
 }
 
 
@@ -2234,9 +2234,9 @@ def _kpi_summary_measure_bases(
                 "declared_sources": tables,
                 "measure": f"computed on demand from {', '.join(tables)}",
                 "note": (
-                    "Computed on demand from the operational substrate via the kpi_query "
-                    "registry — NOT read from the stored business_metrics table. Only "
-                    "compare with a figure whose substrate matches."
+                    "Computed on demand via the kpi_query registry from the tables named in "
+                    "`substrate` (the volume tiles rest on the canonical business_metrics "
+                    "series). Only compare with a figure whose comparison_key matches."
                 ),
             }
     return bases
@@ -2312,9 +2312,9 @@ async def get_kpi_summary(brand: str, region: Optional[str] = None) -> Dict[str,
     """
     Get the REAL KPI summary for a brand for the Home landing tiles.
 
-    Reads the vetted allowlisted KPI queries (treatment_events via the `kpi_query`
-    RPC) -- the same real substrate the KPI grid uses -- NOT the synthetic
-    `business_metrics` table and NOT a hardcoded sample. When the source data is
+    Reads the vetted allowlisted KPI queries via the `kpi_query` RPC: the volume
+    tiles from the canonical business_metrics monthly series, hcp_reach and
+    conversion from treatment_events/triggers, never a hardcoded sample. When the source data is
     stale/empty the values are honest zeros with ``data_source="database"``; when
     the DB is unreachable or every query fails the result is fail-closed with
     ``data_source="unavailable"`` and ``None`` metrics. Values are NEVER fabricated.
@@ -2394,11 +2394,11 @@ async def get_kpi_summary(brand: str, region: Optional[str] = None) -> Dict[str,
         # not wall-clock now — "of data" keeps the tile label honest.
         "period": "Last 30 days of data",
         "metrics": metrics,
-        # #1640: per-tile substrate, derived from the registry. Every figure
-        # here is COMPUTED from the operational substrate via the kpi_query
-        # registry — none is a stored business_metrics row — so a tile must not
-        # be read as a check on, or a correction to, a business_metrics value
-        # under the same name (measured ~73x apart for TRx).
+        # #1640 comparability, derived from the registry SQL each tile ran: the
+        # volume tiles rest on the canonical business_metrics series (so they
+        # agree with stored business_metrics rows); hcp_reach and conversion rest
+        # on treatment_events/triggers. comparison_key is the only field a
+        # comparison may rest on.
         "measure_basis": _kpi_summary_measure_bases(client, brand=brand, region=region),
         # When the E2I_KPI_INCLUDE_SYNTHETIC demo flag is on, the figures are
         # computed over synthetic-gold rows (the _include_synthetic twins) rather
@@ -2410,10 +2410,10 @@ async def get_kpi_summary(brand: str, region: Optional[str] = None) -> Dict[str,
             if (any_ok and kpi_include_synthetic())
             else ("database" if any_ok else "unavailable")
         ),
-        # Data-coverage end (latest treatment_events prescription date) so the FE
-        # renders a 0/null tile as "No recent activity -- data through <date>" with
-        # a DYNAMIC date, not a bare 0. None when unavailable.
-        "data_through": _fetch_data_through(client),
+        # data_through = the event frontier (empty hcp_reach / conversion tile labels);
+        # volume_data_through / volume_period = the canonical series' latest complete
+        # month, which the volume tiles report (canonical TRx lane).
+        **volume_tile_fields(client, _fetch_data_through(client)),
     }
 
 
@@ -5002,7 +5002,7 @@ async def kpi_summary_endpoint(
     """REST exposure of the real business_metrics KPI rollup.
 
     Thin wrapper over the existing :func:`get_kpi_summary` (also registered as a
-    CopilotAction) so the Home QUICK_STATS bar can read Total TRx (MTD) and
+    CopilotAction) so the Home QUICK_STATS bar can read Total TRx (latest full month) and
     HCPs Reached directly. Returns ``{brand, period, metrics, data_source}``;
     ``data_source`` is ``"database"`` for real values, ``"fallback"`` otherwise.
     When ``region`` is supplied the metrics re-scope to that region (migration

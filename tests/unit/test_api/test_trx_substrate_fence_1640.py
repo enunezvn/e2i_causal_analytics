@@ -716,6 +716,16 @@ class TestTheTileSubstratesMatchTheLiveRegistry:
     unit lane with no database must not turn into a false green OR a false red.
     """
 
+    #: A migration-143 statement NO tile runs. Its presence separates "143 is not
+    #: deployed to this registry" (an environment fact -> skip) from "a tile's
+    #: query id does not exist" (a defect -> the KeyError below, loudly). A guard
+    #: that skipped whenever a tile id was missing would sit green forever over a
+    #: typo in ``_KPI_SUMMARY_QUERIES`` — the proxy-for-a-capability shape this
+    #: lane keeps finding. Measured 2026-09-17: the droplet registry holds ZERO
+    #: ``canonical_volume%`` ids, so without this the re-pointed tiles read as a
+    #: product failure rather than an undeployed migration.
+    _MIGRATION_143_WITNESS = "canonical_volume_monthly_series"
+
     def _bases(self):
         from src.api.dependencies.supabase_client import get_supabase, init_supabase
 
@@ -723,11 +733,17 @@ class TestTheTileSubstratesMatchTheLiveRegistry:
             init_supabase()
         if get_supabase() is None:
             pytest.skip("no Supabase client available")
-        from src.api.routes.copilotkit import _kpi_summary_measure_bases
+        from src.api.routes.copilotkit import _KPI_SUMMARY_QUERIES, _kpi_summary_measure_bases
+        from src.kpi.measure_basis import query_substrates_cached
+        from src.kpi.synthetic_mode import resolve_kpi_query_id
 
         bases = _kpi_summary_measure_bases(get_supabase())
         if not bases:
             pytest.skip("kpi_query_registry unreadable")
+        missing = sorted(set(_KPI_SUMMARY_QUERIES) - set(bases))
+        witness = resolve_kpi_query_id(self._MIGRATION_143_WITNESS)
+        if missing and not query_substrates_cached((witness,)):
+            pytest.skip(f"migration 143 not in this registry ({witness}); tiles absent: {missing}")
         return bases
 
     def test_hcp_reach_is_the_event_ledger_not_hcp_profiles(self):
@@ -748,19 +764,31 @@ class TestTheTileSubstratesMatchTheLiveRegistry:
             "patient_starts",
         }, sorted(bases)
 
-    def test_no_tile_claims_business_metrics(self):
-        # ⚠ NOT REWRITTEN BY TASK 16. The plan's replacement asserts the tiles rest
-        # on business_metrics, but the tile map still points trx_volume at
-        # `business_impact_trx` (copilotkit.py:2173) -- the PANEL statement. Moving
-        # the tiles to the canonical statements is Task 17, so the plan placed a
-        # Task-17-dependent assertion in Task 16. These stay TRUE-today until then.
-        for field, basis in self._bases().items():
-            assert "business_metrics" not in basis["substrate"], (field, basis["substrate"])
+    def test_volume_tiles_rest_on_business_metrics_and_the_rest_do_not(self):
+        """Flipped by Task 17, which re-pointed the four volume tiles at the
+        canonical ``canonical_volume_*`` statements. Before that they ran the
+        PANEL ``business_impact_*`` statements and this asserted the opposite.
 
-    def test_a_tile_is_not_comparable_with_stored_rows(self):
+        Both halves matter: asserting only that the volume tiles reach
+        business_metrics would pass just as well if EVERY tile had been moved,
+        and hcp_reach / conversion are exactly the tiles that must not be.
+        """
+        bases = self._bases()
+        for field in ("trx_volume", "nrx_volume", "market_share", "patient_starts"):
+            assert bases[field]["substrate"] == ["business_metrics"], (field, bases[field])
+        for field in ("conversion_rate", "hcp_reach"):
+            assert "business_metrics" not in bases[field]["substrate"], (field, bases[field])
+
+    def test_the_trx_tile_is_comparable_with_stored_rows_and_hcp_reach_is_not(self):
+        """The #1640 fence was built because the TRx tile and a stored
+        business_metrics row were ~1,300x apart. They are now the same series,
+        so fencing them would be the new wrong answer — while hcp_reach still
+        counts events and stays fenced."""
         from src.kpi.measure_basis import BUSINESS_METRICS_BASIS, substrates_agree
 
-        assert not substrates_agree(self._bases()["trx_volume"], BUSINESS_METRICS_BASIS)
+        bases = self._bases()
+        assert substrates_agree(bases["trx_volume"], BUSINESS_METRICS_BASIS)
+        assert not substrates_agree(bases["hcp_reach"], BUSINESS_METRICS_BASIS)
 
 
 @pytest.mark.integration
