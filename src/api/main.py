@@ -302,34 +302,23 @@ async def lifespan(app: FastAPI):
         app.state.supabase_available = False
         logger.warning(f"Supabase initialization failed (degraded mode): {e}")
 
-    # Keep the database tool registry aligned with the running code independently of recording.
-    # The background task never raises and is not awaited here, so a slow or unreachable database
-    # cannot delay startup.
-    registry_sync_task = None
+    # Sync the DB registry independently; both startup jobs remain backgrounded.
+    learning_loop_on = False
+    registry_sync_task = learning_loop_task = None
     try:
         from src.agents.tool_composer import registry_sync
 
         registry_sync_task = asyncio.create_task(registry_sync.registry_sync_startup())
         logger.info("Tool registry: startup sync scheduled")
-    except Exception as e:  # noqa: BLE001 - never block startup on this
-        logger.warning(f"Tool registry startup sync not scheduled: {e}")
-
-    # Tool-composer recording (spec 2026-09-11 §5.4) is opt-in per process through
-    # TOOL_COMPOSER_LEARNING_LOOP_ENABLED (docker-compose x-common-env). Its column-allowlist
-    # initialization remains behind that flag and runs in a separate background task.
-    learning_loop_on = False
-    learning_loop_task = None
-    try:
-        from src.agents.tool_composer import learning_recorder, registry_sync
+        # Recorder-only allowlist initialization remains behind the learning-loop flag.
+        from src.agents.tool_composer import learning_recorder
 
         learning_loop_on = learning_recorder.learning_loop_enabled()
         if learning_loop_on:
             learning_loop_task = asyncio.create_task(registry_sync.learning_loop_startup())
             logger.info("Tool-composer learning loop: recorder initialization scheduled")
         else:
-            logger.info(
-                "Tool-composer learning loop DISABLED (TOOL_COMPOSER_LEARNING_LOOP_ENABLED)"
-            )
+            logger.info("Tool-composer recording disabled")
     except Exception as e:  # noqa: BLE001 - never block startup on this
         logger.warning(f"Tool-composer learning loop startup not scheduled: {e}")
 
@@ -500,22 +489,16 @@ async def lifespan(app: FastAPI):
     try:
         yield  # Application runs here
     finally:
-        # Tool-composer tasks first, while the clients they use are still open: stop startup work,
-        # stop this worker's heartbeats (its unfinished compositions will read abandoned, which
-        # they are), then wait up to 5 s for in-flight recording writes so a graceful deploy keeps
-        # them.
-        if registry_sync_task is not None and not registry_sync_task.done():
-            registry_sync_task.cancel()
-            try:
-                await registry_sync_task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                pass
-        if learning_loop_task is not None and not learning_loop_task.done():
-            learning_loop_task.cancel()
-            try:
-                await learning_loop_task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                pass
+        # Stop composer startup work while its clients remain open. Then stop this worker's
+        # heartbeats and wait up to 5 s for recording writes so a graceful deploy keeps them.
+        # Cancellation is best-effort so the rest of shutdown always continues.
+        for task in (registry_sync_task, learning_loop_task):
+            if task is not None and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                    pass
         if learning_loop_on:
             try:
                 from src.agents.tool_composer import learning_recorder
