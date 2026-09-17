@@ -139,6 +139,12 @@ logger = logging.getLogger(__name__)
 #: supplied. 24 hours matches the Celery beat cadence below.
 DEFAULT_WINDOW_HOURS: int = 24
 
+#: Scheduled runs select territory dates from ARRIVALS over one weekly batch cycle plus
+#: margin. Redeclared (not imported) like PER_HCP_METRIC_TYPE; a unit test pins it equal to
+#: ``business_metrics_per_hcp_etl.ARRIVAL_WINDOW_HOURS`` (canonical TRx lane, owner decision #3).
+ARRIVAL_MARGIN_HOURS: int = 6
+ARRIVAL_WINDOW_HOURS: int = 7 * 24 + ARRIVAL_MARGIN_HOURS
+
 #: Celery queue this task runs on. Routed to ``worker_medium`` per existing
 #: ``task_routes`` config in ``src.workers.celery_app``.
 TASK_QUEUE: str = "analytics"
@@ -162,6 +168,8 @@ PER_HCP_METRIC_TYPE: str = "per_hcp_rollup"
 #      from `business_metrics.metric_date` for per-HCP rollup rows so we
 #      only roll up days where 6B-infra-2a has produced output (avoids
 #      writing all-zeros rows for days with nothing to aggregate).
+#      Scheduled runs instead select the dates touched by ARRIVALS
+#      (_TERRITORY_METRIC_DATES_BY_ARRIVAL); either way each date is rebuilt whole.
 #   2. territory_dates: cross-product of every territory_id with each
 #      metric_date in the window. Anchors LEFT JOINs so a territory with
 #      no business_metrics for the day still gets a row (with zeros).
@@ -187,15 +195,48 @@ PER_HCP_METRIC_TYPE: str = "per_hcp_rollup"
 #   declared on these two columns, so writing NULL explicitly is now
 #   well-defined. Pre-existing 031 rows keep their random values until
 #   real Reltio/Veeva integration replaces this preservation behaviour.
-INSERT_TERRITORY_ROLLUP_SQL: str = """
-WITH metric_dates AS (
+_TERRITORY_METRIC_DATES_BY_WINDOW: str = """
+metric_dates AS (
     SELECT DISTINCT bm.metric_date
       FROM business_metrics bm
      WHERE bm.metric_type = %(per_hcp_metric_type)s
        AND bm.hcp_id IS NOT NULL
        AND bm.metric_date >= %(start_date)s::DATE
        AND bm.metric_date <  %(end_date)s::DATE
-),
+)"""
+
+_TERRITORY_METRIC_DATES_BY_ARRIVAL: str = """
+metric_dates AS (
+    -- Late-arrival fix (canonical TRx lane, owner decision #3). A territory date is affected
+    -- when (a) a per-HCP row for it was WRITTEN in the run window, or (b) a trigger that
+    -- ARRIVED in the run window falls inside the date's 30-day active-HCP lookback. (b) is
+    -- required: business_metrics has no updated_at and the per-HCP ON CONFLICT arm keeps
+    -- created_at, so a date re-rolled for late triggers keeps its old created_at; and a late
+    -- trigger on day D changes active_hcp_count for every date in [D, D + 30].
+    SELECT per_hcp.metric_date
+      FROM (
+            SELECT bm.metric_date,
+                   BOOL_OR(bm.created_at >= %(start_date)s AND bm.created_at < %(end_date)s)
+                       AS written_in_window
+              FROM business_metrics bm
+             WHERE bm.metric_type = %(per_hcp_metric_type)s
+               AND bm.hcp_id IS NOT NULL
+             GROUP BY bm.metric_date
+           ) per_hcp
+     WHERE per_hcp.written_in_window
+        OR EXISTS (
+            SELECT 1
+              FROM triggers t
+             WHERE t.created_at >= %(start_date)s
+               AND t.created_at <  %(end_date)s
+               AND t.hcp_id IS NOT NULL
+               AND t.trigger_timestamp >= per_hcp.metric_date - INTERVAL '30 days'
+               AND t.trigger_timestamp <  per_hcp.metric_date + INTERVAL '1 day'
+        )
+)"""
+
+_TERRITORY_ROLLUP_CTES_TEMPLATE: str = """
+WITH __METRIC_DATES_CTE__,
 territories AS (
     SELECT DISTINCT territory_id
       FROM hcp_profiles
@@ -227,8 +268,7 @@ per_hcp_in_territory AS (
     JOIN hcp_profiles      hp ON bm.hcp_id = hp.hcp_id
     WHERE bm.metric_type = %(per_hcp_metric_type)s
       AND bm.hcp_id IS NOT NULL
-      AND bm.metric_date >= %(start_date)s::DATE
-      AND bm.metric_date <  %(end_date)s::DATE
+      AND bm.metric_date IN (SELECT metric_date FROM metric_dates)
     GROUP BY hp.territory_id, bm.metric_date
 ),
 active_hcp_per_territory_date AS (
@@ -274,6 +314,9 @@ territory_hcp_volume AS (
     WHERE territory_id IS NOT NULL
     GROUP BY territory_id
 )
+"""
+
+_TERRITORY_ROLLUP_INSERT_HEAD: str = """
 INSERT INTO territory_metrics (
     territory_id,
     metric_date,
@@ -293,6 +336,9 @@ INSERT INTO territory_metrics (
     is_synthetic,
     created_at
 )
+"""
+
+_TERRITORY_ROLLUP_ROWS_SELECT: str = """
 SELECT
     td.territory_id,
     td.metric_date,
@@ -317,6 +363,9 @@ LEFT JOIN per_hcp_in_territory          pht ON pht.territory_id = td.territory_i
 LEFT JOIN active_hcp_per_territory_date ahd ON ahd.territory_id = td.territory_id
                                             AND ahd.metric_date  = td.metric_date
 LEFT JOIN territory_hcp_volume          thv ON thv.territory_id = td.territory_id
+"""
+
+_TERRITORY_ROLLUP_ON_CONFLICT: str = """
 ON CONFLICT (territory_id, metric_date) DO UPDATE SET
     total_trx        = EXCLUDED.total_trx,
     total_nrx        = EXCLUDED.total_nrx,
@@ -328,6 +377,158 @@ ON CONFLICT (territory_id, metric_date) DO UPDATE SET
     -- arm.
     is_synthetic     = EXCLUDED.is_synthetic;
 """
+
+
+def _compose_territory_rollup(metric_dates_cte: str) -> str:
+    return (
+        _TERRITORY_ROLLUP_CTES_TEMPLATE.replace("__METRIC_DATES_CTE__", metric_dates_cte)
+        + _TERRITORY_ROLLUP_INSERT_HEAD
+        + _TERRITORY_ROLLUP_ROWS_SELECT
+        + _TERRITORY_ROLLUP_ON_CONFLICT
+    )
+
+
+#: Explicit ``start_date``/``end_date`` (manual backfills): per-HCP metric_dates in the window.
+INSERT_TERRITORY_ROLLUP_SQL: str = _compose_territory_rollup(_TERRITORY_METRIC_DATES_BY_WINDOW)
+
+#: Scheduled run (no dates): the per-HCP metric_dates touched by arrivals in the window.
+INSERT_TERRITORY_ROLLUP_BY_ARRIVAL_SQL: str = _compose_territory_rollup(
+    _TERRITORY_METRIC_DATES_BY_ARRIVAL
+)
+
+#: codex r13-08: a date whose per-HCP rows all disappeared is no longer selectable, so its
+#: stale territory rows must be deleted by calendar range in an explicit run.
+#: codex r14-04: ...but only rows THIS ETL owns. market_potential and resource_allocation_score
+#: are the two columns the ON CONFLICT SET arm refuses to overwrite; a row on which neither has
+#: ever been set is one nothing but this rollup produced. An obsolete row that carries either is
+#: left alone and reported as rows_obsolete_foreign — a stale rollup is a reporting error, while
+#: deleting another writer's only copy of a budget figure is data loss.
+_TERRITORY_OWNED_BY_THIS_ETL: str = (
+    "m.market_potential IS NULL AND m.resource_allocation_score IS NULL"
+)
+
+#: The exact complement of the predicate above, declared ONCE and substituted into the preview
+#: rather than restated inline. The two must PARTITION the obsolete set — every stale row
+#: counted exactly once — and a unit test EXTRACTS both from the composed SQL and evaluates
+#: them over every null combination, so a divergence here cannot pass as agreement.
+_TERRITORY_NOT_OWNED_BY_THIS_ETL: str = (
+    "o.market_potential IS NOT NULL OR o.resource_allocation_score IS NOT NULL"
+)
+
+_TERRITORY_PREVIEW_COUNTS_SQL: str = """
+SELECT
+    COUNT(DISTINCT r.metric_date)                        AS metric_dates,
+    COUNT(*) FILTER (WHERE m.territory_id IS NULL)       AS rows_new,
+    COUNT(*) FILTER (
+        WHERE m.territory_id IS NOT NULL
+          AND (m.total_trx, m.total_nrx, m.active_hcp_count, m.covered_lives, m.is_synthetic)
+              IS DISTINCT FROM
+              (r.total_trx, r.total_nrx, r.active_hcp_count, r.covered_lives, r.is_synthetic)
+    )                                                    AS rows_changed,
+    COUNT(*) FILTER (WHERE m.territory_id IS NOT NULL)   AS rows_existing,
+    -- codex r14-04: rows_obsolete counts exactly what the reconcile would DELETE (same
+    -- ownership predicate, substituted from the same constant), and rows_obsolete_foreign
+    -- counts the stale rows it deliberately leaves because another writer put a value in them.
+    (SELECT count(*) FROM territory_metrics o
+      WHERE o.metric_date >= %(start_date)s::DATE AND o.metric_date < %(end_date)s::DATE
+        AND __OWNED_O__
+        AND NOT EXISTS (SELECT 1 FROM rollup r2 WHERE r2.territory_id = o.territory_id AND r2.metric_date = o.metric_date))
+                                                         AS rows_obsolete,
+    (SELECT count(*) FROM territory_metrics o
+      WHERE o.metric_date >= %(start_date)s::DATE AND o.metric_date < %(end_date)s::DATE
+        AND (__NOT_OWNED_O__)
+        AND NOT EXISTS (SELECT 1 FROM rollup r2 WHERE r2.territory_id = o.territory_id AND r2.metric_date = o.metric_date))
+                                                         AS rows_obsolete_foreign,
+    MIN(r.metric_date)                                   AS first_date,
+    MAX(r.metric_date)                                   AS last_date
+FROM rollup r
+LEFT JOIN territory_metrics m
+       ON m.territory_id = r.territory_id
+      AND m.metric_date  = r.metric_date
+""".replace("__OWNED_O__", _TERRITORY_OWNED_BY_THIS_ETL.replace("m.", "o.")).replace(
+    "__NOT_OWNED_O__", _TERRITORY_NOT_OWNED_BY_THIS_ETL
+)
+
+_TERRITORY_RECONCILE_SCOPE_BY_ARRIVAL: str = (
+    "m.metric_date IN (SELECT metric_date FROM metric_dates)"
+)
+_TERRITORY_RECONCILE_SCOPE_BY_WINDOW: str = (
+    "m.metric_date >= %(start_date)s::DATE AND m.metric_date <  %(end_date)s::DATE"
+)
+
+_TERRITORY_RECONCILE_TAIL: str = """
+, rollup AS (__ROWS_SELECT__
+)
+DELETE FROM territory_metrics m
+ WHERE __SCOPE__
+   AND __OWNED__
+   AND NOT EXISTS (
+        SELECT 1 FROM rollup r
+         WHERE r.territory_id = m.territory_id AND r.metric_date = m.metric_date
+   );
+"""
+
+
+def _compose_territory_reconcile(metric_dates_cte: str, scope: str) -> str:
+    return _TERRITORY_ROLLUP_CTES_TEMPLATE.replace("__METRIC_DATES_CTE__", metric_dates_cte) + (
+        _TERRITORY_RECONCILE_TAIL.replace("__ROWS_SELECT__", _TERRITORY_ROLLUP_ROWS_SELECT)
+        .replace("__SCOPE__", scope)
+        .replace("__OWNED__", _TERRITORY_OWNED_BY_THIS_ETL)
+    )
+
+
+RECONCILE_TERRITORY_ROLLUP_SQL: str = _compose_territory_reconcile(
+    _TERRITORY_METRIC_DATES_BY_WINDOW, _TERRITORY_RECONCILE_SCOPE_BY_WINDOW
+)
+
+RECONCILE_TERRITORY_ROLLUP_BY_ARRIVAL_SQL: str = _compose_territory_reconcile(
+    _TERRITORY_METRIC_DATES_BY_ARRIVAL, _TERRITORY_RECONCILE_SCOPE_BY_ARRIVAL
+)
+
+#: Read-only readout of an explicit-window run. It compares only the columns the SET arm
+#: writes; market_potential / resource_allocation_score are preserved on update by design.
+PREVIEW_TERRITORY_ROLLUP_SQL: str = (
+    _TERRITORY_ROLLUP_CTES_TEMPLATE.replace(
+        "__METRIC_DATES_CTE__", _TERRITORY_METRIC_DATES_BY_WINDOW
+    )
+    + ",\nrollup AS ("
+    + _TERRITORY_ROLLUP_ROWS_SELECT
+    + ")"
+    + _TERRITORY_PREVIEW_COUNTS_SQL
+)
+
+#: codex r14-04: how many obsolete keys a readout lists before it truncates. The counts in
+#: PREVIEW_TERRITORY_ROLLUP_SQL are never truncated, so len(list) < count is the tell.
+PREVIEW_KEY_LIMIT: int = 200
+
+_TERRITORY_PREVIEW_OBSOLETE_TAIL: str = """
+SELECT
+    o.territory_id,
+    o.metric_date,
+    (__OWNED_O__) AS owned_by_this_etl
+FROM territory_metrics o
+WHERE o.metric_date >= %(start_date)s::DATE
+  AND o.metric_date <  %(end_date)s::DATE
+  AND NOT EXISTS (
+        SELECT 1 FROM rollup r
+         WHERE r.territory_id = o.territory_id AND r.metric_date = o.metric_date
+  )
+ORDER BY owned_by_this_etl, o.metric_date, o.territory_id
+LIMIT %(limit)s
+""".replace("__OWNED_O__", _TERRITORY_OWNED_BY_THIS_ETL.replace("m.", "o."))
+
+#: codex r14-04: the exact rows the reconcile would delete (owned_by_this_etl = true) and the
+#: stale ones it would keep (false), so the owner reviews a deletion SET and not a number.
+#: Ordered false-first, because a foreign row is the one a reviewer must see even under LIMIT.
+PREVIEW_TERRITORY_OBSOLETE_SQL: str = (
+    _TERRITORY_ROLLUP_CTES_TEMPLATE.replace(
+        "__METRIC_DATES_CTE__", _TERRITORY_METRIC_DATES_BY_WINDOW
+    )
+    + ",\nrollup AS ("
+    + _TERRITORY_ROLLUP_ROWS_SELECT
+    + ")"
+    + _TERRITORY_PREVIEW_OBSOLETE_TAIL
+)
 
 
 # -----------------------------------------------------------------------------
@@ -342,10 +543,66 @@ ON CONFLICT (territory_id, metric_date) DO UPDATE SET
 # -----------------------------------------------------------------------------
 
 
+def preview_territory_rollup(start_date: str, end_date: str) -> Dict[str, Any]:
+    """Read-only readout of what an explicit-window territory rollup would write.
+
+    Runs ``PREVIEW_TERRITORY_ROLLUP_SQL`` inside a ``READ ONLY`` transaction (Postgres refuses
+    any write in it) and counts the touched dates and the new / changed / existing rows.
+    It is the dry-run before an owner-gated backfill.
+
+    codex r14-04: a count is not reviewable. The readout also carries ``obsolete_keys`` — the
+    exact ``(territory_id, metric_date)`` rows the reconcile would delete — and
+    ``obsolete_foreign_keys``, the stale rows it would leave because another writer has put a
+    value in ``market_potential`` / ``resource_allocation_score``. Both lists are capped at
+    ``PREVIEW_KEY_LIMIT`` rows; the counts are not capped, so a truncated list is visible as
+    ``len(obsolete_keys) < rows_obsolete``.
+    """
+    start_dt, end_dt = _resolve_window(start_date, end_date)
+    params = {
+        "start_date": start_dt,
+        "end_date": end_dt,
+        "per_hcp_metric_type": PER_HCP_METRIC_TYPE,
+    }
+    conn = _connect_to_db()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SET TRANSACTION READ ONLY")
+                cur.execute(PREVIEW_TERRITORY_ROLLUP_SQL, params)
+                row = cur.fetchone()
+                cur.execute(PREVIEW_TERRITORY_OBSOLETE_SQL, {**params, "limit": PREVIEW_KEY_LIMIT})
+                obsolete = cur.fetchall()
+    finally:
+        conn.close()
+    if row is None:  # an aggregate always returns one row
+        raise RuntimeError("territory rollup preview returned no row")
+    keys = (
+        "metric_dates",
+        "rows_new",
+        "rows_changed",
+        "rows_existing",
+        "rows_obsolete",
+        "rows_obsolete_foreign",
+        "first_date",
+        "last_date",
+    )
+    # NB: one line, deliberately. Step 3(j) rewrites every line that reads
+    # `"window_end": end_dt.isoformat(),` inside the impl; this function has no `selected_by`,
+    # so its window must not present that shape.
+    window = {"window_start": start_dt.isoformat(), "window_end": end_dt.isoformat()}
+    return {
+        **window,
+        **dict(zip(keys, row, strict=True)),
+        "obsolete_keys": [(t, d.isoformat()) for t, d, owned in obsolete if owned],
+        "obsolete_foreign_keys": [(t, d.isoformat()) for t, d, owned in obsolete if not owned],
+    }
+
+
 def _run_territory_rollup_impl(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     request_id: str = "no-task-id",
+    arrived_before: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Pure-Python core of the territory rollup ETL.
 
@@ -360,13 +617,27 @@ def _run_territory_rollup_impl(
         end_date: ISO datetime/date for window end (exclusive). Defaults to
             now (UTC).
         request_id: identifier surfaced in log lines.
+        arrived_before: end of the ARRIVAL window when no dates are given
+            (defaults to now, UTC); refused together with start_date/end_date.
 
     Returns:
-        Dict with ``status``, ``rows_affected``, ``window_start``,
+        Dict with ``status``, ``rows_affected``, ``rows_deleted`` (obsolete rows
+        the reconcile removed in the same transaction, restricted to rows this
+        ETL owns), ``selected_by`` (``"arrival"`` for a scheduled run,
+        ``"metric_date"`` for an explicit window), ``window_start``,
         ``window_end``, and on failure an ``error`` field.
     """
+    by_arrival = start_date is None and end_date is None
+    selected_by = "arrival" if by_arrival else "metric_date"
     try:
-        start_dt, end_dt = _resolve_window(start_date, end_date)
+        if arrived_before is not None and not by_arrival:
+            raise ValueError("arrived_before cannot be combined with start_date/end_date")
+        if by_arrival:
+            start_dt, end_dt = _resolve_window(
+                None, arrived_before, default_lookback_seconds=ARRIVAL_WINDOW_HOURS * 3600
+            )
+        else:
+            start_dt, end_dt = _resolve_window(start_date, end_date)
     except ValueError as e:
         logger.error(
             "Invalid window for run_territory_rollup [%s]: %s",
@@ -379,11 +650,17 @@ def _run_territory_rollup_impl(
             "rows_affected": 0,
             "window_start": start_date,
             "window_end": end_date,
+            "selected_by": selected_by,
         }
+    sql = INSERT_TERRITORY_ROLLUP_BY_ARRIVAL_SQL if by_arrival else INSERT_TERRITORY_ROLLUP_SQL
+    reconcile_sql = (
+        RECONCILE_TERRITORY_ROLLUP_BY_ARRIVAL_SQL if by_arrival else RECONCILE_TERRITORY_ROLLUP_SQL
+    )
 
     logger.info(
-        "Starting territory_metrics rollup [%s]: window=[%s, %s)",
+        "Starting territory_metrics rollup [%s]: selected_by=%s window=[%s, %s)",
         request_id,
+        selected_by,
         start_dt.isoformat(),
         end_dt.isoformat(),
     )
@@ -395,14 +672,19 @@ def _run_territory_rollup_impl(
     }
 
     conn = None
+    rows_deleted = 0
     try:
         conn = _connect_to_db()
         with conn:  # transactional: commits on exit, rolls back on exception
             with conn.cursor() as cur:
-                cur.execute(INSERT_TERRITORY_ROLLUP_SQL, params)
+                cur.execute(sql, params)
                 rows_affected = cur.rowcount
+                # codex r13-08: delete territory rows whose (territory, date) is no longer
+                # produced, in the same transaction as the upsert.
+                cur.execute(reconcile_sql, params)
+                rows_deleted = cur.rowcount
 
-        if rows_affected == 0:
+        if rows_affected == 0 and rows_deleted == 0:
             # Most likely: 6B-infra-2a hasn't produced per-HCP rollup rows
             # yet for the run window. The CTE filters on metric_type =
             # 'per_hcp_rollup' so an empty per-HCP set yields an empty
@@ -422,6 +704,8 @@ def _run_territory_rollup_impl(
                 "rows_affected": 0,
                 "window_start": start_dt.isoformat(),
                 "window_end": end_dt.isoformat(),
+                "selected_by": selected_by,
+                "rows_deleted": rows_deleted,
             }
 
         logger.info(
@@ -434,6 +718,8 @@ def _run_territory_rollup_impl(
             "rows_affected": rows_affected,
             "window_start": start_dt.isoformat(),
             "window_end": end_dt.isoformat(),
+            "selected_by": selected_by,
+            "rows_deleted": rows_deleted,
         }
 
     except Exception as e:
@@ -448,6 +734,8 @@ def _run_territory_rollup_impl(
             "rows_affected": 0,
             "window_start": start_dt.isoformat(),
             "window_end": end_dt.isoformat(),
+            "selected_by": selected_by,
+            "rows_deleted": rows_deleted,
         }
 
     finally:

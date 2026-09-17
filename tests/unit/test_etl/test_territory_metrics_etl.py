@@ -785,6 +785,39 @@ def _holds(pred: str, row: dict) -> bool:
     return all(results) if connective != "OR" else any(results)
 
 
+def _extracted_ownership_predicates() -> tuple[str, str]:
+    """Pull both predicates OUT of the composed SQL — never restate them.
+
+    This is the construction the lane already used to pin ``SUPPORTED_METRICS`` from
+    migration 143's own ``IN ('trx','nrx','nbrx')``: read the thing under test out of the
+    artefact that ships, so the test cannot agree with a copy while the server runs
+    something else. Restating them here would make the partition proof below valid only
+    for a predicate shape nobody guarantees.
+
+    Both regexes assert their own match, so a restructure of the DELETE or the preview
+    subquery fails loudly instead of silently extracting the wrong span.
+    """
+    owned_match = re.search(
+        r"DELETE FROM territory_metrics m\n WHERE .*?\n   AND (.*?)\n   AND NOT EXISTS",
+        etl.RECONCILE_TERRITORY_ROLLUP_SQL,
+        re.S,
+    )
+    assert owned_match, "could not extract the ownership predicate from the DELETE"
+    foreign_block = etl.PREVIEW_TERRITORY_ROLLUP_SQL.split("AS rows_obsolete_foreign", 1)[0]
+    foreign_match = re.search(r"AND \(([^)]*IS NOT NULL[^)]*)\)\n", foreign_block)
+    assert foreign_match, "could not extract the foreign predicate from rows_obsolete_foreign"
+    return owned_match.group(1).strip(), foreign_match.group(1).strip()
+
+
+def test_the_extracted_predicates_are_the_ones_the_module_declares() -> None:
+    """Round trip on the extraction itself: what came out of the SQL must be what the
+    module declares. If this fails, the evaluator below is reading a different predicate
+    from the one the constants describe, and neither is trustworthy."""
+    owned, foreign = _extracted_ownership_predicates()
+    assert owned == etl._TERRITORY_OWNED_BY_THIS_ETL
+    assert foreign == etl._TERRITORY_NOT_OWNED_BY_THIS_ETL
+
+
 def test_the_ownership_predicates_partition_every_obsolete_row() -> None:
     """THE DISCRIMINATING PROPERTY, evaluated rather than asserted by text.
 
@@ -799,8 +832,7 @@ def test_the_ownership_predicates_partition_every_obsolete_row() -> None:
     here models the DELETE's join or scope — that behaviour is the planted integration
     pair's job, and it has never run.
     """
-    owned = etl._TERRITORY_OWNED_BY_THIS_ETL
-    foreign = etl._TERRITORY_NOT_OWNED_BY_THIS_ETL
+    owned, foreign = _extracted_ownership_predicates()
     cols = ("market_potential", "resource_allocation_score")
     for mp in (None, 1.0):
         for ras in (None, 0.5):
