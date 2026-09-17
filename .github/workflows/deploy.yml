@@ -940,6 +940,19 @@ jobs:
             COMPOSE_CMD="docker compose -f docker/docker-compose.yml $(pick_overlay)"
             echo "==> Compose overlay: $(pick_overlay) (empty = base prod only)"
 
+            # #2065: the learning-loop real-DB suite, BLOCKING, on the tree being deployed.
+            # CI cannot run it (GitHub-hosted runners cannot reach this database), so this is
+            # its one automated run. Placement is the point: after NEW_SHA is fixed, BEFORE the
+            # migrations below, because the suite rehearses the still-pending ones on a
+            # throwaway copy of prod, and before any pull/up, so a red suite changes nothing.
+            # It fails closed on a red or empty suite, a timeout, or too little memory; see
+            # the script header for the budget and the recovery. Pinned by
+            # tests/unit/test_docker/test_deploy_realdb_suite_gate_2065.py.
+            if ! bash scripts/deploy/realdb_suite_gate.sh; then
+              echo "==> Deploy FAILED before any change was made — nothing was flipped or migrated."
+              exit 1
+            fi
+
             # Apply DB migrations. run_migrations.sh auto-detects the connection:
             # SUPABASE_DB_URL when set (CI/remote), else `docker exec` into the
             # supabase-db container. The droplet's .env DOES define

@@ -7,7 +7,6 @@ made up, and the flag is exercised through ``ToolPlanner.plan()`` rather than th
 
 from __future__ import annotations
 
-import asyncio
 import time
 from typing import Any, Dict, List
 
@@ -15,7 +14,6 @@ import pytest
 
 from src.agents.tool_composer.models.composition_models import DecompositionResult, SubQuestion
 from src.agents.tool_composer.planner import ToolPlanner
-from src.agents.tool_composer.registry_sync import RegistrySync
 from src.agents.tool_composer.reliability import ToolReliabilityReader
 from src.tool_registry.registry import get_registry
 from tests.unit.test_agents.test_tool_composer.conftest import MockLLMClient
@@ -24,22 +22,18 @@ from tests.unit.test_database.learning_loop import _pg
 pytestmark = [
     pytest.mark.skipif(
         not _pg.db_integration_enabled(),
-        reason="real-DB integration; set E2I_DB_INTEGRATION=1 on the droplet (docker + supabase-db)",
+        reason=_pg.OPT_IN_SKIP_REASON,
     ),
     pytest.mark.timeout(300),
 ]
 
-UPTO = "ml/041_composer_learning_loop_recording.sql"
 CAVEATED = "gap_calculator"
 
 
 @pytest.fixture
 def synced(clone_db) -> _pg.PgConn:
-    """Migrated through 041 and synced against the live tool registry."""
-    db = clone_db("reliability")
-    _pg.migrate(db, UPTO)
-    asyncio.run(RegistrySync(port=_pg.PsycopgRpcPort(db)).sync_once())
-    return db
+    """The post-deploy schema, its registry already synced from code by the fixture."""
+    return clone_db("reliability")
 
 
 def _seed(cid: str, *, synthetic: bool = False) -> Dict[str, Any]:

@@ -157,6 +157,13 @@ def _prepare(tmp_path: Path) -> tuple[Path, Path]:
     )
     (project_dir / "scripts").mkdir(parents=True, exist_ok=True)
     (project_dir / "scripts" / "run_migrations.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
+    # #2065 added `bash scripts/deploy/realdb_suite_gate.sh` just before the migrations. Same
+    # rationale as the run_migrations.sh stub: a green gate is the faithful default here, and its
+    # own control flow is covered by test_deploy_realdb_suite_gate_2065.py.
+    (project_dir / "scripts" / "deploy").mkdir(parents=True, exist_ok=True)
+    (project_dir / "scripts" / "deploy" / "realdb_suite_gate.sh").write_text(
+        "#!/usr/bin/env bash\nexit 0\n"
+    )
     # #1479 added `python3 scripts/deploy/check_image_drift.py ...` at the END of the
     # deploy `script:` (after the prune). Same rationale as the run_migrations.sh stub
     # above: this harness validates the bentoml refresh contract, so a clean drift

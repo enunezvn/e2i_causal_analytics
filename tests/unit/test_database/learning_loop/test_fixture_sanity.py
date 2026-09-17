@@ -1,21 +1,24 @@
 """The throwaway database is a faithful copy of prod for everything the learning loop touches.
 
-Every later real-DB test in this package (the lane migrations in ``_pg.LANE_MIGRATIONS``, the
-recording RPCs, the registry sync client) runs against a clone of ``base_db``, so this module
-proves the copy before anything depends on it:
+Every later real-DB test in this package (the recording RPCs, the registry sync client, the
+runner rehearsal of pending migrations) runs against a clone of ``base_db`` or of the deployed
+template built from it, so this module proves the copy before anything depends on it:
 
 * it lives in a throwaway, memory-capped container of prod's own image, bound to 127.0.0.1, and
   the live ``supabase-db`` is only ever read (spec §9, dispatcher constraint 2026-09-11);
 * its schema came from a schema-only dump of prod's ``public`` schema, and every restore error
   is one expected by name;
-* the rows the lane needs were rebuilt from the repository (the migration ledger; the
-  tool_registry / tool_dependencies seeds of ml/013, 027 and 037) and equal prod's;
+* its migration ledger is prod's, and what is pending is derived from it (#2065);
+* its tool_registry / tool_dependencies rows are the running code's, written through
+  ``sync_tool_registry`` the way the API's startup sync writes prod's (no prod data rows);
+* the deployed template is the base with exactly the pending migrations applied;
 * the lane's objects equal prod's in columns, constraints, indexes, ownership, RLS, policies,
   ACLs (object and default, by effective result), view and function bodies, triggers, enums,
   extensions, event triggers, role attributes, memberships and settings;
 * the migration helper applies a file the way scripts/run_migrations.sh does.
 
-Opt-in: ``E2I_DB_INTEGRATION=1`` (skipped in CI, which has no database). Run with ``-n 0``.
+Opt-in: ``E2I_DB_INTEGRATION=1`` (skipped in CI, which has no database; runs in every deploy).
+Run with ``-n 0``.
 """
 
 from __future__ import annotations
@@ -31,7 +34,7 @@ from tests.unit.test_database.learning_loop import _pg
 pytestmark = [
     pytest.mark.skipif(
         os.getenv("E2I_DB_INTEGRATION") != "1",
-        reason="real-DB integration; set E2I_DB_INTEGRATION=1 on the droplet (docker + supabase-db)",
+        reason=_pg.OPT_IN_SKIP_REASON,
     ),
     # The session fixture starts a container and restores a schema dump inside the first test's
     # setup; the repo-wide 30 s pytest-timeout would cut that off on a loaded box.
@@ -186,18 +189,18 @@ EQUIVALENCE_QUERIES = {
 }
 
 
-LEDGER_QUERY = "select filename from public.schema_migrations"
 READ_ONLY_PROBE = "show transaction_read_only"
-REGISTRY_SEED_QUERY = (
-    "select name || '|' || category || '|' || source_agent || '|' || md5(description) || '|' "
-    "|| md5(input_schema::text) || '|' || md5(output_schema::text) || '|' "
-    "|| coalesce(avg_latency_ms::text, '') || '|' || coalesce(version, '') from tool_registry order by name"
+REGISTRY_AS_PAYLOAD = (
+    "select coalesce(jsonb_agg(jsonb_build_object('name', name, 'description', description, "
+    "'category', category, 'source_agent', source_agent, 'input_schema', input_schema, "
+    "'output_schema', output_schema, 'avg_latency_ms', avg_latency_ms, 'version', version) "
+    "order by name), '[]') from tool_registry where deprecated_at is null"
 )
-DEPENDENCIES_QUERY = (
-    "select c.name || '<-' || p.name || '|' || coalesce(d.output_field, '') || '|' "
-    "|| coalesce(d.input_field, '') from tool_dependencies d "
-    "join tool_registry c on c.tool_id = d.consumer_tool_id "
-    "join tool_registry p on p.tool_id = d.producer_tool_id order by 1"
+DEPENDENCIES_AS_PAYLOAD = (
+    "select coalesce(jsonb_agg(jsonb_build_object('consumer', c.name, 'producer', p.name, "
+    "'output_field', d.output_field, 'input_field', d.input_field) order by c.name, p.name), '[]') "
+    "from tool_dependencies d join tool_registry c on c.tool_id = d.consumer_tool_id "
+    "join tool_registry p on p.tool_id = d.producer_tool_id"
 )
 REQUIRED_OBJECTS_QUERY = (
     "select c.relkind::text || ':' || c.relname from pg_class c "
@@ -214,14 +217,21 @@ def _approve_this_modules_prod_queries(request):
         return
     prod = request.getfixturevalue("prod_readonly")
     prod.approve(
-        LEDGER_QUERY,
         READ_ONLY_PROBE,
-        REGISTRY_SEED_QUERY,
-        DEPENDENCIES_QUERY,
         REQUIRED_OBJECTS_QUERY,
         *(query for query, _ in EQUIVALENCE_QUERIES.values()),
         *(_effective_default_acl_query(t) for t in PROBES),
     )
+
+
+@pytest.fixture(scope="module")
+def prod_state_db(base_db, deployed_db):
+    """The copy whose ledger is prod's, for comparing schema with prod.
+
+    That is the base, except under E2I_DB_SIMULATE_PENDING: the base then lacks the simulated
+    migration on purpose, and the deployed template (base + that migration) is prod's state.
+    """
+    return deployed_db if base_db.build.simulated else base_db
 
 
 def test_container_is_throwaway_capped_and_local(pg_container):
@@ -287,33 +297,108 @@ def test_restore_errors_were_exactly_the_expected_ones(base_db):
     assert base_db.restore_log.unseen_expected == []
 
 
-def test_ledger_is_the_repository_ledger_and_prod_has_nothing_older(base_db, prod_readonly):
+def test_ledger_is_prods_and_pending_is_derived_from_it(base_db, prod_readonly, pending_migrations):
     # Sorted in Python: the database collation orders punctuation differently from byte order.
-    copy = sorted(base_db.rows(LEDGER_QUERY))
-    expected = sorted(k for k in _pg.runner_migration_keys() if k not in _pg.LANE_MIGRATIONS)
-    assert copy == expected
-    prod = set(prod_readonly.rows(LEDGER_QUERY))
-    assert set(copy) <= prod, sorted(set(copy) - prod)
-    # Anything prod has beyond the repository must be NEWER than the repository's last file in
-    # the same directory (deployed after this branch's base), never an older gap.
-    for extra in sorted(prod - set(copy)):
-        prefix = extra.rsplit("/", 1)[0] + "/" if "/" in extra else ""
-        same_dir = [k for k in copy if (k.rsplit("/", 1)[0] + "/" if "/" in k else "") == prefix]
-        assert not same_dir or extra > max(same_dir), (
-            f"prod has {extra}, older than the repository's"
-        )
+    prod = sorted(prod_readonly.rows(_pg.PROD_LEDGER))
+    assert prod, "prod's ledger is empty; the derivation would be vacuous"
+    simulated = base_db.build.simulated
+    assert sorted(base_db.rows(_pg.PROD_LEDGER)) == sorted(k for k in prod if k != simulated)
+    # In runner order, and exactly what the runner itself would call pending on the copy.
+    assert pending_migrations == _pg.derive_pending(_pg.runner_migration_keys(), prod, simulated)
+    if simulated is not None:
+        assert simulated in pending_migrations
 
 
-def test_tool_registry_seed_fields_equal_prod(base_db, prod_readonly):
-    rows = base_db.rows(REGISTRY_SEED_QUERY)
-    assert len(rows) == 16
-    assert rows == prod_readonly.rows(REGISTRY_SEED_QUERY)
+def test_tool_registry_is_the_running_codes(base_db):
+    """The rows are what the app's own sync writes, not a copy of prod's rows.
+
+    Prod's rows are NOT the expectation: during a deploy prod still runs the previous code, so a
+    change to a tool's schema would read as a fixture fault on exactly the deploy that ships it.
+    """
+    from src.agents.tool_composer.registry_sync import build_sync_payload
+
+    tools, dependencies = build_sync_payload()
+    assert tools and dependencies
+    rejected = set(base_db.build.registry_rejected)
+    if not base_db.build.pending:
+        assert rejected == set(), "with nothing pending the schema must accept every tool"
+    tools = [t for t in tools if t["name"] not in rejected]
+    dependencies = [d for d in dependencies if not {d["consumer"], d["producer"]} & rejected]
+    with base_db.rolled_back() as conn:
+        assert conn.execute(REGISTRY_AS_PAYLOAD).fetchone()[0] == tools
+        stored = conn.execute(DEPENDENCIES_AS_PAYLOAD).fetchone()[0]
+    key = lambda d: (d["consumer"], d["producer"])  # noqa: E731
+    assert sorted(stored, key=key) == sorted(dependencies, key=key)
+    assert base_db.build.registry_sync["inserted"] == len(tools)
+    assert base_db.rows("select count(*) from tool_registry where deprecated_at is not null") == [
+        "0"
+    ]
 
 
-def test_tool_dependencies_equal_prod(base_db, prod_readonly):
-    rows = base_db.rows(DEPENDENCIES_QUERY)
-    assert len(rows) == 11
-    assert rows == prod_readonly.rows(DEPENDENCIES_QUERY)
+def _empty_registry(db):
+    db.execute("delete from tool_dependencies")
+    db.execute("delete from tool_registry")
+
+
+def test_registry_sync_never_drops_a_tool_unless_asked(clone_db):
+    """Behaviour mode, and the deployed template: a sync the schema refuses is a failure."""
+    db = clone_db("sync_strict")
+    _empty_registry(db)
+    # Stands in for a schema BEFORE a pending migration that the code's COHORT tools need.
+    db.execute(
+        "alter table tool_registry add constraint zz_pre_migration check (category::text <> 'COHORT')"
+    )
+    with pytest.raises(_pg.DbFixtureError, match="zz_pre_migration"):
+        _pg.sync_registry_from_code(db)
+
+
+def test_upgrade_base_gets_every_tool_the_pre_migration_schema_can_hold(clone_db):
+    """Upgrade mode: production migrates BEFORE the new code syncs, so a tool that needs a
+    pending migration cannot be in the pre-upgrade registry, and must not fail the base."""
+    from src.agents.tool_composer.registry_sync import build_sync_payload
+
+    tools, dependencies = build_sync_payload()
+    cohort = sorted(t["name"] for t in tools if t["category"] == "COHORT")
+    assert cohort, "the code registers no COHORT tool; this probe would be vacuous"
+    db = clone_db("sync_tolerant")
+    _empty_registry(db)
+    db.execute(
+        "alter table tool_registry add constraint zz_pre_migration check (category::text <> 'COHORT')"
+    )
+
+    counts, rejected = _pg.sync_registry_from_code(db, drop_rejected=True)
+
+    assert rejected == cohort
+    assert counts["inserted"] == len(tools) - len(cohort)
+    kept = {t["name"] for t in tools} - set(cohort)
+    stored = set(db.rows("select name from tool_registry"))
+    assert stored == kept
+    expected_deps = [d for d in dependencies if d["consumer"] in kept and d["producer"] in kept]
+    assert db.rows("select count(*) from tool_dependencies") == [str(len(expected_deps))]
+
+
+def test_upgrade_base_sync_raises_on_anything_but_a_schema_refusal(clone_db):
+    """Only a tool the schema itself refuses may be left out. An error that is not a refusal of
+    that tool's row (here: the RPC is missing) aborts, and nothing reduced is committed."""
+    db = clone_db("sync_not_a_refusal")
+    _empty_registry(db)
+    db.execute("alter function sync_tool_registry(jsonb, jsonb, integer) rename to zz_moved_away")
+    with pytest.raises(_pg.DbFixtureError, match=r"not a schema refusal \(42883\)"):
+        _pg.sync_registry_from_code(db, drop_rejected=True)
+    assert db.rows("select count(*) from tool_registry") == ["0"]
+
+
+def test_deployed_template_is_the_base_plus_exactly_the_pending_migrations(
+    base_db, deployed_db, pending_migrations
+):
+    if not pending_migrations:
+        assert deployed_db.db == base_db.db
+        return
+    assert deployed_db.db == _pg.DEPLOYED_DB
+    assert sorted(deployed_db.rows(_pg.PROD_LEDGER)) == sorted(
+        base_db.rows(_pg.PROD_LEDGER) + pending_migrations
+    )
+    assert _pg.derive_pending(_pg.runner_migration_keys(), deployed_db.rows(_pg.PROD_LEDGER)) == []
 
 
 def test_loop_tables_start_empty(base_db):
@@ -323,35 +408,35 @@ def test_loop_tables_start_empty(base_db):
     ) == ["0|0|0"]
 
 
-def test_required_lane_objects_exist_on_both_sides(base_db, prod_readonly):
-    expected = sorted(
-        [f"r:{t}" for t in LANE_TABLES]
-        + [f"v:{v}" for v in LANE_VIEWS]
-        + [f"f:{f}" for f in LANE_FUNCTIONS]
-        + [f"e:{e}" for e in LANE_ENUMS]
-    )
-    assert sorted(base_db.rows(REQUIRED_OBJECTS_QUERY)) == expected
-    assert sorted(prod_readonly.rows(REQUIRED_OBJECTS_QUERY)) == expected
+def test_required_lane_objects_exist_on_both_sides(prod_state_db, prod_readonly):
+    # LANE_FUNCTIONS names functions as they were BEFORE the lane (the rollbacks restore them);
+    # 040/041 dropped four of them, so only the copy's agreement with prod is required of those.
+    required = {f"r:{t}" for t in LANE_TABLES} | {f"v:{v}" for v in LANE_VIEWS}
+    required |= {f"e:{e}" for e in LANE_ENUMS}
+    copy = sorted(prod_state_db.rows(REQUIRED_OBJECTS_QUERY))
+    assert copy == sorted(prod_readonly.rows(REQUIRED_OBJECTS_QUERY))
+    assert required <= set(copy), sorted(required - set(copy))
+    assert any(row.startswith("f:") for row in copy), "no lane function on either side"
 
 
 @pytest.mark.parametrize("aspect", sorted(EQUIVALENCE_QUERIES))
-def test_schema_equivalent_for_lane_objects(base_db, prod_readonly, aspect):
+def test_schema_equivalent_for_lane_objects(prod_state_db, prod_readonly, aspect):
     query, may_be_empty = EQUIVALENCE_QUERIES[aspect]
-    got = base_db.rows(query)
+    got = prod_state_db.rows(query)
     want = prod_readonly.rows(query)
     if not may_be_empty:
         assert want, f"{aspect}: prod returned nothing, so equality would be vacuous"
     assert got == want
 
 
-def test_non_public_objects_public_depends_on_exist_in_the_copy(base_db, prod_readonly):
+def test_non_public_objects_public_depends_on_exist_in_the_copy(prod_state_db, prod_readonly):
     refs = prod_readonly.rows(_pg.PROD_NONPUBLIC_REFERENCES)
     assert refs, "public objects reference no non-public object; the check would be vacuous"
     missing = []
     for ref in refs:
         kind, _, name = ref.partition(":")
         fn = {"rel": "to_regclass", "proc": "to_regprocedure", "type": "to_regtype"}[kind]
-        if base_db.rows(f"select {fn}('{name}') is not null") != ["t"]:
+        if prod_state_db.rows(f"select {fn}('{name}') is not null") != ["t"]:
             missing.append(ref)
     assert missing == []
 
@@ -438,11 +523,34 @@ def test_migration_helper_follows_the_runner_branches(clone_db, tmp_path):
     assert _pg.runner_unwraps(wrapped.read_text()) is False
 
 
-def test_migrate_rejects_unknown_or_missing_lane_files(clone_db):
+def test_migrate_skips_ledgered_keys_and_rejects_unknown_ones(clone_db):
     db = clone_db("migrate_guard")
-    with pytest.raises(ValueError, match="unknown lane migration"):
+    with pytest.raises(ValueError, match="not a runner migration key"):
         _pg.migrate(db, "ml/999_nope.sql")
     assert _pg.migrate(db, None) == []
+    # The copy is post-deploy: every runner key is in its ledger, so nothing is re-applied.
+    before = db.rows("select count(*) from public.schema_migrations")
+    assert _pg.migrate(db, "ml/041_composer_learning_loop_recording.sql") == []
+    assert _pg.migrate(db, _pg.ALL_PENDING) == []
+    assert db.rows("select count(*) from public.schema_migrations") == before
+
+
+def test_migrate_applies_and_records_an_unapplied_key_like_the_runner(clone_db):
+    db = clone_db("migrate_records")
+    key = "ml/044_composer_episodes_feedback_id.sql"
+    assert _pg.rollback_file(key).exists()
+    assert _pg.apply_rollback(db, _pg.rollback_file(key).name).returncode == 0
+    assert db.rows(f"select count(*) from public.schema_migrations where filename = '{key}'") == [
+        "0"
+    ]
+    assert _pg.migrate(db, key) == [key]
+    assert db.rows(f"select count(*) from public.schema_migrations where filename = '{key}'") == [
+        "1"
+    ]
+    assert db.rows(
+        "select count(*) from pg_attribute where attrelid = 'composer_episodes'::regclass "
+        "and attname = 'feedback_id' and not attisdropped"
+    ) == ["1"]
 
 
 def test_owner_is_gone_needs_the_same_host_boot_and_pid_namespace():

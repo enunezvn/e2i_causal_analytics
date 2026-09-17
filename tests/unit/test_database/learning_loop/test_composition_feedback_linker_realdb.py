@@ -16,33 +16,33 @@ What the linker may and may not do:
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 
 import pytest
 
-from src.agents.tool_composer.registry_sync import RegistrySync
 from tests.unit.test_database.learning_loop import _pg
 
 pytestmark = [
     pytest.mark.skipif(
         not _pg.db_integration_enabled(),
-        reason="real-DB integration; set E2I_DB_INTEGRATION=1 on the droplet (docker + supabase-db)",
+        reason=_pg.OPT_IN_SKIP_REASON,
     ),
     pytest.mark.timeout(300),
 ]
 
-UPTO = "ml/044_composer_episodes_feedback_id.sql"
 SESSION = "11111111-1111-1111-1111-111111111111~sess-1"
 
 
 @pytest.fixture
 def synced(clone_db) -> _pg.PgConn:
-    db = clone_db("feedback_linker")
-    _pg.migrate(db, UPTO)
-    asyncio.run(RegistrySync(port=_pg.PsycopgRpcPort(db)).sync_once())
-    return db
+    # The post-deploy schema, its registry already synced from code by the fixture.
+    return clone_db("feedback_linker")
+
+
+def _owner(session_id: str) -> str:
+    """The profile that owns the conversation :func:`_feedback` creates for ``session_id``."""
+    return session_id.split("~", 1)[0]
 
 
 def _seed(cid: str, session_id: str = SESSION) -> Dict[str, Any]:
@@ -50,7 +50,11 @@ def _seed(cid: str, session_id: str = SESSION) -> Dict[str, Any]:
         "composition_id": cid,
         "query_text": "which regions drive TRx?",
         "session_id": session_id,
-        "user_id": "user-1",
+        # The chat user the orchestrator threads into the composer (#2069), which is the
+        # conversation's owner. The owner gate compares exactly these two since #2062; the
+        # placeholder "user-1" this used before made every rating fail it, unseen while this
+        # module self-skipped (#2065).
+        "user_id": _owner(session_id),
         "entry_point": "chat_tool",
         "brand": "Kisqali",
         "region": "US",
@@ -101,7 +105,7 @@ def _feedback(
     stamp = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()
     # The chat chain is real: a profile owns the conversation, which owns the message the rating
     # hangs off. chatbot_conversations.user_id is NOT NULL and references that profile.
-    owner = session_id.split("~", 1)[0]
+    owner = _owner(session_id)
     _exec(
         db,
         "INSERT INTO chatbot_user_profiles (id, email) VALUES (%s::uuid, %s) "

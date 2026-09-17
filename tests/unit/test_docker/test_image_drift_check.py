@@ -412,6 +412,13 @@ def _prepare(tmp_path: Path) -> tuple[str, Path, Path]:
     )
     (project_dir / "scripts" / "deploy").mkdir(parents=True, exist_ok=True)
     (project_dir / "scripts" / "run_migrations.sh").write_text("#!/usr/bin/env bash\nexit 0\n")
+    # #2065 added `bash scripts/deploy/realdb_suite_gate.sh` just before the migrations. Same
+    # rationale as the run_migrations.sh stub: a green gate is the faithful default here, and its
+    # own control flow is covered by test_deploy_realdb_suite_gate_2065.py.
+    (project_dir / "scripts" / "deploy").mkdir(parents=True, exist_ok=True)
+    (project_dir / "scripts" / "deploy" / "realdb_suite_gate.sh").write_text(
+        "#!/usr/bin/env bash\nexit 0\n"
+    )
     drift_stub = project_dir / "scripts" / "deploy" / "check_image_drift.py"
     drift_stub.write_text(_DRIFT_STUB)
     drift_stub.chmod(0o755)
