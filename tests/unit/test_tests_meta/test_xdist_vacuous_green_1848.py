@@ -98,6 +98,70 @@ NESTED_BUDGET_SECONDS = 150
 
 _ANY_PASSED = re.compile(r"\b\d+ passed\b")
 
+#: xdist's controller's own line when a worker dies: ``[gw0] node down: <reason>`` at
+#: the start of a line. The guard never kills a worker -- it only observes
+#: ``pytest_testnodedown`` and forces an exit status -- so on a probe that induced NO
+#: crash, this can only mean the environment killed one.
+#:
+#: ANCHORED DELIBERATELY, and a plain ``"node down" in output`` is WRONG here: the
+#: guard's own report says ``Look for '[gwN] node down:' above`` (xdist_crash_guard.py
+#: :182), so the bare substring is satisfied by the guard's output alone. A guard that
+#: wrongly fired on a healthy session would then have been classified as an
+#: ENVIRONMENT failure and skipped -- the precise trap this split exists to avoid.
+#: Measured: with both of ``assess``'s early returns defeated, the bare-substring
+#: version skipped instead of failing. ``[gwN]`` in that prose is a literal N, and the
+#: line is BANNER-prefixed, so the anchored pattern cannot match it either way.
+_WORKER_DIED_RE = re.compile(r"^\[gw\d+\] node down", re.MULTILINE)
+
+
+def _worker_died(output: str) -> bool:
+    return _WORKER_DIED_RE.search(output) is not None
+
+
+def _mem_available() -> str:
+    """``MemAvailable`` right now, for a skip reason. Best-effort and never fatal."""
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                return f"{int(line.split()[1]) // 1024} MiB available"
+    except (OSError, ValueError, IndexError):  # pragma: no cover - platform-dependent
+        pass
+    return "MemAvailable unknown"
+
+
+def _precondition_failure(rc: int, output: str) -> str | None:
+    """Return a reason when the healthy-probe PRECONDITION failed, else ``None``.
+
+    Split out from the nested test so both directions can be exercised in-process,
+    on synthetic output, at no memory cost -- which matters here more than usual,
+    because the thing being classified is a failure caused by memory pressure.
+
+    The discrimination, and why it is sound rather than convenient:
+
+    * A worker death on a ``crash=False`` probe is the ENVIRONMENT. The probe induced
+      no crash, and the guard under test cannot cause one: it implements
+      ``pytest_testnodedown``/``pytest_runtest_logfinish``/``pytest_sessionfinish`` and
+      does nothing but record, print and set ``session.exitstatus``. So this case says
+      nothing about the guard, and reporting it as a guard verdict is a false statement
+      about the cause.
+    * EVERYTHING ELSE stays a hard failure, deliberately. A blanket
+      skip-on-any-nonzero-rc would swallow the real regression this control exists to
+      catch -- the guard reddening or annotating a session that was perfectly healthy.
+    """
+    if not _worker_died(output):
+        return None
+    return (
+        "PRECONDITION FAILED, not a guard result: a worker of the NESTED session died on "
+        f"a probe that induced no crash (rc={rc}, {_mem_available()}). This control can "
+        "only speak about the guard when the nested session actually stays healthy, and "
+        "the guard cannot kill a worker -- it only observes and sets an exit status. "
+        "#1848 itself was observed when memory pressure killed a worker on this box, so "
+        "this is the same failure mode, still live, not a new one. Re-run when the box "
+        "is quieter; the guard's behaviour on a healthy session is covered hermetically "
+        "by test_sessionfinish_leaves_a_healthy_session_alone and "
+        "test_silent_without_a_crash_even_when_nothing_reported."
+    )
+
 
 # =============================================================================
 # In-process: the decision, without spawning anything
@@ -165,6 +229,85 @@ def test_a_clean_worker_exit_is_not_a_crash() -> None:
     guard.pytest_testnodedown(node=_node("gw0"), error=None)
     guard.pytest_testnodedown(node=_node("gw1"), error=None)
     assert guard.assess(collected=2, exitstatus=pytest.ExitCode.OK) is None
+
+
+def test_a_worker_death_on_a_no_crash_probe_reports_as_environment() -> None:
+    """The misattribution this replaces: a dead nested worker is NOT the guard.
+
+    Signature of the real event, taken from the crash arm of this same module -- the
+    controller prints ``node down``, the guard then fires legitimately (a worker died
+    before any test reported), so BANNER is present and rc is GUARD_EXIT_CODE. Read
+    through the HEALTHY path, the old first assertion called that "the guard turned a
+    healthy session red", which is false in every particular.
+    """
+    output = (
+        f"[gw0] node down: Not properly terminated\n{BANNER}\nreported 0 of 2 collected items\n"
+    )
+    reason = _precondition_failure(GUARD_EXIT_CODE, output)
+    assert reason is not None
+    assert reason.startswith("PRECONDITION FAILED")
+    # It must say what happened and where to look, not merely decline to judge.
+    assert "died" in reason and "no crash" in reason
+    assert "test_sessionfinish_leaves_a_healthy_session_alone" in reason
+
+
+def test_the_guards_own_report_does_not_read_as_a_worker_death() -> None:
+    """The bug this discriminator had, pinned so it cannot return.
+
+    ``xdist_crash_guard._render_report`` ends with ``Look for '[gwN] node down:' above``
+    (:182), so a plain ``"node down" in output`` is satisfied by the GUARD'S OWN OUTPUT.
+    A guard that wrongly fired on a healthy session would then have been classified as
+    an ENVIRONMENT failure and skipped -- the exact trap this split exists to avoid,
+    reintroduced by the thing meant to prevent it.
+
+    Found by a teeth proof, not by reading: with both of ``assess``'s early returns
+    defeated, the nested healthy session came back with the BANNER and a forced exit
+    status, and the bare-substring version SKIPPED instead of failing.
+    """
+    from tests.xdist_crash_guard import _render_report
+
+    report = _render_report(crashed=[], collected=2, finished=2, exitstatus=0)
+    assert "node down" in report, (
+        "the guard's prose no longer mentions 'node down'; this test's premise is stale"
+    )
+    # ... and the anchored matcher is not fooled by it.
+    assert not _worker_died(report)
+    assert _precondition_failure(int(GUARD_EXIT_CODE), report) is None
+    # The real controller line still matches, so this is not narrowness for its own sake.
+    assert _worker_died("[gw0] node down: Not properly terminated")
+    assert _worker_died("prefix\n[gw11] node down: killed\nsuffix")
+
+
+def test_a_guard_defect_is_never_reported_as_environment() -> None:
+    """The trap: a blanket skip-on-nonzero-rc would swallow the regression this
+    control exists to catch. Only a worker death is environmental; every other way a
+    healthy session can come back wrong stays a hard failure.
+    """
+    # The guard reddens a session in which nothing died.
+    assert _precondition_failure(GUARD_EXIT_CODE, f"{BANNER}\n2 passed\n") is None
+    # The guard annotates a green session.
+    assert _precondition_failure(0, f"{BANNER}\n2 passed\n") is None
+    # A clean run that did not report what it should have.
+    assert _precondition_failure(0, "1 passed\n") is None
+    # Any other nonzero rc with no worker death.
+    assert _precondition_failure(1, "1 failed, 1 passed\n") is None
+    # And the healthy case itself is not mistaken for a precondition failure.
+    assert _precondition_failure(0, "2 passed in 3.01s\n") is None
+
+
+def test_the_memory_note_is_present_and_never_raises() -> None:
+    """The reason carries the free memory at that instant, because "re-run when the
+    box is quieter" is only actionable with a number attached. It is diagnostic, not
+    a gate: no threshold is invented, and an unreadable /proc must not turn a skip
+    into an error."""
+    note = _mem_available()
+    assert note.endswith("MiB available") or note == "MemAvailable unknown"
+    # The note must reach the reason. Compared by SHAPE, not by value: two calls a
+    # moment apart legitimately differ, so an equality check here would be flaky for
+    # a reason unrelated to what it is testing.
+    reason = _precondition_failure(1, "[gw0] node down: killed")
+    assert reason is not None
+    assert "MiB available" in reason or "MemAvailable unknown" in reason
 
 
 def _fake_session(*, collected: int) -> tuple[SimpleNamespace, io.StringIO]:
@@ -294,7 +437,7 @@ def test_a_collection_phase_worker_crash_is_red_and_named(tmp_path: Path) -> Non
 
     # Positive control for the arm itself: the crash must actually have been
     # induced, or a red result here proves nothing about the guard.
-    assert "node down" in output, f"the probe did not crash a worker.\n{tail}"
+    assert _worker_died(output), f"the probe did not crash a worker.\n{tail}"
     assert _ANY_PASSED.search(output) is None, f"a test ran; the crash was too late.\n{tail}"
 
     assert rc == GUARD_EXIT_CODE, (
@@ -308,11 +451,22 @@ def test_a_collection_phase_worker_crash_is_red_and_named(tmp_path: Path) -> Non
 @pytest.mark.slow
 @pytest.mark.timeout(180)
 def test_a_healthy_run_is_untouched(tmp_path: Path) -> None:
-    """Positive control: same directory, same shape, no crash -> 2 passed, rc 0."""
+    """Positive control: same directory, same shape, no crash -> 2 passed, rc 0.
+
+    The precondition is checked BEFORE any verdict about the guard. Previously the
+    first assertion was ``rc == 0`` with the message "the guard turned a healthy
+    session red" -- which is false when the box killed the nested ``gw0``, and it
+    misdirects the next reader at the exact moment they are least able to check.
+    The evidence needed to tell the two apart was already two lines further down.
+    """
     rc, output = _run_probe(tmp_path, crash=False)
     tail = output[-4000:]
 
+    reason = _precondition_failure(rc, output)
+    if reason is not None:
+        pytest.skip(f"{reason}\n{tail}")
+
     assert rc == 0, f"the guard turned a healthy session red.\n{tail}"
     assert "2 passed" in output, tail
-    assert "node down" not in output, tail
+    assert not _worker_died(output), tail
     assert BANNER not in output, f"the guard fired on a healthy session.\n{tail}"
