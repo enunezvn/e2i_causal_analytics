@@ -623,7 +623,16 @@ docker inspect e2i_api --format 'image_sha: {{.Image}}'
 ```
 Expected: 12 `view:column` lines (4 views × 3 columns); 4 `v_*_business_metrics:v` dependents; **0 functions** (the `\m…\M` word boundaries exclude `trx_count_window/prior`); no triggers or policies that reference columns (if any policy exists, read its `pg_get_expr(polqual, polrelid)` for column names before continuing).
 
-- [ ] **Step 2: Rename rehearsal (rolled back)**
+- [ ] **Step 2: Rename rehearsal (rolled back) — SUPERSEDED DESIGN, kept as evidence**
+
+> **2026-09-18:** this block rehearses the in-place rename that §0.9 now records as REJECTED. It is
+> kept, not deleted, because its result still stands and is still worth knowing: the rename is
+> mechanically sound (every `ALTER VIEW … RENAME COLUMN` succeeds, the views stay valid, and the
+> `ROLLBACK` restores `trx_count`). The rename was rejected on **deploy safety**, not on mechanics —
+> see §0.9. Running this block today is harmless (it rolls back) but it proves nothing about what
+> ships. The rehearsal that does is the expand/contract one recorded in the Task 21 amendment: apply
+> 144, probe, apply 144 again, apply `database/deferred/145`, probe, `ROLLBACK`.
+
 
 ```bash
 docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 <<'SQL' | tee "$EVID/disproof_0_3_rename_rehearsal.txt"
