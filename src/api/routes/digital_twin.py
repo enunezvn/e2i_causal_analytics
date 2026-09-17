@@ -44,6 +44,7 @@ from src.api.dependencies.auth import (
 from src.api.routes.digital_twin_rejections import Decile, rejected_request
 from src.api.schemas.digital_twin import EffectHeterogeneityResponse
 from src.api.schemas.digital_twin import heterogeneity_response as _heterogeneity_response
+from src.api.schemas.digital_twin import live_subgroups_basis as _live_subgroups_basis
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 
 if TYPE_CHECKING:
@@ -493,21 +494,6 @@ class SimulationHistoryResponse(BaseModel):
     total: int
     offset: int
     limit: int
-
-
-def _live_subgroups_basis(data_provenance: Optional[str]) -> str:
-    """Basis for a fresh result; stored legacy classification remains row-aware."""
-    from src.digital_twin.effect.estimate import (
-        PROVENANCE_COHORT,
-        PROVENANCE_RWD,
-        PROVENANCE_SYNTHETIC,
-    )
-
-    if data_provenance == PROVENANCE_COHORT:
-        return "cohort_rows"
-    if data_provenance in {PROVENANCE_SYNTHETIC, PROVENANCE_RWD}:
-        return "per_twin"
-    return "unknown"
 
 
 class ScenarioSimulateRequest(BaseModel):
@@ -1037,7 +1023,9 @@ async def run_simulation(
                 None if result.cohort_ci_upper is None else round(result.cohort_ci_upper, 4)
             ),
             effect_heterogeneity=_heterogeneity_response(result.effect_heterogeneity),
-            subgroups_basis=_live_subgroups_basis(result.data_provenance),
+            subgroups_basis=_live_subgroups_basis(
+                result.data_provenance, calculated=request.calculate_heterogeneity
+            ),
         )
 
     except HTTPException:

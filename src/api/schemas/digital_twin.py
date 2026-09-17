@@ -56,3 +56,20 @@ def heterogeneity_response(value: Any) -> EffectHeterogeneityResponse:
         top_segments=(data.get("top_segments") or [])[:5],
         axis_provenance=data.get("axis_provenance", {}),
     )
+
+
+def live_subgroups_basis(data_provenance: Optional[str], *, calculated: bool = True) -> str:
+    """Describe the evidence basis only when subgroup effects were calculated."""
+    from src.digital_twin.effect.estimate import (
+        PROVENANCE_COHORT,
+        PROVENANCE_RWD,
+        PROVENANCE_SYNTHETIC,
+    )
+
+    if not calculated:
+        return "unknown"
+    if data_provenance == PROVENANCE_COHORT:
+        return "cohort_rows"
+    if data_provenance in {PROVENANCE_SYNTHETIC, PROVENANCE_RWD}:
+        return "per_twin"
+    return "unknown"

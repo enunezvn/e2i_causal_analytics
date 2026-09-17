@@ -839,6 +839,44 @@ describe('DigitalTwin', () => {
     expect(screen.getByText(/rare.*suppressed/i)).toBeInTheDocument();
   });
 
+  it('distinguishes missing specialty source values from insufficient support', async () => {
+    (useRunSimulation as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      isPending: false,
+      isError: false,
+      error: null,
+      data: {
+        ...mockRunResult,
+        subgroups_basis: 'cohort_rows',
+        effect_heterogeneity: {
+          by_specialty: {},
+          by_decile: {},
+          by_region: {},
+          by_adoption_stage: {},
+          top_segments: [],
+          axis_provenance: {
+            specialty: {
+              basis: 'cohort_rows',
+              source: 'hcp_profiles.specialty',
+              min_group_rows: 100,
+              min_treated_rows: 20,
+              min_control_rows: 20,
+              fallback: 'region_then_cohort',
+              support_unit: 'cohort_rows',
+              estimand: 'observed_region_mix_mean_cate',
+              suppressed_groups: { '<missing>': 'source_value_missing' },
+            },
+          },
+        },
+      },
+    });
+
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+
+    expect(await screen.findByText(/<missing>: source specialty is missing/i)).toBeInTheDocument();
+    expect(screen.queryByText(/<missing>.*insufficient support/i)).not.toBeInTheDocument();
+  });
+
   it('does not relabel a provenance-free legacy specialty aggregate as a supported effect', () => {
     (useRunSimulation as ReturnType<typeof vi.fn>).mockReturnValue({
       mutate: mockMutate,

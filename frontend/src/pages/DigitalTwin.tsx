@@ -594,10 +594,16 @@ function SimulationResultPanel({ simulation }: { simulation: AnySimulation }) {
             </p>
           )}
           {Object.keys(specialtyProvenance.suppressed_groups).length > 0 && (
-            <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
-              {Object.keys(specialtyProvenance.suppressed_groups).join(', ')} suppressed for
-              insufficient support.
-            </p>
+            <div className="mt-2 text-xs text-amber-700 dark:text-amber-300">
+              {Object.entries(specialtyProvenance.suppressed_groups).map(([group, reason]) => (
+                <p key={group}>
+                  {group}:{' '}
+                  {reason === 'source_value_missing'
+                    ? 'source specialty is missing.'
+                    : 'suppressed for insufficient support.'}
+                </p>
+              ))}
+            </div>
           )}
         </div>
       )}

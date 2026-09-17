@@ -167,3 +167,10 @@ def test_a_row_without_provenance_is_unknown():
     detail = _read_detail(_row(data_provenance=None))
 
     assert detail.subgroups_basis == "unknown"
+
+
+@pytest.mark.unit
+def test_a_live_result_with_heterogeneity_disabled_does_not_claim_a_computed_basis():
+    from src.api.routes.digital_twin import _live_subgroups_basis
+
+    assert _live_subgroups_basis(PROVENANCE_COHORT, calculated=False) == "unknown"
