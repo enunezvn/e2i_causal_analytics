@@ -714,6 +714,27 @@ class TestTheTileSubstratesMatchTheLiveRegistry:
     shipped a wrong ``hcp_reach`` label: nothing tied the declared substrate to
     the SQL the tile actually runs. Skips rather than fails without a DB — a
     unit lane with no database must not turn into a false green OR a false red.
+
+    ⚠ **THIS CLASS DOES NOT RUN IN CI, AND NEVER HAS.** The CI unit lane sets
+    ``SUPABASE_URL``/``SUPABASE_KEY`` but stands up no Supabase service, so the
+    registry read refuses and every test here skips on ``if not bases`` below.
+    Measured 2026-09-17 under a CI-faithful env (credentials configured,
+    endpoint refusing) over the whole ``tests/unit/test_api/`` directory: 8
+    skips, ``kpi_query_registry unreadable``, with the same result at the lane
+    base — so this is pre-existing, not something the canonical re-point
+    introduced. On a box WITH a reachable registry it does run, and whether it
+    runs is also selection-dependent (it reads the registry after
+    ``test_copilotkit_kpi_synthetic.py`` has run, but not on its own —
+    mechanism unidentified, and irrelevant to CI where the endpoint refuses in
+    every ordering).
+
+    Treat it as a post-deploy check on a box, NOT as a gate. A permanently
+    skipped test is indistinguishable from a passing one, which is how
+    ``test_kpi_endpoints.py`` hid 16 failures until #2151. The CI-visible half
+    of this claim lives in
+    ``tests/unit/test_api/test_home_volume_tiles.py::TestTheVolumeTilesShippedSqlReadsBusinessMetrics``,
+    which proves the SHIPPED SQL and cannot speak for the deployed registry —
+    only this class can do that.
     """
 
     #: A migration-143 statement NO tile runs. Its presence separates "143 is not

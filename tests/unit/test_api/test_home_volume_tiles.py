@@ -12,9 +12,46 @@ canonical series' latest COMPLETE calendar month, not the event frontier.
 ``CURRENT_DATE`` would be indistinguishable from a real one on the page.
 """
 
+import re
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+#: ``database/migrations`` — the SQL this repo SHIPS. Not the deployed registry.
+_MIGRATIONS = Path(__file__).resolve().parents[3] / "database" / "migrations"
+
+
+def _shipped_statement(query_id: str) -> str:
+    """The SQL body one APPLIED migration registers for ``query_id``.
+
+    ``rollback_*.sql`` files are excluded — they exist to undo a migration and
+    are not part of the applied sequence, so counting them would report every
+    143 statement as defined twice.
+
+    Exactly one applied migration must define the id, and that is the load
+    bearing part rather than a tidiness check. Reading "the first file that
+    mentions it" is the supersession trap this repo has already been bitten by
+    (a files-grep once reported 8 live case-sensitive predicates where the live
+    registry had 0, because a later migration had replaced them). If a future
+    migration ever redefines one of these ids, this raises and names both files
+    instead of silently asserting against the superseded body.
+    """
+    pattern = re.compile(r"\('" + re.escape(query_id) + r"', \$kpi\$(.*?)\$kpi\$", re.S)
+    hits = [
+        (path.name, match.group(1))
+        for path in sorted(_MIGRATIONS.glob("*.sql"))
+        if not path.name.startswith("rollback_")
+        for match in [pattern.search(path.read_text())]
+        if match
+    ]
+    assert len(hits) == 1, (
+        f"{query_id} is defined by {[name for name, _ in hits]}, expected exactly 1 — "
+        "the shipped SQL for this id is ambiguous from the files, so a Home tile may "
+        "not be pointed at it (measured when a tile was re-pointed back to "
+        "business_impact_trx, which 044/066/089 all touch)"
+    )
+    return hits[0][1]
 
 
 class _Client:
@@ -127,6 +164,62 @@ def test_region_routes_a_volume_tile_to_the_canonical_region_statement():
         "canonical_volume_trx_region",
         ["Kisqali", "west"],
     )
+
+
+class TestTheVolumeTilesShippedSqlReadsBusinessMetrics:
+    """HERMETIC — no database, so this is the half of the substrate claim that
+    actually runs in CI.
+
+    ⚠ IT PROVES THE SQL WE SHIP, NEVER THE REGISTRY THAT IS DEPLOYED. A
+    migration file is the source of the deployed statement; it is not evidence
+    that the statement was applied. Measured 2026-09-17: the live registry on
+    this box holds ZERO ``canonical_volume%`` ids while these files have shipped
+    them for the whole lane. Only
+    ``test_trx_substrate_fence_1640.py::TestTheTileSubstratesMatchTheLiveRegistry``
+    can witness the deployed side — and that class does not run in CI, which is
+    why this one exists rather than replacing it.
+    """
+
+    def test_each_volume_tile_runs_a_business_metrics_statement(self):
+        """The regression this catches: re-pointing a volume tile back at a
+        patient-panel statement (or at any statement over ``treatment_events``)
+        while every other test still passes, because nothing else in CI reads
+        the SQL behind the id."""
+        from src.api.routes.copilotkit import _KPI_SUMMARY_QUERIES
+        from src.kpi.measure_basis import tables_in_sql
+
+        for field in ("trx_volume", "nrx_volume", "market_share", "patient_starts"):
+            query_id = _KPI_SUMMARY_QUERIES[field][0]
+            assert tables_in_sql(_shipped_statement(query_id)) == ["business_metrics"], (
+                field,
+                query_id,
+            )
+
+    def test_the_event_tiles_are_not_canonical_statements(self):
+        """The other half, asserted at the id rather than at the substrate.
+
+        Deriving hcp_reach / conversion substrate from the files the way the
+        four above are derived would be the overclaim: measured, each is touched
+        by THREE migrations (044/063, 066's twins, 089's frontier anchoring), so
+        a file-order rule would be picking one of several bodies and calling it
+        the answer. The live class above is where their substrate is checked.
+        """
+        from src.api.routes.copilotkit import _KPI_SUMMARY_QUERIES
+
+        for field in ("hcp_reach", "conversion_rate"):
+            assert not _KPI_SUMMARY_QUERIES[field][0].startswith("canonical_volume"), field
+
+    def test_the_statement_finder_has_teeth(self):
+        """Positive control. Without this, a finder that quietly returned an
+        empty string for everything would make the assertion above pass against
+        ``tables_in_sql("") == []``... or fail confusingly; either way the test
+        would not be measuring what it claims. So: an unknown id must RAISE, and
+        a known one must come back with a real body.
+        """
+        with pytest.raises(AssertionError):
+            _shipped_statement("canonical_volume_no_such_statement")
+        body = _shipped_statement("canonical_volume_trx")
+        assert "FROM business_metrics" in body and len(body) > 200
 
 
 def test_the_summary_carries_the_canonical_period(monkeypatch):
