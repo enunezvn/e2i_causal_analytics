@@ -74,6 +74,11 @@ import pytest
 # psycopg2 is a transitive dep of the Supabase client and the ETL itself,
 # but unit-only environments may install without it. Skip the whole module
 # rather than ImportError when the binary is absent.
+from tests.integration._prod_write_guard import (
+    adherence_spec,
+    require_isolated_windows,
+)
+
 psycopg2 = pytest.importorskip("psycopg2")
 
 # Module-level skip: developers must opt in AND have a reachable Postgres URL
@@ -115,6 +120,19 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
     base_date = date(2024, 1, 1)
     end_dt = datetime(2024, 1, 31, tzinfo=timezone.utc)
     start_dt = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+    # Prod-write guard (owner-approved, 2026-09-17): the explicit-window variant UPDATEs
+    # every journey with journey_start_date in [start, end), planted or not, so an
+    # unplanted journey here is both a derivation source and a write target.
+    require_isolated_windows(
+        db_conn,
+        adherence_spec(
+            test_file=__file__,
+            start=start_dt,
+            end=end_dt,
+            journey_like=f"pj_{test_run_id}_%",
+        ),
+    )
 
     # Patient A ("normal"): 30-day journey, full coverage, 5 triggers with a
     # 14-day gap inserted between trigger 2 and trigger 3.

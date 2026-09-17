@@ -51,6 +51,11 @@ import pytest
 # psycopg2 is a transitive dep of the Supabase client and the ETL itself,
 # but unit-only environments (e.g. minimal CI lanes) may install without it.
 # Skip the whole module rather than ImportError when the binary is absent.
+from tests.integration._prod_write_guard import (
+    per_hcp_rollup_spec,
+    require_isolated_windows,
+)
+
 psycopg2 = pytest.importorskip("psycopg2")
 
 # Module-level skip: developers must opt in AND have a reachable Postgres URL
@@ -102,6 +107,19 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
     base_date = date(2024, 1, 1)
     end_dt = datetime(2024, 1, 1, tzinfo=timezone.utc) + timedelta(days=NUM_DAYS)
     start_dt = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+    # Prod-write guard (owner-approved, 2026-09-17): refuse before writing if this
+    # window holds rows we did not plant. See tests/integration/_prod_write_guard.py.
+    require_isolated_windows(
+        db_conn,
+        per_hcp_rollup_spec(
+            test_file=__file__,
+            start=start_dt,
+            end=end_dt,
+            hcp_like=f"hcp_{test_run_id}_%",
+            trigger_like=f"tr_{test_run_id}_%",
+        ),
+    )
 
     hcps = []
     for terr_idx, (territory_id, region) in enumerate(TERRITORIES):

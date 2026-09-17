@@ -21,6 +21,13 @@ from typing import Any
 
 import pytest
 
+from tests.integration._prod_write_guard import (
+    adherence_spec,
+    per_hcp_rollup_spec,
+    require_isolated_windows,
+    territory_rollup_spec,
+)
+
 psycopg2 = pytest.importorskip("psycopg2")
 
 pytestmark = pytest.mark.skipif(
@@ -36,6 +43,13 @@ EARLY_BATCH = datetime(2019, 1, 2, 3, 0, 55, tzinfo=UTC)
 # The weekly batch. Its Tuesday triggers arrive 13 days late, like the 2026-07-27 two-week batch.
 MONDAY_BATCH = datetime(2019, 1, 14, 3, 0, 55, tzinfo=UTC)
 BRAND = "Kisqali"
+# Guard windows: wide enough to cover every window any phase of this file uses -- the
+# two arrival runs (03:15 and 03:45 on 2019-01-14) and the explicit 2019-01-20 reconcile
+# of test_the_reconcile_deletes_our_obsolete_row_and_spares_a_foreign_one. Deliberately
+# the UNION of the file's windows, not one of them: a guard that censuses a narrower
+# range than the test writes over cannot fail for the reason it exists.
+GUARD_ARRIVAL_END = datetime(2019, 1, 21, tzinfo=UTC)
+GUARD_DATE_END = date(2019, 1, 21)
 
 
 @pytest.fixture(scope="module")
@@ -49,17 +63,38 @@ def db_conn() -> Any:
 def planted(db_conn: Any) -> Any:
     rid = uuid.uuid4().hex[:10]
     hcps = {"a": f"hcplate_{rid}_a", "b": f"hcplate_{rid}_b"}
-    with db_conn:
-        with db_conn.cursor() as cur:
-            # The territory phase cross-joins EVERY territory with the planted dates and the
-            # teardown deletes territory_metrics rows on those dates, so none may exist before.
-            cur.execute(
-                "SELECT count(*) FROM territory_metrics WHERE metric_date IN (%s, %s)",
-                (TUESDAY, MONDAY),
-            )
-            assert cur.fetchone()[0] == 0, (
-                "territory_metrics already holds rows on the planted 2019 dates"
-            )
+    # Prod-write guard (owner-approved, 2026-09-17). This replaces the narrower inline
+    # check this fixture used to carry -- it proved only that territory_metrics was
+    # empty on the planted dates, which is the guard's third leg. The shared guard adds
+    # the derivation leg (no unplanted trigger on an affected date) and the key-space
+    # leg (the territory CROSS JOIN reaching real territories), and it FAILS rather than
+    # raising a bare AssertionError, so the message names the window and the counts.
+    # Every phase this file runs is by ARRIVAL, so each census windows on created_at.
+    require_isolated_windows(
+        db_conn,
+        per_hcp_rollup_spec(
+            test_file=__file__,
+            start=EARLY_BATCH,
+            end=GUARD_ARRIVAL_END,
+            hcp_like=f"hcplate_{rid}_%",
+            trigger_like=f"trlate_{rid}_%",
+            window_column="created_at",
+        ),
+        territory_rollup_spec(
+            test_file=__file__,
+            start=TUESDAY,
+            end=GUARD_DATE_END,
+            territory_like=f"T_LATE_{rid}%",
+            teardown_deletes_window=True,
+        ),
+        adherence_spec(
+            test_file=__file__,
+            start=EARLY_BATCH,
+            end=GUARD_ARRIVAL_END,
+            journey_like=f"pjlate_hcplate_{rid}_%",
+            window_column="created_at",
+        ),
+    )
     with db_conn:
         with db_conn.cursor() as cur:
             for hcp_id in hcps.values():

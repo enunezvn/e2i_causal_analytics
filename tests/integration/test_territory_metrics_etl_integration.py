@@ -50,6 +50,11 @@ import pytest
 # psycopg2 is a transitive dep of the Supabase client and the ETL itself,
 # but unit-only environments may install without it. Skip the whole module
 # rather than ImportError when the binary is absent.
+from tests.integration._prod_write_guard import (
+    require_isolated_windows,
+    territory_rollup_spec,
+)
+
 psycopg2 = pytest.importorskip("psycopg2")
 
 # Module-level skip: developers must opt in AND have a reachable Postgres URL
@@ -132,6 +137,21 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
     base_date = date(2024, 6, 1)
     start_dt = datetime(2024, 6, 1, tzinfo=timezone.utc)
     end_dt = datetime(2024, 6, 1, tzinfo=timezone.utc) + timedelta(days=NUM_DAYS)
+
+    # Prod-write guard (owner-approved, 2026-09-17). The key-space leg is the one that
+    # matters here: the territory rollup CROSS JOINs every hcp_profiles.territory_id
+    # with every windowed date, so it writes a row per REAL territory even when every
+    # source row is planted. See tests/integration/_prod_write_guard.py.
+    require_isolated_windows(
+        db_conn,
+        territory_rollup_spec(
+            test_file=__file__,
+            start=start_dt,
+            end=end_dt,
+            territory_like=f"%_{test_run_id}",
+            teardown_deletes_window=False,
+        ),
+    )
 
     # Build the HCP roster.
     hcps: list[dict] = []
