@@ -34,8 +34,8 @@ Three concepts kept deliberately separate (agent.py module docstring, "Design ra
 |----------|--------|----------|
 | **Chat routable** | ✅ | `INTENT_TO_AGENTS['cohort_definition']` → `cohort_profiler` (`router.py:176-184`) |
 | **Classifier route** | ✅ | `Domain.COHORT_DEFINITION` → `cohort_profiler` (`pattern_selector.py:34-38`) |
-| **Input resolver** | ✅ | `_resolve_cohort_profiler_input` grounds optional brand; never fails closed at resolve time (`dispatcher.py:1216-1234`, registered `dispatcher.py:1251`) |
-| **Fail-closed on empty** | ✅ | Member of `_FAIL_CLOSED_ON_FAILED_STATUS` (`dispatcher.py:1285-1299`); `status="failed"` only on genuine empty |
+| **Input resolver** | ✅ | `_resolve_cohort_profiler_input` grounds an optional requested brand and never fails closed at resolve time; the agent boundary rejects a grounded unsupported brand before patient/HCP queries (`dispatcher.py::_resolve_cohort_profiler_input`, `agent.py::analyze`) |
+| **Fail-closed response** | ✅ | Member of `_FAIL_CLOSED_ON_FAILED_STATUS`; `status="failed"` on genuine empty/error, unservable-only asks, or a grounded unsupported brand |
 | **Dispatch method** | ✅ | Default `analyze` (Tier-0 fall-through; **NOT** in `AGENT_METHOD_MAP`, `_agent_method_map.py:64-69`) |
 | **Response field** | ✅ | `AGENT_RESPONSE_FIELDS['cohort_profiler'] = ['narrative']` (`_agent_method_map.py:208-209`) |
 | **Real data (no fabrication)** | ✅ | Reuses `get_kpi_calculator().calculate` (WS3-BI-006 NRx) on the criteria-less path; mig-117 `kpi_query` allowlist RPC on the criteria/HCP paths; `n/a` on missing, fail-closed on genuine empty (`agent.py::_profile_patients_legacy`, `_value`, `_rpc_rows`) |
@@ -61,11 +61,11 @@ INTENT_TO_AGENTS['cohort_definition'] → AgentDispatch(
 
 **4-stage active classifier** (`src/agents/orchestrator/classifier/pattern_selector.py:34-38`): `Domain.COHORT_DEFINITION` maps to `cohort_profiler`.
 
-**Input resolver** (`src/agents/orchestrator/nodes/dispatcher.py:1216-1234`): `_resolve_cohort_profiler_input` extracts an optional brand (`_extract_brand_region`, `parsed_query.entities` → `user_context`) and **always returns inputs** — it never fails closed at resolve time, because profiling always has real data to report. Registered in `INPUT_RESOLVERS` at `dispatcher.py:1251`.
+**Input resolver** (`src/agents/orchestrator/nodes/dispatcher.py::_resolve_cohort_profiler_input`): `_resolve_cohort_profiler_input` extracts an optional requested brand (`_extract_brand_region`, `parsed_query.entities` → `user_context`) and **always returns inputs**. At the agent boundary, a non-empty grounded brand that is not one of `Remibrutinib`, `Fabhalta`, or `Kisqali` fails closed before either patient calculator or HCP RPC access. A genuinely absent brand retains the documented all-supported-brands behavior.
 
 **Method spec**: dispatches via the default `analyze` method (Tier-0 fall-through). `cohort_profiler` is **intentionally NOT** in `AGENT_METHOD_MAP` — that map is the Tier 1–5 contract, pinned as set equality against the registry's tier≥1 agents by `TestAgentMethodMapEqualsTiers1To5` (`tests/unit/test_agents/test_config_roster_ssot_1779.py`; 13 agents today, but the guard is derived rather than a pinned count) (`_agent_method_map.py:64-69`). Timeout comes from the router `AgentDispatch.timeout_ms`; the narrative surfaces via `AGENT_RESPONSE_FIELDS` (`_agent_method_map.py:208-209, 242`).
 
-**Fail-closed contract**: `cohort_profiler` IS in `_FAIL_CLOSED_ON_FAILED_STATUS` (`dispatcher.py:1285-1299`). It emits `status="failed"` **only** on a genuine empty/error state (no prescribing population, calculator unavailable); the dispatcher then fails the dispatch rather than laundering an empty profile into a transport-level success.
+**Fail-closed contract**: `cohort_profiler` IS in `_FAIL_CLOSED_ON_FAILED_STATUS`. It emits `status="failed"` on a genuine empty/error state (no prescribing population, calculator unavailable), an unservable-only ask, or a grounded unsupported brand; the dispatcher then fails the dispatch rather than laundering an empty or out-of-scope profile into a transport-level success.
 
 ---
 
@@ -144,13 +144,13 @@ The narrative is REAL per-segment counts (`_render` / `_render_hcp`); missing va
 
 ### Fail-closed (`_failed`)
 
-Genuine empty (no prescribing population / query layer unavailable), an ask whose recognized parameters are ALL unservable, or an unservable threshold metric — `_failed(...)` returns `{"status": "failed", "errors": [...], "narrative": ""}`, and the dispatcher fails the dispatch closed (no values fabricated). An HCP zero-match over a NONZERO prescribing base is NOT a failure: it completes honestly with cohort_size 0.
+Genuine empty (no prescribing population / query layer unavailable), a grounded unsupported brand, an ask whose recognized parameters are ALL unservable, or an unservable threshold metric — `_failed(...)` returns `{"status": "failed", "errors": [...], "narrative": ""}`, and the dispatcher fails the dispatch closed (no values fabricated). An HCP zero-match over a NONZERO prescribing base is NOT a failure: it completes honestly with cohort_size 0.
 
 ---
 
 ## Scope
 
-**Covers**: how many patients are in the Remibrutinib/Fabhalta/Kisqali prescribing population; size/define the cohort for a brand (brand binds from the query text or an indication mention when no structured entity was grounded); break down a brand's population by disease-severity tier or by line of therapy; the same across all supported brands when none is named; patient cohorts with servable inclusion criteria bound in (age-at-diagnosis bounds) plus per-criterion Applied / NOT-applied accounting; HCP-entity cohorts with quantitative TRx thresholds over an explicit (or disclosed-default) time window, with specialty / priority-tier breakdowns.
+**Covers**: how many patients are in the Remibrutinib/Fabhalta/Kisqali prescribing population; size/define the cohort for a supported brand (brand binds from the query text or an indication mention when no structured entity was grounded); break down a brand's population by disease-severity tier or by line of therapy; the same across all supported brands when none is named; patient cohorts with servable inclusion criteria bound in (age-at-diagnosis bounds) plus per-criterion Applied / NOT-applied accounting; HCP-entity cohorts with quantitative TRx thresholds over an explicit (or disclosed-default) time window, with specialty / priority-tier breakdowns. A grounded unsupported brand is refused with the requested and supported brands named; it never widens to all brands.
 
 **Does NOT cover**: materializing the actual eligible patient rows/IDs with FDA-EMA criteria + audit trail for the ML pipeline (→ `cohort_constructor`); narrative explanation of an upstream analysis (→ `explainer`); arbitrary KPI/metric questions beyond cohort sizing (→ domain KPI agents / chat KPI tool); criteria the data model cannot serve (diagnosis-year — zero diagnosis events, no diagnosis-date column; per-patient KPI thresholds; age criteria on HCP cohorts; NRx thresholds) — each is NAMED as not-applied with guidance, and an ask consisting only of unservable criteria fails closed; adoption-propensity ranking (#1356 part 3, blocked on #1354).
 
@@ -167,6 +167,8 @@ Patient segment axes are disease-severity tier AND line-of-therapy; HCP segment 
 | `test_analyze_returns_real_severity_and_line_breakdown` | Real per-segment severity + line breakdown |
 | `test_analyze_canonicalizes_brand_casing` | Mis-cased brand → canonical casing |
 | `test_analyze_fails_closed_when_no_population` | Genuine empty ⇒ `status="failed"`, no fabrication |
+| `test_resolved_unsupported_brand_fails_before_patient_or_hcp_queries` | Real resolver → agent seam refuses an unsupported brand on both entity paths before any calculator/RPC call |
+| `test_resolver_controls_keep_no_brand_widening_and_supported_lowercase_brand` | Genuine no-brand widening and supported lowercase normalization remain intact |
 | `test_resolver_grounds_brand_and_never_fails_closed` | `_resolve_cohort_profiler_input` grounds brand, never fails at resolve time |
 | `test_classifier_routes_cohort_definition_to_profiler` | `Domain.COHORT_DEFINITION` → `cohort_profiler` |
 
