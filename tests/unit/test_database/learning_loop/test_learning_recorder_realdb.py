@@ -22,7 +22,7 @@ from src.agents.tool_composer import composer as _composer  # noqa: F401 - regis
 from src.agents.tool_composer import learning_recorder
 from src.agents.tool_composer.executor import PlanExecutor
 from src.agents.tool_composer.learning_recorder import CompositionRecorder, drain
-from src.agents.tool_composer.registry_sync import RegistrySync
+from src.agents.tool_composer.registry_sync import RegistrySync, build_sync_payload
 from src.tool_registry.registry import ToolSchema, get_registry
 from tests.unit.test_agents.test_tool_composer.test_learning_recorder_serializer import (
     SENTINEL,
@@ -37,12 +37,14 @@ from tests.unit.test_database.learning_loop import _pg
 pytestmark = [
     pytest.mark.skipif(
         not _pg.db_integration_enabled(),
-        reason="real-DB integration; set E2I_DB_INTEGRATION=1 on the droplet (docker + supabase-db)",
+        reason=_pg.OPT_IN_SKIP_REASON,
     ),
     pytest.mark.timeout(300),
 ]
 
-UPTO = "ml/041_composer_learning_loop_recording.sql"
+#: The tool the lazy-sync tests make the DB forget. The base registry is synced from code
+#: (#2065), so "a tool the DB does not know yet" has to be produced by removing its row.
+LAZY_TOOL = "cohort_builder"
 
 
 class FaultPort:
@@ -106,11 +108,18 @@ def _recorder(cid: str, port: Any, *, sync_port: Any = None, **kw: Any) -> Compo
 
 @pytest.fixture
 def synced(clone_db) -> _pg.PgConn:
-    """Migrated through 041 and synced to the live registry (all 20 tools present)."""
-    db = clone_db("recorder")
-    _pg.migrate(db, UPTO)
-    asyncio.run(RegistrySync(port=_pg.PsycopgRpcPort(db)).sync_once())
-    return db
+    """The post-deploy schema, its registry already synced from code by the fixture."""
+    return clone_db("recorder")
+
+
+def _forget(db: _pg.PgConn, name: str = LAZY_TOOL) -> None:
+    """The DB no longer knows ``name``: its row and every dependency touching it are gone."""
+    db.execute(
+        "delete from tool_dependencies d using tool_registry t "
+        f"where t.tool_id in (d.consumer_tool_id, d.producer_tool_id) and t.name = '{name}'"
+    )
+    db.execute(f"delete from tool_registry where name = '{name}'")
+    assert db.rows(f"select count(*) from tool_registry where name = '{name}'") == ["0"]
 
 
 def _one(db: _pg.PgConn, sql: str, *params: Any) -> Any:
@@ -392,11 +401,11 @@ async def test_allowlist_none_keeps_no_names_end_to_end(synced):
 
 async def test_unknown_tools_trigger_lazy_sync_then_resend(clone_db):
     db = clone_db("lazy_sync")
-    _pg.migrate(db, UPTO)  # no sync: cohort_builder has no registry row yet
+    _forget(db)  # cohort_builder has no registry row
     port = _pg.PsycopgRpcPort(db)
     recorder = _recorder("lazy", port)
     d = _decomposition(["DESCRIPTIVE"])
-    step = _step("build", "cohort_builder", "sq_0", {"brand": "brand"})
+    step = _step("build", LAZY_TOOL, "sq_0", {"brand": "brand"})
     plan = _plan(d, [step], [["build"]])
     recorder.start()
     recorder.planned(plan, latency_ms=1, plan_source="llm")
@@ -405,16 +414,17 @@ async def test_unknown_tools_trigger_lazy_sync_then_resend(clone_db):
     assert port.calls.count("sync_tool_registry") == 1
     assert port.calls.count("composer_record_steps") == 2  # reported unknown, then re-sent
     assert _count(db, "composition_steps", "lazy") == 1
-    assert _one(db, "select count(*) from tool_registry where deprecated_at is null") == 20
+    tools, _ = build_sync_payload()
+    assert _one(db, "select count(*) from tool_registry where deprecated_at is null") == len(tools)
 
 
 async def test_concurrent_recorders_sharing_one_sync_both_record(clone_db):
     db = clone_db("lazy_race")
-    _pg.migrate(db, UPTO)  # no sync yet
+    _forget(db)
     port = _pg.PsycopgRpcPort(db)
     shared = RegistrySync(port=port)
     d = _decomposition(["DESCRIPTIVE"])
-    step = _step("build", "cohort_builder", "sq_0", {"brand": "brand"})
+    step = _step("build", LAZY_TOOL, "sq_0", {"brand": "brand"})
     plan = _plan(d, [step], [["build"]])
     for cid in ("race_1", "race_2"):
         recorder = CompositionRecorder(

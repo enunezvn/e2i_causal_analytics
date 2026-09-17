@@ -3,8 +3,14 @@
 The live ``supabase-db`` is never written. Every write goes to a throwaway container of prod's
 own image: memory-capped, bound to 127.0.0.1, uniquely named, labelled with the owning process
 and removed at teardown (or by :func:`reap_orphans` after a hard exit). Prod contributes a
-schema-only dump of ``public`` (no data rows) and single read-only SELECTs for the equivalence
-checks; the rows the lane needs are rebuilt from the repository.
+schema-only dump of ``public`` (no data rows), its migration ledger, and single read-only
+SELECTs for the equivalence checks. The ``tool_registry`` / ``tool_dependencies`` rows are
+rebuilt the way production builds them: the app's own registry payload through
+``sync_tool_registry`` (ml/040).
+
+What the fixture upgrades is derived, not listed (#2065): ``pending`` is every key the runner
+would apply that prod's ledger does not hold. The base is prod as it is NOW, which is exactly
+"prod before the pending migrations". See ``test_fixture_modes.py`` for the two modes.
 
 Run ``python -m tests.unit.test_database.learning_loop._pg --reap`` to remove containers left
 by a pytest process that was killed before its finalizers ran.
@@ -23,7 +29,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Sequence
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 PROD_CONTAINER = "supabase-db"
@@ -31,6 +37,7 @@ CONTAINER_PREFIX = "e2i-learnloop-pg-"
 OWNER_LABEL = "e2i.learnloop.owner_pid"
 MEMORY_CAP = "1g"
 BASE_DB = "learning_loop_base"
+DEPLOYED_DB = "learning_loop_deployed"
 CLONE_PREFIX = "learning_loop_c_"
 
 # Restore errors we expect, by exact message, with the reason. Exact on purpose: an error that is
@@ -42,7 +49,10 @@ EXPECTED_RESTORE_ERRORS: Dict[str, str] = {
     ),
 }
 
-# Applied by the tests themselves, in this order; never part of the rebuilt ledger.
+# The tool-composer learning-loop lane's migrations, in order. Until #2065 this tuple WAS the
+# fixture's notion of "what is being upgraded", so the whole suite self-skipped once prod carried
+# it. It is now only what the lane's file-shape tests and its ``realdb_upgrade`` tests name; the
+# fixture derives what is pending from prod's ledger (:func:`derive_pending`).
 LANE_MIGRATIONS = (
     "ml/039_tool_category_cohort.sql",
     "ml/040_tool_registry_startup_sync.sql",
@@ -484,13 +494,32 @@ def runner_unwraps(sql_text: str) -> bool:
     return any(_RUNNER_UNWRAP.search(re.sub(r"--.*$", "", line)) for line in sql_text.splitlines())
 
 
-def apply_migration(conn: PgConn, path: Path, *, user: str = "postgres") -> str:
-    """Apply one migration file the way the runner does; returns ``"wrapped"`` or ``"unwrapped"``."""
+def _ledger_insert(key: str) -> str:
+    return (
+        "INSERT INTO public.schema_migrations(filename) VALUES ('"
+        + key.replace("'", "''")
+        + "') ON CONFLICT DO NOTHING;"
+    )
+
+
+def apply_migration(
+    conn: PgConn, path: Path, *, user: str = "postgres", record: Optional[str] = None
+) -> str:
+    """Apply one migration file the way the runner does; returns ``"wrapped"`` or ``"unwrapped"``.
+
+    ``record`` is the ledger key to write as the runner does: inside the file's own transaction
+    when wrapped, in a separate statement after a clean exit when not.
+    """
     text = path.read_bytes()
     unwrapped = runner_unwraps(text.decode())
-    proc = conn.pg.run_script(conn.db, text, single_transaction=not unwrapped, user=user)
+    script = text
+    if record is not None and not unwrapped:
+        script = text + b"\n" + _ledger_insert(record).encode() + b"\n"
+    proc = conn.pg.run_script(conn.db, script, single_transaction=not unwrapped, user=user)
     if proc.returncode != 0:
         raise DbFixtureError(f"applying {path.name} failed: {proc.stderr.decode()}")
+    if record is not None and unwrapped:
+        conn.execute(_ledger_insert(record), user=user)
     return "unwrapped" if unwrapped else "wrapped"
 
 
@@ -535,20 +564,113 @@ def apply_rollback(conn: PgConn, name: str, *, project_root: Path = REPO_ROOT):
     )
 
 
+#: ``migrate(conn, ALL_PENDING)``: every key the runner would apply, i.e. the post-deploy schema.
+ALL_PENDING = "<all pending>"
+
+#: Rehearses upgrade-path mode where nothing is pending: the base is built with this ONE applied
+#: migration rolled back through its own rollback file and removed from the ledger. Never set by
+#: the deploy (scripts/deploy/realdb_suite_gate.sh unsets it).
+SIMULATE_PENDING_ENV = "E2I_DB_SIMULATE_PENDING"
+
+#: Every skip in this package ends with this, so nobody reads a skipped real-DB test as coverage.
+NOT_COVERAGE = "a skipped real-DB test is not coverage"
+
+#: The opt-in skip every real-DB module carries.
+OPT_IN_SKIP_REASON = (
+    "real-DB integration: never runs in CI (no database there); runs in every deploy "
+    "(scripts/deploy/realdb_suite_gate.sh) and on the droplet with E2I_DB_INTEGRATION=1; "
+    + NOT_COVERAGE
+)
+
+
+def derive_pending(
+    runner_keys: Sequence[str], ledger: Sequence[str], simulated: Optional[str] = None
+) -> List[str]:
+    """Keys the runner would apply against ``ledger``, in runner order.
+
+    ``simulated`` is treated as not applied (see :data:`SIMULATE_PENDING_ENV`). Ledger keys the
+    runner no longer knows are ignored, as the runner ignores them.
+    """
+    applied = set(ledger) - {simulated}
+    return [key for key in runner_keys if key not in applied]
+
+
+def migration_plan(runner_keys: Sequence[str], applied: set, upto: str) -> List[str]:
+    """The keys ``migrate(…, upto)`` applies: unapplied runner keys through ``upto``, in order."""
+    if upto == ALL_PENDING:
+        through = list(runner_keys)
+    elif upto in runner_keys:
+        through = list(runner_keys[: list(runner_keys).index(upto) + 1])
+    else:
+        raise ValueError(f"{upto!r} is not a runner migration key (scripts/run_migrations.sh)")
+    return [key for key in through if key not in applied]
+
+
+def upgrade_skip_reason(required: Sequence[str], pending: Sequence[str]) -> Optional[str]:
+    """Why a ``realdb_upgrade`` test cannot run now, or ``None`` when it can.
+
+    An upgrade-path test runs on the base BEFORE the pending migrations, so it is meaningful only
+    when what it upgrades through is actually pending. With no keys named it needs any pending
+    migration; with keys named it needs all of them, so a later unrelated migration never wakes
+    a test whose pre-migration base no longer exists.
+    """
+    if not required:
+        if pending:
+            return None
+        return (
+            "upgrade path: no migration is pending (prod's ledger holds every runner key), so "
+            f"there is nothing to upgrade; runs when a deploy adds one; {NOT_COVERAGE}"
+        )
+    already = [key for key in required if key not in pending]
+    if not already:
+        return None
+    return (
+        f"upgrade path through {list(required)}: runs only while those migrations are pending; "
+        f"already applied: {already}, so the pre-migration base no longer exists; {NOT_COVERAGE}"
+    )
+
+
+def migration_file(key: str, project_root: Path = REPO_ROOT) -> Path:
+    """The file behind a ledger key; ``database/migrations/`` keys carry no directory prefix."""
+    directory, _, filename = key.rpartition("/")
+    return project_root / "database" / (directory or "migrations") / filename
+
+
+def rollback_file(key: str, project_root: Path = REPO_ROOT) -> Path:
+    """``database/<dir>/rollback_<NNN>.sql`` for a ledger key."""
+    path = migration_file(key, project_root)
+    return path.with_name(f"rollback_{path.name[:3]}.sql")
+
+
+def simulated_pending_key(
+    value: Optional[str], ledger: Sequence[str], project_root: Path = REPO_ROOT
+) -> Optional[str]:
+    """Validate :data:`SIMULATE_PENDING_ENV`: an applied key with a real rollback file, or off."""
+    if not value:
+        return None
+    if value not in ledger:
+        raise ValueError(f"{SIMULATE_PENDING_ENV}={value!r} is not in prod's ledger")
+    if not rollback_file(value, project_root).exists():
+        raise ValueError(
+            f"{SIMULATE_PENDING_ENV}={value!r} has no rollback file "
+            f"({rollback_file(value, project_root).name}); it cannot be faithfully un-applied"
+        )
+    return value
+
+
 def migrate(conn: PgConn, upto: Optional[str]) -> List[str]:
-    """Apply the lane's migrations in order through ``upto`` (a LANE_MIGRATIONS key), as postgres."""
+    """Apply, as postgres and in runner order, every runner key through ``upto`` that ``conn``'s
+    ledger does not hold, recording each as the runner does. A ledgered key is a no-op.
+
+    ``upto`` is a runner key or :data:`ALL_PENDING`; ``None`` applies nothing.
+    """
     if upto is None:
         return []
-    if upto not in LANE_MIGRATIONS:
-        raise ValueError(f"unknown lane migration {upto!r}; expected one of {LANE_MIGRATIONS}")
-    applied = []
-    for key in LANE_MIGRATIONS[: LANE_MIGRATIONS.index(upto) + 1]:
-        path = REPO_ROOT / "database" / key
-        if not path.exists():
-            raise DbFixtureError(f"{key} does not exist yet")
-        apply_migration(conn, path)
-        applied.append(key)
-    return applied
+    applied = set(conn.rows("select filename from public.schema_migrations"))
+    plan = migration_plan(runner_migration_keys(), applied, upto)
+    for key in plan:
+        apply_migration(conn, migration_file(key), record=key)
+    return plan
 
 
 # ---------------------------------------------------------------------------
@@ -647,17 +769,19 @@ LANE_ROLE_MEMBERSHIPS = (
 )
 
 
+# Read on a throwaway clone (test_migration_runner.py), never sent to prod.
 LANE_MIGRATIONS_IN_LEDGER = (
     "select filename from public.schema_migrations where filename in ("
     + ",".join("'" + k + "'" for k in LANE_MIGRATIONS)
     + ") order by 1"
 )
+PROD_LEDGER = "select filename from public.schema_migrations order by 1"
 PROD_DB_OWNER = "select datdba::regrole::text from pg_database where datname = current_database()"
 PROD_E2I_ROLES = "select rolname from pg_roles where rolname like 'e2i%' order by 1"
 
 # Every query build_base and the fixtures send to prod.
 PROD_QUERIES = (
-    LANE_MIGRATIONS_IN_LEDGER,
+    PROD_LEDGER,
     PROD_DB_OWNER,
     PROD_E2I_ROLES,
     LANE_ROLE_MEMBERSHIPS,
@@ -682,11 +806,52 @@ def acl_text(acl_expr: str) -> str:
     )
 
 
-def lane_migrations_already_in_prod(prod: ProdReadOnly) -> List[str]:
-    return prod.rows(LANE_MIGRATIONS_IN_LEDGER)
+@dataclass
+class BaseBuild:
+    """What :func:`build_base` produced, kept for the sanity tests and the run summary."""
+
+    restore_log: RestoreLog
+    prod_ledger: List[str]
+    simulated: Optional[str]
+    pending: List[str]
+    registry_sync: Dict[str, int]
 
 
-def build_base(pg: ThrowawayPg, prod: ProdReadOnly, db: str = BASE_DB) -> RestoreLog:
+def sync_registry_from_code(conn: PgConn) -> Dict[str, int]:
+    """The DB tool registry rebuilt the way production builds it, raising on any failure.
+
+    The payload is the app's own (``build_sync_payload``, from the live tool registry) and it
+    reaches ``sync_tool_registry`` as service_role, like the API's startup sync. That path
+    swallows errors (``RegistrySync.sync_once`` returns ``None``), which a fixture must not.
+    """
+    import asyncio
+
+    from src.agents.tool_composer.registry_sync import MAX_DEPRECATIONS, build_sync_payload
+
+    tools, dependencies = build_sync_payload()
+    counts = asyncio.run(
+        PsycopgRpcPort(conn).call(
+            "sync_tool_registry",
+            {
+                "p_tools": tools,
+                "p_dependencies": dependencies,
+                "p_max_deprecations": MAX_DEPRECATIONS,
+            },
+        )
+    )
+    if not isinstance(counts, dict):
+        raise DbFixtureError(f"sync_tool_registry returned {counts!r}")
+    return counts
+
+
+def build_base(
+    pg: ThrowawayPg, prod: ProdReadOnly, db: str = BASE_DB, *, simulate: Optional[str] = None
+) -> BaseBuild:
+    """Prod as it is now, in a throwaway database: the pre-deploy state of every pending migration.
+
+    ``simulate`` names one applied key to un-apply through its rollback file (see
+    :data:`SIMULATE_PENDING_ENV`), so upgrade-path mode can be rehearsed while nothing is pending.
+    """
     # The image's ``postgres`` database carries the Supabase schemas (auth, extensions, …) and
     # event triggers; a bare CREATE DATABASE does not (probe 2026-09-11), so copy it.
     # Same owner as prod's database: PG15's public schema is owned by pg_database_owner, so the
@@ -748,35 +913,74 @@ def build_base(pg: ThrowawayPg, prod: ProdReadOnly, db: str = BASE_DB) -> Restor
             f"schema restore failed (rc={proc.returncode}); fatal={fatal[:5]} unexpected={unexpected[:10]}"
         )
 
-    # Ledger rebuilt from the repository, as the runner would record it.
-    keys = [k for k in runner_migration_keys() if k not in LANE_MIGRATIONS]
-    values = ",".join("('" + k.replace("'", "''") + "')" for k in keys)
-    pg.rows(
-        db, f"insert into public.schema_migrations(filename) values {values} on conflict do nothing"
+    # Prod's ledger, as it is. Rebuilding it from the repository instead assumed prod predated a
+    # hard-coded lane, which stopped being true the day the lane deployed (#2065).
+    prod_ledger = prod.rows(PROD_LEDGER)
+    simulated = simulated_pending_key(simulate, prod_ledger)
+    ledger = [key for key in prod_ledger if key != simulated]
+    if ledger:
+        values = ",".join("('" + k.replace("'", "''") + "')" for k in ledger)
+        pg.rows(db, f"insert into public.schema_migrations(filename) values {values}")
+    conn = PgConn(pg, db)
+    if simulated is not None:
+        # The runbook's rollback: psql as postgres, one transaction.
+        undone = pg.run_script(
+            db, rollback_file(simulated).read_bytes(), single_transaction=True, user="postgres"
+        )
+        if undone.returncode != 0:
+            raise DbFixtureError(f"rolling back {simulated} failed: {undone.stderr.decode()}")
+
+    # tool_registry / tool_dependencies: the schema dump carries no rows. Re-applying the
+    # migrations that once seeded them (ml/013, 027, 037) no longer works on the current schema
+    # (013 indexes a column 041 dropped) and skipped 038's rewrite anyway; prod's rows come from
+    # the API's startup sync since ml/040, so the base gets them the same way.
+    registry = sync_registry_from_code(conn)
+
+    return BaseBuild(
+        restore_log=RestoreLog(errors=errors, unexpected=unexpected, unseen_expected=unseen),
+        prod_ledger=prod_ledger,
+        simulated=simulated,
+        pending=derive_pending(runner_migration_keys(), prod_ledger, simulated),
+        registry_sync=registry,
     )
 
-    # tool_registry / tool_dependencies rows rebuilt from the migrations that wrote them.
-    for rel in (
-        "database/ml/013_tool_composer_tables.sql",
-        "database/ml/027_causal_discovery_tool_deps.sql",
-        "database/ml/037_tool_registry_schema_sync.sql",
-    ):
-        applied = pg.run_script(db, (REPO_ROOT / rel).read_bytes(), single_transaction=True)
-        if applied.returncode != 0:
-            raise DbFixtureError(f"re-applying {rel} failed: {applied.stderr.decode()}")
 
-    return RestoreLog(errors=errors, unexpected=unexpected, unseen_expected=unseen)
+@dataclass
+class DeployedBuild:
+    applied: List[str]
+    registry_sync: Optional[Dict[str, int]]
+
+
+def build_deployed(pg: ThrowawayPg, pending: Sequence[str]) -> Tuple[str, DeployedBuild]:
+    """The schema production will have once this deploy's migrations have run.
+
+    With nothing pending that is the base itself (no copy is made). Otherwise the base is copied
+    to :data:`DEPLOYED_DB`, every pending migration is applied in runner order and recorded, and
+    the registry is synced again, as the new API does at startup after the migrations.
+    """
+    if not pending:
+        return BASE_DB, DeployedBuild(applied=[], registry_sync=None)
+    (owner,) = pg.rows(
+        "template1", f"select datdba::regrole::text from pg_database where datname = '{BASE_DB}'"
+    )
+    pg.terminate_connections(BASE_DB)
+    pg.rows("template1", f'create database {DEPLOYED_DB} template {BASE_DB} owner "{owner}"')
+    conn = PgConn(pg, DEPLOYED_DB)
+    applied = migrate(conn, ALL_PENDING)
+    if applied != list(pending):
+        raise DbFixtureError(f"applied {applied}, but pending was {list(pending)}")
+    return DEPLOYED_DB, DeployedBuild(applied=applied, registry_sync=sync_registry_from_code(conn))
 
 
 def clone(pg: ThrowawayPg, label: str, template: str = BASE_DB) -> PgConn:
     """A new database copied from ``template``, with a unique bounded name.
 
-    Names are ``learning_loop_c_<label[:20]>_<hex6>``: never the base's name, never truncated by
+    Names are ``learning_loop_c_<label[:20]>_<hex6>``: never a template's name, never truncated by
     Postgres' 63-byte identifier limit, never colliding between callers.
     """
     slug = re.sub(r"[^a-z0-9_]", "_", label.lower())[:20]
     db = f"{CLONE_PREFIX}{slug}_{secrets.token_hex(3)}"
-    assert db != BASE_DB and len(db) <= 63
+    assert db not in (BASE_DB, DEPLOYED_DB) and len(db) <= 63
     (owner,) = pg.rows(
         "template1", f"select datdba::regrole::text from pg_database where datname = '{template}'"
     )

@@ -7,14 +7,12 @@ another transport, the same substitution ``PsycopgRpcPort`` makes for PostgREST.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import pytest
 
-from src.agents.tool_composer.registry_sync import RegistrySync
 from src.agents.tool_composer.reliability import ToolReliabilityReader
 from src.api.schemas.admin_tool_composer import ToolComposerObservability
 from src.services.tool_composer_observability_service import ToolComposerObservabilityService
@@ -23,12 +21,10 @@ from tests.unit.test_database.learning_loop import _pg
 pytestmark = [
     pytest.mark.skipif(
         not _pg.db_integration_enabled(),
-        reason="real-DB integration; set E2I_DB_INTEGRATION=1 on the droplet (docker + supabase-db)",
+        reason=_pg.OPT_IN_SKIP_REASON,
     ),
     pytest.mark.timeout(300),
 ]
-
-UPTO = "ml/041_composer_learning_loop_recording.sql"
 
 
 class PsycopgQuery:
@@ -132,10 +128,8 @@ class PsycopgSupabase:
 
 @pytest.fixture
 def synced(clone_db) -> _pg.PgConn:
-    db = clone_db("admin_obs")
-    _pg.migrate(db, UPTO)
-    asyncio.run(RegistrySync(port=_pg.PsycopgRpcPort(db)).sync_once())
-    return db
+    # The post-deploy schema, its registry already synced from code by the fixture.
+    return clone_db("admin_obs")
 
 
 def _seed(cid: str) -> Dict[str, Any]:
