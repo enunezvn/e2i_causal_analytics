@@ -1349,9 +1349,9 @@ Stores periodic KPI snapshots by brand and region including actuals, targets, ac
 
 | Column | Type | Migration | Description |
 |--------|------|-----------|-------------|
-| `trx_count` | `INTEGER` | 033 | Total prescriptions in the period |
-| `nrx_count` | `INTEGER` | 033 | New prescriptions in the period |
-| `total_rx_count` | `INTEGER` | 033 | Total Rx across brands |
+| `triggers_delivered_count` | `INTEGER` | 033, renamed 144 | Triggers delivered or viewed (per_hcp_rollup) |
+| `triggers_accepted_count` | `INTEGER` | 033, renamed 144 | Triggers accepted or responded (per_hcp_rollup) |
+| `triggers_total_count` | `INTEGER` | 033, renamed 144 | All triggers generated (per_hcp_rollup) |
 | `market_share` | `NUMERIC` | 033 | Market share for the brand/territory |
 | `conversion_rate` | `NUMERIC` | 033 | Conversion rate for the period |
 | `engagement_score` | `NUMERIC` | 033 | Average engagement score |
