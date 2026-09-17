@@ -98,7 +98,11 @@ class TrainingFrame:
 @runtime_checkable
 class EffectDataProvider(Protocol):
     def get_training_frame(
-        self, intervention_type: str, brand: str, twin_type: str
+        self,
+        intervention_type: str,
+        brand: str,
+        twin_type: str,
+        reference_covariates: pd.DataFrame | None = None,
     ) -> TrainingFrame: ...
 
 

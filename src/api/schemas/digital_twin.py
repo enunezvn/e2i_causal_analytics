@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -40,6 +40,7 @@ class EffectHeterogeneityResponse(BaseModel):
 
 def heterogeneity_response(value: Any) -> EffectHeterogeneityResponse:
     """Map a live model or stored JSON to the public heterogeneity contract."""
+    data: Mapping[str, Any]
     if isinstance(value, BaseModel):
         data = value.model_dump(mode="json")
     elif isinstance(value, Mapping):
@@ -58,7 +59,9 @@ def heterogeneity_response(value: Any) -> EffectHeterogeneityResponse:
     )
 
 
-def live_subgroups_basis(data_provenance: Optional[str], *, calculated: bool = True) -> str:
+def live_subgroups_basis(
+    data_provenance: Optional[str], *, calculated: bool = True
+) -> Literal["cohort_rows", "per_twin", "twin_weighted_legacy", "unknown"]:
     """Describe the evidence basis only when subgroup effects were calculated."""
     from src.digital_twin.effect.estimate import (
         PROVENANCE_COHORT,
