@@ -5,16 +5,17 @@ Replaces the prior region-only g-formula + synthetic injected-effect handoff
 DML estimate computed DIRECTLY on the connected cohort over a defensible PRE-TREATMENT
 adjustment set. This is the Direction-2 estimator (design doc 2026-06-19):
 
-- magnitude, uncertainty AND per-region heterogeneity all come from the data;
+- magnitude, uncertainty, per-region and supported per-specialty heterogeneity all come
+  from the cohort data;
 - nothing is laundered through a synthetic frame, so the CI reflects REAL sampling noise;
 - it is substrate-agnostic: identical code recovers the planted ``TRUE_CATE_BY_REGION`` on
   synthetic-gold today and runs unchanged on RWD tomorrow (the adjustment set is the
   present subset of the configured pre-treatment confounders, never hardcoded magnitudes).
 
-Method mirrors the gold-standard recovery probe in
-``scripts/backfill_segment_engagement.py`` (CausalForestDML, region as the heterogeneity
-axis X, the confounders as controls W, treatment binarized at the median), so this
-estimator IS the agent-faithful recovery of the documented DGP.
+Method extends the gold-standard recovery probe in ``scripts/backfill_segment_engagement.py``
+(CausalForestDML, treatment binarized at the median) with nominal region and specialty
+modifiers. The current synthetic-gold DGP plants effects by region only, so its specialty
+output is a null-interaction/observed-composition check, not planted specialty truth.
 
 Fail-closed (CLAUDE.md anti-mocking): degenerate/insufficient data raises
 ``EffectDataUnavailable`` — the caller surfaces an honest no-effect result, never a
@@ -25,13 +26,17 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Sequence
+from typing import Sequence, cast
 
 import numpy as np
 import pandas as pd
 
 from src.digital_twin.effect.errors import EffectCause, EffectDataUnavailable
-from src.digital_twin.effect.estimate import PROVENANCE_COHORT, EffectEstimate
+from src.digital_twin.effect.estimate import (
+    PROVENANCE_COHORT,
+    AxisProvenance,
+    EffectEstimate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +52,15 @@ _LOG_CONFOUNDERS = frozenset({"total_rx_count"})
 _MIN_ROWS = 200  # DML needs a stable nuisance fit; the loader gates cohorts at >= 500.
 _OUTCOME_COL = "conversion_rate"
 _REGION_COL = "region"
+_SPECIALTY_COL = "specialty"
+_MISSING_SPECIALTY = "__missing_specialty__"
+
+# Publication support for specialty effects.  The 100-row floor matches the repository's
+# existing minimum evaluation-support stability boundary; the 20-per-arm floor is twice
+# the forest's min_samples_leaf=10.  These are reporting gates, not row filters: all cohort
+# rows remain in the pooled fit, while an under-supported label is omitted from the API.
+MIN_SPECIALTY_ROWS = 100
+MIN_SPECIALTY_ARM_ROWS = 20
 
 
 @dataclass
@@ -60,6 +74,10 @@ class CohortCausalEffect:
     # per-region effect, so a caller reporting it can report what it rests on. Same keys
     # as ``cate_by_region``.
     n_by_region: dict[str, int]
+    cate_by_specialty: dict[str, float]
+    n_by_specialty: dict[str, int]
+    specialty_suppressed_groups: dict[str, str]
+    specialty_source_available: bool
     treatment_col: str
     outcome_col: str
     adjustment_set: list[str] = field(default_factory=list)
@@ -83,6 +101,7 @@ def _usable_rows(
     outcome_col: str,
     region_col: str,
     confounders: Sequence[str],
+    specialty_col: str = _SPECIALTY_COL,
 ) -> pd.DataFrame:
     """The rows every estimate on this cohort uses: required columns present (refusing an
     under-adjusted estimate), numeric model inputs coerced, rows null in any of them dropped.
@@ -127,11 +146,61 @@ def _usable_rows(
             "region": cohort[region_col].astype(str),
         }
     )
+    if specialty_col in cohort.columns:
+        specialty = cohort[specialty_col].astype("string").str.strip()
+        work["specialty"] = specialty.mask(specialty.eq("")).fillna(_MISSING_SPECIALTY)
+    else:
+        # Backward-compatible cohorts still produce the region estimate.  Specialty stays
+        # undeclared rather than fabricated when its source column is absent.
+        work["specialty"] = _MISSING_SPECIALTY
     for c in confounders:
         work[c] = pd.to_numeric(cohort[c], errors="coerce")
     work = work.dropna().reset_index(drop=True)
 
     return work
+
+
+def _effect_modifier_matrix(work: pd.DataFrame) -> np.ndarray:
+    """One-hot both nominal axes, preserving the legacy region-only matrix when needed."""
+    if "specialty" not in work or not work["specialty"].ne(_MISSING_SPECIALTY).any():
+        categories = sorted(work["region"].unique())
+        code = {category: index for index, category in enumerate(categories)}
+        return cast(np.ndarray, work["region"].map(code).to_numpy(dtype=float).reshape(-1, 1))
+    axes = ["region", "specialty"]
+    return cast(
+        np.ndarray,
+        pd.get_dummies(work[axes], columns=axes, dtype=float).to_numpy(dtype=float),
+    )
+
+
+def _specialty_aggregates(
+    specialty: np.ndarray,
+    treatment: np.ndarray,
+    effects: np.ndarray,
+    scope_mask: np.ndarray,
+) -> tuple[dict[str, float], dict[str, int], dict[str, str]]:
+    """Publish supported observed-region-mix specialty CATE means within ``scope_mask``."""
+    cate: dict[str, float] = {}
+    counts: dict[str, int] = {}
+    suppressed: dict[str, str] = {}
+    for label in sorted(set(specialty[scope_mask])):
+        if label == _MISSING_SPECIALTY:
+            suppressed["<missing>"] = "source_value_missing"
+            continue
+        mask = scope_mask & (specialty == label)
+        n_group = int(mask.sum())
+        n_treated = int(treatment[mask].sum())
+        n_control = n_group - n_treated
+        if n_group < MIN_SPECIALTY_ROWS:
+            suppressed[label] = "group_rows_below_minimum"
+        elif n_treated < MIN_SPECIALTY_ARM_ROWS:
+            suppressed[label] = "treated_rows_below_minimum"
+        elif n_control < MIN_SPECIALTY_ARM_ROWS:
+            suppressed[label] = "control_rows_below_minimum"
+        else:
+            cate[label] = float(np.mean(effects[mask]))
+            counts[label] = n_group
+    return cate, counts, suppressed
 
 
 def control_outcome_sd(
@@ -177,6 +246,7 @@ def estimate_cohort_effect(
     *,
     outcome_col: str = _OUTCOME_COL,
     region_col: str = _REGION_COL,
+    specialty_col: str = _SPECIALTY_COL,
     confounders: Sequence[str] = DEFAULT_CONFOUNDERS,
     alpha: float = 0.05,
     seed: int = 42,
@@ -185,8 +255,9 @@ def estimate_cohort_effect(
     """Estimate the ATE + per-region CATE of ``treatment_col`` on ``outcome_col``.
 
     Treatment is binarized at its median (the pre-registered contrast: high vs low
-    intensity, mirroring the DGP). Region is the heterogeneity axis X; the present subset
-    of ``confounders`` is the control set W. Returns honest DML inference intervals.
+    intensity, mirroring the DGP). Region and, when sourced, specialty are categorical
+    heterogeneity axes X; ``confounders`` is the control set W. Returns honest DML
+    inference intervals.
 
     ``target_regions`` (#2015) adds the same forest's average effect over the cohort rows
     in those regions, with ``ate_interval`` over those rows — the interval the cohort-wide
@@ -200,6 +271,7 @@ def estimate_cohort_effect(
         outcome_col=outcome_col,
         region_col=region_col,
         confounders=confounders,
+        specialty_col=specialty_col,
     )
     present_confounders = list(confounders)
 
@@ -228,7 +300,8 @@ def estimate_cohort_effect(
 
     y = work["y"].to_numpy(dtype=float)
 
-    # X = region (integer-coded heterogeneity axis); W = pre-treatment confounder controls.
+    # X = one-hot region + specialty.  Both are nominal labels, so integer coding would
+    # inject a false ordering into the forest's split geometry.
     cats = sorted(work["region"].unique())
     if len(cats) < 1:
         raise EffectDataUnavailable(
@@ -236,8 +309,10 @@ def estimate_cohort_effect(
             cause=EffectCause.TOO_FEW_USABLE_ROWS,
             details={"n_usable_rows": n_usable},
         )
-    code = {c: i for i, c in enumerate(cats)}
-    x = work["region"].map(code).to_numpy(dtype=float).reshape(-1, 1)
+    specialty_source_available = bool(
+        specialty_col in cohort.columns and work["specialty"].ne(_MISSING_SPECIALTY).any()
+    )
+    x = _effect_modifier_matrix(work)
 
     w = None
     if present_confounders:
@@ -282,6 +357,15 @@ def estimate_cohort_effect(
     # Evidence base per region: the usable cohort rows the CATE above averages over.
     n_by_region = {c: int((region_arr == c).sum()) for c in cate_by_region}
 
+    specialty_arr = work["specialty"].to_numpy(dtype=str)
+    report_mask: np.ndarray = np.ones(len(work), dtype=bool)
+    if targets := list(dict.fromkeys(str(r) for r in target_regions)):
+        report_mask = np.isin(region_arr, targets)
+
+    cate_by_specialty, n_by_specialty, specialty_suppressed_groups = _specialty_aggregates(
+        specialty_arr, t, eff, report_mask
+    )
+
     targets = list(dict.fromkeys(str(r) for r in target_regions))
     target_ate = target_lo = target_hi = None
     target_n = 0
@@ -323,13 +407,20 @@ def estimate_cohort_effect(
         target_ate, target_lo, target_hi = float(np.mean(eff[mask])), float(t_lo), float(t_hi)
         target_n = int(mask.sum())
 
-    adjustment_set = [region_col] + present_confounders
+    adjustment_set = [region_col]
+    if specialty_source_available:
+        adjustment_set.append(specialty_col)
+    adjustment_set.extend(present_confounders)
     return CohortCausalEffect(
         ate=float(np.mean(eff)),
         ate_ci_lower=float(lo),
         ate_ci_upper=float(hi),
         cate_by_region=cate_by_region,
         n_by_region=n_by_region,
+        cate_by_specialty=cate_by_specialty,
+        n_by_specialty=n_by_specialty,
+        specialty_suppressed_groups=specialty_suppressed_groups,
+        specialty_source_available=specialty_source_available,
         n=int(len(work)),
         treatment_col=treatment_col,
         outcome_col=outcome_col,
@@ -387,7 +478,8 @@ class CohortCausalEstimator:
         # cohort-wide. What this carries to: the ATE, its interval, the SE derived from it,
         # the DEPLOY/REFINE/SKIP policy and the experiment size.
         # The subgroup heterogeneity the engine reports is now on the same footing: it
-        # comes from ``cate_by_axis`` below, which declares region alone and carries the
+        # comes from ``cate_by_axis`` below, which declares region and supported specialty
+        # groups and carries the
         # cohort rows behind each region's effect, so by_specialty / by_decile /
         # by_adoption_stage are no longer averaged over the GENERATED TWINS (#2054), and
         # the simulation confidence follows ``n_train`` below, not the twin count (#2104).
@@ -404,14 +496,10 @@ class CohortCausalEstimator:
             n_train = eff.n
             cohort_ate = cohort_ci_lower = cohort_ci_upper = None
 
-        # This estimate resolves REGION and nothing else (#2054). The forest's heterogeneity
-        # axis X is region alone, so ``per_twin_uplift`` below is a STEP FUNCTION of region:
-        # every twin in a region carries the identical value. Declaring the other axes would
-        # let the engine average that step function over the twins' specialty / decile /
-        # adoption_stage draws, and since those are drawn independently of region every group
-        # converges to the same twin-mixture mean — the apparent spread is sampling noise in
-        # the twin draw, not an effect (measured: specialty spread 0.049 at 100 twins falling
-        # to 0.002 at 100k, while region spread is exactly invariant).
+        # This estimate resolves region and, when sourced and supported, specialty directly
+        # over the cohort rows. The other axes remain undeclared: averaging this forest over
+        # generated-twin deciles or adoption stages would recreate the twin-mixture artifact
+        # fixed by #2054.
         # Scoped to the targeted regions when there are any: those are the rows this estimate
         # was computed on, and a region outside that scope was not estimated here. The
         # evidence is COHORT rows, so these numbers do not move with the twin count.
@@ -430,6 +518,9 @@ class CohortCausalEstimator:
         if declared_regions:
             cate_by_axis["region"] = {r: eff.cate_by_region[r] for r in declared_regions}
             n_by_axis["region"] = {r: eff.n_by_region[r] for r in declared_regions}
+        if eff.cate_by_specialty:
+            cate_by_axis["specialty"] = dict(eff.cate_by_specialty)
+            n_by_axis["specialty"] = dict(eff.n_by_specialty)
         # Targeting that matches no cohort region is fail-closed above rather than wrong, but
         # it is still a bug: ``estimate_cohort_effect`` rejects an uncovered target region, so
         # every target reaching here is a region the forest produced a CATE for.
@@ -438,11 +529,23 @@ class CohortCausalEstimator:
             f"{sorted(eff.cate_by_region)}."
         )
 
-        # Per-twin uplift = the twin's region CATE (honest, data-driven heterogeneity);
-        # twins in a region absent from the cohort fall back to the headline ATE.
+        # Per-twin scoring uses the same published specialty CATE when supported. An absent
+        # or under-supported specialty falls back to region, then the headline ATE. Fallback
+        # scores are never published as specialty CATEs above.
         if twin_population is not None and "region" in getattr(twin_population, "columns", []):
             regions = twin_population["region"].astype(str)
-            per_twin = np.array([eff.cate_by_region.get(r, ate) for r in regions], dtype=float)
+            specialties = (
+                twin_population["specialty"].astype("string").fillna(_MISSING_SPECIALTY)
+                if "specialty" in twin_population.columns
+                else pd.Series([_MISSING_SPECIALTY] * len(twin_population))
+            )
+            per_twin = np.array(
+                [
+                    eff.cate_by_specialty.get(str(s), eff.cate_by_region.get(r, ate))
+                    for r, s in zip(regions, specialties, strict=True)
+                ],
+                dtype=float,
+            )
         else:
             n = len(twin_population) if twin_population is not None else 0
             per_twin = np.full(max(n, 1), ate, dtype=float)
@@ -456,7 +559,10 @@ class CohortCausalEstimator:
             per_twin_uplift=per_twin,
             auuc=None,
             qini=None,
-            feature_importances={f"cate::{r}": v for r, v in eff.cate_by_region.items()},
+            feature_importances={
+                **{f"cate::region::{r}": v for r, v in eff.cate_by_region.items()},
+                **{f"cate::specialty::{s}": v for s, v in eff.cate_by_specialty.items()},
+            },
             n_train=n_train,
             estimator_type="cohort_causal_forest_dml",
             data_provenance=PROVENANCE_COHORT,
@@ -466,4 +572,19 @@ class CohortCausalEstimator:
             cohort_ci_upper=cohort_ci_upper,
             cate_by_axis=cate_by_axis,
             n_by_axis=n_by_axis,
+            axis_provenance={
+                "specialty": AxisProvenance(
+                    basis="cohort_rows",
+                    source="hcp_profiles.specialty",
+                    min_group_rows=MIN_SPECIALTY_ROWS,
+                    min_treated_rows=MIN_SPECIALTY_ARM_ROWS,
+                    min_control_rows=MIN_SPECIALTY_ARM_ROWS,
+                    fallback="region_then_cohort",
+                    support_unit="cohort_rows",
+                    estimand="observed_region_mix_mean_cate",
+                    suppressed_groups=dict(eff.specialty_suppressed_groups),
+                )
+            }
+            if eff.specialty_source_available
+            else {},
         )

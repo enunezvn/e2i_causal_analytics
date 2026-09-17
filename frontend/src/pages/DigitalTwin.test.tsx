@@ -128,6 +128,15 @@ const mockRunResult: SimulationResponse = {
   is_significant: true,
   effect_direction: 'positive',
   created_at: '2026-06-05T01:00:00Z',
+  effect_heterogeneity: {
+    by_specialty: {},
+    by_decile: {},
+    by_region: {},
+    by_adoption_stage: {},
+    top_segments: [],
+    axis_provenance: {},
+  },
+  subgroups_basis: 'cohort_rows',
 };
 
 // The real detail fetched when a history item is clicked.
@@ -145,6 +154,7 @@ const mockDetail: SimulationDetailResponse = {
     by_region: {},
     by_adoption_stage: {},
     top_segments: [],
+    axis_provenance: {},
   },
   intervention_config: {},
   subgroups_basis: 'per_twin',
@@ -742,6 +752,156 @@ describe('DigitalTwin', () => {
     expect(ev.getByText(/95% CI: \[0\.052, 0\.118\]/)).toBeInTheDocument(); // CI bounds
   });
 
+  it('shows supported specialty effects with their cohort provenance and fallback rule', async () => {
+    (useRunSimulation as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      isPending: false,
+      isError: false,
+      error: null,
+      data: {
+        ...mockRunResult,
+        subgroups_basis: 'cohort_rows',
+        effect_heterogeneity: {
+          by_specialty: {
+            oncology: { ate: 0.21, std: 0, n: 360 },
+            hematology: { ate: 0.08, std: 0, n: 300 },
+          },
+          by_decile: {},
+          by_region: {},
+          by_adoption_stage: {},
+          top_segments: [],
+          axis_provenance: {
+            specialty: {
+              basis: 'cohort_rows',
+              source: 'hcp_profiles.specialty',
+              min_group_rows: 100,
+              min_treated_rows: 20,
+              min_control_rows: 20,
+              fallback: 'region_then_cohort',
+              support_unit: 'cohort_rows',
+              estimand: 'observed_region_mix_mean_cate',
+              suppressed_groups: { rare: 'group_rows_below_minimum' },
+            },
+          },
+        },
+      },
+    });
+
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+
+    expect(await screen.findByText('Specialty Effects')).toBeInTheDocument();
+    expect(screen.getByText('oncology')).toBeInTheDocument();
+    expect(screen.getByText('360 cohort rows')).toBeInTheDocument();
+    expect(screen.getByText(/hcp_profiles\.specialty/)).toBeInTheDocument();
+    expect(screen.getByText(/Observed-region-mix CATE/)).toBeInTheDocument();
+    expect(screen.getByText(/not distinct HCPs/)).toBeInTheDocument();
+    expect(screen.getByText(/at least 100 rows, 20 treated, and 20 control/)).toBeInTheDocument();
+    expect(screen.getByText(/fallback values are not published/)).toBeInTheDocument();
+    expect(screen.getByText(/rare.*suppressed/i)).toBeInTheDocument();
+  });
+
+  it('still exposes specialty provenance when every specialty is suppressed', async () => {
+    (useRunSimulation as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      isPending: false,
+      isError: false,
+      error: null,
+      data: {
+        ...mockRunResult,
+        subgroups_basis: 'cohort_rows',
+        effect_heterogeneity: {
+          by_specialty: {},
+          by_decile: {},
+          by_region: {},
+          by_adoption_stage: {},
+          top_segments: [],
+          axis_provenance: {
+            specialty: {
+              basis: 'cohort_rows',
+              source: 'hcp_profiles.specialty',
+              min_group_rows: 100,
+              min_treated_rows: 20,
+              min_control_rows: 20,
+              fallback: 'region_then_cohort',
+              support_unit: 'cohort_rows',
+              estimand: 'observed_region_mix_mean_cate',
+              suppressed_groups: { rare: 'group_rows_below_minimum' },
+            },
+          },
+        },
+      },
+    });
+
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+
+    expect(await screen.findByText('Specialty Effects')).toBeInTheDocument();
+    expect(screen.getByText(/No specialty effects met the publication floor/i)).toBeInTheDocument();
+    expect(screen.getByText(/rare.*suppressed/i)).toBeInTheDocument();
+  });
+
+  it('distinguishes missing specialty source values from insufficient support', async () => {
+    (useRunSimulation as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      isPending: false,
+      isError: false,
+      error: null,
+      data: {
+        ...mockRunResult,
+        subgroups_basis: 'cohort_rows',
+        effect_heterogeneity: {
+          by_specialty: {},
+          by_decile: {},
+          by_region: {},
+          by_adoption_stage: {},
+          top_segments: [],
+          axis_provenance: {
+            specialty: {
+              basis: 'cohort_rows',
+              source: 'hcp_profiles.specialty',
+              min_group_rows: 100,
+              min_treated_rows: 20,
+              min_control_rows: 20,
+              fallback: 'region_then_cohort',
+              support_unit: 'cohort_rows',
+              estimand: 'observed_region_mix_mean_cate',
+              suppressed_groups: { '<missing>': 'source_value_missing' },
+            },
+          },
+        },
+      },
+    });
+
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+
+    expect(await screen.findByText(/<missing>: source specialty is missing/i)).toBeInTheDocument();
+    expect(screen.queryByText(/<missing>.*insufficient support/i)).not.toBeInTheDocument();
+  });
+
+  it('does not relabel a provenance-free legacy specialty aggregate as a supported effect', () => {
+    (useRunSimulation as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      isPending: false,
+      isError: false,
+      error: null,
+      data: {
+        ...mockRunResult,
+        subgroups_basis: 'twin_weighted_legacy',
+        effect_heterogeneity: {
+          by_specialty: { oncology: { mean: 0.05, std: 0.01, n: 12 } },
+          by_decile: {},
+          by_region: {},
+          by_adoption_stage: {},
+          top_segments: [],
+          axis_provenance: {},
+        },
+      },
+    });
+
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+
+    expect(screen.queryByText('Specialty Effects')).not.toBeInTheDocument();
+  });
+
   it('shows a SYNTHETIC badge when the result data_provenance is synthetic', () => {
     (useRunSimulation as ReturnType<typeof vi.fn>).mockReturnValue({
       mutate: mockMutate,
@@ -801,9 +961,9 @@ describe('DigitalTwin', () => {
     expect(title).not.toMatch(/more twins does not raise|follows the twin sample/i);
   });
 
-  // A STORED simulation (the detail carries `subgroups_basis`; a fresh run does not) shows
-  // the score persisted when it ran, computed by the heuristic in force at that time — the
-  // current-heuristic wording above would be false for it (#2104, codex r2).
+  // A STORED simulation (identified by detail-only `population_filters`) shows the score
+  // persisted when it ran, computed by the heuristic in force at that time — the current
+  // heuristic wording above would be false for it (#2104, codex r2).
   it('says a stored legacy detail carries the score of its time, scored on twin count (#2104)', async () => {
     await openHistoryDetail({
       ...mockDetail,

@@ -98,12 +98,11 @@ def mock_simulation_engine():
         mock_result.intervention_config.model_dump.return_value = {
             "intervention_type": "email_campaign"
         }
-        mock_result.effect_heterogeneity = MagicMock()
-        mock_result.effect_heterogeneity.by_specialty = {}
-        mock_result.effect_heterogeneity.by_decile = {}
-        mock_result.effect_heterogeneity.by_region = {}
-        mock_result.effect_heterogeneity.by_adoption_stage = {}
-        mock_result.effect_heterogeneity.get_top_segments.return_value = []
+        # Real response-domain value: route serialization must be proven against the
+        # production contract, not MagicMock's unconstrained attribute shape (#2162).
+        from src.digital_twin.models.simulation_models import EffectHeterogeneity
+
+        mock_result.effect_heterogeneity = EffectHeterogeneity()
         mock_result.is_significant.return_value = True
         mock_result.effect_direction.return_value = "positive"
 
@@ -1667,12 +1666,12 @@ async def test_simulate_save_path_uses_injected_client(mock_twin_generator, mock
     fake_client, chain = _fake_supabase_client()
 
     # The REAL SimulationRepository.save_simulation serializes the result; give
-    # the mocked engine result JSON-able population_filters / heterogeneity so
-    # the save reaches the injected client instead of raising on None.to_dict().
+    # the mocked engine result JSON-able population_filters so the save reaches
+    # the injected client instead of raising on None.to_dict(). The shared
+    # fixture already supplies a real EffectHeterogeneity domain value.
     result = mock_simulation_engine.simulate.return_value
     result.population_filters = MagicMock()
     result.population_filters.to_dict.return_value = {}
-    result.effect_heterogeneity.model_dump.return_value = {}
     result.memory_usage_mb = 0.0
 
     # This test targets the SAVE path; bypass model resolution/loading (covered by

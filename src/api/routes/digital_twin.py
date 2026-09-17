@@ -42,6 +42,9 @@ from src.api.dependencies.auth import (
     resolve_brand_for_read,
 )
 from src.api.routes.digital_twin_rejections import Decile, rejected_request
+from src.api.schemas.digital_twin import EffectHeterogeneityResponse
+from src.api.schemas.digital_twin import heterogeneity_response as _heterogeneity_response
+from src.api.schemas.digital_twin import live_subgroups_basis as _live_subgroups_basis
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 
 if TYPE_CHECKING:
@@ -352,16 +355,6 @@ class ValidateFidelityRequest(BaseModel):
 # =============================================================================
 
 
-class EffectHeterogeneityResponse(BaseModel):
-    """Heterogeneous effects across subgroups."""
-
-    by_specialty: Dict[str, Dict[str, float]] = Field(default={})
-    by_decile: Dict[str, Dict[str, float]] = Field(default={})
-    by_region: Dict[str, Dict[str, float]] = Field(default={})
-    by_adoption_stage: Dict[str, Dict[str, float]] = Field(default={})
-    top_segments: List[Dict[str, Any]] = Field(default=[])
-
-
 class SimulationResponse(BaseModel):
     """Response from a simulation run."""
 
@@ -429,23 +422,18 @@ class SimulationResponse(BaseModel):
     cohort_ci_upper: Optional[float] = Field(
         default=None, description="Upper bound of the cohort-wide interval, when narrowed."
     )
+    effect_heterogeneity: EffectHeterogeneityResponse = Field(
+        description="Supported subgroup effects and their evidence provenance."
+    )
+    subgroups_basis: Literal["cohort_rows", "per_twin", "twin_weighted_legacy", "unknown"] = Field(
+        description="How effect_heterogeneity was computed; fresh cohort runs use cohort_rows.",
+    )
 
 
 class SimulationDetailResponse(SimulationResponse):
     """Detailed simulation response including heterogeneity."""
 
     population_filters: Dict[str, Any]
-    effect_heterogeneity: EffectHeterogeneityResponse
-    subgroups_basis: Literal["cohort_rows", "per_twin", "twin_weighted_legacy", "unknown"] = Field(
-        description=(
-            "How effect_heterogeneity was computed (#2104): 'cohort_rows' (declared axes over "
-            "the cohort rows behind the estimate, #2054), 'per_twin' (synthetic-path per-twin "
-            "scores), 'twin_weighted_legacy' (a row stored before #2097 whose by_specialty / "
-            "by_decile / by_adoption_stage averaged region CATEs over the generated twins and "
-            "whose stored simulation_confidence was scored on twin count; the stored JSON is "
-            "served unchanged), 'unknown' (no provenance recorded)."
-        ),
-    )
     intervention_config: Dict[str, Any]
     completed_at: Optional[datetime] = None
 
@@ -1034,6 +1022,10 @@ async def run_simulation(
             cohort_ci_upper=(
                 None if result.cohort_ci_upper is None else round(result.cohort_ci_upper, 4)
             ),
+            effect_heterogeneity=_heterogeneity_response(result.effect_heterogeneity),
+            subgroups_basis=_live_subgroups_basis(
+                result.data_provenance, calculated=request.calculate_heterogeneity
+            ),
         )
 
     except HTTPException:
@@ -1355,6 +1347,8 @@ async def compare_scenarios(
             created_at=result.created_at,
             data_provenance=result.data_provenance,
             estimate_scope=_live_estimate_scope(result.target_regions),
+            effect_heterogeneity=_heterogeneity_response(result.effect_heterogeneity),
+            subgroups_basis=_live_subgroups_basis(result.data_provenance),
         )
 
     try:
@@ -1456,13 +1450,7 @@ async def get_simulation(
 
         scope = _stored_estimate_scope(result)
         eh = result.get("effect_heterogeneity") or {}
-        heterogeneity = EffectHeterogeneityResponse(
-            by_specialty=eh.get("by_specialty", {}),
-            by_decile=eh.get("by_decile", {}),
-            by_region=eh.get("by_region", {}),
-            by_adoption_stage=eh.get("by_adoption_stage", {}),
-            top_segments=(eh.get("top_segments") or [])[:5],
-        )
+        heterogeneity = _heterogeneity_response(eh)
 
         return SimulationDetailResponse(
             simulation_id=str(result.get("simulation_id", "")),

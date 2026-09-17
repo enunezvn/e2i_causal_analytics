@@ -292,6 +292,20 @@ export interface EffectHeterogeneityResponse {
   by_adoption_stage: Record<string, Record<string, number>>;
   /** Top performing segments */
   top_segments: Array<Record<string, unknown>>;
+  /** Evidence source, publication floors, and scoring fallback for each axis. */
+  axis_provenance: Record<string, SubgroupAxisProvenance>;
+}
+
+export interface SubgroupAxisProvenance {
+  basis: string;
+  source: string;
+  min_group_rows: number;
+  min_treated_rows?: number | null;
+  min_control_rows?: number | null;
+  fallback: string;
+  support_unit: string;
+  estimand: string;
+  suppressed_groups: Record<string, string>;
 }
 
 /**
@@ -370,6 +384,10 @@ export interface SimulationResponse {
   cohort_ci_lower?: number | null;
   /** Upper bound of the cohort-wide interval, when narrowed. */
   cohort_ci_upper?: number | null;
+  /** Supported subgroup effects; present on fresh responses since #2162. */
+  effect_heterogeneity: EffectHeterogeneityResponse;
+  /** Evidence population used for subgroup effects. */
+  subgroups_basis: 'cohort_rows' | 'per_twin' | 'twin_weighted_legacy' | 'unknown';
 }
 
 /**
