@@ -28,6 +28,16 @@
 -- parses MIGRATION_DIRS out of the runner rather than restating it.
 --
 -- ---------------------------------------------------------------------------
+-- WHO OWNS APPLYING THIS: ISSUE #2167
+-- ---------------------------------------------------------------------------
+-- Nothing in the repository causes this file to run, which is the point and also
+-- the risk: without a tracked owner the lane PR merges, #2114 closes, and the
+-- legacy columns live forever (codex iter2/iter3 MED-1). Issue #2167 is that
+-- owner. It carries the preconditions below, the apply command, and the later PR
+-- that moves this file into database/migrations/. If you apply this file, close
+-- #2167; if you decide NOT to, say so there rather than letting it lapse.
+--
+-- ---------------------------------------------------------------------------
 -- APPLY THIS BY HAND, AND ONLY WHEN ALL OF THE FOLLOWING ARE TRUE
 -- ---------------------------------------------------------------------------
 --   1. the deploy carrying 144 completed and its health checks passed, so no

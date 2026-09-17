@@ -375,6 +375,18 @@ def rollback_render() -> str:
         "'WS3-BI-007', 'WS3-BI-008') AND source = 'business_metrics.value';\n\n"
         + restore_sql()
         + f"\n\nDELETE FROM public.kpi_query_registry WHERE query_id IN ({ids});\n\n"
+        # Retire the ledger row in the SAME transaction as the rollback it records
+        # (codex iter3 HIGH-2). The recovery runbook used to do this as a second
+        # `psql` invocation after the rollback had already committed: if that call
+        # failed, the schema was reverted while the runner still believed 143 was
+        # applied, so the next deploy would skip re-applying it. Applied with
+        # `psql --single-transaction`, this line commits with the rollback or not
+        # at all. It lives in the GENERATOR, not in the rendered file, because
+        # test_mig143_canonical_volume_registry.py asserts the committed file is
+        # byte-identical to this function's output.
+        + "-- Retire the ledger row in the same transaction as the rollback it records.\n"
+        + "DELETE FROM public.schema_migrations WHERE filename = "
+        + "'143_canonical_volume_kpis.sql';\n\n"
         + "NOTIFY pgrst, 'reload schema';\n"
     )
 

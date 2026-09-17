@@ -155,7 +155,8 @@ Add + backfill + sync, then retire in a LATER deploy. Two committed halves:
   changed, legacy winning if a statement ever moved both (no writer in the tree does). Either name may
   therefore be read AND written by either code version, for as long as both can run.
 - **`database/deferred/146` (CONTRACT, by hand, a LATER deploy)** retires the legacy three, the trigger
-  and its function, and rebuilds the four split views.
+  and its function, and rebuilds the four split views. **Applying it is owned by issue #2167**, which
+  carries the preconditions and the later PR that moves it into `database/migrations/`.
 
 Why the halves must not ship in one deploy: `scripts/run_migrations.sh` applies EVERY pending forward
 `*.sql` in each `MIGRATION_DIRS` entry in ONE pass, so a `migrations/145_*.sql` would run seconds after

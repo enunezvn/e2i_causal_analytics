@@ -37,13 +37,7 @@ $restore$;
 
 DELETE FROM public.kpi_query_registry WHERE query_id IN ('canonical_volume_trx', 'canonical_volume_trx_region', 'canonical_volume_trx_windowed', 'canonical_volume_trx_windowed_region', 'canonical_volume_nrx', 'canonical_volume_nrx_region', 'canonical_volume_nrx_windowed', 'canonical_volume_nrx_windowed_region', 'canonical_volume_nbrx', 'canonical_volume_nbrx_region', 'canonical_volume_nbrx_windowed', 'canonical_volume_nbrx_windowed_region', 'canonical_volume_trx_share', 'canonical_volume_trx_share_region', 'canonical_volume_trx_share_windowed', 'canonical_volume_trx_share_windowed_region', 'canonical_volume_monthly_series', 'canonical_volume_trx_include_synthetic', 'canonical_volume_trx_region_include_synthetic', 'canonical_volume_trx_windowed_include_synthetic', 'canonical_volume_trx_windowed_region_include_synthetic', 'canonical_volume_nrx_include_synthetic', 'canonical_volume_nrx_region_include_synthetic', 'canonical_volume_nrx_windowed_include_synthetic', 'canonical_volume_nrx_windowed_region_include_synthetic', 'canonical_volume_nbrx_include_synthetic', 'canonical_volume_nbrx_region_include_synthetic', 'canonical_volume_nbrx_windowed_include_synthetic', 'canonical_volume_nbrx_windowed_region_include_synthetic', 'canonical_volume_trx_share_include_synthetic', 'canonical_volume_trx_share_region_include_synthetic', 'canonical_volume_trx_share_windowed_include_synthetic', 'canonical_volume_trx_share_windowed_region_include_synthetic', 'canonical_volume_monthly_series_include_synthetic');
 
--- Retire the ledger row in the SAME transaction as the schema change it records
--- (codex iter3 HIGH-2). The recovery runbook used to do this as a second `psql`
--- invocation after the rollback had already committed: if that second call failed,
--- the schema was reverted while the runner still believed the migration was
--- applied, so the next deploy would skip re-applying it. `&&` supplies ordering,
--- not atomicity. Applied with `psql --single-transaction`, this line commits with
--- the rollback or not at all.
+-- Retire the ledger row in the same transaction as the rollback it records.
 DELETE FROM public.schema_migrations WHERE filename = '143_canonical_volume_kpis.sql';
 
 NOTIFY pgrst, 'reload schema';
