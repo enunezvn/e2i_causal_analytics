@@ -240,16 +240,18 @@ def test_every_counting_query_is_bounded_by_the_window_or_is_deliberately_total(
     """A census query with no window bound would count the whole table and refuse
     everything for ever -- the no-op-by-over-refusal failure.
 
-    Two legs are total ON PURPOSE and are listed by name rather than waved through
-    by a pattern: the territory key space is every ``territory_id`` in
-    ``hcp_profiles`` (that IS the cross join's reach, so bounding it by the window
-    would understate the hazard), and the ``WHERE false`` legs are the
-    by-construction-empty ones.
+    NARROWED after the dbd1063e7 defect. The old version allowed any query naming
+    ``hcp_profiles`` through as "deliberately total", and that blanket is exactly the
+    hole the defect slipped past: an unconditional key-space leg refused every
+    territory suite alive. The exemption is now tied to the LEG, so only the two
+    key-space legs may be unbounded, and only when they are live at all -- every other
+    leg must carry the window or be explicitly waived.
     """
+    may_be_total = {"target_entities_total", "target_entities_planted"}
     for q in spec.queries:
         bounded = "%(start)s" in q.sql and "%(end)s" in q.sql
-        deliberately_total = "FROM hcp_profiles" in q.sql or "WHERE false" in q.sql
-        assert bounded or deliberately_total, (spec.test_file, q.leg, q.sql)
+        waived = q.sql.rstrip().endswith("WHERE false")
+        assert bounded or waived or q.leg in may_be_total, (spec.test_file, q.leg, q.sql)
 
 
 def test_a_spec_must_declare_its_five_legs_in_order() -> None:
@@ -277,6 +279,157 @@ def test_the_metric_type_constant_matches_both_etls() -> None:
     from src.etl.territory_metrics_etl import PER_HCP_METRIC_TYPE as territory_metric_type
 
     assert PER_HCP_METRIC_TYPE == per_hcp_metric_type == territory_metric_type
+
+
+# =============================================================================
+# The leg-2 / leg-3 pairing (fix for the dbd1063e7 defect)
+# =============================================================================
+
+
+def _leg(spec: WriteWindowSpec, leg: str) -> CensusQuery:
+    return next(q for q in spec.queries if q.leg == leg)
+
+
+def _is_waived(q: CensusQuery) -> bool:
+    """A waived leg is a query that cannot count anything -- `WHERE false`."""
+    return q.sql.rstrip().endswith("WHERE false")
+
+
+@pytest.mark.parametrize("sweeps", [True, False])
+def test_exactly_one_of_the_key_space_and_teardown_legs_is_live(sweeps: bool) -> None:
+    """BOTH directions matter, which is why this is parametrized rather than two
+    assertions about one spec.
+
+    The hazard is not "foreign rows are written", it is "foreign rows SURVIVE". A
+    window-scoped teardown sweeps the cross join's foreign rows, so leg 2 is waived
+    and leg 3 carries the safety; a prefix-scoped teardown leaves them, so leg 2
+    applies and leg 3 has nothing to say. Asking both at once was the shipped defect:
+    leg 2 unconditional refused every territory suite on a live DB.
+    """
+    spec = territory_rollup_spec(
+        test_file="t.py",
+        start="2019-01-01",
+        end="2019-01-21",
+        territory_like="T_x%",
+        teardown_deletes_window=sweeps,
+    )
+    keyspace_waived = _is_waived(_leg(spec, "target_entities_total"))
+    teardown_waived = _is_waived(_leg(spec, "teardown_reach_preexisting"))
+    assert keyspace_waived is sweeps, "leg 2 must be waived exactly when the teardown sweeps"
+    assert teardown_waived is not sweeps, "leg 3 must be live exactly when the teardown sweeps"
+    # Complementary, not merely different: never both live, never both waived.
+    assert keyspace_waived != teardown_waived
+
+
+def test_the_derivation_leg_is_never_waived_by_the_teardown_setting() -> None:
+    """The pairing is about where WRITES land, not about where values come from.
+    A teardown that sweeps the window does not make it acceptable to derive those
+    values from real rows, so leg 1 must stay live in both configurations."""
+    for sweeps in (True, False):
+        spec = territory_rollup_spec(
+            test_file="t.py",
+            start="2019-01-01",
+            end="2019-01-21",
+            territory_like="T_x%",
+            teardown_deletes_window=sweeps,
+        )
+        assert not _is_waived(_leg(spec, "source_rows_total"))
+        assert "%(start)s" in _leg(spec, "source_rows_total").sql
+
+
+def test_the_measured_live_verdicts_are_reproduced_from_their_counts() -> None:
+    """Regression guard over the dispatcher's read-only measurement of 2026-09-17.
+
+    These are real counts from the real database, pinned here so a future change to
+    `assess` cannot silently flip a verdict that was checked against production data.
+    The census QUERIES are what changed in this commit; the decision must still read
+    these numbers the same way.
+    """
+    # test_business_metrics_per_hcp_etl_integration.py, [2024-01-01, +30d)
+    assert assess(WindowCensus(438, 0, 386, 0, 0)).refused is True
+    # test_patient_adherence_etl_integration.py, [2024-01-01, 2024-01-31)
+    assert assess(WindowCensus(285, 0, 285, 0, 0)).refused is True
+    # test_territory_metrics_etl_integration.py, [2024-06-01, +3d): leg 2 ALONE.
+    territory_integration = assess(WindowCensus(0, 0, 40, 0, 0))
+    assert territory_integration.refused is True
+    assert len(territory_integration.reasons) == 1
+    assert territory_integration.reasons[0].startswith("key space:")
+    # The counterfactual the dispatcher ran: waiving leg 2 unconditionally -- the
+    # simpler, WRONG design -- permits that same file. Measured, not assumed.
+    assert assess(WindowCensus(0, 0, 0, 0, 0)).refused is False
+    # test_per_hcp_rollup_late_arrival.py: per-HCP and adherence phases were already 0.
+    assert assess(WindowCensus(0, 0, 0, 0, 0)).refused is False
+
+
+def test_the_late_arrival_territory_census_now_permits() -> None:
+    """The defect, end to end, in the numbers that exposed it.
+
+    Live counts for that file's territory phase were leg1 0/0, leg2 40/0, leg3 0.
+    Shipped, leg 2 was asked unconditionally and the file REFUSED. With the pairing,
+    leg 2 is waived (its teardown sweeps the window) and leg 3 -- measured 0, against
+    a positive control returning 1840 over territory_metrics' real span -- permits.
+    """
+    assert assess(WindowCensus(0, 0, 40, 0, 0)).refused is True  # as shipped
+    assert assess(WindowCensus(0, 0, 0, 0, 0)).refused is False  # with leg 2 waived
+    spec = territory_rollup_spec(
+        test_file="test_per_hcp_rollup_late_arrival.py",
+        start="2019-01-01",
+        end="2019-01-21",
+        territory_like="T_LATE_x%",
+        teardown_deletes_window=True,
+    )
+    assert _is_waived(_leg(spec, "target_entities_total"))
+    assert not _is_waived(_leg(spec, "teardown_reach_preexisting"))
+
+
+# =============================================================================
+# The per-HCP reconcile scope (fix 2): window vs arrival disagree
+# =============================================================================
+
+
+def test_the_reconcile_scope_follows_the_variant_and_the_two_disagree() -> None:
+    """The arrival reconcile scopes by affected_dates, NOT by the window
+    (_PER_HCP_RECONCILE_SCOPE_BY_ARRIVAL). Censusing an arrival run with the window
+    scope understates it, and an understating leg is worse than a missing one because
+    it reads as a measurement.
+
+    Both directions are asserted, so an implementation that ignored `window_column`
+    would fail one of them whichever scope it hardcoded. What this CANNOT show is
+    that Postgres agrees -- it is a check on the predicate we emit, at the SQL-text
+    layer; the live half is what showed the counts.
+    """
+    common = {
+        "test_file": "f.py",
+        "start": "2019-01-02 03:00:55+00",
+        "end": "2019-01-21 00:00:00+00",
+        "hcp_like": "hcplate_x_%",
+        "trigger_like": "trlate_x_%",
+    }
+    arrival = _leg(
+        per_hcp_rollup_spec(**common, window_column="created_at"),
+        "teardown_reach_preexisting",
+    )
+    windowed = _leg(
+        per_hcp_rollup_spec(**common, window_column="trigger_timestamp"),
+        "teardown_reach_preexisting",
+    )
+
+    # The arrival scope is a set membership with no lower bound tied to `start` --
+    # which is exactly why it reaches 2019-01-01 while the window scope starts at
+    # 2019-01-02 and misses it.
+    assert "b.metric_date IN (" in arrival.sql
+    assert "t.created_at >= %(start)s" in arrival.sql
+    assert "b.metric_date >= %(start)s::DATE" not in arrival.sql
+
+    # The explicit variant keeps the window bounds and grows no subquery.
+    assert "b.metric_date >= %(start)s::DATE" in windowed.sql
+    assert "b.metric_date <  %(end)s::DATE" in windowed.sql or (
+        "b.metric_date < %(end)s::DATE" in windowed.sql
+    )
+    assert "b.metric_date IN (" not in windowed.sql
+
+    # And they really are different statements, not two spellings of one.
+    assert re.sub(r"\s+", " ", arrival.sql) != re.sub(r"\s+", " ", windowed.sql)
 
 
 def test_census_sql_renders_a_read_only_transaction_for_hand_off() -> None:

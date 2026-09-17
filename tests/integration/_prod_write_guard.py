@@ -246,11 +246,16 @@ def per_hcp_rollup_spec(
     windows the two coincide; for a partial-day window they do not, and the wider
     one is the honest count.
 
-    Teardown-reach leg: the explicit-window reconcile is
-    ``DELETE FROM business_metrics WHERE metric_type = 'per_hcp_rollup' AND hcp_id IS
-    NOT NULL AND metric_date >= start AND < end AND NOT EXISTS (in rollup)`` -- it
-    removes any per-HCP row in the window the recomputation does not reproduce,
-    including rows this run never planted.
+    Teardown-reach leg: the reconcile DELETEs any per-HCP row in scope that the
+    recomputation does not reproduce, including rows this run never planted -- and
+    **the two variants scope it differently**
+    (``business_metrics_per_hcp_etl._PER_HCP_RECONCILE_SCOPE_BY_WINDOW`` vs
+    ``_BY_ARRIVAL``). The explicit variant scopes by ``metric_date >= start AND < end``;
+    an ARRIVAL run scopes by ``metric_date IN (SELECT metric_date FROM affected_dates)``,
+    which has no lower bound tied to ``start`` at all. Censusing an arrival run with the
+    window scope UNDERSTATES it: on the late-arrival window it would start at 2019-01-02
+    and miss ``TUESDAY = 2019-01-01``, a date that run really does touch. An
+    understating leg is worse than a missing one, because it reads as a measurement.
     """
     if window_column not in ("trigger_timestamp", "created_at"):
         raise ValueError(f"unknown per-HCP window column {window_column!r}")
@@ -259,6 +264,12 @@ def per_hcp_rollup_spec(
         f" WHERE t.{window_column} >= %(start)s AND t.{window_column} < %(end)s"
     )
     window = {"start": start, "end": end}
+    # Mirror the reconcile's own scope, which differs per variant (see the docstring).
+    reconcile_scope = (
+        f"b.metric_date IN ({affected})"
+        if window_column == "created_at"
+        else "b.metric_date >= %(start)s::DATE AND b.metric_date < %(end)s::DATE"
+    )
     return WriteWindowSpec(
         test_file=test_file,
         window_description=f"per-HCP rollup, triggers by {window_column} in [{start}, {end})",
@@ -293,10 +304,10 @@ def per_hcp_rollup_spec(
             ),
             CensusQuery(
                 "teardown_reach_preexisting",
-                "per-HCP rollup rows in the window the reconcile could delete, not ours",
+                "per-HCP rollup rows in the reconcile's own scope that are not ours",
                 "SELECT count(*) FROM business_metrics b "
                 " WHERE b.metric_type = %(metric_type)s AND b.hcp_id IS NOT NULL "
-                "   AND b.metric_date >= %(start)s::DATE AND b.metric_date < %(end)s::DATE "
+                f"   AND {reconcile_scope} "
                 "   AND b.hcp_id NOT LIKE %(hcp_like)s",
                 {**window, "hcp_like": hcp_like, "metric_type": PER_HCP_METRIC_TYPE},
             ),
@@ -314,18 +325,59 @@ def territory_rollup_spec(
 ) -> WriteWindowSpec:
     """Census for a file that runs ``territory_metrics_etl`` on explicit dates.
 
-    The key-space leg is the one that matters here and the one a derivation-only
-    guard cannot see: ``territories AS (SELECT DISTINCT territory_id FROM hcp_profiles
-    WHERE territory_id IS NOT NULL)`` is CROSS JOINed with every date in the window,
-    so the rollup emits a ``territory_metrics`` row for every real territory on every
-    windowed date even when no planted source row exists.
+    The key-space leg is the one a derivation-only guard cannot see: ``territories AS
+    (SELECT DISTINCT territory_id FROM hcp_profiles WHERE territory_id IS NOT NULL)``
+    is CROSS JOINed with every date in the window, so the rollup emits a
+    ``territory_metrics`` row for every real territory on every windowed date even when
+    no planted source row exists.
 
-    ``teardown_deletes_window`` says whether this file's cleanup deletes
-    ``territory_metrics`` by window instead of by planted prefix. Two of the five do.
-    When it does not, the leg counts 0 by construction -- expressed as a query with a
-    false predicate rather than a hardcoded 0, so every leg is measured the same way.
+    **Legs 2 and 3 are complementary, and ``teardown_deletes_window`` selects between
+    them.** The hazard is not "foreign rows are written" -- it is "foreign rows
+    SURVIVE". So:
+
+    * teardown **prefix-scoped** (``False``): the cross join's foreign rows are never
+      cleaned up, so leg 2 applies and leg 3 is empty by construction.
+    * teardown **window-scoped** (``True``): those same foreign rows are swept by the
+      cleanup, so leg 2 is waived -- and leg 3 carries the safety instead, because a
+      window-wide DELETE destroys anything that pre-existed there.
+
+    Asking leg 2 unconditionally was the shipped defect (``dbd1063e7``): it counts every
+    territory in ``hcp_profiles`` with no window bound, so it refused EVERY territory
+    suite on a live database, including correctly-isolated ones. That is a proxy for
+    the real condition -- it asks "are there foreign keys in the key space?" when what
+    matters is "will foreign rows survive teardown?" -- and a leg that always refuses
+    is as useless as one that never does.
+
+    Measured live 2026-09-17 (read-only, by the dispatcher), which is what makes the
+    conditional defensible rather than merely plausible:
+
+    * ``test_territory_metrics_etl_integration.py`` over ``[2024-06-01, 2024-06-04)``:
+      leg 1 = **0/0**, leg 3 = **0**, leg 2 = **40/0**. It is refused by leg 2 ALONE.
+    * The counterfactual was run: with leg 2 waived unconditionally -- the simpler,
+      wrong design -- that file **PERMITS**. So leg 2 is the only thing between it and
+      a live write, and this conditional discriminates by measurement, not by
+      construction.
+    * ``test_per_hcp_rollup_late_arrival.py`` over ``[2019-01-01, 2019-01-21)``: the
+      same ``40/0`` on leg 2, but its teardown sweeps the window, and leg 3 measures
+      **0** there -- against a positive control showing leg 3's shape returns **1840**
+      over ``[2026-01-01, 2027-01-01)``, the real span of ``territory_metrics``. Leg 3's
+      zero is a measurement, not a dead predicate, so it can carry the safety.
+
+    A waived leg is expressed as a false-predicate query rather than a hardcoded 0, so
+    every leg is measured the same way and the census stays five statements.
     """
     window = {"start": start, "end": end}
+    keyspace_total_sql = (
+        "SELECT count(DISTINCT territory_id) FROM hcp_profiles WHERE false"
+        if teardown_deletes_window
+        else "SELECT count(DISTINCT territory_id) FROM hcp_profiles  WHERE territory_id IS NOT NULL"
+    )
+    keyspace_planted_sql = (
+        "SELECT count(DISTINCT territory_id) FROM hcp_profiles WHERE false"
+        if teardown_deletes_window
+        else "SELECT count(DISTINCT territory_id) FROM hcp_profiles "
+        " WHERE territory_id IS NOT NULL AND territory_id LIKE %(territory_like)s"
+    )
     teardown_sql = (
         "SELECT count(*) FROM territory_metrics m "
         " WHERE m.metric_date >= %(start)s::DATE AND m.metric_date < %(end)s::DATE "
@@ -357,17 +409,16 @@ def territory_rollup_spec(
             ),
             CensusQuery(
                 "target_entities_total",
-                "territories the CROSS JOIN writes a row for (every territory in hcp_profiles)",
-                "SELECT count(DISTINCT territory_id) FROM hcp_profiles "
-                " WHERE territory_id IS NOT NULL",
+                "territories the CROSS JOIN writes a row for (waived when the teardown"
+                " sweeps the window, which removes them again)",
+                keyspace_total_sql,
                 {},
             ),
             CensusQuery(
                 "target_entities_planted",
                 "of those, territories this run owns",
-                "SELECT count(DISTINCT territory_id) FROM hcp_profiles "
-                " WHERE territory_id IS NOT NULL AND territory_id LIKE %(territory_like)s",
-                {"territory_like": territory_like},
+                keyspace_planted_sql,
+                {} if teardown_deletes_window else {"territory_like": territory_like},
             ),
             CensusQuery(
                 "teardown_reach_preexisting",
