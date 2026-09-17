@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple, cast
 
 import numpy as np
 
+from src.agents.causal_impact.nodes import _dowhy_order, _reconstruction_columns
 from src.agents.causal_impact.nodes._compute_budget import (
     ComputeBudgetExpired,
     run_bounded_with_budget,
@@ -600,11 +601,10 @@ def _build_dowhy_estimate(
         # trip the cardinality guard on identifier columns (hcp_id) that are
         # not confounders. The guard still fires when an identifier IS in the
         # adjustment set — that stays fail-closed by design.
+        common_causes = _dowhy_order.fit_column_order(common_causes, estimation_result)  # #2084
         effective_common_causes = common_causes
         if common_causes:
-            from src.agents.causal_impact.nodes.estimation import (
-                _encode_categorical_covariates,
-            )
+            from src.agents.causal_impact.nodes.estimation import _encode_categorical_covariates
 
             encoded_covariates = _encode_categorical_covariates(data[common_causes])
             if list(encoded_covariates.columns) != list(common_causes):
@@ -626,9 +626,8 @@ def _build_dowhy_estimate(
             effect_modifiers=effective_common_causes if effective_common_causes else None,
         )
         identified_estimand = model.identify_effect(proceed_when_unidentifiable=True)
-        # Build the estimate using the SAME method that produced the reported
-        # ATE (resolved above). Refuters now critique the actual reported
-        # estimate, not a separately-fitted linear regression.
+        _dowhy_order.pin_adjustment_order(identified_estimand, effective_common_causes)  # #2084
+        # Build the estimate with the SAME method that produced the reported ATE (resolved above).
         # DoWhy 0.14 + EconML 0.16: for a string econml method_name, DoWhy's
         # EconML wrapper does ``estimator_class(**kwargs["init_params"])`` with a
         # *direct* key access (dowhy/causal_estimators/econml.py), so omitting
@@ -678,6 +677,7 @@ def _build_dowhy_estimate(
             method_name=dowhy_method,
             method_params={"init_params": init_params, "fit_params": {}},
             test_significance=False,
+            effect_modifiers=effective_common_causes if effective_common_causes else None,  # #2084
         )
     except Exception as exc:  # noqa: BLE001 — fail-closed wrapper
         raise RefutationError(
@@ -1525,7 +1525,7 @@ class RefutationNode:
             return _STRUCTURE_REJECTED, rejection
         return _STRUCTURE_CLEAR, None
 
-    async def _review_fields_for_band(
+    async def _review_band_fields(
         self,
         state: CausalImpactState,
         suite: "RefutationSuite",
@@ -1915,13 +1915,10 @@ class RefutationNode:
                     f"Using estimation data for refutation (shape: {estimation_data.shape})"  # type: ignore[union-attr]
                 )
 
-            # F-014 fix (#416): reconstruct CausalModel from estimation_data
-            # so refutation runs REAL DoWhy refuters (placebo, random_common_cause,
-            # data_subset, bootstrap) — NOT the deleted ``_mock_*`` paths.
-            # Iter-2 (codex H3): rebuild uses the SAME estimator (resolved
-            # from estimation_result.selected_estimator / .method) that
-            # produced the reported ATE — not a hardcoded linear regression.
-            # Fail-closed: ``RefutationError`` propagates to caller's except block.
+            # F-014 fix (#416): reconstruct a REAL CausalModel from estimation_data (placebo,
+            # random_common_cause, data_subset, bootstrap; no ``_mock_*`` paths) with the SAME
+            # estimator that produced the reported ATE (codex H3: selected_estimator / .method)
+            # and on the SAME columns (#2155). Fail-closed: ``RefutationError`` -> except block.
             common_causes = cast(
                 List[str],
                 state.get("confounders") or estimation_result.get("covariates_adjusted") or [],
@@ -1932,6 +1929,9 @@ class RefutationNode:
             # columns or the refuters critique a different model.
             common_causes = _effective_reconstruction_common_causes(
                 common_causes, cast(Dict[str, Any], estimation_result)
+            )
+            _reconstruction_columns.require_estimate_columns(  # #2155: same model or refuse
+                common_causes, estimation_result, _effective_reconstruction_common_causes
             )
             # Cooperative compute deadline (orphan-fix): the offloaded refutation
             # suite runs in a worker thread that the API task's asyncio.wait_for
@@ -2277,7 +2277,7 @@ class RefutationNode:
                 # H2: consult the ExpertReviewGate and flag needs_review + caveat
                 # so a REVIEW band is NOT surfaced/persisted as robust/validated.
                 # A structure the probe found REJECTED is not re-consulted (#1971).
-                review_fields = await self._review_fields_for_band(
+                review_fields = await self._review_band_fields(
                     state, suite, validation_ids, rejection
                 )
                 # #1971: a human rejection halts; a missing approval halts only

@@ -57,6 +57,30 @@ PURE_HELPERS = CLASSIFIERS | {PARSER}
 TODAY = date.today()
 
 
+class _IsRealDate(type):
+    # expert_review's parser branches on ``isinstance(raw, date)``; keep that
+    # true for real ``date`` values while the module's ``date`` is replaced.
+    def __instancecheck__(cls, obj: object) -> bool:
+        return isinstance(obj, date)
+
+
+class _FrozenDate(date, metaclass=_IsRealDate):
+    """``date`` whose ``today()`` is the import-time ``TODAY``."""
+
+    @classmethod
+    def today(cls) -> date:
+        return TODAY
+
+
+@pytest.fixture(autouse=True)
+def _freeze_reader_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#2085: the rows below are dated from ``TODAY``, computed at collection.
+    The readers call ``date.today()`` at run time, so a job that crossed
+    midnight UTC between the two saw yesterday's rows against today's clock
+    (CI run 34726389626: ``assert 3 == 4``). Pin the readers' clock to ``TODAY``."""
+    monkeypatch.setattr(er, "date", _FrozenDate)
+
+
 def _iso(days: int) -> str:
     return (TODAY + timedelta(days=days)).isoformat()
 
@@ -547,6 +571,11 @@ def _repo(rows: List[Dict[str, Any]]) -> Tuple[ExpertReviewRepository, FakeClien
 
 class TestFakeIsFaithful:
     """The double's semantics are pinned to what psql/PostgREST returned live."""
+
+    def test_reader_clock_is_the_day_the_rows_were_dated_from(self):
+        assert er.date.today() == TODAY
+        # the parser's isinstance branch still sees a real date as a date
+        assert isinstance(TODAY - timedelta(days=1), er.date)
 
     def test_comparison_against_null_is_not_true(self):
         assert _cmp("gte", "valid_until", _iso(0))({"valid_until": None}) is False

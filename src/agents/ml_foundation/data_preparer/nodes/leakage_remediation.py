@@ -33,7 +33,7 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -507,13 +507,49 @@ def _compute_cache_key(context: Dict[str, Any]) -> str:
     return hashlib.sha256(key_str.encode()).hexdigest()
 
 
-def _get_cache_dir() -> Path:
-    """Get the cache directory for leakage remediation."""
-    from pathlib import Path
+def _get_cache_dir() -> Optional[Path]:
+    """Get a writable cache directory for leakage remediation, or None.
 
-    cache_dir = Path(".cache") / "leakage_remediation"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    return cache_dir
+    Roots are tried in order: ``$E2I_CACHE_DIR``, ``<cwd>/.cache`` (the
+    long-standing host location), then ``<tempdir>/e2i_cache``. The first
+    whose ``leakage_remediation`` subdirectory can be created and written
+    wins. The cwd is not writable everywhere -- ``e2i_api`` runs with a
+    read-only rootfs at ``/app`` -- and the cache only saves repeat LLM
+    calls, so when no root is writable remediation runs uncached (#2143).
+    Each root is resolved only when reached: ``Path.cwd()`` and
+    ``tempfile.gettempdir()`` can themselves raise.
+    """
+    import tempfile
+
+    def _configured() -> Optional[Path]:
+        value = os.environ.get("E2I_CACHE_DIR")
+        return Path(value).absolute() if value else None
+
+    root_resolvers: List[Tuple[str, Callable[[], Optional[Path]]]] = [
+        ("E2I_CACHE_DIR", _configured),
+        ("cwd", lambda: Path.cwd() / ".cache"),
+        ("tempdir", lambda: Path(tempfile.gettempdir()) / "e2i_cache"),
+    ]
+    for label, resolve in root_resolvers:
+        try:
+            root = resolve()
+            if root is None:
+                continue
+            cache_dir = root / "leakage_remediation"
+            cache_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            # Expected for the cwd root in a read-only container; only a
+            # configured root failing is worth a warning.
+            log = logger.warning if label == "E2I_CACHE_DIR" else logger.debug
+            log(f"Leakage remediation cache root '{label}' unavailable: {e}")
+            continue
+        # mkdir(exist_ok=True) succeeds on an existing read-only directory.
+        if os.access(cache_dir, os.W_OK):
+            return cache_dir
+        log = logger.warning if label == "E2I_CACHE_DIR" else logger.debug
+        log(f"Leakage remediation cache root '{label}' not writable: {cache_dir}")
+    logger.warning("No writable leakage remediation cache directory; running uncached")
+    return None
 
 
 def _load_cached_analysis(key: str) -> Optional[Dict[str, Any]]:
@@ -527,7 +563,10 @@ def _load_cached_analysis(key: str) -> Optional[Dict[str, Any]]:
     """
     import json
 
-    cache_file = _get_cache_dir() / f"{key}.json"
+    cache_dir = _get_cache_dir()
+    if cache_dir is None:
+        return None
+    cache_file = cache_dir / f"{key}.json"
     if cache_file.exists():
         try:
             with open(cache_file) as f:
@@ -561,7 +600,10 @@ def _save_cached_analysis(key: str, analysis: Dict[str, Any]) -> None:
     }
     cache_data = {k: v for k, v in analysis.items() if k in cacheable_fields}
 
-    cache_file = _get_cache_dir() / f"{key}.json"
+    cache_dir = _get_cache_dir()
+    if cache_dir is None:
+        return
+    cache_file = cache_dir / f"{key}.json"
     try:
         with open(cache_file, "w") as f:
             json.dump(cache_data, f, indent=2)

@@ -1,4 +1,4 @@
-"""ml/039 (COHORT category) and ml/040 (``sync_tool_registry``) on a prod-faithful copy.
+"""ml/039 (COHORT category) and ml/040 (``sync_tool_registry``) on the post-deploy schema.
 
 The sync replaces the migration-per-schema-change regime (spec §4): the API calls
 ``sync_tool_registry(p_tools, p_dependencies, p_max_deprecations)`` at startup, and the DB
@@ -7,6 +7,10 @@ idempotent counts, pre-write guards, atomicity, serialisation of concurrent call
 service_role-only access. They also pin 040's schema changes (agent CHECK follows the
 ``e2i_agent_name`` taxonomy; the unguarded metrics writer, its column and the execution-order
 function are gone — owner decision O3).
+
+Behaviour tests (#2065): prod carries 039 and 040, so they run on the current schema, whose
+registry the fixture synced from code. Every count is derived from that registry; the probe
+tools below are names the code does not register, so inserting them is always an insert.
 
 Opt-in: ``E2I_DB_INTEGRATION=1``. Run with ``-n 0``.
 """
@@ -25,18 +29,18 @@ from tests.unit.test_database.learning_loop import _pg
 pytestmark = [
     pytest.mark.skipif(
         not _pg.db_integration_enabled(),
-        reason="real-DB integration; set E2I_DB_INTEGRATION=1 on the droplet (docker + supabase-db)",
+        reason=_pg.OPT_IN_SKIP_REASON,
     ),
     pytest.mark.timeout(300),
 ]
 
-UPTO = "ml/040_tool_registry_startup_sync.sql"
 SYNC = "sync_tool_registry(jsonb,jsonb,integer)"
 
-# Four tools the code registers that were never seeded (spec §2.1, §9 cert item 1).
+# Four tools the DB does not know, shaped like the four the lane added (spec §2.1, §9 cert item 1).
+# Probe names, not the real ones: the base registry already carries cohort_builder & co.
 NEW_TOOLS: List[Dict[str, Any]] = [
     {
-        "name": "cohort_builder",
+        "name": "probe_cohort_builder",
         "description": "Build a patient cohort from eligibility criteria",
         "category": "COHORT",
         "source_agent": "cohort_constructor",
@@ -46,7 +50,7 @@ NEW_TOOLS: List[Dict[str, Any]] = [
         "version": "1.0.0",
     },
     {
-        "name": "cohort_validator",
+        "name": "probe_cohort_validator",
         "description": "Validate a cohort definition",
         "category": "COHORT",
         "source_agent": "cohort_constructor",
@@ -56,7 +60,7 @@ NEW_TOOLS: List[Dict[str, Any]] = [
         "version": "1.0.0",
     },
     {
-        "name": "cohort_statistics",
+        "name": "probe_cohort_statistics",
         "description": "Profile a cohort",
         "category": "COHORT",
         "source_agent": "cohort_profiler",
@@ -66,7 +70,7 @@ NEW_TOOLS: List[Dict[str, Any]] = [
         "version": "1.0.0",
     },
     {
-        "name": "model_inference",
+        "name": "probe_model_inference",
         "description": "Score rows with a deployed model",
         "category": "PREDICTION",
         "source_agent": "prediction_synthesizer",
@@ -118,16 +122,14 @@ def _current_payload(conn) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
 
 @pytest.fixture
 def migrated(module_db) -> _pg.PgConn:
-    """The module's clone with 039 + 040 applied; tests isolate with ``rolled_back()``."""
-    return module_db(UPTO)
+    """The module's copy of the post-deploy schema; tests isolate with ``rolled_back()``."""
+    return module_db
 
 
 @pytest.fixture
 def fresh(clone_db) -> _pg.PgConn:
-    """A clone of its own with 039 + 040 applied, for tests that must commit."""
-    db = clone_db("sync_commit")
-    _pg.migrate(db, UPTO)
-    return db
+    """A copy of its own, for tests that must commit."""
+    return clone_db("sync_commit")
 
 
 # ---------------------------------------------------------------------------
@@ -139,10 +141,10 @@ def test_cohort_category_insertable_after_039_commit(migrated):
     with migrated.rolled_back() as conn:
         conn.execute(
             "insert into tool_registry (name, description, category, source_agent) "
-            "values ('cohort_builder', 'd', 'COHORT', 'cohort_constructor')"
+            "values ('probe_cohort_row', 'd', 'COHORT', 'cohort_constructor')"
         )
         (category,) = conn.execute(
-            "select category::text from tool_registry where name = 'cohort_builder'"
+            "select category::text from tool_registry where name = 'probe_cohort_row'"
         ).fetchone()
     assert category == "COHORT"
 
@@ -199,7 +201,8 @@ def test_avg_latency_documented_as_declared(migrated):
 def test_sync_first_call_then_idempotent(fresh):
     with fresh.connect() as conn:
         tools, deps = _current_payload(conn)
-    assert len(tools) == 16 and len(deps) == 11
+    assert tools and deps
+    assert not {t["name"] for t in NEW_TOOLS} & {t["name"] for t in tools}
     payload = tools + NEW_TOOLS
 
     with fresh.connect() as conn:
@@ -413,7 +416,7 @@ def test_deprecation_guard_raises_before_any_dml(migrated):
         conn.execute(WRITE_TRAP)
         with pytest.raises(psycopg.errors.RaiseException) as refused:
             _sync(conn, tools[:2], [])
-    assert "would deprecate 14" in str(refused.value)
+    assert f"would deprecate {len(tools) - 2} " in str(refused.value)
     assert "write trap" not in str(refused.value)
 
     # Positive control: the trap does fire on a payload that passes the guard, so the
@@ -429,16 +432,18 @@ def test_sync_refuses_more_than_max_deprecations_before_any_write(fresh):
     import psycopg
 
     with fresh.connect() as conn:
-        tools, _ = _current_payload(conn)
+        tools, deps = _current_payload(conn)
     two = tools[:2]
     with fresh.connect() as conn:
-        with pytest.raises(psycopg.errors.RaiseException, match=r"would deprecate 14 .*limit 3"):
+        with pytest.raises(
+            psycopg.errors.RaiseException, match=rf"would deprecate {len(tools) - 2} .*limit 3"
+        ):
             _sync(conn, two, [])
     assert fresh.rows(
         "select count(*) from tool_registry where deprecated_at is not null or not composable"
     ) == ["0"]
-    assert fresh.rows("select count(*) from tool_dependencies") == ["11"]
-    assert fresh.rows("select count(*) from tool_registry") == ["16"]
+    assert fresh.rows("select count(*) from tool_dependencies") == [str(len(deps))]
+    assert fresh.rows("select count(*) from tool_registry") == [str(len(tools))]
 
 
 def test_sync_deprecates_within_limit_then_reactivates(fresh):
@@ -606,7 +611,9 @@ def test_deprecation_guard_counts_after_the_lock(fresh):
     assert "result" not in outcome, outcome.get("result")
     assert isinstance(outcome["error"], psycopg.errors.RaiseException)
     assert "would deprecate 4 active tools, limit 3" in str(outcome["error"])
-    assert fresh.rows("select count(*) from tool_registry where deprecated_at is null") == ["20"]
+    assert fresh.rows("select count(*) from tool_registry where deprecated_at is null") == [
+        str(len(tools) + len(NEW_TOOLS))
+    ]
 
 
 # ---------------------------------------------------------------------------

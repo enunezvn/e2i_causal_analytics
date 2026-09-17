@@ -293,3 +293,52 @@ async def test_availability_false_below_threshold_and_on_error():
         _FakeClient(_FakeResult(count=None), raise_on_execute=True), "X"
     )
     assert not any(erroring.values())
+
+
+def test_blocking_build_opens_and_closes_its_own_client_on_each_call(monkeypatch):
+    """#2025: the synchronous callers run the load under ``asyncio.run``. The platform's
+    cached async client keeps an httpx pool bound to the first loop that used it, so the
+    next ``asyncio.run`` in the process fails with "Event loop is closed" (measured on the
+    box against the live database: run 1 ok, run 2 failed, run 3 ok). Each blocking build
+    therefore opens a client for its own loop, closes it, and leaves the cache alone."""
+    from src.memory.services import factories
+
+    monkeypatch.setenv("SUPABASE_URL", "http://supabase.invalid")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "service-key")
+    monkeypatch.setattr(factories, "_async_supabase_client", None)
+    created = []
+
+    async def _acreate_client(url, key, options=None):
+        created.append({"url": url, "key": key, "options": options})
+        return _FakeClient(_FakeResult(data=_cohort_rows(600, with_all_channels=True)))
+
+    monkeypatch.setattr("supabase.acreate_client", _acreate_client)
+    open_during_load = []
+    real_load = cohort_loader.load_cohort_frame
+
+    async def _load(client, brand):
+        open_during_load.append(not created[-1]["options"].httpx_client.is_closed)
+        return await real_load(client, brand)
+
+    monkeypatch.setattr(cohort_loader, "load_cohort_frame", _load)
+
+    for _ in range(2):
+        provider = cohort_loader.build_cohort_provider_or_none_blocking(
+            "email_campaign", "Remibrutinib"
+        )
+        assert isinstance(provider, CohortEffectDataProvider)
+
+    assert [(c["url"], c["key"]) for c in created] == [
+        ("http://supabase.invalid", "service-key")
+    ] * 2
+    assert open_during_load == [True, True]
+    assert all(c["options"].httpx_client.is_closed for c in created)
+    assert factories._async_supabase_client is None
+
+
+def test_blocking_build_is_none_when_no_client_can_be_opened(monkeypatch):
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    assert (
+        cohort_loader.build_cohort_provider_or_none_blocking("email_campaign", "Remibrutinib")
+        is None
+    )

@@ -983,6 +983,25 @@ class ExpertReviewRepository(ExpertReviewVersionTimeline):
             logger.info(f"Created renewal review {review_id} superseding {original_review_id}")
             return review_id
         except Exception as e:
+            # #2090: the renewal is a pending row of the ORIGINAL's estimand, so
+            # uq_er_pending_estimand (mig 140) rejects it with a 23505 whenever
+            # that estimand already has a pending review (a concurrent mint or
+            # renewal). Recover exactly as create_review does: return the pending
+            # row, and only for a unique violation.
+            err = str(e).lower()
+            if "23505" in err or "unique" in err or "duplicate key" in err:
+                key = estimand_key_for(
+                    original.get("brand"),
+                    original.get("treatment_variable"),
+                    original.get("outcome_variable"),
+                )
+                existing = await self._find_pending_review_id(key)
+                if existing is not None:
+                    logger.info(
+                        "renew_review: a pending review already exists for estimand "
+                        f"{key}; returning it (unique-violation recovery)."
+                    )
+                    return existing
             logger.error(f"Failed to create renewal review: {e}")
             return None
 

@@ -94,6 +94,39 @@ async def build_cohort_provider_or_none(
     return cohort_provider_from_frame(df, intervention_type)
 
 
+def build_cohort_provider_or_none_blocking(
+    intervention_type: str,
+    brand: str,
+) -> Optional[CohortEffectDataProvider]:
+    """:func:`build_cohort_provider_or_none` for a synchronous caller with no running event
+    loop (the experiment-designer pre-screen tool, the Celery simulation worker) (#2025).
+
+    Opens a client scoped to its own event loop, not the cached one: the cached client's
+    connection pool outlives the loop ``asyncio.run`` closes. Never raises for a missing
+    client or an unusable cohort: ``None`` means no effect can be estimated.
+    """
+    from src.memory.services.factories import loop_scoped_async_supabase_client
+
+    async def _build() -> Optional[CohortEffectDataProvider]:
+        try:
+            async with loop_scoped_async_supabase_client() as client:
+                return await build_cohort_provider_or_none(client, intervention_type, brand)
+        except Exception as e:  # no client configured → honest unavailable
+            logger.warning("cohort client unavailable for %s/%s: %s", brand, intervention_type, e)
+            return None
+
+    return asyncio.run(_build())
+
+
+def no_effect_data_reason(intervention_type: str, brand: str) -> str:
+    """The reader-facing reason a caller gives when there is no cohort provider (#2025)."""
+    return (
+        f"No effect data available for intervention '{intervention_type}' and brand "
+        f"'{brand}': the connected cohort cannot identify this intervention, so a causal "
+        "effect cannot be estimated (no fabricated effect is returned)."
+    )
+
+
 def cohort_provider_from_frame(
     df: pd.DataFrame, intervention_type: str
 ) -> Optional[CohortEffectDataProvider]:

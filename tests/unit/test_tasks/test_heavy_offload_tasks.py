@@ -272,6 +272,123 @@ def test_run_simulation_compute_fails_closed_without_loadable_model():
         )
 
 
+# Planted per-region effect of a high (above-median) email_campaign_count on conversion.
+_PLANTED_EFFECT = {"northeast": 0.45, "west": 0.30, "south": 0.30, "midwest": 0.30}
+
+
+def _planted_cohort(n_per_region: int = 300, seed: int = 3):
+    """A per-HCP cohort frame with the columns ``load_cohort_frame`` returns."""
+    import numpy as np
+    import pandas as pd
+
+    rng = np.random.default_rng(seed)
+    frames = []
+    for region, tau in _PLANTED_EFFECT.items():
+        market = rng.uniform(0.0, 1.0, n_per_region)
+        frames.append(
+            pd.DataFrame(
+                {
+                    "region": region,
+                    "email_campaign_count": rng.poisson(3 + 4 * market).astype(float),
+                    "market_share": market,
+                    "total_rx_count": rng.poisson(60, n_per_region).astype(float),
+                    "_tau": tau,
+                }
+            )
+        )
+    df = pd.concat(frames, ignore_index=True)
+    treated = (df["email_campaign_count"] > df["email_campaign_count"].median()).astype(float)
+    df["conversion_rate"] = (
+        0.2 + 0.3 * df["market_share"] + df["_tau"] * treated + rng.normal(0, 0.05, len(df))
+    )
+    return df.drop(columns="_tau")
+
+
+def _region_population(n_per_region: int = 130):
+    import numpy as np
+
+    from src.digital_twin.models.twin_models import Brand, DigitalTwin, TwinPopulation, TwinType
+
+    rng = np.random.default_rng(5)
+    twins = [
+        DigitalTwin(
+            twin_type=TwinType.HCP,
+            brand=Brand.KISQALI,
+            features={"region": region, "decile": int(rng.integers(1, 11))},
+            baseline_outcome=float(rng.uniform(0.1, 0.3)),
+            baseline_propensity=float(rng.uniform(0.2, 0.5)),
+        )
+        for region in _PLANTED_EFFECT
+        for _ in range(n_per_region)
+    ]
+    return TwinPopulation(twin_type=TwinType.HCP, brand=Brand.KISQALI, twins=twins, size=len(twins))
+
+
+def _scoped_client(client):
+    """Stand-in for ``loop_scoped_async_supabase_client`` yielding ``client``."""
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _scoped():
+        yield client
+
+    return _scoped
+
+
+def _compute_on_cohort(cohort, generate):
+    """Run the worker compute with only the model registry and the database read replaced;
+    the engine, the cohort provider and the estimator run for real."""
+    from src.digital_twin.simulation_runner import run_simulation_compute
+
+    load = AsyncMock(return_value=cohort)
+    with (
+        patch("src.digital_twin.twin_persistence.hydrate_generator", return_value=True),
+        patch("src.digital_twin.twin_generator.TwinGenerator.generate", generate),
+        patch("src.digital_twin.effect.cohort_loader.load_cohort_frame", load),
+        patch(
+            "src.memory.services.factories.loop_scoped_async_supabase_client",
+            new=_scoped_client(MagicMock()),
+        ),
+    ):
+        result = run_simulation_compute(
+            twin_type_value="hcp",
+            brand_value="Kisqali",
+            twin_count=520,
+            intervention_dict={"intervention_type": "email_campaign"},
+            population_filter_dict={"regions": ["northeast"]},
+            calculate_heterogeneity=False,
+            model_id_value=str(UUID(int=7)),
+        )
+    load.assert_awaited_once()
+    assert load.await_args.args[1] == "Kisqali"
+    return result
+
+
+@pytest.mark.timeout(180)
+def test_run_simulation_compute_estimates_on_the_cohort_2025():
+    """#2025: the worker built its engine with no effect provider, so it simulated the
+    engine's synthetic default (a planted ATE of 0.15). It now estimates on the brand's
+    cohort, scoped to the filter's regions, as the inline route does."""
+    from src.digital_twin.effect.estimate import PROVENANCE_COHORT
+
+    result = _compute_on_cohort(_planted_cohort(), MagicMock(return_value=_region_population()))
+
+    assert result.status.value == "completed", result.error_message
+    assert result.data_provenance == PROVENANCE_COHORT
+    # The northeast effect, not the synthetic default and not the whole-cohort average.
+    assert result.simulated_ate == pytest.approx(_PLANTED_EFFECT["northeast"], abs=0.04)
+
+
+def test_run_simulation_compute_refuses_an_unusable_cohort_2025():
+    """No usable cohort: the worker raises before generating twins, never simulates."""
+    import pandas as pd
+
+    generate = MagicMock(return_value=_region_population())
+    with pytest.raises(RuntimeError, match="No effect data available"):
+        _compute_on_cohort(pd.DataFrame(), generate)
+    generate.assert_not_called()
+
+
 def test_train_twin_model_string_false_stays_real_mode():
     """Issue #883 §4: the celery JSON boundary parses ``synthetic`` STRICTLY.
     RED on the pre-#883 base: ``bool("false")`` is True, so a string opt-OUT

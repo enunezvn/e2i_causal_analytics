@@ -65,6 +65,12 @@ class _FakeAlertsQuery:
         return self
 
     def eq(self, column: str, value: Any) -> "_FakeAlertsQuery":
+        if value is None:
+            # postgrest-py 2.27 renders ``f"eq.{None}"`` = ``eq.None``; on the
+            # uuid model_id column the database rejects it (measured read-only:
+            # ``model_id = 'None'`` -> invalid input syntax for type uuid). It
+            # never matches NULL rows, which a Python ``!=`` would.
+            raise RuntimeError(f"invalid input syntax for type uuid: eq.None on {column}")
         self._filters.append(("eq", column, value))
         return self
 
@@ -221,6 +227,38 @@ async def test_create_alerts_resolved_duplicate_does_not_block() -> None:
 
     created = await repo.create_alerts_from_drift(
         model_version=_MODEL_NAME,
+        drift_results=[_CRITICAL_RESULT],
+    )
+
+    assert [a.title for a in created] == ["CRITICAL data drift"]
+    assert len(rows) == 2
+
+
+@pytest.mark.asyncio
+async def test_create_alerts_unregistered_model_dedups_against_null_model_rows() -> None:
+    """An unregistered model resolves to a NULL model_id (#2093). Its dedup
+    must match NULL explicitly: a NULL-model active alert blocks the insert."""
+    rows = [_active_alert("CRITICAL data drift", model_id=None)]  # type: ignore[arg-type]
+    repo = _repo(rows)
+
+    created = await repo.create_alerts_from_drift(
+        model_version="not_in_the_registry",
+        drift_results=[_CRITICAL_RESULT],
+    )
+
+    assert created == []
+    assert len(rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_create_alerts_unregistered_model_is_not_blocked_by_a_registered_one() -> None:
+    """Omitting the model filter for a NULL model_id would match every model's
+    active alert and silently drop this one."""
+    rows = [_active_alert("CRITICAL data drift")]
+    repo = _repo(rows)
+
+    created = await repo.create_alerts_from_drift(
+        model_version="not_in_the_registry",
         drift_results=[_CRITICAL_RESULT],
     )
 

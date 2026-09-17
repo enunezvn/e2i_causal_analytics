@@ -22,6 +22,7 @@ import numpy as np
 import pytest
 
 from src.digital_twin.effect import PROVENANCE_SYNTHETIC
+from src.digital_twin.effect.provider import SyntheticEffectDataProvider
 from src.digital_twin.models.simulation_models import (
     EffectHeterogeneity,
     InterventionConfig,
@@ -444,7 +445,7 @@ class TestConcurrentSimulations:
         """
         import concurrent.futures
 
-        engine = SimulationEngine(sample_population)
+        engine = SimulationEngine(sample_population, effect_provider=SyntheticEffectDataProvider())
 
         configs = [
             InterventionConfig(
@@ -483,7 +484,7 @@ class TestConcurrentSimulations:
         """Test concurrent simulations with same config."""
         import concurrent.futures
 
-        engine = SimulationEngine(sample_population)
+        engine = SimulationEngine(sample_population, effect_provider=SyntheticEffectDataProvider())
 
         config = InterventionConfig(
             intervention_type="email_campaign",
@@ -506,7 +507,7 @@ class TestConcurrentSimulations:
         """Test concurrent simulations with different population filters."""
         import concurrent.futures
 
-        engine = SimulationEngine(sample_population)
+        engine = SimulationEngine(sample_population, effect_provider=SyntheticEffectDataProvider())
 
         config = InterventionConfig(
             intervention_type="email_campaign",

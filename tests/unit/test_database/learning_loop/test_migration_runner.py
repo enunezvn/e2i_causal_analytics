@@ -1,5 +1,15 @@
-""":data:`_pg.LANE_MIGRATIONS` through the real ``scripts/run_migrations.sh``, failure first,
-and the rollbacks.
+"""Pending migrations through the real ``scripts/run_migrations.sh``, failure first, and the
+learning-loop lane's rollbacks. All but the last section are UPGRADE-PATH tests (#2065); the
+last section runs the rollback safety contracts on the current schema, as behaviour tests.
+
+``test_pending_migrations_apply_through_the_runner_failure_first`` is generic: it rehearses, on a
+copy of prod's current schema, exactly the migrations this deploy's runner is about to apply, and
+runs whenever any is pending. The lane tests below it need ml/039–044 themselves pending, which
+they no longer are, so they skip naming what they wait for. Their behavioural consequences
+(the schema 040/041/044 left, the sync and recording contracts) are behaviour tests in
+test_040_registry_sync.py and test_041_recording.py, run on every pass.
+
+The lane tests, as written for the lane:
 
 Spec §9: on a fresh prod-faithful copy the runner is first pointed at a repository copy whose
 041 fails, which must leave everything before it applied and recorded and nothing of 041 (body
@@ -32,7 +42,7 @@ from tests.unit.test_database.learning_loop.test_fixture_sanity import (
 pytestmark = [
     pytest.mark.skipif(
         not _pg.db_integration_enabled(),
-        reason="real-DB integration; set E2I_DB_INTEGRATION=1 on the droplet (docker + supabase-db)",
+        reason=_pg.OPT_IN_SKIP_REASON,
     ),
     pytest.mark.timeout(300),
 ]
@@ -96,18 +106,71 @@ def _out(proc) -> str:
     return re.sub(r"\x1b\[[0-9;]*m", "", proc.stdout.decode() + proc.stderr.decode())
 
 
-def _repo_copy(tmp_path, *, break_041: bool):
+def _repo_copy(tmp_path, *, break_041: bool = False, break_key=None):
     repo = tmp_path / "repo"
     shutil.copytree(_pg.REPO_ROOT / "scripts", repo / "scripts")
     shutil.copytree(_pg.REPO_ROOT / "database", repo / "database")
-    if break_041:
-        target = repo / "database" / BROKEN_KEY
+    for key in ([BROKEN_KEY] if break_041 else []) + ([break_key] if break_key else []):
+        target = _pg.migration_file(key, repo)
         target.write_text(target.read_text() + "\nSELECT 1/0;\n")
     return repo
 
 
-def test_runner_failure_first_then_real_files_then_nothing_pending(clone_db, tmp_path):
-    db = clone_db("runner_fail")
+def _ledger_of(keys) -> str:
+    listed = ",".join("'" + k.replace("'", "''") + "'" for k in keys)
+    return f"select filename from public.schema_migrations where filename in ({listed})"
+
+
+@pytest.mark.realdb_upgrade()
+def test_pending_migrations_apply_through_the_runner_failure_first(
+    base_clone_db, pending_migrations, tmp_path
+):
+    """What this deploy's migration step will do, on a copy of prod as it is now.
+
+    Failure first on the last pending file the runner WRAPS (body and ledger row in one
+    transaction, so a failure must leave neither); an un-wrapped file applies statement by
+    statement and a planted failure would leave a half-applied body behind, which is not what
+    this rehearses. Then the real files apply exactly what is pending, and a rerun has nothing.
+    """
+    pending = list(pending_migrations)
+    db = base_clone_db("pending_runner")
+    shims = tmp_path / "shims"
+    assert db.rows(_ledger_of(pending)) == []
+
+    dry = _pg.run_runner(db, _pg.REPO_ROOT, shims, "--dry-run")
+    assert dry.returncode == 0, _out(dry)
+    assert [line for line in _out(dry).splitlines() if "[PENDING]" in line] == [
+        f"[PENDING] {key}" for key in pending
+    ]
+
+    wrapped = [k for k in pending if not _pg.runner_unwraps(_pg.migration_file(k).read_text())]
+    if wrapped:
+        broken = wrapped[-1]
+        failed = _pg.run_runner(db, _repo_copy(tmp_path, break_key=broken), shims)
+        assert failed.returncode != 0, _out(failed)
+        assert f"Migration {broken} failed" in _out(failed)
+        before = pending[: pending.index(broken)]
+        assert sorted(db.rows(_ledger_of(pending))) == sorted(before)
+        remaining = pending[len(before) :]
+    else:
+        remaining = pending
+
+    real = _pg.run_runner(db, _pg.REPO_ROOT, shims)
+    assert real.returncode == 0, _out(real)
+    assert f"Applied {len(remaining)} migration(s) successfully." in _out(real)
+    assert sorted(db.rows(_ledger_of(pending))) == sorted(pending)
+
+    again = _pg.run_runner(db, _pg.REPO_ROOT, shims)
+    assert again.returncode == 0, _out(again)
+    assert "Database is up to date. No migrations to apply." in _out(again)
+
+
+LANE = _pg.LANE_MIGRATIONS
+
+
+@pytest.mark.realdb_upgrade(*LANE)
+def test_runner_failure_first_then_real_files_then_nothing_pending(base_clone_db, tmp_path):
+    db = base_clone_db("runner_fail")
     shims = tmp_path / "shims"
     assert db.rows(LEDGER) == []
 
@@ -159,8 +222,9 @@ SNAPSHOT = (
 )
 
 
-def test_direct_reapply_is_a_no_op_for_data(clone_db):
-    db = clone_db("reapply_all")
+@pytest.mark.realdb_upgrade(*LANE)
+def test_direct_reapply_is_a_no_op_for_data(base_clone_db):
+    db = base_clone_db("reapply_all")
     # Migrated through the WHOLE lane before the snapshot. Seeding at an intermediate migration
     # made the comparison fail for the wrong reason: a later ADD COLUMN (ml/044's feedback_id)
     # shows up in row_to_json as a new null key, which is schema drift between the two
@@ -245,8 +309,9 @@ def _enums(conn: _pg.PgConn) -> list:
     return conn.rows(EQUIVALENCE_QUERIES["enums"][0])
 
 
-def test_rollbacks_restore_every_lane_object_and_are_idempotent(base_db, clone_db, tmp_path):
-    db = clone_db("rollbacks")
+@pytest.mark.realdb_upgrade(*LANE)
+def test_rollbacks_restore_every_lane_object_and_are_idempotent(base_db, base_clone_db, tmp_path):
+    db = base_clone_db("rollbacks")
     shims = tmp_path / "shims"
     # Migrated the way a deploy does, so the ledger rows the rollbacks must remove exist.
     forward = _pg.run_runner(db, _pg.REPO_ROOT, shims)
@@ -297,8 +362,9 @@ def test_rollbacks_restore_every_lane_object_and_are_idempotent(base_db, clone_d
     ) == ["true,true"]
 
 
-def test_rollback_040_refuses_rows_the_six_agent_check_would_reject(clone_db):
-    db = clone_db("rollback_guard_040")
+@pytest.mark.realdb_upgrade(*LANE[: LANE.index("ml/041_composer_learning_loop_recording.sql") + 1])
+def test_rollback_040_refuses_rows_the_six_agent_check_would_reject(base_clone_db):
+    db = base_clone_db("rollback_guard_040")
     _pg.migrate(db, "ml/041_composer_learning_loop_recording.sql")
     assert _pg.apply_rollback(db, "rollback_041.sql").returncode == 0
     db.execute(
@@ -319,8 +385,9 @@ def test_rollback_040_refuses_rows_the_six_agent_check_would_reject(clone_db):
     ) == ["0"]
 
 
-def test_rollback_041_refuses_unfinished_episodes(clone_db):
-    db = clone_db("rollback_guard_041")
+@pytest.mark.realdb_upgrade("ml/041_composer_learning_loop_recording.sql")
+def test_rollback_041_refuses_unfinished_episodes(base_clone_db):
+    db = base_clone_db("rollback_guard_041")
     _pg.migrate(db, "ml/041_composer_learning_loop_recording.sql")
     db.execute(
         'select composer_record_start(\'{"composition_id": "open_one", "query_text": "q"}\'::jsonb)',
@@ -333,3 +400,84 @@ def test_rollback_041_refuses_unfinished_episodes(clone_db):
     assert db.rows("select to_regprocedure('composer_record_steps(jsonb,jsonb)') is not null") == [
         "t"
     ]
+
+
+# ---------------------------------------------------------------------------
+# Rollback safety contracts, from the CURRENT schema (behaviour; run on every pass)
+# ---------------------------------------------------------------------------
+#
+# The lane tests above can no longer run: they need a pre-lane base. What the rollback files
+# promise an operator TODAY, on the schema prod actually has, still can: the runbook order is
+# newest first, so reaching rollback_041 means undoing 044 and 043 (the refusal-code lane that
+# rewrote 041's functions) first. What cannot be checked without a pre-lane base is that the
+# rollbacks restore each object to its exact pre-lane definition.
+#
+# If a later migration changes the objects these files touch, these tests are where that
+# first shows: the rollback files are then stale and need the same attention as the migration.
+
+ROLLBACK_CHAIN = ("rollback_044.sql", "rollback_043.sql", "rollback_041.sql", "rollback_040.sql")
+ROLLED_BACK_KEYS = (
+    "ml/040_tool_registry_startup_sync.sql",
+    "ml/041_composer_learning_loop_recording.sql",
+    "ml/043_composer_refusal_reason_codes.sql",
+    "ml/044_composer_episodes_feedback_id.sql",
+)
+
+
+def _roll_back_through(db: _pg.PgConn, last: str) -> None:
+    for name in ROLLBACK_CHAIN[: ROLLBACK_CHAIN.index(last)]:
+        proc = _pg.apply_rollback(db, name)
+        assert proc.returncode == 0, (name, proc.stderr.decode())
+
+
+def test_rollback_041_refuses_unfinished_episodes_on_the_current_schema(clone_db):
+    db = clone_db("rollback_guard_041_now")
+    db.execute(
+        'select composer_record_start(\'{"composition_id": "open_one", "query_text": "q"}\'::jsonb)',
+        user="postgres",
+    )
+    _roll_back_through(db, "rollback_041.sql")
+    proc = _pg.apply_rollback(db, "rollback_041.sql")
+    assert proc.returncode != 0
+    assert "have no total_latency_ms" in proc.stderr.decode() and "open_one" in proc.stderr.decode()
+    # One transaction: nothing of 041's rollback applied.
+    assert db.rows("select to_regprocedure('composer_record_steps(jsonb,jsonb)') is not null") == [
+        "t"
+    ]
+
+
+def test_rollback_040_refuses_while_the_synced_registry_names_agents_outside_the_six(clone_db):
+    db = clone_db("rollback_guard_040_now")
+    _roll_back_through(db, "rollback_040.sql")
+    proc = _pg.apply_rollback(db, "rollback_040.sql")
+    assert proc.returncode != 0
+    # The code's own COHORT tool, written by the startup sync, is exactly what the guard names.
+    assert "cohort_builder (cohort_constructor)" in proc.stderr.decode()
+    assert db.rows(
+        "select to_regprocedure('sync_tool_registry(jsonb,jsonb,integer)') is not null"
+    ) == ["t"]
+    assert db.rows(
+        "select count(*) from pg_attribute where attrelid = 'tool_registry'::regclass "
+        "and attname = 'success_rate' and not attisdropped"
+    ) == ["0"]
+
+
+def test_rollback_chain_is_idempotent_and_the_runner_reapplies_what_it_removed(clone_db, tmp_path):
+    db = clone_db("rollback_chain_now")
+    # The operator step both guards ask for: no unfinished episode, no row outside the six agents.
+    db.execute("delete from tool_dependencies")
+    db.execute("delete from tool_registry")
+    snapshots = []
+    for attempt in ("first", "second"):
+        for name in ROLLBACK_CHAIN:
+            proc = _pg.apply_rollback(db, name)
+            assert proc.returncode == 0, (attempt, name, proc.stderr.decode())
+        snapshots.append(_aspects(db))
+        assert db.rows(_ledger_of(ROLLED_BACK_KEYS)) == [], attempt
+        assert db.rows(NEW_FUNCTIONS) == ["none"], attempt
+    assert snapshots[0] == snapshots[1]
+
+    replay = _pg.run_runner(db, _pg.REPO_ROOT, tmp_path / "shims")
+    assert replay.returncode == 0, _out(replay)
+    assert f"Applied {len(ROLLED_BACK_KEYS)} migration(s) successfully." in _out(replay)
+    assert sorted(db.rows(_ledger_of(ROLLED_BACK_KEYS))) == sorted(ROLLED_BACK_KEYS)

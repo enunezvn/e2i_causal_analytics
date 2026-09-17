@@ -428,17 +428,28 @@ function estimateScopeNote(
 }
 
 /**
- * Region qualifier for a history row's ATE. History rows carry no population filter, so an
- * unknown-scope row cannot tell whether it was filtered; it stays plain, like a cohort row.
+ * Scope qualifier for a history row's ATE, by the same rule as the detail note
+ * (estimateScopeNote): a region-scoped row names its regions; an unknown-scope row notes the
+ * unrecorded scope only when its stored filter named regions (#2079); otherwise nothing.
  */
-function HistoryScopeQualifier({ scope, regions }: { scope?: EstimateScope; regions?: string[] }) {
-  if (scope !== EstimateScope.REGIONS || !regions || regions.length === 0) return null;
+function HistoryScopeQualifier({
+  scope,
+  regions,
+  filterRegions,
+}: {
+  scope?: EstimateScope;
+  regions?: string[];
+  filterRegions?: string[];
+}) {
+  const note = estimateScopeNote(scope, regions ?? [], filterRegions ?? []);
+  if (note === null) return null;
+  const label =
+    scope === EstimateScope.REGIONS
+      ? (regions ?? []).join(', ')
+      : `scope not recorded — may cover only ${(filterRegions ?? []).join(', ')}`;
   return (
-    <span
-      className="ml-1 text-xs font-normal text-[var(--color-text-tertiary)]"
-      title={`estimated on ${regions.join(', ')}`}
-    >
-      · {regions.join(', ')}
+    <span className="ml-1 text-xs font-normal text-[var(--color-text-tertiary)]" title={note}>
+      · {label}
     </span>
   );
 }
@@ -1037,6 +1048,7 @@ export default function DigitalTwin() {
                               <HistoryScopeQualifier
                                 scope={sim.estimate_scope}
                                 regions={sim.target_regions}
+                                filterRegions={sim.filter_regions}
                               />
                             </p>
                           </div>
@@ -1061,6 +1073,7 @@ export default function DigitalTwin() {
                                   <HistoryScopeQualifier
                                     scope={run.estimate_scope}
                                     regions={run.target_regions}
+                                    filterRegions={run.filter_regions}
                                   />
                                 </span>
                                 <RecommendationBadge recommendation={run.recommendation_type} />

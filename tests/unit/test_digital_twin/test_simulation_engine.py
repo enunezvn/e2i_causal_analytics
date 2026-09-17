@@ -186,7 +186,7 @@ class TestSimulationEngineInit:
 
     def test_init_default_thresholds(self, sample_population):
         """Test initialization with default thresholds."""
-        engine = SimulationEngine(sample_population)
+        engine = SimulationEngine(sample_population, effect_provider=SyntheticEffectDataProvider())
 
         assert engine.population == sample_population
         assert engine.model_id == sample_population.model_id
@@ -201,6 +201,7 @@ class TestSimulationEngineInit:
             min_effect_threshold=0.10,
             confidence_threshold=0.85,
             model_fidelity_score=0.92,
+            effect_provider=SyntheticEffectDataProvider(),
         )
 
         assert engine.min_effect_threshold == 0.10

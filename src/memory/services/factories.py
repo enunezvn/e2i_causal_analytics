@@ -36,6 +36,8 @@ import logging
 import os
 from abc import ABC, abstractmethod
 from collections import OrderedDict
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from functools import lru_cache
 from typing import Any, Dict, List, Literal, Optional, cast
 
@@ -818,6 +820,50 @@ async def get_async_supabase_client():
             raise ServiceConnectionError(
                 "Supabase", f"Failed to create async client: {e}", e
             ) from e
+
+
+@asynccontextmanager
+async def loop_scoped_async_supabase_client() -> AsyncIterator[Any]:
+    """An uncached async Supabase client that lives for this block only, closed on exit.
+
+    For a synchronous caller that runs its own event loop (``asyncio.run``) — a sync tool,
+    a Celery task. The cached client from :func:`get_async_supabase_client` keeps an httpx
+    connection pool bound to the first loop that used it, so the next ``asyncio.run`` in the
+    process fails with "Event loop is closed" (#2025). Same credentials as the cached client.
+
+    Raises:
+        ServiceConnectionError: If required environment variables are missing or client
+            creation fails
+    """
+    try:
+        from supabase import acreate_client
+    except ImportError as e:
+        raise ServiceConnectionError(
+            "Supabase", "supabase package is not installed. Run: pip install supabase"
+        ) from e
+
+    url = os.environ.get("SUPABASE_URL")
+    key = _resolve_supabase_key()
+    if not url:
+        raise ServiceConnectionError("Supabase", "SUPABASE_URL environment variable is not set")
+    if not key:
+        raise ServiceConnectionError(
+            "Supabase",
+            "No Supabase key set (need SUPABASE_SERVICE_ROLE_KEY, SUPABASE_SERVICE_KEY "
+            "or SUPABASE_ANON_KEY)",
+        )
+
+    options = _build_async_supabase_options()
+    try:
+        try:
+            client = await acreate_client(url, key, options=options)
+        except Exception as e:
+            raise ServiceConnectionError(
+                "Supabase", f"Failed to create async client: {e}", e
+            ) from e
+        yield client
+    finally:
+        await options.httpx_client.aclose()
 
 
 async def get_async_supabase_service_client():

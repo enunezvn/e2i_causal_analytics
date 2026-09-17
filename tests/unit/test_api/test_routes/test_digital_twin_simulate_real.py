@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import pytest
 
+from src.digital_twin.effect.provider import SyntheticEffectDataProvider
 from src.digital_twin.models.twin_models import Brand, TwinType
 from src.digital_twin.simulation_engine import SimulationEngine
 
@@ -19,8 +20,12 @@ def test_engine_does_not_accept_model_id_kwarg():
     from src.digital_twin.models.twin_models import TwinPopulation
 
     pop = TwinPopulation(twin_type=TwinType.HCP, brand=Brand.REMIBRUTINIB, twins=[], size=0)
-    with pytest.raises(TypeError):
-        SimulationEngine(population=pop, model_id=uuid4())  # type: ignore[call-arg]
+    with pytest.raises(TypeError, match="model_id"):
+        SimulationEngine(
+            population=pop,
+            model_id=uuid4(),  # type: ignore[call-arg]
+            effect_provider=SyntheticEffectDataProvider(),
+        )
 
 
 @pytest.mark.unit
@@ -32,7 +37,9 @@ def test_route_construction_smoke_uses_real_engine(monkeypatch):
 
     pop = TwinPopulation(twin_type=TwinType.HCP, brand=Brand.REMIBRUTINIB, twins=[], size=0)
     model_id = uuid4()
-    engine = SimulationEngine(population=pop)  # no model_id kwarg
+    engine = SimulationEngine(
+        population=pop, effect_provider=SyntheticEffectDataProvider()
+    )  # no model_id kwarg
     engine.model_id = model_id
     assert engine.model_id == model_id
 

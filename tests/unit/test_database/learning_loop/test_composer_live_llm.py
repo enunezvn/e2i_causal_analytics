@@ -14,7 +14,6 @@ Run twice to pin the audit identity at its call site:
 
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 from typing import Any, Dict, List, Optional
@@ -32,7 +31,7 @@ from tests.unit.test_database.learning_loop import _pg
 pytestmark = [
     pytest.mark.skipif(
         not _pg.db_integration_enabled(),
-        reason="real-DB integration; set E2I_DB_INTEGRATION=1 on the droplet (docker + supabase-db)",
+        reason=_pg.OPT_IN_SKIP_REASON,
     ),
     pytest.mark.skipif(
         os.getenv("E2I_LIVE_LLM") != "1",
@@ -41,7 +40,6 @@ pytestmark = [
     pytest.mark.timeout(300),
 ]
 
-UPTO = "ml/041_composer_learning_loop_recording.sql"
 QUERY = "What drove Kisqali TRx in the last quarter, and how does it differ by region?"
 
 
@@ -124,11 +122,8 @@ class PsycopgSupabase:
 
 @pytest.fixture
 def live_db(clone_db) -> _pg.PgConn:
-    """Migrated through 041 and synced against the live tool registry."""
-    db = clone_db("live_llm")
-    _pg.migrate(db, UPTO)
-    asyncio.run(RegistrySync(port=_pg.PsycopgRpcPort(db)).sync_once())
-    return db
+    """The post-deploy schema, its registry already synced from code by the fixture."""
+    return clone_db("live_llm")
 
 
 def _one(db: _pg.PgConn, sql: str, *params: Any) -> Any:

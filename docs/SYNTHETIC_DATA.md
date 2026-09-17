@@ -552,7 +552,11 @@ Each `DigitalTwin` has:
 Runs intervention simulations on twin populations.
 
 ```python
-engine = SimulationEngine(population, min_effect_threshold=0.05)
+engine = SimulationEngine(
+    population,
+    min_effect_threshold=0.05,
+    effect_provider=SyntheticEffectDataProvider(),  # required; production passes the cohort provider
+)
 result = engine.simulate(
     intervention_config=InterventionConfig(
         intervention_type="email_campaign",

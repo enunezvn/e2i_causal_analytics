@@ -6,6 +6,9 @@ serializer sends and never store error text), §6 (``get_tool_reliability`` deno
 provenance, window; views without fan-out; heartbeat-derived ``abandoned``). Owner decision O3:
 the vector column, its index, ``find_similar_compositions`` and the step trigger are dropped.
 
+Behaviour tests (#2065) run on the post-deploy schema, whose registry the fixture synced from
+code; counts derive from it. Only re-applying 041 over itself is an upgrade-path test.
+
 Opt-in: ``E2I_DB_INTEGRATION=1``. Run with ``-n 0``.
 """
 
@@ -23,7 +26,7 @@ from tests.unit.test_database.learning_loop import _pg
 pytestmark = [
     pytest.mark.skipif(
         not _pg.db_integration_enabled(),
-        reason="real-DB integration; set E2I_DB_INTEGRATION=1 on the droplet (docker + supabase-db)",
+        reason=_pg.OPT_IN_SKIP_REASON,
     ),
     pytest.mark.timeout(300),
 ]
@@ -54,9 +57,13 @@ REPAIR_REASONS = (
 )
 
 
+#: A tool name no registry declares.
+UNREGISTERED = "probe_unregistered_tool"
+
+
 @pytest.fixture
 def db(module_db) -> _pg.PgConn:
-    return module_db(UPTO)
+    return module_db
 
 
 def seed(cid: str, **over: Any) -> Dict[str, Any]:
@@ -446,9 +453,9 @@ def test_steps_unknown_tools_reported_and_rest_recorded(db):
     s = seed("unknown")
     batch = [
         step(0, "gap_calculator", "succeeded"),
-        step(1, "cohort_builder", "succeeded"),
+        step(1, UNREGISTERED, "succeeded"),
         step(2, "roi_estimator", "succeeded"),
-        step(3, "cohort_builder", "error"),
+        step(3, UNREGISTERED, "error"),
     ]
     with db.rolled_back() as conn:
         receipt = call(conn, "composer_record_steps", s, batch)
@@ -456,7 +463,7 @@ def test_steps_unknown_tools_reported_and_rest_recorded(db):
     assert receipt == {
         "recorded": 2,
         "already_present": 0,
-        "unknown_tools": ["cohort_builder"],
+        "unknown_tools": [UNREGISTERED],
         **NO_MISMATCH,
     }
     assert [r["step_number"] for r in stored] == [0, 2]
@@ -651,10 +658,11 @@ def test_rpc_rechecks_column_entries(db):
 def test_rpc_reduces_anything_that_is_not_structure(db):
     """Every LLM- or data-authored position the RPCs accept, planted with a sentinel.
 
-    Declared parameter names come from the registry (measured): gap_calculator IN metric,
+    Declared parameter names come from the registry the code syncs: gap_calculator IN metric,
     entities, group_by, entity_type / OUT gap, entity_values, top_performer, bottom_performer;
-    causal_effect_estimator IN method, outcome, treatment, confounders; psi_calculator IN
-    feature, period_column, current_period, baseline_period.
+    causal_effect_estimator IN outcome, treatment, confounders (``method`` stopped being offered
+    in #2014; the old re-applied ml/037 seed still declared it); cate_analyzer IN treatment,
+    outcome, segments; psi_calculator IN feature, period_column, current_period, baseline_period.
     """
     s = seed("reduce")
     gap_params = {
@@ -669,9 +677,9 @@ def test_rpc_reduces_anything_that_is_not_structure(db):
     cee_params = {
         "treatment": {"type": "ref", "step": 0, "field": "gap", "raw": SENTINEL},
         "outcome": {"type": "ref", "step": 0, "field": SENTINEL},
-        "confounders": [SENTINEL, 1],
-        "method": {"type": "frame", "rows": 10, "columns": 3, "cols": [SENTINEL]},
+        "confounders": {"type": "frame", "rows": 10, "columns": 3, "cols": [SENTINEL]},
     }
+    cate_params = {"segments": [SENTINEL, 1]}
     psi_params = {
         "current_period": 0.05,
         "baseline_period": True,
@@ -692,6 +700,7 @@ def test_rpc_reduces_anything_that_is_not_structure(db):
         ),
         step(1, "causal_effect_estimator", "succeeded", input_params=cee_params),
         step(2, "psi_calculator", "succeeded", input_params=psi_params),
+        step(3, "cate_analyzer", "succeeded", input_params=cate_params),
     ]
     snapshot = final(
         sub_questions=[
@@ -741,9 +750,9 @@ def test_rpc_reduces_anything_that_is_not_structure(db):
     assert stored[1]["input_params"] == {
         "treatment": {"type": "ref", "step": 0, "field": "gap"},
         "outcome": {"type": "ref", "step": 0, "field": None},
-        "confounders": {"type": "list", "len": 2},
-        "method": {"type": "frame", "rows": 10, "columns": 3},
+        "confounders": {"type": "frame", "rows": 10, "columns": 3},
     }
+    assert stored[3]["input_params"] == {"segments": {"type": "list", "len": 2}}
     # Positive control: declared names, numbers, booleans and catalog columns survive.
     assert stored[2]["input_params"] == psi_params
     assert stored[0]["serves_sub_question"] is None and stored[0]["error_type"] is None
@@ -933,10 +942,14 @@ def test_reliability_window(db):
 
 def test_reliability_lists_active_tools_only(db):
     with db.rolled_back() as conn:
+        (active,) = conn.execute(
+            "select count(*) from tool_registry where deprecated_at is null"
+        ).fetchone()
         (before,) = conn.execute("select count(*) from get_tool_reliability(30, true)").fetchone()
         conn.execute("update tool_registry set deprecated_at = now() where name = 'psi_calculator'")
         (after,) = conn.execute("select count(*) from get_tool_reliability(30, true)").fetchone()
-    assert (before, after) == (16, 15)
+    assert active > 1
+    assert (before, after) == (active, active - 1)
 
 
 @pytest.mark.parametrize("days", [None, 0, -5])
@@ -1062,8 +1075,11 @@ def test_service_role_can_record_and_read(db):
             conn.execute(f"select * from {view}").fetchall()
 
 
-def test_reapply_041_keeps_recorded_rows(clone_db):
-    fresh = clone_db("reapply_041")
+@pytest.mark.realdb_upgrade(UPTO)
+def test_reapply_041_keeps_recorded_rows(base_clone_db):
+    # Upgrade path: 041 re-applied directly over ITSELF. Over 043/044 it is not a path the
+    # runner ever takes (a ledgered key is never re-applied), so it waits for 041 to be pending.
+    fresh = base_clone_db("reapply_041")
     _pg.migrate(fresh, UPTO)
     s = seed("keep")
     with fresh.connect() as conn:

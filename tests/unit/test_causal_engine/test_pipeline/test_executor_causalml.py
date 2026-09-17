@@ -39,6 +39,7 @@ from src.causal_engine.pipeline.executors.causalml import (
     CausalMLExecutor,
     ExecutorDataUnavailable,
     _extract_uplift_inputs_from_state,
+    _refuse_unmodelable_outcome,
     _resolve_control_name,
 )
 from src.causal_engine.pipeline.router import CausalLibrary
@@ -1185,6 +1186,109 @@ class TestCausalMLExecutorFailsClosedOnBinarizationCollapse:
         assert "collapse" not in msg, msg
         assert "DoWhy" not in msg, msg
         assert "not a binarization problem" in msg, msg
+
+
+class TestCausalMLOutcomeGatesOnEmptyAndInfiniteOutcomes:
+    """#2066: the outcome gates stand on their own and name non-finite values.
+
+    Empty: ``nan_count == len(y)`` and ``(y > 0).all()`` are both vacuously
+    true on zero rows, so without its own guard the helper called directly
+    would refuse an empty outcome as "entirely NaN (0 of 0 rows)". The
+    ``len(df) == 0`` check in the extractor hides that today; the helper must
+    not depend on it.
+
+    Infinite: measured 2026-09-16 at b5d33c2eb, a COLLAPSING non-constant
+    outcome holding -inf was diagnosed as a binarization problem and sent to
+    "recode to 0/1, or DoWhy/EconML" -- a remedy that leaves the infinity in
+    place. The owner's proposal on the issue: one non-finite check before the
+    binarization classification, constant all-inf outcomes excluded. A
+    non-collapsing outcome holding inf was already refused by the uplift
+    wrapper (``Input y contains infinity``); it now gets the same message.
+    """
+
+    def test_empty_outcome_is_refused_as_empty_not_as_all_nan(self):
+        with pytest.raises(ExecutorDataUnavailable) as excinfo:
+            _refuse_unmodelable_outcome(np.array([], dtype=float), "sales")
+
+        msg = str(excinfo.value)
+        assert "outcome 'sales' has no rows" in msg, msg
+        assert "NaN" not in msg, msg
+        assert "binariz" not in msg, msg
+
+    @pytest.mark.parametrize(
+        ("sales", "inf_phrase"),
+        [
+            ([-np.inf, 0.0, -np.inf, 0.0], "2 infinite values (0 +inf, 2 -inf) in 4 rows"),
+            ([np.nan, -np.inf, 0.0, 0.0], "1 infinite value (0 +inf, 1 -inf) in 4 rows"),
+            ([-np.inf, -1.0, -2.0, -1.0], "1 infinite value (0 +inf, 1 -inf) in 4 rows"),
+        ],
+        ids=["neg_inf_and_zero", "nan_neg_inf_and_zero", "neg_inf_and_negatives"],
+    )
+    def test_collapsing_outcome_with_infinities_names_them_not_a_recode(self, sales, inf_phrase):
+        df = pd.DataFrame(
+            {
+                "marketing_spend": [0, 1, 0, 1],
+                "sales": sales,
+                "age": [25.0, 35.0, 45.0, 55.0],
+                "income": [1.0, 2.0, 3.0, 4.0],
+            }
+        )
+        state = _make_pipeline_state(filters={"dataframe": df}, confounders=["age", "income"])
+
+        with pytest.raises(ExecutorDataUnavailable) as excinfo:
+            _extract_uplift_inputs_from_state(state)
+
+        msg = str(excinfo.value)
+        assert f"outcome 'sales' contains {inf_phrase}" in msg, msg
+        assert "Recode" not in msg, msg
+        assert "DoWhy" not in msg, msg
+        assert "= inf" not in msg, msg
+        if np.isnan(sales).any():
+            assert "NaN in 1 of 4 rows" in msg, msg
+        else:
+            assert "NaN" not in msg, msg
+
+    def test_constant_infinite_outcome_keeps_the_constant_diagnosis(self):
+        """POSITIVE CONTROL -- all-inf is constant; the literal inf in that
+        message is the reader's best clue, and #2063's review ruled it fine."""
+        df = _make_continuous_positive_outcome_frame()
+        df["sales"] = np.inf
+        state = _make_pipeline_state(filters={"dataframe": df}, confounders=["age", "income"])
+
+        with pytest.raises(ExecutorDataUnavailable) as excinfo:
+            _extract_uplift_inputs_from_state(state)
+
+        assert "is constant" in str(excinfo.value)
+
+    def test_nan_with_a_constant_infinite_remainder_keeps_the_constant_diagnosis(self):
+        """POSITIVE CONTROL -- constant after dropping NaN is still constant."""
+        with pytest.raises(ExecutorDataUnavailable) as excinfo:
+            _refuse_unmodelable_outcome(np.array([np.nan, -np.inf, -np.inf]), "sales")
+
+        msg = str(excinfo.value)
+        assert "the non-NaN values are constant" in msg, msg
+        assert "infinite value" not in msg, msg
+
+    @pytest.mark.parametrize(
+        ("bad", "inf_phrase"),
+        [(np.inf, "(1 +inf, 0 -inf)"), (-np.inf, "(0 +inf, 1 -inf)")],
+        ids=["pos_inf", "neg_inf"],
+    )
+    @pytest.mark.asyncio
+    async def test_non_collapsing_outcome_with_an_infinity_is_refused_before_any_fit(
+        self, bad, inf_phrase
+    ):
+        df = _make_continuous_positive_outcome_frame()
+        df["sales"] = np.where(df["marketing_spend"] > 0, 3.0, -1.0)
+        df.loc[df.index[5], "sales"] = bad
+        state = _make_pipeline_state(filters={"dataframe": df}, confounders=["age", "income"])
+
+        with patch("src.causal_engine.pipeline.executors.causalml._fit_uplift_model") as fit:
+            result = await CausalMLExecutor().execute(state, _make_pipeline_config())
+
+        assert result["success"] is False
+        assert f"contains 1 infinite value {inf_phrase} in 240 rows" in result["error"]
+        fit.assert_not_called()
 
 
 # =============================================================================

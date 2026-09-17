@@ -10,8 +10,10 @@
  * - An operator reads the queue and resolves (approves/rejects) it.
  *
  * This file is a HAND-WRITTEN MIRROR of the expert-review schemas in
- * `src/types/generated/api.ts`. No drift check covers it, so any backend schema
- * change must be copied here by hand in the same PR that regenerates api.ts.
+ * `src/types/generated/api.ts`. Any backend schema change must be copied here by
+ * hand in the same PR that regenerates api.ts; `expert-review.drift.test.ts`
+ * (#2092) fails the typecheck when the two disagree, and lists the deliberate
+ * relaxations (e.g. `version_count?`).
  *
  * @module types/expert-review
  */

@@ -42,6 +42,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from pydantic import BaseModel, Field
 
 from src.repositories.base import BaseRepository
+from src.repositories.query_utils import match_nullable_column
 
 logger = logging.getLogger(__name__)
 
@@ -828,13 +829,11 @@ class MonitoringAlertRepository(BaseRepository[MonitoringAlertRecord]):
             # 2026-07-04 storm). Mirrors the NOT EXISTS guard migration 093 adds
             # to the trigger-side writer.
             try:
-                existing_query = (
-                    self.client.table(self.table_name).select("title").eq("status", "active")
+                existing_query = match_nullable_column(
+                    self.client.table(self.table_name).select("title").eq("status", "active"),
+                    "model_id",
+                    model_id,
                 )
-                if model_id is not None:
-                    existing_query = existing_query.eq("model_id", model_id)
-                else:
-                    existing_query = existing_query.is_("model_id", "null")
                 existing_result = await existing_query.execute()
                 existing_titles = {row["title"] for row in (existing_result.data or [])}
                 alerts = [a for a in alerts if a.title not in existing_titles]
