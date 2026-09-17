@@ -50,6 +50,14 @@
 -- on its own, leaving the ledger disagreeing with the schema. Nothing else writes
 -- it: this file is outside every MIGRATION_DIRS entry, so the runner never sees it.
 --
+-- IF THIS FILE IS EVER MOVED INTO database/migrations/ (the right end state once
+-- the lane's SHA, not origin/main, is the automated rollback target — codex iter2
+-- MED-1), the runner will key it as '145_drop_legacy_per_hcp_count_columns.sql'
+-- with no 'deferred/' prefix, will not match the row written below, and will apply
+-- it once more. That is harmless by construction: every statement here is
+-- IF EXISTS / OR REPLACE, so the second application changes nothing. Delete the
+-- stale 'deferred/...' ledger row afterwards if you want the ledger tidy.
+--
 -- ---------------------------------------------------------------------------
 -- THE VIEWS
 -- ---------------------------------------------------------------------------
