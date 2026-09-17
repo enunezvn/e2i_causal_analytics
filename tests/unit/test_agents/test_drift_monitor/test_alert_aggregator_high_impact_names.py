@@ -25,9 +25,7 @@ _REFERENCE_HIGH_IMPACT = "market_share"
 
 def _node_and_method():
     cls = next(
-        c
-        for c in vars(mod).values()
-        if inspect.isclass(c) and "_assess_feature_impact" in vars(c)
+        c for c in vars(mod).values() if inspect.isclass(c) and "_assess_feature_impact" in vars(c)
     )
     return object.__new__(cls), cls._assess_feature_impact
 

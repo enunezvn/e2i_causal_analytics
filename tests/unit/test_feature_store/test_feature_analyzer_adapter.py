@@ -262,7 +262,7 @@ class TestDiscoverFeatures:
                     "ttl_days": 7,
                     "schema": [
                         {"name": "engagement_score", "dtype": "FLOAT64"},
-                        {"name": "trx_count", "dtype": "INT64"},
+                        {"name": "triggers_delivered_count", "dtype": "INT64"},
                     ],
                 }
             ]

@@ -122,7 +122,7 @@ BATCH_SOURCE_NAME = "business_metrics_source"
 # feature_repo/data_sources.py). The smallest pair that exercises the
 # schema-builder + PushSource round-trip without depending on any real
 # downstream consumers.
-SELECTED_FEATURES = ["trx_count", "nrx_count"]
+SELECTED_FEATURES = ["triggers_delivered_count", "triggers_accepted_count"]
 
 # Default TTL for synthetic FVs registered by this suite. Picked deliberately
 # different from the FeastClient default (7 days) so the schema-deep diff
@@ -353,8 +353,8 @@ def test_materialize_via_push_round_trips_to_online_store(feast_client: Any) -> 
         push_df = pd.DataFrame(
             {
                 ENTITY_JOIN_KEY: ["hcp_test_a", "hcp_test_b"],
-                "trx_count": [42, 7],
-                "nrx_count": [13, 3],
+                "triggers_delivered_count": [42, 7],
+                "triggers_accepted_count": [13, 3],
                 "event_timestamp": [push_ts, push_ts],
                 "created_at": [push_ts, push_ts],
             }
@@ -388,11 +388,11 @@ def test_materialize_via_push_round_trips_to_online_store(feast_client: Any) -> 
         assert returned_ids == ["hcp_test_a", "hcp_test_b"], (
             f"online entity ids out of order or missing: got {returned_ids!r}"
         )
-        assert list(online_dict["trx_count"]) == [42, 7], (
-            f"trx_count round-trip mismatch: got {online_dict['trx_count']!r}"
+        assert list(online_dict["triggers_delivered_count"]) == [42, 7], (
+            f"triggers_delivered_count round-trip mismatch: got {online_dict['triggers_delivered_count']!r}"
         )
-        assert list(online_dict["nrx_count"]) == [13, 3], (
-            f"nrx_count round-trip mismatch: got {online_dict['nrx_count']!r}"
+        assert list(online_dict["triggers_accepted_count"]) == [13, 3], (
+            f"triggers_accepted_count round-trip mismatch: got {online_dict['triggers_accepted_count']!r}"
         )
 
     finally:
@@ -513,8 +513,8 @@ def test_get_online_features_round_trips_pushed_values(feast_client: Any) -> Non
         push_df = pd.DataFrame(
             {
                 ENTITY_JOIN_KEY: ["hcp_round_a", "hcp_round_b", "hcp_round_c"],
-                "trx_count": [0, 100_000, 1],
-                "nrx_count": [0, 50_000, 1],
+                "triggers_delivered_count": [0, 100_000, 1],
+                "triggers_accepted_count": [0, 50_000, 1],
                 "event_timestamp": [push_ts, push_ts, push_ts],
                 "created_at": [push_ts, push_ts, push_ts],
             }
@@ -671,16 +671,18 @@ def test_schema_deep_diff_detects_ttl_change() -> None:
 def test_schema_deep_diff_detects_schema_field_add() -> None:
     """Drift case 2 — adding a field produces detectable proto-byte drift."""
     name = "test_6b_diff_schema_add"
-    base = build_minimal_feature_view(name, ttl=TEST_TTL, feature_names=["trx_count"])
+    base = build_minimal_feature_view(
+        name, ttl=TEST_TTL, feature_names=["triggers_delivered_count"]
+    )
     drifted = build_minimal_feature_view(
-        name, ttl=TEST_TTL, feature_names=["trx_count", "nrx_count"]
+        name, ttl=TEST_TTL, feature_names=["triggers_delivered_count", "triggers_accepted_count"]
     )
 
     base_bytes = proto_bytes(base)
     drifted_bytes = proto_bytes(drifted)
 
     assert base_bytes != drifted_bytes, (
-        "Adding a schema field (trx_count + nrx_count) produced byte-"
+        "Adding a schema field (triggers_delivered_count + triggers_accepted_count) produced byte-"
         "identical FV protos. Schema-deep idempotency check would NOT "
         "detect this drift."
     )
@@ -694,14 +696,18 @@ def test_schema_deep_diff_detects_schema_field_remove() -> None:
     asymmetric. This test catches the symmetric-detection regression.
     """
     name = "test_6b_diff_schema_remove"
-    base = build_minimal_feature_view(name, ttl=TEST_TTL, feature_names=["trx_count", "nrx_count"])
-    drifted = build_minimal_feature_view(name, ttl=TEST_TTL, feature_names=["trx_count"])
+    base = build_minimal_feature_view(
+        name, ttl=TEST_TTL, feature_names=["triggers_delivered_count", "triggers_accepted_count"]
+    )
+    drifted = build_minimal_feature_view(
+        name, ttl=TEST_TTL, feature_names=["triggers_delivered_count"]
+    )
 
     base_bytes = proto_bytes(base)
     drifted_bytes = proto_bytes(drifted)
 
     assert base_bytes != drifted_bytes, (
-        "Removing a schema field (nrx_count dropped) produced byte-"
+        "Removing a schema field (triggers_accepted_count dropped) produced byte-"
         "identical FV protos. Schema-deep idempotency check would NOT "
         "detect this drift."
     )

@@ -79,7 +79,7 @@ BATCH_SOURCE_NAME = "business_metrics_source"
 
 # The smallest feature set that exercises the schema-builder / PushSource
 # round-trip without depending on any real downstream consumers.
-SELECTED_FEATURES = ["trx_count", "nrx_count"]
+SELECTED_FEATURES = ["triggers_delivered_count", "triggers_accepted_count"]
 
 
 @pytest.fixture(scope="module")

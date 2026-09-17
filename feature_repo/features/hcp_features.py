@@ -27,10 +27,22 @@ hcp_conversion_fv = FeatureView(
     entities=[hcp, hcp_brand],
     ttl=timedelta(days=7),
     schema=[
-        # Prescribing metrics
-        Field(name="trx_count", dtype=Int64, description="Total TRx in period"),
-        Field(name="nrx_count", dtype=Int64, description="New prescriptions"),
-        Field(name="total_rx_count", dtype=Int64, description="Total prescriptions"),
+        # Trigger funnel counts (per_hcp_rollup; renamed by migration 144 — not prescriptions)
+        Field(
+            name="triggers_delivered_count",
+            dtype=Int64,
+            description="Triggers delivered or viewed in period",
+        ),
+        Field(
+            name="triggers_accepted_count",
+            dtype=Int64,
+            description="Triggers accepted or responded in period",
+        ),
+        Field(
+            name="triggers_total_count",
+            dtype=Int64,
+            description="All triggers generated in period",
+        ),
         # Market metrics
         Field(name="market_share", dtype=Float32, description="HCP's market share for brand"),
         Field(name="conversion_rate", dtype=Float32, description="Historical conversion rate"),
