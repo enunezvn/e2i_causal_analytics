@@ -215,6 +215,54 @@ def test_parsers_are_non_vacuous():
         assert _DDL.get(table), f"DDL parser found no columns for {table}"
 
 
+class TestCommittedRenamesAreModelled:
+    """Migration 144 is the repo's FIRST column rename, so this is the first thing
+    ever to exercise renames in the DDL model (measured 2026-09-17: no other
+    ``RENAME COLUMN`` exists under ``database/``).
+
+    A rename is the one DDL statement that is SUBTRACTIVE — it retires a name.
+    That is why it cannot simply be added to the ADD/DROP scan: the model's
+    safety argument was "over-capture can only relax the guard", and a rename
+    applied from a NON-FORWARD file (a rollback) would silently reverse a real
+    rename and produce a FALSE 'missing column'. The file filter is what keeps
+    the model sound once renames are modelled.
+    """
+
+    def test_the_ddl_model_follows_a_committed_column_rename(self):
+        available = _DDL.get("business_metrics", set())
+        for new in (
+            "triggers_delivered_count",
+            "triggers_accepted_count",
+            "triggers_total_count",
+        ):
+            assert new in available, f"{new} missing from the modelled schema"
+
+    def test_the_retired_names_are_genuinely_absent(self):
+        """Teeth in the FAIL direction: after 144 the old names do not exist, so a
+        source query still naming one MUST be caught (the #556 class, post-rename)."""
+        available = _DDL.get("business_metrics", set())
+        for old in ("trx_count", "nrx_count", "total_rx_count"):
+            assert old not in available, f"{old} was retired by migration 144"
+
+    def test_a_non_forward_file_does_not_flip_the_model_back(self):
+        """rollback_144 holds the REVERSE rename and sorts AFTER 144 ('1' < 'r').
+        Without the forward-only filter it would undo the rename in the model."""
+        rollback = _DATABASE_DIR / "migrations" / "rollback_144_per_hcp_trigger_count_columns.sql"
+        assert rollback.exists(), "the trap this guards is gone; re-check the filter"
+        assert not _is_forward_migration(rollback)
+        assert "triggers_delivered_count" in _DDL.get("business_metrics", set())
+
+    def test_the_forward_only_filter_is_not_vacuous(self):
+        """A filter that excludes nothing would pass every test above by accident."""
+        excluded = [p for p in _DATABASE_DIR.rglob("*.sql") if not _is_forward_migration(p)]
+        assert excluded, "filter excluded no file at all"
+        names = {p.name for p in excluded}
+        assert "rollback_144_per_hcp_trigger_count_columns.sql" in names
+        assert "011_validation_queries.sql" in names
+        # ...and it must not swallow real forward migrations.
+        assert _is_forward_migration(_DATABASE_DIR / "migrations" / "033_feast_canonical_schema.sql")
+
+
 @pytest.mark.parametrize("source_name", sorted(_QUERIES))
 def test_source_query_columns_exist_in_canonical_schema(source_name):
     table, query = _QUERIES[source_name]
