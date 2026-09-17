@@ -630,12 +630,16 @@ class AlertAggregatorNode:
             Impact assessment string
         """
         # Common high-impact features in pharma commercial analytics
+        # Canonical TRx lane (codex r1): the per-HCP trigger counts were renamed by
+        # migration 144 and keep the high-impact rating their old names carried. The
+        # set is a generic name heuristic (463d54f55); changing severity is an owner
+        # decision, not a side effect of a rename.
         high_impact_features = {
             "hcp_visits",
             "prescription_volume",
             "market_share",
-            "trx_count",
-            "nrx_count",
+            "triggers_delivered_count",
+            "triggers_accepted_count",
             "conversion_rate",
             "patient_count",
             "days_on_therapy",

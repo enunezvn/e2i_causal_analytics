@@ -250,7 +250,8 @@ class TestFeatureViewDefinitions:
 
         # Check has expected fields
         field_names = [f.name for f in hcp_conversion_fv.schema]
-        assert "trx_count" in field_names
+        assert "triggers_delivered_count" in field_names
+        assert "trx_count" not in field_names
         assert "market_share" in field_names
         assert "engagement_score" in field_names
 

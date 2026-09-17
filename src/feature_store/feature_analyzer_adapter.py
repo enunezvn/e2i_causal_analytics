@@ -447,7 +447,7 @@ class FeatureAnalyzerAdapter:
                 entity_df=entity_df,
                 feature_refs=[
                     "hcp_conversion_features:engagement_score",
-                    "hcp_conversion_features:trx_count",
+                    "hcp_conversion_features:triggers_delivered_count",
                 ],
             )
             ```
