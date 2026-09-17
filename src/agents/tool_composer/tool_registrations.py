@@ -2541,15 +2541,6 @@ def gap_calculator(
     values, and ``max``/``min`` silently return the first key when a NaN is in
     play (#1599).
 
-    Args:
-        metric: Numeric column to compare across entities.
-        entity_type: Logical entity type (region / territory / brand); also a
-            grouping-column hint.
-        entities: Optional subset of entity values to restrict to.
-        group_by: Optional grouping column. It is explicit so the executor can
-            validate every planner-visible argument against the callable signature.
-        **kwargs: Must contain the DataFrame under one of
-            ``_DATAFRAME_KWARGS_KEYS``.
     """
     df = _extract_dataframe_from_kwargs(kwargs)
     if df is None:
@@ -3145,13 +3136,6 @@ def roi_estimator(
     (an ROI is undefined without a real gap, a real investment and a usable unit
     value; we refuse to fabricate one).
 
-    Args:
-        gap_analysis: Output of ``gap_calculator`` (carries ``gap`` and,
-            optionally, ``entity_values``).
-        investment: Proposed investment amount (must be > 0).
-        value_per_unit: Float multiplier converting a unit of gap into monetary
-            value. Explicit ``None`` retains the historical default of 1.0.
-        **kwargs: Carries executor-injected internal context only.
     """
     if not isinstance(gap_analysis, dict) or "gap" not in gap_analysis:
         raise ToolRefusalError(
@@ -4404,15 +4388,6 @@ def risk_scorer(
     carrying a gap are dropped. Both drops are reported in ``missing_data_disclosure``
     / ``n_scored`` / ``n_rows_dropped`` — never silently.
 
-    Args:
-        entity_type: Logical entity type (echoed for provenance only).
-        risk_type: Logical risk label (echoed for provenance only).
-        entity_ids: Optional subset of entity IDs to restrict scoring to.
-        id_column: Column containing the entity IDs (default ``patient_id``).
-        outcome: Binary outcome column the model predicts (default
-            ``discontinuation_flag``).
-        **kwargs: Must contain the DataFrame under one of
-            ``_DATAFRAME_KWARGS_KEYS``.
     """
     import hashlib
     from datetime import datetime, timezone
