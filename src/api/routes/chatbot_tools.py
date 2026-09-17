@@ -560,15 +560,11 @@ async def _query_kpis(
                 "window_start": window_start,
                 "data_source": "synthetic" if kpi_include_synthetic() else "database",
                 "measure_basis": _BUSINESS_METRICS_BASIS,
-                # No rows, so no stored figure to be confused with anything.
-                # The notice is a caveat ON the rows above it (#1640 codex
-                # iter-3): _query_kpis filters metric_name with
-                # _normalize_metric_name while the notice resolves through
-                # recognize_kpi, and those diverge -- "total prescriptions"
-                # filters 'total_prescriptions', which is never a stored key,
-                # yet resolved to TRx. Gating on rows closes that: a key the
-                # table does not use cannot return rows, so the mismatch can
-                # never reach a reader.
+                # No rows, so no stored figure to be confused with anything (#1640
+                # codex iter-3): the metric_name filter (_normalize_metric_name) and
+                # the notice's recognize_kpi can diverge ("total prescriptions"
+                # filters a never-stored key yet resolves to TRx); gating the
+                # notice on rows means that mismatch can never reach a reader.
                 "cross_substrate_conflict": None,
                 "note": "; ".join(unmatched) + "; returned 0 rows",
             }
@@ -577,8 +573,12 @@ async def _query_kpis(
                 response["hint"] = _REGION_CLARIFY_HINT
             return response
 
-        client = await get_async_supabase_client()
-        repo = BusinessMetricRepository(client)
+        from src.kpi.canonical_volume_stored import canonical_volume_stored_rows
+
+        canonical = await canonical_volume_stored_rows(kpi_name, filters, window_start, limit)
+        if canonical is not None:
+            return canonical
+        repo = BusinessMetricRepository(await get_async_supabase_client())
 
         metrics = await repo.query_metrics(
             filters=filters,

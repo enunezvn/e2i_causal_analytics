@@ -10,6 +10,7 @@ Covers:
 """
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -415,10 +416,15 @@ class TestQueryKpis:
 
     @pytest.mark.asyncio
     async def test_query_kpis_success(self):
-        """Test successful KPI query."""
+        """Test successful KPI query.
+
+        Task 15A: the subject here is the STORED-ROW path, so the kpi_name must be
+        a stored-only metric. TRx/NRx/NBRx/TRx Share now route to the canonical
+        aggregate and never reach ``query_metrics`` at all.
+        """
         mock_metrics = [
-            {"metric_name": "trx", "value": 100, "brand": "Kisqali"},
-            {"metric_name": "trx", "value": 150, "brand": "Kisqali"},
+            {"metric_name": "market_share", "value": 0.31, "brand": "Kisqali"},
+            {"metric_name": "market_share", "value": 0.34, "brand": "Kisqali"},
         ]
 
         with patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client:
@@ -433,7 +439,7 @@ class TestQueryKpis:
                 result = await _query_kpis(
                     brand="Kisqali",
                     region="Northeast",
-                    kpi_name="TRx",
+                    kpi_name="Market Share",
                     since=datetime.now(timezone.utc),
                     limit=10,
                 )
@@ -460,7 +466,7 @@ class TestQueryKpis:
                 result = await _query_kpis(
                     brand="Fabhalta",
                     region="Midwest",
-                    kpi_name="TRx",
+                    kpi_name="Market Share",
                     since=since,
                     limit=5,
                 )
@@ -470,11 +476,11 @@ class TestQueryKpis:
         assert call_kwargs["filters"]["brand"] == "Fabhalta"
         # #1501: region resolves to the region_type enum label
         assert call_kwargs["filters"]["region"] == "midwest"
-        assert call_kwargs["filters"]["metric_name"] == "trx"
+        assert call_kwargs["filters"]["metric_name"] == "market_share"
         assert call_kwargs["since"] == "2026-04-08"
         assert call_kwargs["limit"] == 5
         # The response reports what was actually queried
-        assert result["filters_applied"]["metric_name"] == "trx"
+        assert result["filters_applied"]["metric_name"] == "market_share"
         assert result["window_start"] == "2026-04-08"
 
     @pytest.mark.asyncio
@@ -483,7 +489,7 @@ class TestQueryKpis:
         for display, stored in [
             ("Market Share", "market_share"),
             ("conversion-rate", "conversion_rate"),
-            ("  NRx ", "nrx"),
+            ("  Conversion Rate ", "conversion_rate"),
         ]:
             with patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client:
                 mock_repo = AsyncMock()
@@ -528,7 +534,7 @@ class TestQueryKpis:
                     result = await _query_kpis(
                         brand="Fabhalta",
                         region=None,
-                        kpi_name="TRx",
+                        kpi_name="Market Share",
                         since=datetime.now(timezone.utc),
                         limit=5,
                     )
@@ -554,6 +560,97 @@ class TestQueryKpis:
         assert "Database connection failed" in result["error"]
 
 
+class TestQueryKpisRoutesTheCanonicalVolumeFamily:
+    """Task 15A: TRx/NRx/NBRx/TRx Share are answered by kpi_calculate's own call.
+
+    The unit tests in tests/unit/test_kpi/test_canonical_volume_stored.py drive the
+    helper directly; these drive the PUBLIC seam, so a hook that is never reached
+    (or reached after the repository call) cannot pass.
+    """
+
+    @staticmethod
+    def _calculator(recorder):
+        calc = MagicMock()
+
+        def _calculate(kpi_id, use_cache=True, force_refresh=False, context=None):
+            recorder.append((kpi_id, dict(context or {})))
+            return SimpleNamespace(
+                value=800349.18,
+                error=None,
+                metadata={
+                    "context": {"data_month": "2026-08-01", "data_through": "2026-08-31"},
+                    "include_synthetic": False,
+                },
+            )
+
+        calc.calculate = _calculate
+        return calc
+
+    @pytest.mark.asyncio
+    async def test_a_volume_ask_never_reaches_the_stored_row_repository(self):
+        recorder: list = []
+        mock_repo = AsyncMock()
+        mock_repo.query_metrics.return_value = [{"metric_name": "trx", "value": 1}]
+
+        with (
+            patch("src.api.routes.chatbot_tools.get_async_supabase_client"),
+            patch(
+                "src.api.routes.chatbot_tools.BusinessMetricRepository",
+                return_value=mock_repo,
+            ),
+            patch(
+                "src.api.routes.kpi.get_kpi_calculator",
+                return_value=self._calculator(recorder),
+            ),
+        ):
+            result = await _query_kpis(
+                brand="Kisqali",
+                region=None,
+                kpi_name="TRx",
+                since=datetime(2026, 8, 20, tzinfo=timezone.utc),
+                limit=10,
+            )
+
+        mock_repo.query_metrics.assert_not_called()
+        assert recorder == [("WS3-BI-005", {"brand": "Kisqali"})]
+        assert result["canonical_aggregate"] is True
+        assert result["count"] == 1
+        assert result["data"][0]["value"] == 800349.18
+        assert result["data"][0]["metric_date"] == "2026-08-01"
+        assert result["measure_basis"]["substrate"] == ["business_metrics"]
+
+    @pytest.mark.asyncio
+    async def test_a_stored_only_ask_still_takes_the_repository_path(self):
+        """The negative control: without it the test above passes for a hook that
+        swallowed EVERY kpi_name."""
+        recorder: list = []
+        mock_repo = AsyncMock()
+        mock_repo.query_metrics.return_value = []
+
+        with (
+            patch("src.api.routes.chatbot_tools.get_async_supabase_client"),
+            patch(
+                "src.api.routes.chatbot_tools.BusinessMetricRepository",
+                return_value=mock_repo,
+            ),
+            patch(
+                "src.api.routes.kpi.get_kpi_calculator",
+                return_value=self._calculator(recorder),
+            ),
+        ):
+            result = await _query_kpis(
+                brand="Kisqali",
+                region=None,
+                kpi_name="Market Share",
+                since=datetime(2026, 8, 20, tzinfo=timezone.utc),
+                limit=10,
+            )
+
+        mock_repo.query_metrics.assert_called_once()
+        assert recorder == []
+        assert "canonical_aggregate" not in result
+
+
 class TestQueryKpisEnumNormalization:
     """#1501: business_metrics.region/.brand are Postgres ENUM columns.
 
@@ -571,7 +668,7 @@ class TestQueryKpisEnumNormalization:
     @pytest.mark.asyncio
     async def test_display_case_region_resolves_to_enum_label(self):
         """The live #1501 repro: "Northeast" must reach the DB as "northeast"."""
-        mock_rows = [{"metric_name": "trx", "value": 100, "region": "northeast"}]
+        mock_rows = [{"metric_name": "market_share", "value": 0.31, "region": "northeast"}]
 
         with patch("src.api.routes.chatbot_tools.get_async_supabase_client") as mock_client:
             mock_repo = AsyncMock()
@@ -585,7 +682,7 @@ class TestQueryKpisEnumNormalization:
                 result = await _query_kpis(
                     brand="Kisqali",
                     region="Northeast",
-                    kpi_name="TRx",
+                    kpi_name="Market Share",
                     since=datetime.now(timezone.utc),
                     limit=10,
                 )
