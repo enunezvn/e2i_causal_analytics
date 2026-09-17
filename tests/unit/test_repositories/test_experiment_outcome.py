@@ -24,12 +24,12 @@ def _repo():
 
 
 class TestResolveColumn:
-    def test_count_metrics_map_to_sum(self):
-        repo = _repo()
-        for metric in ("trx", "trx_count", "nrx", "nrx_count", "total_rx", "total_rx_count"):
-            column, reducer = repo.resolve_column(metric)
-            assert reducer == "sum", f"{metric} should sum"
-            assert column in {"trx_count", "nrx_count", "total_rx_count"}
+    # test_count_metrics_map_to_sum was removed by the canonical TRx lane
+    # (migration 144): it asserted that trx / nrx / total_rx and the three legacy
+    # *_count names RESOLVE. That contract is inverted now — all six of those
+    # values are cases of TestHonestTriggerColumns's refusal test, and the
+    # counts-SUM behaviour it covered is carried by
+    # TestHonestTriggerColumns.test_trigger_counts_resolve_and_sum.
 
     def test_rate_metrics_map_to_mean(self):
         repo = _repo()
@@ -54,14 +54,14 @@ class TestAggregateToArrays:
         ]
         # Two date rows for HCP_1 -> summed to 3; HCP_2 -> 5; HCP_3 -> 9.
         rows = [
-            {"hcp_id": "HCP_1", "trx_count": 1},
-            {"hcp_id": "HCP_1", "trx_count": 2},
-            {"hcp_id": "HCP_2", "trx_count": 5},
-            {"hcp_id": "HCP_3", "trx_count": 4},
-            {"hcp_id": "HCP_3", "trx_count": 5},
+            {"hcp_id": "HCP_1", "triggers_delivered_count": 1},
+            {"hcp_id": "HCP_1", "triggers_delivered_count": 2},
+            {"hcp_id": "HCP_2", "triggers_delivered_count": 5},
+            {"hcp_id": "HCP_3", "triggers_delivered_count": 4},
+            {"hcp_id": "HCP_3", "triggers_delivered_count": 5},
         ]
         control, treatment = repo.aggregate_to_arrays(
-            assignments, rows, column="trx_count", reducer="sum"
+            assignments, rows, column="triggers_delivered_count", reducer="sum"
         )
         assert sorted(control.tolist()) == [3.0, 5.0]
         assert treatment.tolist() == [9.0]
@@ -85,11 +85,11 @@ class TestAggregateToArrays:
         assignments = [("HCP_1", "control"), ("HCP_2", "treatment")]
         # HCP_2 has only NULLs -> excluded entirely (no NaN in the array).
         rows = [
-            {"hcp_id": "HCP_1", "trx_count": 7},
-            {"hcp_id": "HCP_2", "trx_count": None},
+            {"hcp_id": "HCP_1", "triggers_delivered_count": 7},
+            {"hcp_id": "HCP_2", "triggers_delivered_count": None},
         ]
         control, treatment = repo.aggregate_to_arrays(
-            assignments, rows, column="trx_count", reducer="sum"
+            assignments, rows, column="triggers_delivered_count", reducer="sum"
         )
         assert control.tolist() == [7.0]
         assert treatment.size == 0
@@ -98,7 +98,10 @@ class TestAggregateToArrays:
     def test_empty_when_no_assignments(self):
         repo = _repo()
         control, treatment = repo.aggregate_to_arrays(
-            [], [{"hcp_id": "HCP_1", "trx_count": 1}], column="trx_count", reducer="sum"
+            [],
+            [{"hcp_id": "HCP_1", "triggers_delivered_count": 1}],
+            column="triggers_delivered_count",
+            reducer="sum",
         )
         assert control.size == 0 and treatment.size == 0
 
@@ -106,12 +109,12 @@ class TestAggregateToArrays:
         repo = _repo()
         assignments = [("HCP_1", "control"), ("HCP_2", "treatment")]
         rows = [
-            {"hcp_id": "HCP_1", "trx_count": 1},
-            {"hcp_id": "HCP_2", "trx_count": 2},
-            {"hcp_id": "HCP_999", "trx_count": 100},  # not assigned -> ignored
+            {"hcp_id": "HCP_1", "triggers_delivered_count": 1},
+            {"hcp_id": "HCP_2", "triggers_delivered_count": 2},
+            {"hcp_id": "HCP_999", "triggers_delivered_count": 100},  # not assigned -> ignored
         ]
         control, treatment = repo.aggregate_to_arrays(
-            assignments, rows, column="trx_count", reducer="sum"
+            assignments, rows, column="triggers_delivered_count", reducer="sum"
         )
         assert control.tolist() == [1.0]
         assert treatment.tolist() == [2.0]
@@ -156,7 +159,14 @@ class _FakeClient:
             return _FakeQuery([{"unit_id": "HCP_1", "variant": "control"}], [])
         # business_metrics
         return _FakeQuery(
-            [{"hcp_id": "HCP_1", "trx_count": 5, "metric_date": "2025-01-01", "brand": "Kisqali"}],
+            [
+                {
+                    "hcp_id": "HCP_1",
+                    "triggers_delivered_count": 5,
+                    "metric_date": "2025-01-01",
+                    "brand": "Kisqali",
+                }
+            ],
             self._bm_eq_log,
         )
 
@@ -172,7 +182,7 @@ class TestLoadArraysProvenance:
 
         bm_eq_log: list = []
         repo = ExperimentOutcomeRepository(supabase_client=_FakeClient(bm_eq_log))
-        asyncio.run(repo.load_arrays(uuid4(), "trx"))
+        asyncio.run(repo.load_arrays(uuid4(), "triggers_delivered"))
 
         assert ("is_synthetic", False) in bm_eq_log
 
@@ -184,6 +194,61 @@ class TestLoadArraysProvenance:
 
         bm_eq_log: list = []
         repo = ExperimentOutcomeRepository(supabase_client=_FakeClient(bm_eq_log))
-        asyncio.run(repo.load_arrays(uuid4(), "trx", include_synthetic=True))
+        asyncio.run(repo.load_arrays(uuid4(), "triggers_delivered", include_synthetic=True))
 
         assert ("is_synthetic", False) not in bm_eq_log
+
+
+class TestHonestTriggerColumns:
+    """Canonical TRx lane: per-HCP rows carry trigger funnel counts, not prescriptions.
+
+    Measured 2026-09-17 on prod: ml_experiments holds 1,068 rows and NONE has a
+    prediction_target among the eight prescription shorthands refused below, so
+    refusing them breaks no stored experiment. That
+    is a SNAPSHOT of today's data, not an invariant — a future row could use one,
+    and the refusal below is what makes that case loud instead of silently
+    measuring trigger deliveries as if they were prescriptions.
+    """
+
+    @pytest.mark.parametrize(
+        "metric,column",
+        [
+            ("triggers_delivered", "triggers_delivered_count"),
+            ("triggers_delivered_count", "triggers_delivered_count"),
+            ("triggers_accepted", "triggers_accepted_count"),
+            ("triggers_accepted_count", "triggers_accepted_count"),
+            ("triggers_total", "triggers_total_count"),
+            ("TRIGGERS_TOTAL", "triggers_total_count"),
+        ],
+    )
+    def test_trigger_counts_resolve_and_sum(self, metric, column):
+        from src.repositories.experiment_outcome import ExperimentOutcomeRepository
+
+        assert ExperimentOutcomeRepository.resolve_column(metric) == (column, "sum")
+
+    @pytest.mark.parametrize(
+        "metric",
+        [
+            "trx",
+            "nrx",
+            "rx",
+            "total_rx",
+            "TRx",
+            "trx_count",
+            "nrx_count",
+            "total_rx_count",
+        ],
+    )
+    def test_prescription_shorthands_are_refused(self, metric):
+        from src.repositories.experiment_outcome import ExperimentOutcomeRepository
+
+        with pytest.raises(ValueError, match="TRIGGER funnel counts"):
+            ExperimentOutcomeRepository.resolve_column(metric)
+
+    def test_rates_are_unchanged(self):
+        from src.repositories.experiment_outcome import ExperimentOutcomeRepository
+
+        assert ExperimentOutcomeRepository.resolve_column("conversion") == (
+            "conversion_rate",
+            "mean",
+        )
