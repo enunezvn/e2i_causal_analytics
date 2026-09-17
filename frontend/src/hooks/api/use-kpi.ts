@@ -282,14 +282,17 @@ export function useKPIHistoryMultiBrand(
 }
 
 /**
- * The Rx-volume KPI family (WS3-BI-005 TRx / WS3-BI-006 NRx / WS3-BI-007
- * NBRx) — the ONLY KPIs whose history carries the claims-lag nowcast overlay.
- * Mirrors the backend gate: /history/nowcast 422s every other family.
+ * The patient-panel Rx-event family (WS3-BI-011 TRx Panel / WS3-BI-012 NRx Panel /
+ * WS3-BI-013 NBRx Panel) — the ONLY KPIs whose history carries the claims-lag
+ * nowcast overlay and patient-axis splits. Mirrors the backend gate:
+ * /history/nowcast and /history/segmented 422 every other id, including the
+ * canonical TRx/NRx/NBRx (business_metrics has no claims-arrival plane or
+ * patient dimension).
  */
 export const RX_VOLUME_KPI_IDS: ReadonlySet<string> = new Set([
-  'WS3-BI-005',
-  'WS3-BI-006',
-  'WS3-BI-007',
+  'WS3-BI-011',
+  'WS3-BI-012',
+  'WS3-BI-013',
 ]);
 
 /**

@@ -81,6 +81,23 @@ export function resolveKpiId(kpiId: string): string {
 }
 
 /**
+ * Canonical TRx lane: patient-axis splits and the claims-lag nowcast exist only
+ * for the patient-panel Rx-event KPIs. A friendly `trx` / `nrx` / `nbrx` resolves
+ * to the CANONICAL id; when the ask carries a patient axis, the chart must use
+ * the panel id instead (and say it is the panel).
+ */
+export const PANEL_KPI_FOR_CANONICAL: Readonly<Record<string, string>> = {
+  'WS3-BI-005': 'WS3-BI-011',
+  'WS3-BI-006': 'WS3-BI-012',
+  'WS3-BI-007': 'WS3-BI-013',
+  'WS3-BI-008': 'WS3-BI-014',
+};
+
+export function toPanelKpiId(kpiId: string): string {
+  return PANEL_KPI_FOR_CANONICAL[kpiId] ?? kpiId;
+}
+
+/**
  * Normalize a free-text KPI reference to the alias key form: lowercase, with
  * runs of space / hyphen / underscore / slash collapsed to a single underscore.
  *

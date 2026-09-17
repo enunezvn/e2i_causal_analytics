@@ -26,7 +26,7 @@ vi.mock('@/hooks/api/use-kpi', () => ({
   useKPIHistoryNowcast: vi.fn(),
   useKPIMetadata: vi.fn(),
   useKPIList: vi.fn(),
-  RX_VOLUME_KPI_IDS: new Set(['WS3-BI-005', 'WS3-BI-006', 'WS3-BI-007']),
+  RX_VOLUME_KPI_IDS: new Set(['WS3-BI-011', 'WS3-BI-012', 'WS3-BI-013']),
 }));
 
 import {

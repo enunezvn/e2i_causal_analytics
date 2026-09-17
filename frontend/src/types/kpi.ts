@@ -417,8 +417,9 @@ export interface KPINowcastPoint {
 }
 
 /**
- * Claims-lag provisional/nowcast monthly series for one Rx-volume KPI
- * (WS3-BI-005 TRx / WS3-BI-006 NRx / WS3-BI-007 NBRx; other KPIs 422).
+ * Claims-lag provisional/nowcast monthly series for one patient-panel Rx-event
+ * KPI (WS3-BI-011 TRx Panel / WS3-BI-012 NRx Panel / WS3-BI-013 NBRx Panel;
+ * other KPIs 422, the canonical TRx/NRx/NBRx included).
  *
  * When the completion curve cannot be estimated honestly,
  * `insufficient_maturity` is true, `reason` says why and `points` is EMPTY —
