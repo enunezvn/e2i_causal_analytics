@@ -48,7 +48,7 @@ Claude-Session: https://claude.ai/code/session_01EsDCKhDjWEstrJe6HE13Ac
 | Dependents of `trx_count / nrx_count / total_rx_count` | 4 views (`v_train/v_test/v_validation/v_holdout_business_metrics`, `SELECT … trx_count, nrx_count, total_rx_count …`). Zero functions: `assign_truth_script_conversion` / `assign_truth_hcp_churn` match only the aliases `trx_count_window/prior` and `nrx_count_window` over `treatment_events`. `feast_business_metrics_seed` (migration 032) does not exist live. |
 | `ml_experiments.prediction_target` | no row uses `trx`, `nrx`, `rx`, `total_rx` or a column name (the values are cohort outcome names or empty) |
 | kpi_history | `UNIQUE (kpi_id, brand, region, metric_date)`. WS3-BI-005/006 = 740 rows and 007/008 = 555 rows, all `source='treatment_events.event_date'`. WS3-BI-010 ROI history already reaches the in-progress month 2026-09-01 (flagged, out of scope). |
-| Postgres | 15.8 (`ALTER VIEW … RENAME COLUMN` is available) |
+| Postgres | 15.8 (`CREATE OR REPLACE TRIGGER` is available — it is PG14+, and §0.9's expand relies on it to stay free of any `DROP`. The row used to cite `ALTER VIEW … RENAME COLUMN`, which the rejected rename design needed; it is still available and no longer used.) |
 | Migrations | latest is `database/migrations/142_*` → this lane uses **143** and **144** |
 | Deploy order | `.github/workflows/deploy.yml` runs `bash scripts/run_migrations.sh` **before** it pulls or recreates containers |
 | Feast | `feast` runs `flock … feast --chdir /feast apply --skip-source-validation` at start. The materializer is materialize-only. `feature_repo/` is bind-mounted, so a changed file needs a restart, not a rebuild. |
