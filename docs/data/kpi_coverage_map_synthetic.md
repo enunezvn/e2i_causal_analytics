@@ -12,15 +12,36 @@
 >
 > **2026-09-17 (canonical TRx lane, #2114):** WS3-BI-005..008 CHANGED SUBSTRATE.
 > They now read the canonical monthly `business_metrics` series via the
-> `canonical_volume_*` statements (migration 143, **not yet applied** — the live
-> registry holds 0 `canonical_volume%` rows), so their verdict is PENDING rather
-> than MAPPED: a MAPPED verdict there would be carried over from a substrate they
-> no longer read. The `treatment_events` substrate those four used to describe now
-> belongs to the patient-panel KPIs WS3-BI-011..014, whose rows below were probed
-> fresh rather than inherited — and the numbers differ (TRx 1238 -> 597, NRx/NBRx
-> 301 -> 114), so carrying them across would have published four wrong figures.
-> Re-run the probe after 143 is applied; it exits 1 while any row is EMPTY, but
-> NOTHING IN CI RUNS IT — the refresh is manual.
+> `canonical_volume_*` statements, and **migration 143 has been applied** — the
+> registry went 300 -> 334 statements. All four were re-probed after the apply.
+> The `treatment_events` substrate those four used to describe now belongs to the
+> patient-panel KPIs WS3-BI-011..014, whose rows below were probed fresh rather
+> than inherited — and the numbers differ (TRx 1238 -> 597, NRx/NBRx 301 -> 114),
+> so carrying them across would have published four wrong figures.
+>
+> **WS3-BI-007 canonical NBRx is EMPTY and stays EMPTY until the reseed.**
+> `business_metrics` holds **no `nbrx` rows at all** — not merely none in the
+> latest complete month. Measured 2026-09-17 synthetic-inclusive, the table's
+> whole metric_type set is `per_hcp_rollup`, `hcp_engagement_score`, `nrx`,
+> `trx`, `conversion_rate`, `market_share`; `trx`/`nrx` each hold 1,980 rows
+> spanning 2013-01 to 2026-09 and `nbrx` holds zero at every date. So canonical
+> NBRx serves NULL on the merged lane until Task 30's reseed populates it: the
+> reseed is a prerequisite, not a tidy-up.
+>
+> Canonical TRx share reads 0.6613 while the patient-panel share reads 0.3291.
+> Different substrates, and the canonical figure reconciles exactly: in
+> 2026-08 the three brands hold Kisqali 800,349.18 / Remibrutinib 271,044.15 /
+> Fabhalta 138,925.43, so Kisqali is 800,349.18 / 1,210,318.76 = 0.66127, digit
+> for digit what the statement returned, and the numerator is WS3-BI-005's own
+> TRx. Note this is share **of the three-brand portfolio**, which is what
+> migration 143 declares; the separately stored `market_share` metric_type reads
+> 0.4375 for the same brand and month and does **not** sum to 1 across the three
+> brands (0.79), so it is a share of a wider market — a different quantity, not a
+> disagreement with this one.
+>
+> Re-run the probe after any substrate change; it exits 1 while any row is EMPTY,
+> but NOTHING IN CI RUNS IT — the refresh is manual, which is why these rows went
+> stale within an hour of 143 being applied.
 >
 > Refresh with `E2I_DB_INTEGRATION=1 python scripts/check_kpi_coverage.py`
 > against the faithful docker Supabase, and see
@@ -29,7 +50,7 @@
 
 **Goal:** map every one of the 49 calculable KPIs in `config/kpi_definitions.yaml` to the
 synthetic substrate that makes it return **non-NULL**, and prove it on the faithful
-docker Supabase. **Result (re-measured 2026-09-17): 45/49 MAPPED, 4 PENDING migration 143, ZERO N/A.** (WS1-MP-008 was decommissioned in #1068 — needs protected-group fairness_metrics the substrate does not populate. WS1-DQ-008 "Label Quality (IAA)" was decommissioned in T8 by product decision — a working metric, κ≈0.76, removed from the live set; `v_kpi_label_quality` + `ml_annotations` retained in the DB. WS2-TR-009 "Trigger Funnel Conversion" was ADDED by the #1360 ruling, 2026-07-30 — its registry statement lands with migration 118; its MAPPED verdict below was measured by executing the migration-118 statement body read-only on the live DB pre-application.)
+docker Supabase. **Result (re-measured 2026-09-17, after migration 143 was applied): 48/49 MAPPED, 1 EMPTY (WS3-BI-007 canonical NBRx), ZERO N/A.** (WS1-MP-008 was decommissioned in #1068 — needs protected-group fairness_metrics the substrate does not populate. WS1-DQ-008 "Label Quality (IAA)" was decommissioned in T8 by product decision — a working metric, κ≈0.76, removed from the live set; `v_kpi_label_quality` + `ml_annotations` retained in the DB. WS2-TR-009 "Trigger Funnel Conversion" was ADDED by the #1360 ruling, 2026-07-30 — its registry statement lands with migration 118; its MAPPED verdict below was measured by executing the migration-118 statement body read-only on the live DB pre-application.)
 
 Reproduce:
 
@@ -39,8 +60,8 @@ PYTHONPATH=$(pwd) LOKY_MAX_CPU_COUNT=1 \
   dotenv -f /path/to/.env run -- python scripts/load_synthetic_data.py --small --anchor-to-now
 # probe all 49 KPIs against the faithful DB:
 E2I_DB_INTEGRATION=1 python scripts/check_kpi_coverage.py
-# -> TOTAL 49  MAPPED 45  EMPTY 4  N/A 0   (measured 2026-09-17; exit 1)
-# (WS2-TR-009 requires migration 118; WS3-BI-005..008 require migration 143)
+# -> TOTAL 49  MAPPED 48  EMPTY 1  N/A 0   (measured 2026-09-17 post-143; exit 1)
+# (WS2-TR-009 requires migration 118; the one EMPTY is canonical NBRx, awaiting the reseed)
 ```
 
 ## How a KPI is proven
@@ -93,10 +114,10 @@ on the faithful docker DB after a `--small --anchor-to-now` load.
 | WS3-BI-002 | Weekly Active Users | `user_sessions` → `v_kpi_active_users` / wau fallback (Task 5) | MAPPED | wau=30 |
 | WS3-BI-003 | Patient Touch Rate | `triggers`+`patient_journeys` → `business_impact_patient_touch_rate` (Shard 05/06) | MAPPED | touch_rate=0.916 |
 | WS3-BI-004 | HCP Coverage | `hcp_profiles.coverage_status` → `business_impact_hcp_coverage` | MAPPED | coverage=52.3 (pre-099 probe: unscoped numerator; migration 099 re-scoped both sides to `priority_tier <= 2` and healed synthetic tier/coverage data) |
-| WS3-BI-005 | Total Prescriptions (TRx) | `business_metrics.value` (metric_type='trx', latest complete month) → `canonical_volume_trx` (migration 143) | PENDING: migration 143 not applied | `kpi_query: unknown query_id canonical_volume_trx` (measured 2026-09-17; 0 `canonical_volume%` rows in `kpi_query_registry`) |
-| WS3-BI-006 | New Prescriptions (NRx) | `business_metrics.value` (metric_type='nrx', latest complete month) → `canonical_volume_nrx` (migration 143) | PENDING: migration 143 not applied | `unknown query_id canonical_volume_nrx` (measured 2026-09-17) |
-| WS3-BI-007 | New-to-Brand Rx (NBRx) | `business_metrics.value` (metric_type='nbrx', latest complete month) → `canonical_volume_nbrx` (migration 143) | PENDING: migration 143 not applied | `unknown query_id canonical_volume_nbrx` (measured 2026-09-17) |
-| WS3-BI-008 | TRx Share | `business_metrics.value` (brand trx / portfolio trx, latest complete month) → `canonical_volume_trx_share` (migration 143) | PENDING: migration 143 not applied | `unknown query_id canonical_volume_trx_share` (measured 2026-09-17) |
+| WS3-BI-005 | Total Prescriptions (TRx) | `business_metrics.value` (metric_type='trx', latest complete month) → `canonical_volume_trx` (migration 143) | MAPPED | trx=800349.18 data_month=2026-08-01 data_through=2026-08-31 (measured 2026-09-17, post-143) |
+| WS3-BI-006 | New Prescriptions (NRx) | `business_metrics.value` (metric_type='nrx', latest complete month) → `canonical_volume_nrx` (migration 143) | MAPPED | nrx=250988.81 data_month=2026-08-01 (measured 2026-09-17, post-143) |
+| WS3-BI-007 | New-to-Brand Rx (NBRx) | `business_metrics.value` (metric_type='nbrx', latest complete month) → `canonical_volume_nbrx` (migration 143) | EMPTY: business_metrics holds no nbrx rows at all | nbrx=null (measured 2026-09-17, post-143). Not a month-alignment artifact: the table's metric_type set is per_hcp_rollup, hcp_engagement_score, nrx, trx, conversion_rate, market_share — there is NO nbrx row at any date. Task 30's reseed must populate it. |
+| WS3-BI-008 | TRx Share | `business_metrics.value` (brand trx / portfolio trx, latest complete month) → `canonical_volume_trx_share` (migration 143) | MAPPED | share=0.6613 (measured 2026-09-17, post-143; Kisqali 800349.18 of a 1210318.76 three-brand portfolio — reconciles exactly, see header) |
 | WS3-BI-009 | Conversion Rate | `triggers`+`treatment_events` → `business_impact_conversion_rate` (Shard 05) | MAPPED | conversion=0.615 |
 | WS3-BI-010 | Return on Investment | `business_metrics.roi` → `business_impact_roi_business_metrics` (Shard 02) | MAPPED | avg_roi=1.888 |
 | WS3-BI-011 | Observed Rx Events - Patient Panel TRx | `treatment_events.event_type='prescription'` → `business_impact_trx` (Shard 05) | MAPPED | trx=597 data_through=2026-09-14 (measured 2026-09-17) |
