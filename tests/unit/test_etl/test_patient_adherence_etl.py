@@ -4,11 +4,15 @@ These tests do not touch a real database. They verify:
 
 * ``_compute_adherence_rate`` mirrors the SQL clamp-and-divide for every
   edge case (zero span, NULL inputs, ratio overflow).
-* The SQL string contains the load-bearing CTEs, parameter placeholders,
-  the ``LEAST/GREATEST`` clamp, the ``LAG``-based gap computation, the
-  ``UPDATE...FROM`` shape, the in-subquery ``patient_id IN (...)`` predicate
-  (so the planner filters before LAG runs), and the explicit "refill_count
-  NOT set" comment.
+* The SQL string contains the load-bearing CTE, parameter placeholders,
+  the ``CASE`` that returns NULL for an uncomputable ratio, the
+  ``LEAST/GREATEST`` clamp, the ``COALESCE`` that keeps a stored value, the
+  ``IS DISTINCT FROM`` predicate that skips unchanged rows, the
+  ``UPDATE...FROM`` shape, and the explicit "refill_count NOT set" comment.
+  Canonical TRx lane, owner decision #6: six tests that pinned the ``gap_days``
+  trigger walk were deleted with it — the synthetic DGP owns that column, so
+  there is nothing here for this ETL to assert about it beyond
+  ``test_the_etl_does_not_write_gap_days_and_does_not_read_triggers``.
 * ``_run_patient_adherence_impl`` orchestrates the connect/execute/commit/
   close flow correctly with mocks, and surfaces ``status`` / ``rows_affected``
   faithfully. The Celery wrapper ``run_patient_adherence_rollup`` is a thin
@@ -18,8 +22,8 @@ These tests do not touch a real database. They verify:
   (the canonical tests live in ``test_common.py`` since extraction in
   6B-infra-2b fix-up).
 
-Behaviour-level assertions about exact gap counts and adherence ratios on
-real synthetic data live in
+Behaviour-level assertions about adherence ratios on real synthetic data — and
+about the planted ``gap_days`` this ETL must leave alone — live in
 ``tests/integration/test_patient_adherence_etl_integration.py``.
 """
 
@@ -156,42 +160,6 @@ class TestSQLShape:
             normalised,
         ), "missing NULLIF guard around the journey span subtraction"
 
-    def test_gap_days_uses_lag_window_function(self) -> None:
-        """gap_days computed via LAG(...) over patient-partitioned trigger
-        timestamps — single-event patients yield NULL → COALESCE to 0."""
-        sql = etl.UPDATE_PATIENT_ADHERENCE_SQL
-        normalised = re.sub(r"\s+", " ", sql)
-        assert "LAG(trigger_timestamp)" in normalised
-        assert "PARTITION BY patient_id" in normalised
-        assert "ORDER BY trigger_timestamp" in normalised
-
-    def test_gap_days_coalesces_to_zero_for_single_event(self) -> None:
-        """Plan: single-event patients (gap_days=0). Ensured by COALESCE."""
-        normalised = re.sub(r"\s+", " ", etl.UPDATE_PATIENT_ADHERENCE_SQL)
-        # COALESCE(MAX(...)::INTEGER, 0)
-        assert re.search(
-            r"COALESCE\(\s*MAX\(",
-            normalised,
-        ), "missing COALESCE around MAX(...) for single-event patients"
-        assert re.search(r",\s*0\s*\)\s*AS\s+gap_days", normalised), (
-            "COALESCE must default to 0 for single-event patients"
-        )
-
-    def test_gap_days_uses_epoch_division_for_seconds_to_days(self) -> None:
-        """EPOCH/86400 conversion preserves sub-day precision then truncates,
-        whereas EXTRACT(DAY FROM interval) drops hours+minutes."""
-        normalised = re.sub(r"\s+", " ", etl.UPDATE_PATIENT_ADHERENCE_SQL)
-        assert re.search(
-            r"EXTRACT\(\s*EPOCH FROM gap\s*\)::BIGINT\s*/\s*86400",
-            normalised,
-        ), "missing EPOCH/86400 conversion"
-
-    def test_update_uses_left_join_to_keep_no_trigger_journeys(self) -> None:
-        """Journeys with no triggers must still get adherence_rate updated;
-        gap_days falls out as NULL via the LEFT JOIN."""
-        sql = etl.UPDATE_PATIENT_ADHERENCE_SQL
-        assert "LEFT JOIN patient_gaps pg" in sql
-
     def test_filters_journey_window_on_journey_start_date(self) -> None:
         """Window scope on patient_journeys is journey_start_date — avoids
         rewriting old static journeys on every daily run."""
@@ -202,54 +170,6 @@ class TestSQLShape:
         assert re.search(r"pj\.journey_start_date\s*<\s*%\(end_date\)s", sql), (
             "missing pj.journey_start_date < end_date filter"
         )
-
-    def test_filters_trigger_window_on_trigger_timestamp(self) -> None:
-        """Window scope on triggers is trigger_timestamp [start, end)."""
-        sql = etl.UPDATE_PATIENT_ADHERENCE_SQL
-        assert re.search(r"trigger_timestamp\s*>=\s*%\(start_date\)s", sql), (
-            "missing trigger_timestamp >= start_date filter"
-        )
-        assert re.search(r"trigger_timestamp\s*<\s*%\(end_date\)s", sql), (
-            "missing trigger_timestamp < end_date filter"
-        )
-
-    def test_patient_id_predicate_lives_inside_lag_subquery(self) -> None:
-        """The ``patient_id IN (SELECT patient_id FROM patient_journeys ...)``
-        predicate must sit INSIDE the inner LAG-bearing subquery, alongside
-        the trigger_timestamp window — not on the outer ``WHERE`` of the
-        ``patient_gaps`` CTE.
-
-        PostgreSQL is not guaranteed to push an outer predicate through a
-        window function; pinning the placement here keeps the planner free
-        to filter trigger rows BEFORE LAG runs (latency-safe on large
-        ``triggers`` tables).
-        """
-        sql = etl.UPDATE_PATIENT_ADHERENCE_SQL
-        normalised = re.sub(r"\s+", " ", sql)
-
-        # The predicate must appear once.
-        assert "patient_id IN ( SELECT patient_id FROM patient_journeys" in normalised, (
-            "missing patient_id IN (SELECT patient_id FROM patient_journeys ...) predicate"
-        )
-
-        # And it must appear BEFORE the closing ``) lag_view`` of the inner
-        # subquery — i.e. inside it, not on the outer ``patient_gaps`` WHERE.
-        predicate_idx = normalised.index("patient_id IN ( SELECT patient_id FROM patient_journeys")
-        lag_view_close_idx = normalised.index(") lag_view")
-        assert predicate_idx < lag_view_close_idx, (
-            "patient_id IN (...) predicate must live inside the inner "
-            "LAG-bearing subquery (before the `) lag_view` closer), not on "
-            "the outer patient_gaps WHERE"
-        )
-
-        # Belt-and-braces: the segment between ``FROM triggers`` and
-        # ``) lag_view`` should contain both the trigger_timestamp window AND
-        # the patient_id IN predicate (proving they're co-located inside the
-        # inner subquery).
-        from_triggers_idx = normalised.index("FROM triggers")
-        inner_subquery = normalised[from_triggers_idx:lag_view_close_idx]
-        assert "trigger_timestamp >= %(start_date)s" in inner_subquery
-        assert "patient_id IN ( SELECT patient_id FROM patient_journeys" in inner_subquery
 
     def test_refill_count_left_null_with_documenting_comment(self) -> None:
         """refill_count is intentionally NOT in the SET list — and the SQL

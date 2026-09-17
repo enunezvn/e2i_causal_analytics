@@ -1,16 +1,24 @@
-"""Per-patient adherence / refill / gap ETL (block 6B-infra-2b).
+"""Per-patient adherence ETL (block 6B-infra-2b).
 
-Populates three columns on ``patient_journeys`` that migration 033 added:
+Writes ONE of the three columns migration 033 added to ``patient_journeys``:
 
 * ``adherence_rate NUMERIC`` — proxy for medication possession ratio. Computed
   as ``journey_duration_days / (journey_end_date - journey_start_date)``
   clamped to ``[0, 1]``. The ratio is a stand-in until real claims data is
   ingested; it captures whether the journey covers most of its declared span.
+  Written only where it is computable; see the edge cases below.
 * ``refill_count INTEGER`` — count of refill events. **Left NULL** in this
   ETL because the canonical v3 schema has no first-class refill concept
   (see "refill_count is intentionally NULL" below).
-* ``gap_days INTEGER`` — maximum gap (in days) between consecutive triggers
-  for the same patient.
+* ``gap_days INTEGER`` — **not written by this ETL** (canonical TRx lane,
+  owner decision #6 revised by codex r13-05). The synthetic DGP owns the
+  column and snaps it to the recoverable binary ``low_gap_180d``
+  (``gap_days <= 30 ⇔ low_gap_180d = 1``, exact on the 26,600 live rows this
+  ETL never touched). What this ETL used to compute was a different quantity —
+  the maximum interval between a patient's consecutive TRIGGERS — and 13,272
+  journeys belong to a patient with a single trigger, where that walk yields 0
+  and would have broken the DGP contract. A trigger-interval statistic, if a
+  consumer ever asks for one, belongs in its own column under its own name.
 
 This mirrors the shape of ``business_metrics_per_hcp_etl`` (block
 6B-infra-2a) so the two ETLs read the same way: pure-SQL CTE, deterministic
@@ -40,21 +48,31 @@ then re-enable this column. This matches how 6B-infra-2a left
 
 Edge-case behaviour for ``adherence_rate``
 ------------------------------------------
-* ``journey_end_date IS NULL`` → ``DATE - DATE`` is NULL → NULLIF(NULL, 0)
-  is NULL → division yields NULL → LEAST/GREATEST(NULL) is NULL.
-* ``journey_end_date == journey_start_date`` → 0 → NULLIF(0, 0) is NULL →
-  NULL. (This is the "zero-duration journeys" case the plan calls out.)
-* ``journey_duration_days IS NULL`` → numerator NULL → result NULL.
+* ``journey_end_date IS NULL`` → the value is NOT computable. An explicit CASE
+  returns NULL and the UPDATE then KEEPS the existing value.
+  (Canonical TRx lane, owner decision #6: PostgreSQL's ``LEAST``/``GREATEST``
+  IGNORE NULLs — ``LEAST(1.0, NULL)`` is 1.0 and ``GREATEST(0.0, NULL)`` is 0.0 —
+  so the old clamp silently wrote 0.0 here. Every journey in the live table has a
+  NULL end date, and it zeroed 20 of them, 6 of which then contradicted their
+  ``adherent_180d`` binary. This ETL is not the only writer of these columns: the
+  synthetic DGP writes them too, snapped to the recoverable binaries
+  (``src/ml/synthetic/dgp/adherence_outcomes.py``). An ETL that cannot compute a
+  value must leave the existing one alone.)
+* ``journey_end_date == journey_start_date`` → zero span → NOT computable →
+  NULL → existing value kept. (The "zero-duration journeys" case the plan
+  calls out; the old clamp wrote 0.0 here too, for the same reason.)
+* ``journey_duration_days IS NULL`` → NOT computable → NULL → existing value
+  kept.
+* Computable but out of range → the ``LEAST``/``GREATEST`` clamp still applies.
 
-Edge-case behaviour for ``gap_days``
-------------------------------------
-* Patient with one trigger → ``LAG(...)`` returns NULL on the only row →
-  ``MAX(NULL)`` is NULL → ``COALESCE(MAX(...), 0)`` yields 0. (Plan: "single-
-  event patients (gap_days=0)".)
-* Patient with no triggers → no row in ``patient_gaps`` CTE → LEFT JOIN
-  produces NULL → ``gap_days`` left NULL. There is no data to compute over,
-  so NULL is the correct outcome (distinct from "0 because we observed one
-  event").
+An UPDATE that writes the value already stored is skipped entirely: the
+``WHERE`` requires the resulting value to be ``IS DISTINCT FROM`` the stored one.
+``patient_journeys`` carries an unconditional ``BEFORE UPDATE`` trigger
+(``update_patient_journeys_timestamp`` → ``update_updated_at()``, whose whole body
+is ``NEW.updated_at = NOW(); RETURN NEW;``), so a value-preserving write would
+still move ~153 real timestamps on every scheduled run and change nothing
+(codex r14-02). ``IS DISTINCT FROM`` and not ``<>``, because both sides are
+nullable and ``NULL <> NULL`` is NULL — which would skip nothing.
 """
 
 from __future__ import annotations
@@ -85,6 +103,12 @@ logger = logging.getLogger(__name__)
 #: supplied. 24 hours matches the Celery beat cadence below.
 DEFAULT_WINDOW_HOURS: int = 24
 
+#: Scheduled runs select journeys from ARRIVALS over one weekly batch cycle plus margin,
+#: like the per-HCP and territory rollups. Redeclared (not imported) to keep the ETLs
+#: separable; a unit test pins all three equal (canonical TRx lane, owner decision #6).
+ARRIVAL_MARGIN_HOURS: int = 6
+ARRIVAL_WINDOW_HOURS: int = 7 * 24 + ARRIVAL_MARGIN_HOURS
+
 #: Celery queue this task runs on. Routed to ``worker_medium`` per existing
 #: ``task_routes`` config in ``src.workers.celery_app``.
 TASK_QUEUE: str = "analytics"
@@ -94,103 +118,92 @@ TASK_QUEUE: str = "analytics"
 # SQL
 # -----------------------------------------------------------------------------
 
-# Single UPDATE statement composed of two CTEs: ``journey_adherence`` (the
-# clamp-and-divide derivation) and ``patient_gaps`` (the LAG-based gap
-# computation). The UPDATE-FROM with LEFT JOIN keeps every journey in the
-# window so journeys whose patients have zero triggers still get
-# ``adherence_rate`` populated (with ``gap_days`` NULL).
+# Single UPDATE statement over ONE CTE, ``journey_adherence`` (the clamp-and-divide
+# derivation). The ``patient_gaps`` CTE and its whole LAG-based trigger walk are gone
+# with the ``gap_days`` write (codex r13-05, see the module docstring): this ETL no
+# longer reads ``triggers`` at all.
 #
-# Window scope: ``patient_journeys.journey_start_date`` is the gating key for
-# adherence (so old static journeys aren't rewritten on every daily run) and
-# ``triggers.trigger_timestamp`` for the gap CTE (so we only walk recent
-# trigger history). Both use the same ``[start_date, end_date)`` half-open
-# interval the unit tests pin.
+# Two variants are composed from one template. They differ ONLY in how they select
+# journeys and are identical after ``UPDATE patient_journeys``, which a unit test pins.
 #
-# Clamp: PostgreSQL's ``LEAST`` / ``GREATEST`` propagate NULL through —
-# ``LEAST(1.0, NULL)`` is NULL — which preserves the "NULL means undefined"
-# semantics for zero-duration journeys without an explicit CASE. Verified in
-# unit tests.
+# Selection (canonical TRx lane, owner decision #6): a scheduled run takes journeys
+# that ARRIVED in the window; an explicit ``[start_date, end_date)`` run keeps the
+# ``journey_start_date`` window. Journeys arrive in a weekly batch (created − start up
+# to 6 d 03:00:52), so the old 24 h ``journey_start_date`` window reached Monday
+# journeys only, which is why exactly 20 rows were ever zeroed. Unlike the per-HCP and
+# territory rollups, no trigger-arrival term is needed: the one column this ETL still
+# writes depends on journey fields alone.
+#
+# Clamp: PostgreSQL's ``LEAST`` / ``GREATEST`` IGNORE NULLs — ``LEAST(1.0, NULL)`` is
+# 1.0, ``GREATEST(0.0, NULL)`` is 0.0 — so the clamp ALONE returned 0.0 for an
+# undefined ratio, against this module's own docstring, its Python twin and its tests.
+# The explicit CASE below returns NULL instead, and the UPDATE coalesces it to the
+# stored value. The clamp is kept for a computable but out-of-range ratio.
 #
 # refill_count: not populated by this UPDATE. The ``SET`` clause omits the
 # column entirely so existing values stay intact (currently always NULL post-
 # migration 033). The SQL comment at the SET line documents why.
-UPDATE_PATIENT_ADHERENCE_SQL: str = """
+_ADHERENCE_SELECTION_BY_WINDOW: str = """    WHERE pj.journey_start_date >= %(start_date)s
+      AND pj.journey_start_date <  %(end_date)s"""
+
+_ADHERENCE_SELECTION_BY_ARRIVAL: str = """    WHERE pj.created_at >= %(start_date)s
+      AND pj.created_at <  %(end_date)s"""
+
+_UPDATE_PATIENT_ADHERENCE_TEMPLATE: str = """
 WITH journey_adherence AS (
     SELECT
         pj.patient_journey_id,
-        pj.patient_id,
-        -- adherence_rate = duration / span, clamped to [0, 1]. NULLs propagate
-        -- through LEAST/GREATEST so zero-duration journeys (NULLIF==NULL) and
-        -- open-ended journeys (NULL end date) return NULL, matching the plan.
-        LEAST(
-            1.0::NUMERIC,
-            GREATEST(
-                0.0::NUMERIC,
-                pj.journey_duration_days::NUMERIC
-                / NULLIF(
-                    (pj.journey_end_date - pj.journey_start_date)::NUMERIC,
-                    0
+        -- adherence_rate = duration / span, clamped to [0, 1], or NULL when it is not
+        -- computable. The CASE is load-bearing: LEAST/GREATEST IGNORE NULLs, so without
+        -- it an open-ended journey (NULL end date) yields 0.0, not NULL.
+        CASE
+            WHEN pj.journey_duration_days IS NULL
+              OR pj.journey_end_date IS NULL
+              OR (pj.journey_end_date - pj.journey_start_date) = 0
+            THEN NULL
+            ELSE LEAST(
+                1.0::NUMERIC,
+                GREATEST(
+                    0.0::NUMERIC,
+                    pj.journey_duration_days::NUMERIC
+                    / NULLIF(
+                        (pj.journey_end_date - pj.journey_start_date)::NUMERIC,
+                        0
+                    )
                 )
             )
-        ) AS adherence_rate
+        END AS adherence_rate
     FROM patient_journeys pj
-    WHERE pj.journey_start_date >= %(start_date)s
-      AND pj.journey_start_date <  %(end_date)s
-),
-patient_gaps AS (
-    -- Per-patient max consecutive-trigger gap, in whole days.
-    -- LAG on the ordered timestamp series; the first row's lag is NULL, so a
-    -- single-event patient yields MAX(NULL) = NULL, then COALESCE pins it to 0
-    -- (plan: "single-event patients (gap_days=0)").
-    --
-    -- The patient_id IN (...) predicate sits INSIDE the LAG-bearing subquery
-    -- (alongside the trigger_timestamp window) rather than wrapping it on the
-    -- outside. PostgreSQL is not guaranteed to push an outer predicate
-    -- through a window function, and on a large `triggers` table the
-    -- difference matters: filtering BEFORE LAG runs lets the planner skip
-    -- whole patient partitions, whereas an outer filter forces LAG over
-    -- every patient first and then discards rows. Correctness is identical
-    -- either way; latency is not.
-    SELECT
-        patient_id,
-        COALESCE(
-            MAX(
-                EXTRACT(EPOCH FROM gap)::BIGINT / 86400
-            )::INTEGER,
-            0
-        ) AS gap_days
-    FROM (
-        SELECT
-            patient_id,
-            trigger_timestamp - LAG(trigger_timestamp) OVER (
-                PARTITION BY patient_id ORDER BY trigger_timestamp
-            ) AS gap
-        FROM triggers
-        WHERE trigger_timestamp >= %(start_date)s
-          AND trigger_timestamp <  %(end_date)s
-          -- Restrict to patients touched by the journey window so this CTE
-          -- doesn't balloon to all triggers in the DB. Lives inside the
-          -- inner subquery (not wrapped outside) so it filters rows BEFORE
-          -- LAG runs.
-          AND patient_id IN (
-              SELECT patient_id FROM patient_journeys
-               WHERE journey_start_date >= %(start_date)s
-                 AND journey_start_date <  %(end_date)s
-          )
-    ) lag_view
-    GROUP BY patient_id
+__SELECTION__
 )
 UPDATE patient_journeys pj
-SET adherence_rate = ja.adherence_rate,
+-- COALESCE: keep the stored value when this ETL cannot compute one. gap_days is NOT set
+-- here at all (codex r13-05): the synthetic DGP owns it and snaps it to low_gap_180d,
+-- and this ETL's trigger-interval quantity is a different concept.
+SET adherence_rate = COALESCE(ja.adherence_rate, pj.adherence_rate)
     -- refill_count intentionally not set here: the canonical v3 schema has no
     -- 'refill_reminder' trigger_type and no prescription_refills table. A
     -- future block lands a refill source and re-enables this column. See the
     -- module docstring for the full rationale.
-    gap_days = pg.gap_days
 FROM journey_adherence ja
-LEFT JOIN patient_gaps pg ON pg.patient_id = ja.patient_id
-WHERE pj.patient_journey_id = ja.patient_journey_id;
+WHERE pj.patient_journey_id = ja.patient_journey_id
+  -- codex r14-02: COALESCE preserves the VALUE, but an UPDATE that writes the same value
+  -- is still an UPDATE, and the BEFORE UPDATE trigger update_patient_journeys_timestamp
+  -- bumps updated_at unconditionally. Every journey currently has a NULL journey_end_date,
+  -- so without this predicate every scheduled run would rewrite ~153 real timestamps and
+  -- change nothing. IS DISTINCT FROM, not <>: both sides are nullable.
+  AND COALESCE(ja.adherence_rate, pj.adherence_rate) IS DISTINCT FROM pj.adherence_rate;
 """
+
+#: Explicit ``start_date``/``end_date`` (manual backfills): journeys by journey_start_date.
+UPDATE_PATIENT_ADHERENCE_SQL: str = _UPDATE_PATIENT_ADHERENCE_TEMPLATE.replace(
+    "__SELECTION__", _ADHERENCE_SELECTION_BY_WINDOW
+)
+
+#: Scheduled run (no dates): journeys that ARRIVED in the window.
+UPDATE_PATIENT_ADHERENCE_BY_ARRIVAL_SQL: str = _UPDATE_PATIENT_ADHERENCE_TEMPLATE.replace(
+    "__SELECTION__", _ADHERENCE_SELECTION_BY_ARRIVAL
+)
 
 
 # -----------------------------------------------------------------------------
@@ -241,8 +254,9 @@ def _run_patient_adherence_impl(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     request_id: str = "no-task-id",
+    arrived_before: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Pure-Python core of the per-patient adherence/refill/gap ETL.
+    """Pure-Python core of the per-patient adherence ETL.
 
     Split out from the Celery task so unit/integration tests can call it
     without poking at Celery internals. ``request_id`` is the Celery task
@@ -255,13 +269,24 @@ def _run_patient_adherence_impl(
         end_date: ISO datetime/date for window end (exclusive). Defaults to
             now (UTC).
         request_id: identifier surfaced in log lines.
+        arrived_before: end of the ARRIVAL window when no dates are given
+            (defaults to now, UTC); refused together with start_date/end_date.
 
     Returns:
         Dict with ``status``, ``rows_affected``, ``window_start``,
-        ``window_end``, and on failure an ``error`` field.
+        ``window_end``, ``selected_by``, and on failure an ``error`` field.
     """
+    by_arrival = start_date is None and end_date is None
+    selected_by = "arrival" if by_arrival else "journey_start_date"
     try:
-        start_dt, end_dt = _resolve_window(start_date, end_date)
+        if arrived_before is not None and not by_arrival:
+            raise ValueError("arrived_before cannot be combined with start_date/end_date")
+        if by_arrival:
+            start_dt, end_dt = _resolve_window(
+                None, arrived_before, default_lookback_seconds=ARRIVAL_WINDOW_HOURS * 3600
+            )
+        else:
+            start_dt, end_dt = _resolve_window(start_date, end_date)
     except ValueError as e:
         logger.error(
             "Invalid window for run_patient_adherence_rollup [%s]: %s",
@@ -274,11 +299,14 @@ def _run_patient_adherence_impl(
             "rows_affected": 0,
             "window_start": start_date,
             "window_end": end_date,
+            "selected_by": selected_by,
         }
+    sql = UPDATE_PATIENT_ADHERENCE_BY_ARRIVAL_SQL if by_arrival else UPDATE_PATIENT_ADHERENCE_SQL
 
     logger.info(
-        "Starting per-patient adherence rollup [%s]: window=[%s, %s)",
+        "Starting per-patient adherence rollup [%s]: selected_by=%s window=[%s, %s)",
         request_id,
+        selected_by,
         start_dt.isoformat(),
         end_dt.isoformat(),
     )
@@ -293,12 +321,27 @@ def _run_patient_adherence_impl(
         conn = _connect_to_db()
         with conn:  # transactional: commits on exit, rolls back on exception
             with conn.cursor() as cur:
-                cur.execute(UPDATE_PATIENT_ADHERENCE_SQL, params)
+                cur.execute(sql, params)
                 rows_affected = cur.rowcount
 
+        # codex r14-05: emitted on BOTH outcomes and only after `with conn:` has exited,
+        # i.e. after the commit. A run that fails in _connect_to_db or in the SQL never
+        # reaches this line, which is what makes it certification evidence rather than an
+        # announcement of intent. Everything needed to correlate it is on the one line,
+        # because the start line may have rotated away.
+        logger.info(
+            "Per-patient adherence rollup committed [%s]: selected_by=%s window=[%s, %s) rows_affected=%d",
+            request_id,
+            selected_by,
+            start_dt.isoformat(),
+            end_dt.isoformat(),
+            rows_affected,
+        )
+
         if rows_affected == 0:
-            logger.warning(
-                "No journeys to update for window [%s, %s) [%s]",
+            # Not an error after r14-02: a run that finds nothing to change writes nothing.
+            logger.info(
+                "No journeys needed an adherence update for window [%s, %s) [%s]",
                 start_dt.isoformat(),
                 end_dt.isoformat(),
                 request_id,
@@ -308,6 +351,7 @@ def _run_patient_adherence_impl(
                 "rows_affected": 0,
                 "window_start": start_dt.isoformat(),
                 "window_end": end_dt.isoformat(),
+                "selected_by": selected_by,
             }
 
         logger.info(
@@ -320,6 +364,7 @@ def _run_patient_adherence_impl(
             "rows_affected": rows_affected,
             "window_start": start_dt.isoformat(),
             "window_end": end_dt.isoformat(),
+            "selected_by": selected_by,
         }
 
     except Exception as e:
@@ -334,6 +379,7 @@ def _run_patient_adherence_impl(
             "rows_affected": 0,
             "window_start": start_dt.isoformat(),
             "window_end": end_dt.isoformat(),
+            "selected_by": selected_by,
         }
 
     finally:
