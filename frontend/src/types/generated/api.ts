@@ -3524,7 +3524,7 @@ export interface paths {
         };
         /**
          * Get KPI history split by patient axis (severity tier / line of therapy)
-         * @description Monthly KPI series per axis bucket, computed live from the vetted kpi_query registry (migration 110) — NOT from the materialized kpi_history table, which has no patient-segment dimension. Month bucketing and partial-edge-month trimming mirror the history backfill, so the bucket series partition the headline series. Only the Rx-volume family (WS3-BI-005 TRx, WS3-BI-006 NRx, WS3-BI-007 NBRx) supports axes.
+         * @description Monthly KPI series per axis bucket, computed live from the vetted kpi_query registry (migration 110) — NOT from the materialized kpi_history table, which has no patient-segment dimension. Month bucketing and partial-edge-month trimming mirror the history backfill, so the bucket series partition the headline series. Only the patient-panel Rx-event family (WS3-BI-011 TRx Panel, WS3-BI-012 NRx Panel, WS3-BI-013 NBRx Panel) supports axes.
          */
         get: operations["get_kpi_history_segmented"];
         put?: never;
@@ -3544,7 +3544,7 @@ export interface paths {
         };
         /**
          * Get KPI history with claims-lag provisional/nowcast overlay
-         * @description Monthly mature / provisional / nowcast series for the Rx-volume family (WS3-BI-005 TRx, WS3-BI-006 NRx, WS3-BI-007 NBRx), computed live from the migration-116 claims-arrival lag triangle (backlog #45) — NOT from the materialized kpi_history table, whose figures stay the mature values. The completion factor is re-estimated empirically from mature service months (chain-ladder); when that cannot be done honestly the response says insufficient_maturity=true with a reason and carries no nowcast values.
+         * @description Monthly mature / provisional / nowcast series for the patient-panel Rx-event family (WS3-BI-011 TRx Panel, WS3-BI-012 NRx Panel, WS3-BI-013 NBRx Panel), computed live from the migration-116 claims-arrival lag triangle (backlog #45) — NOT from the materialized kpi_history table, whose figures stay the mature values. The completion factor is re-estimated empirically from mature service months (chain-ladder); when that cannot be done honestly the response says insufficient_maturity=true with a reason and carries no nowcast values.
          */
         get: operations["get_kpi_history_nowcast"];
         put?: never;
@@ -4878,7 +4878,7 @@ export interface paths {
          * @description REST exposure of the real business_metrics KPI rollup.
          *
          *     Thin wrapper over the existing :func:`get_kpi_summary` (also registered as a
-         *     CopilotAction) so the Home QUICK_STATS bar can read Total TRx (MTD) and
+         *     CopilotAction) so the Home QUICK_STATS bar can read Total TRx (latest full month) and
          *     HCPs Reached directly. Returns ``{brand, period, metrics, data_source}``;
          *     ``data_source`` is ``"database"`` for real values, ``"fallback"`` otherwise.
          *     When ``region`` is supplied the metrics re-scope to that region (migration
