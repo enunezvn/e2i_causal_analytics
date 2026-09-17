@@ -34,9 +34,11 @@ class _FakeCalc:
 
     def __init__(self, table):
         self._table = table
+        self.contexts = []
 
     def calculate(self, kpi_id, context=None):
         context = context or {}
+        self.contexts.append(dict(context))
         if context.get("brand") != "Remibrutinib":
             return {"value": None}
         key = context.get("segment") or context.get("therapy_line") or None
@@ -81,6 +83,88 @@ async def test_analyze_fails_closed_when_no_population():
     assert out["status"] == "failed"
     assert out["narrative"] == ""
     assert out["errors"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query",
+    (
+        "profile Xolair patients",
+        "profile HCPs prescribing Xolair",
+    ),
+)
+async def test_resolved_unsupported_brand_fails_before_patient_or_hcp_queries(query):
+    """A named unsupported brand is not the same request as no brand.
+
+    Exercise the real resolver-to-agent seam: structured chat context may carry
+    a brand outside this agent's allowlist, and the agent must reject it before
+    either its patient calculator or HCP allowlist-RPC path can silently widen
+    the request to every supported brand.
+    """
+    from src.agents.orchestrator.nodes.dispatcher import _resolve_cohort_profiler_input
+
+    dispatch = {"agent_name": "cohort_profiler", "parameters": {}}
+    resolved = _resolve_cohort_profiler_input(
+        {"query": query, "user_context": {"brand": "Xolair"}}, dispatch
+    )
+    assert resolved["brand"] == "Xolair"
+
+    calculator = _FakeCalc(_REMI_NRX)
+    rpc_calls = []
+
+    async def record_rpc(query_id, params):
+        rpc_calls.append((query_id, params))
+        return [
+            {
+                "specialty": "Allergy",
+                "priority_tier": 1,
+                "n_hcps": 1,
+                "total_trx": 1,
+                "max_trx": 1,
+            }
+        ]
+
+    agent = CohortProfilerAgent()
+    agent._get_calculator = lambda: calculator  # type: ignore[method-assign]
+    agent._rpc_rows = record_rpc  # type: ignore[method-assign]
+    out = await agent.analyze(resolved)
+
+    assert out["status"] == "failed"
+    errors = " ".join(error["error"] for error in out["errors"])
+    assert "Xolair" in errors
+    for supported in ("Remibrutinib", "Fabhalta", "Kisqali"):
+        assert supported in errors
+    assert calculator.contexts == []
+    assert rpc_calls == []
+
+
+@pytest.mark.asyncio
+async def test_resolver_controls_keep_no_brand_widening_and_supported_lowercase_brand():
+    from src.agents.orchestrator.nodes.dispatcher import _resolve_cohort_profiler_input
+
+    dispatch = {"agent_name": "cohort_profiler", "parameters": {}}
+
+    no_brand = _resolve_cohort_profiler_input({"query": "profile patients"}, dispatch)
+    no_brand_calc = _FakeCalc(_REMI_NRX)
+    no_brand_agent = CohortProfilerAgent()
+    no_brand_agent._get_calculator = lambda: no_brand_calc  # type: ignore[method-assign]
+    no_brand_out = await no_brand_agent.analyze(no_brand)
+    assert no_brand_out["status"] == "completed"
+    assert {context["brand"] for context in no_brand_calc.contexts} == {
+        "Remibrutinib",
+        "Fabhalta",
+        "Kisqali",
+    }
+
+    lowercase = _resolve_cohort_profiler_input(
+        {"query": "profile patients", "user_context": {"brand": "remibrutinib"}}, dispatch
+    )
+    lowercase_calc = _FakeCalc(_REMI_NRX)
+    lowercase_agent = CohortProfilerAgent()
+    lowercase_agent._get_calculator = lambda: lowercase_calc  # type: ignore[method-assign]
+    lowercase_out = await lowercase_agent.analyze(lowercase)
+    assert lowercase_out["status"] == "completed"
+    assert {context["brand"] for context in lowercase_calc.contexts} == {"Remibrutinib"}
 
 
 def test_resolver_grounds_brand_and_never_fails_closed():
