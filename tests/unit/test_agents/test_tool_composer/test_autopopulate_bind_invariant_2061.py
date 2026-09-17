@@ -13,13 +13,10 @@ tool is covered without editing this file):
    dispatch source, and the kwargs checked are the ones the executor actually validates
    (and would call with) under a context that satisfies every hook's gates.
 
-2. **Declared-required means signature-required.** The #2045 pre-dispatch guard judges a
-   call by the callable's signature. A parameter the schema declares required but that
-   only reaches the tool through ``**kwargs`` cannot be enforced: a plan omitting it is
-   dispatched and fails later, as a tool refusal rather than a ``plan_defect`` — so the
-   defective cached plan is not evicted (``composer._after_execution``). Measured on
-   ``38b653b21``: ``refutation_runner`` and ``sensitivity_analyzer`` both declared
-   ``treatment`` / ``outcome`` required with neither in the signature.
+2. **Planner-visible means signature-visible.** The #2045 pre-dispatch guard judges a
+   call by the callable's signature. Required schema parameters must therefore be
+   required by the signature. The optional parameters repaired in #2078 are explicit too,
+   so their declared names and defaults cannot drift independently inside ``**kwargs``.
 
 Positive controls guard against a vacuous pass: a first measurement of this registry read
 the wrong schema attribute and reported all-zeros, so the registry size, the declared
@@ -197,10 +194,8 @@ def test_every_autopopulate_hook_is_derived_with_its_keyword() -> None:
 def test_the_capture_context_fires_every_hook() -> None:
     """Without this the per-tool check could pass because a hook never fired.
 
-    Measured on ``38b653b21``: on the live registry the ``experiment_id`` hook fires for
-    NO tool — no registered schema declares ``experiment_id``. That is the registry's
-    state, not the context's fault, and only a tool that passes every tool-side gate can
-    tell the two apart."""
+    The probe declares every currently injected keyword, so a failure means the
+    all-gates-open context no longer exercises one of the generic hooks."""
     keywords = sorted(set(_hook_keywords().values()))
     _, kwargs = _kwargs_the_executor_would_call("probe_2061", _ProbeRegistry(keywords))
     assert sorted(kwargs) == keywords
@@ -260,6 +255,29 @@ def test_declared_required_parameters_are_signature_required(name) -> None:
         f"{name}: declared required to the planner but not required by the signature, so "
         f"the pre-dispatch guard cannot enforce them: {unenforced}"
     )
+
+
+@pytest.mark.parametrize(
+    ("name", "parameter", "default"),
+    [
+        ("gap_calculator", "group_by", None),
+        ("risk_scorer", "id_column", "patient_id"),
+        ("risk_scorer", "outcome", "discontinuation_flag"),
+        ("roi_estimator", "value_per_unit", 1.0),
+    ],
+)
+def test_issue_2078_planner_inputs_are_explicit_with_declared_defaults(
+    name: str, parameter: str, default: Any
+) -> None:
+    """The four #2078 planner inputs live in the dispatch signature, not ``**kwargs``."""
+    registered = _registry().get(name)
+    parameters = inspect.signature(registered.callable, follow_wrapped=False).parameters
+    by_keyword = (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    schema_parameter = next(p for p in registered.schema.input_parameters if p.name == parameter)
+
+    assert parameter in parameters
+    assert parameters[parameter].kind in by_keyword
+    assert parameters[parameter].default == default == schema_parameter.default
 
 
 @pytest.mark.parametrize(
