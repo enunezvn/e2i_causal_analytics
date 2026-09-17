@@ -1,9 +1,9 @@
-"""The API lifespan starts and drains the tool-composer learning loop (spec §5.4).
+"""The API lifespan syncs tools and starts/drains recording state (spec §5.4).
 
-- With ``TOOL_COMPOSER_LEARNING_LOOP_ENABLED`` set, startup schedules the registry sync and the
-  column-allowlist fetch in the background (never awaited on the startup path), and shutdown
-  waits up to 5 s for in-flight recording writes, stopping heartbeats first.
-- Without it, neither runs: composer runs outside the API (tests, scripts) record nothing.
+- The registry sync is always scheduled in the background and never delays API startup.
+- With ``TOOL_COMPOSER_LEARNING_LOOP_ENABLED`` set, startup also schedules the column-allowlist
+  fetch and shutdown waits up to 5 s for in-flight recording writes, stopping heartbeats first.
+- Without it, recorder initialization and draining do not run.
 - The flag is forwarded into the containers: ``x-common-env`` is an explicit whitelist.
 """
 
@@ -30,33 +30,40 @@ async def _run_lifespan() -> None:
 
 async def test_enabled_lifespan_starts_the_sync_and_drains_on_shutdown(monkeypatch):
     monkeypatch.setenv(LEARNING_LOOP_ENV, "true")
-    startup = AsyncMock()
+    registry_startup = AsyncMock()
+    recorder_startup = AsyncMock()
     drain = AsyncMock(return_value=0)
     with (
-        patch("src.agents.tool_composer.registry_sync.learning_loop_startup", new=startup),
+        patch("src.agents.tool_composer.registry_sync.registry_sync_startup", new=registry_startup),
+        patch("src.agents.tool_composer.registry_sync.learning_loop_startup", new=recorder_startup),
         patch("src.agents.tool_composer.learning_recorder.drain", new=drain),
     ):
         await _run_lifespan()
-    startup.assert_awaited_once_with()
+    registry_startup.assert_awaited_once_with()
+    recorder_startup.assert_awaited_once_with()
     drain.assert_awaited_once_with(timeout=5.0, cancel_heartbeats=True)
 
 
-async def test_disabled_lifespan_neither_syncs_nor_drains(monkeypatch):
+async def test_disabled_lifespan_still_syncs_but_does_not_initialize_or_drain_recorder(monkeypatch):
     monkeypatch.delenv(LEARNING_LOOP_ENV, raising=False)
-    startup = AsyncMock()
+    registry_startup = AsyncMock()
+    recorder_startup = AsyncMock()
     drain = AsyncMock(return_value=0)
     with (
-        patch("src.agents.tool_composer.registry_sync.learning_loop_startup", new=startup),
+        patch("src.agents.tool_composer.registry_sync.registry_sync_startup", new=registry_startup),
+        patch("src.agents.tool_composer.registry_sync.learning_loop_startup", new=recorder_startup),
         patch("src.agents.tool_composer.learning_recorder.drain", new=drain),
     ):
         await _run_lifespan()
-    startup.assert_not_awaited()
+    registry_startup.assert_awaited_once_with()
+    recorder_startup.assert_not_awaited()
     drain.assert_not_awaited()
 
 
 async def test_a_failing_drain_does_not_break_shutdown(monkeypatch):
     monkeypatch.setenv(LEARNING_LOOP_ENV, "true")
     with (
+        patch("src.agents.tool_composer.registry_sync.registry_sync_startup", new=AsyncMock()),
         patch("src.agents.tool_composer.registry_sync.learning_loop_startup", new=AsyncMock()),
         patch(
             "src.agents.tool_composer.learning_recorder.drain",
