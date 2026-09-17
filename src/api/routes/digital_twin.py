@@ -27,7 +27,6 @@ Version: 4.2.0
 
 import asyncio
 import logging
-from collections.abc import Mapping
 from datetime import datetime, timezone
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, cast
@@ -43,6 +42,8 @@ from src.api.dependencies.auth import (
     resolve_brand_for_read,
 )
 from src.api.routes.digital_twin_rejections import Decile, rejected_request
+from src.api.schemas.digital_twin import EffectHeterogeneityResponse
+from src.api.schemas.digital_twin import heterogeneity_response as _heterogeneity_response
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 
 if TYPE_CHECKING:
@@ -353,36 +354,6 @@ class ValidateFidelityRequest(BaseModel):
 # =============================================================================
 
 
-class SubgroupAxisProvenanceResponse(BaseModel):
-    """Evidence source, publication support, and scoring fallback for an axis."""
-
-    basis: str
-    source: str
-    min_group_rows: int
-    min_treated_rows: Optional[int] = None
-    min_control_rows: Optional[int] = None
-    fallback: str
-    support_unit: str
-    estimand: str
-    suppressed_groups: Dict[str, str] = Field(default_factory=dict)
-
-
-class EffectHeterogeneityResponse(BaseModel):
-    """Heterogeneous effects across subgroups."""
-
-    by_specialty: Dict[str, Dict[str, float]]
-    by_decile: Dict[str, Dict[str, float]]
-    by_region: Dict[str, Dict[str, float]]
-    by_adoption_stage: Dict[str, Dict[str, float]]
-    top_segments: List[Dict[str, Any]]
-    axis_provenance: Dict[str, SubgroupAxisProvenanceResponse] = Field(
-        description=(
-            "Per-axis evidence contract: source, cohort/per-twin basis, publication support "
-            "floors, fallback rule, and groups suppressed for insufficient support."
-        ),
-    )
-
-
 class SimulationResponse(BaseModel):
     """Response from a simulation run."""
 
@@ -522,26 +493,6 @@ class SimulationHistoryResponse(BaseModel):
     total: int
     offset: int
     limit: int
-
-
-def _heterogeneity_response(value: Any) -> EffectHeterogeneityResponse:
-    """Map a live model or stored JSON to the public heterogeneity contract."""
-    if isinstance(value, BaseModel):
-        data = value.model_dump(mode="json")
-    elif isinstance(value, Mapping):
-        data = value
-    else:
-        raise TypeError(
-            "effect heterogeneity must be a Pydantic domain model or stored JSON mapping"
-        )
-    return EffectHeterogeneityResponse(
-        by_specialty=data.get("by_specialty", {}),
-        by_decile=data.get("by_decile", {}),
-        by_region=data.get("by_region", {}),
-        by_adoption_stage=data.get("by_adoption_stage", {}),
-        top_segments=(data.get("top_segments") or [])[:5],
-        axis_provenance=data.get("axis_provenance", {}),
-    )
 
 
 def _live_subgroups_basis(data_provenance: Optional[str]) -> str:

@@ -800,6 +800,45 @@ describe('DigitalTwin', () => {
     expect(screen.getByText(/rare.*suppressed/i)).toBeInTheDocument();
   });
 
+  it('still exposes specialty provenance when every specialty is suppressed', async () => {
+    (useRunSimulation as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      isPending: false,
+      isError: false,
+      error: null,
+      data: {
+        ...mockRunResult,
+        subgroups_basis: 'cohort_rows',
+        effect_heterogeneity: {
+          by_specialty: {},
+          by_decile: {},
+          by_region: {},
+          by_adoption_stage: {},
+          top_segments: [],
+          axis_provenance: {
+            specialty: {
+              basis: 'cohort_rows',
+              source: 'hcp_profiles.specialty',
+              min_group_rows: 100,
+              min_treated_rows: 20,
+              min_control_rows: 20,
+              fallback: 'region_then_cohort',
+              support_unit: 'cohort_rows',
+              estimand: 'observed_region_mix_mean_cate',
+              suppressed_groups: { rare: 'group_rows_below_minimum' },
+            },
+          },
+        },
+      },
+    });
+
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+
+    expect(await screen.findByText('Specialty Effects')).toBeInTheDocument();
+    expect(screen.getByText(/No specialty effects met the publication floor/i)).toBeInTheDocument();
+    expect(screen.getByText(/rare.*suppressed/i)).toBeInTheDocument();
+  });
+
   it('does not relabel a provenance-free legacy specialty aggregate as a supported effect', () => {
     (useRunSimulation as ReturnType<typeof vi.fn>).mockReturnValue({
       mutate: mockMutate,

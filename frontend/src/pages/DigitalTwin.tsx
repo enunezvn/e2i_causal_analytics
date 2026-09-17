@@ -553,7 +553,7 @@ function SimulationResultPanel({ simulation }: { simulation: AnySimulation }) {
 
       {/* Cohort-derived specialty effects (#2162).  The provenance text makes the
           publication floor and scoring-only fallback visible beside the numbers. */}
-      {specialtyProvenance && Object.keys(specialtyEffects).length > 0 && (
+      {specialtyProvenance && (
         <div>
           <h4 className="text-sm font-medium text-[var(--color-text-secondary)] mb-2">
             Specialty Effects
@@ -571,22 +571,28 @@ function SimulationResultPanel({ simulation }: { simulation: AnySimulation }) {
               . Unsupported specialties fall back to region, then cohort for twin scoring;
               fallback values are not published as specialty effects.
           </p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {Object.entries(specialtyEffects).map(([specialty, stats]) => (
-              <div
-                key={specialty}
-                className="flex items-center justify-between rounded-lg border border-[var(--color-border)] bg-[var(--color-background)] px-3 py-2"
-              >
-                <span className="text-sm text-[var(--color-text-primary)]">{specialty}</span>
-                <span className="text-right text-sm font-medium text-[var(--color-text-primary)]">
-                  {fmt(Number(stats.ate))}
-                  <span className="block text-xs font-normal text-[var(--color-text-tertiary)]">
-                    {Number(stats.n).toLocaleString()} cohort rows
+          {Object.keys(specialtyEffects).length > 0 ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {Object.entries(specialtyEffects).map(([specialty, stats]) => (
+                <div
+                  key={specialty}
+                  className="flex items-center justify-between rounded-lg border border-[var(--color-border)] bg-[var(--color-background)] px-3 py-2"
+                >
+                  <span className="text-sm text-[var(--color-text-primary)]">{specialty}</span>
+                  <span className="text-right text-sm font-medium text-[var(--color-text-primary)]">
+                    {fmt(Number(stats.ate))}
+                    <span className="block text-xs font-normal text-[var(--color-text-tertiary)]">
+                      {Number(stats.n).toLocaleString()} cohort rows
+                    </span>
                   </span>
-                </span>
-              </div>
-            ))}
-          </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-[var(--color-text-tertiary)]">
+              No specialty effects met the publication floor for this cohort scope.
+            </p>
+          )}
           {Object.keys(specialtyProvenance.suppressed_groups).length > 0 && (
             <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
               {Object.keys(specialtyProvenance.suppressed_groups).join(', ')} suppressed for
