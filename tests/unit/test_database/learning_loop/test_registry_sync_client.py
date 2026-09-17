@@ -166,12 +166,17 @@ async def test_allowlist_refresh_failure_keeps_last_set_cools_down_and_recovers(
     assert port.calls == ["composer_public_column_names"] * 3
 
 
-async def test_startup_runs_sync_and_allowlist_and_never_raises(migrated, clone_db):
+async def test_registry_and_recorder_startup_tasks_are_independent_and_never_raise(
+    migrated, clone_db
+):
     port = _pg.PsycopgRpcPort(migrated)
     sync = registry_sync.RegistrySync(port=port)
+    await registry_sync.registry_sync_startup(sync)
+    assert port.calls == ["sync_tool_registry"]
+    assert sync.synced is True
+
     await registry_sync.learning_loop_startup(sync)
     assert port.calls == ["sync_tool_registry", "composer_public_column_names"]
-    assert sync.synced is True
     assert await sync.column_allowlist() is not None
     assert port.calls == ["sync_tool_registry", "composer_public_column_names"]  # cached
     tools, _ = registry_sync.build_sync_payload()
@@ -182,5 +187,6 @@ async def test_startup_runs_sync_and_allowlist_and_never_raises(migrated, clone_
     gone = clone_db("startup_gone")
     failing = registry_sync.RegistrySync(port=_pg.PsycopgRpcPort(gone))
     _pg.drop(gone)
+    await registry_sync.registry_sync_startup(failing)  # logs, does not raise
     await registry_sync.learning_loop_startup(failing)  # logs, does not raise
     assert failing.synced is False
