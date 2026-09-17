@@ -13194,20 +13194,36 @@ SYNC_TRG=business_metrics_sync_legacy_trigger_counts_trg
 # Measured by rehearsing 144 inside BEGIN/ROLLBACK on the live DB (2026-09-17): pg_get_triggerdef
 # output, tgenabled 'O', the six-name column list, and 0 disagreeing rows over all 22,043.
 SYNC_DEF="CREATE TRIGGER $SYNC_TRG BEFORE INSERT OR UPDATE ON public.business_metrics FOR EACH ROW EXECUTE FUNCTION business_metrics_sync_legacy_trigger_counts()"
+# codex iter5 HIGH-2: pg_get_triggerdef names the function but does NOT include its BODY. Reproduced
+# live inside BEGIN/ROLLBACK: replacing the sync function with `BEGIN RETURN NEW; END` left
+# pg_get_triggerdef BYTE-IDENTICAL and tgenabled 'O', and the next insert wrote NULL into the
+# canonical column. Before that first write `disagree` is still 0 -- the same timing argument that
+# rejects a disabled trigger. So the BODY is fingerprinted too. md5 of pg_get_functiondef, measured
+# on the droplet's PG 15.8 by rehearsing 144 inside BEGIN/ROLLBACK (2026-09-17). A PostgreSQL major
+# upgrade can re-render the catalog text; if this stops matching after one, re-measure it there
+# rather than dropping the check.
+SYNC_BODY_MD5=2352de80c22c79ca7a70f13e42a940cd
 COLS_BOTH="nrx_count,total_rx_count,triggers_accepted_count,triggers_delivered_count,triggers_total_count,trx_count"
 COLS_LEGACY="nrx_count,total_rx_count,trx_count"
 COLS_CANON="triggers_accepted_count,triggers_delivered_count,triggers_total_count"
-# The trigger is checked by DEFINITION and by tgenabled, not by name: a same-named trigger that is
-# disabled ('D'), or points at another function, keeps the two names free to diverge while a
-# name-only check still says "installed". Rows currently agreeing does not make it enabled.
-expand_state()   { [ "$cols" = "$COLS_BOTH" ] && [ "$trg_def" = "$SYNC_DEF" ] && [ "$trg_on" = O ] && [ "$disagree" = 0 ]; }
-contract_state() { [ "$cols" = "$COLS_CANON" ] && [ "$trg_def" = absent ] && [ "$defer_led" = 1 ]; }
-legacy_state()   { [ "$cols" = "$COLS_LEGACY" ] && [ "$trg_def" = absent ]; }
+# The trigger is checked by DEFINITION, BODY and tgenabled, not by name: a same-named trigger that is
+# disabled ('D'), points at another function, or points at a GUTTED one, keeps the two names free to
+# diverge while a name-only check still says "installed". Rows currently agreeing does not make it work.
+#
+# codex iter5 HIGH-3: each generation is also bound to its LEDGER row. Without that, the state
+# rollback_144 passes through -- schema reverted, ledger row not yet deleted -- reports `legacy`, the
+# `old` branch's own "0 or 1 migrations" tolerance accepts it, and the whole prover exits 0. The next
+# deploy then SKIPS 144 and starts new code against a schema with no canonical columns. A generation
+# is a schema state AND the ledger claim about it; certifying one without the other is what let a
+# half-finished rollback look finished.
+expand_state()   { [ "$cols" = "$COLS_BOTH" ] && [ "$trg_def" = "$SYNC_DEF" ] && [ "$trg_body" = "$SYNC_BODY_MD5" ] && [ "$trg_on" = O ] && [ "$disagree" = 0 ] && [ "$led_144" = 1 ]; }
+contract_state() { [ "$cols" = "$COLS_CANON" ] && [ "$trg_def" = absent ] && [ "$led_144" = 1 ] && [ "$defer_led" = 1 ]; }
+legacy_state()   { [ "$cols" = "$COLS_LEGACY" ] && [ "$trg_def" = absent ] && [ "$led_144" = 0 ] && [ "$defer_led" = 0 ]; }
 schema_generation() {
   if expand_state; then echo expand
   elif contract_state; then echo contract
   elif legacy_state; then echo legacy
-  else echo "broken(cols=[$cols] trigger_enabled=[$trg_on] trigger_def_matches=[$([ "$trg_def" = "$SYNC_DEF" ] && echo yes || echo no)] disagreeing_rows=[$disagree] deferred_146_ledger=[$defer_led])"
+  else echo "broken(cols=[$cols] trigger_enabled=[$trg_on] trigger_def_matches=[$([ "$trg_def" = "$SYNC_DEF" ] && echo yes || echo no)] trigger_body_matches=[$([ "$trg_body" = "$SYNC_BODY_MD5" ] && echo yes || echo no)] disagreeing_rows=[$disagree] ledger_144=[$led_144] deferred_146_ledger=[$defer_led])"
   fi; }
 # $1 label, $2.. the generations this branch accepts.
 generation_in() { local got="$1"; shift; for want in "$@"; do [ "$got" = "$want" ] && { echo "OK   schema_generation: $got (accepted here: $*)"; return; }; done
@@ -13221,6 +13237,12 @@ audit=$(q "SELECT to_regclass('public.kpi_history_rekey_143') IS NOT NULL")
 # disagrees across the two names. Row agreement is only a question while BOTH name sets exist.
 trg_def=$(q "SELECT coalesce((SELECT pg_get_triggerdef(t.oid) FROM pg_trigger t WHERE t.tgrelid = 'public.business_metrics'::regclass AND NOT t.tgisinternal AND t.tgname = '$SYNC_TRG'), 'absent')")
 trg_on=$(q "SELECT coalesce((SELECT t.tgenabled::text FROM pg_trigger t WHERE t.tgrelid = 'public.business_metrics'::regclass AND NOT t.tgisinternal AND t.tgname = '$SYNC_TRG'), 'absent')")
+# codex iter5 HIGH-2: the BODY of the function the trigger names, not just the trigger's own text.
+trg_body=$(q "SELECT coalesce((SELECT md5(pg_get_functiondef(t.tgfoid)) FROM pg_trigger t WHERE t.tgrelid = 'public.business_metrics'::regclass AND NOT t.tgisinternal AND t.tgname = '$SYNC_TRG'), 'absent')")
+# codex iter5 HIGH-3: the ledger claim about 144 specifically ($mig counts 143 and 144 together, so it
+# cannot tell a half-finished rollback_144 from a clean pre-lane box).
+led_144=$(q "SELECT count(*) FROM public.schema_migrations WHERE filename = '144_per_hcp_trigger_count_columns.sql'")
+led_143=$(q "SELECT count(*) FROM public.schema_migrations WHERE filename = '143_canonical_volume_kpis.sql'")
 defer_led=$(q "SELECT count(*) FROM public.schema_migrations WHERE filename = 'deferred/146_drop_legacy_per_hcp_count_columns.sql'")
 if [ "$cols" = "$COLS_BOTH" ]; then
   disagree=$(q "SELECT count(*) FROM public.business_metrics WHERE triggers_delivered_count IS DISTINCT FROM trx_count OR triggers_accepted_count IS DISTINCT FROM nrx_count OR triggers_total_count IS DISTINCT FROM total_rx_count")
@@ -13298,8 +13320,11 @@ if [ "$EXPECT" = new ]; then
     # from one whose sync trigger is gone or disabled, so a verdict must be bound to the generation and
     # to the machinery that makes it valid, not just to the names.
     printf 'SCHEMA_GENERATION=%s\n' "$generation"
-    printf 'SYNC_TRIGGER=%s/%s\n' "$trg_on" "$([ "$trg_def" = "$SYNC_DEF" ] && echo def-matches || echo def-differs)"
+    printf 'SYNC_TRIGGER=%s/%s/%s\n' "$trg_on" \
+      "$([ "$trg_def" = "$SYNC_DEF" ] && echo def-matches || echo def-differs)" \
+      "$([ "$trg_body" = "$SYNC_BODY_MD5" ] && echo body-matches || echo body-differs)"
     printf 'LEGACY_CANONICAL_DISAGREEMENTS=%s\n' "$disagree"
+    printf 'MIGRATION_LEDGER=143:%s/144:%s/deferred146:%s\n' "$led_143" "$led_144" "$defer_led"
     printf 'CANONICAL_REGISTRY=%s\n' "$(q "SELECT count(*) || ':' || coalesce(md5(string_agg(query_id || '=' || md5(sql), ',' ORDER BY query_id)), '') FROM public.kpi_query_registry WHERE query_id LIKE 'canonical_volume_%'")"
     if [ "$(q "SELECT to_regclass('public.kpi_history_rekey_143') IS NOT NULL")" = t ]; then
       printf 'REKEY_PROVENANCE=%s\n' "$(q "SELECT count(*) || ':' || coalesce(md5(string_agg(source_history_id::text || '/' || dest_history_id::text || '/' || disposition, ',' ORDER BY source_history_id)), '') FROM public.kpi_history_rekey_143")"
@@ -13494,7 +13519,14 @@ if [ "$EXPECT" = old ]; then
   # migrations: 0 when 144 never applied (case a2), 1 when the expand is LEFT APPLIED by B1 — both
   # are valid "old code" states, because old code works against the expanded schema. That tolerance
   # IS the property the expand bought, so the prover states it rather than failing on it.
-  if [ "$mig" = 0 ] || [ "$mig" = 1 ]; then echo "OK   migrations: $mig (0 = 144 never applied, 1 = expand left applied)"; else echo "BAD  migrations: got [$mig] want 0 or 1"; bad=1; fi
+  # codex iter5 HIGH-3: this used to be a STANDALONE "0 or 1 is fine" tolerance, and that independence
+  # was the hole. A half-finished rollback_144 -- schema reverted, ledger row not yet deleted -- gave
+  # cols=legacy, trigger=absent, mig=1, and BOTH this check and the generation check passed it, so the
+  # prover exited 0 on a box whose next deploy would skip 144 entirely. The ledger is no longer judged
+  # on its own: `led_144` is part of the generation (legacy requires 0, expand requires 1), and all
+  # that is left to say here is that 143 is gone, which B1 does in every `old` case.
+  check ledger_143_rolled_back "$led_143" 0
+  echo "NOTE ledger: 143=$led_143 144=$led_144 deferred/146=$defer_led (generation: $generation)"
   check canonical_registry_rows "$reg" 0
   # Old CODE is correct against the pre-144 schema AND against a fully valid expand (that tolerance is
   # what the expand bought). It is NOT correct against a half-applied one, and `contract` is fatal to it:
@@ -14672,11 +14704,17 @@ check("the legacy names are still on the table, trigger-synced, until the contra
 SYNC_DEF = ("CREATE TRIGGER business_metrics_sync_legacy_trigger_counts_trg BEFORE INSERT OR UPDATE "
             "ON public.business_metrics FOR EACH ROW EXECUTE FUNCTION "
             "business_metrics_sync_legacy_trigger_counts()")
-sync = psql("SELECT coalesce((SELECT pg_get_triggerdef(t.oid)||'|'||t.tgenabled FROM pg_trigger t "
-            "WHERE t.tgrelid='public.business_metrics'::regclass AND NOT t.tgisinternal "
+# codex iter5 HIGH-2: and pg_get_triggerdef does NOT include the FUNCTION BODY. Reproduced live inside
+# BEGIN/ROLLBACK: swapping the sync function for `BEGIN RETURN NEW; END` left pg_get_triggerdef
+# byte-identical and tgenabled 'O', and the next insert wrote NULL into the canonical column — while
+# the skew check below still read 0, because divergence starts at the next write. So the body is
+# fingerprinted too (md5 of pg_get_functiondef, measured on PG 15.8 by rehearsing 144, 2026-09-17).
+SYNC_BODY_MD5 = "2352de80c22c79ca7a70f13e42a940cd"
+sync = psql("SELECT coalesce((SELECT pg_get_triggerdef(t.oid)||'|'||t.tgenabled||'|'||md5(pg_get_functiondef(t.tgfoid)) "
+            "FROM pg_trigger t WHERE t.tgrelid='public.business_metrics'::regclass AND NOT t.tgisinternal "
             "AND t.tgname='business_metrics_sync_legacy_trigger_counts_trg'), 'absent')")
-check("the bidirectional sync trigger is installed, enabled and defined as 144 defines it",
-      sync == SYNC_DEF + "|O", sync)
+check("the sync trigger is installed, enabled, and its FUNCTION BODY is the one 144 installs",
+      sync == f"{SYNC_DEF}|O|{SYNC_BODY_MD5}", sync)
 # ...and it must actually hold: no per_hcp_rollup row may disagree across the two names.
 skew = psql("SELECT count(*) FROM public.business_metrics WHERE trx_count IS DISTINCT FROM triggers_delivered_count "
             "OR nrx_count IS DISTINCT FROM triggers_accepted_count "

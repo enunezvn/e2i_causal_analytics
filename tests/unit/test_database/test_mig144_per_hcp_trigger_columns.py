@@ -78,51 +78,99 @@ def _strip_comments(text: str) -> str:
     return re.sub(r"--.*$", "", text, flags=re.M)
 
 
-def _destructive_statements(sql: str) -> list[str]:
-    """Every DELETE / TRUNCATE the file can EXECUTE, wherever it appears, as
-    ``"<VERB> <target>"``.
+#: Every statement ``rollback_144`` is ALLOWED to contain, as an anchored pattern.
+#: Whitespace is collapsed before matching, so a statement may wrap across lines.
+_ROLLBACK_ALLOWED = (
+    r"DROP TRIGGER IF EXISTS business_metrics_sync_legacy_trigger_counts_trg "
+    r"ON public\.business_metrics",
+    r"DROP FUNCTION IF EXISTS public\.business_metrics_sync_legacy_trigger_counts\(\)",
+    r"ALTER TABLE public\.business_metrics DROP COLUMN IF EXISTS "
+    r"(?:triggers_delivered_count|triggers_accepted_count|triggers_total_count)",
+    r"COMMENT ON COLUMN public\.business_metrics\."
+    r"(?:trx_count|nrx_count|total_rx_count) IS '[^']*'",
+    r"DELETE FROM public\.schema_migrations "
+    r"WHERE filename = '144_per_hcp_trigger_count_columns\.sql'",
+    r"NOTIFY pgrst, 'reload schema'",
+)
 
-    codex iter4 HIGH-2. The previous form was line-anchored --
-    ``re.findall(r"^\\s*(DELETE FROM[^;]*|TRUNCATE[^;]*);", ...)`` -- which made it
-    a PROXY for the destructive capability instead of a measure of it: it asked
-    "does a line begin with DELETE FROM?" when the condition that matters is "can
-    this file delete rows?". Three valid PostgreSQL payloads, each of which empties
-    ``business_metrics``, left the detected list equal to the one permitted ledger
-    DELETE and the assertion green::
 
-        WITH erased AS (DELETE FROM public.business_metrics RETURNING metric_id)
-        SELECT count(*) FROM erased;          -- the line begins with WITH
+def _statements(sql: str) -> list[str]:
+    """The file's executable statements, comments stripped and whitespace collapsed.
 
-        DELETE
-        FROM public.business_metrics;         -- "DELETE FROM" is not one token here
+    The split is quote-aware. A naive ``body.split(";")`` is wrong here and this file
+    proves it: ``COMMENT ON COLUMN ... IS '... (misnamed by migration 033; never
+    prescriptions)'`` carries a semicolon INSIDE the literal, so the naive form cut a
+    valid statement in two and reported both halves as unapproved. A splitter that
+    mis-parses the file it guards is not a guard -- it fails on correct input and, on
+    hostile input, an attacker who controls a string literal controls where the
+    statement boundaries appear to be.
 
-        DO $x$ BEGIN
-          EXECUTE 'DELETE FROM public.business_metrics';
-        END $x$;                              -- the line begins with EXECUTE
-
-    So this counts the destructive VERB wherever it occurs -- inside a CTE, split
-    across lines, or quoted inside dynamic SQL -- and reports the target it names.
-    Scanning string literals rather than skipping them is deliberate: dynamic SQL
-    is the one place a destructive statement can hide from a reader, so it is the
-    one place this must still see.
-
-    ``ON DELETE`` (a foreign-key action clause) is the single exclusion. It cannot
-    remove a row by itself -- only a DELETE against the referenced table can, and
-    that DELETE would be counted where it is written. The exclusion is anchored to
-    the preceding ``ON`` so it cannot widen into a way of hiding a statement.
+    Dollar-quoting is refused rather than parsed: ``$`` bodies would need real
+    nesting rules, and a ``DO $x$ ... $x$`` block or an inline function body is an
+    unapproved statement form here anyway, so the assertion and :data:`_ROLLBACK_ALLOWED`
+    agree about what this file may contain. An unterminated literal is refused for the
+    same reason -- it would silently swallow every statement after it.
     """
     body = _strip_comments(sql)
-    found: list[str] = []
-    for m in re.finditer(r"\b(DELETE|TRUNCATE)\b", body, re.I):
-        verb = m.group(1).upper()
-        if verb == "DELETE" and re.search(r"\bON\s+$", body[: m.start()], re.I):
-            continue  # ON DELETE CASCADE / SET NULL -- a constraint, not a statement
-        tail = body[m.start() :]
-        target = re.match(r"DELETE\s+FROM\s+([A-Za-z_.\"]+)", tail, re.I) or re.match(
-            r"TRUNCATE(?:\s+TABLE)?\s+(?:ONLY\s+)?([A-Za-z_.\"]+)", tail, re.I
-        )
-        found.append(f"{verb} {target.group(1) if target else '<unparsed>'}")
-    return found
+    assert "$" not in body, (
+        "the rollback contains dollar-quoting; a DO block or a function body is not "
+        "an approved statement form here, and it would also break the statement split"
+    )
+    out: list[str] = []
+    cur: list[str] = []
+    in_str = False
+    i = 0
+    while i < len(body):
+        ch = body[i]
+        if in_str:
+            if ch == "'" and body[i + 1 : i + 2] == "'":  # '' is an escaped quote
+                cur.append("''")
+                i += 2
+                continue
+            if ch == "'":
+                in_str = False
+            cur.append(ch)
+        elif ch == "'":
+            in_str = True
+            cur.append(ch)
+        elif ch == ";":
+            out.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+        i += 1
+    assert not in_str, "the rollback has an unterminated string literal"
+    out.append("".join(cur))
+    return [re.sub(r"\s+", " ", s).strip() for s in out if s.strip()]
+
+
+def _unapproved_statements(sql: str) -> list[str]:
+    """Statements in the rollback that match none of :data:`_ROLLBACK_ALLOWED`.
+
+    codex iter5 HIGH-1. Two rounds of BLACKLIST failed here, and the second failure
+    is the instructive one. iter4 replaced a line-anchored ``^\\s*DELETE FROM`` with a
+    detector that counted the DELETE/TRUNCATE verb anywhere -- which closed the three
+    payloads codex had shown me and nothing else. Measured against the iter4 form:
+
+        DROP TABLE public.business_metrics;                      -- not counted
+        ALTER TABLE public.business_metrics DROP COLUMN metric_id;  -- not counted
+        DO $x$ BEGIN EXECUTE 'DE' || 'LETE FROM public.business_metrics'; END $x$;
+                                                                 -- not counted
+        COMMENT ON TABLE public.business_metrics IS 'Never DELETE FROM ...';
+                                                                 -- FALSE positive
+
+    I had fixed the three examples instead of the question. **A blacklist of
+    destructive spellings can never be a capability check**: the language has
+    unboundedly many ways to spell destruction (other verbs, string concatenation,
+    dynamic execution), so any such list is a proxy that is satisfiable while the
+    real condition is false. An ALLOWLIST inverts the quantifier -- every statement
+    must be one of the forms this rollback is known to need -- so an unapproved form
+    fails by construction, whatever it is called.
+
+    If this file legitimately gains a statement, add its pattern above. That edit is
+    the review the blacklist never forced.
+    """
+    return [s for s in _statements(sql) if not any(re.fullmatch(p, s) for p in _ROLLBACK_ALLOWED)]
 
 
 def test_the_canonical_columns_are_added_statically():
@@ -246,15 +294,29 @@ def test_the_rollback_removes_exactly_what_the_expand_added():
     assert "DROP TRIGGER IF EXISTS" in rollback
     assert f"DROP FUNCTION IF EXISTS public.{SYNC_FUNCTION}()" in rollback
 
-    # Exactly ONE DELETE is permitted, and only against the migration ledger: the
-    # rollback retires its own schema_migrations row in the same transaction as the
-    # schema change (codex iter3 HIGH-2). Doing it as a second psql invocation left
-    # a window where the columns were gone while the runner still believed 144 was
-    # applied, so the next deploy would skip re-applying it. Any OTHER delete —
-    # against business_metrics or anything else holding data — is still forbidden,
-    # so this narrows the old blanket ban rather than lifting it.
-    assert _destructive_statements(rollback) == ["DELETE public.schema_migrations"], (
-        _destructive_statements(rollback)
+    # EVERY statement must be one of the forms this rollback is known to need. The one
+    # DELETE among them is against the migration ledger: the rollback retires its own
+    # schema_migrations row in the same transaction as the schema change (codex iter3
+    # HIGH-2). Doing it as a second psql invocation left a window where the columns
+    # were gone while the runner still believed 144 was applied, so the next deploy
+    # would skip re-applying it.
+    #
+    # This is an ALLOWLIST because two rounds of blacklisting destructive spellings
+    # both failed (codex iter3 HIGH-2 narrowed a ban that iter4 then walked through;
+    # iter4's replacement counted the DELETE/TRUNCATE verb and iter5 walked through
+    # THAT with DROP TABLE, ALTER TABLE DROP COLUMN and a concatenated 'DE'||'LETE').
+    # See :func:`_unapproved_statements` for why no blacklist here can be anything but
+    # a proxy.
+    assert _unapproved_statements(rollback) == [], _unapproved_statements(rollback)
+    # ...and the allowlist must actually be exercised: every approved form present.
+    # Without this the test would still pass if the rollback were emptied to a single
+    # NOTIFY -- an allowlist constrains what MAY appear, never what MUST.
+    kinds = {
+        next(i for i, p in enumerate(_ROLLBACK_ALLOWED) if re.fullmatch(p, s))
+        for s in _statements(rollback)
+    }
+    assert kinds == set(range(len(_ROLLBACK_ALLOWED))), (
+        f"the rollback no longer uses every approved statement form: {sorted(kinds)}"
     )
 
     # ...and the flag that makes "in the same transaction" true (codex iter4 MED-1).
