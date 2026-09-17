@@ -43,11 +43,12 @@
 --     --single-transaction < database/deferred/145_drop_legacy_per_hcp_count_columns.sql
 --
 -- Verify first, in the same shape, with a trailing ROLLBACK instead of a commit.
--- Afterwards, record it: this file is outside the runner, so nothing writes a
--- public.schema_migrations row for it.
 --
---   docker exec -i supabase-db psql -U postgres -d postgres -c \
---     "INSERT INTO public.schema_migrations(filename) VALUES ('deferred/145_drop_legacy_per_hcp_count_columns.sql') ON CONFLICT DO NOTHING;"
+-- The ledger row is written by the LAST statement of this file, inside the same
+-- --single-transaction as the schema change (codex iter2 MED-1). It used to be a
+-- second, separate command in this header, which could be forgotten or could fail
+-- on its own, leaving the ledger disagreeing with the schema. Nothing else writes
+-- it: this file is outside every MIGRATION_DIRS entry, so the runner never sees it.
 --
 -- ---------------------------------------------------------------------------
 -- THE VIEWS
@@ -65,10 +66,22 @@
 -- (is_synthetic, email_campaign_count, speaker_program_count, sample_volume,
 -- peer_influence_score, patient_support_enrollment, rep_training_score) added to
 -- business_metrics AFTER the views were created and never reflected in them.
--- That is a deliberate convergence on the committed schema: a box built from
--- database/core/e2i_ml_complete_v3_schema.sql already gets all 36. Measured
--- 2026-09-18: these views have ZERO consumers outside database/ (src/, tests/,
--- scripts/, feature_repo/, frontend/src), so widening them breaks no query.
+-- The widening is safe, and the reason is a measurement rather than an argument
+-- about the base schema: these views have ZERO consumers outside database/
+-- (measured 2026-09-18 across src/, tests/, scripts/, feature_repo/ and
+-- frontend/src; the only other mention anywhere is a name list in
+-- docs/data/02-CORE-DATA-DICTIONARY.md), so no query selects a column from them at
+-- all. It also restores the AUTHORED intent: e2i_ml_complete_v3_schema.sql writes
+-- these views as `SELECT * FROM business_metrics WHERE data_split = ...`, and
+-- PostgreSQL froze that star into an explicit list at creation time.
+--
+-- CORRECTION 2026-09-18 (codex iter2 HIGH-1). An earlier draft of this header
+-- justified the widening by claiming a box built from
+-- database/core/e2i_ml_complete_v3_schema.sql "already gets all 36" columns. That
+-- was asserted, not measured, and it is FALSE: that file's CREATE TABLE
+-- business_metrics declares 19 columns, and the other 17 arrive from later
+-- migrations (033 and after). Nothing depended on the claim -- but it was wrong,
+-- so it is corrected here rather than quietly removed.
 --
 -- Idempotent: every statement carries IF EXISTS / OR REPLACE, so a second
 -- application changes nothing and raises nothing.
@@ -95,5 +108,10 @@ CREATE OR REPLACE VIEW public.v_validation_business_metrics AS
     SELECT * FROM public.business_metrics WHERE data_split = 'validation';
 CREATE OR REPLACE VIEW public.v_holdout_business_metrics AS
     SELECT * FROM public.business_metrics WHERE data_split = 'holdout';
+
+-- Record the application in the same transaction as the change it records.
+INSERT INTO public.schema_migrations(filename)
+VALUES ('deferred/145_drop_legacy_per_hcp_count_columns.sql')
+ON CONFLICT DO NOTHING;
 
 NOTIFY pgrst, 'reload schema';

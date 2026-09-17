@@ -123,6 +123,31 @@ def test_the_contract_is_ordered_drop_views_then_columns_then_recreate():
     )
 
 
+def test_the_contract_records_itself_in_the_migration_ledger_atomically():
+    """Nothing else writes a ``schema_migrations`` row for this file — the runner
+    never sees it (that is the point of ``database/deferred/``). An earlier draft
+    left the INSERT as a second, separate command in the header, which can be
+    forgotten or fail on its own and leave the ledger disagreeing with the schema.
+    It is now the file's LAST statement, so it commits in the same
+    ``--single-transaction`` as the change it records, or not at all.
+    """
+    sql = CONTRACT.read_text()
+    m = re.search(
+        r"INSERT INTO public\.schema_migrations\(filename\)\s*\n?\s*"
+        r"VALUES \('deferred/145_drop_legacy_per_hcp_count_columns\.sql'\)",
+        sql,
+    )
+    assert m, "the contract does not record itself in public.schema_migrations"
+    assert "ON CONFLICT DO NOTHING" in sql, "re-applying it would raise on the ledger row"
+    last_change = sql.index(
+        "ALTER TABLE public.business_metrics DROP COLUMN IF EXISTS total_rx_count;"
+    )
+    assert m.start() > last_change, (
+        "the ledger row is written before the change it records; a failure in "
+        "between would leave the ledger claiming work that did not happen"
+    )
+
+
 def test_the_contract_carries_its_own_manual_apply_instructions():
     """Nothing applies this file automatically, so the file itself has to say who
     applies it and what must be true first — otherwise it rots in the tree and the

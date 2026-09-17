@@ -879,7 +879,7 @@ ws3_business:
     windowable: clean
     window:
       column: metric_date
-    
+
   nrx:
     id: "WS3-BI-006"
     reporting_window: "most recent complete calendar month"
@@ -914,7 +914,7 @@ ws3_business:
     windowable: clean
     window:
       column: metric_date
-    
+
   nbrx:
     id: "WS3-BI-007"
     reporting_window: "most recent complete calendar month"

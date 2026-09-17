@@ -210,13 +210,38 @@ def _is_forward_migration(sql_path: Path) -> bool:
     )
 
 
-def _scan_order(paths: Iterable[Path]) -> list[Path]:
-    """Sorted, except that by-hand ``database/deferred/`` files come last.
+def _runner_dir_order() -> list[str]:
+    """The ``$PROJECT_ROOT``-relative directories the runner applies, IN ITS ORDER.
 
-    The model applies statements in file order, so file order has to match the
-    order in which the statements reach the database: everything the runner
-    applies, then the contract migrations a human applies afterwards. See
-    ``_DEFERRED_DIR``.
+    Parsed from ``scripts/run_migrations.sh`` rather than restated, for the reason
+    the runner's own header gives: "MIGRATION_DIRS is the only source of that scope
+    -- do not restate the dir count here, it has gone stale twice."
+    """
+    block = re.search(
+        r"^MIGRATION_DIRS=\((.*?)^\)",
+        (_ROOT / "scripts" / "run_migrations.sh").read_text(),
+        re.M | re.S,
+    )
+    return re.findall(r'"\$PROJECT_ROOT/([^":]+)::', block.group(1)) if block else []
+
+
+def _scan_order(paths: Iterable[Path]) -> list[Path]:
+    """Lexical, except that by-hand ``database/deferred/`` files come LAST.
+
+    The model applies statements in file order, so file order has to approximate the
+    order in which the statements reach the database. Exactly ONE rule is
+    implemented here, and it is the one that was measured to matter: deferred files
+    last (see ``_DEFERRED_DIR``).
+
+    What this is NOT, despite the temptation to say so: the runner's order. The
+    runner walks ``MIGRATION_DIRS`` in its OWN sequence — migrations, memory, core,
+    ml, causal, chat, rag, audit — which is not alphabetical (codex iter2 LOW-1).
+    Implementing that was considered and rejected: it is not obviously better (it
+    would put the ``migrations`` ALTERs before ``core``'s CREATE TABLE), and
+    ``test_the_lexical_order_still_agrees_with_the_runners_directory_order``
+    measures that the two orders produce the SAME model today. That test is the
+    guard: if they ever diverge, it fails and the choice gets re-made with evidence
+    instead of being assumed away here.
     """
     return sorted(paths, key=lambda p: (_DEFERRED_DIR in p.parents, str(p)))
 
@@ -358,6 +383,36 @@ class TestSchemaModelFollowsTheExpandContractPair:
         )
         assert "trx_count" not in ordered
         assert naive - ordered == {"trx_count", "nrx_count", "total_rx_count"}, naive - ordered
+
+    def test_the_lexical_order_still_agrees_with_the_runners_directory_order(self):
+        """codex iter2 LOW-1: ``_scan_order`` is lexical, but the runner applies its
+        MIGRATION_DIRS in its own sequence (migrations, memory, core, ml, causal,
+        chat, rag, audit), which is not alphabetical. Rather than assert in a
+        docstring that the difference does not matter, build the model BOTH ways and
+        measure it. If this ever fails, the orders have diverged on a real table and
+        ``_scan_order`` needs the runner's sequence implemented for real.
+        """
+        dirs = _runner_dir_order()
+        assert "database/migrations" in dirs and len(dirs) >= 8, dirs
+        rank = {(_ROOT / d).resolve(): i for i, d in enumerate(dirs)}
+        every = [p for p in _DATABASE_DIR.rglob("*.sql") if _is_forward_migration(p)]
+
+        def runner_key(p: Path):
+            # deferred (and anything else off the runner's list) sorts last, as in
+            # _scan_order; within the runner's scope, by ITS directory sequence.
+            return (rank.get(p.parent.resolve(), len(dirs)), str(p))
+
+        lexical = _ddl_columns(_scan_order(every))
+        runner = _ddl_columns(sorted(every, key=runner_key))
+        differing = {t for t in set(lexical) | set(runner) if lexical.get(t) != runner.get(t)}
+        assert not differing, (
+            "the lexical scan order and the runner's directory order now disagree on "
+            f"{sorted(differing)} — _scan_order's simplification is no longer safe"
+        )
+        # ...and the comparison must be non-vacuous: the two orders really differ.
+        assert _scan_order(every) != sorted(every, key=runner_key), (
+            "the two orderings are identical, so this test compares nothing"
+        )
 
     def test_the_rollback_does_not_unbuild_the_expand(self):
         """rollback_144 now holds three STATIC ``DROP COLUMN`` statements against

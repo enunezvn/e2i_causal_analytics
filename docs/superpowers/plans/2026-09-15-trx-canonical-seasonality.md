@@ -102,7 +102,8 @@ Registry totals move from 45 to **49** (direct 21→24, derived 24→25, ws3_bus
 ### 0.4 Migrations
 
 - `database/migrations/143_canonical_volume_kpis.sql` is **generated** by `scripts/gen_canonical_volume_registry.py`, and a unit test asserts the committed file equals the generator output. It registers 17 base statements plus 17 `_include_synthetic` twins: `canonical_volume_{trx,nrx,nbrx,trx_share}` × {base, `_region`, `_windowed`, `_windowed_region`}, plus `canonical_volume_monthly_series`. It also re-keys kpi_history rows for 005..008 to 011..014 and runs `NOTIFY pgrst`. Idempotent: `ON CONFLICT DO UPDATE`, and the UPDATE is a no-op on rerun.
-- `database/migrations/144_per_hcp_trigger_count_columns.sql`: a guarded `DO` block renames the three columns on `business_metrics` and on each of the four split views (`ALTER VIEW … RENAME COLUMN`), adds column comments, and runs `NOTIFY pgrst`. Idempotent through `information_schema` guards.
+- `database/migrations/144_per_hcp_trigger_count_columns.sql`: **the EXPAND half.** Three static `ALTER TABLE public.business_metrics ADD COLUMN IF NOT EXISTS triggers_{delivered,accepted,total}_count INTEGER;`, a backfill per pair guarded by `IS DISTINCT FROM`, a bidirectional `BEFORE INSERT OR UPDATE ... FOR EACH ROW` sync trigger, column comments on all six, and `NOTIFY pgrst`. It renames nothing, touches no view, and contains no `DROP`. Idempotent through `IF NOT EXISTS` / `CREATE OR REPLACE`.
+- `database/deferred/145_drop_legacy_per_hcp_count_columns.sql`: **the CONTRACT half, applied BY HAND in a LATER deploy.** Retires the three legacy columns, the sync trigger and its function, and rebuilds the four split views. It sits outside every `MIGRATION_DIRS` entry so the runner cannot apply it in the same pass as 144 — see §0.9.
 
 ### 0.5 RNG-safe `nbrx` design (read from `business_metrics_generator.py`)
 
@@ -140,13 +141,52 @@ Stored as integer basis points, so "annual mean exactly 1.0" is an integer ident
 
 National = Σ over the 4 regions (the generator's national scale and the reseed's `_national_trx` already define it this way). Portfolio `brand=''` = Σ over brands × regions. Region and brand×region history becomes available from `business_metrics.region` directly, like ROI (#1536). WS3-BI-008 history is brand and brand×region only: a portfolio share of the portfolio is undefined.
 
-### 0.9 Column rename strategy
+### 0.9 Column expand/contract strategy
 
-A plain rename, not add + backfill + drop.
-- (a) Every reader is batch or low-traffic (ETL, Feast materialize, twin cohort load, experiment interim analysis), and migrations run minutes before the new containers start, so the skew window is short and fails loudly (42703) rather than silently.
-- (b) An add/backfill/drop would need dual-write code in the ETL and an extra deploy for no measured benefit.
-- (c) `ALTER TABLE … RENAME COLUMN` is metadata-only. The four views keep working after the table rename (attnum binding) but keep the old output names until `ALTER VIEW … RENAME COLUMN`, which runs in the same migration.
-- (d) Feast feature names change, so `feast apply` rewrites the registry on the post-deploy restart. Old Redis online keys under the old names are left for TTL expiry (7 days). Nothing reads them after the code switch.
+**REVISED 2026-09-18 (codex iter1 HIGH-1, owner-approved). This section is the contract; the
+superseded rename rationale is kept below it so the reversal is auditable.**
+
+Add + backfill + sync, then retire in a LATER deploy. Two committed halves:
+
+- **144 (EXPAND, auto-applied)** adds `triggers_{delivered,accepted,total}_count` beside the legacy
+  `{trx,nrx,total_rx}_count`, backfills them, and installs
+  `business_metrics_sync_legacy_trigger_counts_trg` — a bidirectional `BEFORE INSERT OR UPDATE` row
+  trigger. On INSERT it fills whichever side the writer left empty; on UPDATE it follows the side that
+  changed, legacy winning if a statement ever moved both (no writer in the tree does). Either name may
+  therefore be read AND written by either code version, for as long as both can run.
+- **`database/deferred/145` (CONTRACT, by hand, a LATER deploy)** retires the legacy three, the trigger
+  and its function, and rebuilds the four split views.
+
+Why the halves must not ship in one deploy: `scripts/run_migrations.sh` applies EVERY pending forward
+`*.sql` in each `MIGRATION_DIRS` entry in ONE pass, so a `migrations/145_*.sql` would run seconds after
+144 and drop the legacy columns before a single container was replaced — the very failure the expand
+exists to prevent. `database/deferred/` appears in no `MIGRATION_DIRS` entry, which makes the
+separation structural rather than a naming convention;
+`tests/unit/test_database/test_mig145_contract_legacy_per_hcp_columns.py` pins it by PARSING
+`MIGRATION_DIRS` out of the runner rather than restating it.
+
+The four split views are deliberately untouched by the expand: they are `SELECT *` snapshots with ZERO
+consumers repo-wide (measured 2026-09-18 across `src/`, `tests/`, `scripts/`, `feature_repo/`,
+`frontend/src`; the only other mentions are a name list in `docs/data/02-CORE-DATA-DICTIONARY.md`), and
+leaving them on the legacy names is what a pre-lane container expects. The contract rebuilds them.
+
+**The rejected design, and why — do not reinstate it.** The original plan called for a plain
+`ALTER TABLE … RENAME COLUMN` plus `ALTER VIEW … RENAME COLUMN`, on three arguments: (a) every reader
+is batch or low-traffic and the skew window is short and fails loudly (42703) rather than silently;
+(b) add/backfill/drop would need dual-write code in the ETL and an extra deploy for no measured
+benefit; (c) the rename is metadata-only. Argument (a) is **false**, and that is what forced the
+revision: `deploy.yml:956` applies migrations while the OLD containers are still serving,
+`:1085` replaces the app services, and `:1104` rolls back **only** the app services on a health
+failure — leaving pre-lane code, which reads *and writes* the legacy names (52 references on
+`origin/main`, among them the per-HCP ETL's `ON CONFLICT DO UPDATE SET trx_count = EXCLUDED.trx_count`),
+running against a schema that no longer has them, PERMANENTLY, with no automated way back. A failure
+that is loud but unrecoverable is not an acceptable skew. Argument (b) is answered by the trigger: the
+dual-write lives in the database, so no ETL code is dual-write, and the "extra deploy" is the point.
+Argument (c) remains true and is simply no longer relevant.
+
+(d) Feast feature names change either way, so `feast apply` rewrites the registry on the post-deploy
+restart. Old Redis online keys under the old names are left for TTL expiry (7 days). Nothing reads them
+after the code switch.
 
 ### 0.10 Retired-fence wording (verbatim prompt line for both chat brains)
 
@@ -14010,12 +14050,23 @@ The deploy run's step summary (`deploy.yml:1298-1359`) and its job log (actions 
 
 **Blocks** (each procedure lists which to run, in order):
 
-- **B1 — schema back** (144 before 143; each only if applied). **AMENDED 2026-09-18:** the `rollback_144` line is now OPTIONAL. 144 is an EXPAND (see the amendment at Task 21) — it removes nothing, so pre-lane containers run correctly against the migrated schema and need no schema recovery. Run it only to return the schema to its exact pre-144 shape; skipping it is safe, and the `schema_migrations` DELETE below must then skip 144 too, or the next deploy will not re-apply it. Rollback 143 restores exactly the rows the re-key moved, from `public.kpi_history_rekey_143` (Task 8).
+- **B1 — schema back: 143 ONLY.** **REVISED 2026-09-18 (§0.9).** 144 is an EXPAND — it removes nothing,
+  so a pre-lane container runs correctly against schema 143+144 and needs no schema recovery. Undoing it
+  is not part of any recovery path, so it is not in this block: an earlier draft left the `rollback_144`
+  line in the copy-paste text and merely called it "optional" in prose, which is a trap — the block ran
+  it unconditionally and then deleted BOTH ledger rows. Rollback 143 restores exactly the rows the
+  re-key moved, from `public.kpi_history_rekey_143` (Task 8).
   ```bash
   docker stop e2i_feast_materializer
-  [ "$(q "SELECT count(*) FROM public.schema_migrations WHERE filename = '144_per_hcp_trigger_count_columns.sql'")" = 1 ] && docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 --single-transaction < "$RB/rollback_144_per_hcp_trigger_count_columns.sql"
   [ "$(q "SELECT count(*) FROM public.schema_migrations WHERE filename = '143_canonical_volume_kpis.sql'")" = 1 ] && docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 --single-transaction < "$RB/rollback_143_canonical_volume_kpis.sql"
-  q "DELETE FROM public.schema_migrations WHERE filename IN ('143_canonical_volume_kpis.sql','144_per_hcp_trigger_count_columns.sql') RETURNING filename;"
+  q "DELETE FROM public.schema_migrations WHERE filename = '143_canonical_volume_kpis.sql' RETURNING filename;"
+  ```
+- **B1x — undo the EXPAND too (NOT a recovery step; only to return the schema to its exact pre-144
+  shape, e.g. to re-rehearse the migration).** Run the two statements together or neither: leaving the
+  ledger row while the columns are gone means the next deploy will NOT re-apply 144.
+  ```bash
+  [ "$(q "SELECT count(*) FROM public.schema_migrations WHERE filename = '144_per_hcp_trigger_count_columns.sql'")" = 1 ] && docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 --single-transaction < "$RB/rollback_144_per_hcp_trigger_count_columns.sql" \
+    && q "DELETE FROM public.schema_migrations WHERE filename = '144_per_hcp_trigger_count_columns.sql' RETURNING filename;"
   ```
 - **B2 — checkout back** (mirrors `rollback_to_prev`, `deploy.yml:467`; `$RB` is untracked and survives):
   ```bash
@@ -14071,7 +14122,7 @@ The deploy run's step summary (`deploy.yml:1298-1359`) and its job log (actions 
 - **a1, 143 failed** (for example the re-key refused a conflicting destination): the schema is unchanged. Run B2, then Reopen (old). The refused rows are data for the owner to rule on; do not retry the deploy first.
 - **a2, 143 applied and 144 failed:** the PREV app would see an empty WS3-BI-005..008 history (moved to 011..014). 144 needs a code fix, so restore rather than roll forward: B1 (only 143 runs), B2, Reopen (old). The prover's `kpi_history_md5` proves the restore is exact.
 
-**(b) The health check fails after the app flips.** Signature: `Health check failed — rolling back app services` (`deploy.yml:1093`). State: schema 143+144; api/frontend/workers/scheduler back at PREV; `feast` and `feast-materializer` still at NEW_SHA with the renamed view materialized (`deploy.yml:1094-1098`); checkout reset to PREV_SHA (`deploy.yml:467`). This mix is incompatible. The PREV per-HCP ETL and experiment outcomes use `trx_count`, which 144 renamed. PREV `feature_analyzer_adapter.py:450` requests `hcp_conversion_features:trx_count`, which NEW Feast no longer defines.
+**(b) The health check fails after the app flips.** Signature: `Health check failed — rolling back app services` (`deploy.yml:1093`). State: schema 143+144; api/frontend/workers/scheduler back at PREV; `feast` and `feast-materializer` still at NEW_SHA (`deploy.yml:1094-1098`); checkout reset to PREV_SHA (`deploy.yml:467`). **REVISED 2026-09-18: the DATABASE half of this mix is no longer incompatible, which is the whole reason 144 became an expand (§0.9).** The PREV per-HCP ETL and experiment outcomes use `trx_count`, and 144 leaves it present, correct and trigger-synced — so they keep working against schema 143+144 with no schema recovery at all. What remains incompatible is FEAST ONLY: PREV `feature_analyzer_adapter.py:450` requests `hcp_conversion_features:trx_count`, which NEW Feast no longer defines. Recovery for (b) is therefore unchanged in shape — B1, B4, B3, B5 below — but B1 is now 143-only: 143 still has to be undone (the PREV app would otherwise see an empty WS3-BI-005..008 history), while 144 is simply LEFT APPLIED, because a pre-lane container reads and writes the legacy names correctly against it.
 1. Diagnose from the job log. If the cause is outside this lane (a dependency outage, a port clash), roll forward ONCE. Every rerun is its own recorded attempt (codex r5 MEDIUM). Its effective PREV_SHA may equal NEW_SHA, and then `deploy.yml:1122` rebuilds BentoML even with unchanged inputs. `prove_state.sh new` judges each sidecar by THAT attempt's log:
    ```bash
    RB="$MAIN/docs/demos/results/2026-09-15_trx_canonical/rollback"
