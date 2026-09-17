@@ -1457,6 +1457,7 @@ class TestOptunaOptimizerIntegration:
 # ============================================================================
 
 
+@pytest.mark.usefixtures("use_real_optuna_storage_config")
 class TestLoadOptunaConfig:
     """Tests for load_optuna_config function."""
 
