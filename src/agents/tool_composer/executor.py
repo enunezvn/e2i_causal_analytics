@@ -653,18 +653,6 @@ class PlanExecutor:
             # (codex audit PR #367 INVARIANT 8 — preserve caller's dict identity).
             resolved_inputs = {**resolved_inputs, "confounders": autopop_confounders}
 
-        # S14 (issue #360): propagate ``experiment_id`` from the context
-        # carrier into tool kwargs when the tool's schema declares the
-        # parameter AND the caller did NOT supply an explicit value. This
-        # mirrors the confounders auto-pop pattern above. Explicit caller
-        # value always wins (C1 trust-gate parity — key presence, not
-        # truthiness, is the explicit-caller signal).
-        autopop_experiment_id = self._maybe_autopopulate_experiment_id(
-            step, resolved_inputs, context
-        )
-        if autopop_experiment_id is not None:
-            resolved_inputs = {**resolved_inputs, "experiment_id": autopop_experiment_id}
-
         # F2-core: thread a context-carried DataFrame into tool kwargs under
         # the canonical ``estimation_data`` key (only when the caller did not
         # already supply one). NOT every composable tool accepts **kwargs:
@@ -1467,49 +1455,6 @@ class PlanExecutor:
         )
         return confounder_features
 
-    def _maybe_autopopulate_experiment_id(
-        self,
-        step: ExecutionStep,
-        resolved_inputs: Dict[str, Any],
-        context: Dict[str, Any],
-    ) -> Optional[str]:
-        """Propagate ``experiment_id`` from context into tool kwargs.
-
-        Issue #360 (S14). Mirrors the
-        ``_maybe_autopopulate_confounders`` triple-gate pattern:
-
-        1. ``context["experiment_id"]`` is a non-empty string.
-        2. The tool's schema declares an ``experiment_id`` parameter
-           (we don't inject a kwarg the tool can't accept).
-        3. The caller did NOT supply an explicit value in the
-           resolved inputs. Key presence — not truthiness — is the
-           explicit-caller signal (C1 trust-gate parity with the
-           confounders hook). An explicit ``experiment_id=None`` is
-           still a caller decision and must NOT be overridden.
-
-        Returns the value to inject, or ``None`` to skip auto-pop
-        entirely.
-        """
-        # Gate 1: experiment_id present in context (S14)
-        experiment_id = context.get("experiment_id")
-        if not isinstance(experiment_id, str) or not experiment_id:
-            return None
-
-        # Gate 2: tool schema declares an ``experiment_id`` parameter
-        schema = self.registry.get_schema(step.tool_name)
-        if schema is None:
-            return None
-        param_names = {p.name for p in schema.input_parameters}
-        if "experiment_id" not in param_names:
-            return None
-
-        # Gate 3: caller did not supply explicit experiment_id.
-        if "experiment_id" in resolved_inputs:
-            return None
-
-        logger.debug(f"Auto-populated experiment_id={experiment_id!r} for tool '{step.tool_name}'")
-        return experiment_id
-
     @staticmethod
     def _is_explicit_dataframe_input(value: Any) -> bool:
         """True iff ``value`` is a genuine caller-explicit frame or data dict.
@@ -1546,8 +1491,7 @@ class PlanExecutor:
         The composable tools read their working frame from ``**kwargs`` via
         ``_extract_dataframe_from_kwargs`` — but the planner's
         ``input_mapping`` never names ``data``/``dataframe``/``estimation_data``,
-        so until now NO production path delivered a frame. This hook mirrors
-        the ``_maybe_autopopulate_experiment_id`` pattern and fires when:
+        so until now NO production path delivered a frame. It fires when:
 
         1. ``context`` carries a pandas-like DataFrame under ANY canonical
            key in ``_DATAFRAME_KWARGS_KEYS`` (duck-typed: has ``.columns``).
@@ -1575,9 +1519,8 @@ class PlanExecutor:
         ``model_inference`` declare NO ``**kwargs``. Injecting into one of those
         makes the call raise ``TypeError: unexpected keyword argument`` — which,
         before #2045, the executor retried three times and charged to the tool's
-        circuit breaker. The ``experiment_id`` hook has always gated this way
-        ("we don't inject a kwarg the tool can't accept"); this one now does too,
-        so an unbindable argument can only ever come from the PLAN.
+        circuit breaker. The hook therefore checks bindability first, so an
+        unbindable argument can only ever come from the PLAN.
         """
         # Gate 0: never inject a kwarg the tool cannot accept.
         if not self._accepts_keyword(self.registry.get_callable(step.tool_name), "estimation_data"):
