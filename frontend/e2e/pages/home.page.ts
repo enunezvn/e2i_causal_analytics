@@ -69,7 +69,7 @@ export class HomePage extends BasePage {
   }
 
   get totalTrxStat(): Locator {
-    return this.page.getByText('Total TRx (MTD)')
+    return this.page.getByText('Total TRx (latest full month)')
   }
 
   get activeCampaignsStat(): Locator {
@@ -271,7 +271,7 @@ export class HomePage extends BasePage {
   async verifyQuickStatsDisplayed(): Promise<boolean> {
     // Wait for quick stats to render - look for the first stat text
     try {
-      await this.page.getByText('Total TRx (MTD)').first().waitFor({ state: 'visible', timeout: TIMEOUTS.PAGE_LOAD })
+      await this.page.getByText('Total TRx (latest full month)').first().waitFor({ state: 'visible', timeout: TIMEOUTS.PAGE_LOAD })
       return true
     } catch {
       // Fallback: check for any stat text

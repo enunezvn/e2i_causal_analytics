@@ -3,7 +3,7 @@
  * ======================
  *
  * React Query hooks for the two Home-tile sources backing the QUICK_STATS bar:
- *   - `useKpiSummary(brand)` → real Total TRx (MTD) / HCPs Reached rollup
+ *   - `useKpiSummary(brand)` → real Total TRx (latest full month) / HCPs Reached rollup
  *   - `useActiveExperimentCount()` → Active Campaigns (running experiments)
  *
  * @module hooks/api/use-home-stats

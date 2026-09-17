@@ -527,7 +527,7 @@ export async function mockApiRoutes(page: Page): Promise<void> {
   //   - /api/kpis/batch + /api/kpis/WS1-MP-001  must beat  /api/kpis**
   // --------------------------------------------------------------------------
 
-  // QUICK_STATS rollup (Total TRx (MTD), HCPs Reached). Real shape from
+  // QUICK_STATS rollup (Total TRx (latest full month), HCPs Reached). Real shape from
   // GET /api/copilotkit/kpis/summary (data_source 'database' = real DB values).
   await page.route('**/api/copilotkit/kpis/summary**', async (route: Route) => {
     await route.fulfill({

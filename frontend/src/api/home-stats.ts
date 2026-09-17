@@ -34,10 +34,17 @@ export interface KpiSummaryResponse {
   /** 'database' = real DB values; 'synthetic' = computed over synthetic-gold
    *  rows (E2I_KPI_INCLUDE_SYNTHETIC demo/review mode); 'fallback' = sample data. */
   data_source: 'database' | 'synthetic' | 'fallback' | string;
-  /** Latest treatment_events prescription date (data-coverage end), ISO `YYYY-MM-DD`,
+  /** Latest treatment_events prescription date (the event frontier), ISO `YYYY-MM-DD`,
    *  or null when unavailable. Used to render "No recent activity — data through
-   *  <date>" on empty (0/null) tiles with a dynamic date. */
+   *  <date>" on empty (0/null) event tiles with a dynamic date. */
   data_through?: string | null;
+  /** Canonical TRx lane: last day of the canonical series' latest COMPLETE month
+   *  (the month the volume tiles report), ISO `YYYY-MM-DD`, or null. */
+  volume_data_through?: string | null;
+  /** That month as a label, e.g. "August 2026", or null. Comes from the backend,
+   *  which reads it off the statement the tiles ran — never derived here from the
+   *  clock, because the canonical series lags the calendar by a variable amount. */
+  volume_period?: string | null;
 }
 
 /** Fetch the real KPI rollup for a brand, optionally scoped to a region.

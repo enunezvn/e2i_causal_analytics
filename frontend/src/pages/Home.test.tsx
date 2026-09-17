@@ -198,6 +198,8 @@ describe('Home', () => {
         period: 'Last 90 days',
         metrics: { trx_volume: 125000, hcp_reach: 8500 },
         data_source: 'database',
+        volume_period: 'August 2026',
+        volume_data_through: '2026-08-31',
       },
       isLoading: false,
       error: null,
@@ -224,7 +226,11 @@ describe('Home', () => {
     renderWithAllProviders(<Home />);
 
     // Real tile labels (kept exact for the e2e selectors) + real values.
-    expect(screen.getByText('Total TRx (MTD)')).toBeInTheDocument();
+    expect(screen.getByText('Total TRx (latest full month)')).toBeInTheDocument();
+    // The canonical series' period, from the backend — not computed here. A
+    // label the page derived from the clock would look identical and be wrong
+    // whenever the series lags, which it usually does.
+    expect(screen.getByText('August 2026')).toBeInTheDocument();
     expect(screen.getByText('Active Campaigns')).toBeInTheDocument();
     expect(screen.getByText('HCPs Reached')).toBeInTheDocument();
     expect(screen.getByText('Model Accuracy')).toBeInTheDocument();
@@ -237,6 +243,39 @@ describe('Home', () => {
     // Real DB data => no synthetic banner and no provenance badge.
     expect(screen.queryByText(/synthetic demo data/i)).not.toBeInTheDocument();
     expect(screen.queryByText('synthetic data')).not.toBeInTheDocument();
+  });
+
+  it('states the volume period only when the backend supplies one', () => {
+    // The sublabel is the canonical series' latest COMPLETE month, read by the
+    // backend off the statement the tiles ran. When it cannot be named (a failed
+    // or empty canonical read) the tile must show the figure with NO period
+    // rather than a month inferred from the clock: the two render identically
+    // and only one of them is true.
+    (useKpiSummary as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        brand: 'All',
+        period: 'Last 30 days',
+        metrics: { trx_volume: 777, hcp_reach: 7 },
+        data_source: 'database',
+        volume_period: null,
+        volume_data_through: null,
+      },
+      isLoading: false,
+      error: null,
+    });
+    renderWithAllProviders(<Home />);
+    const tile = screen.getByText('Total TRx (latest full month)')
+      .parentElement as HTMLElement;
+    // Positive control: the tile really rendered, so the absence below is an
+    // absent period and not an absent tile.
+    expect(within(tile).getByText('777')).toBeInTheDocument();
+    // Any month-year anywhere in the tile fails this — including one derived
+    // locally from today's date, which is the mistake being fenced.
+    expect(
+      within(tile).queryByText(
+        /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}\b/
+      )
+    ).toBeNull();
   });
 
   it('shows per-brand model accuracy as an average of N models', () => {
