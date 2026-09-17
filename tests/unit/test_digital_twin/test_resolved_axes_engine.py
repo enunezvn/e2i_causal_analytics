@@ -1,8 +1,9 @@
 """#2054: the engine reports only the subgroup axes its estimator resolves.
 
-On the live cohort path the estimator's per-twin score is a step function of region, so
-averaging it over the twins' specialty / decile / adoption_stage draws produces numbers
-whose only content is the twin draw. Measured on the base commit with the real
+For a backward-compatible cohort with no specialty source, the estimator's per-twin score
+is a step function of region, so averaging it over the twins' specialty / decile /
+adoption_stage draws produces numbers whose only content is the twin draw. Measured on the
+base commit with the real
 ``_calculate_heterogeneity``:
 
     n_twins   specialty spread   region spread
@@ -17,8 +18,9 @@ same twin counts, because it drove an extracted copy of ``calc_group_stats`` ove
 different twin draw. The decay and region's invariance are the finding here; the digits
 themselves are specific to the harness that produced them.
 
-Those three axes are therefore not reported at all, and ``by_region`` is reported from the
-COHORT rows the effect was estimated on.
+Those three axes are therefore not reported by this no-specialty cohort, and ``by_region``
+is reported from the COHORT rows the effect was estimated on. #2162 separately pins a real
+specialty-source cohort as a supported second axis.
 
 The synthetic path (``TwinEffectEstimator``) declares every axis and keeps reporting all
 four — ``test_simulation_engine.py::TestHeterogeneousEffects`` pins that.
@@ -116,7 +118,7 @@ def cohort() -> pd.DataFrame:
     return _cohort()
 
 
-def test_cohort_path_reports_only_region_and_is_invariant_to_twin_count(cohort):
+def test_cohort_without_specialty_reports_only_region_and_is_invariant_to_twin_count(cohort):
     """The reported ``by_region`` must be identical at 100 / 1,000 / 10,000 twins, and the
     three axes the estimate does not resolve must be absent rather than noise."""
     reported = []
@@ -212,6 +214,62 @@ def test_the_engine_reports_every_axis_in_the_declaration_vocabulary():
         assert set(got) == set(groups), f"by_{axis} did not receive its own declaration"
         assert got[f"group_of_{axis}"]["ate"] == pytest.approx(groups[f"group_of_{axis}"])
         assert got[f"group_of_{axis}"]["n"] == 17
+
+
+def test_the_engine_carries_axis_provenance_next_to_the_reported_effects():
+    """The evidence contract must survive the estimate -> persisted model boundary."""
+    from src.digital_twin.effect.estimate import AxisProvenance, EffectEstimate
+
+    estimate = EffectEstimate(
+        ate=0.2,
+        ate_ci_lower=0.1,
+        ate_ci_upper=0.3,
+        att=None,
+        atc=None,
+        per_twin_uplift=np.full(20, 0.2),
+        auuc=None,
+        qini=None,
+        feature_importances=None,
+        n_train=700,
+        estimator_type="cohort_causal_forest_dml",
+        data_provenance="cohort_estimated_synthetic_gold_v1",
+        cate_by_axis={"specialty": {"oncology": 0.2}},
+        n_by_axis={"specialty": {"oncology": 300}},
+        axis_provenance={
+            "specialty": AxisProvenance(
+                basis="cohort_rows",
+                source="hcp_profiles.specialty",
+                min_group_rows=100,
+                min_treated_rows=20,
+                min_control_rows=20,
+                fallback="region_then_cohort",
+                support_unit="cohort_rows",
+                estimand="observed_region_mix_mean_cate",
+                suppressed_groups={"rare": "group_rows_below_minimum"},
+            )
+        },
+    )
+
+    heterogeneity = SimulationEngine._calculate_heterogeneity(
+        None, _labelled_twins("specialty", ["oncology"]), [0.2] * 20, estimate
+    )
+    many_twins = _labelled_twins("specialty", ["oncology"] * 20)
+    large_heterogeneity = SimulationEngine._calculate_heterogeneity(
+        None, many_twins, [0.2] * len(many_twins), estimate
+    )
+
+    assert heterogeneity.axis_provenance["specialty"].model_dump() == {
+        "basis": "cohort_rows",
+        "source": "hcp_profiles.specialty",
+        "min_group_rows": 100,
+        "min_treated_rows": 20,
+        "min_control_rows": 20,
+        "fallback": "region_then_cohort",
+        "support_unit": "cohort_rows",
+        "estimand": "observed_region_mix_mean_cate",
+        "suppressed_groups": {"rare": "group_rows_below_minimum"},
+    }
+    assert large_heterogeneity.by_specialty == heterogeneity.by_specialty
 
 
 def _axis_estimate(n_twins: int):

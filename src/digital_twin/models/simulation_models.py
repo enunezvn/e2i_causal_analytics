@@ -119,6 +119,20 @@ class PopulationFilter(BaseModel):
 # =============================================================================
 
 
+class SubgroupAxisProvenance(BaseModel):
+    """Where a subgroup axis came from and its publication/fallback contract."""
+
+    basis: str
+    source: str
+    min_group_rows: int = 0
+    min_treated_rows: Optional[int] = None
+    min_control_rows: Optional[int] = None
+    fallback: str = "none"
+    support_unit: str = "rows"
+    estimand: str = "group_mean_cate"
+    suppressed_groups: Dict[str, str] = Field(default_factory=dict)
+
+
 class EffectHeterogeneity(BaseModel):
     """Heterogeneous effects across subgroups."""
 
@@ -126,6 +140,7 @@ class EffectHeterogeneity(BaseModel):
     by_decile: Dict[str, Dict[str, float]] = Field(default_factory=dict)
     by_region: Dict[str, Dict[str, float]] = Field(default_factory=dict)
     by_adoption_stage: Dict[str, Dict[str, float]] = Field(default_factory=dict)
+    axis_provenance: Dict[str, SubgroupAxisProvenance] = Field(default_factory=dict)
 
     def get_top_segments(self, n: int = 5) -> List[Dict[str, Any]]:
         """Get top N segments by effect size."""

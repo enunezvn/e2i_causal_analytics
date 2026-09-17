@@ -16,6 +16,7 @@ from src.digital_twin.effect import cohort_loader
 from src.digital_twin.effect.cohort_loader import (
     build_cohort_provider_or_none,
     cohort_treatment_availability,
+    flatten_specialty_relation,
 )
 from src.digital_twin.effect.errors import EffectCause
 from src.digital_twin.effect.provider import (
@@ -68,6 +69,20 @@ class _FakeClient:
 
     def table(self, *a, **k):
         return _FakeQuery(self._result, raise_on_execute=self._raise)
+
+
+def test_embedded_hcp_specialty_is_flattened_without_inventing_missing_values():
+    rows = [
+        {"hcp_id": "h1", "hcp_profiles": {"specialty": " oncology "}},
+        {"hcp_id": "h2", "hcp_profiles": {"specialty": ""}},
+        {"hcp_id": "h3", "hcp_profiles": None},
+    ]
+
+    frame = flatten_specialty_relation(pd.DataFrame(rows))
+
+    assert frame["specialty"].tolist()[:1] == ["oncology"]
+    assert frame["specialty"].isna().tolist() == [False, True, True]
+    assert "hcp_profiles" not in frame.columns
 
 
 def _cohort_rows(n: int = 600, seed: int = 0, *, with_all_channels: bool = False):

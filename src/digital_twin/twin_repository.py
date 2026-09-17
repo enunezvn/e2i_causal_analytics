@@ -393,10 +393,10 @@ def stored_filter_regions(row: Dict[str, Any]) -> List[str]:
 
 # Subgroup axes a cohort-provenance row can only carry if it was stored before #2097, when
 # by_specialty / by_decile / by_adoption_stage averaged region CATEs over the GENERATED
-# TWINS. Since #2097 the cohort estimator declares region alone and the engine writes {}
-# for every other axis. When a lane makes another axis legitimate on the cohort path
-# (specialty, #2104 item 2) it drops that axis here; the legacy rows stay recognised
-# through by_adoption_stage, which exists in no table and can never be declared.
+# TWINS. From #2097 until #2162 the cohort estimator declared region alone. #2162 adds a
+# legitimate cohort-row specialty axis and stores its provenance beside it. A populated
+# specialty without that metadata remains recognisably legacy; decile/adoption_stage are
+# always legacy on the cohort path.
 LEGACY_TWIN_WEIGHTED_AXES: tuple[str, ...] = tuple(a for a in SUBGROUP_AXES if a != "region")
 
 
@@ -431,7 +431,18 @@ class StoredSubgroupsBasis(str, Enum):
         if provenance != PROVENANCE_COHORT:
             return cls.UNKNOWN  # fail closed: None, or a provenance this reader cannot place
         eh = row.get("effect_heterogeneity") or {}
-        if any(eh.get(f"by_{axis}") for axis in LEGACY_TWIN_WEIGHTED_AXES):
+        axis_provenance = eh.get("axis_provenance") or {}
+        legacy_axes = [
+            axis
+            for axis in LEGACY_TWIN_WEIGHTED_AXES
+            if eh.get(f"by_{axis}")
+            and not (
+                axis == "specialty"
+                and isinstance(axis_provenance.get("specialty"), dict)
+                and axis_provenance["specialty"].get("basis") == "cohort_rows"
+            )
+        ]
+        if legacy_axes:
             return cls.TWIN_WEIGHTED_LEGACY
         return cls.COHORT_ROWS
 

@@ -98,12 +98,11 @@ def mock_simulation_engine():
         mock_result.intervention_config.model_dump.return_value = {
             "intervention_type": "email_campaign"
         }
-        mock_result.effect_heterogeneity = MagicMock()
-        mock_result.effect_heterogeneity.by_specialty = {}
-        mock_result.effect_heterogeneity.by_decile = {}
-        mock_result.effect_heterogeneity.by_region = {}
-        mock_result.effect_heterogeneity.by_adoption_stage = {}
-        mock_result.effect_heterogeneity.get_top_segments.return_value = []
+        # Real response-domain value: route serialization must be proven against the
+        # production contract, not MagicMock's unconstrained attribute shape (#2162).
+        from src.digital_twin.models.simulation_models import EffectHeterogeneity
+
+        mock_result.effect_heterogeneity = EffectHeterogeneity()
         mock_result.is_significant.return_value = True
         mock_result.effect_direction.return_value = "positive"
 

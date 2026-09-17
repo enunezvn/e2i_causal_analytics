@@ -20,6 +20,27 @@ PROVENANCE_COHORT = "cohort_estimated_synthetic_gold_v1"
 SUBGROUP_AXES: tuple[str, ...] = ("specialty", "decile", "region", "adoption_stage")
 
 
+@dataclass(frozen=True)
+class AxisProvenance:
+    """Evidence and fallback contract for one declared heterogeneity axis.
+
+    This metadata travels with the estimate so the API can explain where an axis came
+    from and why a label may be absent.  ``fallback`` describes scoring only: a fallback
+    value is never promoted into ``cate_by_axis`` as if it were a supported subgroup
+    estimate.
+    """
+
+    basis: str
+    source: str
+    min_group_rows: int
+    min_treated_rows: int | None = None
+    min_control_rows: int | None = None
+    fallback: str = "none"
+    support_unit: str = "rows"
+    estimand: str = "group_mean_cate"
+    suppressed_groups: dict[str, str] = field(default_factory=dict)
+
+
 @dataclass
 class EffectEstimate:
     ate: float
@@ -54,6 +75,7 @@ class EffectEstimate:
     #     scores as before. ``n_by_axis`` is then the twin count and is left unset.
     cate_by_axis: dict[str, dict[str, float]] = field(default_factory=dict)
     n_by_axis: dict[str, dict[str, int]] = field(default_factory=dict)
+    axis_provenance: dict[str, AxisProvenance] = field(default_factory=dict)
 
     def ci_width(self) -> float:
         return float(self.ate_ci_upper - self.ate_ci_lower)

@@ -17,6 +17,7 @@ The simulation follows these steps:
 
 import logging
 import time
+from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 from uuid import uuid4
@@ -43,6 +44,7 @@ from .models.simulation_models import (
     SimulationRecommendation,
     SimulationResult,
     SimulationStatus,
+    SubgroupAxisProvenance,
 )
 from .models.twin_models import DigitalTwin, TwinPopulation
 
@@ -410,12 +412,9 @@ class SimulationEngine:
         Averaging ``per_twin_uplift`` over twin subgroups is a real subgroup effect only
         when the score varies WITHIN a subgroup. ``TwinEffectEstimator`` scores each twin
         over all its covariates, so it does, and all four axes are reported as before.
-        ``CohortCausalEstimator`` fits region as its only heterogeneity axis, so its score
-        is a step function of region: every twin in a region carries the same value, and a
-        ``by_specialty`` average is then just the twin region-mixture mean. Since specialty,
-        decile and adoption_stage are drawn independently of region, every such group
-        converges to the SAME number and the spread between them is sampling noise in the
-        twin draw (measured: 0.049 at 100 twins, 0.002 at 100k, while region is invariant).
+        ``CohortCausalEstimator`` fits region and specialty directly and precomputes their
+        cohort-row effects. Decile and adoption_stage remain unresolved; grouping its scores
+        over generated twins on either would describe the twin mixture, not cohort evidence.
 
         So each estimator declares what it resolves (``EffectEstimate.cate_by_axis``) and
         an undeclared axis is reported as ``{}`` — the fail-closed answer this codebase
@@ -424,6 +423,10 @@ class SimulationEngine:
         ``n``, so the numbers do not move with the twin count.
         """
         heterogeneity = EffectHeterogeneity()
+        heterogeneity.axis_provenance = {
+            axis: SubgroupAxisProvenance.model_validate(asdict(provenance))
+            for axis, provenance in estimate.axis_provenance.items()
+        }
 
         # One bucket per axis, keyed by the twin's value on it. Driven by SUBGROUP_AXES so an
         # axis added there is grouped and reported without a second edit here.

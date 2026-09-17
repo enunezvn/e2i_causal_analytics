@@ -370,10 +370,10 @@ function provenanceLabel(provenance: string): string {
  * Title for the confidence badge (#2104). Confidence blends the rows the estimator fit on,
  * the interval's precision and model fidelity.
  *
- * A STORED simulation is told apart from a fresh run by `subgroups_basis`, which only the
- * detail response carries (never a `created_at` cutoff): its score was persisted when it
- * ran, by the heuristic in force at that time — for a `twin_weighted_legacy` row one that
- * scored on the generated twin count — so the current-heuristic sentences would be false.
+ * A STORED simulation is told apart from a fresh run by the detail-only
+ * `population_filters` field (never a `created_at` cutoff): its score was persisted when
+ * it ran, by the heuristic in force at that time — for a `twin_weighted_legacy` row one
+ * that scored on the generated twin count — so current-heuristic sentences would be false.
  * A fresh run's sentence is selected by `data_provenance`: on the cohort path the rows are
  * the brand cohort, so generating more twins cannot raise it; on the synthetic path the
  * training frame is drawn from the twins, so it follows the twin sample. Unknown provenance
@@ -382,7 +382,7 @@ function provenanceLabel(provenance: string): string {
 function confidenceTitle(simulation: AnySimulation): string {
   const base =
     'Confidence blends the evidence behind this estimate: the rows the estimator fit on, the precision of the 95% interval, and model fidelity.';
-  if ('subgroups_basis' in simulation) {
+  if ('population_filters' in simulation) {
     // Its own opening: a legacy row's evidence term WAS the generated twin count, so the
     // shared "rows the estimator fit on" sentence would be false before the qualification.
     const stored =
@@ -460,6 +460,9 @@ function HistoryScopeQualifier({
  */
 function SimulationResultPanel({ simulation }: { simulation: AnySimulation }) {
   const fmt = (n: number) => n.toFixed(3);
+  const specialtyEffects = simulation.effect_heterogeneity?.by_specialty ?? {};
+  const specialtyProvenance =
+    simulation.effect_heterogeneity?.axis_provenance?.specialty;
 
   // Supporting evidence — plain-English summary of the signals behind the
   // recommendation (ported from the retired Intervention Impact page, T10).
@@ -547,6 +550,51 @@ function SimulationResultPanel({ simulation }: { simulation: AnySimulation }) {
           )}
         </div>
       </div>
+
+      {/* Cohort-derived specialty effects (#2162).  The provenance text makes the
+          publication floor and scoring-only fallback visible beside the numbers. */}
+      {specialtyProvenance && Object.keys(specialtyEffects).length > 0 && (
+        <div>
+          <h4 className="text-sm font-medium text-[var(--color-text-secondary)] mb-2">
+            Specialty Effects
+          </h4>
+          <p className="mb-3 text-xs text-[var(--color-text-tertiary)]">
+              Observed-region-mix CATE from {specialtyProvenance.source}, supported by dated
+              cohort rows (not distinct HCPs). Published with at least{' '}
+              {specialtyProvenance.min_group_rows} rows
+              {specialtyProvenance.min_treated_rows != null
+                ? `, ${specialtyProvenance.min_treated_rows} treated`
+                : ''}
+              {specialtyProvenance.min_control_rows != null
+                ? `, and ${specialtyProvenance.min_control_rows} control`
+                : ''}
+              . Unsupported specialties fall back to region, then cohort for twin scoring;
+              fallback values are not published as specialty effects.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {Object.entries(specialtyEffects).map(([specialty, stats]) => (
+              <div
+                key={specialty}
+                className="flex items-center justify-between rounded-lg border border-[var(--color-border)] bg-[var(--color-background)] px-3 py-2"
+              >
+                <span className="text-sm text-[var(--color-text-primary)]">{specialty}</span>
+                <span className="text-right text-sm font-medium text-[var(--color-text-primary)]">
+                  {fmt(Number(stats.ate))}
+                  <span className="block text-xs font-normal text-[var(--color-text-tertiary)]">
+                    {Number(stats.n).toLocaleString()} cohort rows
+                  </span>
+                </span>
+              </div>
+            ))}
+          </div>
+          {Object.keys(specialtyProvenance.suppressed_groups).length > 0 && (
+            <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">
+              {Object.keys(specialtyProvenance.suppressed_groups).join(', ')} suppressed for
+              insufficient support.
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Supporting evidence (derived above from the simulation fields). */}
       <div>

@@ -112,10 +112,18 @@ const mockSimulationResponse: SimulationResponse = {
   is_significant: true,
   effect_direction: 'positive',
   created_at: '2024-01-15T10:00:00Z',
+  effect_heterogeneity: {
+    by_specialty: {},
+    by_decile: {},
+    by_region: {},
+    by_adoption_stage: {},
+    top_segments: [],
+    axis_provenance: {},
+  },
+  subgroups_basis: 'per_twin',
 };
 
 const mockSimulationDetailResponse: SimulationDetailResponse = {
-  subgroups_basis: 'per_twin',
   ...mockSimulationResponse,
   population_filters: { region: 'Northeast' },
   effect_heterogeneity: {
@@ -124,6 +132,7 @@ const mockSimulationDetailResponse: SimulationDetailResponse = {
     by_region: { 'Northeast': { ate: 0.16, ci_lower: 0.10, ci_upper: 0.22 } },
     by_adoption_stage: { 'early': { ate: 0.20, ci_lower: 0.14, ci_upper: 0.26 } },
     top_segments: [{ segment: 'Cardiology-Decile10', ate: 0.25 }],
+    axis_provenance: {},
   },
   intervention_config: { channel: 'email', duration_weeks: 8 },
   completed_at: '2024-01-15T10:05:00Z',

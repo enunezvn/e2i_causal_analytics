@@ -539,11 +539,11 @@ class TestTwinRepository:
 class TestStoredSubgroupsBasis:
     """How a stored row's effect_heterogeneity was computed (#2104 item 3).
 
-    The stored JSON is never rewritten; the detail read ANNOTATES it. Post-#2097 the cohort
-    estimator declares region alone and the engine writes ``{}`` for every other axis, so a
-    cohort-provenance row with a populated non-region axis can only predate #2097: its
-    subgroups averaged region CATEs over the generated twins and its confidence was scored
-    on twin count. No created_at cutoff is needed.
+    The stored JSON is never rewritten; the detail read ANNOTATES it. From #2097 to #2162
+    the cohort estimator declared region alone, so an old cohort row with populated
+    specialty and no axis provenance remains legacy. #2162 specialty rows carry explicit
+    cohort-row provenance and are classified as current. Decile/adoption-stage population
+    remains legacy on this path. No created_at cutoff is needed.
     """
 
     @staticmethod
@@ -571,6 +571,21 @@ class TestStoredSubgroupsBasis:
         from src.digital_twin.twin_repository import StoredSubgroupsBasis
 
         row = self._row("cohort", by_region={"northeast": {"ate": 0.1, "std": 0.0, "n": 900}})
+        assert StoredSubgroupsBasis.from_row(row) is StoredSubgroupsBasis.COHORT_ROWS
+
+    def test_new_specialty_axis_provenance_is_cohort_rows_not_legacy(self):
+        from src.digital_twin.twin_repository import StoredSubgroupsBasis
+
+        row = self._row(
+            "cohort",
+            by_specialty={"oncology": {"ate": 0.05, "std": 0.0, "n": 300}},
+            axis_provenance={
+                "specialty": {
+                    "basis": "cohort_rows",
+                    "source": "hcp_profiles.specialty",
+                }
+            },
+        )
         assert StoredSubgroupsBasis.from_row(row) is StoredSubgroupsBasis.COHORT_ROWS
 
     def test_synthetic_row_is_per_twin_even_with_every_axis_populated(self):

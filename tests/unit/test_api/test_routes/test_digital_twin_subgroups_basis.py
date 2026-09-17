@@ -91,6 +91,71 @@ def test_a_cohort_row_with_region_only_is_cohort_rows():
 
 
 @pytest.mark.unit
+def test_a_new_specialty_axis_keeps_its_support_provenance_in_detail():
+    provenance = {
+        "basis": "cohort_rows",
+        "source": "hcp_profiles.specialty",
+        "min_group_rows": 100,
+        "min_treated_rows": 20,
+        "min_control_rows": 20,
+        "fallback": "region_then_cohort",
+        "support_unit": "cohort_rows",
+        "estimand": "observed_region_mix_mean_cate",
+        "suppressed_groups": {},
+    }
+    eh = {
+        "by_specialty": {"oncology": {"ate": 0.05, "std": 0.0, "n": 300}},
+        "by_decile": {},
+        "by_region": dict(_REGION),
+        "by_adoption_stage": {},
+        "axis_provenance": {"specialty": provenance},
+    }
+
+    detail = _read_detail(_row(data_provenance=PROVENANCE_COHORT, effect_heterogeneity=eh))
+
+    assert detail.subgroups_basis == "cohort_rows"
+    assert detail.effect_heterogeneity.axis_provenance["specialty"].model_dump() == provenance
+
+
+@pytest.mark.unit
+def test_live_domain_heterogeneity_maps_to_the_same_specialty_contract():
+    from src.api.routes import digital_twin as dt
+    from src.digital_twin.models.simulation_models import (
+        EffectHeterogeneity,
+        SubgroupAxisProvenance,
+    )
+
+    live = EffectHeterogeneity(
+        by_specialty={"oncology": {"ate": 0.05, "std": 0.0, "n": 300}},
+        axis_provenance={
+            "specialty": SubgroupAxisProvenance(
+                basis="cohort_rows",
+                source="hcp_profiles.specialty",
+                min_group_rows=100,
+                min_treated_rows=20,
+                min_control_rows=20,
+                fallback="region_then_cohort",
+                support_unit="cohort_rows",
+                estimand="observed_region_mix_mean_cate",
+            )
+        },
+    )
+
+    response = dt._heterogeneity_response(live)
+
+    assert response.by_specialty["oncology"] == {"ate": 0.05, "std": 0.0, "n": 300.0}
+    assert response.axis_provenance["specialty"].source == "hcp_profiles.specialty"
+
+
+@pytest.mark.unit
+def test_live_heterogeneity_mapper_rejects_untyped_runtime_objects():
+    from src.api.routes import digital_twin as dt
+
+    with pytest.raises(TypeError, match="Pydantic domain model or stored JSON mapping"):
+        dt._heterogeneity_response(object())
+
+
+@pytest.mark.unit
 def test_a_synthetic_row_is_per_twin():
     detail = _read_detail(_row(data_provenance=PROVENANCE_SYNTHETIC))
 
