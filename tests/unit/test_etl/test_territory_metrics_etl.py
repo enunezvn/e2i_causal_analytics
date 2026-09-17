@@ -550,8 +550,12 @@ def test_the_territory_rollup_reads_the_honest_trigger_columns():
     import re as _re
 
     from src.etl import territory_metrics_etl as _etl
+    from tests._checkout_guard import assert_same_checkout
 
-    assert ".worktrees/lane-trx-canonical" in _etl.__file__, _etl.__file__
+    # Capability, not a literal path: the module must come from THIS checkout.
+    # A `.worktrees/<lane>` substring was the first form and it could only ever
+    # pass inside one directory on one machine -- see tests/_checkout_guard.py.
+    assert_same_checkout(_etl, __file__)
     sql = _etl.INSERT_TERRITORY_ROLLUP_SQL
     assert "bm.triggers_delivered_count" in sql
     assert "bm.triggers_accepted_count" in sql
