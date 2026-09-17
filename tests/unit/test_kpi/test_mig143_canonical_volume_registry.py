@@ -115,6 +115,30 @@ def test_the_rollback_restores_only_what_the_migration_moved():
     # row cannot collide with it
     assert rollback.index("source = 'business_metrics.value'") < rollback.index("DO $restore$")
 
+    # The ledger row is retired by the rollback ITSELF, as its last statement before
+    # NOTIFY, so that under `psql --single-transaction` the schema change and the
+    # ledger move commit together (codex iter3 HIGH-2). Doing it as a second psql
+    # invocation left a window in which 143 was undone while the runner still
+    # believed it applied, so the next deploy would skip re-applying it.
+    #
+    # codex iter4 MED-1: this has to be asserted SEMANTICALLY. The byte-equality
+    # check on line 106 compares the committed file against `rollback_render()`, so
+    # it says the file matches the generator -- it says nothing about what either
+    # one CONTAINS. Deleting the DELETE from `rollback_render()` and regenerating
+    # keeps both sides equal and left every other assertion here green; the property
+    # would have regressed without a red test. Assert the content, not the agreement.
+    ledger = re.findall(
+        r"DELETE FROM public\.schema_migrations WHERE filename = '([^']+)';", rollback
+    )
+    assert ledger == ["143_canonical_volume_kpis.sql"], (
+        f"the rollback does not retire exactly its own ledger row: {ledger}"
+    )
+    tail = rollback[rollback.index("DELETE FROM public.schema_migrations") :]
+    assert "DROP TABLE" not in tail and "DO $restore$" not in tail, (
+        "the ledger DELETE runs before some schema statement; a failure in between "
+        "would leave the ledger claiming a rollback that did not finish"
+    )
+
 
 def test_every_read_of_the_table_applies_the_null_dimension_rule():
     """codex r2 HIGH: headline, share, frontier, windowed and series statements all

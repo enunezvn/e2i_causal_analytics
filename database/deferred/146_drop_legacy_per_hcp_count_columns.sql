@@ -54,8 +54,11 @@
 --
 -- Verify first, in the same shape, with a trailing ROLLBACK instead of a commit.
 --
--- The ledger row is written by the LAST statement of this file, inside the same
--- --single-transaction as the schema change (codex iter2 MED-1). It used to be a
+-- The ledger row is written AFTER every schema statement in this file -- only the
+-- trailing NOTIFY follows it -- inside the same --single-transaction as the schema
+-- change (codex iter2 MED-1; the "last statement" wording was corrected in iter4,
+-- because NOTIFY does follow it and a claim in a permanent artifact has to be true
+-- as written). It used to be a
 -- second, separate command in this header, which could be forgotten or could fail
 -- on its own, leaving the ledger disagreeing with the schema. Nothing else writes
 -- it: this file is outside every MIGRATION_DIRS entry, so the runner never sees it.

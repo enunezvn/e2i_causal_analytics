@@ -339,7 +339,7 @@ class TestSchemaModelFollowsTheExpandContractPair:
 
     144 (``database/migrations/``, applied by the runner) ADDs
     ``business_metrics.triggers_{delivered,accepted,total}_count`` beside the
-    legacy ``{trx,nrx,total_rx}_count``. 145 (``database/deferred/``, applied by
+    legacy ``{trx,nrx,total_rx}_count``. 146 (``database/deferred/``, applied by
     hand in a LATER deploy) retires the legacy three. The canonical schema a Feast
     source must target is the end state: canonical present, legacy gone.
 

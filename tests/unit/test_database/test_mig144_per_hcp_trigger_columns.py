@@ -78,6 +78,53 @@ def _strip_comments(text: str) -> str:
     return re.sub(r"--.*$", "", text, flags=re.M)
 
 
+def _destructive_statements(sql: str) -> list[str]:
+    """Every DELETE / TRUNCATE the file can EXECUTE, wherever it appears, as
+    ``"<VERB> <target>"``.
+
+    codex iter4 HIGH-2. The previous form was line-anchored --
+    ``re.findall(r"^\\s*(DELETE FROM[^;]*|TRUNCATE[^;]*);", ...)`` -- which made it
+    a PROXY for the destructive capability instead of a measure of it: it asked
+    "does a line begin with DELETE FROM?" when the condition that matters is "can
+    this file delete rows?". Three valid PostgreSQL payloads, each of which empties
+    ``business_metrics``, left the detected list equal to the one permitted ledger
+    DELETE and the assertion green::
+
+        WITH erased AS (DELETE FROM public.business_metrics RETURNING metric_id)
+        SELECT count(*) FROM erased;          -- the line begins with WITH
+
+        DELETE
+        FROM public.business_metrics;         -- "DELETE FROM" is not one token here
+
+        DO $x$ BEGIN
+          EXECUTE 'DELETE FROM public.business_metrics';
+        END $x$;                              -- the line begins with EXECUTE
+
+    So this counts the destructive VERB wherever it occurs -- inside a CTE, split
+    across lines, or quoted inside dynamic SQL -- and reports the target it names.
+    Scanning string literals rather than skipping them is deliberate: dynamic SQL
+    is the one place a destructive statement can hide from a reader, so it is the
+    one place this must still see.
+
+    ``ON DELETE`` (a foreign-key action clause) is the single exclusion. It cannot
+    remove a row by itself -- only a DELETE against the referenced table can, and
+    that DELETE would be counted where it is written. The exclusion is anchored to
+    the preceding ``ON`` so it cannot widen into a way of hiding a statement.
+    """
+    body = _strip_comments(sql)
+    found: list[str] = []
+    for m in re.finditer(r"\b(DELETE|TRUNCATE)\b", body, re.I):
+        verb = m.group(1).upper()
+        if verb == "DELETE" and re.search(r"\bON\s+$", body[: m.start()], re.I):
+            continue  # ON DELETE CASCADE / SET NULL -- a constraint, not a statement
+        tail = body[m.start() :]
+        target = re.match(r"DELETE\s+FROM\s+([A-Za-z_.\"]+)", tail, re.I) or re.match(
+            r"TRUNCATE(?:\s+TABLE)?\s+(?:ONLY\s+)?([A-Za-z_.\"]+)", tail, re.I
+        )
+        found.append(f"{verb} {target.group(1) if target else '<unparsed>'}")
+    return found
+
+
 def test_the_canonical_columns_are_added_statically():
     """The three ADDs must be STATIC, not dynamic SQL.
 
@@ -206,13 +253,29 @@ def test_the_rollback_removes_exactly_what_the_expand_added():
     # applied, so the next deploy would skip re-applying it. Any OTHER delete —
     # against business_metrics or anything else holding data — is still forbidden,
     # so this narrows the old blanket ban rather than lifting it.
-    deletes = re.findall(
-        r"^\s*(DELETE FROM[^;]*|TRUNCATE[^;]*);", _strip_comments(rollback), re.M | re.I
+    assert _destructive_statements(rollback) == ["DELETE public.schema_migrations"], (
+        _destructive_statements(rollback)
     )
-    assert deletes == [
-        "DELETE FROM public.schema_migrations WHERE filename = "
-        "'144_per_hcp_trigger_count_columns.sql'"
-    ], deletes
+
+    # ...and the flag that makes "in the same transaction" true (codex iter4 MED-1).
+    # The ledger DELETE following every schema statement (only NOTIFY comes after
+    # it) is only atomicity if psql is told
+    # to wrap the file in one transaction; without the flag it commits statement by
+    # statement and the DROPs can land while the ledger row survives -- the very
+    # split the DELETE was moved here to close. It must be in the APPLY COMMAND:
+    # this header ALSO explains the flag in prose two paragraphs above, so a
+    # substring check over the header passes while the command has lost it (that
+    # exact proxy was codex iter3 LOW-2 on the contract migration). Reconstruct the
+    # command from its comment lines -- it wraps across two with a backslash -- and
+    # look inside it.
+    command_text = " ".join(re.sub(r"^--\s?", "", ln) for ln in rollback.splitlines())
+    assert re.search(
+        r"docker exec.*?psql.*?--single-transaction.*?<\s*database/migrations/rollback_144",
+        command_text,
+    ), (
+        "the documented apply COMMAND does not use --single-transaction, so nothing "
+        "couples the ledger DELETE to the schema change it records"
+    )
 
 
 def test_the_rollback_is_never_applied_as_a_forward_migration():

@@ -1,10 +1,17 @@
 """Migration 146: the CONTRACT half of the per_hcp_rollup column expand/contract.
 
 144 adds ``business_metrics.triggers_{delivered,accepted,total}_count`` beside the
-legacy ``{trx,nrx,total_rx}_count`` and keeps both true with a row trigger. 145
+legacy ``{trx,nrx,total_rx}_count`` and keeps both true with a row trigger. 146
 retires the legacy three.
 
-THE WHOLE POINT OF THIS MODULE IS THAT 145 MUST NOT RUN IN THE SAME DEPLOY AS 144.
+(It is 146, not 145: ``database/migrations/145_drop_trx_share_patient_axis_variants.sql``
+is already on origin/main and applied live. Different directories, so the runner keys
+the two apart today — but the intended end state moves this file into
+``database/migrations/``, where a duplicate number makes apply order ambiguous.
+``test_the_contract_number_collides_with_no_other_migration`` pins both halves of
+that.)
+
+THE WHOLE POINT OF THIS MODULE IS THAT 146 MUST NOT RUN IN THE SAME DEPLOY AS 144.
 ``scripts/run_migrations.sh`` applies EVERY pending forward ``*.sql`` in each of its
 ``MIGRATION_DIRS`` in one pass, so a ``database/migrations/146_*.sql`` committed
 beside 144 would be applied seconds after it — the legacy columns would be gone
@@ -12,7 +19,7 @@ before a single container was replaced, and the deploy would be exactly as unsaf
 as the rename that codex HIGH-1 rejected. Expand/contract is only expand/contract
 if the two halves land in two different deploys.
 
-The separation is STRUCTURAL rather than a naming convention: 145 lives in
+The separation is STRUCTURAL rather than a naming convention: 146 lives in
 ``database/deferred/``, a directory the runner's ``MIGRATION_DIRS`` does not list,
 so no filename typo and no new skip-pattern can arm it. These tests pin that
 directory out of the runner's scope, and pin the runner's scope as the ONE source
@@ -61,7 +68,7 @@ def test_the_runner_scope_parser_is_not_vacuous():
 
 
 def test_the_contract_migration_is_outside_every_directory_the_runner_applies():
-    """THE GUARD. If ``database/deferred`` ever joins MIGRATION_DIRS — or 145 is
+    """THE GUARD. If ``database/deferred`` ever joins MIGRATION_DIRS — or 146 is
     moved into a directory already on it — the contract half starts shipping in
     the same deploy as the expand half, and the deploy-safety property bought by
     codex HIGH-1 is silently gone."""
@@ -101,10 +108,23 @@ def test_the_contract_number_collides_with_no_other_migration():
         f"migration number {number} is already used by {clashes} — renumber the "
         "contract before it is moved into database/migrations/"
     )
-    # ...and the guard must be able to SEE a clash: the number it would have
-    # collided with is still there, under a different name.
-    taken = sorted((REPO / "database").rglob("145_*.sql"))
-    assert taken, "the 145 file this guard was written for is gone; re-derive the trap"
+    # ...and the guard must be able to SEE a clash: the file this contract WOULD
+    # have collided with is still there, under its own number.
+    #
+    # codex iter4 LOW-1: this used to be `assert sorted(database.rglob("145_*.sql"))`
+    # -- a PROXY. It asks "does any file numbered 145 exist anywhere under
+    # database/?", when the condition it claims to prove is "the specific migration
+    # that made 145 unusable is still on main". Deleting
+    # 145_drop_trx_share_patient_axis_variants.sql and dropping any unrelated
+    # 145_dummy.sql anywhere under database/ satisfied the old form while the trap it
+    # documents had evaporated. Pin the path.
+    collision = REPO / "database" / "migrations" / "145_drop_trx_share_patient_axis_variants.sql"
+    assert collision.exists(), (
+        f"{collision.relative_to(REPO)} is gone -- that file (already on origin/main "
+        "and applied live) is WHY this contract is numbered 146 rather than 145. If it "
+        "really was removed, re-derive the next free number instead of deleting this "
+        "assertion: the guard below is only meaningful while a real collision exists."
+    )
 
 
 def test_the_contract_retires_the_legacy_columns_and_the_sync_machinery():

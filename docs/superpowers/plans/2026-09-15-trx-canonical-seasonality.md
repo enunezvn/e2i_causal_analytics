@@ -159,7 +159,7 @@ Add + backfill + sync, then retire in a LATER deploy. Two committed halves:
   carries the preconditions and the later PR that moves it into `database/migrations/`.
 
 Why the halves must not ship in one deploy: `scripts/run_migrations.sh` applies EVERY pending forward
-`*.sql` in each `MIGRATION_DIRS` entry in ONE pass, so a `migrations/145_*.sql` would run seconds after
+`*.sql` in each `MIGRATION_DIRS` entry in ONE pass, so a `migrations/146_*.sql` would run seconds after
 144 and drop the legacy columns before a single container was replaced — the very failure the expand
 exists to prevent. `database/deferred/` appears in no `MIGRATION_DIRS` entry, which makes the
 separation structural rather than a naming convention;
@@ -9093,7 +9093,7 @@ RENAME_SED='s/\btrx_count\b/triggers_delivered_count/g; s/\bnrx_count\b/triggers
 > `per_hcp_rollup` rows, sync trigger installed, 12 legacy view columns intact; an old-code INSERT
 > (legacy only) fills the canonical side; the ETL's real `ON CONFLICT DO UPDATE` shape propagates to
 > it; a new-code write (canonical only) fills the legacy side; apply 144 a second time → no-op (6
-> columns, 0 mismatches, 1 trigger); apply 145 → legacy columns, trigger and function gone, all four
+> columns, 0 mismatches, 1 trigger); apply 146 → legacy columns, trigger and function gone, all four
 > views rebuilt on the canonical names (29 → 36 columns), the pre-lane writer's values intact.
 > Separately: 144 then `rollback_144` → back to 36 columns with the legacy data untouched on all
 > 12,143 rows. Note Step 4b's Expected `15` still holds, but for a different reason — under the expand
@@ -13175,18 +13175,57 @@ case "$EXPECT" in old|new) ;; *) echo "usage: prove_state.sh old|new"; exit 2 ;;
 IMAGES_PRE="${IMAGES_PRE:-$RB/images_pre.txt}"
 q() { docker exec supabase-db psql -U postgres -d postgres -Atc "$1"; }
 check() { if [ "$2" = "$3" ]; then echo "OK   $1: $2"; else echo "BAD  $1: got [$2] want [$3]"; bad=1; fi; }
-# REVISED 2026-09-18 (codex iter3 HIGH-1). 144 is an EXPAND, so business_metrics carries SIX count
-# columns between the expand deploy and the by-hand contract (database/deferred/146), and a pre-lane
-# container is correct against either three or six. An exact-fingerprint check on that column set
-# therefore fails a CORRECT deploy, which is what this prover is for. `has` asserts the columns that
-# must BE THERE and reports the rest instead of failing on them.
-has() { local missing=""; for want in $3; do case ",$2," in *",$want,"*) ;; *) missing="$missing $want";; esac; done
-        if [ -z "$missing" ]; then echo "OK   $1: [$2] contains all of [$3]"; else echo "BAD  $1: [$2] is missing$missing"; bad=1; fi; }
+# REVISED 2026-09-18 (codex iter3 HIGH-1), REWRITTEN 2026-09-17 (codex iter4 HIGH-1).
+#
+# 144 is an EXPAND, so business_metrics carries SIX count columns between the expand deploy and the
+# by-hand contract (database/deferred/146). The original exact-fingerprint `check` on that column set
+# FAILED a correct deploy, which is what this prover exists to certify. iter3 replaced it with a `has`
+# helper that asserted only that the required columns EXISTED -- and that over-corrected into a prover
+# that accepts broken schemas. Measured, all returning OK exit 0:
+#   * canonical three + trx_count only          -- a HALF-APPLIED expand
+#   * all six columns but NO sync trigger       -- both generations writing, nothing keeping them equal
+#   * legacy three + triggers_accepted_count    -- the same half-application on the `old` side
+# The middle one is the dangerous one, and it is exactly the failure the expand was designed to make
+# impossible: `has` could not see it because a missing trigger is not a missing column.
+#
+# So the schema is judged as one of THREE named generations, each an EXACT state, and each branch below
+# names which generations it accepts. Anything else is `broken` and reported with what made it so.
+SYNC_TRG=business_metrics_sync_legacy_trigger_counts_trg
+# Measured by rehearsing 144 inside BEGIN/ROLLBACK on the live DB (2026-09-17): pg_get_triggerdef
+# output, tgenabled 'O', the six-name column list, and 0 disagreeing rows over all 22,043.
+SYNC_DEF="CREATE TRIGGER $SYNC_TRG BEFORE INSERT OR UPDATE ON public.business_metrics FOR EACH ROW EXECUTE FUNCTION business_metrics_sync_legacy_trigger_counts()"
+COLS_BOTH="nrx_count,total_rx_count,triggers_accepted_count,triggers_delivered_count,triggers_total_count,trx_count"
+COLS_LEGACY="nrx_count,total_rx_count,trx_count"
+COLS_CANON="triggers_accepted_count,triggers_delivered_count,triggers_total_count"
+# The trigger is checked by DEFINITION and by tgenabled, not by name: a same-named trigger that is
+# disabled ('D'), or points at another function, keeps the two names free to diverge while a
+# name-only check still says "installed". Rows currently agreeing does not make it enabled.
+expand_state()   { [ "$cols" = "$COLS_BOTH" ] && [ "$trg_def" = "$SYNC_DEF" ] && [ "$trg_on" = O ] && [ "$disagree" = 0 ]; }
+contract_state() { [ "$cols" = "$COLS_CANON" ] && [ "$trg_def" = absent ] && [ "$defer_led" = 1 ]; }
+legacy_state()   { [ "$cols" = "$COLS_LEGACY" ] && [ "$trg_def" = absent ]; }
+schema_generation() {
+  if expand_state; then echo expand
+  elif contract_state; then echo contract
+  elif legacy_state; then echo legacy
+  else echo "broken(cols=[$cols] trigger_enabled=[$trg_on] trigger_def_matches=[$([ "$trg_def" = "$SYNC_DEF" ] && echo yes || echo no)] disagreeing_rows=[$disagree] deferred_146_ledger=[$defer_led])"
+  fi; }
+# $1 label, $2.. the generations this branch accepts.
+generation_in() { local got="$1"; shift; for want in "$@"; do [ "$got" = "$want" ] && { echo "OK   schema_generation: $got (accepted here: $*)"; return; }; done
+                  echo "BAD  schema_generation: got [$got] want one of [$*]"; bad=1; }
 STATE_SQL="SELECT md5(string_agg(id::text || kpi_id || brand || region || metric_date || value || coalesce(status, '') || source || is_synthetic, ',' ORDER BY id)) FROM public.kpi_history WHERE kpi_id IN ('WS3-BI-005','WS3-BI-006','WS3-BI-007','WS3-BI-008','WS3-BI-011','WS3-BI-012','WS3-BI-013','WS3-BI-014')"
 mig=$(q "SELECT count(*) FROM public.schema_migrations WHERE filename IN ('143_canonical_volume_kpis.sql','144_per_hcp_trigger_count_columns.sql')")
 reg=$(q "SELECT count(*) FROM public.kpi_query_registry WHERE query_id LIKE 'canonical_volume_%'")
 cols=$(q "SELECT string_agg(column_name, ',' ORDER BY column_name) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'business_metrics' AND column_name IN ('trx_count','nrx_count','total_rx_count','triggers_delivered_count','triggers_accepted_count','triggers_total_count')")
 audit=$(q "SELECT to_regclass('public.kpi_history_rekey_143') IS NOT NULL")
+# codex iter4 HIGH-1: the sync trigger's DEFINITION and enabled flag, and whether any row actually
+# disagrees across the two names. Row agreement is only a question while BOTH name sets exist.
+trg_def=$(q "SELECT coalesce((SELECT pg_get_triggerdef(t.oid) FROM pg_trigger t WHERE t.tgrelid = 'public.business_metrics'::regclass AND NOT t.tgisinternal AND t.tgname = '$SYNC_TRG'), 'absent')")
+trg_on=$(q "SELECT coalesce((SELECT t.tgenabled::text FROM pg_trigger t WHERE t.tgrelid = 'public.business_metrics'::regclass AND NOT t.tgisinternal AND t.tgname = '$SYNC_TRG'), 'absent')")
+defer_led=$(q "SELECT count(*) FROM public.schema_migrations WHERE filename = 'deferred/146_drop_legacy_per_hcp_count_columns.sql'")
+if [ "$cols" = "$COLS_BOTH" ]; then
+  disagree=$(q "SELECT count(*) FROM public.business_metrics WHERE triggers_delivered_count IS DISTINCT FROM trx_count OR triggers_accepted_count IS DISTINCT FROM nrx_count OR triggers_total_count IS DISTINCT FROM total_rx_count")
+else disagree="n/a"; fi
+generation=$(schema_generation)
 event_hist=$(q "SELECT count(*) FROM public.kpi_history WHERE kpi_id IN ('WS3-BI-005','WS3-BI-006','WS3-BI-007','WS3-BI-008') AND source = 'treatment_events.event_date'")
 api_img=$(docker inspect e2i_api --format '{{.Image}}' 2>/dev/null || echo missing)
 api_tag=$(docker inspect e2i_api --format '{{.Config.Image}}' 2>/dev/null || echo missing)
@@ -13255,6 +13294,12 @@ if [ "$EXPECT" = new ]; then
     # (supabase_migrations.schema_migrations does not exist here; measured 2026-09-15: 223 rows, md5 46186fc3...)
     printf 'MIGRATIONS=%s\n' "$(q "SELECT count(*) || ':' || md5(string_agg(filename, ',' ORDER BY filename)) FROM public.schema_migrations")"
     printf 'SCHEMA_COLUMNS=%s\n' "$cols"
+    # codex iter4 HIGH-1: the column list alone cannot tell an expand that is keeping both names true
+    # from one whose sync trigger is gone or disabled, so a verdict must be bound to the generation and
+    # to the machinery that makes it valid, not just to the names.
+    printf 'SCHEMA_GENERATION=%s\n' "$generation"
+    printf 'SYNC_TRIGGER=%s/%s\n' "$trg_on" "$([ "$trg_def" = "$SYNC_DEF" ] && echo def-matches || echo def-differs)"
+    printf 'LEGACY_CANONICAL_DISAGREEMENTS=%s\n' "$disagree"
     printf 'CANONICAL_REGISTRY=%s\n' "$(q "SELECT count(*) || ':' || coalesce(md5(string_agg(query_id || '=' || md5(sql), ',' ORDER BY query_id)), '') FROM public.kpi_query_registry WHERE query_id LIKE 'canonical_volume_%'")"
     if [ "$(q "SELECT to_regclass('public.kpi_history_rekey_143') IS NOT NULL")" = t ]; then
       printf 'REKEY_PROVENANCE=%s\n' "$(q "SELECT count(*) || ':' || coalesce(md5(string_agg(source_history_id::text || '/' || dest_history_id::text || '/' || disposition, ',' ORDER BY source_history_id)), '') FROM public.kpi_history_rekey_143")"
@@ -13451,7 +13496,10 @@ if [ "$EXPECT" = old ]; then
   # IS the property the expand bought, so the prover states it rather than failing on it.
   if [ "$mig" = 0 ] || [ "$mig" = 1 ]; then echo "OK   migrations: $mig (0 = 144 never applied, 1 = expand left applied)"; else echo "BAD  migrations: got [$mig] want 0 or 1"; bad=1; fi
   check canonical_registry_rows "$reg" 0
-  has business_metrics_columns "$cols" "trx_count nrx_count total_rx_count"
+  # Old CODE is correct against the pre-144 schema AND against a fully valid expand (that tolerance is
+  # what the expand bought). It is NOT correct against a half-applied one, and `contract` is fatal to it:
+  # the legacy names it reads and writes are gone.
+  generation_in "$generation" legacy expand
   check rekey_audit_table "$audit" f
   check kpi_history_md5 "$(q "$STATE_SQL")" "$(cat "$RB/kpi_history_volume_pre.md5")"
   check canonical_calculator_code "$canon" absent
@@ -13461,8 +13509,10 @@ elif [ "$EXPECT" = new ]; then
   check migrations "$mig" 2
   check canonical_registry_rows "$reg" 34
   # Both name sets are present until the CONTRACT half (database/deferred/146) is applied by hand in a
-  # later deploy; after it, only the canonical three remain. `has` passes in both states.
-  has business_metrics_columns "$cols" "triggers_delivered_count triggers_accepted_count triggers_total_count"
+  # later deploy; after it, only the canonical three remain. New code is correct against either -- but
+  # `expand` is only acceptable WITH a live, correctly-defined sync trigger and zero disagreeing rows,
+  # which is the whole reason the legacy columns are still safe to leave standing.
+  generation_in "$generation" expand contract
   check rekey_audit_table "$audit" t
   check canonical_calculator_code "$canon" present
   check feast_fields "$fields" "triggers_accepted_count,triggers_delivered_count,triggers_total_count"
@@ -14080,7 +14130,8 @@ The deploy run's step summary (`deploy.yml:1298-1359`) and its job log (actions 
   re-key moved, from `public.kpi_history_rekey_143` (Task 8).
   ```bash
   docker stop e2i_feast_materializer
-  # The rollback file retires its OWN ledger row as its last statement, so the schema change and the
+  # The rollback file retires its OWN ledger row after every schema statement (only NOTIFY
+  # follows it), so the schema change and the
   # ledger move commit together under --single-transaction (codex iter3 HIGH-2). Do NOT re-add a
   # separate `q DELETE` after this: `&&` would order the two, not make them atomic, and a failure
   # between them leaves the runner believing a rolled-back migration is still applied.
@@ -14611,9 +14662,21 @@ check("the legacy names are still on the table, trigger-synced, until the contra
       legacy_tbl == "3", legacy_tbl)
 # The sync trigger is what makes the legacy three safe to keep, so certify it is actually installed
 # rather than inferring it from the columns being present.
-sync = psql("SELECT count(*) FROM pg_trigger WHERE tgrelid='public.business_metrics'::regclass "
-            "AND NOT tgisinternal AND tgname='business_metrics_sync_legacy_trigger_counts_trg'")
-check("the bidirectional sync trigger is installed", sync == "1", sync)
+#
+# codex iter4 HIGH-1: matching it by NAME is a proxy. A trigger of that name that is DISABLED
+# (tgenabled 'D') or bound to a different function satisfies a name check while the two name sets are
+# free to diverge from the next write on — and the skew check below would still read 0, because
+# divergence starts when someone writes, not when the trigger breaks. Assert the definition
+# pg_get_triggerdef actually returns (measured by rehearsing 144 inside BEGIN/ROLLBACK, 2026-09-17)
+# and that it is enabled for origin writes.
+SYNC_DEF = ("CREATE TRIGGER business_metrics_sync_legacy_trigger_counts_trg BEFORE INSERT OR UPDATE "
+            "ON public.business_metrics FOR EACH ROW EXECUTE FUNCTION "
+            "business_metrics_sync_legacy_trigger_counts()")
+sync = psql("SELECT coalesce((SELECT pg_get_triggerdef(t.oid)||'|'||t.tgenabled FROM pg_trigger t "
+            "WHERE t.tgrelid='public.business_metrics'::regclass AND NOT t.tgisinternal "
+            "AND t.tgname='business_metrics_sync_legacy_trigger_counts_trg'), 'absent')")
+check("the bidirectional sync trigger is installed, enabled and defined as 144 defines it",
+      sync == SYNC_DEF + "|O", sync)
 # ...and it must actually hold: no per_hcp_rollup row may disagree across the two names.
 skew = psql("SELECT count(*) FROM public.business_metrics WHERE trx_count IS DISTINCT FROM triggers_delivered_count "
             "OR nrx_count IS DISTINCT FROM triggers_accepted_count "
