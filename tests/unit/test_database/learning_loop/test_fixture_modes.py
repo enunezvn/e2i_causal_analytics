@@ -116,13 +116,13 @@ def _repo(tmp_path: Path) -> Path:
 
 def test_simulation_is_off_by_default(tmp_path):
     root = _repo(tmp_path)
-    assert _pg.simulated_pending_key(None, RUNNER, root) is None
-    assert _pg.simulated_pending_key("", RUNNER, root) is None
+    assert _pg.simulated_pending_key(None, RUNNER, RUNNER, root) is None
+    assert _pg.simulated_pending_key("", RUNNER, RUNNER, root) is None
 
 
 def test_simulation_accepts_an_applied_key_that_has_a_rollback_file(tmp_path):
     root = _repo(tmp_path)
-    assert _pg.simulated_pending_key("ml/044_z.sql", RUNNER, root) == "ml/044_z.sql"
+    assert _pg.simulated_pending_key("ml/044_z.sql", RUNNER, RUNNER, root) == "ml/044_z.sql"
     assert _pg.rollback_file("ml/044_z.sql", root) == root / "database" / "ml" / "rollback_044.sql"
     assert (
         _pg.rollback_file("145_x.sql", root)
@@ -139,4 +139,12 @@ def test_simulation_accepts_an_applied_key_that_has_a_rollback_file(tmp_path):
 )
 def test_simulation_refuses_a_key_it_cannot_faithfully_un_apply(tmp_path, key, message):
     with pytest.raises(ValueError, match=message):
-        _pg.simulated_pending_key(key, RUNNER, _repo(tmp_path))
+        _pg.simulated_pending_key(key, RUNNER, RUNNER, _repo(tmp_path))
+
+
+def test_simulation_is_refused_while_a_real_migration_is_pending(tmp_path):
+    # Its purpose is rehearsing upgrade mode when nothing is pending. With a real pending key the
+    # base is already pre-upgrade, and a simulated one on top leaves no template equal to prod.
+    ledger = RUNNER[:-1]  # audit/001.sql is genuinely pending
+    with pytest.raises(ValueError, match=r"already pending: \['audit/001.sql'\]"):
+        _pg.simulated_pending_key("ml/044_z.sql", ledger, RUNNER, _repo(tmp_path))

@@ -643,11 +643,24 @@ def rollback_file(key: str, project_root: Path = REPO_ROOT) -> Path:
 
 
 def simulated_pending_key(
-    value: Optional[str], ledger: Sequence[str], project_root: Path = REPO_ROOT
+    value: Optional[str],
+    ledger: Sequence[str],
+    runner_keys: Sequence[str],
+    project_root: Path = REPO_ROOT,
 ) -> Optional[str]:
-    """Validate :data:`SIMULATE_PENDING_ENV`: an applied key with a real rollback file, or off."""
+    """Validate :data:`SIMULATE_PENDING_ENV`: an applied key with a real rollback file, or off.
+
+    Refused while a real migration is pending: the base is then already pre-upgrade, and a
+    simulated key on top would leave no template whose schema equals prod's.
+    """
     if not value:
         return None
+    genuinely_pending = derive_pending(runner_keys, ledger)
+    if genuinely_pending:
+        raise ValueError(
+            f"{SIMULATE_PENDING_ENV} rehearses upgrade mode when nothing is pending; "
+            f"already pending: {genuinely_pending}"
+        )
     if value not in ledger:
         raise ValueError(f"{SIMULATE_PENDING_ENV}={value!r} is not in prod's ledger")
     if not rollback_file(value, project_root).exists():
@@ -815,33 +828,82 @@ class BaseBuild:
     simulated: Optional[str]
     pending: List[str]
     registry_sync: Dict[str, int]
+    #: Tools the pre-migration schema refused (upgrade mode only; see sync_registry_from_code).
+    registry_rejected: List[str] = field(default_factory=list)
 
 
-def sync_registry_from_code(conn: PgConn) -> Dict[str, int]:
-    """The DB tool registry rebuilt the way production builds it, raising on any failure.
+def _sync_call(
+    conn: PgConn, tools: List[Dict[str, Any]], dependencies: List[Dict[str, Any]], *, commit: bool
+) -> Any:
+    """``sync_tool_registry`` as service_role, like the API's startup sync; rolled back unless
+    ``commit``. Raises the database's own error."""
+    import json
 
-    The payload is the app's own (``build_sync_payload``, from the live tool registry) and it
-    reaches ``sync_tool_registry`` as service_role, like the API's startup sync. That path
-    swallows errors (``RegistrySync.sync_once`` returns ``None``), which a fixture must not.
+    from src.agents.tool_composer.registry_sync import MAX_DEPRECATIONS
+
+    with conn.connect() as pgconn:
+        pgconn.execute('set role "service_role"')
+        (counts,) = pgconn.execute(
+            "select sync_tool_registry(%s::jsonb, %s::jsonb, %s)",
+            (json.dumps(tools), json.dumps(dependencies), MAX_DEPRECATIONS),
+        ).fetchone()
+        if commit:
+            pgconn.commit()
+        else:
+            pgconn.rollback()
+    return counts
+
+
+def sync_registry_from_code(conn: PgConn, *, drop_rejected: bool = False) -> Any:
+    """The DB tool registry rebuilt the way production builds it: the app's own payload
+    (``build_sync_payload``) through ``sync_tool_registry``. No prod data rows.
+
+    Raises on any failure; the startup path swallows errors (``RegistrySync.sync_once`` returns
+    ``None``), which a fixture must not. Returns the counts.
+
+    ``drop_rejected`` is for the base in upgrade mode only, and returns ``(counts, rejected)``.
+    Production applies the pending migrations BEFORE the new code syncs, so a tool that needs one
+    of them (a new enum value, a widened CHECK) was never in the pre-upgrade registry. Each such
+    tool is found by a trial sync rolled back, and left out with its dependencies; every tool the
+    pre-migration schema accepts is written. The deployed template then syncs the full payload
+    after the migrations, and that one may not drop anything.
     """
-    import asyncio
+    import psycopg
 
-    from src.agents.tool_composer.registry_sync import MAX_DEPRECATIONS, build_sync_payload
+    from src.agents.tool_composer.registry_sync import build_sync_payload
 
     tools, dependencies = build_sync_payload()
-    counts = asyncio.run(
-        PsycopgRpcPort(conn).call(
-            "sync_tool_registry",
-            {
-                "p_tools": tools,
-                "p_dependencies": dependencies,
-                "p_max_deprecations": MAX_DEPRECATIONS,
-            },
-        )
-    )
+
+    def deps_among(kept: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        names = {t["name"] for t in kept}
+        return [d for d in dependencies if d["consumer"] in names and d["producer"] in names]
+
+    try:
+        counts = _sync_call(conn, tools, dependencies, commit=True)
+        rejected: List[str] = []
+    except psycopg.Error as exc:
+        if not drop_rejected:
+            raise DbFixtureError(f"sync_tool_registry refused the code's payload: {exc}") from exc
+        accepted: List[Dict[str, Any]] = []
+        rejected = []
+        for tool in tools:
+            trial = accepted + [tool]
+            try:
+                _sync_call(conn, trial, deps_among(trial), commit=False)
+            except psycopg.Error:
+                rejected.append(tool["name"])
+                continue
+            accepted.append(tool)
+        try:
+            counts = _sync_call(conn, accepted, deps_among(accepted), commit=True)
+        except psycopg.Error as again:
+            raise DbFixtureError(
+                f"sync_tool_registry refused even the {len(accepted)} tools it accepted one by "
+                f"one: {again}"
+            ) from again
     if not isinstance(counts, dict):
         raise DbFixtureError(f"sync_tool_registry returned {counts!r}")
-    return counts
+    return (counts, sorted(rejected)) if drop_rejected else counts
 
 
 def build_base(
@@ -916,7 +978,9 @@ def build_base(
     # Prod's ledger, as it is. Rebuilding it from the repository instead assumed prod predated a
     # hard-coded lane, which stopped being true the day the lane deployed (#2065).
     prod_ledger = prod.rows(PROD_LEDGER)
-    simulated = simulated_pending_key(simulate, prod_ledger)
+    runner_keys = runner_migration_keys()
+    simulated = simulated_pending_key(simulate, prod_ledger, runner_keys)
+    pending = derive_pending(runner_keys, prod_ledger, simulated)
     ledger = [key for key in prod_ledger if key != simulated]
     if ledger:
         values = ",".join("('" + k.replace("'", "''") + "')" for k in ledger)
@@ -933,15 +997,20 @@ def build_base(
     # tool_registry / tool_dependencies: the schema dump carries no rows. Re-applying the
     # migrations that once seeded them (ml/013, 027, 037) no longer works on the current schema
     # (013 indexes a column 041 dropped) and skipped 038's rewrite anyway; prod's rows come from
-    # the API's startup sync since ml/040, so the base gets them the same way.
-    registry = sync_registry_from_code(conn)
+    # the API's startup sync since ml/040, so the base gets them the same way. With migrations
+    # pending, a tool that needs one of them cannot be in the pre-upgrade registry.
+    if pending:
+        registry, rejected = sync_registry_from_code(conn, drop_rejected=True)
+    else:
+        registry, rejected = sync_registry_from_code(conn), []
 
     return BaseBuild(
         restore_log=RestoreLog(errors=errors, unexpected=unexpected, unseen_expected=unseen),
         prod_ledger=prod_ledger,
         simulated=simulated,
-        pending=derive_pending(runner_migration_keys(), prod_ledger, simulated),
+        pending=pending,
         registry_sync=registry,
+        registry_rejected=rejected,
     )
 
 

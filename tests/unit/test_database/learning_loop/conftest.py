@@ -56,12 +56,14 @@ def pytest_terminal_summary(terminalreporter) -> None:  # type: ignore[no-untype
         return
     terminalreporter.write_line(
         "learning-loop real-DB: prod ledger {ledger} keys; pending {pending}; simulated {sim}; "
-        "deployed template {deployed}; registry sync {sync}".format(
+        "deployed template {deployed}; registry sync {sync}; "
+        "tools the pre-upgrade schema refused {rejected}".format(
             ledger=_RUN.get("ledger"),
             pending=_RUN.get("pending"),
             sim=_RUN.get("simulated"),
             deployed=_RUN.get("deployed"),
             sync=_RUN.get("registry_sync"),
+            rejected=_RUN.get("registry_rejected"),
         )
     )
 
@@ -105,6 +107,7 @@ def base_db(pg_container: _pg.ThrowawayPg, prod_readonly: _pg.ProdReadOnly) -> B
         pending=build.pending,
         simulated=build.simulated,
         registry_sync=build.registry_sync,
+        registry_rejected=build.registry_rejected,
     )
     return BaseDb(pg_container, _pg.BASE_DB, build)
 

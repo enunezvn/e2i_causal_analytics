@@ -1,5 +1,6 @@
 """Pending migrations through the real ``scripts/run_migrations.sh``, failure first, and the
-learning-loop lane's rollbacks. Every test here is an UPGRADE-PATH test (#2065).
+learning-loop lane's rollbacks. All but the last section are UPGRADE-PATH tests (#2065); the
+last section runs the rollback safety contracts on the current schema, as behaviour tests.
 
 ``test_pending_migrations_apply_through_the_runner_failure_first`` is generic: it rehearses, on a
 copy of prod's current schema, exactly the migrations this deploy's runner is about to apply, and
@@ -399,3 +400,84 @@ def test_rollback_041_refuses_unfinished_episodes(base_clone_db):
     assert db.rows("select to_regprocedure('composer_record_steps(jsonb,jsonb)') is not null") == [
         "t"
     ]
+
+
+# ---------------------------------------------------------------------------
+# Rollback safety contracts, from the CURRENT schema (behaviour; run on every pass)
+# ---------------------------------------------------------------------------
+#
+# The lane tests above can no longer run: they need a pre-lane base. What the rollback files
+# promise an operator TODAY, on the schema prod actually has, still can: the runbook order is
+# newest first, so reaching rollback_041 means undoing 044 and 043 (the refusal-code lane that
+# rewrote 041's functions) first. What cannot be checked without a pre-lane base is that the
+# rollbacks restore each object to its exact pre-lane definition.
+#
+# If a later migration changes the objects these files touch, these tests are where that
+# first shows: the rollback files are then stale and need the same attention as the migration.
+
+ROLLBACK_CHAIN = ("rollback_044.sql", "rollback_043.sql", "rollback_041.sql", "rollback_040.sql")
+ROLLED_BACK_KEYS = (
+    "ml/040_tool_registry_startup_sync.sql",
+    "ml/041_composer_learning_loop_recording.sql",
+    "ml/043_composer_refusal_reason_codes.sql",
+    "ml/044_composer_episodes_feedback_id.sql",
+)
+
+
+def _roll_back_through(db: _pg.PgConn, last: str) -> None:
+    for name in ROLLBACK_CHAIN[: ROLLBACK_CHAIN.index(last)]:
+        proc = _pg.apply_rollback(db, name)
+        assert proc.returncode == 0, (name, proc.stderr.decode())
+
+
+def test_rollback_041_refuses_unfinished_episodes_on_the_current_schema(clone_db):
+    db = clone_db("rollback_guard_041_now")
+    db.execute(
+        'select composer_record_start(\'{"composition_id": "open_one", "query_text": "q"}\'::jsonb)',
+        user="postgres",
+    )
+    _roll_back_through(db, "rollback_041.sql")
+    proc = _pg.apply_rollback(db, "rollback_041.sql")
+    assert proc.returncode != 0
+    assert "have no total_latency_ms" in proc.stderr.decode() and "open_one" in proc.stderr.decode()
+    # One transaction: nothing of 041's rollback applied.
+    assert db.rows("select to_regprocedure('composer_record_steps(jsonb,jsonb)') is not null") == [
+        "t"
+    ]
+
+
+def test_rollback_040_refuses_while_the_synced_registry_names_agents_outside_the_six(clone_db):
+    db = clone_db("rollback_guard_040_now")
+    _roll_back_through(db, "rollback_040.sql")
+    proc = _pg.apply_rollback(db, "rollback_040.sql")
+    assert proc.returncode != 0
+    # The code's own COHORT tool, written by the startup sync, is exactly what the guard names.
+    assert "cohort_builder (cohort_constructor)" in proc.stderr.decode()
+    assert db.rows(
+        "select to_regprocedure('sync_tool_registry(jsonb,jsonb,integer)') is not null"
+    ) == ["t"]
+    assert db.rows(
+        "select count(*) from pg_attribute where attrelid = 'tool_registry'::regclass "
+        "and attname = 'success_rate' and not attisdropped"
+    ) == ["0"]
+
+
+def test_rollback_chain_is_idempotent_and_the_runner_reapplies_what_it_removed(clone_db, tmp_path):
+    db = clone_db("rollback_chain_now")
+    # The operator step both guards ask for: no unfinished episode, no row outside the six agents.
+    db.execute("delete from tool_dependencies")
+    db.execute("delete from tool_registry")
+    snapshots = []
+    for attempt in ("first", "second"):
+        for name in ROLLBACK_CHAIN:
+            proc = _pg.apply_rollback(db, name)
+            assert proc.returncode == 0, (attempt, name, proc.stderr.decode())
+        snapshots.append(_aspects(db))
+        assert db.rows(_ledger_of(ROLLED_BACK_KEYS)) == [], attempt
+        assert db.rows(NEW_FUNCTIONS) == ["none"], attempt
+    assert snapshots[0] == snapshots[1]
+
+    replay = _pg.run_runner(db, _pg.REPO_ROOT, tmp_path / "shims")
+    assert replay.returncode == 0, _out(replay)
+    assert f"Applied {len(ROLLED_BACK_KEYS)} migration(s) successfully." in _out(replay)
+    assert sorted(db.rows(_ledger_of(ROLLED_BACK_KEYS))) == sorted(ROLLED_BACK_KEYS)

@@ -319,6 +319,11 @@ def test_tool_registry_is_the_running_codes(base_db):
 
     tools, dependencies = build_sync_payload()
     assert tools and dependencies
+    rejected = set(base_db.build.registry_rejected)
+    if not base_db.build.pending:
+        assert rejected == set(), "with nothing pending the schema must accept every tool"
+    tools = [t for t in tools if t["name"] not in rejected]
+    dependencies = [d for d in dependencies if not {d["consumer"], d["producer"]} & rejected]
     with base_db.rolled_back() as conn:
         assert conn.execute(REGISTRY_AS_PAYLOAD).fetchone()[0] == tools
         stored = conn.execute(DEPENDENCIES_AS_PAYLOAD).fetchone()[0]
@@ -328,6 +333,48 @@ def test_tool_registry_is_the_running_codes(base_db):
     assert base_db.rows("select count(*) from tool_registry where deprecated_at is not null") == [
         "0"
     ]
+
+
+def _empty_registry(db):
+    db.execute("delete from tool_dependencies")
+    db.execute("delete from tool_registry")
+
+
+def test_registry_sync_never_drops_a_tool_unless_asked(clone_db):
+    """Behaviour mode, and the deployed template: a sync the schema refuses is a failure."""
+    db = clone_db("sync_strict")
+    _empty_registry(db)
+    # Stands in for a schema BEFORE a pending migration that the code's COHORT tools need.
+    db.execute(
+        "alter table tool_registry add constraint zz_pre_migration check (category::text <> 'COHORT')"
+    )
+    with pytest.raises(_pg.DbFixtureError, match="zz_pre_migration"):
+        _pg.sync_registry_from_code(db)
+
+
+def test_upgrade_base_gets_every_tool_the_pre_migration_schema_can_hold(clone_db):
+    """Upgrade mode: production migrates BEFORE the new code syncs, so a tool that needs a
+    pending migration cannot be in the pre-upgrade registry, and must not fail the base."""
+    from src.agents.tool_composer.registry_sync import build_sync_payload
+
+    tools, dependencies = build_sync_payload()
+    cohort = sorted(t["name"] for t in tools if t["category"] == "COHORT")
+    assert cohort, "the code registers no COHORT tool; this probe would be vacuous"
+    db = clone_db("sync_tolerant")
+    _empty_registry(db)
+    db.execute(
+        "alter table tool_registry add constraint zz_pre_migration check (category::text <> 'COHORT')"
+    )
+
+    counts, rejected = _pg.sync_registry_from_code(db, drop_rejected=True)
+
+    assert rejected == cohort
+    assert counts["inserted"] == len(tools) - len(cohort)
+    kept = {t["name"] for t in tools} - set(cohort)
+    stored = set(db.rows("select name from tool_registry"))
+    assert stored == kept
+    expected_deps = [d for d in dependencies if d["consumer"] in kept and d["producer"] in kept]
+    assert db.rows("select count(*) from tool_dependencies") == [str(len(expected_deps))]
 
 
 def test_deployed_template_is_the_base_plus_exactly_the_pending_migrations(
