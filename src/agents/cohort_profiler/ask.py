@@ -22,15 +22,17 @@ Design constraints (REASON-BEFORE-RULES):
     diagnosis-date column anywhere (``journey_start_date`` is only a documented
     proxy — migration 044's kisqali_dx_adoption note) → a diagnosis-year filter
     is NOT servable and must fail closed honestly.
-  - Per-HCP TRx = COUNT of ``treatment_events`` prescription rows per
-    ``hcp_id`` — the same substrate as the platform's TRx KPI
-    (``business_impact_trx``), so HCP cohort numbers stay in lock-step with
-    the KPI dashboard.
+  - Per-HCP TRx Panel = COUNT of ``treatment_events`` prescription rows per
+    ``hcp_id`` — the ``treatment_events`` prescription substrate of the TRx
+    Panel KPI WS3-BI-011 (canonical TRx has no per-HCP grain), so HCP cohort
+    numbers stay in lock-step with the patient-panel KPI.
 """
 
 from __future__ import annotations
 
+import html
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import List, Optional, Tuple
@@ -138,6 +140,32 @@ _VOLUME_TIER_RE = re.compile(
     re.I,
 )
 
+# Canonical TRx lane (codex r6): does the ask MENTION the canonical measure? This is
+# emphasis only. The answer is always the panel cohort with the standing disclosure;
+# a mention adds one leading sentence (agent.CANONICAL_REQUEST_SENTENCE). A false
+# positive costs a sentence and a false negative still leaves the disclosure, so
+# there is no negation handling and no refusal. Letters and digits are kept and
+# EVERYTHING else is deleted, so "can**on**ical", "can<b>on</b>ical", full-width
+# letters and "c-a-n-o-n-i-c-a-l" all read "canonical".
+_MARKDOWN_LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+_HTML_TAG_RE = re.compile(r"</?[a-z][^<>]*>")
+_NOT_LETTER_OR_DIGIT_RE = re.compile(r"[\W_]+")
+_CANONICAL_MENTION_RE = re.compile(r"canonical|marketlevel|businessmetrics|ws3bi00[5-8]")
+
+
+def mentions_canonical(text: str) -> bool:
+    """True when ``text`` names canonical TRx, however it is formatted (codex r6).
+
+    NFKC runs before AND after entity decoding, so a full-width entity or tag still
+    decodes; a markdown link keeps its text and loses its URL; tags are removed.
+    """
+    text = unicodedata.normalize("NFKC", text or "")
+    text = unicodedata.normalize("NFKC", html.unescape(text)).casefold()
+    text = _MARKDOWN_LINK_RE.sub(r"\1", text)
+    text = _HTML_TAG_RE.sub("", text)
+    return bool(_CANONICAL_MENTION_RE.search(_NOT_LETTER_OR_DIGIT_RE.sub("", text)))
+
+
 _DIAG_GUIDANCE = (
     "the data model carries no true diagnosis dates (treatment_events has zero "
     "'diagnosis' events; patient_journeys.journey_start_date is only a documented "
@@ -202,6 +230,9 @@ class CohortAsk:
     # default falling through — merge_cohort_asks uses it so a generic rewrite
     # cannot clobber the raw ask's explicit entity (#1736 codex iter-1).
     entity_explicit: bool = False
+    # Canonical TRx lane (codex r6): the ask MENTIONS the canonical measure. Emphasis
+    # only: it adds a leading sentence to the served answer and never changes what runs.
+    canonical_requested: bool = False
 
 
 # Delegations to the shared service (#1351). The names stay module-local so
@@ -247,7 +278,7 @@ def _parse_threshold(query: str) -> Optional[Threshold]:
             servable=False,
             guidance=(
                 "NRx thresholds are not yet servable via the allowlisted HCP "
-                "cohort query — TRx thresholds are. Re-ask with a TRx threshold, "
+                "cohort query — TRx Panel thresholds are. Re-ask with a TRx Panel threshold, "
                 "or request the NRx variant."
             ),
         )
@@ -380,6 +411,7 @@ def parse_cohort_ask(
         window=_parse_window(query, today),
         volume_tiers=volume_tiers,
         entity_explicit=entity_explicit,
+        canonical_requested=mentions_canonical(query),
     )
 
 
@@ -419,4 +451,7 @@ def merge_cohort_asks(primary: CohortAsk, supplement: CohortAsk) -> CohortAsk:
         window=primary.window or supplement.window,
         volume_tiers=volume_tiers,
         entity_explicit=primary.entity_explicit or supplement.entity_explicit,
+        # Canonical TRx lane (codex r6): a mention in EITHER text is kept, so a rewrite
+        # can never drop the user's canonical wording from the disclosure.
+        canonical_requested=primary.canonical_requested or supplement.canonical_requested,
     )

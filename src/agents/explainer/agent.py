@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 from src.agents.base import SkillsMixin
+from src.agents.cohort_profiler.notes import has_cohort_evidence
 
 from .config import ComplexityScorer, ExplainerConfig, get_default_config
 from .graph import build_explainer_graph
@@ -316,6 +317,16 @@ class ExplainerAgent(SkillsMixin):
                 f"Auto LLM selection: use_llm={effective_use_llm}, "
                 f"complexity={complexity_score:.2f}, reason={llm_reason}"
             )
+
+        # Canonical TRx lane (codex r10): the explainer is the only agent that CONSUMES a per-HCP
+        # cohort result (dispatcher branch 2a binds same-turn results into analysis_results).
+        # With cohort evidence present it runs the use_llm=False graph, which makes no LLM
+        # call, overriding both the explicit setting and auto-detect, so no LLM can paraphrase
+        # per-HCP figures as canonical. The explanation itself is still produced.
+        if has_cohort_evidence(analysis_results):
+            effective_use_llm = False
+            llm_reason = "cohort_evidence_deterministic"
+            logger.info("Explainer LLM mode overridden: use_llm=False, reason=%s", llm_reason)
 
         initial_state: ExplainerState = {  # type: ignore[typeddict-item]
             "query": query,
