@@ -13212,7 +13212,18 @@ SYNC_TRG=business_metrics_sync_legacy_trigger_counts_trg
 # tgtype 23 = BEFORE(1) + ROW(2) + INSERT(4) + UPDATE(16), which is what pg_get_triggerdef was being
 # read for. Measured 2026-09-17: identical with quote_all_identifiers both on and off, and it DOES
 # move when the body is gutted (35d5221e...), so it still catches the iter5 regression.
-SYNC_FP="36158a8b04fe78658cac39b44ea505bb|plpgsql|true|v|23|O|business_metrics_sync_legacy_trigger_counts|public"
+# codex iter7 HIGH: and the fingerprint must cover the WHEN predicate and the table's WHOLE trigger
+# set, not one trigger looked up by name. Both measured live inside BEGIN/ROLLBACK (2026-09-17), each
+# leaving the previous fingerprint BYTE-IDENTICAL while a write of trx_count=7 landed
+# triggers_delivered_count = NULL:
+#   * CREATE OR REPLACE TRIGGER <same name> ... FOR EACH ROW WHEN (false) EXECUTE FUNCTION <same fn>
+#   * a SECOND, later-firing BEFORE trigger that nulls the canonical column again
+# So this aggregates EVERY non-internal trigger on the table, ordered by name, and includes
+# (tgqual IS NULL) -- true means "no WHEN clause". 'none' when the table carries no user trigger.
+# If a legitimate second trigger is ever added to business_metrics this constant must be updated, and
+# that edit is the review which catches an illegitimate one.
+SYNC_FP="business_metrics_sync_legacy_trigger_counts_trg~36158a8b04fe78658cac39b44ea505bb~plpgsql~true~v~23~O~true~public.business_metrics_sync_legacy_trigger_counts"
+SYNC_FP_NONE=none
 COLS_BOTH="nrx_count,total_rx_count,triggers_accepted_count,triggers_delivered_count,triggers_total_count,trx_count"
 COLS_LEGACY="nrx_count,total_rx_count,trx_count"
 COLS_CANON="triggers_accepted_count,triggers_delivered_count,triggers_total_count"
@@ -13240,15 +13251,15 @@ VIEWS_N=4; VIEW_LEGACY_COLS=12; VIEW_CANON_COLS=12   # 4 views x 3 columns (meas
 expand_state()   { [ "$cols" = "$COLS_BOTH" ] && [ "$trg_fp" = "$SYNC_FP" ] && [ "$disagree" = 0 ] \
                    && [ "$led_144" = 1 ] && [ "$defer_led" = 0 ] \
                    && [ "$views_n" = "$VIEWS_N" ] && [ "$views_legacy" = "$VIEW_LEGACY_COLS" ] && [ "$views_canon" = 0 ]; }
-contract_state() { [ "$cols" = "$COLS_CANON" ] && [ "$trg_fp" = absent ] && [ "$led_144" = 1 ] && [ "$defer_led" = 1 ] \
+contract_state() { [ "$cols" = "$COLS_CANON" ] && [ "$trg_fp" = "$SYNC_FP_NONE" ] && [ "$led_144" = 1 ] && [ "$defer_led" = 1 ] \
                    && [ "$views_n" = "$VIEWS_N" ] && [ "$views_canon" = "$VIEW_CANON_COLS" ] && [ "$views_legacy" = 0 ]; }
-legacy_state()   { [ "$cols" = "$COLS_LEGACY" ] && [ "$trg_fp" = absent ] && [ "$led_144" = 0 ] && [ "$defer_led" = 0 ] \
+legacy_state()   { [ "$cols" = "$COLS_LEGACY" ] && [ "$trg_fp" = "$SYNC_FP_NONE" ] && [ "$led_144" = 0 ] && [ "$defer_led" = 0 ] \
                    && [ "$views_n" = "$VIEWS_N" ] && [ "$views_legacy" = "$VIEW_LEGACY_COLS" ] && [ "$views_canon" = 0 ]; }
 schema_generation() {
   if expand_state; then echo expand
   elif contract_state; then echo contract
   elif legacy_state; then echo legacy
-  else echo "broken(cols=[$cols] trigger=[$([ "$trg_fp" = absent ] && echo absent || { [ "$trg_fp" = "$SYNC_FP" ] && echo as-144-installs-it || echo "DIFFERS: $trg_fp"; })] disagreeing_rows=[$disagree] ledger_144=[$led_144] deferred_146_ledger=[$defer_led] views=[n=$views_n legacy_cols=$views_legacy canonical_cols=$views_canon])"
+  else echo "broken(cols=[$cols] trigger=[$([ "$trg_fp" = "$SYNC_FP_NONE" ] && echo none || { [ "$trg_fp" = "$SYNC_FP" ] && echo as-144-installs-it || echo "DIFFERS: $trg_fp"; })] disagreeing_rows=[$disagree] ledger_144=[$led_144] deferred_146_ledger=[$defer_led] views=[n=$views_n legacy_cols=$views_legacy canonical_cols=$views_canon])"
   fi; }
 # $1 label, $2.. the generations this branch accepts.
 generation_in() { local got="$1"; shift; for want in "$@"; do [ "$got" = "$want" ] && { echo "OK   schema_generation: $got (accepted here: $*)"; return; }; done
@@ -13262,8 +13273,9 @@ audit=$(q "SELECT to_regclass('public.kpi_history_rekey_143') IS NOT NULL")
 # disagrees across the two names. Row agreement is only a question while BOTH name sets exist.
 # The sync trigger as STABLE CATALOG FIELDS (see SYNC_FP above for why not the deparsers): the body
 # the trigger will actually run, its language / return type / volatility, the firing mask, the enabled
-# flag, and the function's identity. 'absent' when no such trigger exists.
-trg_fp=$(q "SELECT coalesce((SELECT md5(p.prosrc) || '|' || l.lanname || '|' || (p.prorettype = 'trigger'::regtype)::text || '|' || p.provolatile::text || '|' || t.tgtype::text || '|' || t.tgenabled::text || '|' || p.proname || '|' || n.nspname FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid JOIN pg_namespace n ON n.oid = p.pronamespace JOIN pg_language l ON l.oid = p.prolang WHERE t.tgrelid = 'public.business_metrics'::regclass AND NOT t.tgisinternal AND t.tgname = '$SYNC_TRG'), 'absent')")
+# flag, the WHEN predicate and the function's identity, for EVERY trigger on the table. 'none' when
+# the table carries no user trigger at all.
+trg_fp=$(q "SELECT coalesce((SELECT string_agg(t.tgname || '~' || md5(p.prosrc) || '~' || l.lanname || '~' || (p.prorettype = 'trigger'::regtype)::text || '~' || p.provolatile::text || '~' || t.tgtype::text || '~' || t.tgenabled::text || '~' || (t.tgqual IS NULL)::text || '~' || n.nspname || '.' || p.proname, ',' ORDER BY t.tgname) FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid JOIN pg_namespace n ON n.oid = p.pronamespace JOIN pg_language l ON l.oid = p.prolang WHERE t.tgrelid = 'public.business_metrics'::regclass AND NOT t.tgisinternal), 'none')")
 # codex iter6 HIGH-3: the four split views, which a partial contract drops before recreating.
 SPLIT_VIEWS="'v_train_business_metrics','v_test_business_metrics','v_validation_business_metrics','v_holdout_business_metrics'"
 views_n=$(q "SELECT count(*) FROM information_schema.views WHERE table_schema = 'public' AND table_name IN ($SPLIT_VIEWS)")
@@ -14735,15 +14747,21 @@ check("the legacy names are still on the table, trigger-synced, until the contra
 # pg_get_functiondef render identifiers per `quote_all_identifiers`; with that setting on, both texts
 # change while the schema does not, and a CORRECT deployment would fail certification.
 # So: stable catalog fields only. Same string the recovery prover builds (see SYNC_FP there).
-SYNC_FP = ("36158a8b04fe78658cac39b44ea505bb|plpgsql|true|v|23|O|"
-           "business_metrics_sync_legacy_trigger_counts|public")
-sync = psql("SELECT coalesce((SELECT md5(p.prosrc)||'|'||l.lanname||'|'||(p.prorettype='trigger'::regtype)::text"
-            "||'|'||p.provolatile::text||'|'||t.tgtype::text||'|'||t.tgenabled::text||'|'||p.proname||'|'||n.nspname "
-            "FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid JOIN pg_namespace n ON n.oid=p.pronamespace "
-            "JOIN pg_language l ON l.oid=p.prolang WHERE t.tgrelid='public.business_metrics'::regclass "
-            "AND NOT t.tgisinternal AND t.tgname='business_metrics_sync_legacy_trigger_counts_trg'), 'absent')")
-check("the sync trigger is installed, enabled, and runs the FUNCTION BODY 144 installs",
-      sync == SYNC_FP, sync)
+# codex iter7 HIGH: and it must bind the WHEN predicate and the table's WHOLE trigger set. Measured
+# live: a same-name trigger with WHEN (false), and a second later-firing trigger that re-nulls the
+# canonical column, each left the by-name fingerprint BYTE-IDENTICAL while a write of trx_count=7
+# landed triggers_delivered_count = NULL. So aggregate every non-internal trigger on the table,
+# ordered by name, with (tgqual IS NULL) -- true meaning "no WHEN clause".
+SYNC_FP = ("business_metrics_sync_legacy_trigger_counts_trg~36158a8b04fe78658cac39b44ea505bb~plpgsql~"
+           "true~v~23~O~true~public.business_metrics_sync_legacy_trigger_counts")
+sync = psql("SELECT coalesce((SELECT string_agg(t.tgname||'~'||md5(p.prosrc)||'~'||l.lanname||'~'"
+            "||(p.prorettype='trigger'::regtype)::text||'~'||p.provolatile::text||'~'||t.tgtype::text"
+            "||'~'||t.tgenabled::text||'~'||(t.tgqual IS NULL)::text||'~'||n.nspname||'.'||p.proname, "
+            "',' ORDER BY t.tgname) FROM pg_trigger t JOIN pg_proc p ON p.oid=t.tgfoid "
+            "JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_language l ON l.oid=p.prolang "
+            "WHERE t.tgrelid='public.business_metrics'::regclass AND NOT t.tgisinternal), 'none')")
+check("business_metrics carries exactly the sync trigger 144 installs: right body, enabled, no WHEN, "
+      "and no other trigger able to undo it", sync == SYNC_FP, sync)
 # ...and it must actually hold: no per_hcp_rollup row may disagree across the two names.
 skew = psql("SELECT count(*) FROM public.business_metrics WHERE trx_count IS DISTINCT FROM triggers_delivered_count "
             "OR nrx_count IS DISTINCT FROM triggers_accepted_count "
