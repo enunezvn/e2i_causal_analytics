@@ -36,13 +36,21 @@ from src.mlops.optuna_optimizer import (
 # ============================================================================
 
 
+@pytest.fixture
+def use_real_optuna_storage_config():
+    """Opt a test into the production storage-resolution path."""
+
+
 @pytest.fixture(scope="function", autouse=True)
-def disable_optuna_storage(monkeypatch):
+def disable_optuna_storage(monkeypatch, request):
     """Disable Optuna SQLite storage during tests to prevent parallel access issues.
 
     This patches the load_optuna_config function to return storage.enabled=False,
     ensuring tests use in-memory storage instead of SQLite file.
     """
+    if "use_real_optuna_storage_config" in request.fixturenames:
+        return
+
     import src.mlops.optuna_optimizer as optuna_module
 
     # Cache the original function
@@ -136,7 +144,7 @@ def mock_frozen_trial():
 class TestOptunaOptimizerInit:
     """Tests for OptunaOptimizer initialization."""
 
-    def test_init_with_defaults(self, monkeypatch):
+    def test_init_with_defaults(self, monkeypatch, use_real_optuna_storage_config):
         """Default storage is process-local and needs no writable filesystem."""
         monkeypatch.delenv("OPTUNA_STORAGE_URL", raising=False)
 
@@ -220,7 +228,9 @@ class TestOptunaOptimizerCreateStudy:
         assert study.direction == optuna.study.StudyDirection.MAXIMIZE
 
     @pytest.mark.asyncio
-    async def test_default_study_succeeds_from_read_only_cwd(self, tmp_path, monkeypatch):
+    async def test_default_study_succeeds_from_read_only_cwd(
+        self, tmp_path, monkeypatch, use_real_optuna_storage_config
+    ):
         """Default HPO must not create a cwd-relative SQLite database (#2158)."""
         monkeypatch.delenv("OPTUNA_STORAGE_URL", raising=False)
         read_only_cwd = tmp_path / "read-only"
