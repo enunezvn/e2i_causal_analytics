@@ -142,8 +142,9 @@ class OptunaOptimizer:
 
         Args:
             experiment_id: E2I experiment ID for tracking
-            storage_url: Optuna storage URL (e.g., "sqlite:///optuna.db")
-                        If None, uses config or in-memory storage
+            storage_url: Optuna storage URL (e.g., "sqlite:///optuna.db").
+                        If None, uses OPTUNA_STORAGE_URL, enabled config, or
+                        in-memory storage, in that order.
             mlflow_tracking: Whether to log trials to MLflow. If None, uses config.
             config_path: Path to configuration file. If None, uses default.
             use_config: Whether to load settings from config file.
@@ -153,11 +154,17 @@ class OptunaOptimizer:
         # Load configuration
         self._config = load_optuna_config(config_path) if use_config else {}
 
-        # Resolve storage URL (explicit > config > None)
+        # Resolve storage URL (explicit > environment > enabled config > memory).
+        # The default must not point at a cwd-relative SQLite file: API and
+        # scheduler containers use read-only root filesystems, while worker
+        # filesystem layers are neither shared nor durable across deploys.
+        environment_storage_url = os.environ.get("OPTUNA_STORAGE_URL")
         if storage_url is not None:
             self.storage_url = storage_url
+        elif environment_storage_url:
+            self.storage_url = environment_storage_url
         elif self._config.get("storage", {}).get("enabled", False):
-            self.storage_url = self._config.get("storage", {}).get("url")
+            self.storage_url = self._config.get("storage", {}).get("url") or None
         else:
             self.storage_url = None  # type: ignore[assignment]
 
