@@ -123,9 +123,9 @@ class TestSQLShape:
         # the SELECT).
         on_conflict_block = sql.split("ON CONFLICT (metric_id) DO UPDATE SET", 1)[1]
         for col in (
-            "trx_count",
-            "nrx_count",
-            "total_rx_count",
+            "triggers_delivered_count",
+            "triggers_accepted_count",
+            "triggers_total_count",
             "market_share",
             "conversion_rate",
         ):
@@ -134,10 +134,10 @@ class TestSQLShape:
             assert re.search(pattern, on_conflict_block), f"missing UPDATE SET clause for {col}"
 
     def test_market_share_is_share_of_territory_total(self) -> None:
-        """market_share = total_rx_count / territory_total, with a >0 guard."""
+        """market_share = triggers_total_count / territory_total, with a >0 guard."""
         sql = etl.INSERT_PER_HCP_ROLLUP_SQL
         assert "tt.territory_total > 0" in sql
-        assert "hbd.total_rx_count::NUMERIC / tt.territory_total" in sql
+        assert "hbd.triggers_total_count::NUMERIC / tt.territory_total" in sql
 
     def test_conversion_rate_uses_nullif_guard(self) -> None:
         """Division by zero is guarded via NULLIF; default to 0 via COALESCE."""
@@ -503,3 +503,51 @@ class TestProvenanceInheritance:
             "is_synthetic missing from the ON CONFLICT SET list -- a re-run "
             "would keep a stale provenance tag"
         )
+
+
+def test_the_rollup_writes_the_honest_trigger_count_columns():
+    """Canonical TRx lane / migration 144: these are trigger funnel counts.
+
+    The NEGATIVE assertion is what gives this teeth. The three positive
+    ``AS <column>`` bindings alone would pass on a module that had renamed the
+    SELECT aliases and left ``triggers_delivered_count`` in the INSERT list, which is the exact
+    half-done rename worth catching; "no legacy name survives anywhere in the
+    module" cannot pass while any site still writes the old name, comments
+    included.
+
+    The INSERT and ON CONFLICT bindings are asserted separately from the
+    aliases because the negative assertion has one blind spot: a future edit
+    that REMOVED the three columns from the INSERT entirely would satisfy both
+    "no legacy name" and "the aliases exist", while the rollup silently stopped
+    persisting the counts.
+    """
+    import inspect
+    import re as _re
+
+    from src.etl import business_metrics_per_hcp_etl as _etl
+
+    assert ".worktrees/lane-trx-canonical" in _etl.__file__, _etl.__file__
+    source = inspect.getsource(_etl)
+    columns = ("triggers_delivered_count", "triggers_accepted_count", "triggers_total_count")
+    for column in columns:
+        assert f"AS {column}" in source, f"{column}: no SELECT alias binding it"
+    insert_sql = _etl.INSERT_PER_HCP_ROLLUP_SQL
+    on_conflict = insert_sql.split("ON CONFLICT (metric_id) DO UPDATE SET", 1)[1]
+    # The INSERT COLUMN LIST, parsed — not `column in insert_sql`. Measured: each
+    # name occurs SEVEN times in this statement (SELECT alias, territory_total
+    # SUM, the column list, the hbd projection, the market_share divisor, and
+    # both halves of the ON CONFLICT line), so a substring test over the whole
+    # SQL is satisfied by six sites that are not the column list and cannot fail
+    # when the column list is what broke. Proven: dropping
+    # `triggers_total_count,` from the list left the substring version green.
+    listed = re.search(r"INSERT INTO business_metrics\s*\((.*?)\n\)\s*\nSELECT", insert_sql, re.S)
+    assert listed, "could not find the INSERT column list — has the statement been restructured?"
+    insert_columns = {
+        line.strip().rstrip(",")
+        for line in listed.group(1).splitlines()
+        if line.strip() and not line.strip().startswith("--")
+    }
+    for column in columns:
+        assert column in insert_columns, f"{column}: aliased but not in the INSERT column list"
+        assert f"EXCLUDED.{column}" in on_conflict, f"{column}: absent from the re-run arm"
+    assert not _re.search(r"\b(trx_count|nrx_count|total_rx_count)\b", source)

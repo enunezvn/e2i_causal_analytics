@@ -199,8 +199,8 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
                             """
                             INSERT INTO business_metrics (
                                 metric_id, metric_date, metric_type, brand,
-                                region, hcp_id, trx_count, nrx_count,
-                                total_rx_count, market_share, conversion_rate
+                                region, hcp_id, triggers_delivered_count, triggers_accepted_count,
+                                triggers_total_count, market_share, conversion_rate
                             ) VALUES (
                                 %s, %s, 'per_hcp_rollup',
                                 'Remibrutinib'::brand_type,
@@ -306,7 +306,7 @@ def test_territorial_sums_match_per_hcp_sums(db_conn: Any, synthetic_dataset: di
     """Per the plan: assert territorial sums match per-HCP sums.
 
     For each (territory, metric_date) cell, total_trx must equal SUM(per-HCP
-    trx_count) and total_nrx must equal SUM(per-HCP nrx_count). Drives off
+    triggers_delivered_count) and total_nrx must equal SUM(per-HCP triggers_accepted_count). Drives off
     the synthetic fixture's deterministic per-day rates.
     """
     from src.etl.territory_metrics_etl import _run_territory_rollup_impl

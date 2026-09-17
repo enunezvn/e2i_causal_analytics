@@ -9,9 +9,17 @@ table created by migration 031 (with ``event_timestamp`` added by migration
 Aggregations
 ------------
 
-* ``total_trx`` — SUM of ``business_metrics.trx_count`` across the
+* ``total_trx`` — SUM of ``business_metrics.triggers_delivered_count`` across the
   territory's per-HCP rollup rows for the metric_date.
-* ``total_nrx`` — SUM of ``business_metrics.nrx_count`` likewise.
+* ``total_nrx`` — SUM of ``business_metrics.triggers_accepted_count`` likewise.
+
+  (Canonical TRx lane: the two territory OUTPUT columns ``total_trx`` and
+  ``total_nrx`` are still named for prescriptions although they sum trigger
+  counts. This lane renames only the SOURCE columns, so the mislabel now stops
+  at the ``territory_metrics`` table instead of running through both. No issue
+  tracks the output-column names as of 2026-09-17 — searched open and closed;
+  the nearest hits are #1640, which only mentions ``total_trx`` in passing, and
+  #895, which is about provenance on this same file rather than naming.)
 * ``active_hcp_count`` — DISTINCT ``hcp_id`` count from ``triggers`` whose
   ``trigger_timestamp`` falls in the **30-day** window ending on (and
   inclusive of) ``metric_date``. The 30-day lookback is independent of the
@@ -157,7 +165,7 @@ PER_HCP_METRIC_TYPE: str = "per_hcp_rollup"
 #   2. territory_dates: cross-product of every territory_id with each
 #      metric_date in the window. Anchors LEFT JOINs so a territory with
 #      no business_metrics for the day still gets a row (with zeros).
-#   3. per_hcp_in_territory: SUM(trx_count) / SUM(nrx_count) per
+#   3. per_hcp_in_territory: SUM(triggers_delivered_count) / SUM(triggers_accepted_count) per
 #      (territory_id, metric_date) from per-HCP rollup rows.
 #   4. active_hcp_per_territory_date: DISTINCT hcp_id count for the 30-day
 #      backward-looking window ending on each metric_date.
@@ -208,8 +216,8 @@ per_hcp_in_territory AS (
     SELECT
         hp.territory_id,
         bm.metric_date,
-        SUM(COALESCE(bm.trx_count, 0))::BIGINT AS total_trx,
-        SUM(COALESCE(bm.nrx_count, 0))::BIGINT AS total_nrx,
+        SUM(COALESCE(bm.triggers_delivered_count, 0))::BIGINT AS total_trx,
+        SUM(COALESCE(bm.triggers_accepted_count, 0))::BIGINT AS total_nrx,
         -- Provenance inheritance (issue #895): the per-HCP rollup rows are
         -- themselves provenance-tagged (6B-infra-2a post-#895), so this
         -- composes -- any synthetic input row (or synthetic HCP profile)

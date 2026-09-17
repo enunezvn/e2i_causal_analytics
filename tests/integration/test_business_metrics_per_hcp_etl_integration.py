@@ -176,7 +176,7 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
                             counter += 1
                             trigger_id = f"tr_{test_run_id}_{counter:06d}"
                             # Make k=0 not delivered, k=1 delivered+responded,
-                            # k=2 delivered+pending so trx_count and nrx_count
+                            # k=2 delivered+pending so triggers_delivered_count and triggers_accepted_count
                             # diverge.
                             delivery = "delivered" if k > 0 else "pending"
                             acceptance = "responded" if k == 1 else "pending"

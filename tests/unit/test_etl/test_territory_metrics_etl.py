@@ -89,15 +89,15 @@ class TestSQLShape:
         """The four aggregations the plan asks for are all in the SQL."""
         sql = etl.INSERT_TERRITORY_ROLLUP_SQL
         normalised = re.sub(r"\s+", " ", sql)
-        # SUM(trx_count) / SUM(nrx_count) per territory+date.
+        # SUM(triggers_delivered_count) / SUM(triggers_accepted_count) per territory+date.
         assert re.search(
-            r"SUM\(\s*COALESCE\(\s*bm\.trx_count,\s*0\s*\)\s*\)::BIGINT\s+AS\s+total_trx",
+            r"SUM\(\s*COALESCE\(\s*bm\.triggers_delivered_count,\s*0\s*\)\s*\)::BIGINT\s+AS\s+total_trx",
             normalised,
-        ), "missing SUM(trx_count) AS total_trx"
+        ), "missing SUM(triggers_delivered_count) AS total_trx"
         assert re.search(
-            r"SUM\(\s*COALESCE\(\s*bm\.nrx_count,\s*0\s*\)\s*\)::BIGINT\s+AS\s+total_nrx",
+            r"SUM\(\s*COALESCE\(\s*bm\.triggers_accepted_count,\s*0\s*\)\s*\)::BIGINT\s+AS\s+total_nrx",
             normalised,
-        ), "missing SUM(nrx_count) AS total_nrx"
+        ), "missing SUM(triggers_accepted_count) AS total_nrx"
         # COUNT(DISTINCT hcp_id) AS active_hcp_count.
         assert re.search(
             r"COUNT\(DISTINCT\s+t\.hcp_id\)::BIGINT\s+AS\s+active_hcp_count",
@@ -514,3 +514,25 @@ class TestProvenanceInheritance:
             "is_synthetic missing from the ON CONFLICT SET list -- a re-run "
             "would keep a stale provenance tag"
         )
+
+
+def test_the_territory_rollup_reads_the_honest_trigger_columns():
+    """Canonical TRx lane / migration 144.
+
+    Two negatives, deliberately: the SQL constant must not name a legacy column
+    (that is the behaviour), and neither must the MODULE (that is the prose).
+    This lane has already found three doc comments asserting the inverse of the
+    gate they described, so a stale sentence here is a real failure mode and not
+    a tidiness preference.
+    """
+    import inspect
+    import re as _re
+
+    from src.etl import territory_metrics_etl as _etl
+
+    assert ".worktrees/lane-trx-canonical" in _etl.__file__, _etl.__file__
+    sql = _etl.INSERT_TERRITORY_ROLLUP_SQL
+    assert "bm.triggers_delivered_count" in sql
+    assert "bm.triggers_accepted_count" in sql
+    assert not _re.search(r"\b(trx_count|nrx_count|total_rx_count)\b", sql)
+    assert not _re.search(r"\b(trx_count|nrx_count|total_rx_count)\b", inspect.getsource(_etl))

@@ -123,8 +123,11 @@ METRIC_TYPE: str = "per_hcp_rollup"
 #   1. triggers_with_brand: triggers x most-recent-prior patient_journey.brand,
 #      filtered to [start_date, end_date).
 #   2. hcp_brand_daily: collapse to per-(hcp_id, brand, metric_date) counts +
-#      conversion_rate (NRx / TRx with NULLIF guard).
-#   3. territory_totals: sum total_rx_count per (territory_id, brand,
+#      conversion_rate. That ratio is accepted triggers / delivered triggers
+#      (with a NULLIF guard), NOT NRx / TRx as this line used to say: the three
+#      counts below are trigger funnel stages, which is why migration 144
+#      renamed them to triggers_{delivered,accepted,total}_count.
+#   3. territory_totals: sum triggers_total_count per (territory_id, brand,
 #      metric_date) so the SELECT can compute market_share = HCP /
 #      territory_total within each territory window.
 #   4. INSERT with deterministic metric_id and ON CONFLICT DO UPDATE for
@@ -177,9 +180,9 @@ hcp_brand_daily AS (
         -- further progression of 'delivered', and once accepted implies viewed
         -- a delivered-exclusive count keeps only the never-viewed remainder
         -- (conversion_rate could then exceed 1).
-        COUNT(*) FILTER (WHERE delivery_status IN ('delivered', 'viewed'))          AS trx_count,
-        COUNT(*) FILTER (WHERE acceptance_status IN ('accepted', 'responded'))      AS nrx_count,
-        COUNT(*)                                                                    AS total_rx_count,
+        COUNT(*) FILTER (WHERE delivery_status IN ('delivered', 'viewed'))          AS triggers_delivered_count,
+        COUNT(*) FILTER (WHERE acceptance_status IN ('accepted', 'responded'))      AS triggers_accepted_count,
+        COUNT(*)                                                                    AS triggers_total_count,
         COALESCE(
             COUNT(*) FILTER (WHERE acceptance_status IN ('accepted', 'responded'))::NUMERIC
             / NULLIF(COUNT(*) FILTER (WHERE delivery_status IN ('delivered', 'viewed')), 0),
@@ -196,7 +199,7 @@ territory_totals AS (
         hp.territory_id,
         hbd.brand,
         hbd.metric_date,
-        SUM(hbd.total_rx_count) AS territory_total,
+        SUM(hbd.triggers_total_count) AS territory_total,
         -- Provenance of the market_share DENOMINATOR (issue #895): if any
         -- HCP cell feeding this territory total is synthetic (or the HCP
         -- profile itself is), every market_share computed against it is a
@@ -213,9 +216,9 @@ INSERT INTO business_metrics (
     brand,
     region,
     hcp_id,
-    trx_count,
-    nrx_count,
-    total_rx_count,
+    triggers_delivered_count,
+    triggers_accepted_count,
+    triggers_total_count,
     market_share,
     conversion_rate,
     -- engagement_score and call_frequency intentionally NULL: the
@@ -240,12 +243,12 @@ SELECT
     hbd.brand,
     hp.geographic_region                        AS region,
     hbd.hcp_id,
-    hbd.trx_count,
-    hbd.nrx_count,
-    hbd.total_rx_count,
+    hbd.triggers_delivered_count,
+    hbd.triggers_accepted_count,
+    hbd.triggers_total_count,
     CASE
         WHEN tt.territory_total > 0
-            THEN hbd.total_rx_count::NUMERIC / tt.territory_total
+            THEN hbd.triggers_total_count::NUMERIC / tt.territory_total
         ELSE 0
     END                                         AS market_share,
     hbd.conversion_rate,
@@ -264,9 +267,9 @@ JOIN territory_totals  tt
  AND tt.brand        = hbd.brand
  AND tt.metric_date  = hbd.metric_date
 ON CONFLICT (metric_id) DO UPDATE SET
-    trx_count       = EXCLUDED.trx_count,
-    nrx_count       = EXCLUDED.nrx_count,
-    total_rx_count  = EXCLUDED.total_rx_count,
+    triggers_delivered_count       = EXCLUDED.triggers_delivered_count,
+    triggers_accepted_count       = EXCLUDED.triggers_accepted_count,
+    triggers_total_count  = EXCLUDED.triggers_total_count,
     market_share    = EXCLUDED.market_share,
     conversion_rate = EXCLUDED.conversion_rate,
     region          = EXCLUDED.region,
