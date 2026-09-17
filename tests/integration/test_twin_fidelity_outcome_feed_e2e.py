@@ -36,7 +36,7 @@ pytestmark = pytest.mark.skipif(
 
 EXISTING_MODEL_ID = "5141ba73-d926-43ec-b064-9cf717f8a9dd"  # real trained twin model
 BRAND = "Fabhalta"
-METRIC = "total_rx_count"
+METRIC = "triggers_total_count"
 
 
 def _distinct_fabhalta_hcps(client, n: int) -> list[str]:

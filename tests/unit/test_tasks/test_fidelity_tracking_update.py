@@ -81,7 +81,7 @@ class TestFidelityProducer:
         client = MagicMock()
         (
             client.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value
-        ).data = [{"brand": "Fabhalta", "prediction_target": "total_rx_count"}]
+        ).data = [{"brand": "Fabhalta", "prediction_target": "triggers_total_count"}]
         return client
 
     def test_final_analysis_enqueues_fidelity_tracking_update(self):

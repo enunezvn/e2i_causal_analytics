@@ -4,8 +4,9 @@ Closes the long-standing #422 placeholder (``control_data = []``) that forced
 ``compute_experiment_results`` / ``scheduled_interim_analysis`` to bail with
 ``insufficient_data``. There is no dedicated per-unit observation table in the
 schema; the REAL per-HCP outcome values live in ``business_metrics`` rows with
-``metric_type='per_hcp_rollup'`` (typed columns ``trx_count``, ``nrx_count``,
-``total_rx_count``, ``market_share``, ``conversion_rate``, ``engagement_score``,
+``metric_type='per_hcp_rollup'`` (typed columns ``triggers_delivered_count``,
+``triggers_accepted_count``, ``triggers_total_count`` (trigger funnel counts,
+migration 144), ``market_share``, ``conversion_rate``, ``engagement_score``,
 ``call_frequency``). This repository joins an experiment's assignments
 (``ab_experiment_assignments.unit_id`` == ``business_metrics.hcp_id``) to those
 real rows, collapses multiple ``metric_date`` rows per HCP to one scalar (SUM for
@@ -33,19 +34,23 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 # primary_metric (normalized) -> (business_metrics column, reducer).
-# Counts SUM across the window (total prescriptions over the period); rates MEAN
-# (a per-period rate averaged over the window). Unknown metrics fail closed.
-_COUNT_COLUMNS = {"trx_count", "nrx_count", "total_rx_count"}
+# Counts SUM across the window; rates MEAN. Unknown metrics fail closed.
+# Canonical TRx lane / migration 144: the per-HCP counts are TRIGGER funnel
+# counts. The prescription shorthands that used to map onto them are refused
+# (see resolve_column) — no per-HCP prescription column exists.
+_COUNT_COLUMNS = {"triggers_delivered_count", "triggers_accepted_count", "triggers_total_count"}
 _RATE_COLUMNS = {"market_share", "conversion_rate", "engagement_score", "call_frequency"}
+_PRESCRIPTION_SHORTHANDS = frozenset(
+    {"trx", "nrx", "rx", "total_rx", "trx_count", "nrx_count", "total_rx_count"}
+)
 
 METRIC_COLUMN_MAP: Dict[str, str] = {
-    "trx": "trx_count",
-    "trx_count": "trx_count",
-    "nrx": "nrx_count",
-    "nrx_count": "nrx_count",
-    "total_rx": "total_rx_count",
-    "total_rx_count": "total_rx_count",
-    "rx": "total_rx_count",
+    "triggers_delivered": "triggers_delivered_count",
+    "triggers_delivered_count": "triggers_delivered_count",
+    "triggers_accepted": "triggers_accepted_count",
+    "triggers_accepted_count": "triggers_accepted_count",
+    "triggers_total": "triggers_total_count",
+    "triggers_total_count": "triggers_total_count",
     "market_share": "market_share",
     "conversion_rate": "conversion_rate",
     "conversion": "conversion_rate",
@@ -87,6 +92,13 @@ class ExperimentOutcomeRepository:
         Fail closed on an unknown metric rather than silently picking a column.
         """
         key = (primary_metric or "").strip().lower()
+        if key in _PRESCRIPTION_SHORTHANDS:
+            raise ValueError(
+                f"Unsupported primary_metric {primary_metric!r}: per-HCP business_metrics rows "
+                "carry TRIGGER funnel counts (triggers_delivered_count / triggers_accepted_count / "
+                "triggers_total_count, migration 144), not prescriptions. Name the trigger count "
+                "you mean; prescription outcomes are not recorded per HCP."
+            )
         column = METRIC_COLUMN_MAP.get(key)
         if column is None:
             raise ValueError(
