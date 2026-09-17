@@ -11,6 +11,33 @@ The allowlist is the load-bearing part, and it is deliberately tiny. Anything ad
 it is invisible to this guard FOREVER, which is the same rot shape as a permanently
 skipped test -- so a name belongs here only when renaming it would make the code WRONG,
 never to turn a red green.
+
+Red-first evidence, and why it is recorded here rather than re-derivable
+-----------------------------------------------------------------------
+This test was written to be red and is committed green, because Task 25 landed between
+the brief and the run. The transition IS the census proof, and the "before" half is no
+longer reachable from the working tree -- only from git history -- so both halves are
+written down. Measured independently twice (by the implementer over ``git show`` blobs
+and by the dispatcher over checkouts), same command, same ALLOWED exclusions:
+
+* ``8c7a61204`` (pre-merge): **12** offenders outside ALLOWED, across exactly Task 25's
+  five files -- ``feature_repo/data_sources.py:46,47,48``,
+  ``feature_repo/features/hcp_features.py:31,32,33``,
+  ``feature_repo/features/market_features.py:28,29,30``,
+  ``src/agents/drift_monitor/nodes/alert_aggregator.py:637,638``,
+  ``src/feature_store/feature_analyzer_adapter.py:450``.
+* ``41a37592e`` (post-merge): **0**.
+
+They are green because they were FIXED. None of those five is in ALLOWED, and none may
+be added: the allowlist has to stay able to catch a sixth file that appears later.
+
+Why this file is worth more than its size suggests
+--------------------------------------------------
+CI's lint job runs over ``src/ tests/`` only, so **nothing in CI looks at
+``feature_repo/`` at all** -- and ``feature_repo`` is where 9 of the 12 offenders above
+lived. For this class of defect this test is the only CI-visible coverage of that
+directory, which is why ``test_the_scan_is_not_vacuous`` guards every root rather than
+just ``src``.
 """
 
 import re
