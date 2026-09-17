@@ -9005,6 +9005,54 @@ RENAME_SED='s/\btrx_count\b/triggers_delivered_count/g; s/\bnrx_count\b/triggers
 
 ### Task 21: Migration 144 (table + four split views, idempotent)
 
+> **AMENDED 2026-09-18 — the steps below describe the SUPERSEDED in-place-rename design. Read this
+> first; where the two disagree, this amendment is what shipped.**
+>
+> Codex iter1 raised HIGH-1 against the rename: `.github/workflows/deploy.yml` applies migrations at
+> `:956` while the OLD containers are still serving, replaces Feast at `:1044` and the app services
+> only at `:1085`, and a post-flip health failure at `:1104` rolls back **only** the app services.
+> Pre-lane code both reads and WRITES the legacy names — 52 references on `origin/main`, among them
+> `src/etl/business_metrics_per_hcp_etl.py`'s `ON CONFLICT DO UPDATE SET trx_count =
+> EXCLUDED.trx_count`. A rename therefore breaks them for the whole replacement window and
+> PERMANENTLY after a failed health check, with no automated way back. **Owner's call: expand/contract.**
+>
+> **What actually shipped (`35c4dc531`):**
+> - **144 = EXPAND, purely additive.** Three static `ALTER TABLE public.business_metrics ADD COLUMN IF
+>   NOT EXISTS triggers_{delivered,accepted,total}_count INTEGER;`, a backfill per pair guarded by
+>   `IS DISTINCT FROM`, and a bidirectional `BEFORE INSERT OR UPDATE ... FOR EACH ROW` trigger
+>   (`business_metrics_sync_legacy_trigger_counts`). It renames nothing, touches no view, and contains
+>   no `DROP`. The ADDs are static for the same reason the renames were: the hermetic Feast guard
+>   text-parses these files.
+> - **The four split views are NOT touched.** They are `SELECT *` snapshots, already seven columns
+>   behind the table, with ZERO consumers outside `database/` (measured across src/, tests/, scripts/,
+>   feature_repo/, frontend/src). Leaving them on the legacy names is what pre-lane containers expect.
+> - **`database/deferred/145_drop_legacy_per_hcp_count_columns.sql` = CONTRACT, applied BY HAND in a
+>   LATER deploy.** It retires the legacy three, the trigger and its function, and rebuilds the four
+>   views. It lives outside every `MIGRATION_DIRS` entry because `run_migrations.sh` applies every
+>   pending forward `*.sql` in ONE pass — a `migrations/145` would have dropped the legacy columns
+>   seconds after adding their replacements and restored the exact hole HIGH-1 rejected.
+>   `tests/unit/test_database/test_mig145_contract_legacy_per_hcp_columns.py` pins that separation by
+>   PARSING `MIGRATION_DIRS` out of the runner rather than restating it.
+> - **`rollback_144` now removes what the expand added** (trigger, function, the three canonical
+>   columns) and never touches the legacy columns. It is **no longer a deploy-recovery step** — the
+>   expand needs none — see the amendment on recovery block **B1** below.
+>
+> **Step 4 / Step 4b expectations are replaced by one rehearsal, run live inside a single rolled-back
+> transaction, with the database re-verified unchanged afterwards (36 columns, 0 triggers, 22,043 rows):**
+> apply 144 → 3 canonical + 3 legacy columns present, backfill leaves **0 mismatches** over all 12,143
+> `per_hcp_rollup` rows, sync trigger installed, 12 legacy view columns intact; an old-code INSERT
+> (legacy only) fills the canonical side; the ETL's real `ON CONFLICT DO UPDATE` shape propagates to
+> it; a new-code write (canonical only) fills the legacy side; apply 144 a second time → no-op (6
+> columns, 0 mismatches, 1 trigger); apply 145 → legacy columns, trigger and function gone, all four
+> views rebuilt on the canonical names (29 → 36 columns), the pre-lane writer's values intact.
+> Separately: 144 then `rollback_144` → back to 36 columns with the legacy data untouched on all
+> 12,143 rows. Note Step 4b's Expected `15` still holds, but for a different reason — under the expand
+> the legacy names never left. Step 4's "`0` legacy columns" does NOT hold and must not be asserted.
+>
+> Teeth, each with the plant asserted to land and the file restored by sha256: returning a
+> `RENAME COLUMN` to 144, removing one sync direction, and adding `database/deferred` to
+> `MIGRATION_DIRS` each redden exactly one test.
+
 **Files:**
 - Create: `database/migrations/144_per_hcp_trigger_count_columns.sql`
 - Create: `database/migrations/rollback_144_per_hcp_trigger_count_columns.sql` (recovery only; the runner excludes `rollback_*`)
@@ -13962,7 +14010,7 @@ The deploy run's step summary (`deploy.yml:1298-1359`) and its job log (actions 
 
 **Blocks** (each procedure lists which to run, in order):
 
-- **B1 — schema back** (144 before 143; each only if applied). Rollback 143 restores exactly the rows the re-key moved, from `public.kpi_history_rekey_143` (Task 8).
+- **B1 — schema back** (144 before 143; each only if applied). **AMENDED 2026-09-18:** the `rollback_144` line is now OPTIONAL. 144 is an EXPAND (see the amendment at Task 21) — it removes nothing, so pre-lane containers run correctly against the migrated schema and need no schema recovery. Run it only to return the schema to its exact pre-144 shape; skipping it is safe, and the `schema_migrations` DELETE below must then skip 144 too, or the next deploy will not re-apply it. Rollback 143 restores exactly the rows the re-key moved, from `public.kpi_history_rekey_143` (Task 8).
   ```bash
   docker stop e2i_feast_materializer
   [ "$(q "SELECT count(*) FROM public.schema_migrations WHERE filename = '144_per_hcp_trigger_count_columns.sql'")" = 1 ] && docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 --single-transaction < "$RB/rollback_144_per_hcp_trigger_count_columns.sql"

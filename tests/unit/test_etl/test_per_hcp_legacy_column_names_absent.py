@@ -1,11 +1,23 @@
-"""No live code path reads the legacy per_hcp_rollup column names (migration 144).
+"""No live code path reads the legacy per_hcp_rollup column names (migrations 144/145).
 
-Migration 144 renames ``business_metrics.{trx_count,nrx_count,total_rx_count}`` to
-``{triggers_delivered_count,triggers_accepted_count,triggers_total_count}``, because
-those columns never held prescriptions -- they hold trigger funnel counts. This is the
-census proof for that rename: it fails with the file and line of every remaining
-reader, so a missed consumer cannot reach a deploy as a runtime ``column does not
-exist``.
+``business_metrics.{trx_count,nrx_count,total_rx_count}`` never held prescriptions --
+they hold trigger funnel counts -- so the lane gives them the honest names
+``{triggers_delivered_count,triggers_accepted_count,triggers_total_count}``. This is the
+census proof: it fails with the file and line of every remaining reader.
+
+AMENDED 2026-09-18, and the amendment is why this guard matters MORE than when it was
+written. The change was an in-place rename; codex iter1 HIGH-1 replaced it with an
+expand/contract pair -- migration 144 ADDs the canonical columns beside the legacy ones
+and keeps both true with a bidirectional trigger, and ``database/deferred/145`` retires
+the legacy three by hand in a LATER deploy.
+
+Under the rename, a missed reader announced itself the moment the migration landed, as a
+runtime ``column does not exist``. Under the expand it does NOT: the legacy columns are
+still there, still correct, and a missed reader keeps working -- silently depending on a
+deprecated column -- right up until someone applies the contract, which is a different
+deploy with a different author on a different day. **This static census is now the only
+thing standing between a missed consumer and that far-away breakage.** Treat a name added
+to ALLOWED accordingly.
 
 The allowlist is the load-bearing part, and it is deliberately tiny. Anything added to
 it is invisible to this guard FOREVER, which is the same rot shape as a permanently
@@ -84,8 +96,9 @@ def _offenders() -> list[str]:
 
 def test_no_legacy_per_hcp_column_name_outside_the_allowlist():
     offenders = _offenders()
-    assert not offenders, "legacy per_hcp_rollup names (renamed by migration 144):\n" + "\n".join(
-        offenders
+    assert not offenders, (
+        "legacy per_hcp_rollup names (superseded by migration 144's canonical columns):\n"
+        + "\n".join(offenders)
     )
 
 
@@ -130,7 +143,7 @@ def test_the_causal_api_example_is_a_variable_name_not_a_column():
     Measured 2026-09-17: ``rep_visits`` appears in ZERO files under ``database/``, so
     the pair is two placeholders, not two columns -- and renaming the outcome half to
     ``triggers_delivered_count`` would turn a placeholder into a FALSE column
-    reference, creating the defect the rename is meant to remove.
+    reference, creating the defect the canonical names are meant to remove.
     """
     schema = (REPO / "src/api/schemas/causal.py").read_text()
     catalog = (REPO / "src/api/routes/causal/catalog.py").read_text()
@@ -141,8 +154,8 @@ def test_the_causal_api_example_is_a_variable_name_not_a_column():
     assert "defaults rep_visits/trx_count were not real columns" in catalog
 
     # The discriminating half: a real column would appear in the schema DDL. Neither
-    # of these does, and the treatment half is the control -- it is not renamed by 144,
-    # so if it were a column this argument would be wrong about both.
+    # of these does, and the treatment half is the control -- 144 gives it no canonical
+    # counterpart, so if it were a column this argument would be wrong about both.
     ddl = "\n".join(
         p.read_text() for p in sorted((REPO / "database").rglob("*.sql")) if p.is_file()
     )
