@@ -34,14 +34,14 @@ COHORT_METRIC_TYPE = "per_hcp_rollup"
 # All planted treatment channels (deduped, stable order for the select string).
 _TREATMENT_COLUMNS: tuple[str, ...] = tuple(sorted(set(INTERVENTION_TREATMENT_MAP.values())))
 # region (heterogeneity axis) + every treatment channel + outcome + pre-treatment
-# confounders (market_share, total_rx_count) for the direct causal estimate.
+# confounders (market_share, triggers_total_count) for the direct causal estimate.
 _COHORT_COLUMNS = ",".join(
-    ["region", "conversion_rate", "market_share", "total_rx_count", *_TREATMENT_COLUMNS]
+    ["region", "conversion_rate", "market_share", "triggers_total_count", *_TREATMENT_COLUMNS]
 )
 _NUMERIC_COLUMNS: tuple[str, ...] = (
     "conversion_rate",
     "market_share",
-    "total_rx_count",
+    "triggers_total_count",
     *_TREATMENT_COLUMNS,
 )
 # Generous cap so we read the full per-brand cohort (~7k rows) past PostgREST's

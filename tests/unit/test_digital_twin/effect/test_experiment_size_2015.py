@@ -40,7 +40,7 @@ def _frame(control_outcomes, treated_outcome=1.3, n_per_arm=600):
                 "email_campaign_count": float(i % 5),
                 "conversion_rate": control_outcomes[i % len(control_outcomes)],
                 "market_share": 0.3,
-                "total_rx_count": 50.0,
+                "triggers_total_count": 50.0,
             }
         )
     for i in range(n_per_arm):
@@ -50,7 +50,7 @@ def _frame(control_outcomes, treated_outcome=1.3, n_per_arm=600):
                 "email_campaign_count": 6.0 + i % 5,
                 "conversion_rate": treated_outcome,
                 "market_share": 0.3,
-                "total_rx_count": 50.0,
+                "triggers_total_count": 50.0,
             }
         )
     provider = CohortEffectDataProvider(pd.DataFrame(rows))

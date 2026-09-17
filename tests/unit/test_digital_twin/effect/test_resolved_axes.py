@@ -47,7 +47,7 @@ def _make_cohort(n_per_region: int = 200, seed: int = 42) -> pd.DataFrame:
                     "region": region,
                     "engagement_score": engagement,
                     "market_share": market,
-                    "total_rx_count": np.expm1(np.abs(logvol) * 2.0),
+                    "triggers_total_count": np.expm1(np.abs(logvol) * 2.0),
                     "_tau": tau,
                 }
             )
@@ -201,7 +201,7 @@ def test_a_non_string_region_column_still_yields_a_declared_region_axis():
                     "region": code,
                     "engagement_score": 10.0 / (1.0 + np.exp(-eng_logit)),
                     "market_share": market,
-                    "total_rx_count": rng.poisson(60, n).astype(float),
+                    "triggers_total_count": rng.poisson(60, n).astype(float),
                     "_tau": tau,
                 }
             )

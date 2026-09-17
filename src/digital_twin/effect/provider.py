@@ -47,7 +47,7 @@ SUPPORTED_INTERVENTIONS = {value for value, _label in INTERVENTION_CATALOG}
 #
 # Every catalog intervention now carries its own planted treatment channel
 # (backfill_segment_engagement.py multi-channel DGP: each treatment is generated
-# from the row's OBSERVED confounders — market_share, total_rx_count, region —
+# from the row's OBSERVED confounders — market_share, triggers_total_count, region —
 # and conversion_rate = baseline(confounders) + Σ_k tau_k[region]*T_k + noise,
 # with a documented per-channel, per-region true CATE). Because every channel
 # shares the same observed confounders and independent noise, adjusting for
@@ -73,7 +73,7 @@ INTERVENTION_TREATMENT_MAP: dict[str, str] = {
 COHORT_ESTIMABLE_INTERVENTIONS = frozenset(INTERVENTION_TREATMENT_MAP)
 
 # Pre-treatment confounder controls for the direct cohort estimate (present subset used).
-COHORT_CONFOUNDERS: tuple[str, ...] = ("market_share", "total_rx_count")
+COHORT_CONFOUNDERS: tuple[str, ...] = ("market_share", "triggers_total_count")
 
 _COHORT_OUTCOME = "conversion_rate"
 _COHORT_REGION = "region"

@@ -307,7 +307,7 @@ class TestSimulationExecution:
                     ),
                     "conversion_rate": (1.3 if treated else 1.0) + float(rng.normal(0.0, 0.15)),
                     "market_share": float(rng.uniform(0.1, 0.9)),
-                    "total_rx_count": float(rng.integers(30, 90)),
+                    "triggers_total_count": float(rng.integers(30, 90)),
                 }
             )
         cohort = pd.DataFrame(rows)
