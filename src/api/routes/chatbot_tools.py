@@ -434,8 +434,15 @@ def _normalize_metric_name(kpi_name: str) -> str:
     business_metrics.metric_name values are lowercase snake_case (trx, nrx,
     market_share, conversion_rate, hcp_engagement_score) while LLM tool calls
     pass display forms ("TRx", "Market Share") — an exact-match filter on
-    those returns 0 rows.
+    those returns 0 rows. Full names whose stored key is an abbreviation
+    ("Total Prescriptions" -> ``trx``) resolve through the shared KPI
+    vocabulary; unknown names retain the transparent snake-case fallback.
     """
+    from src.kpi.business_metric_vocabulary import canonical_business_metric_name
+
+    canonical = canonical_business_metric_name(kpi_name)
+    if canonical is not None:
+        return canonical
     return kpi_name.strip().lower().replace("-", "_").replace(" ", "_")
 
 
@@ -561,13 +568,11 @@ async def _query_kpis(
                 "measure_basis": _BUSINESS_METRICS_BASIS,
                 # No rows, so no stored figure to be confused with anything.
                 # The notice is a caveat ON the rows above it (#1640 codex
-                # iter-3): _query_kpis filters metric_name with
-                # _normalize_metric_name while the notice resolves through
-                # recognize_kpi, and those diverge -- "total prescriptions"
-                # filters 'total_prescriptions', which is never a stored key,
-                # yet resolved to TRx. Gating on rows closes that: a key the
-                # table does not use cannot return rows, so the mismatch can
-                # never reach a reader.
+                # iter-3). #2130 aligned supported business-metric aliases
+                # across recognition and filtering, but unsupported registry
+                # KPIs still pass through transparently rather than being
+                # conflated with a different stored metric. With no rows,
+                # there is no stored figure for a notice to describe.
                 "cross_substrate_conflict": None,
                 "note": "; ".join(unmatched) + "; returned 0 rows",
             }

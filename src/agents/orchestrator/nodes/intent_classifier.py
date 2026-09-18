@@ -38,6 +38,7 @@ from src.agents.multi_faceted import (
     has_dependency_composition,
     split_clauses,
 )
+from src.kpi.business_metric_vocabulary import KPI_VALUE_LOOKUP_METRIC_PATTERN
 from src.utils.llm_content import normalize_llm_content, parse_llm_json
 from src.utils.llm_factory import MODEL_MAPPINGS, get_fast_llm, get_llm_provider
 from src.utils.mock_llm import llm_or_marked_mock
@@ -536,7 +537,7 @@ KPI_VALUE_LOOKUP_PATTERN = (
     r"(?s)\A(?!.*(?:predict|expect|forecast|project|likelihood|probabilit|what will))"
     r".*?(?:what(?:'?s| is| are| was| were)|show me|tell me about|how many|give me)\s+"
     r"(?:teh\s+|the\s+)?(?:[\w'-]+\s+){0,3}?"
-    r"(?:trx|nrx|nbrx|market share|conversion rate)\b"
+    rf"{KPI_VALUE_LOOKUP_METRIC_PATTERN}\b"
 )
 KPI_VALUE_LOOKUP_RE = re.compile(KPI_VALUE_LOOKUP_PATTERN, re.IGNORECASE)
 
