@@ -1734,7 +1734,7 @@ droplet. To redeploy the same sha, re-run the workflow rather than touching the 
 | Agent definitions | `config/agent_config.yaml` | YAML |
 | Domain vocabulary | `config/domain_vocabulary.yaml` | YAML |
 | KPI definitions | `config/kpi_definitions.yaml` | YAML (`summary.total_kpis` is the count) |
-| Ontology | `config/ontology/*.yaml` | YAML (17 files) |
+| Ontology | `config/ontology/*.yaml` | YAML (17 files) — design spec; no runtime loader (`src/ontology`'s schema compiler, validator and inference engine run in CI tests only; its `vocabulary_registry` / `query_extractor` serve `config/domain_vocabulary.yaml` at runtime). The graph is built by code: see `docs/data/04-KNOWLEDGE-GRAPH-ONTOLOGY.md` "How the graph is built" |
 | Docker services | `docker/docker-compose*.yml` | YAML (7 files — see ADR-006 for which one deploys) |
 | Environment | `.env` (gitignored) | Key=Value |
 | Python tools | `pyproject.toml` | TOML (ruff, mypy, pytest, coverage) |
