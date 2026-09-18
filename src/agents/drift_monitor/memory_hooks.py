@@ -36,6 +36,7 @@ Integrates the Drift Monitor agent with the 4-Memory Architecture:
 - Procedural: No (statistical computation, no LLM prompts to optimize)
 """
 
+import asyncio
 import hashlib
 import logging
 from dataclasses import dataclass, field
@@ -825,77 +826,82 @@ class DriftMonitorMemoryHooks:
             # hide a failed write. Values are bound parameters (feature names can
             # contain quotes). Ownership (``agent``) is set ON CREATE only, so a
             # curated Feature/Model is never taken over (#2177, #2174).
-            graph = self.semantic_memory.graph
-            base = {"feature": feature, "ts": timestamp, "agent": "drift_monitor"}
+            # The graph client is synchronous; run the writes in a worker thread
+            # so the event loop (and the caller's timeout) is never blocked.
+            def _write() -> None:
+                graph = self.semantic_memory.graph
+                base = {"feature": feature, "ts": timestamp, "agent": "drift_monitor"}
 
-            graph.query(
-                """
-                MERGE (f:Feature {name: $feature})
-                ON CREATE SET f.created_at = $ts, f.agent = $agent
-                SET f.last_drift_check = $ts
-                """,
-                base,
-            )
-            graph.query(
-                """
-                MERGE (d:DriftPattern {pattern_id: $pattern_id})
-                ON CREATE SET
-                    d.drift_type = $drift_type,
-                    d.first_detected = $ts,
-                    d.occurrence_count = 1,
-                    d.agent = $agent
-                ON MATCH SET
-                    d.occurrence_count = d.occurrence_count + 1
-                SET
-                    d.severity = $severity,
-                    d.last_detected = $ts,
-                    d.test_statistic = $test_statistic,
-                    d.p_value = $p_value
-                """,
-                {
-                    **base,
-                    "pattern_id": pattern_id,
-                    "drift_type": drift_type,
-                    "severity": severity,
-                    "test_statistic": feature_result.get("test_statistic", 0.0),
-                    "p_value": feature_result.get("p_value", 1.0),
-                },
-            )
-            graph.query(
-                """
-                MATCH (f:Feature {name: $feature})
-                MATCH (d:DriftPattern {pattern_id: $pattern_id})
-                MERGE (f)-[:HAS_DRIFT]->(d)
-                """,
-                {**base, "pattern_id": pattern_id},
-            )
-
-            # Co-drifting relationships
-            for other_feature in result.get("features_with_drift", []):
-                if other_feature != feature:
-                    graph.query(
-                        """
-                        MERGE (f1:Feature {name: $feature})
-                        ON CREATE SET f1.created_at = $ts, f1.agent = $agent
-                        MERGE (f2:Feature {name: $other})
-                        ON CREATE SET f2.created_at = $ts, f2.agent = $agent
-                        MERGE (f1)-[:CO_DRIFTS_WITH]->(f2)
-                        """,
-                        {**base, "other": other_feature},
-                    )
-
-            # Link to model if specified
-            model_id = state.get("model_id")
-            if model_id:
                 graph.query(
                     """
-                    MATCH (d:DriftPattern {pattern_id: $pattern_id})
-                    MERGE (m:Model {model_id: $model_id})
-                    ON CREATE SET m.agent = $agent
-                    MERGE (d)-[:AFFECTS_MODEL]->(m)
+                    MERGE (f:Feature {name: $feature})
+                    ON CREATE SET f.created_at = $ts, f.agent = $agent
+                    SET f.last_drift_check = $ts
                     """,
-                    {**base, "pattern_id": pattern_id, "model_id": model_id},
+                    base,
                 )
+                graph.query(
+                    """
+                    MERGE (d:DriftPattern {pattern_id: $pattern_id})
+                    ON CREATE SET
+                        d.drift_type = $drift_type,
+                        d.first_detected = $ts,
+                        d.occurrence_count = 1,
+                        d.agent = $agent
+                    ON MATCH SET
+                        d.occurrence_count = d.occurrence_count + 1
+                    SET
+                        d.severity = $severity,
+                        d.last_detected = $ts,
+                        d.test_statistic = $test_statistic,
+                        d.p_value = $p_value
+                    """,
+                    {
+                        **base,
+                        "pattern_id": pattern_id,
+                        "drift_type": drift_type,
+                        "severity": severity,
+                        "test_statistic": feature_result.get("test_statistic", 0.0),
+                        "p_value": feature_result.get("p_value", 1.0),
+                    },
+                )
+                graph.query(
+                    """
+                    MATCH (f:Feature {name: $feature})
+                    MATCH (d:DriftPattern {pattern_id: $pattern_id})
+                    MERGE (f)-[:HAS_DRIFT]->(d)
+                    """,
+                    {**base, "pattern_id": pattern_id},
+                )
+
+                # Co-drifting relationships
+                for other_feature in result.get("features_with_drift", []):
+                    if other_feature != feature:
+                        graph.query(
+                            """
+                            MERGE (f1:Feature {name: $feature})
+                            ON CREATE SET f1.created_at = $ts, f1.agent = $agent
+                            MERGE (f2:Feature {name: $other})
+                            ON CREATE SET f2.created_at = $ts, f2.agent = $agent
+                            MERGE (f1)-[:CO_DRIFTS_WITH]->(f2)
+                            """,
+                            {**base, "other": other_feature},
+                        )
+
+                # Link to model if specified
+                model_id = state.get("model_id")
+                if model_id:
+                    graph.query(
+                        """
+                        MATCH (d:DriftPattern {pattern_id: $pattern_id})
+                        MERGE (m:Model {model_id: $model_id})
+                        ON CREATE SET m.agent = $agent
+                        MERGE (d)-[:AFFECTS_MODEL]->(m)
+                        """,
+                        {**base, "pattern_id": pattern_id, "model_id": model_id},
+                    )
+
+            await asyncio.to_thread(_write)
 
             logger.debug(f"Stored drift pattern for {feature} ({drift_type})")
             return True

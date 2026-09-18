@@ -196,6 +196,10 @@ def _validate_relationship_types(relationship_types: List[str]) -> List[str]:
 # whitespace, comment markers) impossible.
 _SAFE_CYPHER_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
+# Parameter name that carries ``add_e2i_entity``'s create-only map. Reserved:
+# a caller property with this key is rejected rather than silently shadowed.
+_CREATE_ONLY_PARAM = "__e2i_create_only"
+
 
 def _validate_cypher_identifier(value: str, kind: str) -> str:
     """Validate a structural Cypher token (label / relationship type) on WRITE.
@@ -324,26 +328,21 @@ class FalkorDBSemanticMemory:
         props["e2i_entity_type"] = type_value
         props["updated_at"] = datetime.now(timezone.utc).isoformat()
         create_only = {k: v for k, v in (create_only_properties or {}).items() if k not in props}
+        if _CREATE_ONLY_PARAM in props:
+            raise ValueError(f"Property key {_CREATE_ONLY_PARAM!r} is reserved")
 
-        # Build property strings for Cypher. Create-only values bind under a
-        # ``co_`` prefix so they can never collide with a match-time parameter.
+        # Caller keys are spliced as ``k: $k``; create-only values bind as ONE map
+        # parameter, so no caller key can collide with them (codex R1, #2174).
         prop_string = ", ".join(f"{k}: ${k}" for k in props)
-        create_string = ", ".join(
-            [f"{k}: ${k}" for k in props] + [f"{k}: $co_{k}" for k in create_only]
-        )
 
         query = f"""
         MERGE (e:{label} {{id: $entity_id}})
-        ON CREATE SET e += {{{create_string}}}
+        ON CREATE SET e += {{{prop_string}}}, e += ${_CREATE_ONLY_PARAM}
         ON MATCH SET e += {{{prop_string}}}
         RETURN e
         """
 
-        params = {
-            "entity_id": entity_id,
-            **props,
-            **{f"co_{k}": v for k, v in create_only.items()},
-        }
+        params = {"entity_id": entity_id, **props, _CREATE_ONLY_PARAM: create_only}
         self.graph.query(query, params)
 
         logger.debug(f"Added/updated {label} entity: {entity_id}")

@@ -22,6 +22,7 @@ Algorithm: .claude/specialists/Agent_Specialists_Tiers 1-5/drift-monitor.md
 Contract: .claude/contracts/tier3-contracts.md lines 349-562
 """
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -218,6 +219,9 @@ class DriftMonitorAgent:
         self.graph = drift_monitor_graph
         self.enable_mlflow = enable_mlflow
         self.enable_memory = enable_memory
+        # Upper bound on the post-detection memory contribution. Co-drift writes
+        # are O(n^2) in drifting features; a slow backend must not hold the run.
+        self.memory_timeout_seconds = 15.0
         self._mlflow_tracker: Optional["DriftMonitorMLflowTracker"] = None
 
     def _get_mlflow_tracker(self) -> Optional["DriftMonitorMLflowTracker"]:
@@ -361,10 +365,18 @@ class DriftMonitorAgent:
         # Non-blocking: a memory failure is logged and never fails detection.
         if self.enable_memory:
             try:
-                await contribute_to_memory(
-                    result=dict(final_state),
-                    state=dict(final_state),
-                    session_id=f"drift_run_{uuid.uuid4().hex}",
+                await asyncio.wait_for(
+                    contribute_to_memory(
+                        result=dict(final_state),
+                        state=dict(final_state),
+                        session_id=f"drift_run_{uuid.uuid4().hex}",
+                    ),
+                    timeout=self.memory_timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"Drift memory contribution exceeded {self.memory_timeout_seconds}s; "
+                    "returning the detection result without waiting"
                 )
             except Exception as e:
                 logger.warning(f"Failed to contribute drift result to memory: {e}")

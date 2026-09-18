@@ -410,13 +410,14 @@ class ScopeDefinerMemoryHooks:
             self.semantic_memory.add_e2i_entity(
                 entity_type="ProblemType",
                 entity_id=f"ptype:{problem_type}",
+                # #2174: a ProblemType is agent output — no curated writer creates
+                # one — so ownership is set on match too, repairing nodes written
+                # before this fix (they had no agent and counted as curated).
                 properties={
                     "name": problem_type,
+                    "agent": "scope_definer",
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 },
-                # #2174: a ProblemType is agent output, not seed data — without an
-                # agent property it would count as curated.
-                create_only_properties={"agent": "scope_definer"},
             )
             self.semantic_memory.add_relationship(
                 from_entity_id=f"exp:{experiment_id}",

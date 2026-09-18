@@ -130,3 +130,23 @@ async def test_refresh_repairs_an_empty_prediction_target(real_output):
 
     _row_id, updates = repo.update.await_args.args
     assert updates["prediction_target"] == output["scope_spec"]["prediction_target"]
+
+
+def test_hand_built_spec_keeps_its_features():
+    """A caller-built spec using the input names keeps both target and features."""
+    output = {
+        "experiment_id": "exp-legacy",
+        "scope_spec": {
+            "problem_type": "regression",
+            "target_variable": "trx",
+            "features": ["a", "b"],
+        },
+    }
+    with patch("src.agents.ml_foundation.scope_definer.agent.ScopeDefinerMemoryHooks") as HookCls:
+        hook = HookCls.return_value
+        hook.store_experiment_pattern = AsyncMock(return_value=True)
+        asyncio.run(ScopeDefinerAgent()._update_semantic_memory(output))
+
+    kwargs = hook.store_experiment_pattern.await_args.kwargs
+    assert kwargs["target_variable"] == "trx"
+    assert kwargs["features"] == ["a", "b"]

@@ -323,3 +323,103 @@ async def test_drift_pattern_lands_and_is_runtime_owned(graph, semantic):
         graph,
         "MATCH (:DriftPattern)-[:AFFECTS_MODEL]->(m:Model {model_id:'model_1'}) RETURN count(m)",
     ) == [[2]]
+
+
+# ---------------------------------------------------------------------------
+# Codex R1 — parameter namespace, legacy ProblemType, one-off repair
+# ---------------------------------------------------------------------------
+
+
+def test_create_only_values_cannot_collide_with_caller_keys(graph, semantic):
+    semantic.add_e2i_entity(
+        entity_type="Variable",
+        entity_id="var:x",
+        properties={"name": "x", "co_agent": "caller-metadata"},
+        create_only_properties={"agent": "scope_definer"},
+    )
+
+    assert rows(graph, "MATCH (v:Variable {id:'var:x'}) RETURN v.agent, v.co_agent") == [
+        ["scope_definer", "caller-metadata"]
+    ]
+
+
+@pytest.mark.asyncio
+async def test_scope_definer_repairs_a_pre_fix_problem_type(graph, semantic):
+    from src.agents.ml_foundation.scope_definer.memory_hooks import ScopeDefinerMemoryHooks
+
+    # Written by the pre-#2174 hook: no agent, so it counted as curated.
+    graph.query("CREATE (:ProblemType {id: 'ptype:regression', name: 'regression'})")
+    hooks = ScopeDefinerMemoryHooks()
+    hooks._semantic_memory = semantic
+
+    assert await hooks.store_experiment_pattern(
+        experiment_id="exp_c",
+        experiment_name="c",
+        problem_type="regression",
+        target_variable="",
+        features=[],
+        success_criteria={},
+    )
+
+    assert rows(graph, "MATCH (p:ProblemType) RETURN p.id, p.agent") == [
+        ["ptype:regression", "scope_definer"]
+    ]
+
+
+def _seed_pre_fix_damage(graph) -> None:
+    graph.query(
+        "CREATE (:Experiment {id:'exp:1', agent:'scope_definer'})-[:TARGETS {agent:'scope_definer'}]->"
+        "(:Variable {id:'var:', name:'', role:'target', agent:'scope_definer'})"
+    )
+    graph.query(
+        "MATCH (e:Experiment {id:'exp:1'}), (v:Variable {id:'var:'}) CREATE (:Experiment {id:'exp:2', agent:'scope_definer'})-[:TARGETS]->(v)"
+    )
+    graph.query("CREATE (:ProblemType {id:'ptype:regression', name:'regression'})")
+    # A validated synced edge whose endpoint an old hook stamped.
+    graph.query(
+        "CREATE (:Variable {id:'var:treatment_arm', name:'treatment_arm', role:'treatment', agent:'causal_impact'})"
+        "-[:CAUSES {validation_status:'validated', brand:'Kisqali', region:'northeast'}]->"
+        "(:Variable {id:'var:persistent_180d', name:'persistent_180d', role:'outcome'})"
+    )
+    # A genuinely agent-owned causal_impact pair must stay agent-owned.
+    graph.query(
+        "CREATE (:Variable {id:'var:accepted', agent:'causal_impact'})"
+        "-[:CAUSES {agent:'causal_impact'}]->(:Variable {id:'var:converted', agent:'causal_impact'})"
+    )
+
+
+def test_repair_script_dry_run_changes_nothing(graph):
+    repair = _load_script("repair_kg_ownership")
+    _seed_pre_fix_damage(graph)
+
+    report = repair.repair(graph, execute=False)
+
+    assert report == {
+        "empty_target_variables": 1,
+        "unowned_problem_types": 1,
+        "stamped_synced_variables": 1,
+    }
+    assert rows(graph, "MATCH (v:Variable {id:'var:'}) RETURN count(v)") == [[1]]
+    assert rows(graph, "MATCH (p:ProblemType) RETURN p.agent") == [[None]]
+
+
+def test_repair_script_execute_fixes_pre_fix_damage_and_is_idempotent(graph):
+    repair = _load_script("repair_kg_ownership")
+    _seed_pre_fix_damage(graph)
+
+    repair.repair(graph, execute=True)
+    second = repair.repair(graph, execute=False)
+
+    assert second == {
+        "empty_target_variables": 0,
+        "unowned_problem_types": 0,
+        "stamped_synced_variables": 0,
+    }
+    assert rows(graph, "MATCH (v:Variable {id:'var:'}) RETURN count(v)") == [[0]]
+    assert rows(graph, "MATCH (e:Experiment) RETURN count(e)") == [[2]]  # experiments kept
+    assert rows(graph, "MATCH (p:ProblemType) RETURN p.agent") == [["scope_definer"]]
+    assert rows(graph, "MATCH (v:Variable {id:'var:treatment_arm'}) RETURN v.agent") == [[None]]
+    assert rows(
+        graph,
+        "MATCH (v:Variable) WHERE v.id IN ['var:accepted','var:converted'] RETURN count(v.agent)",
+    ) == [[2]]

@@ -457,7 +457,7 @@ class ScopeDefinerAgent:
                 ),
                 problem_type=problem_type,
                 target_variable=target_variable,
-                features=scope_spec.get("required_features") or [],
+                features=scope_spec.get("required_features") or scope_spec.get("features") or [],
                 success_criteria=output.get("success_criteria", {}) or {},
             )
             logger.info(f"Updated semantic graph (e2i_causal) for experiment: {experiment_id}")
