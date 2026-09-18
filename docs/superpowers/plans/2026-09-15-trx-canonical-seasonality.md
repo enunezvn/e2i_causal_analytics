@@ -13174,6 +13174,71 @@ case "$EXPECT" in old|new) ;; *) echo "usage: prove_state.sh old|new"; exit 2 ;;
 # The negative rehearsal points this at an altered copy; recovery uses the staged file.
 IMAGES_PRE="${IMAGES_PRE:-$RB/images_pre.txt}"
 q() { docker exec supabase-db psql -U postgres -d postgres -Atc "$1"; }
+# codex/ultracode iter7: the ONE check that is a CAPABILITY and not a catalog proxy.
+# Six review rounds each bound one more attribute of the sync trigger -- tgenabled, then the function
+# body, then tgqual, then tgattr -- and each round a new attribute was found that changes BEHAVIOUR
+# while leaving the fingerprint byte-identical. That is an unwinnable game: the fingerprint asserts the
+# trigger's IDENTITY, which is worth having, but identity is not the condition the legacy columns
+# depend on. The condition is "a write to either name reaches the other", and the only thing that
+# settles it is writing a row and reading it back.
+#
+# Measured against every vector the fingerprint has ever missed (2026-09-18, each inside BEGIN/ROLLBACK
+# on the live box): honest 144 -> ok; `UPDATE OF <other column>` (tgattr) -> BROKEN; `WHEN (false)` ->
+# BROKEN; gutted function body -> BROKEN; DISABLE TRIGGER -> BROKEN; a second later-firing trigger that
+# re-nulls the canonical column -> BROKEN; the function's whole UPDATE branch deleted -> BROKEN. The
+# last of those is the ETL writer's own path and NO test in the repo catches it.
+#
+# SAFETY: this is the only thing in this script that writes. It runs in its own transaction and ends in
+# an unconditional ROLLBACK, touches two rows keyed by an unmistakable metric_id at 1900-01-01, and is
+# invoked through `probe()` rather than `q()` so that `q()` stays what an operator can trust it to be:
+# read-only. `--single-transaction` is not used -- the BEGIN/ROLLBACK is inside the string, so an error
+# part-way leaves the transaction aborted and discarded either way.
+# The verdict must be READABLE, not merely unequal to "ok". Without ON_ERROR_STOP psql runs on past a
+# failed statement, the transaction goes aborted, every later statement errors too, and `tail -1` returns
+# whatever noise came last -- measured: running this against a pre-144 schema returned "INSERT 0 1". That
+# still fails closed (expand_state demands exactly "ok"), but a refusal an operator cannot act on is its
+# own defect, so anything that is not a verdict is relabelled as one.
+probe() {
+  local out verdict
+  out=$(docker exec supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 -Atc "$1" 2>&1)
+  verdict=$(printf '%s\n' "$out" | grep -E '^(ok$|BROKEN:)' | tail -1)
+  if [ -n "$verdict" ]; then echo "$verdict"
+  else echo "BROKEN: probe did not complete [$(printf '%s\n' "$out" | grep -m1 'ERROR' || printf '%s' "$out" | tr '\n' ' ' | cut -c1-120)]"; fi
+}
+SYNC_PROBE_SQL="$(cat <<'PROBE'
+BEGIN;
+CREATE TEMP TABLE _sp(step text, ok boolean, detail text);
+INSERT INTO public.business_metrics(metric_id, metric_date, trx_count, nrx_count, total_rx_count)
+     VALUES ('__prove_state_sync_probe_a__', DATE '1900-01-01', 11, 22, 33);
+INSERT INTO _sp SELECT 'insert_legacy_to_canonical',
+       (triggers_delivered_count,triggers_accepted_count,triggers_total_count) IS NOT DISTINCT FROM (11,22,33),
+       format('%s/%s/%s want 11/22/33', triggers_delivered_count, triggers_accepted_count, triggers_total_count)
+  FROM public.business_metrics WHERE metric_id='__prove_state_sync_probe_a__';
+UPDATE public.business_metrics SET trx_count=44, nrx_count=55, total_rx_count=66
+ WHERE metric_id='__prove_state_sync_probe_a__';
+INSERT INTO _sp SELECT 'update_legacy_to_canonical',
+       (triggers_delivered_count,triggers_accepted_count,triggers_total_count) IS NOT DISTINCT FROM (44,55,66),
+       format('%s/%s/%s want 44/55/66', triggers_delivered_count, triggers_accepted_count, triggers_total_count)
+  FROM public.business_metrics WHERE metric_id='__prove_state_sync_probe_a__';
+UPDATE public.business_metrics SET triggers_delivered_count=77, triggers_accepted_count=88, triggers_total_count=99
+ WHERE metric_id='__prove_state_sync_probe_a__';
+INSERT INTO _sp SELECT 'update_canonical_to_legacy',
+       (trx_count,nrx_count,total_rx_count) IS NOT DISTINCT FROM (77,88,99),
+       format('%s/%s/%s want 77/88/99', trx_count, nrx_count, total_rx_count)
+  FROM public.business_metrics WHERE metric_id='__prove_state_sync_probe_a__';
+INSERT INTO public.business_metrics(metric_id, metric_date, triggers_delivered_count, triggers_accepted_count, triggers_total_count)
+     VALUES ('__prove_state_sync_probe_b__', DATE '1900-01-01', 111, 222, 333);
+INSERT INTO _sp SELECT 'insert_canonical_to_legacy',
+       (trx_count,nrx_count,total_rx_count) IS NOT DISTINCT FROM (111,222,333),
+       format('%s/%s/%s want 111/222/333', trx_count, nrx_count, total_rx_count)
+  FROM public.business_metrics WHERE metric_id='__prove_state_sync_probe_b__';
+SELECT CASE WHEN count(*) <> 4 THEN 'BROKEN: probe ran ' || count(*) || ' of 4 steps'
+            WHEN bool_and(ok) THEN 'ok'
+            ELSE 'BROKEN: ' || string_agg(step || ' got ' || detail, '; ') FILTER (WHERE NOT ok) END
+  FROM _sp;
+ROLLBACK;
+PROBE
+)"
 check() { if [ "$2" = "$3" ]; then echo "OK   $1: $2"; else echo "BAD  $1: got [$2] want [$3]"; bad=1; fi; }
 # REVISED 2026-09-18 (codex iter3 HIGH-1), REWRITTEN 2026-09-17 (codex iter4 HIGH-1).
 #
@@ -13248,7 +13313,7 @@ COLS_CANON="triggers_accepted_count,triggers_delivered_count,triggers_total_coun
 # the canonical names. `expand` also requires defer_led=0: a schema that has not contracted, beside a
 # ledger claiming 146 ran, is not a state this lane can legitimately produce.
 VIEWS_N=4; VIEW_LEGACY_COLS=12; VIEW_CANON_COLS=12   # 4 views x 3 columns (measured 2026-09-17)
-expand_state()   { [ "$cols" = "$COLS_BOTH" ] && [ "$trg_fp" = "$SYNC_FP" ] && [ "$disagree" = 0 ] \
+expand_state()   { [ "$cols" = "$COLS_BOTH" ] && [ "$trg_fp" = "$SYNC_FP" ] && [ "$disagree" = 0 ] && [ "$sync_probe" = ok ] \
                    && [ "$led_144" = 1 ] && [ "$defer_led" = 0 ] \
                    && [ "$views_n" = "$VIEWS_N" ] && [ "$views_legacy" = "$VIEW_LEGACY_COLS" ] && [ "$views_canon" = 0 ]; }
 contract_state() { [ "$cols" = "$COLS_CANON" ] && [ "$trg_fp" = "$SYNC_FP_NONE" ] && [ "$led_144" = 1 ] && [ "$defer_led" = 1 ] \
@@ -13259,7 +13324,7 @@ schema_generation() {
   if expand_state; then echo expand
   elif contract_state; then echo contract
   elif legacy_state; then echo legacy
-  else echo "broken(cols=[$cols] trigger=[$([ "$trg_fp" = "$SYNC_FP_NONE" ] && echo none || { [ "$trg_fp" = "$SYNC_FP" ] && echo as-144-installs-it || echo "DIFFERS: $trg_fp"; })] disagreeing_rows=[$disagree] ledger_144=[$led_144] deferred_146_ledger=[$defer_led] views=[n=$views_n legacy_cols=$views_legacy canonical_cols=$views_canon])"
+  else echo "broken(cols=[$cols] trigger=[$([ "$trg_fp" = "$SYNC_FP_NONE" ] && echo none || { [ "$trg_fp" = "$SYNC_FP" ] && echo as-144-installs-it || echo "DIFFERS: $trg_fp"; })] disagreeing_rows=[$disagree] sync_probe=[$sync_probe] ledger_144=[$led_144] deferred_146_ledger=[$defer_led] views=[n=$views_n legacy_cols=$views_legacy canonical_cols=$views_canon])"
   fi; }
 # $1 label, $2.. the generations this branch accepts.
 generation_in() { local got="$1"; shift; for want in "$@"; do [ "$got" = "$want" ] && { echo "OK   schema_generation: $got (accepted here: $*)"; return; }; done
@@ -13288,7 +13353,11 @@ led_143=$(q "SELECT count(*) FROM public.schema_migrations WHERE filename = '143
 defer_led=$(q "SELECT count(*) FROM public.schema_migrations WHERE filename = 'deferred/146_drop_legacy_per_hcp_count_columns.sql'")
 if [ "$cols" = "$COLS_BOTH" ]; then
   disagree=$(q "SELECT count(*) FROM public.business_metrics WHERE triggers_delivered_count IS DISTINCT FROM trx_count OR triggers_accepted_count IS DISTINCT FROM nrx_count OR triggers_total_count IS DISTINCT FROM total_rx_count")
-else disagree="n/a"; fi
+  # `disagree` says the two names AGREE on the rows that exist; `sync_probe` says a NEW write still
+  # reaches both. They fail at different times: divergence starts at the next write, so a box whose
+  # trigger broke a second ago still measures 0 disagreements.
+  sync_probe=$(probe "$SYNC_PROBE_SQL")
+else disagree="n/a"; sync_probe="n/a"; fi
 generation=$(schema_generation)
 event_hist=$(q "SELECT count(*) FROM public.kpi_history WHERE kpi_id IN ('WS3-BI-005','WS3-BI-006','WS3-BI-007','WS3-BI-008') AND source = 'treatment_events.event_date'")
 api_img=$(docker inspect e2i_api --format '{{.Image}}' 2>/dev/null || echo missing)
@@ -13365,6 +13434,7 @@ if [ "$EXPECT" = new ]; then
     printf 'SYNC_TRIGGER=%s\n' "$trg_fp"
     printf 'SPLIT_VIEWS=n=%s/legacy_cols=%s/canonical_cols=%s\n' "$views_n" "$views_legacy" "$views_canon"
     printf 'LEGACY_CANONICAL_DISAGREEMENTS=%s\n' "$disagree"
+    printf 'SYNC_WRITE_READBACK=%s\n' "$sync_probe"
     printf 'MIGRATION_LEDGER=143:%s/144:%s/deferred146:%s\n' "$led_143" "$led_144" "$defer_led"
     printf 'CANONICAL_REGISTRY=%s\n' "$(q "SELECT count(*) || ':' || coalesce(md5(string_agg(query_id || '=' || md5(sql), ',' ORDER BY query_id)), '') FROM public.kpi_query_registry WHERE query_id LIKE 'canonical_volume_%'")"
     if [ "$(q "SELECT to_regclass('public.kpi_history_rekey_143') IS NOT NULL")" = t ]; then
@@ -14767,6 +14837,55 @@ skew = psql("SELECT count(*) FROM public.business_metrics WHERE trx_count IS DIS
             "OR nrx_count IS DISTINCT FROM triggers_accepted_count "
             "OR total_rx_count IS DISTINCT FROM triggers_total_count")
 check("no row disagrees between the legacy and canonical names", skew == "0", skew)
+
+# ...and the capability itself, not another catalog proxy (ultracode iter7). `skew` says the two names
+# AGREE on the rows that exist; it cannot say a NEW write still reaches both, because divergence starts
+# at the next write. Six rounds bound one more trigger attribute each (tgenabled, the body, tgqual,
+# tgattr) and each time a further attribute was found that changes behaviour with a byte-identical
+# fingerprint. This writes a row and reads it back, and so fails on every one of those vectors at once
+# -- including the function's UPDATE branch being deleted, which is the ETL writer's own path.
+# It writes inside its own transaction and ends in an unconditional ROLLBACK; the two probe rows are
+# keyed by an unmistakable metric_id at 1900-01-01. Same SQL as the recovery prover's SYNC_PROBE_SQL.
+SYNC_PROBE_SQL = """\
+BEGIN;
+CREATE TEMP TABLE _sp(step text, ok boolean, detail text);
+INSERT INTO public.business_metrics(metric_id, metric_date, trx_count, nrx_count, total_rx_count)
+     VALUES ('__prove_state_sync_probe_a__', DATE '1900-01-01', 11, 22, 33);
+INSERT INTO _sp SELECT 'insert_legacy_to_canonical',
+       (triggers_delivered_count,triggers_accepted_count,triggers_total_count) IS NOT DISTINCT FROM (11,22,33),
+       format('%s/%s/%s want 11/22/33', triggers_delivered_count, triggers_accepted_count, triggers_total_count)
+  FROM public.business_metrics WHERE metric_id='__prove_state_sync_probe_a__';
+UPDATE public.business_metrics SET trx_count=44, nrx_count=55, total_rx_count=66
+ WHERE metric_id='__prove_state_sync_probe_a__';
+INSERT INTO _sp SELECT 'update_legacy_to_canonical',
+       (triggers_delivered_count,triggers_accepted_count,triggers_total_count) IS NOT DISTINCT FROM (44,55,66),
+       format('%s/%s/%s want 44/55/66', triggers_delivered_count, triggers_accepted_count, triggers_total_count)
+  FROM public.business_metrics WHERE metric_id='__prove_state_sync_probe_a__';
+UPDATE public.business_metrics SET triggers_delivered_count=77, triggers_accepted_count=88, triggers_total_count=99
+ WHERE metric_id='__prove_state_sync_probe_a__';
+INSERT INTO _sp SELECT 'update_canonical_to_legacy',
+       (trx_count,nrx_count,total_rx_count) IS NOT DISTINCT FROM (77,88,99),
+       format('%s/%s/%s want 77/88/99', trx_count, nrx_count, total_rx_count)
+  FROM public.business_metrics WHERE metric_id='__prove_state_sync_probe_a__';
+INSERT INTO public.business_metrics(metric_id, metric_date, triggers_delivered_count, triggers_accepted_count, triggers_total_count)
+     VALUES ('__prove_state_sync_probe_b__', DATE '1900-01-01', 111, 222, 333);
+INSERT INTO _sp SELECT 'insert_canonical_to_legacy',
+       (trx_count,nrx_count,total_rx_count) IS NOT DISTINCT FROM (111,222,333),
+       format('%s/%s/%s want 111/222/333', trx_count, nrx_count, total_rx_count)
+  FROM public.business_metrics WHERE metric_id='__prove_state_sync_probe_b__';
+SELECT CASE WHEN count(*) <> 4 THEN 'BROKEN: probe ran ' || count(*) || ' of 4 steps'
+            WHEN bool_and(ok) THEN 'ok'
+            ELSE 'BROKEN: ' || string_agg(step || ' got ' || detail, '; ') FILTER (WHERE NOT ok) END
+  FROM _sp;
+ROLLBACK;
+"""
+raw = psql(SYNC_PROBE_SQL)
+verdicts = [ln for ln in raw.splitlines() if ln == "ok" or ln.startswith("BROKEN:")]
+sync_probe = verdicts[-1] if verdicts else f"BROKEN: probe did not complete [{raw[:120]}]"
+check("a write to either name still reaches the other (insert+update, both directions)",
+      sync_probe == "ok", sync_probe)
+probe_rows = psql("SELECT count(*) FROM public.business_metrics WHERE metric_id LIKE '__prove_state_sync_probe%'")
+check("the sync probe left nothing behind", probe_rows == "0", probe_rows)
 views_legacy = psql("SELECT count(*) FROM information_schema.columns WHERE table_name LIKE 'v\\_%business_metrics' "
                     "AND column_name IN ('trx_count','nrx_count','total_rx_count')")
 check("the split views are untouched by the expand (12 legacy view columns)", views_legacy == "12", views_legacy)
