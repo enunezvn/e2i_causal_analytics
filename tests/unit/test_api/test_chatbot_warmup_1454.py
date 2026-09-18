@@ -678,6 +678,7 @@ def _hermetic_lifespan_io():
         patch("src.api.main.init_redis", new=AsyncMock()),
         patch("src.api.main.init_falkordb", new=AsyncMock()),
         patch("src.api.main.init_supabase", return_value=None),
+        patch("src.agents.tool_composer.registry_sync.registry_sync_startup", new=AsyncMock()),
         patch("src.api.main.get_mlflow_connector", new=MagicMock()),
         patch("src.api.main.get_opik_connector", new=MagicMock()),
         patch("src.api.main.FeastClient", new=MagicMock(return_value=feast)),

@@ -3,12 +3,13 @@
 
 # Storage configuration
 storage:
-  # Database URL for persistent storage (uses env variable if set)
+  # HPO runs use in-memory storage by default. Set OPTUNA_STORAGE_URL or pass
+  # storage_url to OptunaOptimizer when a durable shared backend is required.
   # Supports: sqlite:///path/to/db, postgresql://..., mysql://...
-  url: "${OPTUNA_STORAGE_URL:-sqlite:///optuna_studies.db}"
+  url: null
 
-  # Enable storage (if false, uses in-memory storage)
-  enabled: true
+  # Custom config files can enable their configured URL explicitly.
+  enabled: false
 
 # Default sampler configuration (Tree-structured Parzen Estimator)
 sampler:

@@ -9592,49 +9592,41 @@ export interface components {
          * @description Heterogeneous effects across subgroups.
          */
         EffectHeterogeneityResponse: {
-            /**
-             * By Specialty
-             * @default {}
-             */
+            /** By Specialty */
             by_specialty: {
                 [key: string]: {
                     [key: string]: number;
                 };
             };
-            /**
-             * By Decile
-             * @default {}
-             */
+            /** By Decile */
             by_decile: {
                 [key: string]: {
                     [key: string]: number;
                 };
             };
-            /**
-             * By Region
-             * @default {}
-             */
+            /** By Region */
             by_region: {
                 [key: string]: {
                     [key: string]: number;
                 };
             };
-            /**
-             * By Adoption Stage
-             * @default {}
-             */
+            /** By Adoption Stage */
             by_adoption_stage: {
                 [key: string]: {
                     [key: string]: number;
                 };
             };
-            /**
-             * Top Segments
-             * @default []
-             */
+            /** Top Segments */
             top_segments: {
                 [key: string]: unknown;
             }[];
+            /**
+             * Axis Provenance
+             * @description Per-axis evidence contract: source, cohort/per-twin basis, publication support floors, fallback rule, and groups suppressed for insufficient support.
+             */
+            axis_provenance: {
+                [key: string]: components["schemas"]["SubgroupAxisProvenanceResponse"];
+            };
         };
         /**
          * EnrollUnitRequest
@@ -18741,17 +18733,18 @@ export interface components {
              * @description Upper bound of the cohort-wide interval, when narrowed.
              */
             cohort_ci_upper?: number | null;
+            /** @description Supported subgroup effects and their evidence provenance. */
+            effect_heterogeneity: components["schemas"]["EffectHeterogeneityResponse"];
+            /**
+             * Subgroups Basis
+             * @description How effect_heterogeneity was computed; fresh cohort runs use cohort_rows.
+             * @enum {string}
+             */
+            subgroups_basis: "cohort_rows" | "per_twin" | "twin_weighted_legacy" | "unknown";
             /** Population Filters */
             population_filters: {
                 [key: string]: unknown;
             };
-            effect_heterogeneity: components["schemas"]["EffectHeterogeneityResponse"];
-            /**
-             * Subgroups Basis
-             * @description How effect_heterogeneity was computed (#2104): 'cohort_rows' (declared axes over the cohort rows behind the estimate, #2054), 'per_twin' (synthetic-path per-twin scores), 'twin_weighted_legacy' (a row stored before #2097 whose by_specialty / by_decile / by_adoption_stage averaged region CATEs over the generated twins and whose stored simulation_confidence was scored on twin count; the stored JSON is served unchanged), 'unknown' (no provenance recorded).
-             * @enum {string}
-             */
-            subgroups_basis: "cohort_rows" | "per_twin" | "twin_weighted_legacy" | "unknown";
             /** Intervention Config */
             intervention_config: {
                 [key: string]: unknown;
@@ -18946,6 +18939,14 @@ export interface components {
              * @description Upper bound of the cohort-wide interval, when narrowed.
              */
             cohort_ci_upper?: number | null;
+            /** @description Supported subgroup effects and their evidence provenance. */
+            effect_heterogeneity: components["schemas"]["EffectHeterogeneityResponse"];
+            /**
+             * Subgroups Basis
+             * @description How effect_heterogeneity was computed; fresh cohort runs use cohort_rows.
+             * @enum {string}
+             */
+            subgroups_basis: "cohort_rows" | "per_twin" | "twin_weighted_legacy" | "unknown";
         };
         /**
          * SimulationStatusEnum
@@ -19017,6 +19018,32 @@ export interface components {
             /** Structural Considerations */
             structural_considerations?: string | null;
             mitigation_playbook?: components["schemas"]["MitigationPlaybook"] | null;
+        };
+        /**
+         * SubgroupAxisProvenanceResponse
+         * @description Evidence source, publication support, and scoring fallback for an axis.
+         */
+        SubgroupAxisProvenanceResponse: {
+            /** Basis */
+            basis: string;
+            /** Source */
+            source: string;
+            /** Min Group Rows */
+            min_group_rows: number;
+            /** Min Treated Rows */
+            min_treated_rows?: number | null;
+            /** Min Control Rows */
+            min_control_rows?: number | null;
+            /** Fallback */
+            fallback: string;
+            /** Support Unit */
+            support_unit: string;
+            /** Estimand */
+            estimand: string;
+            /** Suppressed Groups */
+            suppressed_groups?: {
+                [key: string]: string;
+            };
         };
         /**
          * SuggestionsRequest

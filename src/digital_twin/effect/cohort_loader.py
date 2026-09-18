@@ -33,10 +33,20 @@ COHORT_TABLE = "business_metrics"
 COHORT_METRIC_TYPE = "per_hcp_rollup"
 # All planted treatment channels (deduped, stable order for the select string).
 _TREATMENT_COLUMNS: tuple[str, ...] = tuple(sorted(set(INTERVENTION_TREATMENT_MAP.values())))
-# region (heterogeneity axis) + every treatment channel + outcome + pre-treatment
-# confounders (market_share, triggers_total_count) for the direct causal estimate.
+# ``specialty`` lives on hcp_profiles, its single source of truth.  The declared FK lets
+# PostgREST embed the one matching profile without a second query or an IN-list cap.
+# region + specialty (heterogeneity axes) + every treatment channel + outcome +
+# pre-treatment confounders (market_share, triggers_total_count).
 _COHORT_COLUMNS = ",".join(
-    ["region", "conversion_rate", "market_share", "triggers_total_count", *_TREATMENT_COLUMNS]
+    [
+        "hcp_id",
+        "region",
+        "hcp_profiles(specialty)",
+        "conversion_rate",
+        "market_share",
+        "triggers_total_count",
+        *_TREATMENT_COLUMNS,
+    ]
 )
 _NUMERIC_COLUMNS: tuple[str, ...] = (
     "conversion_rate",
@@ -47,6 +57,23 @@ _NUMERIC_COLUMNS: tuple[str, ...] = (
 # Generous cap so we read the full per-brand cohort (~7k rows) past PostgREST's
 # default 1000-row page; the estimate only needs a representative sample.
 _FETCH_LIMIT = 20000
+
+
+def flatten_specialty_relation(df: pd.DataFrame) -> pd.DataFrame:
+    """Flatten PostgREST's embedded ``hcp_profiles`` object into ``specialty``.
+
+    Missing profiles and blank specialty values stay missing; inventing an ``unknown``
+    label here would make unavailable source data look like a measured subgroup.
+    """
+    if "hcp_profiles" not in df.columns:
+        return df
+    result = df.copy()
+    values = result.pop("hcp_profiles").map(
+        lambda value: value.get("specialty") if isinstance(value, Mapping) else None
+    )
+    values = values.map(lambda value: value.strip() if isinstance(value, str) else value)
+    result["specialty"] = values.replace("", None)
+    return result
 
 
 async def load_cohort_frame(client: Any, brand: str) -> pd.DataFrame:
@@ -64,7 +91,7 @@ async def load_cohort_frame(client: Any, brand: str) -> pd.DataFrame:
         .execute()
     )
     rows = getattr(result, "data", None) or []
-    df = pd.DataFrame(rows)
+    df = flatten_specialty_relation(pd.DataFrame(rows))
     if df.empty:
         return df
     for col in _NUMERIC_COLUMNS:

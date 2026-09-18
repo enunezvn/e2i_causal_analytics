@@ -36,13 +36,26 @@ from src.mlops.optuna_optimizer import (
 # ============================================================================
 
 
+@pytest.fixture
+def use_real_optuna_storage_config():
+    """Opt a test into the production storage-resolution path."""
+
+
 @pytest.fixture(scope="function", autouse=True)
-def disable_optuna_storage(monkeypatch):
+def disable_optuna_storage(monkeypatch, request):
     """Disable Optuna SQLite storage during tests to prevent parallel access issues.
 
     This patches the load_optuna_config function to return storage.enabled=False,
     ensuring tests use in-memory storage instead of SQLite file.
     """
+    if "use_real_optuna_storage_config" in request.fixturenames:
+        return
+
+    # Production gives this explicit operator setting precedence over config.
+    # Ordinary unit tests must not inherit a developer/CI backend by accident;
+    # the environment-precedence tests set their own value after this fixture.
+    monkeypatch.delenv("OPTUNA_STORAGE_URL", raising=False)
+
     import src.mlops.optuna_optimizer as optuna_module
 
     # Cache the original function
@@ -136,18 +149,14 @@ def mock_frozen_trial():
 class TestOptunaOptimizerInit:
     """Tests for OptunaOptimizer initialization."""
 
-    def test_init_with_defaults(self):
-        """Test initialization with default values.
+    def test_init_with_defaults(self, monkeypatch, use_real_optuna_storage_config):
+        """Default storage is process-local and needs no writable filesystem."""
+        monkeypatch.delenv("OPTUNA_STORAGE_URL", raising=False)
 
-        Note: storage_url is determined by config (config/optuna_config.yaml).
-        If storage.enabled=true, uses storage.url; otherwise None.
-        """
         optimizer = OptunaOptimizer(experiment_id="exp_123")
 
         assert optimizer.experiment_id == "exp_123"
-        # storage_url is now config-driven (enabled=true in optuna_config.yaml)
-        # Either None (if storage.enabled=false) or config value
-        assert optimizer.storage_url is None or optimizer.storage_url.startswith("sqlite://")
+        assert optimizer.storage_url is None
         assert optimizer.mlflow_tracking is True
         assert optimizer._mlflow_connector is None
 
@@ -159,6 +168,25 @@ class TestOptunaOptimizerInit:
         )
 
         assert optimizer.storage_url == "sqlite:///optuna.db"
+
+    def test_environment_storage_url_is_an_explicit_opt_in(self, monkeypatch):
+        """Operators can select a durable backend without editing config."""
+        monkeypatch.setenv("OPTUNA_STORAGE_URL", "postgresql://db.example/optuna")
+
+        optimizer = OptunaOptimizer(experiment_id="exp_env")
+
+        assert optimizer.storage_url == "postgresql://db.example/optuna"
+
+    def test_constructor_storage_url_overrides_environment(self, monkeypatch):
+        """A per-call backend remains the highest-precedence storage choice."""
+        monkeypatch.setenv("OPTUNA_STORAGE_URL", "postgresql://db.example/optuna")
+
+        optimizer = OptunaOptimizer(
+            experiment_id="exp_explicit",
+            storage_url="sqlite:////tmp/explicit-optuna.db",
+        )
+
+        assert optimizer.storage_url == "sqlite:////tmp/explicit-optuna.db"
 
     def test_init_with_mlflow_disabled(self):
         """Test initialization with MLflow disabled."""
@@ -203,6 +231,27 @@ class TestOptunaOptimizerCreateStudy:
         assert study is not None
         assert "e2i_exp_test_test_study" in study.study_name
         assert study.direction == optuna.study.StudyDirection.MAXIMIZE
+
+    @pytest.mark.asyncio
+    async def test_default_study_succeeds_from_read_only_cwd(
+        self, tmp_path, monkeypatch, use_real_optuna_storage_config
+    ):
+        """Default HPO must not create a cwd-relative SQLite database (#2158)."""
+        monkeypatch.delenv("OPTUNA_STORAGE_URL", raising=False)
+        read_only_cwd = tmp_path / "read-only"
+        read_only_cwd.mkdir()
+        read_only_cwd.chmod(0o555)
+
+        try:
+            monkeypatch.chdir(read_only_cwd)
+            optimizer = OptunaOptimizer(experiment_id="exp_read_only")
+
+            study = await optimizer.create_study(study_name="read_only_cwd")
+
+            assert isinstance(study._storage, optuna.storages.InMemoryStorage)
+            assert not (read_only_cwd / "optuna_studies.db").exists()
+        finally:
+            read_only_cwd.chmod(0o755)
 
     @pytest.mark.asyncio
     async def test_create_study_minimize(self):
@@ -1408,6 +1457,7 @@ class TestOptunaOptimizerIntegration:
 # ============================================================================
 
 
+@pytest.mark.usefixtures("use_real_optuna_storage_config")
 class TestLoadOptunaConfig:
     """Tests for load_optuna_config function."""
 
@@ -1420,6 +1470,7 @@ class TestLoadOptunaConfig:
         # Should load successfully
         assert config is not None
         assert "storage" in config
+        assert config["storage"] == {"enabled": False, "url": None}
         assert "sampler" in config
         assert "pruner" in config
 

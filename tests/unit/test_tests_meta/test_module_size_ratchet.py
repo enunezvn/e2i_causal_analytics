@@ -33,8 +33,8 @@ ALLOWLIST: dict[str, int] = {
     # 3773, and the merge keeps both reductions. Taking either branch's pin here
     # would have failed the ratchet's own `n == pin` assertion.
     "src/agents/orchestrator/nodes/dispatcher.py": 3700,
-    "src/agents/tool_composer/executor.py": 1684,
-    "src/agents/tool_composer/tool_registrations.py": 4847,
+    "src/agents/tool_composer/executor.py": 1627,
+    "src/agents/tool_composer/tool_registrations.py": 4843,
     "src/api/main.py": 1692,
     "src/api/routes/chatbot_dspy.py": 4182,
     "src/api/routes/chatbot_graph.py": 3190,
@@ -42,7 +42,7 @@ ALLOWLIST: dict[str, int] = {
     # (and then lazy accessors, which removed two more lines).
     "src/api/routes/chatbot_tools.py": 3029,
     "src/api/routes/copilotkit.py": 6142,
-    "src/api/routes/digital_twin.py": 1975,
+    "src/api/routes/digital_twin.py": 1963,
     "src/api/routes/experiments.py": 1595,
     "src/api/routes/explain.py": 2822,
     "src/api/routes/feedback.py": 2041,

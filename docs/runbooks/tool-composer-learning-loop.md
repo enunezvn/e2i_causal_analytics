@@ -15,13 +15,13 @@ off by default.
 
 | Flag | Default | What it does |
 |---|---|---|
-| `TOOL_COMPOSER_LEARNING_LOOP_ENABLED` | off in code, `true` in `docker/docker-compose.yml` | Turns recording on for the process, and schedules the startup registry sync. |
+| `TOOL_COMPOSER_LEARNING_LOOP_ENABLED` | off in code, `true` in `docker/docker-compose.yml` | Turns recording and recorder-only column-allowlist priming on for the process. The startup registry sync runs independently. |
 | `TOOL_COMPOSER_RELIABILITY_IN_PLANNER` | off everywhere | Adds one reliability caveat line per caveated tool to the planning prompt. Ships off; see §6. |
 | `E2I_INCLUDE_SYNTHETIC` | off | Whether synthetic-substrate runs count in the reliability numbers and the admin page. |
 
 **Turning recording off.** Set `TOOL_COMPOSER_LEARNING_LOOP_ENABLED=false` and recreate the API
-containers. Compositions keep working; nothing is recorded. Note the startup registry sync rides
-the same flag — see §7.
+containers. Compositions keep working; nothing is recorded. The API still syncs the database tool
+registry to the running code at startup — see §7.
 
 ---
 
@@ -122,22 +122,19 @@ which condition failed.
 
 ## 7. The startup registry sync
 
-At API startup, when the learning-loop flag is set, `learning_loop_startup()` calls
+At every API startup, independently of the recording flag, `registry_sync_startup()` calls
 `sync_tool_registry` (ml/040), which makes `tool_registry` and `tool_dependencies` equal to the
 running code's registered tools. It replaced the previous regime of generating a migration whenever
-a tool's schema changed.
+a tool's schema changed. The call remains backgrounded and fail-open so an unavailable database does
+not delay or prevent the API from serving.
 
-**Consequence worth knowing:** the re-sync only runs while `TOOL_COMPOSER_LEARNING_LOOP_ENABLED` is
-on. With the flag off, nothing re-syncs the registry, and the static sync migration
-(`database/ml/038_tool_registry_schema_sync.sql`, regenerated from the merged registry when this
-work lands alongside the other tool-composer branches) is the only thing holding those rows in step
-with the code — which is why one is kept rather than retired with the generator regime.
+When `TOOL_COMPOSER_LEARNING_LOOP_ENABLED` is on, a separate `learning_loop_startup()` task primes
+the recorder's public-column allowlist. Turning recording off skips only that recorder state and its
+shutdown drain; it does not skip registry synchronization.
 
-The coupling itself — registry sync and the column allowlist both riding the *recording* flag — is
-filed as **#2034**. It is deliberately not changed here; until it is, treat the static migration as
-the fallback and re-run it after any tool-schema change made with the flag off.
-
-Boot log to look for: `tool-composer learning loop: registry sync {...}; column allowlist N names`.
+Boot logs to look for: `Tool registry: startup sync scheduled`, followed by
+`tool registry startup sync: {...}` (or `failed`), and, when recording is enabled,
+`tool-composer learning loop startup: column allowlist N names`.
 
 ---
 

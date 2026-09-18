@@ -1,6 +1,6 @@
 """Keep the DB tool registry equal to the running code (spec §4, ml/040).
 
-At API startup ``learning_loop_startup()`` builds the payload from the live registry and calls
+At API startup ``registry_sync_startup()`` builds the payload from the live registry and calls
 ``sync_tool_registry``, which upserts every registered tool, deprecates tools the code no longer
 registers and makes ``tool_dependencies`` exactly ``DEPENDENCY_FIELD_MAPPINGS``. This replaces
 generating a migration whenever a tool's declared inputs or output model change (#2003).
@@ -11,8 +11,8 @@ concurrent callers wait for a single RPC. A failure is logged and never raised; 
 serving and the recorder reports the missing tools. The two API workers run the same image, and
 the SQL function serialises them with an advisory lock.
 
-The same startup task fetches the column allowlist the recorder's serializer uses to decide
-whether a string parameter is a public column name (spec §5.5).
+When recording is enabled, a separate startup task fetches the column allowlist the recorder's
+serializer uses to decide whether a string parameter is a public column name (spec §5.5).
 """
 
 from __future__ import annotations
@@ -224,15 +224,26 @@ async def fetch_column_allowlist() -> Optional[frozenset[str]]:
     return await default_registry_sync().column_allowlist()
 
 
-async def learning_loop_startup(sync: Optional[RegistrySync] = None) -> None:
-    """API startup task: sync the registry, fetch the allowlist. Never raises."""
+async def registry_sync_startup(sync: Optional[RegistrySync] = None) -> None:
+    """API startup task: sync the DB registry to the running code. Never raises."""
     sync = sync or default_registry_sync()
     try:
         counts = await sync.sync_once()
+        logger.info(
+            "tool registry startup sync: %s",
+            counts if counts is not None else ("already synced" if sync.synced else "failed"),
+        )
+    except Exception as exc:  # the lifespan task must never crash the app
+        logger.warning("tool registry startup sync failed (%s: %s)", type(exc).__name__, exc)
+
+
+async def learning_loop_startup(sync: Optional[RegistrySync] = None) -> None:
+    """API startup task: prime recorder-only state when recording is enabled. Never raises."""
+    sync = sync or default_registry_sync()
+    try:
         allowlist = await sync.column_allowlist()
         logger.info(
-            "tool-composer learning loop startup: registry sync %s; column allowlist %s",
-            counts if counts is not None else ("already synced" if sync.synced else "failed"),
+            "tool-composer learning loop startup: column allowlist %s",
             f"{len(allowlist)} names" if allowlist is not None else "unavailable",
         )
     except Exception as exc:  # the lifespan task must never crash the app

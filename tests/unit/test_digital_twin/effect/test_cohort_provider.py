@@ -97,6 +97,23 @@ def test_cohort_provider_returns_raw_cohort_frame():
     assert frame.df is cohort  # raw cohort, not a synthetic resample
 
 
+def test_cohort_provider_declares_specialty_only_when_the_joined_source_is_available():
+    cohort = _make_cohort()
+    cohort["specialty"] = np.where(cohort.index % 2, "oncology", "hematology")
+
+    frame = CohortEffectDataProvider(cohort).get_training_frame(
+        "digital_engagement", brand="Kisqali", twin_type="hcp"
+    )
+
+    assert frame.effect_modifiers == ["region", "specialty"]
+
+    cohort["specialty"] = None
+    missing_frame = CohortEffectDataProvider(cohort).get_training_frame(
+        "digital_engagement", brand="Kisqali", twin_type="hcp"
+    )
+    assert missing_frame.effect_modifiers == ["region"]
+
+
 def test_cohort_provider_unknown_intervention_fails_closed():
     provider = CohortEffectDataProvider(_make_cohort())
     with pytest.raises(EffectDataUnavailable) as caught:

@@ -99,13 +99,18 @@ def _exec(db: _pg.PgConn, sql: str, params: tuple = ()) -> None:
 
 
 def _feedback(
-    db: _pg.PgConn, rating: str, *, session_id: str = SESSION, minutes_ago: int = 0
+    db: _pg.PgConn,
+    rating: str,
+    *,
+    session_id: str = SESSION,
+    minutes_ago: int = 0,
+    conversation_owner: str | None = None,
 ) -> None:
     """A real chatbot_message_feedback row, through the real conversation/message chain."""
     stamp = (datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).isoformat()
     # The chat chain is real: a profile owns the conversation, which owns the message the rating
     # hangs off. chatbot_conversations.user_id is NOT NULL and references that profile.
-    owner = _owner(session_id)
+    owner = conversation_owner or _owner(session_id)
     _exec(
         db,
         "INSERT INTO chatbot_user_profiles (id, email) VALUES (%s::uuid, %s) "
@@ -172,6 +177,26 @@ async def test_a_thumbs_up_marks_the_composition_successful(synced):
     assert episode["success"] is True and episode["feedback_at"] is not None
     # The comment is free user text; §5.5 keeps it out of the learning tables.
     assert episode["feedback_text"] is None
+
+
+async def test_anonymous_owned_conversation_can_label_authenticated_episode(synced):
+    """Exercise the real ownership trigger and linker together (#2161).
+
+    Historical/fallback conversations legitimately retain the anonymous sentinel, while a later
+    authenticated turn records its real caller on the composition. The feedback row inherits the
+    sentinel from the real conversation trigger; strict session equality still identifies the
+    conversation, so the placeholder owner must not suppress the user's verdict.
+    """
+    from src.utils.llm_attribution import ANONYMOUS_USER_ID
+
+    await _record_episode(_pg.PsycopgRpcPort(synced), "comp_anon_owner")
+    _feedback(synced, "thumbs_down", conversation_owner=ANONYMOUS_USER_ID)
+
+    result = _link(synced)
+
+    assert result["labelled"] == 1 and result["failed"] == 0
+    episode = _episode(synced, "comp_anon_owner")
+    assert episode["success"] is False and episode["feedback_at"] is not None
 
 
 async def test_a_failed_write_is_reported_not_counted_as_nothing_to_do(synced):

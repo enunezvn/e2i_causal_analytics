@@ -27,6 +27,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Mapping, Optional
 
+from src.utils.llm_attribution import ANONYMOUS_USER_ID
+
 logger = logging.getLogger(__name__)
 
 #: How far back to look for unlabelled episodes.
@@ -63,12 +65,12 @@ def _parse(value: Any) -> Optional[datetime]:
 def _same_owner(episode: Dict[str, Any], rating: Dict[str, Any]) -> bool:
     """Defence in depth: never label across users when both sides name one.
 
-    Both sides name the owner of the CONVERSATION, which is what makes them comparable:
+    The two values are intended to name the same person, by different write paths:
 
     - the rating's ``computed_user_id`` is a trigger-set copy of
       ``chatbot_conversations.user_id`` (migration ``123_chatbot_message_owner_inherit.sql``);
-    - the episode's ``user_id`` is the chat user the orchestrator threads into the composer's
-      context when it dispatches (#2069).
+    - the episode's ``user_id`` is the verified chat caller the orchestrator threads into the
+      composer's context when it dispatches (#2069).
 
     The session id is NOT consulted. Until #2062 this compared ``computed_user_id`` with the text
     before ``~`` in the episode's session id, from a time when the column WAS
@@ -79,14 +81,25 @@ def _same_owner(episode: Dict[str, Any], rating: Dict[str, Any]) -> bool:
     carry is not evidence of an owner, so it is not kept as a fallback either.
 
     Absent on either side returns True: the check could not run, which is not the same as the
-    check failing. This is the SECONDARY guard — strict session equality in
+    check failing. The anonymous sentinel on the rating side means the same thing: it is the
+    fallback owner required by ``chatbot_conversations.user_id NOT NULL`` when creation has no
+    usable identity (or the real user's profile FK is unavailable), not a real principal.
+    Historical/fallback conversations retain that placeholder even when a later authenticated
+    turn records its real caller on the composition, because the lost conversation owner cannot
+    be reconstructed safely.
+
+    The sentinel bypass is intentionally rating-side only. Production episode writers call
+    ``resolve_tool_user_id``/``resolve_session_user_id``, which normalize the sentinel to None;
+    therefore an episode carrying the sentinel is an invalid direct-caller value and must not
+    weaken the guard against a rating that names a real owner. This is the SECONDARY guard —
+    strict session equality in
     :func:`match_episodes` is the primary one and has already held by the time this is reached.
     Compared as text because the two columns differ in type: ``composer_episodes.user_id`` is
     VARCHAR(100) (ml/013), ``computed_user_id`` is uuid.
     """
     rating_owner = rating.get("computed_user_id")
     episode_owner = episode.get("user_id")
-    if rating_owner is None or episode_owner is None:
+    if rating_owner is None or episode_owner is None or str(rating_owner) == ANONYMOUS_USER_ID:
         return True
     return str(rating_owner) == str(episode_owner)
 

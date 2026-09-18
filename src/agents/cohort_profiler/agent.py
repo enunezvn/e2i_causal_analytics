@@ -194,11 +194,23 @@ class CohortProfilerAgent:
         when the NLP layer supplied one — and since #1356 the raw query text is
         parsed as the fallback, so a brand/criteria/threshold named in the ask
         itself binds even when no structured entities were grounded (the exact
-        q11/q15 failure mode). When no brand is grounded anywhere we profile
-        every supported brand rather than fabricate a default.
+        q11/q15 failure mode). A grounded but unsupported brand fails closed at
+        this boundary before either patient or HCP data access; only a genuinely
+        absent brand widens to every supported brand.
         """
         query = str(agent_input.get("query") or "")
-        ask = parse_cohort_ask(query, brand_hint=agent_input.get("brand"), today=self._today())
+        brand_hint = agent_input.get("brand")
+        if (
+            isinstance(brand_hint, str)
+            and brand_hint.strip()
+            and not self._canonical_brand(brand_hint)
+        ):
+            return self._failed(
+                f"requested brand '{brand_hint.strip()}' is not supported; "
+                f"supported brands are {', '.join(SUPPORTED_BRANDS)}"
+            )
+
+        ask = parse_cohort_ask(query, brand_hint=brand_hint, today=self._today())
 
         # #1698: ``query`` is the chat model's rewrite, and the measured 2.1
         # defect is that rewrite silently dropping servable criteria. When the

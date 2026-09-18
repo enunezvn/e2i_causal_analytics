@@ -197,6 +197,7 @@ class GapCalculatorInput(BaseModel):
     metric: str
     entity_type: str  # region, territory, brand
     entities: List[str]
+    group_by: Optional[str] = None
 
 
 class GapAnalysis(BaseModel):
@@ -2500,7 +2501,14 @@ def segment_ranker(cate_results: Dict[str, Any], **kwargs) -> SegmentRanking:
     input_model=GapCalculatorInput,
     output_model=GapAnalysis,
 )
-def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs) -> GapAnalysis:
+def gap_calculator(
+    metric: str,
+    entity_type: str,
+    entities: List[str],
+    *,
+    group_by: Optional[str] = None,
+    **kwargs,
+) -> GapAnalysis:
     """Calculate real performance gaps between entities from a DataFrame.
 
     Phase of GH #621. Replaces the hardcoded ``northeast/midwest`` region
@@ -2509,7 +2517,7 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
     top- and bottom-performing entity group. No fabricated regions/values.
 
     Grouping column resolution (first match wins):
-    1. explicit ``group_by`` kwarg (refused when it is not a column),
+    1. explicit ``group_by`` argument (refused when it is not a column),
     2. ``entity_type`` if it is a column,
     3. a column named ``<entity_type>`` or ``geographic_region`` /
        ``territory`` / ``brand`` heuristics.
@@ -2533,13 +2541,6 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
     values, and ``max``/``min`` silently return the first key when a NaN is in
     play (#1599).
 
-    Args:
-        metric: Numeric column to compare across entities.
-        entity_type: Logical entity type (region / territory / brand); also a
-            grouping-column hint.
-        entities: Optional subset of entity values to restrict to.
-        **kwargs: Must contain the DataFrame under one of
-            ``_DATAFRAME_KWARGS_KEYS``; may contain ``group_by``.
     """
     df = _extract_dataframe_from_kwargs(kwargs)
     if df is None:
@@ -2558,7 +2559,6 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
             reason_code=ReasonCode.UNKNOWN_COLUMN,
         )
 
-    group_by = kwargs.get("group_by")
     if group_by is not None and group_by not in df.columns:
         raise ToolRefusalError(
             f"gap_calculator: group_by={group_by!r} is not a column of the supplied "
@@ -2570,7 +2570,7 @@ def gap_calculator(metric: str, entity_type: str, entities: List[str], **kwargs)
     if group_col is None:
         raise ToolRefusalError(
             "gap_calculator: could not resolve a grouping column from group_by="
-            f"{kwargs.get('group_by')!r} / entity_type={entity_type!r}; "
+            f"{group_by!r} / entity_type={entity_type!r}; "
             f"DataFrame columns={list(df.columns)!r}. Refusing to fabricate.",
             reason_code=ReasonCode.UNKNOWN_COLUMN,
         )
@@ -3102,7 +3102,13 @@ def _gap_leave_one_out_bounds(entity_values: Any) -> Optional[Tuple[float, float
     avg_execution_ms=2000,
     output_model=ROIEstimate,
 )
-def roi_estimator(gap_analysis: Dict[str, Any], investment: float, **kwargs) -> ROIEstimate:
+def roi_estimator(
+    gap_analysis: Dict[str, Any],
+    investment: float,
+    *,
+    value_per_unit: Optional[float] = 1.0,
+    **kwargs,
+) -> ROIEstimate:
     """Estimate the ROI of closing a performance gap.
 
     Phase of GH #621. Replaces the hardcoded ``estimated_roi=3.2`` placeholder
@@ -3113,7 +3119,7 @@ def roi_estimator(gap_analysis: Dict[str, Any], investment: float, **kwargs) -> 
     - ``opportunity_value`` = ``gap`` * ``n_entities`` * ``value_per_unit``,
       where ``n_entities`` is the number of entity groups in the gap result
       (defaults to 1 when not derivable) and ``value_per_unit`` is the optional
-      ``value_per_unit`` kwarg (default 1.0 — the gap is treated as already in
+      multiplier (default 1.0 — the gap is treated as already in
       value units when no multiplier is given).
     - ``estimated_roi`` = ``opportunity_value`` / ``investment``.
     - ``payback_months`` = ``investment`` / (``opportunity_value`` / 12) when
@@ -3130,12 +3136,6 @@ def roi_estimator(gap_analysis: Dict[str, Any], investment: float, **kwargs) -> 
     (an ROI is undefined without a real gap, a real investment and a usable unit
     value; we refuse to fabricate one).
 
-    Args:
-        gap_analysis: Output of ``gap_calculator`` (carries ``gap`` and,
-            optionally, ``entity_values``).
-        investment: Proposed investment amount (must be > 0).
-        **kwargs: May contain ``value_per_unit`` (float multiplier converting a
-            unit of gap into monetary value).
     """
     if not isinstance(gap_analysis, dict) or "gap" not in gap_analysis:
         raise ToolRefusalError(
@@ -3166,7 +3166,6 @@ def roi_estimator(gap_analysis: Dict[str, Any], investment: float, **kwargs) -> 
     gap = float(gap_raw)
     entity_values = gap_analysis.get("entity_values")
     n_entities = len(entity_values) if isinstance(entity_values, dict) and entity_values else 1
-    value_per_unit = kwargs.get("value_per_unit")
     if value_per_unit is None:
         value_per_unit = 1.0
     elif (
@@ -4354,7 +4353,13 @@ def distribution_comparator(
     output_model=RiskScores,
 )
 def risk_scorer(
-    entity_type: str, risk_type: str, entity_ids: Optional[List[str]] = None, **kwargs
+    entity_type: str,
+    risk_type: str,
+    entity_ids: Optional[List[str]] = None,
+    *,
+    id_column: str = "patient_id",
+    outcome: str = "discontinuation_flag",
+    **kwargs,
 ) -> RiskScores:
     """Score real entities by risk using a logistic model fit on the DataFrame.
 
@@ -4383,13 +4388,6 @@ def risk_scorer(
     carrying a gap are dropped. Both drops are reported in ``missing_data_disclosure``
     / ``n_scored`` / ``n_rows_dropped`` — never silently.
 
-    Args:
-        entity_type: Logical entity type (echoed for provenance only).
-        risk_type: Logical risk label (echoed for provenance only).
-        entity_ids: Optional subset of entity IDs to restrict scoring to.
-        **kwargs: Must contain the DataFrame under one of
-            ``_DATAFRAME_KWARGS_KEYS``; may contain ``id_column`` (default
-            ``patient_id``) and ``outcome`` (default ``discontinuation_flag``).
     """
     import hashlib
     from datetime import datetime, timezone
@@ -4409,8 +4407,6 @@ def risk_scorer(
             reason_code=ReasonCode.MISSING_DATAFRAME,
         )
 
-    id_column = kwargs.get("id_column", "patient_id")
-    outcome = kwargs.get("outcome", "discontinuation_flag")
     if outcome not in df.columns:
         raise ToolRefusalError(
             f"risk_scorer: outcome column {outcome!r} not found in the supplied "

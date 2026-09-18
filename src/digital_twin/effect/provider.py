@@ -98,7 +98,11 @@ class TrainingFrame:
 @runtime_checkable
 class EffectDataProvider(Protocol):
     def get_training_frame(
-        self, intervention_type: str, brand: str, twin_type: str
+        self,
+        intervention_type: str,
+        brand: str,
+        twin_type: str,
+        reference_covariates: pd.DataFrame | None = None,
     ) -> TrainingFrame: ...
 
 
@@ -255,12 +259,13 @@ class CohortEffectDataProvider:
 
     Returns the cohort's (treatment, outcome, region, pre-treatment confounders) frame
     UNCHANGED — paired with :class:`CohortCausalEstimator`, which runs a DML estimate over
-    it (region as the heterogeneity axis, ``COHORT_CONFOUNDERS`` as controls).
+    it (region and the joined HCP specialty as categorical heterogeneity axes,
+    ``COHORT_CONFOUNDERS`` as controls).
 
     This REPLACES the prior v1 behavior, which computed a region-only standardized ATE
     and laundered it through ``SyntheticEffectDataProvider(true_ate=...)`` — a synthetic
     injected-effect frame whose CI and per-twin heterogeneity were synthetic artifacts.
-    Now magnitude, CI, and per-region heterogeneity all come from the cohort. The
+    Now magnitude, CI, and supported region/specialty heterogeneity all come from the
     substrate is synthetic-gold (NOT real-world) — the UI keeps the SYNTHETIC badge.
     """
 
@@ -289,17 +294,24 @@ class CohortEffectDataProvider:
                 details={"n_rows": int(len(self._cohort)), "has_treatment_column": False},
             )
         # RAW cohort frame for direct causal estimation — NO synthetic injected-effect
-        # handoff. region is the heterogeneity axis (effect_modifier); the present subset
-        # of COHORT_CONFOUNDERS is the pre-treatment control set; ground_truth_ate is None
-        # because the effect is ESTIMATED from the data, not injected.
+        # handoff. Region is always a heterogeneity axis; specialty is declared only when
+        # the joined source has at least one non-blank value, preserving the legacy
+        # region-only contract for frames that predate the join. COHORT_CONFOUNDERS is the
+        # pre-treatment control set; ground_truth_ate is None because the effect is
+        # ESTIMATED from the data, not injected.
         # Pass the FULL required confounder set; the estimator fails closed if the cohort
         # is missing any (refusing an under-adjusted estimate) rather than silently dropping.
         confounders = list(COHORT_CONFOUNDERS)
+        effect_modifiers = [_COHORT_REGION]
+        if "specialty" in self._cohort.columns:
+            specialty = self._cohort["specialty"].astype("string").str.strip()
+            if specialty.dropna().ne("").any():
+                effect_modifiers.append("specialty")
         return TrainingFrame(
             df=self._cohort,
             treatment_var=treatment_col,
             outcome_var=_COHORT_OUTCOME,
             confounders=confounders,
-            effect_modifiers=[_COHORT_REGION],
+            effect_modifiers=effect_modifiers,
             ground_truth_ate=None,
         )
