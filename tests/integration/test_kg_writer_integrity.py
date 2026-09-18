@@ -423,3 +423,32 @@ def test_repair_script_execute_fixes_pre_fix_damage_and_is_idempotent(graph):
         graph,
         "MATCH (v:Variable) WHERE v.id IN ['var:accepted','var:converted'] RETURN count(v.agent)",
     ) == [[2]]
+
+
+@pytest.mark.asyncio
+async def test_cohort_pattern_brand_write_keeps_the_seeded_brand_curated(graph, semantic):
+    """Codex R3: both cohort Brand writers MERGE onto the seeded Brand without owning it
+    (``agent`` rides the APPLIES_TO / FOR_BRAND edges, never the Brand node)."""
+    seed = _load_script("seed_falkordb")
+    from src.agents.cohort_constructor.memory_hooks import CohortConstructorMemoryHooks
+
+    for q in seed.generate_brand_queries():
+        graph.query(q)
+    hooks = CohortConstructorMemoryHooks()
+    hooks._semantic_memory = semantic
+
+    assert await hooks.store_cohort_pattern(
+        cohort_id="c2",
+        cohort_name="pnh",
+        brand="FABHALTA",
+        indication="PNH",
+        criteria_summary={},
+        eligibility_rate=0.4,
+    )
+
+    assert rows(graph, "MATCH (b:Brand {name:'Fabhalta'}) RETURN count(b), collect(b.agent)") == [
+        [1, []]
+    ]
+    assert rows(
+        graph, "MATCH (:CohortConfig)-[r:FOR_BRAND]->(:Brand {id:'brand:Fabhalta'}) RETURN r.agent"
+    ) == [["cohort_constructor"]]

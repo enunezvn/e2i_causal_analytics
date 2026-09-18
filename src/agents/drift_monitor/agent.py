@@ -364,8 +364,10 @@ class DriftMonitorAgent:
         # so the id is a per-run handle, never a chat session id (#2099).
         # Non-blocking: a memory failure is logged and never fails detection.
         if self.enable_memory:
-            # Fit the wait inside what is left of the SLA (codex R2): detection
-            # time counts against sla_seconds, so memory gets the remainder.
+            # Memory gets what is left of the SLA (codex R2), with a 0.5 s floor:
+            # a run that already used its SLA still records its result. That is a
+            # deliberate trade — slow runs are the many-feature runs whose drift
+            # record matters most — so the total may exceed sla_seconds by <= 0.5 s.
             elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
             memory_budget = max(0.5, min(self.memory_timeout_seconds, self.sla_seconds - elapsed))
             try:

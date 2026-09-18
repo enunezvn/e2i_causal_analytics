@@ -94,3 +94,28 @@ async def test_memory_wait_fits_inside_the_remaining_sla(monkeypatch):
 
     assert len(waited) == 1
     assert 0 < waited[0] <= agent.sla_seconds
+
+
+@pytest.mark.asyncio
+async def test_exhausted_sla_still_records_with_the_floor(monkeypatch):
+    """A run that already used its SLA still records its drift result, bounded by
+    the 0.5 s floor — a deliberate trade: slow runs are the many-feature runs whose
+    drift record matters most."""
+    waited: list[float] = []
+    real_wait_for = asyncio.wait_for
+
+    async def _spy_wait_for(aw, timeout):
+        waited.append(timeout)
+        return await real_wait_for(aw, timeout)
+
+    async def _noop(result, state, session_id):
+        return {}
+
+    monkeypatch.setattr(agent_module, "contribute_to_memory", _noop)
+    monkeypatch.setattr(agent_module.asyncio, "wait_for", _spy_wait_for)
+    agent = DriftMonitorAgent()
+    agent.sla_seconds = 0  # detection alone exhausts it
+
+    await agent.run(DriftMonitorInput(query="Check drift", features_to_monitor=["feature1"]))
+
+    assert waited == [0.5]
