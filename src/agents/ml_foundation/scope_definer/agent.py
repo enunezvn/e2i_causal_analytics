@@ -61,6 +61,20 @@ def _get_procedural_memory():
         return None
 
 
+def _scope_target(scope_spec: Dict[str, Any]) -> str:
+    """The target a ScopeSpec names, or ``""``.
+
+    ``scope_builder.build_scope_spec`` stores it as ``prediction_target`` (the
+    key every data_preparer node reads). ``target_variable`` is only the agent's
+    INPUT name; reading it from the spec returned nothing on every real run, so
+    ml_experiments rows and the knowledge graph lost the target (#2175). The
+    input name is accepted as a fallback for callers that hand-build a spec.
+    """
+    return str(
+        scope_spec.get("prediction_target") or scope_spec.get("target_variable") or ""
+    ).strip()
+
+
 class ScopeDefinerAgent:
     """Scope Definer: Transform business requirements into ML specifications.
 
@@ -262,7 +276,9 @@ class ScopeDefinerAgent:
             }
 
             # Persist to database (ml_experiments table)
-            await self._persist_scope_spec(output)
+            await self._persist_scope_spec(
+                output, problem_description=final_state.get("problem_description", "")
+            )
 
             # Update procedural memory with successful pattern
             await self._update_procedural_memory(output)
@@ -293,7 +309,9 @@ class ScopeDefinerAgent:
                 "error_type": "graph_execution_error",
             }
 
-    async def _persist_scope_spec(self, output: Dict[str, Any]) -> None:
+    async def _persist_scope_spec(
+        self, output: Dict[str, Any], problem_description: str = ""
+    ) -> None:
         """Persist ScopeSpec to ml_experiments table.
 
         Graceful degradation: If repository is unavailable,
@@ -336,7 +354,9 @@ class ScopeDefinerAgent:
                 await repo.update(
                     str(existing.id),
                     {
-                        "description": scope_spec.get("problem_description", ""),
+                        "description": problem_description,
+                        # Re-runs repair rows written empty before #2175.
+                        "prediction_target": _scope_target(scope_spec),
                         "brand": db_brand,
                         "region": db_region,
                         "minimum_auc": success_criteria.get("minimum_auc"),
@@ -352,8 +372,8 @@ class ScopeDefinerAgent:
             result = await repo.create_experiment(
                 name=name,
                 mlflow_experiment_id=output.get("experiment_id", ""),
-                prediction_target=scope_spec.get("target_variable", ""),
-                description=scope_spec.get("problem_description", ""),
+                prediction_target=_scope_target(scope_spec),
+                description=problem_description,
                 brand=db_brand,
                 region=db_region,
                 created_by="scope_definer",
@@ -394,7 +414,7 @@ class ScopeDefinerAgent:
                     "problem_type": scope_spec.get("problem_type"),
                     "brand": scope_spec.get("brand"),
                     "region": scope_spec.get("region"),
-                    "target_variable": scope_spec.get("target_variable"),
+                    "target_variable": _scope_target(scope_spec) or None,
                     "success_criteria": output.get("success_criteria", {}),
                     "experiment_id": output.get("experiment_id"),
                 },
@@ -426,7 +446,7 @@ class ScopeDefinerAgent:
 
             scope_spec = output.get("scope_spec", {})
             problem_type = scope_spec.get("problem_type") or "unknown"
-            target_variable = scope_spec.get("target_variable") or ""
+            target_variable = _scope_target(scope_spec)
 
             hooks = ScopeDefinerMemoryHooks()
             await hooks.store_experiment_pattern(
@@ -437,7 +457,7 @@ class ScopeDefinerAgent:
                 ),
                 problem_type=problem_type,
                 target_variable=target_variable,
-                features=scope_spec.get("features", []) or [],
+                features=scope_spec.get("required_features") or [],
                 success_criteria=output.get("success_criteria", {}) or {},
             )
             logger.info(f"Updated semantic graph (e2i_causal) for experiment: {experiment_id}")

@@ -282,6 +282,7 @@ class FalkorDBSemanticMemory:
         entity_type: Union[E2IEntityType, str],
         entity_id: str,
         properties: Optional[Dict[str, Any]] = None,
+        create_only_properties: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
         Add an E2I entity to the semantic graph.
@@ -291,7 +292,13 @@ class FalkorDBSemanticMemory:
         Args:
             entity_type: E2I entity type (enum or string label)
             entity_id: Unique entity identifier
-            properties: Additional properties to store
+            properties: Additional properties to store (set on create and match)
+            create_only_properties: Properties set only when this call CREATES the
+                node. Use for ownership (``agent``) and writer-specific ``role``:
+                a node is curated when it has no ``agent`` property
+                (``src/tasks/graph_reseed_tasks.py``), so an agent that MERGEs
+                onto a node the seed or causal-path sync wrote must not stamp
+                itself as the owner or overwrite the sync's topology role (#2174).
 
         Returns:
             True if successful
@@ -308,6 +315,7 @@ class FalkorDBSemanticMemory:
         # keys are interpolated into the SET clause. Values are bound params.
         _validate_cypher_identifier(label, "node label")
         _validate_property_keys(properties)
+        _validate_property_keys(create_only_properties)
 
         props = properties.copy() if properties else {}
         # The two keys added below are hardcoded identifier literals (not
@@ -315,19 +323,27 @@ class FalkorDBSemanticMemory:
         # interpolated into the SET clause alongside the validated caller keys.
         props["e2i_entity_type"] = type_value
         props["updated_at"] = datetime.now(timezone.utc).isoformat()
+        create_only = {k: v for k, v in (create_only_properties or {}).items() if k not in props}
 
-        # Build property string for Cypher
-        prop_items = [f"{k}: ${k}" for k in props.keys()]
-        prop_string = ", ".join(prop_items)
+        # Build property strings for Cypher. Create-only values bind under a
+        # ``co_`` prefix so they can never collide with a match-time parameter.
+        prop_string = ", ".join(f"{k}: ${k}" for k in props)
+        create_string = ", ".join(
+            [f"{k}: ${k}" for k in props] + [f"{k}: $co_{k}" for k in create_only]
+        )
 
         query = f"""
         MERGE (e:{label} {{id: $entity_id}})
-        ON CREATE SET e += {{{prop_string}}}
+        ON CREATE SET e += {{{create_string}}}
         ON MATCH SET e += {{{prop_string}}}
         RETURN e
         """
 
-        params = {"entity_id": entity_id, **props}
+        params = {
+            "entity_id": entity_id,
+            **props,
+            **{f"co_{k}": v for k, v in create_only.items()},
+        }
         self.graph.query(query, params)
 
         logger.debug(f"Added/updated {label} entity: {entity_id}")
