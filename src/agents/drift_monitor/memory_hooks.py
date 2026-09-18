@@ -819,61 +819,83 @@ class DriftMonitorMemoryHooks:
                 (r for r in drift_results if r.get("feature") == feature), {}
             )
 
-            # Create/update Feature node
-            feature_query = f"""
-            MERGE (f:Feature {{name: '{feature}'}})
-            ON CREATE SET f.created_at = '{timestamp}'
-            SET f.last_drift_check = '{timestamp}'
-            RETURN f
-            """
-            await self.semantic_memory.query(feature_query)
+            # Writes go through the graph handle, NOT ``semantic_memory.query``:
+            # that shim is synchronous (the old ``await`` raised TypeError after
+            # the first MERGE) and returns [] on any backend error, which would
+            # hide a failed write. Values are bound parameters (feature names can
+            # contain quotes). Ownership (``agent``) is set ON CREATE only, so a
+            # curated Feature/Model is never taken over (#2177, #2174).
+            graph = self.semantic_memory.graph
+            base = {"feature": feature, "ts": timestamp, "agent": "drift_monitor"}
 
-            # Create DriftPattern node
-            pattern_query = f"""
-            MERGE (d:DriftPattern {{pattern_id: '{pattern_id}'}})
-            ON CREATE SET
-                d.drift_type = '{drift_type}',
-                d.first_detected = '{timestamp}',
-                d.occurrence_count = 1
-            ON MATCH SET
-                d.occurrence_count = d.occurrence_count + 1
-            SET
-                d.severity = '{severity}',
-                d.last_detected = '{timestamp}',
-                d.test_statistic = {feature_result.get("test_statistic", 0.0)},
-                d.p_value = {feature_result.get("p_value", 1.0)}
-            RETURN d
-            """
-            await self.semantic_memory.query(pattern_query)
+            graph.query(
+                """
+                MERGE (f:Feature {name: $feature})
+                ON CREATE SET f.created_at = $ts, f.agent = $agent
+                SET f.last_drift_check = $ts
+                """,
+                base,
+            )
+            graph.query(
+                """
+                MERGE (d:DriftPattern {pattern_id: $pattern_id})
+                ON CREATE SET
+                    d.drift_type = $drift_type,
+                    d.first_detected = $ts,
+                    d.occurrence_count = 1,
+                    d.agent = $agent
+                ON MATCH SET
+                    d.occurrence_count = d.occurrence_count + 1
+                SET
+                    d.severity = $severity,
+                    d.last_detected = $ts,
+                    d.test_statistic = $test_statistic,
+                    d.p_value = $p_value
+                """,
+                {
+                    **base,
+                    "pattern_id": pattern_id,
+                    "drift_type": drift_type,
+                    "severity": severity,
+                    "test_statistic": feature_result.get("test_statistic", 0.0),
+                    "p_value": feature_result.get("p_value", 1.0),
+                },
+            )
+            graph.query(
+                """
+                MATCH (f:Feature {name: $feature})
+                MATCH (d:DriftPattern {pattern_id: $pattern_id})
+                MERGE (f)-[:HAS_DRIFT]->(d)
+                """,
+                {**base, "pattern_id": pattern_id},
+            )
 
-            # Create Feature -> DriftPattern relationship
-            rel_query = f"""
-            MATCH (f:Feature {{name: '{feature}'}})
-            MATCH (d:DriftPattern {{pattern_id: '{pattern_id}'}})
-            MERGE (f)-[:HAS_DRIFT]->(d)
-            """
-            await self.semantic_memory.query(rel_query)
-
-            # Create co-drifting relationships
-            features_with_drift = result.get("features_with_drift", [])
-            for other_feature in features_with_drift:
+            # Co-drifting relationships
+            for other_feature in result.get("features_with_drift", []):
                 if other_feature != feature:
-                    co_drift_query = f"""
-                    MERGE (f1:Feature {{name: '{feature}'}})
-                    MERGE (f2:Feature {{name: '{other_feature}'}})
-                    MERGE (f1)-[:CO_DRIFTS_WITH]->(f2)
-                    """
-                    await self.semantic_memory.query(co_drift_query)
+                    graph.query(
+                        """
+                        MERGE (f1:Feature {name: $feature})
+                        ON CREATE SET f1.created_at = $ts, f1.agent = $agent
+                        MERGE (f2:Feature {name: $other})
+                        ON CREATE SET f2.created_at = $ts, f2.agent = $agent
+                        MERGE (f1)-[:CO_DRIFTS_WITH]->(f2)
+                        """,
+                        {**base, "other": other_feature},
+                    )
 
             # Link to model if specified
             model_id = state.get("model_id")
             if model_id:
-                model_query = f"""
-                MERGE (m:Model {{model_id: '{model_id}'}})
-                MATCH (d:DriftPattern {{pattern_id: '{pattern_id}'}})
-                MERGE (d)-[:AFFECTS_MODEL]->(m)
-                """
-                await self.semantic_memory.query(model_query)
+                graph.query(
+                    """
+                    MATCH (d:DriftPattern {pattern_id: $pattern_id})
+                    MERGE (m:Model {model_id: $model_id})
+                    ON CREATE SET m.agent = $agent
+                    MERGE (d)-[:AFFECTS_MODEL]->(m)
+                    """,
+                    {**base, "pattern_id": pattern_id, "model_id": model_id},
+                )
 
             logger.debug(f"Stored drift pattern for {feature} ({drift_type})")
             return True

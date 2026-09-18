@@ -23,12 +23,14 @@ Contract: .claude/contracts/tier3-contracts.md lines 349-562
 """
 
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
 from src.agents.drift_monitor.graph import drift_monitor_graph
+from src.agents.drift_monitor.memory_hooks import contribute_to_memory
 from src.agents.drift_monitor.state import DriftMonitorState
 from src.utils.frame_registry import release_frame, stash_frame
 
@@ -205,14 +207,17 @@ class DriftMonitorAgent:
     sla_seconds = 10  # <10s for 50 features
     tools = ["scipy", "numpy"]  # Statistical libraries for drift detection
 
-    def __init__(self, enable_mlflow: bool = True):
+    def __init__(self, enable_mlflow: bool = True, enable_memory: bool = True):
         """Initialize drift monitor agent.
 
         Args:
             enable_mlflow: Whether to enable MLflow tracking (default: True)
+            enable_memory: Whether to contribute results to working, episodic
+                and semantic memory after a successful run (default: True)
         """
         self.graph = drift_monitor_graph
         self.enable_mlflow = enable_mlflow
+        self.enable_memory = enable_memory
         self._mlflow_tracker: Optional["DriftMonitorMLflowTracker"] = None
 
     def _get_mlflow_tracker(self) -> Optional["DriftMonitorMLflowTracker"]:
@@ -348,6 +353,21 @@ class DriftMonitorAgent:
             # detection failure, raise) — a leaked handle would pin the frame
             # in process memory for the worker's lifetime.
             release_frame(initial_state.get("tier0_frame_ref"))
+
+        # #2177: hand the result to the memory hooks. contribute_to_memory
+        # existed since the 4-memory hooks landed but had no caller, so none of
+        # this agent's memory writes ever ran. A drift run has no conversation,
+        # so the id is a per-run handle, never a chat session id (#2099).
+        # Non-blocking: a memory failure is logged and never fails detection.
+        if self.enable_memory:
+            try:
+                await contribute_to_memory(
+                    result=dict(final_state),
+                    state=dict(final_state),
+                    session_id=f"drift_run_{uuid.uuid4().hex}",
+                )
+            except Exception as e:
+                logger.warning(f"Failed to contribute drift result to memory: {e}")
 
         # Log execution time and SLA check
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
