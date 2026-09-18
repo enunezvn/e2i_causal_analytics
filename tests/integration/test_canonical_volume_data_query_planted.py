@@ -14,7 +14,6 @@ rows the database happens to hold proves much less than asserting it on the rows
 discriminate.
 """
 
-import asyncio
 from datetime import date
 
 import pytest
@@ -91,7 +90,7 @@ def _calculator(monkeypatch, db, include_synthetic):
 
 @pytest.mark.parametrize("include_synthetic", [False, True])
 @pytest.mark.parametrize("kpi_id,name,brand,region,expected", CASES)
-def test_data_query_equals_kpi_calculate_and_the_hand_computed_headline(
+async def test_data_query_equals_kpi_calculate_and_the_hand_computed_headline(
     db, monkeypatch, include_synthetic, kpi_id, name, brand, region, expected
 ):
     calculator = _calculator(monkeypatch, db, include_synthetic)
@@ -100,14 +99,12 @@ def test_data_query_equals_kpi_calculate_and_the_hand_computed_headline(
     reference = calculator.calculate(kpi_id, use_cache=False, context=dict(context))
     reference_calls = list(db.calls)
     db.calls.clear()
-    out = asyncio.run(
-        cvs.canonical_volume_stored_rows(
-            name,
-            {"brand": brand, "region": region, "metric_name": name},
-            "2026-06-01",
-            24,
-            calculator=calculator,
-        )
+    out = await cvs.canonical_volume_stored_rows(
+        name,
+        {"brand": brand, "region": region, "metric_name": name},
+        "2026-06-01",
+        24,
+        calculator=calculator,
     )
     # the same statements with the same params, in the same order
     assert db.calls == reference_calls
@@ -127,7 +124,7 @@ def test_data_query_equals_kpi_calculate_and_the_hand_computed_headline(
         assert out["data_through"] == "2026-08-31"
 
 
-def test_an_explicit_window_is_served_by_kpi_calculate_and_the_lookback_is_never_one(
+async def test_an_explicit_window_is_served_by_kpi_calculate_and_the_lookback_is_never_one(
     db, monkeypatch
 ):
     calculator = _calculator(monkeypatch, db, include_synthetic=False)
@@ -139,10 +136,8 @@ def test_an_explicit_window_is_served_by_kpi_calculate_and_the_lookback_is_never
     assert windowed.error is None
     assert windowed.value == pytest.approx(460.0 + 410.0)
     db.calls.clear()
-    out = asyncio.run(
-        cvs.canonical_volume_stored_rows(
-            "TRx", {"brand": "Kisqali"}, "2026-07-01", 24, calculator=calculator
-        )
+    out = await cvs.canonical_volume_stored_rows(
+        "TRx", {"brand": "Kisqali"}, "2026-07-01", 24, calculator=calculator
     )
     assert [c["query_id"] for c in db.calls if c["query_id"].startswith("canonical_volume_")] == [
         "canonical_volume_trx"
