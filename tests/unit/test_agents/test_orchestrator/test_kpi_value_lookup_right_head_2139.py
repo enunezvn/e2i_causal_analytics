@@ -4,7 +4,10 @@ from typing import Any, Dict, List
 
 import pytest
 
-from src.agents.orchestrator.nodes.dispatcher import _kpi_lookup_evidence
+from src.agents.orchestrator.nodes.dispatcher import (
+    _kpi_lookup_evidence,
+    _window_from_query,
+)
 from src.kpi.models import KPIResult, KPIStatus
 
 
@@ -59,6 +62,41 @@ def calculator(monkeypatch) -> _RecordingCalculator:
         # Every repeated occurrence is checked before identical mentions mask.
         "What is TRx and TRx cost?",
         "What is TRx and the cost of TRx?",
+        # A function word cannot make its unresolved object disappear (#2141).
+        "What is TRx among new patients?",
+        "What is TRx within the cohort?",
+        "What is TRx in oncology?",
+        "What is TRx by severity?",
+        "What is TRx among Kisqali patients?",
+        "What is TRx across brands?",
+        "What is TRx at the HCP level?",
+        "What is TRx with high adherence?",
+        "What is TRx per brand?",
+        "What is TRx under the new plan?",
+        "What is TRx compared with baseline?",
+        "What is TRx when adherence is low?",
+        "What is TRx if adherence drops?",
+        "What is TRx for Kisqali or Fabhalta?",
+        "What is TRx for Kisqali and Fabhalta?",
+        "What is TRx in west and south?",
+        "What is TRx in west oncology?",
+        "What is TRx Q3 for the last 30 days?",
+        "What is TRx for last quarter and last year?",
+        "What is TRx without Kisqali?",
+        "What is TRx not Kisqali?",
+        "What is TRx except west?",
+        "What is TRx or Kisqali?",
+        "What is TRx compared to last quarter?",
+        "What is TRx relative to west?",
+        "What is TRx versus last quarter?",
+        "What is TRx if Kisqali?",
+        "What is market share compared to last quarter?",
+        # Coordinators and punctuation cannot terminate the safety walk while
+        # a continuation still changes the requested quantity.
+        "What is TRx and its cost?",
+        "What is TRx or its price?",
+        "What is TRx; specifically its cost?",
+        "What is TRx? I mean its cost",
     ],
 )
 def test_unsupported_right_heads_fail_closed_before_calculation(query, calculator) -> None:
@@ -77,14 +115,15 @@ def test_unsupported_right_heads_fail_closed_before_calculation(query, calculato
             {"region": "west"},
         ),
         ("What is TRx for Kisqali?", "WS3-BI-005", {"brand": "Kisqali"}),
-        ("What is TRx compared with baseline?", "WS3-BI-005", {}),
         ("What is the current TRx volume?", "WS3-BI-005", {}),
         ("What is TRx value?", "WS3-BI-005", {}),
         # Repeated aliases are an appositive restatement, not another quantity.
         ("What is TRx, the total prescriptions, for Kisqali?", "WS3-BI-005", {"brand": "Kisqali"}),
+        ("What is TRx, the total prescriptions?", "WS3-BI-005", {}),
         # Bare scope is accepted only when the platform's resolver binds it.
         ("What is TRx Kisqali?", "WS3-BI-005", {"brand": "Kisqali"}),
         ("What is TRx west region?", "WS3-BI-005", {"region": "west"}),
+        ("What is TRx? Thanks.", "WS3-BI-005", {}),
     ],
 )
 def test_ordinary_value_lookups_still_calculate(
@@ -99,23 +138,28 @@ def test_ordinary_value_lookups_still_calculate(
 @pytest.mark.parametrize(
     "query",
     [
-        "What is TRx by severity?",
-        "What is TRx across brands?",
-        "What is TRx among new patients?",
-        "What is TRx at the HCP level?",
-        "What is TRx with high adherence?",
-        "What is TRx from Q1?",
-        "What is TRx to date?",
-        "What is TRx per brand?",
-        "What is TRx within the cohort?",
-        "What is TRx under the new plan?",
-        "What is TRx between Q1 and Q2?",
-        "What is TRx versus last quarter?",
-        "What is TRx when adherence is low?",
-        "What is TRx if adherence drops?",
+        "What is TRx in the west region?",
+        "What is TRx for the last 30 days?",
+        "What is TRx in the last quarter?",
+        "What is TRx for last quarter and last quarter?",
     ],
 )
 def test_closed_class_right_heads_do_not_over_refuse(query, calculator) -> None:
     """The guard decides the bare compound head, not a prepositional object."""
     assert _kpi_lookup_evidence({"query": query}), query
     assert len(calculator.calls) == 1
+
+
+def test_bare_year_is_not_silently_treated_as_a_supported_window(calculator) -> None:
+    """The consumer intentionally does not bind one-token years.
+
+    ``_window_from_query`` omits single tokens so unrelated counts such as
+    "top 2000 HCPs" cannot silently become a calendar-year scope.  The guard
+    must therefore fail closed on a bare year rather than letting the KPI
+    engine use its default window while implying that the year was honored.
+    """
+    query = "What is TRx 2025?"
+
+    assert _window_from_query(query) is None
+    assert _kpi_lookup_evidence({"query": query}) is None
+    assert calculator.calls == []
