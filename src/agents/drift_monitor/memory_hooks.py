@@ -39,11 +39,19 @@ Integrates the Drift Monitor agent with the 4-Memory Architecture:
 import asyncio
 import hashlib
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, cast
 
 logger = logging.getLogger(__name__)
+
+# Bounds for the synchronous FalkorDB writes in ``store_drift_pattern`` (#2177).
+# Per-query server-side timeout, and a wall-clock budget after which the write
+# thread issues no further queries (co-drift writes are O(n^2) in drifting
+# features). Kept inside DriftMonitorAgent's 10 s SLA.
+_GRAPH_QUERY_TIMEOUT_MS = 2000
+_GRAPH_WRITE_BUDGET_SECONDS = 8.0
 
 
 # ============================================================================
@@ -830,9 +838,19 @@ class DriftMonitorMemoryHooks:
             # so the event loop (and the caller's timeout) is never blocked.
             def _write() -> None:
                 graph = self.semantic_memory.graph
+                deadline = time.monotonic() + _GRAPH_WRITE_BUDGET_SECONDS
+
+                def _q(cypher: str, params: Dict[str, Any]) -> None:
+                    # Server-side timeout per query, and no new query once the
+                    # write budget is spent: a stalled FalkorDB cannot keep this
+                    # worker thread busy long after run() has returned (codex R2).
+                    if time.monotonic() > deadline:
+                        raise TimeoutError("drift graph-write budget exhausted")
+                    graph.query(cypher, params, timeout=_GRAPH_QUERY_TIMEOUT_MS)
+
                 base = {"feature": feature, "ts": timestamp, "agent": "drift_monitor"}
 
-                graph.query(
+                _q(
                     """
                     MERGE (f:Feature {name: $feature})
                     ON CREATE SET f.created_at = $ts, f.agent = $agent
@@ -840,7 +858,7 @@ class DriftMonitorMemoryHooks:
                     """,
                     base,
                 )
-                graph.query(
+                _q(
                     """
                     MERGE (d:DriftPattern {pattern_id: $pattern_id})
                     ON CREATE SET
@@ -865,7 +883,7 @@ class DriftMonitorMemoryHooks:
                         "p_value": feature_result.get("p_value", 1.0),
                     },
                 )
-                graph.query(
+                _q(
                     """
                     MATCH (f:Feature {name: $feature})
                     MATCH (d:DriftPattern {pattern_id: $pattern_id})
@@ -877,7 +895,7 @@ class DriftMonitorMemoryHooks:
                 # Co-drifting relationships
                 for other_feature in result.get("features_with_drift", []):
                     if other_feature != feature:
-                        graph.query(
+                        _q(
                             """
                             MERGE (f1:Feature {name: $feature})
                             ON CREATE SET f1.created_at = $ts, f1.agent = $agent
@@ -891,7 +909,7 @@ class DriftMonitorMemoryHooks:
                 # Link to model if specified
                 model_id = state.get("model_id")
                 if model_id:
-                    graph.query(
+                    _q(
                         """
                         MATCH (d:DriftPattern {pattern_id: $pattern_id})
                         MERGE (m:Model {model_id: $model_id})

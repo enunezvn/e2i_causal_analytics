@@ -221,7 +221,7 @@ class DriftMonitorAgent:
         self.enable_memory = enable_memory
         # Upper bound on the post-detection memory contribution. Co-drift writes
         # are O(n^2) in drifting features; a slow backend must not hold the run.
-        self.memory_timeout_seconds = 15.0
+        self.memory_timeout_seconds = 8.0
         self._mlflow_tracker: Optional["DriftMonitorMLflowTracker"] = None
 
     def _get_mlflow_tracker(self) -> Optional["DriftMonitorMLflowTracker"]:
@@ -364,6 +364,10 @@ class DriftMonitorAgent:
         # so the id is a per-run handle, never a chat session id (#2099).
         # Non-blocking: a memory failure is logged and never fails detection.
         if self.enable_memory:
+            # Fit the wait inside what is left of the SLA (codex R2): detection
+            # time counts against sla_seconds, so memory gets the remainder.
+            elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
+            memory_budget = max(0.5, min(self.memory_timeout_seconds, self.sla_seconds - elapsed))
             try:
                 await asyncio.wait_for(
                     contribute_to_memory(
@@ -371,11 +375,11 @@ class DriftMonitorAgent:
                         state=dict(final_state),
                         session_id=f"drift_run_{uuid.uuid4().hex}",
                     ),
-                    timeout=self.memory_timeout_seconds,
+                    timeout=memory_budget,
                 )
             except asyncio.TimeoutError:
                 logger.warning(
-                    f"Drift memory contribution exceeded {self.memory_timeout_seconds}s; "
+                    f"Drift memory contribution exceeded {memory_budget:.1f}s; "
                     "returning the detection result without waiting"
                 )
             except Exception as e:
