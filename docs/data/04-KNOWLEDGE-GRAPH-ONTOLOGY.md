@@ -13,7 +13,12 @@
 
 ## Overview
 
-The E2I knowledge graph runs on **FalkorDB** (Redis-compatible graph database) using the Cypher query language. It models pharmaceutical commercial relationships — patients, HCPs, brands, triggers, causal paths, and KPIs — as a property graph with **8 node types** and **15 edge types** (13 direct + 2 inferred).
+The E2I knowledge graph runs on **FalkorDB** (Redis-compatible graph database) using the Cypher query language. It models pharmaceutical commercial relationships — patients, HCPs, brands, triggers, causal paths, and KPIs. The **ontology** in `config/ontology/` defines **8 node types** and **15 edge types** (13 direct + 2 inferred).
+
+> **The ontology is a design spec, not the runtime schema.** No production code loads
+> `config/ontology/*.yaml` (`src/ontology`'s compiler, validator and inference engine run only
+> in CI tests). The live graph is built by code and carries more labels than the ontology —
+> see [How the graph is built](#how-the-graph-is-built).
 
 **Purpose**: Enables graph-based RAG retrieval, causal path traversal, HCP influence network analysis, and patient journey state tracking for the agent roster in `config/agent_config.yaml` (22 agents, Tier 0 = 9).
 
@@ -388,7 +393,8 @@ Stage values: `aware`, `considering`, `prescribed`, `first_fill`, `adherent`, `d
 
 ### Inferred Edges (2)
 
-These are computed by the inference rule engine, not created directly.
+Defined by the inference rules below. **Nothing materializes them today** — see the note under
+[Inference Rules](#inference-rules).
 
 #### INDIRECTLY_INFLUENCES
 
@@ -434,7 +440,12 @@ Each transition is recorded as a `TRANSITIONED_TO` self-edge on the Patient node
 
 ## Inference Rules
 
-The inference engine runs 5 rules on a scheduled basis to discover implicit relationships.
+`config/ontology/inference_rules.yaml` defines 5 rules and the execution settings below.
+
+> **Not executed.** No scheduler, beat task or API path runs these rules, and
+> `src/ontology/inference_engine.py` (which is test-only) does not read this file — it carries
+> its own 3 hard-coded rules. The schedule and execution configuration describe the intended
+> design.
 
 ### 1. indirect_treatment (Daily, Priority 1)
 
@@ -506,11 +517,30 @@ Priority assignment: critical (gap >= 30%), high (>= 20%), medium (>= 10%)
 
 ---
 
+## How the graph is built
+
+The graph `e2i_causal` is written by code, not compiled from the ontology. Curated and runtime
+content share one graph and are told apart by a property convention: **a node is curated when it
+has no `agent` property** (`n.agent IS NULL` — `src/tasks/graph_reseed_tasks.py`,
+`/api/graph/health` `curated_node_count`, the Knowledge Graph page's curated view).
+
+| Writer | Trigger | Writes | Ownership |
+|--------|---------|--------|-----------|
+| `scripts/seed_falkordb.py` | `scripts/deploy.sh` when the graph has 0 nodes (with `--clear-first`); the emptiness sentinel | Brand, Region, HCP, Patient, Treatment, CausalPath, KPI, Agent + 72 edges of 15 types, from lists in the script | curated |
+| `scripts/sync_causal_paths_to_falkordb.py` | the emptiness sentinel; manual `--execute` | `causal_paths` rows with `validation_status = validated` → `(:Variable)-[:CAUSES]->(:Variable)`, bridged onto seeded KPIs | curated — clears `agent` on the Variables it writes |
+| Agent memory hooks (`FalkorDBSemanticMemory`) | agent runs (causal_impact on the PROCEED band; Tier 0 agents; drift_monitor) | run records: Variable, Experiment, ScopeSpec, ProblemType, Model, DriftPattern, … | `agent=<name>`, set **on create only** — an agent never takes over a curated node |
+| Graphiti (`POST /api/graph/episodes`) | explicit API call only; no UI or chat caller | Graphiti episode/entity nodes | — |
+
+The **emptiness sentinel** (`graph-emptiness-sentinel`, Celery beat every 30 min) counts curated
+nodes; at 0 it takes a Redis lock, re-checks, then runs the seed and the sync. It detects an empty
+graph, not a partial one. Current contents by type: `GET /api/graph/stats`.
+
 ## Seed Data
 
 The seed script (`scripts/seed_falkordb.py`) populates:
 
-- **3 Brand** nodes (Remibrutinib, Fabhalta, Kisqali)
+- **3 Brand** nodes (Remibrutinib, Fabhalta, Kisqali), each with `id: 'brand:<Name>'` — the
+  identity agent hooks MERGE on (#2176)
 - **4 Region** nodes (northeast, south, midwest, west)
 - **6 Agent** nodes — `orchestrator`, `causal_impact`, `gap_analyzer`,
   `experiment_designer`, `prediction_synthesizer`, `explainer`. This is a
@@ -518,8 +548,10 @@ The seed script (`scripts/seed_falkordb.py`) populates:
   carries one representative agent per tier 1–5 (two for tier 2), not all 13
   Tier 1–5 agents and none of the 9 Tier-0 agents. Node counts from a seeded
   graph are therefore a floor, not the ontology's cardinality.
-- **Sample KPI** nodes (from `config/kpi_definitions.yaml`)
-- **Sample HCP** and **Patient** nodes with relationships
+- **6 KPI** nodes (TRx, NRx, Market_Share, HCP_Reach, Conversion_Rate, Patient_Retention),
+  hard-coded in the script — not read from `config/kpi_definitions.yaml`
+- **6 HCP**, **6 Patient**, **4 Treatment** and **4 CausalPath** sample nodes
+- **72 relationships** of 15 types (`RELATIONSHIPS` in the script)
 
 Run from host:
 
@@ -589,6 +621,10 @@ to the graph they were written into. The domain relationship types
 
 **Source**: `config/ontology/falkordb_config.yaml` (ontology only — see the
 graph-name caveat above)
+
+> **Not applied to `e2i_causal`.** Only the retired `scripts/seed_semantic_graph.py` (for the
+> legacy `e2i_semantic` graph) applied these constraints. Runtime writers deduplicate by
+> `MERGE` on `id`; `seed_falkordb.py` creates `name` indexes on 8 labels.
 
 ```
 Patient.patient_id, HCP.hcp_id, HCP.npi, Brand.brand_name,
