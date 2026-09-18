@@ -168,8 +168,13 @@ separation structural rather than a naming convention;
 
 The four split views are deliberately untouched by the expand: they are `SELECT *` snapshots with ZERO
 consumers repo-wide (measured 2026-09-18 across `src/`, `tests/`, `scripts/`, `feature_repo/`,
-`frontend/src`; the only other mentions are a name list in `docs/data/02-CORE-DATA-DICTIONARY.md`), and
-leaving them on the legacy names is what a pre-lane container expects. The contract rebuilds them.
+`frontend/src`), and leaving them on the legacy names is what a pre-lane container expects. The five
+files that NAME them — `database/core/e2i_ml_complete_v3_schema.sql`, `database/deferred/146_*`,
+`docs/data/02-CORE-DATA-DICTIONARY.md`, this plan and
+`tests/unit/test_database/test_mig146_contract_legacy_per_hcp_columns.py` — none of them reads a column
+from a view. An earlier wording called the data dictionary "the only other mention", which this lane's
+own test file falsified the day it was written (ultracode iter7 LOW); the durable claim is about
+READERS, not about how many files say the name. The contract rebuilds them.
 
 **The rejected design, and why — do not reinstate it.** The original plan called for a plain
 `ALTER TABLE … RENAME COLUMN` plus `ALTER VIEW … RENAME COLUMN`, on three arguments: (a) every reader
@@ -13169,7 +13174,10 @@ cat > "$RB/prove_state.sh" <<'SH'
 # Canonical TRx lane recovery proof. Usage: prove_state.sh old|new
 # Exit 0 only when EVERY tier (schema, history, app, feast, cache, health) is one generation.
 set -u
-EXPECT="$1"; RB="$(cd "$(dirname "$0")" && pwd)"; bad=0
+# ${1:-}, not $1: under `set -u` a bare $1 aborts with "unbound variable" BEFORE the usage line
+# below can run, so the script's own help was unreachable in exactly the case it exists for
+# (ultracode iter7 LOW). The empty string then falls through to the usage branch as intended.
+EXPECT="${1:-}"; RB="$(cd "$(dirname "$0")" && pwd)"; bad=0
 case "$EXPECT" in old|new) ;; *) echo "usage: prove_state.sh old|new"; exit 2 ;; esac
 # The negative rehearsal points this at an altered copy; recovery uses the staged file.
 IMAGES_PRE="${IMAGES_PRE:-$RB/images_pre.txt}"
@@ -13274,9 +13282,21 @@ SYNC_TRG=business_metrics_sync_legacy_trigger_counts_trg
 # So the fingerprint is STABLE CATALOG FIELDS, none of which is deparser output:
 #   md5(pg_proc.prosrc) | language | returns trigger | volatility | pg_trigger.tgtype | tgenabled
 #   | function name | function schema
-# tgtype 23 = BEFORE(1) + ROW(2) + INSERT(4) + UPDATE(16), which is what pg_get_triggerdef was being
-# read for. Measured 2026-09-17: identical with quote_all_identifiers both on and off, and it DOES
-# move when the body is gutted (35d5221e...), so it still catches the iter5 regression.
+# tgtype 23 = ROW(1) + BEFORE(2) + INSERT(4) + UPDATE(16). Measured 2026-09-18 on the droplet's
+# PG 15.8 inside BEGIN/ROLLBACK, because a bit list is exactly the kind of contract-bearing sentence
+# that is easier to recall than to check: BEFORE INSERT FOR EACH STATEMENT = 6 and AFTER INSERT FOR
+# EACH ROW = 5, which is only consistent with ROW=1 and BEFORE=2 -- the previous wording here had the
+# two swapped (ultracode iter7 LOW). Measured 2026-09-17: identical with quote_all_identifiers both on
+# and off, and it DOES move when the body is gutted (35d5221e...), so it still catches the iter5
+# regression.
+#
+# tgtype is NOT, however, "what pg_get_triggerdef was being read for" -- that claim, also corrected
+# here, is measurably false and was the seed of two later HIGHs. The deparser ALSO renders the
+# `UPDATE OF <column>` list and the `WHEN` clause, and neither is in tgtype: measured 2026-09-18, a
+# plain trigger, an `UPDATE OF y` trigger and a `WHEN (false)` trigger all report tgtype 23, differing
+# only in tgattr ({} vs {2}) and tgqual. (tgqual is covered below; tgattr is not covered here at all,
+# and is why the catalog fingerprint alone was never going to be enough -- see SYNC_PROBE_SQL, which
+# settles the behaviour by writing a row instead of naming a fifth attribute.)
 # codex iter7 HIGH: and the fingerprint must cover the WHEN predicate and the table's WHOLE trigger
 # set, not one trigger looked up by name. Both measured live inside BEGIN/ROLLBACK (2026-09-17), each
 # leaving the previous fingerprint BYTE-IDENTICAL while a write of trx_count=7 landed
@@ -13313,18 +13333,38 @@ COLS_CANON="triggers_accepted_count,triggers_delivered_count,triggers_total_coun
 # the canonical names. `expand` also requires defer_led=0: a schema that has not contracted, beside a
 # ledger claiming 146 ran, is not a state this lane can legitimately produce.
 VIEWS_N=4; VIEW_LEGACY_COLS=12; VIEW_CANON_COLS=12   # 4 views x 3 columns (measured 2026-09-17)
+# ultracode iter7 MED: a COUNT of views and of their columns says nothing about which ROWS each view
+# returns, and the whole purpose of these four is to return different rows. A contract that rebuilt all
+# four as `WHERE data_split = 'train'` leaves views_n=4 and every column count exactly right -- measured
+# 2026-09-18 inside BEGIN/ROLLBACK -- so `contract` accepted it, and three consumers would have been
+# served the training split, the holdout view (whose entire point is to be what nothing trains on)
+# reading what everything trains on. The predicate is the only thing that distinguishes these views, so
+# bind the predicate.
+#
+# This is deparser output, which iter6 HIGH-2 banned from the trigger fingerprint because
+# `quote_all_identifiers` changes `pg_get_triggerdef`'s text and would fail a CORRECT deploy. A view's
+# WHERE clause has no non-deparser catalog form (pg_rewrite.ev_qual is a node tree), so instead the
+# extraction is made INSENSITIVE to that setting and the insensitivity is measured, not assumed: the
+# regex accepts data_split quoted and unquoted, and pulls out only the string literal, which quoting
+# never touches. Measured 2026-09-18 on PG 15.8, byte-identical with quote_all_identifiers on and off,
+# and it DOES move when one view is rebuilt on the wrong split (v_holdout -> train), while views_n and
+# every column count stay exactly right.
+VIEW_SPLITS="v_holdout_business_metrics=holdout,v_test_business_metrics=test,v_train_business_metrics=train,v_validation_business_metrics=validation"
 expand_state()   { [ "$cols" = "$COLS_BOTH" ] && [ "$trg_fp" = "$SYNC_FP" ] && [ "$disagree" = 0 ] && [ "$sync_probe" = ok ] \
                    && [ "$led_144" = 1 ] && [ "$defer_led" = 0 ] \
-                   && [ "$views_n" = "$VIEWS_N" ] && [ "$views_legacy" = "$VIEW_LEGACY_COLS" ] && [ "$views_canon" = 0 ]; }
+                   && [ "$views_n" = "$VIEWS_N" ] && [ "$views_legacy" = "$VIEW_LEGACY_COLS" ] && [ "$views_canon" = 0 ] \
+                   && [ "$views_split" = "$VIEW_SPLITS" ]; }
 contract_state() { [ "$cols" = "$COLS_CANON" ] && [ "$trg_fp" = "$SYNC_FP_NONE" ] && [ "$led_144" = 1 ] && [ "$defer_led" = 1 ] \
-                   && [ "$views_n" = "$VIEWS_N" ] && [ "$views_canon" = "$VIEW_CANON_COLS" ] && [ "$views_legacy" = 0 ]; }
+                   && [ "$views_n" = "$VIEWS_N" ] && [ "$views_canon" = "$VIEW_CANON_COLS" ] && [ "$views_legacy" = 0 ] \
+                   && [ "$views_split" = "$VIEW_SPLITS" ]; }
 legacy_state()   { [ "$cols" = "$COLS_LEGACY" ] && [ "$trg_fp" = "$SYNC_FP_NONE" ] && [ "$led_144" = 0 ] && [ "$defer_led" = 0 ] \
-                   && [ "$views_n" = "$VIEWS_N" ] && [ "$views_legacy" = "$VIEW_LEGACY_COLS" ] && [ "$views_canon" = 0 ]; }
+                   && [ "$views_n" = "$VIEWS_N" ] && [ "$views_legacy" = "$VIEW_LEGACY_COLS" ] && [ "$views_canon" = 0 ] \
+                   && [ "$views_split" = "$VIEW_SPLITS" ]; }
 schema_generation() {
   if expand_state; then echo expand
   elif contract_state; then echo contract
   elif legacy_state; then echo legacy
-  else echo "broken(cols=[$cols] trigger=[$([ "$trg_fp" = "$SYNC_FP_NONE" ] && echo none || { [ "$trg_fp" = "$SYNC_FP" ] && echo as-144-installs-it || echo "DIFFERS: $trg_fp"; })] disagreeing_rows=[$disagree] sync_probe=[$sync_probe] ledger_144=[$led_144] deferred_146_ledger=[$defer_led] views=[n=$views_n legacy_cols=$views_legacy canonical_cols=$views_canon])"
+  else echo "broken(cols=[$cols] trigger=[$([ "$trg_fp" = "$SYNC_FP_NONE" ] && echo none || { [ "$trg_fp" = "$SYNC_FP" ] && echo as-144-installs-it || echo "DIFFERS: $trg_fp"; })] disagreeing_rows=[$disagree] sync_probe=[$sync_probe] ledger_144=[$led_144] deferred_146_ledger=[$defer_led] views=[n=$views_n legacy_cols=$views_legacy canonical_cols=$views_canon splits=$([ "$views_split" = "$VIEW_SPLITS" ] && echo as-authored || echo "DIFFERS: $views_split")])"
   fi; }
 # $1 label, $2.. the generations this branch accepts.
 generation_in() { local got="$1"; shift; for want in "$@"; do [ "$got" = "$want" ] && { echo "OK   schema_generation: $got (accepted here: $*)"; return; }; done
@@ -13346,6 +13386,7 @@ SPLIT_VIEWS="'v_train_business_metrics','v_test_business_metrics','v_validation_
 views_n=$(q "SELECT count(*) FROM information_schema.views WHERE table_schema = 'public' AND table_name IN ($SPLIT_VIEWS)")
 views_legacy=$(q "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name IN ($SPLIT_VIEWS) AND column_name IN ('trx_count','nrx_count','total_rx_count')")
 views_canon=$(q "SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name IN ($SPLIT_VIEWS) AND column_name IN ('triggers_delivered_count','triggers_accepted_count','triggers_total_count')")
+views_split=$(q "SELECT coalesce(string_agg(c.relname || '=' || coalesce((regexp_match(pg_get_viewdef(c.oid, true), '\"?data_split\"? = ''([a-z]+)'''))[1], '?'), ',' ORDER BY c.relname), 'none') FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind = 'v' AND c.relname IN ($SPLIT_VIEWS)")
 # codex iter5 HIGH-3: the ledger claim about 144 specifically ($mig counts 143 and 144 together, so it
 # cannot tell a half-finished rollback_144 from a clean pre-lane box).
 led_144=$(q "SELECT count(*) FROM public.schema_migrations WHERE filename = '144_per_hcp_trigger_count_columns.sql'")
@@ -13432,7 +13473,7 @@ if [ "$EXPECT" = new ]; then
     # to the machinery that makes it valid, not just to the names.
     printf 'SCHEMA_GENERATION=%s\n' "$generation"
     printf 'SYNC_TRIGGER=%s\n' "$trg_fp"
-    printf 'SPLIT_VIEWS=n=%s/legacy_cols=%s/canonical_cols=%s\n' "$views_n" "$views_legacy" "$views_canon"
+    printf 'SPLIT_VIEWS=n=%s/legacy_cols=%s/canonical_cols=%s/splits=%s\n' "$views_n" "$views_legacy" "$views_canon" "$views_split"
     printf 'LEGACY_CANONICAL_DISAGREEMENTS=%s\n' "$disagree"
     printf 'SYNC_WRITE_READBACK=%s\n' "$sync_probe"
     printf 'MIGRATION_LEDGER=143:%s/144:%s/deferred146:%s\n' "$led_143" "$led_144" "$defer_led"
@@ -14278,7 +14319,13 @@ The deploy run's step summary (`deploy.yml:1298-1359`) and its job log (actions 
   # ledger move commit together under --single-transaction (codex iter3 HIGH-2). Do NOT re-add a
   # separate `q DELETE` after this: `&&` would order the two, not make them atomic, and a failure
   # between them leaves the runner believing a rolled-back migration is still applied.
-  [ "$(q "SELECT count(*) FROM public.schema_migrations WHERE filename = '143_canonical_volume_kpis.sql'")" = 1 ] && docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 --single-transaction < "$RB/rollback_143_canonical_volume_kpis.sql"
+  # `if`, not `[ ... ] && psql ...`: a false guard makes an `&&` list exit 1, and the runbook
+  # above says to stop at the first non-zero exit — so "the ledger row is already gone", the
+  # CORRECT state after a completed rollback or a re-run, read as a failure and halted the
+  # recovery (ultracode iter7 LOW). A guard that is legitimately false must say so and exit 0.
+  if [ "$(q "SELECT count(*) FROM public.schema_migrations WHERE filename = '143_canonical_volume_kpis.sql'")" = 1 ]; then
+    docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 --single-transaction < "$RB/rollback_143_canonical_volume_kpis.sql"
+  else echo "143_canonical_volume_kpis.sql not in the ledger — nothing to roll back"; fi
   q "SELECT count(*) AS ledger_143_should_be_0 FROM public.schema_migrations WHERE filename = '143_canonical_volume_kpis.sql';"
   ```
 - **B1x — undo the EXPAND too (NOT a recovery step; only to return the schema to its exact pre-144
@@ -14286,7 +14333,13 @@ The deploy run's step summary (`deploy.yml:1298-1359`) and its job log (actions 
   transaction, so "columns gone but ledger still present" — which would make the next deploy skip 144 —
   cannot happen half-way. The second command below only REPORTS the result.
   ```bash
-  [ "$(q "SELECT count(*) FROM public.schema_migrations WHERE filename = '144_per_hcp_trigger_count_columns.sql'")" = 1 ] && docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 --single-transaction < "$RB/rollback_144_per_hcp_trigger_count_columns.sql"
+  # `if`, not `[ ... ] && psql ...`: a false guard makes an `&&` list exit 1, and the runbook
+  # above says to stop at the first non-zero exit — so "the ledger row is already gone", the
+  # CORRECT state after a completed rollback or a re-run, read as a failure and halted the
+  # recovery (ultracode iter7 LOW). A guard that is legitimately false must say so and exit 0.
+  if [ "$(q "SELECT count(*) FROM public.schema_migrations WHERE filename = '144_per_hcp_trigger_count_columns.sql'")" = 1 ]; then
+    docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 --single-transaction < "$RB/rollback_144_per_hcp_trigger_count_columns.sql"
+  else echo "144_per_hcp_trigger_count_columns.sql not in the ledger — nothing to roll back"; fi
   q "SELECT count(*) AS ledger_144_should_be_0 FROM public.schema_migrations WHERE filename = '144_per_hcp_trigger_count_columns.sql';"
   ```
 - **B2 — checkout back** (mirrors `rollback_to_prev`, `deploy.yml:467`; `$RB` is untracked and survives):

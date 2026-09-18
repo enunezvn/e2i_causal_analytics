@@ -37,12 +37,16 @@ CONTRACT = DEFERRED_DIR / "146_drop_legacy_per_hcp_count_columns.sql"
 EXPAND = REPO / "database" / "migrations" / "144_per_hcp_trigger_count_columns.sql"
 LEGACY = ("trx_count", "nrx_count", "total_rx_count")
 CANONICAL = ("triggers_delivered_count", "triggers_accepted_count", "triggers_total_count")
-VIEWS = (
-    "v_train_business_metrics",
-    "v_test_business_metrics",
-    "v_validation_business_metrics",
-    "v_holdout_business_metrics",
-)
+#: split view -> the ``data_split`` value it must keep selecting. Read off the LIVE
+#: definitions on 2026-09-18 rather than inferred from the view names:
+#: ``pg_get_viewdef`` shows each of the four filtering on
+#: ``data_split = '<its own split>'::data_split_type``.
+VIEWS = {
+    "v_train_business_metrics": "train",
+    "v_test_business_metrics": "test",
+    "v_validation_business_metrics": "validation",
+    "v_holdout_business_metrics": "holdout",
+}
 
 
 def _runner_dirs() -> list[str]:
@@ -150,15 +154,30 @@ def test_the_contract_recreates_the_split_views():
     assert not re.search(r"\bCASCADE\b", sql, re.IGNORECASE), (
         "CASCADE would silently drop the dependent views instead of recreating them"
     )
-    for view in VIEWS:
+    for view, split in VIEWS.items():
         assert f"DROP VIEW IF EXISTS public.{view};" in sql, view
+        # ...and recreated selecting ITS OWN split. The predicate is the only thing
+        # that distinguishes these four views from each other and from the table, and
+        # the previous version of this assertion stopped at
+        # `SELECT * FROM public.business_metrics` (ultracode iter7 MED): a contract
+        # that rebuilt all four as `WHERE data_split = 'train'` passed this test, and
+        # passed prove_state's contract_state too, which counts four views. Three
+        # consumers would then have been silently served the training split — the
+        # holdout view, whose entire purpose is to be the split nothing trains on,
+        # reading the split everything trains on.
         assert re.search(
-            rf"CREATE OR REPLACE VIEW public\.{view} AS\s*\n?\s*SELECT \* FROM public\.business_metrics",
+            rf"CREATE OR REPLACE VIEW public\.{view} AS\s*\n?\s*"
+            rf"SELECT \* FROM public\.business_metrics WHERE data_split = '{split}';",
             sql,
-        ), f"{view} is dropped but not recreated"
+        ), f"{view} is not recreated as the {split!r} split"
         assert sql.index(f"DROP VIEW IF EXISTS public.{view};") < sql.index(
             f"CREATE OR REPLACE VIEW public.{view}"
         ), f"{view} is recreated before it is dropped"
+
+    # The four predicates must also be DISTINCT — the assertion above is per view, and
+    # a mapping that repeated a split would satisfy it four times over only if VIEWS
+    # itself were wrong. Pin that here rather than trusting the constant.
+    assert len(set(VIEWS.values())) == len(VIEWS), f"VIEWS repeats a split: {VIEWS}"
 
 
 def test_the_contract_is_ordered_drop_views_then_columns_then_recreate():

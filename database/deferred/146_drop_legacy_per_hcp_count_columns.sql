@@ -90,9 +90,15 @@
 -- The widening is safe, and the reason is a measurement rather than an argument
 -- about the base schema: these views have ZERO consumers outside database/
 -- (measured 2026-09-18 across src/, tests/, scripts/, feature_repo/ and
--- frontend/src; the only other mention anywhere is a name list in
--- docs/data/02-CORE-DATA-DICTIONARY.md), so no query selects a column from them at
--- all. It also restores the AUTHORED intent: e2i_ml_complete_v3_schema.sql writes
+-- frontend/src), so no query selects a column from them at all. The "only other
+-- mention anywhere is docs/data/02-CORE-DATA-DICTIONARY.md" this header used to add
+-- was false, and falsified by this lane's own files (ultracode iter7 LOW). The
+-- complete list of files naming these views is: database/core/
+-- e2i_ml_complete_v3_schema.sql (which creates them), this file (which rebuilds
+-- them), docs/data/02-CORE-DATA-DICTIONARY.md (a name list), the lane plan, and
+-- tests/unit/test_database/test_mig146_contract_legacy_per_hcp_columns.py (the guard
+-- over this file). None of them READS a column from a view, which is the claim that
+-- matters -- and stating it as a file count invited exactly this kind of drift. It also restores the AUTHORED intent: e2i_ml_complete_v3_schema.sql writes
 -- these views as `SELECT * FROM business_metrics WHERE data_split = ...`, and
 -- PostgreSQL froze that star into an explicit list at creation time.
 --

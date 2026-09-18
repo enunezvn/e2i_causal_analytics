@@ -63,9 +63,17 @@
 --     this deploy -- which is what the pre-lane containers expect -- and the
 --     contract half rebuilds them.
 --
--- Independent of migration 143: 143 only inserts kpi_query_registry rows, and no
--- registry statement mentions these columns (measured 0). 144 therefore applies
--- correctly on a box where 143 has not run, which today is every box.
+-- Independent of migration 143. The earlier wording here -- "143 only inserts
+-- kpi_query_registry rows" -- was measurably false (ultracode iter7): 143 also
+-- CREATEs public.kpi_history_rekey_143, enables RLS on it, and INSERTs into and
+-- DELETEs from public.kpi_history to re-key the volume KPIs. What actually makes
+-- the two independent is narrower and checkable: measured 2026-09-18, the three
+-- tables 143 writes are kpi_query_registry, kpi_history and kpi_history_rekey_143 --
+-- business_metrics is not among them -- and no 143 statement mentions trx_count,
+-- nrx_count or total_rx_count at all (0 matches; its 38 `business_metrics` hits are
+-- all header prose or SQL text INSIDE the registry rows, none past line 72, where
+-- its schema half begins). 144 therefore applies correctly on a box where 143 has
+-- not run, which today is every box.
 --
 -- Idempotent throughout: ADD COLUMN IF NOT EXISTS, a backfill whose WHERE excludes
 -- rows that already agree, and CREATE OR REPLACE for both the function and the
