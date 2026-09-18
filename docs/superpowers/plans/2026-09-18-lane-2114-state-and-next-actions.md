@@ -186,11 +186,22 @@ incident (§2). Stopping the loop was still right; the prediction was overconfid
       scope for this finding; raise it with the follow-up issue if you want it closed.
 - [ ] **3. Fix iter8 (b):** let the 146 view assertion accept the `::data_split_type` cast
       `pg_get_viewdef` emits. Prove it by asserting against the LIVE view definition, not a literal.
-- [ ] **4. Re-run the lane's own gate on the merged HEAD.** CI is green on `fd41a8ecb`, which is
-      stronger evidence, but the 109-file lane gate has only ever run on `4ec6af6ac`. Re-derive the
-      Step-2 FAILED-set baseline from the NEW `origin/main` (main moved 31 commits) instead of reusing
-      the stored one, and **add `tests/unit/test_digital_twin/effect/test_specialty_axis_2162.py`** to
-      the Step-2 list — it arrived with the merge, touches the lane's columns, and no gate runs it.
+- [x] **4a. Step-2 baseline re-derived 2026-09-18 — it is now EMPTY.** Against `origin/main`
+      `09456b702` (both #2172 and #2171 merged), the 84 of the lane's 109 Step-2 files that exist on
+      main give **3303 passed, 0 failed**. PR #2172 repaired the 16 `tests/api/test_kpi_endpoints.py`
+      failures that were the old baseline, so the gate's assertion changes from "byte-identical to
+      main's 16" to "**the FAILED set is EMPTY**" — strictly stronger. Baseline and its provenance:
+      `docs/demos/results/2026-09-15_trx_canonical/f_main_09456b702.{txt,provenance.txt}`.
+      🔴 **The old `evid_t27/f_main.txt` (16 lines) is STALE — diffing against it would report 16
+      fixes as 16 regressions.**
+- [ ] **4b. The lane must merge main again (≥ `09456b702`) before its Step 2 can reach 0.** Lane HEAD
+      `2f5046dd4` merged main at `eed17d9f1`, which PREDATES #2172, so it still carries those 16
+      failures. `merge-tree` says the lane merges clean with the new main.
+- [ ] **4c. Then re-run the lane's own gate on the merged HEAD.** CI is green on `2f5046dd4` (all nine
+      workflows; `mypy-report` artifact reads **59 errors**, the expected figure, ceiling 61, lane
+      contributes 0), but the 109-file lane gate has only ever run on `4ec6af6ac`. Also **add
+      `tests/unit/test_digital_twin/effect/test_specialty_axis_2162.py`** to the Step-2 list — it
+      arrived with the merge, touches the lane's columns, and no gate runs it.
 - [ ] **5. Confirm `prove_state.sh old` passes now** that production is genuinely pre-lane again. That
       is the gate every recovery procedure depends on, and it is the cheapest check that §2 really fixed
       the premise rather than only the rows.
