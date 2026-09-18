@@ -434,9 +434,11 @@ def _normalize_metric_name(kpi_name: str) -> str:
     business_metrics.metric_name values are lowercase snake_case (trx, nrx,
     market_share, conversion_rate, hcp_engagement_score) while LLM tool calls
     pass display forms ("TRx", "Market Share") — an exact-match filter on
-    those returns 0 rows. Full names whose stored key is an abbreviation
+    those returns 0 rows. Full names with an equivalent stored quantity
     ("Total Prescriptions" -> ``trx``) resolve through the shared KPI
-    vocabulary; unknown names retain the transparent snake-case fallback.
+    vocabulary. A distinct quantity with no current row (TRx Share) receives a
+    safe non-matching key instead of being conflated with ``market_share``;
+    unknown names retain the transparent snake-case fallback.
     """
     from src.kpi.business_metric_vocabulary import canonical_business_metric_name
 

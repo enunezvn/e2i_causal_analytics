@@ -13,11 +13,14 @@ import pytest
         ("New Prescriptions", "nrx"),
         ("New-to-Brand Prescriptions", "nbrx"),
         ("new to brand prescriptions", "nbrx"),
-        ("TRx Share", "market_share"),
-        ("share of total prescriptions", "market_share"),
+        # Current main has no stored TRx-share key: ``market_share`` is a
+        # different modeled quantity. Keep the transparent fallback until
+        # #2159's canonical handler owns this phrase.
+        ("TRx Share", "trx_share"),
+        ("share of total prescriptions", "trx_share"),
     ],
 )
-def test_full_kpi_name_uses_the_stored_business_metric_key(display_name, stored_name):
+def test_full_kpi_name_uses_a_safe_business_metric_filter_key(display_name, stored_name):
     from src.api.routes.chatbot_tools import _normalize_metric_name
 
     assert _normalize_metric_name(display_name) == stored_name
@@ -30,6 +33,7 @@ def test_full_kpi_name_uses_the_stored_business_metric_key(display_name, stored_
         "Show me total prescriptions for Kisqali",
         "What are the new prescriptions for Fabhalta?",
         "How many new-to-brand prescriptions were there?",
+        "Show me new/to/brand prescriptions",
         "Tell me about TRx share in the Northeast",
         "What is the share of total prescriptions for Kisqali?",
     ],
@@ -63,6 +67,9 @@ def test_shared_business_metric_aliases_agree_with_kpi_recognition():
         ("NBRx", "nbrx"),
         ("Market Share", "market_share"),
         ("conversion-rate", "conversion_rate"),
+        ("conversion rates", "conversion_rate"),
+        ("market shares", "market_share"),
+        ("TRx's", "trx"),
         # Unsupported recognized KPIs must not be conflated with a different
         # stored metric merely because some words overlap.
         ("HCP Coverage", "hcp_coverage"),
@@ -85,6 +92,8 @@ def test_abbreviations_and_unsafe_mismatches_keep_their_existing_behavior(
         "Show me the prescription details for this patient",
         "Tell me about a new brand campaign",
         "How many total prescription errors occurred?",
+        "How many patients received new prescriptions?",
+        "How many HCPs wrote total prescriptions?",
         "How many total calls did the HCP receive?",
         "Show me the total prescriptions forecast for next month",
     ],

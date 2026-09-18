@@ -48,7 +48,10 @@ from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Tup
 
 import pandas as pd
 
-from src.kpi.business_metric_vocabulary import BUSINESS_METRIC_KPI_ALIASES
+from src.kpi.business_metric_vocabulary import (
+    BUSINESS_METRIC_KPI_ALIASES,
+    KPI_ALIAS_SUFFIX_PATTERN,
+)
 from src.kpi.models import KPIMetadata
 from src.kpi.registry import get_registry
 
@@ -279,7 +282,7 @@ _SEPARATOR_CHARS = "_-/.–—"
 #: governing-head guards exist to read. The curly apostrophe resolved while the
 #: ASCII one did not, which is the tell that this was an accident of the
 #: character class rather than a decision.
-_PLURAL_SUFFIX = r"(?:'s|’s|e?s)?"
+_PLURAL_SUFFIX = KPI_ALIAS_SUFFIX_PATTERN
 
 
 @lru_cache(maxsize=1024)

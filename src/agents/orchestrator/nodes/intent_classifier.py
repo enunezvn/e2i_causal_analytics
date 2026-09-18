@@ -535,6 +535,13 @@ _ASK_SHAPE_RE = re.compile(
 # test_explainer_evidence_binding_1475.py.
 KPI_VALUE_LOOKUP_PATTERN = (
     r"(?s)\A(?!.*(?:predict|expect|forecast|project|likelihood|probabilit|what will))"
+    # A metric phrase can be the OBJECT of a different entity-count question.
+    # Without this fail-closed subject guard, "How many patients received new
+    # prescriptions?" binds NRx instead of the requested patient count.
+    # Modifiers before the subject remain tolerated, matching the gap budget
+    # below ("How many high-risk patients ...").
+    r"(?!.*\bhow many(?:\s+[\w'-]+){0,2}\s+"
+    r"(?:patients?|hcps?|prescribers?|doctors?|reps?|representatives?)\b)"
     r".*?(?:what(?:'?s| is| are| was| were)|show me|tell me about|how many|give me)\s+"
     r"(?:teh\s+|the\s+)?(?:[\w'-]+\s+){0,3}?"
     rf"{KPI_VALUE_LOOKUP_METRIC_PATTERN}\b"
