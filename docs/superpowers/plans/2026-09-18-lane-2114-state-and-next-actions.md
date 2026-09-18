@@ -171,9 +171,19 @@ incident (§2). Stopping the loop was still right; the prediction was overconfid
 
 - [ ] **1. Ask who applied migration 143 to production on 2026-09-17 03:02:06Z.** §2. Do not deploy
       until answered — another session may still believe it applied that migration.
-- [ ] **2. Fix iter8 (a):** add a fail-closed precondition block to `database/deferred/146`. Red-first:
-      write the test that applies 146 to a 144-less schema inside `BEGIN … ROLLBACK` and expects a
-      refusal, watch it fail, then add the block.
+- [x] **2. Fix iter8 (a) — DONE 2026-09-18.** `database/deferred/146` now opens with a
+      `DO $precondition$` block that refuses unless (i) the three canonical columns exist and (ii) no
+      row holds a legacy count its canonical column does not carry. Reproduced the defect first against
+      production (a faithful environment — 144 has never been applied there): 3 legacy columns and
+      12,143 rows carrying counts before, **0 legacy, 0 canonical, 33 columns, psql exit 0** after.
+      Rehearsed the fix three ways inside `BEGIN … ROLLBACK`: 144-less → REFUSED with 0 DROPs run;
+      144 applied → PROCEEDS; one disagreeing row (plant verified) → REFUSED naming the count. The
+      refusal exits **3** with `ON_ERROR_STOP=1` and **0** without, so a new test pins that flag in the
+      documented COMMAND. Production re-verified unchanged afterwards.
+      **Residual, accepted:** an operator who drops BOTH documented flags still gets a loud `ERROR`
+      but psql would carry on into the DROPs. Making the file self-transactional would fix that and
+      would also revisit the deliberate `--single-transaction` decision from codex iter3/iter4 — out of
+      scope for this finding; raise it with the follow-up issue if you want it closed.
 - [ ] **3. Fix iter8 (b):** let the 146 view assertion accept the `::data_split_type` cast
       `pg_get_viewdef` emits. Prove it by asserting against the LIVE view definition, not a literal.
 - [ ] **4. Re-run the lane's own gate on the merged HEAD.** CI is green on `fd41a8ecb`, which is

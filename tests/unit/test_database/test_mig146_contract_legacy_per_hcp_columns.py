@@ -267,3 +267,103 @@ def test_the_contract_carries_its_own_manual_apply_instructions():
     assert "144" in head, "the header does not name the expand half it completes"
     assert re.search(r"psql|docker exec", head), "the header gives no apply command"
     assert not re.search(r"^\s*(COMMIT|ROLLBACK)\s*;", sql, re.I | re.M)
+
+
+def test_the_contract_refuses_a_schema_where_the_expand_has_not_run():
+    """THE PRECONDITION. 146 is the destructive half, applied BY HAND, possibly weeks
+    later and possibly by someone who was not here for 144.
+
+    ultracode iter8 HIGH. Every statement in this file is ``IF EXISTS`` / ``OR
+    REPLACE`` — deliberately, so a re-run is a no-op — and the consequence nobody had
+    drawn is that the file runs happily to completion on a schema where 144 was NEVER
+    applied, or was rolled back. It drops trx_count / nrx_count / total_rx_count with
+    no canonical column holding the values, reports **exit 0**, and the per-HCP trigger
+    counts are simply gone.
+
+    Reproduced 2026-09-18 against the live database inside BEGIN/ROLLBACK — which was a
+    FAITHFUL environment for it, because production genuinely has not had 144 applied:
+    3 legacy columns and 12,143 rows carrying counts before, **0 legacy columns, 0
+    canonical columns, 33 columns and psql exit 0** after. Nothing raised; only two
+    NOTICEs about skipping a trigger and a function that were never there.
+
+    The only thing standing between that and a hand-applied contract was header prose,
+    and prose is not a precondition — it is a hope about who is reading. The check has
+    to be IN THE FILE, and it has to fail CLOSED.
+
+    What the block asserts is the CAPABILITY, in the order the two conditions can be
+    asked. First: the three canonical columns exist at all. That must raise before
+    anything references them, because the row-level query below names those columns and
+    would otherwise fail with a bare ``column does not exist`` — a refusal, technically,
+    but one an operator cannot act on, which this lane has already classified as its own
+    defect. plpgsql plans a statement on first execution, not at block entry, so an
+    early RAISE keeps the second query from ever being planned; that ordering is load
+    bearing and is verified live, not assumed. Second: no row holds a legacy count the
+    canonical column does not carry — the actual condition under which dropping the
+    legacy three loses information.
+    """
+    sql = CONTRACT.read_text()
+
+    block = re.search(r"DO \$precondition\$(.*?)\$precondition\$;", sql, re.DOTALL)
+    assert block, (
+        "146 has no DO $precondition$ block — it will drop the legacy columns on a "
+        "schema where 144 never ran, silently and exit 0"
+    )
+    body = block.group(1)
+
+    # It must come before ANY destructive statement, or it is a post-mortem.
+    destructive = [
+        m.start()
+        for m in re.finditer(
+            r"^\s*(DROP|ALTER TABLE \S+ DROP|TRUNCATE|DELETE)\b", sql, re.MULTILINE
+        )
+    ]
+    assert destructive, "no destructive statement found — this test is looking at the wrong file"
+    assert block.start() < min(destructive), (
+        "the precondition block runs after the first destructive statement, so it can "
+        "only report the loss it was supposed to prevent"
+    )
+
+    # Condition 1: the canonical columns exist, asked of the catalog.
+    for canonical in CANONICAL:
+        assert canonical in body, f"the precondition does not check for {canonical}"
+    assert re.search(r"information_schema\.columns|pg_attribute", body), (
+        "the precondition does not ask the catalog whether the canonical columns exist"
+    )
+
+    # Condition 2: every legacy value is actually carried by its canonical column.
+    # strict=True: LEGACY and CANONICAL are parallel tuples, and a silent zip
+    # truncation would drop a pair from this check without failing anything.
+    for legacy, canonical in zip(LEGACY, CANONICAL, strict=True):
+        assert re.search(rf"{canonical}\s+IS DISTINCT FROM\s+{legacy}", body), (
+            f"the precondition does not compare {canonical} against {legacy} row by row"
+        )
+
+    # ...and both must REFUSE, not warn. A NOTICE would let the drops proceed.
+    assert body.count("RAISE EXCEPTION") >= 2, (
+        "the precondition must RAISE EXCEPTION for both conditions; a RAISE NOTICE or a "
+        "logged warning still lets the columns be dropped"
+    )
+    assert "RAISE WARNING" not in body and "RAISE NOTICE" not in body, (
+        "the precondition downgrades a refusal to a warning"
+    )
+
+
+def test_the_documented_apply_command_keeps_the_precondition_armed():
+    """``ON_ERROR_STOP=1`` is what turns the precondition's RAISE into a refusal.
+
+    Without it psql prints the error and RUNS THE NEXT STATEMENT, which is the first
+    DROP — so the block would raise, be ignored, and the columns would go anyway. The
+    flag is therefore part of the guard, exactly as ``--single-transaction`` is part of
+    the ledger's atomicity (codex iter4 MED-1), and it is asserted in the COMMAND rather
+    than anywhere in the header prose: this header explains both flags in sentences too,
+    so a substring check over the whole file passes while the command has lost them.
+    That exact proxy was codex iter3 LOW-2 on this same file.
+    """
+    head = CONTRACT.read_text()
+    command_text = " ".join(re.sub(r"^--\s?", "", ln) for ln in head.splitlines())
+    assert re.search(
+        r"docker exec.*?psql.*?ON_ERROR_STOP=1.*?<\s*database/deferred/146", command_text
+    ), (
+        "the documented apply COMMAND does not set ON_ERROR_STOP=1, so the precondition "
+        "block would raise and psql would carry on into the DROPs"
+    )

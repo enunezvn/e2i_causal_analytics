@@ -114,6 +114,86 @@
 -- application changes nothing and raises nothing.
 -- ----------------------------------------------------------------------------
 
+-- ----------------------------------------------------------------------------
+-- PRECONDITION: refuse unless the expand really ran and its values really landed.
+-- ----------------------------------------------------------------------------
+-- ultracode iter8 HIGH. Every statement below carries IF EXISTS / OR REPLACE so that
+-- a second application is a no-op -- and the consequence nobody had drawn is that the
+-- same property makes this file run happily to completion on a schema where 144 was
+-- NEVER applied, or was rolled back. It drops trx_count / nrx_count / total_rx_count
+-- with no canonical column holding the values, and reports exit 0.
+--
+-- Measured 2026-09-18 inside BEGIN/ROLLBACK against production, which is a FAITHFUL
+-- environment for it because production genuinely has not had 144 applied: 3 legacy
+-- columns and 12,143 rows carrying counts before; 0 legacy columns, 0 canonical
+-- columns, 33 columns and psql exit 0 after. Nothing raised. Only two NOTICEs, about
+-- skipping a trigger and a function that were never there.
+--
+-- This file is the destructive half, applied BY HAND, possibly weeks after 144 and
+-- possibly by someone who was not here for it. Until now the only thing standing
+-- between that operator and the loss above was the prose in this header -- and prose
+-- is not a precondition, it is a hope about who is reading.
+--
+-- The two conditions are asked in this ORDER for a reason. The catalog check must
+-- raise BEFORE the row-level query is reached, because that query names the canonical
+-- columns and would otherwise fail with a bare `column "triggers_delivered_count" does
+-- not exist` -- a refusal, technically, but one an operator cannot act on, which this
+-- lane has already classified as a defect in its own right (the prover's `probe()`
+-- had exactly this shape). plpgsql plans a statement on first execution rather than at
+-- block entry, so an early RAISE means the second query is never planned. That is load
+-- bearing, and it is verified live rather than assumed.
+--
+-- ON_ERROR_STOP=1 in the documented apply command is part of this guard, and the
+-- difference is measured, not argued: the same refusal exits **3** with the flag and
+-- **0** without it (2026-09-18). Without it psql prints the exception and carries on
+-- into the first DROP, and an operator's `&&` chain sees success.
+-- tests/unit/test_database/test_mig146_contract_legacy_per_hcp_columns.py pins the
+-- flag in the COMMAND, not in this prose, because prose is what failed here already.
+--
+-- Rehearsed live 2026-09-18, three ways, each inside BEGIN/ROLLBACK:
+--   144 never applied            -> REFUSED, 3 of 3 canonical columns absent, 0 DROPs ran
+--   144 applied first            -> PROCEEDS, legacy 3 -> 0, canonical 3, 12,143 rows kept
+--   144 applied, 1 row disagrees -> REFUSED, names the count (plant verified first)
+-- The middle case is why the block asks the catalog before it asks the rows, and the
+-- last is what proves the row query is reached and correct when the columns do exist.
+DO $precondition$
+DECLARE
+    missing      integer;
+    disagreeing  bigint;
+BEGIN
+    SELECT count(*) INTO missing
+      FROM (VALUES ('triggers_delivered_count'),
+                   ('triggers_accepted_count'),
+                   ('triggers_total_count')) AS want(column_name)
+     WHERE NOT EXISTS (SELECT 1
+                         FROM information_schema.columns c
+                        WHERE c.table_schema = 'public'
+                          AND c.table_name   = 'business_metrics'
+                          AND c.column_name  = want.column_name);
+    IF missing > 0 THEN
+        RAISE EXCEPTION
+            'contract 146 REFUSED: % of the 3 canonical columns are absent from '
+            'public.business_metrics, so dropping the legacy three would destroy the '
+            'per-HCP trigger counts outright. Apply '
+            'database/migrations/144_per_hcp_trigger_count_columns.sql first, verify '
+            'the deploy, then re-run this file.', missing;
+    END IF;
+
+    SELECT count(*) INTO disagreeing
+      FROM public.business_metrics
+     WHERE (trx_count      IS NOT NULL AND triggers_delivered_count IS DISTINCT FROM trx_count)
+        OR (nrx_count      IS NOT NULL AND triggers_accepted_count  IS DISTINCT FROM nrx_count)
+        OR (total_rx_count IS NOT NULL AND triggers_total_count     IS DISTINCT FROM total_rx_count);
+    IF disagreeing > 0 THEN
+        RAISE EXCEPTION
+            'contract 146 REFUSED: % rows hold a legacy count that its canonical column '
+            'does not carry, so dropping the legacy three would lose those values. '
+            'Re-run 144''s backfill (it is guarded by IS DISTINCT FROM, so it touches '
+            'only the rows that disagree) and confirm this count reaches 0.', disagreeing;
+    END IF;
+END
+$precondition$;
+
 DROP VIEW IF EXISTS public.v_train_business_metrics;
 DROP VIEW IF EXISTS public.v_test_business_metrics;
 DROP VIEW IF EXISTS public.v_validation_business_metrics;
