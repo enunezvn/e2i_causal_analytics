@@ -236,9 +236,9 @@ jobs:
             --timeout=300 \
             --tb=short ${EXTRA_ARGS}
 
-      # #1804/#1813: decide whether this red is an upstream provider outage
-      # (the clinical-context live suite hitting a 5xx/timeout — three of those
-      # in five days each cost a triage session) or a real failure. The script
+      # #1804/#1813/#2173: decide whether this red is an upstream provider
+      # outage (an explicitly recognized live-provider suite hitting a
+      # 5xx/timeout) or a real failure. The script
       # prints its per-test derivation to stderr and a clean GITHUB_OUTPUT
       # payload to stdout; `tee` keeps the verdict visible in the run log. The
       # `junit_logging=all` flag above is load-bearing: without it the fan-out
@@ -847,9 +847,9 @@ jobs:
   # Auto-create / update issue on ANY job failure (Jobs A/C/D + Job B).
   # De-dups by `nightly-slow-tests-failure` label: comments on existing
   # open issue if one exists, else creates new.
-  # #1804/#1813 distinct outcome: when the ONLY red lane is Job A and its
-  # classify step verdicts upstream-transient (clinical-context live suite
-  # on an upstream 5xx/timeout), the report goes to the low-priority
+  # #1804/#1813/#2173 distinct outcome: when the ONLY red lane is Job A and its
+  # classify step verdicts upstream-transient (a recognized live-provider
+  # suite on an upstream 5xx/timeout), the report goes to the low-priority
   # `[upstream-transient]`-titled rolling issue instead of this red alarm.
   # Job B (excluded-heavy) is BLOCKING since #617 — no longer continue-on-error,
   # so its `.result` is accurate and the alarm keys off it like A/C/D. This also
@@ -905,7 +905,7 @@ jobs:
 
           # ── #1804/#1813 routing: upstream provider outage ≠ red alarm ──
           # When the ONLY red lane is Job A and its classifier says every
-          # failure was the clinical-context live suite hitting an upstream
+          # failure was a recognized live-provider suite hitting an upstream
           # 5xx/timeout, file into a low-priority rolling issue instead of the
           # red nightly alarm. The tests still went red (the #1612 signal is
           # untouched); only the REPORTING is distinct. Any other shape — a
@@ -925,7 +925,7 @@ jobs:
 
           if [ "${UPSTREAM_TRANSIENT}" = true ]; then
             TITLE_PREFIX="[upstream-transient] "
-            TITLE="${TITLE_PREFIX}Nightly clinical-context live suite hit an upstream provider outage"
+            TITLE="${TITLE_PREFIX}Nightly live-provider suites hit an upstream outage"
 
             # Self-heal the label like maintenance-freshness.yml (#1807 D3):
             # use it when it exists, create it when we can (description under
@@ -952,7 +952,7 @@ jobs:
               --json number,title \
               --jq "[.[] | select(.title | startswith(\"${TITLE_PREFIX}\"))] | .[0].number // empty")
 
-            BODY="$(printf "Upstream provider outage on %s (commit \`%s\`).\n\nClassifier verdict: %s\n\nJob results: %s\n\nRun: %s\n\nNo action needed for a lone occurrence — the live suite is DESIGNED to go red when a provider is down (#1612), and every failure in this run matched the upstream-outage shape (5xx/timeout, plus its static_fallback echoes). If this fires on many consecutive nights, the transient story stops being credible: check the provider's status page, then the client." "$DATE" "$SHA_SHORT" "${JOB_A_CLASSIFY_DETAIL:-<no detail>}" "$RESULTS" "$RUN_URL")"
+            BODY="$(printf "Upstream provider outage on %s (commit \`%s\`).\n\nClassifier verdict: %s\n\nJob results: %s\n\nRun: %s\n\nNo action needed for a lone occurrence — recognized live-provider suites are DESIGNED to go red when a provider is down (#1612/#1629), and every failure in this run matched the upstream-outage shape (5xx/timeout, plus its static_fallback echoes). If this fires on many consecutive nights, the transient story stops being credible: check the provider's status page, then the client." "$DATE" "$SHA_SHORT" "${JOB_A_CLASSIFY_DETAIL:-<no detail>}" "$RESULTS" "$RUN_URL")"
 
             if [ -n "$EXISTING" ]; then
               echo "Commenting on existing upstream-transient issue #${EXISTING}"
