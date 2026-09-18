@@ -389,7 +389,12 @@ async def home_kpi_insight(
     """Strategic interpretation of the home KPI grid for a brand + territory
     (server-derived grounding: registry KPIs recomputed under the same
     brand/region context the dashboard's batch endpoint uses)."""
-    from src.api.routes.kpi import get_kpi_calculator
+    from src.api.routes.kpi import get_kpi_calculator, normalize_kpi_region_scope
+
+    # Validate before entering the broad data/LLM fallback boundary. A bad
+    # caller scope is a 422, not an infrastructure failure to disguise as a
+    # successful ungrounded insight.
+    normalized_region = normalize_kpi_region_scope(req.region)
 
     def _load() -> dict[str, Any]:
         calc = get_kpi_calculator()
@@ -406,10 +411,10 @@ async def home_kpi_insight(
         context: dict[str, Any] = {}
         if req.brand != "All":
             context["brand"] = req.brand
-        if req.region:
-            context["region"] = req.region
+        if normalized_region:
+            context["region"] = normalized_region
         batch = calc.calculate_batch(kpi_ids=[m.id for m in metas], use_cache=True, context=context)
-        g = home_kpi.build_grounding(req.brand, req.region, metas, batch.results)
+        g = home_kpi.build_grounding(req.brand, normalized_region, metas, batch.results)
         # Constraint-aware two-channel triage (2026-07-20): deterministic
         # measurement-constraint block for the KPIs that actually computed.
         # Empty on failure (loud degradation): the chip surfaces it and the
@@ -445,7 +450,7 @@ async def home_kpi_insight(
     # the residual TTL.
     key = cache_key(
         "home-kpis",
-        f"{req.brand}:{req.region or 'all-us'}",
+        f"{req.brand}:{normalized_region or 'all-us'}",
         {
             "t": g["kpi_table"],
             "s": g["status_summary"],
