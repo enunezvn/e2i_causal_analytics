@@ -136,6 +136,15 @@ x-common-env: &common-env
   # measured -1.9-3.7s on dry paths; "false" restores the LLM decider).
   CHATBOT_RAG_REWRITE_COT: ${CHATBOT_RAG_REWRITE_COT:-}
   CHATBOT_RAG_SKIP_EMPTY_DECIDER: ${CHATBOT_RAG_SKIP_EMPTY_DECIDER:-}
+  # Hybrid-search retrieval enhancement. Query optimization is rule-based on
+  # the request path; reranking lazily loads the configured cross-encoder.
+  # The multiplier controls how many fused candidates are scored before the
+  # requested top_k is returned.
+  RAG_ENABLE_QUERY_OPTIMIZATION: ${RAG_ENABLE_QUERY_OPTIMIZATION:-false}
+  RAG_ENABLE_RERANKING: ${RAG_ENABLE_RERANKING:-false}
+  RAG_RERANK_CANDIDATE_MULTIPLIER: ${RAG_RERANK_CANDIDATE_MULTIPLIER:-3}
+  RAG_RERANK_MAX_CONCURRENCY: ${RAG_RERANK_MAX_CONCURRENCY:-1}
+  RAG_RERANK_TIMEOUT_SECONDS: ${RAG_RERANK_TIMEOUT_SECONDS:-30}
   # Routing-label loop (#1341 Phase 1): nightly Celery labeler for
   # classification_logs. Must be forwarded here or host-.env overrides never
   # reach the worker containers and the in-code defaults govern.

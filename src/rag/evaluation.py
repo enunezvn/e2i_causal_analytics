@@ -1026,7 +1026,10 @@ class RAGASEvaluator:
                 metadata={"error": "No answer provided"},
             )
 
-        if not sample.retrieved_contexts:
+        if (
+            not sample.retrieved_contexts
+            and sample.metadata.get("evaluation_source") != "runtime_pipeline"
+        ):
             sample.retrieved_contexts = sample.contexts
 
         # Execute evaluation with optional Opik tracing
@@ -1540,7 +1543,7 @@ class RAGEvaluationPipeline:
         logger.info(f"Starting evaluation run {run_id} with {len(self.dataset)} samples")
 
         # Generate answers if pipeline provided
-        if rag_pipeline:
+        if rag_pipeline is not None:
             await self._generate_answers(rag_pipeline)
 
         # Evaluate all samples with batch tracing
@@ -1609,19 +1612,35 @@ class RAGEvaluationPipeline:
         return report
 
     async def _generate_answers(self, rag_pipeline: Any) -> None:
-        """Generate answers using RAG pipeline for each sample."""
+        """Generate answers and contexts from the explicitly supplied pipeline.
+
+        Supplying ``rag_pipeline`` is an instruction to evaluate that runtime,
+        even when the dataset also contains frozen fixture answers. Reference
+        ``contexts`` are ground truth for context recall; they must never stand
+        in for a pipeline retrieval miss.
+        """
         for sample in self.dataset:
-            if not sample.answer:
-                try:
-                    # Assuming rag_pipeline has a query method
-                    result = await rag_pipeline.query(sample.query)
-                    sample.answer = result.get("answer", "")
-                    sample.retrieved_contexts = result.get("contexts", sample.contexts)
-                except Exception as e:
-                    logger.warning(
-                        f"Failed to generate answer for: {redact_query(sample.query)}: {e}"
+            # Clear any fixture/stale runtime output before the call so a
+            # failure cannot leave a prior answer or curated context in place.
+            sample.answer = ""
+            sample.retrieved_contexts = []
+            sample.metadata["evaluation_source"] = "runtime_pipeline"
+            try:
+                result = await rag_pipeline.query(sample.query)
+                if not isinstance(result, dict):
+                    raise TypeError(
+                        "rag_pipeline.query() must return a dict with answer and contexts"
                     )
-                    sample.answer = ""
+
+                sample.answer = str(result.get("answer") or "")
+                contexts = result.get("contexts")
+                if isinstance(contexts, (list, tuple)):
+                    sample.retrieved_contexts = [str(context) for context in contexts]
+                runtime_metadata = result.get("metadata")
+                if isinstance(runtime_metadata, dict):
+                    sample.metadata["pipeline_metadata"] = dict(runtime_metadata)
+            except Exception as e:
+                logger.warning(f"Failed to generate answer for: {redact_query(sample.query)}: {e}")
 
     def log_to_mlflow(self, report: EvaluationReport) -> None:
         """

@@ -131,6 +131,26 @@ class TestHybridRetrieverInit:
 
         assert retriever.config is not None
 
+    def test_rag_config_reads_retrieval_enhancement_flags(self, monkeypatch):
+        monkeypatch.setenv("RAG_ENABLE_QUERY_OPTIMIZATION", "false")
+        monkeypatch.setenv("RAG_ENABLE_RERANKING", "false")
+        monkeypatch.setenv("RAG_RERANK_CANDIDATE_MULTIPLIER", "0")
+
+        config = RAGConfig.from_env()
+
+        assert config.enable_query_optimization is False
+        assert config.enable_reranking is False
+        assert config.rerank_candidate_multiplier == 1
+
+    def test_rag_retrieval_enhancements_are_safe_by_default(self, monkeypatch):
+        monkeypatch.delenv("RAG_ENABLE_QUERY_OPTIMIZATION", raising=False)
+        monkeypatch.delenv("RAG_ENABLE_RERANKING", raising=False)
+
+        config = RAGConfig.from_env()
+
+        assert config.enable_query_optimization is False
+        assert config.enable_reranking is False
+
     def test_repr(self, hybrid_retriever):
         """Test string representation."""
         repr_str = repr(hybrid_retriever)
@@ -232,6 +252,23 @@ class TestRRFFusion:
         # First result should have higher RRF score
         assert fused[0].id == "doc-1"
         assert fused[0].score > fused[1].score
+
+    def test_rrf_uses_configured_source_weights(self, hybrid_retriever):
+        backend_results = {
+            RetrievalSource.VECTOR: [
+                create_mock_result("vector", "Vector", RetrievalSource.VECTOR, 0.9)
+            ],
+            RetrievalSource.FULLTEXT: [
+                create_mock_result("fulltext", "Fulltext", RetrievalSource.FULLTEXT, 0.9)
+            ],
+            RetrievalSource.GRAPH: [],
+        }
+
+        fused = hybrid_retriever._apply_rrf_fusion(backend_results, top_k=2)
+
+        by_id = {result.id: result.score for result in fused}
+        assert by_id["vector"] == pytest.approx(0.4 / 61)
+        assert by_id["fulltext"] == pytest.approx(0.2 / 61)
 
     def test_rrf_multiple_sources(self, hybrid_retriever):
         """Test RRF combines results from multiple sources."""

@@ -370,7 +370,16 @@ class HybridRetriever:
             sources_found = []
 
             for source, rank in source_ranks.items():
-                weight = weights.get(source.value, 0.33)
+                # HybridSearchConfig exposes canonical keys (vector/fulltext/
+                # graph), while RetrievalSource.value is the physical backend
+                # label (supabase_vector, ...). Resolve the intended key first;
+                # the previous lookup missed every configured weight.
+                weight_key = {
+                    RetrievalSource.VECTOR: "vector",
+                    RetrievalSource.FULLTEXT: "fulltext",
+                    RetrievalSource.GRAPH: "graph",
+                }[source]
+                weight = weights.get(weight_key, weights.get(source.value, 0.33))
                 score += weight * (1.0 / (self.RRF_K + rank))
                 sources_found.append(source.value)
 

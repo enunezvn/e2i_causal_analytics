@@ -495,10 +495,45 @@ class TestRAGEvaluationPipeline:
         mock_rag.query.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_run_evaluation_with_falsey_pipeline(self, pipeline):
+        class FalseyPipeline:
+            def __init__(self):
+                self.queries = []
+
+            def __bool__(self):
+                return False
+
+            async def query(self, query):
+                self.queries.append(query)
+                return {"answer": "runtime answer", "contexts": ["runtime context"]}
+
+        rag_pipeline = FalseyPipeline()
+        pipeline.dataset = [
+            EvaluationSample(
+                query="test",
+                ground_truth="truth",
+                contexts=["reference"],
+                answer="fixture answer",
+                retrieved_contexts=["reference"],
+            )
+        ]
+        pipeline.evaluator._ragas_available = False
+        pipeline.evaluator._llm_configured = False
+
+        await pipeline.run_evaluation(rag_pipeline=rag_pipeline)
+
+        assert rag_pipeline.queries == ["test"]
+        assert pipeline.dataset[0].answer == "runtime answer"
+
+    @pytest.mark.asyncio
     async def test_generate_answers(self, pipeline):
         mock_rag = AsyncMock()
         mock_rag.query = AsyncMock(
-            return_value={"answer": "generated answer", "contexts": ["ctx1", "ctx2"]}
+            return_value={
+                "answer": "generated answer",
+                "contexts": ["ctx1", "ctx2"],
+                "metadata": {"reranked": True},
+            }
         )
 
         pipeline.dataset = [EvaluationSample(query="test", ground_truth="truth", contexts=[])]
@@ -507,6 +542,72 @@ class TestRAGEvaluationPipeline:
 
         assert pipeline.dataset[0].answer == "generated answer"
         assert len(pipeline.dataset[0].retrieved_contexts) == 2
+        assert pipeline.dataset[0].metadata["pipeline_metadata"] == {"reranked": True}
+
+    @pytest.mark.asyncio
+    async def test_generate_answers_overwrites_fixture_answer_when_pipeline_is_explicit(
+        self, pipeline
+    ):
+        """Passing a pipeline must judge that pipeline, not the golden fixture prose."""
+        mock_rag = AsyncMock()
+        mock_rag.query = AsyncMock(
+            return_value={"answer": "live answer", "contexts": ["live context"]}
+        )
+        pipeline.dataset = [
+            EvaluationSample(
+                query="test",
+                ground_truth="truth",
+                contexts=["golden context"],
+                answer="fixture answer",
+                retrieved_contexts=["golden context"],
+            )
+        ]
+
+        await pipeline._generate_answers(mock_rag)
+
+        mock_rag.query.assert_awaited_once_with("test")
+        assert pipeline.dataset[0].answer == "live answer"
+        assert pipeline.dataset[0].retrieved_contexts == ["live context"]
+
+    @pytest.mark.asyncio
+    async def test_generate_answers_never_substitutes_reference_contexts(self, pipeline):
+        """Missing retrieval output is an honest miss, not curated context."""
+        mock_rag = AsyncMock()
+        mock_rag.query = AsyncMock(return_value={"answer": "live answer"})
+        pipeline.dataset = [
+            EvaluationSample(
+                query="test",
+                ground_truth="truth",
+                contexts=["golden context"],
+                retrieved_contexts=["stale context"],
+            )
+        ]
+
+        await pipeline._generate_answers(mock_rag)
+
+        assert pipeline.dataset[0].answer == "live answer"
+        assert pipeline.dataset[0].retrieved_contexts == []
+
+    @pytest.mark.asyncio
+    async def test_pipeline_retrieval_miss_stays_empty_during_evaluation(self, pipeline):
+        """Evaluation must not restore golden context after live generation."""
+        mock_rag = AsyncMock()
+        mock_rag.query = AsyncMock(return_value={"answer": "live answer", "contexts": []})
+        sample = EvaluationSample(
+            query="test",
+            ground_truth="truth",
+            contexts=["golden context"],
+            answer="fixture answer",
+            retrieved_contexts=["golden context"],
+        )
+        pipeline.dataset = [sample]
+        pipeline.evaluator._ragas_available = False
+        pipeline.evaluator._llm_configured = False
+
+        await pipeline.run_evaluation(rag_pipeline=mock_rag)
+
+        assert sample.retrieved_contexts == []
+        assert sample.metadata["evaluation_source"] == "runtime_pipeline"
 
     @pytest.mark.asyncio
     async def test_generate_answers_failure(self, pipeline):
@@ -518,6 +619,7 @@ class TestRAGEvaluationPipeline:
         await pipeline._generate_answers(mock_rag)
 
         assert pipeline.dataset[0].answer == ""
+        assert pipeline.dataset[0].retrieved_contexts == []
 
     def test_log_to_mlflow_disabled(self, pipeline):
         report = EvaluationReport(

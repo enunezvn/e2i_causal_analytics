@@ -9,6 +9,7 @@ Tests cover:
 - Score normalization
 """
 
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, Mock, patch
 
 import numpy as np
@@ -16,6 +17,7 @@ import pytest
 
 from src.rag.models.retrieval_models import RetrievalResult
 from src.rag.reranker import _MODEL_CACHE, CrossEncoderReranker
+from src.rag.types import RetrievalResult as LiveRetrievalResult
 from src.rag.types import RetrievalSource
 
 
@@ -66,6 +68,10 @@ class TestCrossEncoderReranker:
         """Clear model cache before each test."""
         _MODEL_CACHE.clear()
 
+    def teardown_method(self):
+        """Do not leak mocked model instances into other test modules."""
+        _MODEL_CACHE.clear()
+
     def test_init_default_params(self):
         """Test initialization with default parameters."""
         reranker = CrossEncoderReranker()
@@ -91,6 +97,31 @@ class TestCrossEncoderReranker:
         assert result == []
         # Model should not be called for empty input
         mock_cross_encoder.predict.assert_not_called()
+
+    def test_rerank_preserves_live_hybrid_result_type_and_fields(self, mock_cross_encoder):
+        """The live API uses src.rag.types.RetrievalResult, not the legacy model."""
+        mock_cross_encoder.predict.return_value = np.array([0.88])
+        original = LiveRetrievalResult(
+            id="doc-1",
+            content="Kisqali TRx increased in Q4",
+            source=RetrievalSource.VECTOR,
+            score=0.016,
+            metadata={"brand": "Kisqali"},
+            graph_context={"nodes": ["brand:kisqali"]},
+            query_latency_ms=12.5,
+            raw_score=0.91,
+        )
+
+        reranked = CrossEncoderReranker().rerank([original], "Kisqali TRx", top_k=1)
+
+        assert len(reranked) == 1
+        assert isinstance(reranked[0], LiveRetrievalResult)
+        assert reranked[0].id == "doc-1"
+        assert reranked[0].graph_context == original.graph_context
+        assert reranked[0].query_latency_ms == 12.5
+        assert reranked[0].raw_score == 0.91
+        assert reranked[0].metadata["original_score"] == 0.016
+        assert reranked[0].metadata["reranker_score"] == reranked[0].score
 
     def test_rerank_basic(self, sample_results, mock_cross_encoder):
         """Test basic reranking functionality."""
@@ -130,9 +161,8 @@ class TestCrossEncoderReranker:
         assert reranked[0].metadata["original_score"] == 0.8
 
     def test_rerank_score_normalization(self, sample_results, mock_cross_encoder):
-        """Test that scores are normalized to [0, 1] range."""
-        # Raw logits that should be normalized via sigmoid
-        mock_cross_encoder.predict.return_value = np.array([2.0, 0.0, -2.0])
+        """Trust the single activation requested from CrossEncoder.predict."""
+        mock_cross_encoder.predict.return_value = np.array([0.88, 0.5, 0.12])
 
         reranker = CrossEncoderReranker()
         reranked = reranker.rerank(sample_results, "query", top_k=3)
@@ -141,10 +171,22 @@ class TestCrossEncoderReranker:
         for result in reranked:
             assert 0.0 <= result.score <= 1.0
 
-        # sigmoid(2.0) ≈ 0.88, sigmoid(0.0) = 0.5, sigmoid(-2.0) ≈ 0.12
-        assert reranked[0].score > 0.8  # Highest
-        assert 0.4 < reranked[1].score < 0.6  # Middle
-        assert reranked[2].score < 0.2  # Lowest
+        # Values must not be compressed through a second sigmoid.
+        assert reranked[0].score == pytest.approx(0.88)
+        assert reranked[1].score == pytest.approx(0.5)
+        assert reranked[2].score == pytest.approx(0.12)
+        assert (
+            type(mock_cross_encoder.predict.call_args.kwargs["activation_fn"]).__name__ == "Sigmoid"
+        )
+
+    @pytest.mark.parametrize("invalid_score", [np.nan, np.inf, -np.inf])
+    def test_strict_reranker_rejects_non_finite_scores(
+        self, sample_results, mock_cross_encoder, invalid_score
+    ):
+        mock_cross_encoder.predict.return_value = np.array([invalid_score, 0.5, 0.25])
+
+        with pytest.raises(ValueError, match="non-finite"):
+            CrossEncoderReranker(raise_on_error=True).rerank(sample_results, "query")
 
     def test_rerank_with_string_query(self, sample_results, mock_cross_encoder):
         """Test reranking with plain string query."""
@@ -218,6 +260,17 @@ class TestCrossEncoderReranker:
             # Model should only be constructed once
             assert mock_constructor.call_count == 1
 
+    def test_concurrent_cold_load_constructs_model_once(self):
+        model = MagicMock()
+        with patch("src.rag.reranker.CrossEncoder", return_value=model) as constructor:
+            reranker = CrossEncoderReranker()
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                loaded = list(pool.map(lambda _: reranker.model, range(2)))
+
+        assert loaded == [model, model]
+        constructor.assert_called_once()
+
     def test_error_handling_returns_fallback_scores(self, sample_results):
         """Test that errors in scoring return fallback scores."""
         with patch("src.rag.reranker.CrossEncoder") as mock_constructor:
@@ -232,6 +285,18 @@ class TestCrossEncoderReranker:
             assert len(reranked) == 3
             for result in reranked:
                 assert result.score == 0.5
+
+    def test_strict_error_handling_preserves_orchestrator_fallback(self, sample_results):
+        """The live service must be able to detect inference failure."""
+        with patch("src.rag.reranker.CrossEncoder") as mock_constructor:
+            mock_model = MagicMock()
+            mock_model.predict.side_effect = RuntimeError("Model error")
+            mock_constructor.return_value = mock_model
+
+            reranker = CrossEncoderReranker(raise_on_error=True)
+
+            with pytest.raises(RuntimeError, match="Model error"):
+                reranker.rerank(sample_results, "query")
 
     def test_single_result(self, mock_cross_encoder):
         """Test reranking with single result."""
@@ -259,8 +324,7 @@ class TestCrossEncoderReranker:
         reranker = CrossEncoderReranker()
         score = reranker._score_pair("query", "document")
 
-        # sigmoid(0.7) ≈ 0.668
-        assert 0.6 < score < 0.8
+        assert score == pytest.approx(0.7)
 
 
 class TestRerankerPerformance:
@@ -268,6 +332,10 @@ class TestRerankerPerformance:
 
     def setup_method(self):
         """Clear model cache before each test."""
+        _MODEL_CACHE.clear()
+
+    def teardown_method(self):
+        """Do not leak mocked model instances into other test modules."""
         _MODEL_CACHE.clear()
 
     def test_batch_score_empty_pairs(self, mock_cross_encoder):
