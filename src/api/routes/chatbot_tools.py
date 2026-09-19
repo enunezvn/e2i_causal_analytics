@@ -2079,6 +2079,7 @@ KPI_REPORTING_WINDOWS = _cap.lazy_reporting_windows()
 # explainer resolver binds the same notes, and importing THIS module costs ~30s
 # (orchestrator/tool_composer/RAG stacks) — unaffordable in a sync resolver.
 # Re-exported here so every existing consumer keeps working unchanged.
+from src.kpi.reporting_month import frontier_fields  # noqa: E402
 from src.services.kpi_resolution import KPI_SEMANTIC_NOTES  # noqa: E402
 
 
@@ -2155,9 +2156,8 @@ def _kpi_result_to_response(
             f"{kpi.name} has no region-scoped variant, so this value is "
             "global/portfolio-level. Do not present it as region-specific."
         )
-    data_through = (metadata.get("context") or {}).get("data_through")
-    if data_through is not None:
-        response["data_through"] = data_through
+    # data_through, and for a default-window canonical headline the month it covers (#2114).
+    response.update(frontier_fields(metadata, window_status, kpi.id))
     # #1360: WS2-TR-009 surfaces its stage counts (delivered -> viewed ->
     # accepted -> actioned -> outcome) so the synthesizer can narrate the whole
     # funnel, not just the headline rate. Absent for every other KPI.
@@ -2176,10 +2176,6 @@ def _kpi_result_to_response(
         temporal_band = (metadata.get("context") or {}).get("temporal_variability_band")
         if temporal_band is not None:
             response["temporal_variability_band"] = temporal_band
-    if window_status == "default":
-        window = KPI_REPORTING_WINDOWS.get(kpi.id)
-        if window:
-            response["reporting_window"] = window
     # #1713: direction glosses on `status` ("above/below threshold") are only
     # checkable when the payload names the metric's polarity — the 2026-08-19
     # eval wrote "flagged warning (below healthy threshold)" for WS2-TR-005,
