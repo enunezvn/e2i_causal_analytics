@@ -66,6 +66,10 @@ def calculator(monkeypatch) -> _RecordingCalculator:
         "What is TRx among new patients?",
         "What is TRx within the cohort?",
         "What is TRx in oncology?",
+        # The exact owner-observed prepositional-axis ask from #2141.  This is
+        # a decomposition upstream, but the scalar evidence seam must still
+        # refuse it rather than calculate a national number if routing drifts.
+        "What is NRx panel by segment?",
         "What is TRx by severity?",
         "What is TRx among Kisqali patients?",
         "What is TRx across brands?",
@@ -97,6 +101,8 @@ def calculator(monkeypatch) -> _RecordingCalculator:
         "What is TRx or its price?",
         "What is TRx; specifically its cost?",
         "What is TRx? I mean its cost",
+        # Courtesy words are accepted only when terminal, never as a bypass.
+        "What is TRx please cost?",
     ],
 )
 def test_unsupported_right_heads_fail_closed_before_calculation(query, calculator) -> None:
@@ -123,6 +129,9 @@ def test_unsupported_right_heads_fail_closed_before_calculation(query, calculato
         # Bare scope is accepted only when the platform's resolver binds it.
         ("What is TRx Kisqali?", "WS3-BI-005", {"brand": "Kisqali"}),
         ("What is TRx west region?", "WS3-BI-005", {"region": "west"}),
+        # A terminal courtesy word changes neither the quantity nor its scope.
+        ("What is TRx please?", "WS3-BI-005", {}),
+        ("What is NRx panel for Kisqali please?", "WS3-BI-006", {"brand": "Kisqali"}),
         ("What is TRx? Thanks.", "WS3-BI-005", {}),
     ],
 )

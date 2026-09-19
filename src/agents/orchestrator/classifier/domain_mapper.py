@@ -9,6 +9,11 @@ indicate relevance.
 
 import re
 
+from src.agents.orchestrator.kpi_decomposition import (
+    NRX_COHORT_DECOMPOSITION_EVIDENCE,
+    is_nrx_cohort_decomposition,
+)
+
 from .schemas import (
     Domain,
     DomainMapping,
@@ -214,7 +219,19 @@ class DomainMapper:
         # Sort by confidence descending
         domain_scores.sort(key=lambda x: x.confidence, reverse=True)
 
-        if self._takes_kpi_lookup_fast_path(features):
+        if is_nrx_cohort_decomposition(features.raw_query):
+            # This bounded whole-query shape has one real owner.  Do not retain
+            # incidental EXPLANATION/HETEROGENEITY scores: in active mode they
+            # would turn one descriptive profile into a scalar lookup, a CATE
+            # estimate, or a multi-agent dispatch.
+            domain_scores = [
+                DomainMatch(
+                    domain=Domain.COHORT_DEFINITION,
+                    confidence=KPI_LOOKUP_CONFIDENCE,
+                    evidence=[NRX_COHORT_DECOMPOSITION_EVIDENCE],
+                )
+            ]
+        elif self._takes_kpi_lookup_fast_path(features):
             # Promote EXPLANATION to first so PatternSelector's explanation
             # override fires. FLOOR, not overwrite: a query that also scored
             # EXPLANATION above KPI_LOOKUP_CONFIDENCE on real keyword evidence

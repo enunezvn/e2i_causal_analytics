@@ -56,6 +56,48 @@ def _classify_and_route(query: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# #2141 owner follow-up — an NRx patient-axis decomposition is cohort work,
+# never a scalar explainer lookup and never a CATE request.  CohortProfiler's
+# real calculator path serves exactly severity segment + therapy-line buckets.
+# ---------------------------------------------------------------------------
+class TestNrxPanelDecompositionRouting2141:
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "What is NRx panel by segment?",
+            "What is NRx panel by clinical segment?",
+            "What is NRx panel by severity tier?",
+            "What is NRx panel by therapy line?",
+            "What is NRx panel by therapy_line?",
+            "What is NRx panel by line of therapy?",
+            "What is NRx panel by line-of-therapy?",
+        ],
+    )
+    def test_routes_supported_nrx_breakdowns_to_cohort_profiler(self, query: str) -> None:
+        intent = _classify(query)
+
+        assert intent["primary_intent"] == "cohort_definition", query
+        assert _route(intent) == ["cohort_profiler"], query
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "What is NRx panel by segment cost?",
+            "What is NRx panel by therapy line accuracy?",
+            "What is NRx panel by segment and TRx cost?",
+            "Do not show me NRx panel by segment.",
+            "Why did NRx panel fall by segment?",
+            "Forecast NRx panel by segment.",
+            "The report stores NRx panel by segment.",
+        ],
+    )
+    def test_open_class_or_compound_continuations_do_not_enter_cohort_profiler(
+        self, query: str
+    ) -> None:
+        assert _classify_and_route(query) != ["cohort_profiler"], query
+
+
+# ---------------------------------------------------------------------------
 # Change 1a — incidental second-intent co-matches must NOT split into 2 agents.
 # These verbatim gold-SINGLE rows were mis-split to PARALLEL_DELEGATION because a
 # single incidental keyword ("predict"/"segment"/a KPI verb) matched a second
