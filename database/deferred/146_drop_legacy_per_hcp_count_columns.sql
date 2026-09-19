@@ -106,8 +106,13 @@
 -- e2i_ml_complete_v3_schema.sql (which creates them), this file (which rebuilds
 -- them), docs/data/02-CORE-DATA-DICTIONARY.md (a name list), the lane plan, and
 -- tests/unit/test_database/test_mig146_contract_legacy_per_hcp_columns.py (the guard
--- over this file). None of them READS a column from a view, which is the claim that
--- matters -- and stating it as a file count invited exactly this kind of drift. It also restores the AUTHORED intent: e2i_ml_complete_v3_schema.sql writes
+-- over this file). None of them is a RUNTIME reader: the only reads are the lane
+-- plan's rehearsal probes named above, inside BEGIN ... ROLLBACK. That is the claim
+-- that matters -- stating it as a file count invited exactly this kind of drift.
+-- Raw evidence for this header's live measurements (dependents, privileges, the
+-- four re-application cases) is kept beside the lane's other evidence, in
+-- docs/demos/results/2026-09-15_trx_canonical/iter9_13_146_rehearsal_20260919.txt.
+-- The rebuild also restores the AUTHORED intent: e2i_ml_complete_v3_schema.sql writes
 -- these views as `SELECT * FROM business_metrics WHERE data_split = ...`, and
 -- PostgreSQL froze that star into an explicit list at creation time.
 --
