@@ -359,13 +359,14 @@ def _tail_changes_quantity(
     while index < len(matches):
         token = matches[index].group(0)
         if token in _DISCOURSE_SUFFIXES:
-            # A terminal polite suffix changes neither quantity nor scope, with
-            # or without punctuation ("TRx please", "TRx? Thanks.").  It is
-            # harmless only when EVERY remaining token is also discourse, so
-            # "TRx please cost" and "TRx? I mean its cost" still refuse.
+            # A polite suffix is harmless only as its own punctuation-delimited
+            # clause.  This preserves "TRx? Thanks." without turning arbitrary
+            # continuations ("TRx? I mean its cost") into an escape hatch.
+            prefix = tail[: matches[index].start()]
+            boundary = max(prefix.rfind(mark) for mark in ",.?!;")
+            separated = boundary >= 0 and _TAIL_TOKEN_RE.search(prefix[boundary + 1 :]) is None
             remaining = {match.group(0) for match in matches[index:]}
-            terminal = remaining <= _DISCOURSE_SUFFIXES
-            return not terminal
+            return not (separated and remaining <= _DISCOURSE_SUFFIXES)
         if token in value_heads or token in _KNOWN_KPI_QUALIFIERS or token in warned_tail_nouns:
             index += 1
             bound_dimension = None

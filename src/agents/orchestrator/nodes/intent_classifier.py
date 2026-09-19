@@ -38,7 +38,6 @@ from src.agents.multi_faceted import (
     has_dependency_composition,
     split_clauses,
 )
-from src.agents.orchestrator.kpi_decomposition import NRX_COHORT_DECOMPOSITION_PATTERN
 from src.utils.llm_content import normalize_llm_content, parse_llm_json
 from src.utils.llm_factory import MODEL_MAPPINGS, get_fast_llm, get_llm_provider
 from src.utils.mock_llm import llm_or_marked_mock
@@ -683,13 +682,6 @@ class IntentClassifierNode:
         # (issue #288). Identity-checked in test_multi_faceted_ssot.py.
         "multi_faceted": MULTI_FACETED_PATTERNS,
         "cohort_definition": [
-            # #2141 owner follow-up: an NRx patient-axis decomposition asks for
-            # real per-bucket counts, not one scalar value and not a treatment
-            # effect.  CohortProfiler owns exactly the two axes below through
-            # its calculator-backed severity/therapy-line profile.  Keep this
-            # NRx-specific: routing TRx here would silently substitute NRx, and
-            # biologic/IgE are not served by CohortProfiler.
-            NRX_COHORT_DECOMPOSITION_PATTERN,
             # Original construction objects keep the unbounded gap (unchanged
             # from origin/main — no regression on existing cohort rows).
             r"(define|create|build|construct).*(cohort|patient set|patient population)",
