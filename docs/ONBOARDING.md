@@ -431,10 +431,12 @@ Re-derive with `grep -nE 'queues=|concurrency=|replicas:' docker/docker-compose.
 - **RAG** (2): rag_document_chunks (HNSW), rag_search_logs
 - **Chat** (6+): chat_threads, chat_messages, user_preferences (RLS)
 - **Audit** (2): audit_chain_entries (SHA-256 hash chain), verification_log
-- **FalkorDB Graph**: the ontology in `config/ontology/` declares 8 node types
-  (`node_types.yaml`) and 15 edge types (`edge_types.yaml`); the deployed memory graph
-  schema (`database/memory/002_semantic_graph_schema.cypher`) uses a wider set —
-  12 labels and 18 relationship types — because it adds the memory/causal layer on top
+- **FalkorDB Graph** (`e2i_causal`): the ontology in `config/ontology/` declares 8 node
+  types (`node_types.yaml`) and 15 edge types (`edge_types.yaml`) as a design spec — no
+  runtime code loads it. `database/memory/002_semantic_graph_schema.cypher` (12 labels,
+  18 relationship types) is entirely commented out and never applied. The graph is built
+  by `scripts/seed_falkordb.py`, `scripts/sync_causal_paths_to_falkordb.py` and agent
+  memory hooks; see [How the graph is built](data/04-KNOWLEDGE-GRAPH-ONTOLOGY.md#how-the-graph-is-built)
 - **Feast Feature Store**: 11 feature views / 65 fields over 7 PostgreSQL sources
   (`feature_repo/features/*.py`), served by `feastdev/feature-server` pinned in
   `docker/Dockerfile.feast`. Canonical reference:

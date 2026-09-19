@@ -51,7 +51,7 @@ ALLOWLIST: dict[str, int] = {
     "src/data/causal_role_classifier.py": 6525,
     "src/feature_store/feast_client.py": 1711,
     "src/memory/lifecycle/consolidator.py": 1954,
-    "src/memory/semantic_memory.py": 1796,
+    "src/memory/semantic_memory.py": 1795,
     "src/ml/data_generator.py": 1759,
     "src/rag/cognitive_rag_dspy.py": 1587,
     "src/rag/evaluation.py": 1824,
