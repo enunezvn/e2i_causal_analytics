@@ -72,7 +72,14 @@ def canonical_volume_kpi_id(kpi_name: Optional[str]) -> Optional[str]:
     # "market/share" to canonical TRx Share (codex iter9 HIGH).
     from src.kpi.business_metric_vocabulary import canonical_business_metric_name
 
-    if canonical_business_metric_name(kpi_name) in _STORED_ONLY_KEYS:
+    stored_key = canonical_business_metric_name(kpi_name)
+    if stored_key in _STORED_ONLY_KEYS:
+        return None
+    if stored_key is None and "(" in kpi_name:
+        # The vocabulary accepts a parenthetical only when it restates the SAME
+        # quantity ("Total Prescriptions (TRx)"); it refuses one naming another
+        # axis ("Total Prescriptions (patients)"). Broad recognition below would
+        # still find the base name and route it canonically (codex iter10 HIGH).
         return None
     from src.services.kpi_resolution import recognize_kpi
 

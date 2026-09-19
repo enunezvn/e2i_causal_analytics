@@ -113,6 +113,32 @@ def test_every_spelling_of_trx_share_still_routes_canonically(name):
     assert cvs.canonical_volume_kpi_id(name) == "WS3-BI-008", name
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Total Prescriptions (patients)",
+        "New Prescriptions (patients)",
+        "TRx Share (market share)",
+        "Market Share (TRx Share)",
+    ],
+)
+def test_an_unsupported_parenthetical_is_not_routed_canonically(name):
+    """codex iter10 HIGH: the shared vocabulary REFUSES a parenthetical that names a
+    different quantity or axis ("Total Prescriptions (patients)" is not TRx), and
+    the stored-row path then reports a transparent no-match. Broad recognition
+    still found "total prescriptions" inside it and routed canonical TRx -- a
+    figure for a question nobody asked."""
+    assert cvs.canonical_volume_kpi_id(name) is None, name
+
+
+@pytest.mark.parametrize(
+    "name,expected",
+    [("Total Prescriptions (TRx)", "WS3-BI-005"), ("New Prescriptions (NRx)", "WS3-BI-006")],
+)
+def test_a_registry_name_with_its_own_abbreviation_still_routes(name, expected):
+    assert cvs.canonical_volume_kpi_id(name) == expected, name
+
+
 def test_the_calculation_is_kpi_calculates_own_call_with_the_same_context():
     calc = _Calculator(_result())
     out = _run("TRx", {"brand": "Kisqali", "metric_name": "trx"}, calc)
