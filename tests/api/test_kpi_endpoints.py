@@ -17,6 +17,17 @@ from fastapi.testclient import TestClient
 
 from src.api.main import app
 from src.api.routes.kpi import get_kpi_calculator
+from src.kpi.calculator import KPICalculator
+from src.kpi.models import (
+    CalculationType,
+    CausalLibrary,
+    KPIBatchResult,
+    KPIMetadata,
+    KPIResult,
+    KPIStatus,
+    KPIThreshold,
+    Workstream,
+)
 
 client = TestClient(app)
 
@@ -27,66 +38,56 @@ client = TestClient(app)
 
 
 @pytest.fixture
-def mock_kpi_metadata():
-    """Mock KPI metadata object."""
-    kpi = MagicMock()
-    kpi.id = "data_freshness_lag"
-    kpi.name = "Data Freshness Lag"
-    kpi.definition = "Time since last data update"
-    kpi.formula = "NOW() - MAX(updated_at)"
-    kpi.calculation_type = MagicMock(value="aggregation")
-    kpi.workstream = MagicMock(value="ws1_data_quality")
-    kpi.tables = ["business_metrics"]
-    kpi.columns = ["updated_at"]
-    kpi.view = None
-    kpi.threshold = MagicMock(target=1.0, warning=4.0, critical=8.0)
-    kpi.unit = "hours"
-    kpi.frequency = "hourly"
-    kpi.primary_causal_library = MagicMock(value="none")
-    kpi.brand = None
-    kpi.note = None
-    return kpi
+def kpi_metadata():
+    """Concrete KPI metadata matching the production domain contract."""
+    return KPIMetadata(
+        id="data_freshness_lag",
+        name="Data Freshness Lag",
+        definition="Time since last data update",
+        formula="NOW() - MAX(updated_at)",
+        calculation_type=CalculationType.DIRECT,
+        workstream=Workstream.WS1_DATA_QUALITY,
+        tables=["business_metrics"],
+        columns=["updated_at"],
+        threshold=KPIThreshold(target=1.0, warning=4.0, critical=8.0),
+        unit="hours",
+        value_format=None,
+        frequency="hourly",
+        primary_causal_library=CausalLibrary.NONE,
+    )
 
 
 @pytest.fixture
-def mock_kpi_result():
-    """Mock KPI calculation result."""
-    result = MagicMock()
-    result.kpi_id = "data_freshness_lag"
-    result.value = 2.5
-    result.status = MagicMock(value="normal")
-    result.calculated_at = datetime.now(timezone.utc)
-    result.cached = False
-    result.cache_expires_at = None
-    result.error = None
-    result.causal_library_used = None
-    result.confidence_interval = None
-    result.p_value = None
-    result.effect_size = None
-    result.metadata = {}
-    return result
+def kpi_result():
+    """Concrete KPI result matching the production domain contract."""
+    return KPIResult(
+        kpi_id="data_freshness_lag",
+        value=2.5,
+        status=KPIStatus.WARNING,
+        calculated_at=datetime.now(timezone.utc),
+    )
 
 
 @pytest.fixture
-def mock_batch_result(mock_kpi_result):
-    """Mock batch calculation result."""
-    batch = MagicMock()
-    batch.results = [mock_kpi_result]
-    batch.calculated_at = datetime.now(timezone.utc)
-    batch.total_kpis = 1
-    batch.successful = 1
-    batch.failed = 0
-    return batch
+def batch_result(kpi_result):
+    """Concrete batch result matching the production domain contract."""
+    return KPIBatchResult(
+        results=[kpi_result],
+        calculated_at=datetime.now(timezone.utc),
+        total_kpis=1,
+        successful=1,
+        failed=0,
+    )
 
 
 @pytest.fixture
-def mock_calculator(mock_kpi_metadata, mock_kpi_result, mock_batch_result):
+def mock_calculator(kpi_metadata, kpi_result, batch_result):
     """Mock KPICalculator instance."""
-    calculator = MagicMock()
-    calculator.list_kpis = MagicMock(return_value=[mock_kpi_metadata])
-    calculator.get_kpi_metadata = MagicMock(return_value=mock_kpi_metadata)
-    calculator.calculate = MagicMock(return_value=mock_kpi_result)
-    calculator.calculate_batch = MagicMock(return_value=mock_batch_result)
+    calculator = MagicMock(spec=KPICalculator)
+    calculator.list_kpis = MagicMock(return_value=[kpi_metadata])
+    calculator.get_kpi_metadata = MagicMock(return_value=kpi_metadata)
+    calculator.calculate = MagicMock(return_value=kpi_result)
+    calculator.calculate_batch = MagicMock(return_value=batch_result)
     calculator.invalidate_cache = MagicMock(return_value=5)
     calculator._db = MagicMock()
     calculator._cache = MagicMock(enabled=True, size=MagicMock(return_value=10))
@@ -183,8 +184,10 @@ class TestGetKPIValue:
 
     def test_get_kpi_value_not_found(self, mock_calculator):
         """Should return 404 for missing KPI."""
-        mock_result = MagicMock()
-        mock_result.error = "KPI not found: invalid_kpi"
+        mock_result = KPIResult(
+            kpi_id="invalid_kpi",
+            error="KPI not found: invalid_kpi",
+        )
         mock_calculator.calculate.return_value = mock_result
 
         app.dependency_overrides[get_kpi_calculator] = lambda: mock_calculator
@@ -358,8 +361,10 @@ class TestCalculateKPI:
 
     def test_calculate_kpi_not_found(self, mock_calculator):
         """Should return 404 for missing KPI."""
-        mock_result = MagicMock()
-        mock_result.error = "KPI not found: invalid_kpi"
+        mock_result = KPIResult(
+            kpi_id="invalid_kpi",
+            error="KPI not found: invalid_kpi",
+        )
         mock_calculator.calculate.return_value = mock_result
 
         app.dependency_overrides[get_kpi_calculator] = lambda: mock_calculator

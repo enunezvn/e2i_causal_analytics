@@ -968,12 +968,20 @@ def generate_index_queries() -> List[str]:
 
 
 def generate_brand_queries() -> List[str]:
-    """Generate brand node creation queries."""
+    """Generate brand node creation queries.
+
+    Each Brand carries ``id: 'brand:<Name>'`` — the identity agent memory hooks
+    MERGE on (``cohort_constructor`` via ``canonical_brand``). Without it the
+    first agent brand write after a (re)seed forked a second Brand node for the
+    same brand (#2176; the follow-up named in ``scripts/dedup_falkordb_brands.py``).
+    ``BRANDS`` names are already canonical.
+    """
     queries = []
     ts = get_timestamp()
     for brand in BRANDS:
         queries.append(f"""
             CREATE (:Brand {{
+                id: 'brand:{brand["name"]}',
                 name: '{brand["name"]}',
                 type: '{brand["type"]}',
                 indication: '{brand["indication"]}',

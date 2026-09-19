@@ -193,6 +193,31 @@ def test_kpi_lookup_binds_real_calculated_value(monkeypatch) -> None:
     assert stub.calls == [("WS3-BI-005", {"brand": "Kisqali"})]
 
 
+def test_full_kpi_name_lookup_binds_the_same_real_calculated_value(monkeypatch) -> None:
+    """#2130: spelling out TRx must reach the same evidence path as TRx."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("Show me total prescriptions for Kisqali"), _dispatch()
+    )
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["value"] == 12345.0
+    assert stub.calls == [("WS3-BI-005", {"brand": "Kisqali"})]
+
+
+def test_full_kpi_name_as_cost_modifier_never_binds_a_bare_value(monkeypatch) -> None:
+    """Widening the route vocabulary must preserve the governing-head fence."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("What is the cost of total prescriptions?"), _dispatch()
+    )
+
+    assert isinstance(resolved, NeedsStructuredInput), resolved
+    assert stub.calls == []
+
+
 def test_kpi_lookup_binds_window_named_in_the_query(monkeypatch) -> None:
     """A user-named window is honored via the KPI engine's own parser."""
     stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
@@ -1234,20 +1259,18 @@ def test_west_coast_still_binds_the_west_scoped_figure(monkeypatch) -> None:
     assert stub.calls == [("WS3-BI-005", {"brand": "Kisqali", "region": "west"})]
 
 
-def test_guard_phrase_keeps_the_unscoped_figure_without_clarify(monkeypatch) -> None:
-    """'central coast' is a #1565 guard phrase (a locality, NOT a census-region
-    concept): it binds no region AND raises no clarify — the honest unscoped
-    figure keeps flowing exactly as before #1572."""
+def test_guard_phrase_no_longer_widens_to_an_unscoped_figure(monkeypatch) -> None:
+    """'central coast' is neither a supported census region nor a resolvable
+    scope.  Returning the national figure would silently drop that qualifier
+    (#2141), so the value consumer must now fail closed before calculation."""
     stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
 
     resolved = disp.INPUT_RESOLVERS["explainer"](
         _agent_input("What is the TRx for Kisqali on the central coast?"), _dispatch()
     )
 
-    assert isinstance(resolved, dict), resolved
-    payload = resolved["analysis_results"][0]
-    assert payload["analysis_type"] == "kpi_lookup"
-    assert stub.calls == [("WS3-BI-005", {"brand": "Kisqali"})]
+    assert isinstance(resolved, NeedsStructuredInput), resolved
+    assert stub.calls == []
 
 
 @pytest.mark.asyncio

@@ -571,10 +571,11 @@ class CausalImpactMemoryHooks:
                 entity_id=f"var:{treatment_var}",
                 properties={
                     "name": treatment_var,
-                    "role": "treatment",
-                    "agent": "causal_impact",
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 },
+                # #2174: ownership + role only on CREATE — a synced (curated)
+                # Variable keeps no agent and keeps the sync's topology role.
+                create_only_properties={"role": "treatment", "agent": "causal_impact"},
             )
 
             # Create or update outcome variable node
@@ -583,10 +584,11 @@ class CausalImpactMemoryHooks:
                 entity_id=f"var:{outcome_var}",
                 properties={
                     "name": outcome_var,
-                    "role": "outcome",
-                    "agent": "causal_impact",
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 },
+                # #2174: ownership + role only on CREATE — a synced (curated)
+                # Variable keeps no agent and keeps the sync's topology role.
+                create_only_properties={"role": "outcome", "agent": "causal_impact"},
             )
 
             # Create causal relationship

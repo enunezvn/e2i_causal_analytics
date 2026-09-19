@@ -578,21 +578,17 @@ class TestTheHelperAnswersSubstrateNotMeasure:
 
 
 class TestTheNoticeDescribesTheRowsItSitsBeside:
-    """codex iter-3 HIGH: the notice and the query disagreed on what was asked.
+    """codex iter-3 HIGH: a notice may only describe rows actually returned.
 
-    ``_query_kpis`` filters ``business_metrics.metric_name`` with
-    ``_normalize_metric_name(kpi_name)``, while the notice resolved the RAW name
-    through ``recognize_kpi``. Measured, they diverge:
+    #2130 made the business-metric vocabulary shared, so supported full names
+    now converge:
 
-        "total prescriptions" -> filter key 'total_prescriptions'  (never stored)
-                              -> notice claimed WS3-BI-005 TRx
-        "hcp coverage"        -> filter key 'hcp_coverage'         (never stored)
-                              -> notice claimed WS3-BI-004
+        "total prescriptions" -> filter key 'trx' -> WS3-BI-005 TRx
 
-    So a TRx cross-substrate warning could be attached to zero rows for a key
-    that was never queried as TRx. The notice is a caveat ON the rows above it,
-    so it now fires only when there ARE rows: with none, there is no stored
-    figure to be confused with anything, and naming one is worse than silence.
+    Unsupported registry KPIs remain transparent passthroughs rather than being
+    guessed onto a semantically different stored key ("hcp coverage" is not
+    ``hcp_engagement_score``). The row gate remains the final safety property:
+    with no rows, there is no stored figure to caveat.
     """
 
     def test_no_rows_means_no_notice(self):
@@ -621,14 +617,12 @@ class TestTheNoticeDescribesTheRowsItSitsBeside:
 
         assert _cross_substrate_conflict("TRx panel")["kpi_id"] == "WS3-BI-011"
 
-    def test_a_name_that_is_not_a_stored_key_cannot_produce_rows(self):
-        """Why gating on rows is sufficient rather than a second name check:
-        if the filter key is not a stored metric_name, the query returns
-        nothing, so the mismatch can never reach a reader."""
+    def test_supported_full_name_converges_and_unsupported_name_stays_transparent(self):
         from src.api.routes.chatbot_tools import _normalize_metric_name
 
-        assert _normalize_metric_name("total prescriptions") == "total_prescriptions"
+        assert _normalize_metric_name("total prescriptions") == "trx"
         assert _normalize_metric_name("TRx") == "trx"
+        assert _normalize_metric_name("hcp coverage") == "hcp_coverage"
 
 
 class TestTheSummaryDerivesSubstrateFromTheQueryItRuns:

@@ -23,9 +23,9 @@ the (now casing-fixed) agent writes MERGE onto it instead of forking again.
 Env (read from the process; e.g. ``FALKORDB_HOST=127.0.0.1 FALKORDB_PORT=6381
 FALKORDB_PASSWORD=changeme``): FALKORDB_HOST/PORT/PASSWORD/GRAPH_NAME.
 
-NOTE: ``scripts/seed_falkordb.py`` still creates name-keyed Brand nodes, so a
-re-seed re-introduces a variant; re-run this migration afterwards (it is safe to
-re-run). Giving the seed canonical ids is a deliberately-separate follow-up.
+Since #2176 ``scripts/seed_falkordb.py`` creates Brand nodes with the canonical
+``id``, so a re-seed no longer re-introduces a variant. This script remains the
+one-off cleanup for graphs seeded before that fix (safe to re-run).
 """
 
 from __future__ import annotations

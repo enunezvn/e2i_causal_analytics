@@ -58,6 +58,7 @@ from src.kpi.calculators.model_performance import ModelPerformanceCalculator
 from src.kpi.calculators.trigger_performance import TriggerPerformanceCalculator
 from src.kpi.models import CausalLibrary, Workstream
 from src.kpi.registry import get_registry
+from src.services.enum_labels import REGION_ENUM_LABELS, resolve_region_label
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +151,42 @@ def _causal_library_from_string(lib_str: str | None) -> CausalLibrary | None:
         "none": CausalLibrary.NONE,
     }
     return mapping.get(lib_str.lower())
+
+
+def normalize_kpi_region_scope(region: Any) -> str | None:
+    """Return the canonical KPI region label or reject an invalid scope.
+
+    ``None`` and the exact empty-string sentinel mean the all-regions scope.
+    Every other caller-supplied value must be a string that resolves through
+    the shared census-region vocabulary.  In particular, whitespace-only
+    strings are supplied scopes, not an implicit request to widen globally.
+    """
+    if region is None or region == "":
+        return None
+    known = ", ".join(REGION_ENUM_LABELS)
+    if not isinstance(region, str):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"region must be a string matching one of: {known}",
+        )
+    normalized: str | None = resolve_region_label(region, allow_synonyms=True)
+    if normalized is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"region {region!r} does not match any known region ({known})",
+        )
+    return normalized
+
+
+def _normalize_region_in_context(context: dict[str, Any]) -> None:
+    """Normalize the final merged context, including ``context.extra``."""
+    if "region" not in context:
+        return
+    normalized = normalize_kpi_region_scope(context["region"])
+    if normalized is None:
+        context.pop("region")
+    else:
+        context["region"] = normalized
 
 
 def _metadata_to_response(kpi: Any) -> KPIMetadataResponse:
@@ -588,11 +625,12 @@ async def get_kpi_value(
         HTTPException: If KPI not found or calculation fails
     """
     try:
+        normalized_region = normalize_kpi_region_scope(region)
         context: dict[str, Any] = {}
         if brand:
             context["brand"] = brand
-        if region:
-            context["region"] = region
+        if normalized_region:
+            context["region"] = normalized_region
         if segment:
             context["segment"] = segment
         if therapy_line:
@@ -654,9 +692,14 @@ async def get_kpi_history(
     """
     from src.repositories.kpi_history import get_kpi_history_repository
 
+    normalized_region = normalize_kpi_region_scope(region)
     repo = await get_kpi_history_repository()
     rows = await repo.get_history(
-        kpi_id, brand=brand, region=region, start_date=start_date, end_date=end_date
+        kpi_id,
+        brand=brand,
+        region=normalized_region,
+        start_date=start_date,
+        end_date=end_date,
     )
     points = [
         KPIHistoryPoint(
@@ -675,7 +718,7 @@ async def get_kpi_history(
     return KPIHistoryResponse(
         kpi_id=kpi_id,
         brand=brand or "",
-        region=region or "",
+        region=normalized_region or "",
         count=len(points),
         points=points,
         measure_basis=materialized_history_basis(kpi_meta, rows=rows) if kpi_meta else None,
@@ -949,6 +992,7 @@ async def calculate_kpi(
             if request.context.ige_tier:
                 context["ige_tier"] = request.context.ige_tier
             context.update(request.context.extra)
+        _normalize_region_in_context(context)
 
         result = calculator.calculate(
             kpi_id=request.kpi_id,
@@ -1009,6 +1053,7 @@ async def calculate_batch(
             if request.context.end_date:
                 context["end_date"] = request.context.end_date
             context.update(request.context.extra)
+        _normalize_region_in_context(context)
 
         # Parse workstream
         ws_enum = _workstream_from_string(request.workstream)
@@ -1030,6 +1075,8 @@ async def calculate_batch(
             failed=batch_result.failed,
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Batch KPI calculation failed: {e}")
         raise HTTPException(

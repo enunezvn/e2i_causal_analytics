@@ -48,6 +48,10 @@ from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Tup
 
 import pandas as pd
 
+from src.kpi.business_metric_vocabulary import (
+    BUSINESS_METRIC_KPI_ALIASES,
+    KPI_ALIAS_SUFFIX_PATTERN,
+)
 from src.kpi.models import KPIMetadata
 from src.kpi.registry import get_registry
 
@@ -88,22 +92,10 @@ _MAX_ROWS = 100_000
 # KPI vocabulary aliases: common user terms -> KPI id. This maps the FIXED,
 # defined KPI vocabulary to ids; it is NOT brand/region hardcoding.
 _ALIASES: Dict[str, str] = {
-    "conversion": CONVERSION_KPI_ID,
-    "conversion rate": CONVERSION_KPI_ID,
-    "nbrx": "WS3-BI-007",
-    "new-to-brand": "WS3-BI-007",
-    "new to brand": "WS3-BI-007",
-    "nrx": "WS3-BI-006",
-    "new prescription": "WS3-BI-006",
-    "trx share": "WS3-BI-008",
-    "market share": "WS3-BI-008",
-    # Reverse share phrasing (#1475 codex iter-2): "the share of TRx" is
-    # natural WS3-BI-008 language — without these it falls to the bare "trx"
-    # alias and reads as a WS3-BI-005 mention inside a "share of" chain.
-    "share of trx": "WS3-BI-008",
-    "share of total prescriptions": "WS3-BI-008",
-    "trx": "WS3-BI-005",
-    "total prescription": "WS3-BI-005",
+    # The business_metrics-backed family is shared with chat routing and
+    # repository filtering. Display names and abbreviations therefore resolve
+    # to one KPI id here and one stored key at the query seam (#2130).
+    **BUSINESS_METRIC_KPI_ALIASES,
     # Canonical TRx lane (2026-09-15): the patient-panel event FAMILY. WS3-BI-011 is
     # the family's stated default — an explicit decision, not the registry-order
     # accident _best_name_match would produce (all four panel KPIs tie there on two
@@ -330,7 +322,7 @@ _SEPARATOR_CHARS = "_-/.–—"
 #: governing-head guards exist to read. The curly apostrophe resolved while the
 #: ASCII one did not, which is the tell that this was an accident of the
 #: character class rather than a decision.
-_PLURAL_SUFFIX = r"(?:'s|’s|e?s)?"
+_PLURAL_SUFFIX = KPI_ALIAS_SUFFIX_PATTERN
 
 
 @lru_cache(maxsize=1024)

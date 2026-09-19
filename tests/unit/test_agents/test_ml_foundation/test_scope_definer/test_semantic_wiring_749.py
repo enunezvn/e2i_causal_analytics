@@ -16,8 +16,11 @@ _OUTPUT = {
     "experiment_id": "exp-749",
     "scope_spec": {
         "problem_type": "binary_classification",
-        "target_variable": "discontinuation_flag",
-        "features": ["age_at_index", "payer_category"],
+        # Real ScopeSpec keys (scope_builder.build_scope_spec). This fixture used
+        # ``target_variable`` / ``features`` — keys the real spec never carries —
+        # which kept this pin green while every real run lost the target (#2175).
+        "prediction_target": "discontinuation_flag",
+        "required_features": ["age_at_index", "payer_category"],
         "experiment_name": "disc-mart-749",
     },
     "success_criteria": {"min_auc": 0.65},

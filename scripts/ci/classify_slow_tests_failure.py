@@ -1,11 +1,10 @@
 """Classify a red nightly Job A: upstream provider outage vs real failure.
 
-#1804/#1813: the clinical-context live suite (tests/integration/
-test_clinical_context/) deliberately hits real providers so an outage goes RED
-instead of silently skipping (#1612). Three transient EMBL-EBI HTTP 500s
-(08-21/08-24/08-25) each filed the same red nightly alarm a real regression
-files, costing a triage session apiece. The recorded fix: classify the failure
-in the REPORTER — never skip/xfail in the tests, never retry 5xx in the client.
+#1804/#1813/#2173: live provider suites deliberately hit real services so an outage
+goes RED instead of silently skipping (#1612/#1629). Transient provider 500s
+used to file the same red nightly alarm as a real regression. The recorded fix:
+classify the failure in the REPORTER — never skip/xfail in the tests, never
+retry 5xx in the client.
 
 Reads the junit XML Job A wrote and prints a GITHUB_OUTPUT payload on stdout:
 
@@ -13,7 +12,7 @@ Reads the junit XML Job A wrote and prints a GITHUB_OUTPUT payload on stdout:
     detail=<one line of evidence>
 
 The verdict is ``upstream-transient`` ONLY when every failed/errored test
-1. is in the clinical-context live family, and
+1. is in an explicitly recognized live-provider family, and
 2. carries hard upstream evidence (HTTP 5xx / timeout / connect error) in its
    failure text or captured output, or is a recognized fallback ECHO of one
    (the ``static_fallback`` degradation assertions), and
@@ -42,11 +41,13 @@ import sys
 import xml.etree.ElementTree as ET  # nosemgrep: python.lang.security.use-defused-xml.use-defused-xml
 from pathlib import Path
 
-# Both id styles: junit classname dots and file-path prefixes.
-_FAMILY_PREFIXES = (
-    "tests.integration.test_clinical_context",
-    "tests/integration/test_clinical_context",
-)
+# Both id styles: junit classname dots and file paths. Keep the UMLS entry an
+# exact module/file boundary: a similarly named generic KG test mentioning an
+# HTTP 500 can still be a code defect.
+_CLINICAL_CLASSNAME_PREFIX = "tests.integration.test_clinical_context"
+_CLINICAL_FILE_PREFIX = "tests/integration/test_clinical_context"
+_UMLS_CLASSNAME = "tests.integration.test_kg.test_umls_uts_live"
+_UMLS_FILE = "tests/integration/test_kg/test_umls_uts_live.py"
 
 # Hard evidence: the provider itself misbehaved on the wire. Sources: the
 # 08-24/08-25 outages ("ChEMBL HTTP 500", "HTTP 500 Internal Server Error"
@@ -54,6 +55,7 @@ _FAMILY_PREFIXES = (
 # taxonomy, and pytest-timeout's kill message for a hung upstream request.
 _HARD = re.compile(
     r"HTTP[ /]5\d\d"
+    r"|status[=:]\s*5\d\d"
     r"|Server error '5\d\d"
     r"|\b5\d\d (?:Internal Server Error|Bad Gateway|Service Unavailable|Gateway Time-?out)"
     r"|ReadTimeout|ConnectTimeout|PoolTimeout|WriteTimeout|TimeoutException"
@@ -67,6 +69,32 @@ _HARD = re.compile(
 # echo never counts as hard evidence on its own.
 _ECHO = re.compile(r"static_fallback", re.IGNORECASE)
 
+# An exception headline outside this explicit provider/transport set is a real
+# failure even when its traceback/request context also contains a 500.  #1766
+# was a TypeError; an open-ended code-defect denylist would just move the hole
+# to the next exception class.  AssertionError is allowed because live-contract
+# assertions expose the provider's actual 500 in their failure representation.
+_EXCEPTION_HEADLINE = re.compile(r"^(?:E\s+)?(?:[A-Za-z_]\w*\.)*([A-Za-z_]\w*(?:Error|Exception)):")
+_UPSTREAM_EXCEPTION_TYPES = frozenset(
+    {
+        "AssertionError",
+        "ChEMBLError",
+        "UMLSError",
+        "HTTPError",
+        "HTTPStatusError",
+        "ReadTimeout",
+        "ConnectTimeout",
+        "PoolTimeout",
+        "WriteTimeout",
+        "TimeoutError",
+        "TimeoutException",
+        "ConnectionError",
+        "ConnectError",
+        "ReadError",
+        "RemoteProtocolError",
+    }
+)
+
 _DETAIL_CAP = 900
 
 
@@ -77,18 +105,36 @@ def _test_id(testcase: ET.Element) -> str:
 def _in_family(testcase: ET.Element) -> bool:
     classname = testcase.get("classname") or ""
     file_attr = testcase.get("file") or ""
-    return classname.startswith(_FAMILY_PREFIXES[0]) or file_attr.startswith(_FAMILY_PREFIXES[1])
+    return (
+        classname == _CLINICAL_CLASSNAME_PREFIX
+        or classname.startswith(f"{_CLINICAL_CLASSNAME_PREFIX}.")
+        or classname == _UMLS_CLASSNAME
+        or classname.startswith(f"{_UMLS_CLASSNAME}.")
+        or file_attr == _CLINICAL_FILE_PREFIX
+        or file_attr.startswith(f"{_CLINICAL_FILE_PREFIX}/")
+        or file_attr == _UMLS_FILE
+    )
 
 
-def _evidence_text(testcase: ET.Element) -> str:
-    """Everything the XML holds for this test: failure/error nodes plus any
-    captured output (present once Job A passes ``-o junit_logging=all``)."""
+def _node_text(testcase: ET.Element, tags: tuple[str, ...]) -> str:
     parts: list[str] = []
-    for tag in ("failure", "error", "system-out", "system-err"):
+    for tag in tags:
         for node in testcase.findall(tag):
             parts.append(node.get("message") or "")
             parts.append(node.text or "")
     return "\n".join(parts)
+
+
+def _failure_exception_type(testcase: ET.Element) -> str | None:
+    """Return the exception type from the failure/error headline, if any."""
+    for tag in ("failure", "error"):
+        for node in testcase.findall(tag):
+            text = node.get("message") or node.text or ""
+            first_line = text.lstrip().splitlines()[0] if text.strip() else ""
+            match = _EXCEPTION_HEADLINE.match(first_line)
+            if match:
+                return match.group(1)
+    return None
 
 
 def classify(junit_path: Path) -> tuple[str, str]:
@@ -108,33 +154,44 @@ def classify(junit_path: Path) -> tuple[str, str]:
     if not failed:
         return "real", "junit records 0 failures/errors — the red was infra, not a test (fail-safe)"
 
-    verdicts: dict[str, str] = {}
+    # Keep one verdict per failure node, not per display id.  JUnit may contain
+    # the same classname/name more than once (for example after a rerun or when
+    # suites are combined), and a later outage must not overwrite an earlier
+    # real failure with the same id.
+    verdicts: list[tuple[str, str]] = []
     for tc in failed:
-        text = _evidence_text(tc)
+        failure_text = _node_text(tc, ("failure", "error"))
+        captured_text = _node_text(tc, ("system-out", "system-err"))
+        exception_type = _failure_exception_type(tc)
         if not _in_family(tc):
             verdict = "foreign"
-        elif _HARD.search(text):
+        elif exception_type is not None and exception_type not in _UPSTREAM_EXCEPTION_TYPES:
+            verdict = "unrecognized"
+        elif _HARD.search(failure_text):
             verdict = "hard"
-        elif _ECHO.search(text):
-            verdict = "echo"
+        elif _ECHO.search(failure_text):
+            # Captured output corroborates a recognized fail-open echo.  It
+            # cannot by itself reclassify an unrelated assertion/exception:
+            # a test can log an upstream 500 and then fail on a code defect.
+            verdict = "hard" if _HARD.search(captured_text) else "echo"
         else:
             verdict = "unrecognized"
-        verdicts[_test_id(tc)] = verdict
+        verdicts.append((_test_id(tc), verdict))
         print(f"  {verdict:<12} {_test_id(tc)}", file=sys.stderr)
 
     counts = {
-        v: sum(1 for x in verdicts.values() if x == v)
+        v: sum(1 for _, verdict in verdicts if verdict == v)
         for v in ("foreign", "hard", "echo", "unrecognized")
     }
     print(f"derived: {len(failed)} failed -> {counts}", file=sys.stderr)
 
     if counts["foreign"]:
         return "real", (
-            f"{counts['foreign']}/{len(failed)} failures outside the clinical-context live family"
+            f"{counts['foreign']}/{len(failed)} failures outside recognized live-provider families"
         )
     if counts["unrecognized"]:
         return "real", (
-            f"{counts['unrecognized']}/{len(failed)} clinical-context failures carry no upstream "
+            f"{counts['unrecognized']}/{len(failed)} live-provider failures carry no upstream "
             "5xx/timeout evidence and are not fallback echoes"
         )
     if not counts["hard"]:
@@ -142,9 +199,9 @@ def classify(junit_path: Path) -> tuple[str, str]:
             f"all {len(failed)} failures are fallback echoes (static_fallback) with no hard "
             "5xx/timeout evidence anywhere — a client bug produces exactly this shape"
         )
-    names = ", ".join(sorted(t.rsplit(".", 1)[-1] for t in verdicts))
+    names = ", ".join(sorted(test_id.rsplit(".", 1)[-1] for test_id, _ in verdicts))
     return "upstream-transient", (
-        f"{len(failed)}/{len(failed)} failures in the clinical-context live suite "
+        f"{len(failed)}/{len(failed)} failures in recognized live-provider suites "
         f"(hard 5xx/timeout evidence: {counts['hard']}, fallback echoes: {counts['echo']}) — {names}"
     )
 
