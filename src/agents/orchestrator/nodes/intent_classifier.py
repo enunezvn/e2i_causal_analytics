@@ -42,7 +42,11 @@ from src.kpi.business_metric_vocabulary import (
     KPI_VALUE_LOOKUP_METRIC_PATTERN,
     KPI_VALUE_LOOKUP_UNSUPPORTED_QUALIFIER_PATTERN,
 )
-from src.services.query_entities import SUPPORTED_BRANDS, region_phrase_source
+from src.services.query_entities import (
+    INDICATION_TO_BRAND,
+    SUPPORTED_BRANDS,
+    region_phrase_source,
+)
 from src.utils.llm_content import normalize_llm_content, parse_llm_json
 from src.utils.llm_factory import MODEL_MAPPINGS, get_fast_llm, get_llm_provider
 from src.utils.mock_llm import llm_or_marked_mock
@@ -556,8 +560,22 @@ _REGION_WORD_PATTERN = rf"(?:{region_phrase_source()})(?:'s)?(?:\s+(?:region|are
 _TIME_WORD_PATTERN = (
     r"(?:last|past|this|prior|previous|current|currnt|curent|latest|recent|trailing"
     r"|(?:day|week|month|quarter|year)s?(?:'s)?|today's|ytd|mtd|qtd"
-    r"|(?:year|month|quarter)-to-date|q[1-4]|h[12]|fy\d{2,4}|\d{1,4}(?:-day)?|last-\d+-day"
-    r"|end|start|as|weekly|monthly|quarterly|daily|annual|annualized|yearly)"
+    r"|(?:year|month|quarter)-to-date|q[1-4]|h[12]|fy\d{2,4}|\d{4}-\d{2}-\d{2}"
+    r"|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?"
+    r"|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?"
+    r"|\d{1,4}(?:-day)?|last-\d+-day|to|end|start|as"
+    r"|weekly|monthly|quarterly|daily|annual|annualized|yearly)"
+)
+# Indications ground a brand (brand_scan / INDICATION_TO_BRAND), so "PNH TRx" is a
+# scoped lookup the resolver binds -- derived from that authority, not re-listed.
+_INDICATION_WORD_PATTERN = (
+    "(?:"
+    + "|".join(
+        part
+        for pattern, _brand in INDICATION_TO_BRAND
+        for part in pattern.replace(r"\b", "").split("|")
+    )
+    + ")"
 )
 _QUALIFIER_WORD_PATTERN = (
     r"(?:total|overall|national|regional|us|u\.s\.|brand|canonical|patient[\s-]panel|panel"
@@ -567,13 +585,21 @@ _QUALIFIER_WORD_PATTERN = (
 )
 _KPI_SCOPE_WORD_PATTERN = (
     rf"(?:{_BRAND_WORD_PATTERN}|{_REGION_WORD_PATTERN}|{_TIME_WORD_PATTERN}"
-    rf"|{_QUALIFIER_WORD_PATTERN})"
+    rf"|{_INDICATION_WORD_PATTERN}|{_QUALIFIER_WORD_PATTERN})"
 )
-# main's own budget -- a determiner plus at most THREE gap words -- now with every gap
-# word required to be a scope word. Keeping the budget makes this grammar a strict
-# SUBSET of main's: it can never bind something main did not (codex r2 HIGH-2, where a
-# six-word budget let "the number of competitors in new prescriptions" reach NRx).
+# The target is the INTERSECTION of two grammars anchored at the same position:
+# (a) main's own shape -- a determiner plus at most three PHYSICAL words before the
+#     metric -- as a lookahead, and (b) the scope-word form.
+# Counting scope repetitions alone did NOT give main's budget, because one scope
+# element can consume several words ("new england", "patient panel", "u.s."): codex r3
+# matched "What is New England and West TRx?" here while main did not, and the resolver
+# then served a NATIONAL figure for a two-region ask. With (a) as a gate the subset
+# property is structural, so the scope vocabulary can hold multi-word forms safely.
+_KPI_MAIN_SHAPE_PATTERN = (
+    rf"(?:teh\s+|the\s+)?(?:[\w'-]+\s+){{0,3}}?{KPI_VALUE_LOOKUP_METRIC_PATTERN}\b"
+)
 _KPI_VALUE_LOOKUP_TARGET_PATTERN = (
+    rf"(?={_KPI_MAIN_SHAPE_PATTERN})"
     r"(?:teh\s+|the\s+)?"
     rf"(?:{_KPI_SCOPE_WORD_PATTERN}\s+){{0,3}}?{KPI_VALUE_LOOKUP_METRIC_PATTERN}"
 )
