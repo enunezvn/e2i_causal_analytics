@@ -401,6 +401,25 @@ class TestRAGASEvaluator:
         assert all(isinstance(r, EvaluationResult) for r in results)
 
     @pytest.mark.asyncio
+    async def test_evaluate_batch_assigns_unique_ids_for_same_brand(self, evaluator):
+        samples = [
+            EvaluationSample(
+                query=f"query_{i}",
+                ground_truth=f"truth_{i}",
+                answer=f"answer_{i}",
+                contexts=[f"context_{i}"],
+                metadata={"brand": "Kisqali"},
+            )
+            for i in range(3)
+        ]
+        evaluator._ragas_available = False
+
+        results = await evaluator.evaluate_batch(samples, batch_run_id="batch_001")
+
+        assert len({result.sample_id for result in results}) == len(samples)
+        assert all(result.sample_id.startswith("Kisqali_batch_001_") for result in results)
+
+    @pytest.mark.asyncio
     async def test_evaluate_batch_with_run_id(self, evaluator):
         samples = [
             EvaluationSample(query="test", ground_truth="truth", answer="ans", contexts=["ctx"])
@@ -479,6 +498,18 @@ class TestRAGEvaluationPipeline:
         assert report.total_samples == 2
         assert report.evaluation_time_seconds > 0
         assert len(report.results) == 2
+
+    @pytest.mark.asyncio
+    async def test_same_second_runs_have_distinct_run_and_sample_ids(self, pipeline):
+        pipeline.dataset = pipeline.dataset[:1]
+        pipeline.evaluator._ragas_available = False
+
+        with patch("src.rag.evaluation.time.time", return_value=1_700_000_000.0):
+            first = await pipeline.run_evaluation()
+            second = await pipeline.run_evaluation()
+
+        assert first.run_id != second.run_id
+        assert first.results[0].sample_id != second.results[0].sample_id
 
     @pytest.mark.asyncio
     async def test_run_evaluation_with_pipeline(self, pipeline):

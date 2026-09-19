@@ -20,7 +20,7 @@ import logging
 import time
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Awaitable, Dict, List, Optional, cast
 
 from src.rag.backends import FulltextBackend, GraphBackend, VectorBackend
 from src.rag.config import (
@@ -37,6 +37,26 @@ from src.rag.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class _BackendResults(dict[RetrievalSource, List[RetrievalResult]]):
+    """Per-search results plus sanitized backend failures.
+
+    Keeping the errors on the returned mapping makes the evidence local to a
+    single concurrent search instead of storing mutable in-flight state on the
+    shared retriever instance.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            {
+                RetrievalSource.VECTOR: [],
+                RetrievalSource.FULLTEXT: [],
+                RetrievalSource.GRAPH: [],
+            }
+        )
+        self.errors: List[str] = []
+        self.latencies_ms: Dict[RetrievalSource, float] = {}
 
 
 class HybridRetriever:
@@ -166,6 +186,8 @@ class HybridRetriever:
         backend_results = await self._dispatch_parallel_searches(
             query=query, embedding=embedding, entities=entities, filters=filters
         )
+        backend_errors = list(getattr(backend_results, "errors", []))
+        backend_latencies = dict(getattr(backend_results, "latencies_ms", {}))
 
         # Check if all backends failed
         total_results = sum(len(r) for r in backend_results.values())
@@ -184,9 +206,10 @@ class HybridRetriever:
                     "fulltext": bool(query and query.strip()),
                     "graph": True,
                 },
-                vector_latency_ms=self.vector_backend.last_latency_ms,
-                fulltext_latency_ms=self.fulltext_backend.last_latency_ms,
-                graph_latency_ms=self.graph_backend.last_latency_ms,
+                vector_latency_ms=backend_latencies.get(RetrievalSource.VECTOR),
+                fulltext_latency_ms=backend_latencies.get(RetrievalSource.FULLTEXT),
+                graph_latency_ms=backend_latencies.get(RetrievalSource.GRAPH),
+                errors=backend_errors,
             )
             return []
 
@@ -217,9 +240,10 @@ class HybridRetriever:
                 "fulltext": bool(query and query.strip()),
                 "graph": True,
             },
-            vector_latency_ms=self.vector_backend.last_latency_ms,
-            fulltext_latency_ms=self.fulltext_backend.last_latency_ms,
-            graph_latency_ms=self.graph_backend.last_latency_ms,
+            vector_latency_ms=backend_latencies.get(RetrievalSource.VECTOR),
+            fulltext_latency_ms=backend_latencies.get(RetrievalSource.FULLTEXT),
+            graph_latency_ms=backend_latencies.get(RetrievalSource.GRAPH),
+            errors=backend_errors,
         )
 
         logger.info(
@@ -238,49 +262,72 @@ class HybridRetriever:
         embedding: Optional[List[float]],
         entities: ExtractedEntities,
         filters: Dict[str, Any],
-    ) -> Dict[RetrievalSource, List[RetrievalResult]]:
+    ) -> _BackendResults:
         """
         Dispatch searches to all backends in parallel.
 
         Returns dict of source -> results, with empty list for failed backends.
         """
-        results: Dict[RetrievalSource, List[RetrievalResult]] = {
-            RetrievalSource.VECTOR: [],
-            RetrievalSource.FULLTEXT: [],
-            RetrievalSource.GRAPH: [],
-        }
+        results = _BackendResults()
 
-        # Build task list
+        async def capture(
+            source: RetrievalSource,
+            operation: Awaitable[List[RetrievalResult]],
+        ) -> tuple[
+            RetrievalSource,
+            List[RetrievalResult],
+            Optional[Exception],
+            float,
+        ]:
+            """Bind result, error, and latency to this invocation."""
+            backend_start = time.perf_counter()
+            try:
+                return source, await operation, None, (time.perf_counter() - backend_start) * 1000
+            except Exception as error:
+                return source, [], error, (time.perf_counter() - backend_start) * 1000
+
+        # Build task list. Each task captures telemetry locally so concurrent
+        # calls cannot read another query's mutable backend.last_latency_ms.
         tasks = []
-        task_sources = []
 
         # Vector search (requires embedding)
         if embedding is not None:
-            tasks.append(self._safe_vector_search(embedding, filters))
-            task_sources.append(RetrievalSource.VECTOR)
+            tasks.append(
+                capture(
+                    RetrievalSource.VECTOR,
+                    self._safe_vector_search(embedding, filters),
+                )
+            )
         else:
             logger.debug("Skipping vector search - no embedding provided")
 
         # Fulltext search (requires query text)
         if query and query.strip():
-            tasks.append(self._safe_fulltext_search(query, filters))
-            task_sources.append(RetrievalSource.FULLTEXT)
+            tasks.append(
+                capture(
+                    RetrievalSource.FULLTEXT,
+                    self._safe_fulltext_search(query, filters),
+                )
+            )
 
         # Graph search (can work with or without entities)
-        tasks.append(self._safe_graph_search(entities, query, filters))
-        task_sources.append(RetrievalSource.GRAPH)
+        tasks.append(
+            capture(
+                RetrievalSource.GRAPH,
+                self._safe_graph_search(entities, query, filters),
+            )
+        )
 
         # Execute all tasks in parallel
         if tasks:
-            completed = await asyncio.gather(*tasks, return_exceptions=True)
+            completed = await asyncio.gather(*tasks)
 
-            for source, result in zip(task_sources, completed, strict=False):
-                if isinstance(result, BaseException):
-                    logger.warning(f"{source.value} search failed: {result}")
-                    results[source] = []
-                else:
-                    # result is List[RetrievalResult] at this point
-                    results[source] = result  # type: ignore[assignment]
+            for source, result, error, latency_ms in completed:
+                results[source] = result
+                results.latencies_ms[source] = latency_ms
+                if error is not None:
+                    logger.warning(f"{source.value} search failed: {error}")
+                    results.errors.append(f"{source.value}:{type(error).__name__}")
 
         return results
 
@@ -289,30 +336,39 @@ class HybridRetriever:
     ) -> List[RetrievalResult]:
         """Execute vector search with error handling."""
         try:
-            return await self.vector_backend.search(embedding=embedding, filters=filters)
+            return cast(
+                List[RetrievalResult],
+                await self.vector_backend.search(embedding=embedding, filters=filters),
+            )
         except Exception as e:
             logger.error(f"Vector search error: {e}")
-            return []
+            raise
 
     async def _safe_fulltext_search(
         self, query: str, filters: Dict[str, Any]
     ) -> List[RetrievalResult]:
         """Execute fulltext search with error handling."""
         try:
-            return await self.fulltext_backend.search(query=query, filters=filters)
+            return cast(
+                List[RetrievalResult],
+                await self.fulltext_backend.search(query=query, filters=filters),
+            )
         except Exception as e:
             logger.error(f"Fulltext search error: {e}")
-            return []
+            raise
 
     async def _safe_graph_search(
         self, entities: ExtractedEntities, query: str, filters: Dict[str, Any]
     ) -> List[RetrievalResult]:
         """Execute graph search with error handling."""
         try:
-            return await self.graph_backend.search(entities=entities, query=query, filters=filters)
+            return cast(
+                List[RetrievalResult],
+                await self.graph_backend.search(entities=entities, query=query, filters=filters),
+            )
         except Exception as e:
             logger.error(f"Graph search error: {e}")
-            return []
+            raise
 
     def _apply_rrf_fusion(
         self, backend_results: Dict[RetrievalSource, List[RetrievalResult]], top_k: int
@@ -487,12 +543,15 @@ class HybridRetriever:
         Returns:
             Dict with 'nodes', 'edges', and 'metadata' for visualization
         """
-        return await self.graph_backend.get_causal_subgraph(
-            center_node_id=center_node_id,
-            node_types=node_types,
-            relationship_types=relationship_types,
-            max_depth=max_depth,
-            limit=limit,
+        return cast(
+            Dict[str, Any],
+            await self.graph_backend.get_causal_subgraph(
+                center_node_id=center_node_id,
+                node_types=node_types,
+                relationship_types=relationship_types,
+                max_depth=max_depth,
+                limit=limit,
+            ),
         )
 
     async def get_causal_path(
@@ -511,8 +570,11 @@ class HybridRetriever:
         Returns:
             List of GraphPath objects
         """
-        return await self.graph_backend.get_causal_path(
-            source_id=source_id, target_id=target_id, max_length=max_length
+        return cast(
+            List[Any],
+            await self.graph_backend.get_causal_path(
+                source_id=source_id, target_id=target_id, max_length=max_length
+            ),
         )
 
     @property

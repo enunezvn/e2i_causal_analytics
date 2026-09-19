@@ -21,15 +21,26 @@ import json
 import logging
 import os
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, cast
 
 from pydantic import BaseModel, Field
 
+from src.rag.ragas_dependencies import (
+    RagasDependencyError,
+    ensure_ragas_vertexai_compat,
+)
+from src.rag.ragas_dependencies import (
+    import_ragas_components as _import_ragas_components,
+)
 from src.utils.redaction import redact_query
 
 logger = logging.getLogger(__name__)
+
+# Backward-compatible private seam retained for the dependency regression test.
+_ensure_ragas_vertexai_compat = ensure_ragas_vertexai_compat
 
 
 # =============================================================================
@@ -664,69 +675,6 @@ def save_evaluation_dataset(samples: List[EvaluationSample], path: str) -> None:
         json.dump([sample.model_dump() for sample in samples], f, indent=2)
 
 
-# =============================================================================
-# RAGAS Dependency Compatibility (issue #491)
-# =============================================================================
-
-
-class RagasDependencyError(RuntimeError):
-    """Raised when the RAGAS dependency tree is broken or incompatible.
-
-    Distinct from a *transient* evaluation failure (a bad LLM call, a 401, a
-    network blip). A broken import means the evaluator cannot run at all — for
-    example issue #491, where ``ragas`` 0.4.x unconditionally imports
-    ``langchain_community.chat_models.vertexai`` which modern
-    ``langchain-community`` removed. We raise this loudly rather than silently
-    degrading to heuristic fallback scores, because those fallback values look
-    like real (failing) RAG metrics and masquerade as a quality regression.
-    """
-
-
-def _ensure_ragas_vertexai_compat() -> None:
-    """Make RAGAS 0.4.x importable against modern ``langchain-community``.
-
-    ``ragas`` 0.4.x's ``ragas/llms/base.py`` unconditionally runs::
-
-        from langchain_community.chat_models.vertexai import ChatVertexAI
-        from langchain_community.llms import VertexAI
-
-    but current ``langchain-community`` releases no longer ship the Vertex AI
-    integrations (the pinned 0.4.2 does not include them; they migrated to the
-    standalone ``langchain-google-vertexai`` package).
-    E2I evaluation uses OpenAI exclusively and never instantiates Vertex
-    models, so we register lightweight stubs that satisfy ragas's import
-    without dragging in the heavy Google Cloud dependency tree. See issue #491
-    (confirmed against ragas==0.4.3 / langchain-community==0.4.2, 2026-05-24).
-
-    Idempotent and conditional: stubs are only injected when the *real* import
-    fails, so if a future ``langchain-community`` release restores the real
-    Vertex classes those win. If ``langchain-community`` is not installed at
-    all there is nothing to shim (ragas would not be importable either).
-    """
-    import sys
-    import types
-
-    try:
-        import langchain_community  # noqa: F401
-    except ImportError:
-        return
-
-    try:
-        from langchain_community.chat_models.vertexai import ChatVertexAI  # noqa: F401
-    except ImportError:
-        _stub = types.ModuleType("langchain_community.chat_models.vertexai")
-        _stub.ChatVertexAI = type("ChatVertexAI", (), {})  # type: ignore[attr-defined]
-        sys.modules["langchain_community.chat_models.vertexai"] = _stub
-
-    try:
-        from langchain_community.llms import VertexAI  # noqa: F401
-    except ImportError:
-        import langchain_community.llms as _llms
-
-        if not hasattr(_llms, "VertexAI"):
-            _llms.VertexAI = type("VertexAI", (), {})  # type: ignore[attr-defined]
-
-
 @dataclass
 class RagasSmokeResult:
     """Structured result of :func:`verify_ragas_dependencies`.
@@ -742,60 +690,12 @@ class RagasSmokeResult:
     checks: Dict[str, bool] = field(default_factory=dict)
 
 
-def _import_ragas_components() -> Dict[str, Any]:
-    """Run the Vertex compat shim and the exact RAGAS import sequence the
-    evaluator needs, returning the imported callables.
-
-    Centralised so the real evaluator (:meth:`RAGASEvaluator._evaluate_with_ragas`)
-    and the cheap dependency smoke (:func:`verify_ragas_dependencies`) exercise
-    the *same* imports — they cannot drift, so the smoke faithfully guards what
-    the eval actually does.
-
-    Raises:
-        RagasDependencyError: if any import fails. A broken import (issue #491)
-            means the evaluator cannot run at all, so we fail loud rather than
-            silently degrading to heuristic fallback scores that masquerade as a
-            real quality regression.
-    """
-    try:
-        _ensure_ragas_vertexai_compat()
-        import openai
-        from datasets import Dataset
-        from ragas import evaluate
-        from ragas.embeddings import OpenAIEmbeddings as RagasOpenAIEmbeddings
-        from ragas.llms import llm_factory
-        from ragas.metrics import (
-            answer_relevancy,
-            context_precision,
-            context_recall,
-            faithfulness,
-        )
-    except ImportError as e:
-        raise RagasDependencyError(
-            "RAGAS evaluation dependencies are broken or incompatible "
-            f"({e}). The langchain stack in requirements-ragas.txt likely "
-            "drifted; see issue #491."
-        ) from e
-
-    return {
-        "openai": openai,
-        "Dataset": Dataset,
-        "evaluate": evaluate,
-        "OpenAIEmbeddings": RagasOpenAIEmbeddings,
-        "llm_factory": llm_factory,
-        "faithfulness": faithfulness,
-        "answer_relevancy": answer_relevancy,
-        "context_precision": context_precision,
-        "context_recall": context_recall,
-    }
-
-
 def verify_ragas_dependencies(min_samples: int = 30) -> RagasSmokeResult:
     """Cheap, key-free smoke check of the RAGAS evaluation stack.
 
     Runs the real import sequence (:func:`_import_ragas_components`), validates
     golden-set integrity, and builds a one-row dataset — WITHOUT calling
-    ``evaluate()`` or constructing an OpenAI client, so it needs no API key and
+    ``aevaluate()`` or constructing an OpenAI client, so it needs no API key and
     spends nothing.
 
     This restores the automatic per-PR guard that going manual-only (#504)
@@ -1010,7 +910,11 @@ class RAGASEvaluator:
         Returns:
             Evaluation result with metric scores
         """
-        sample_id = f"{sample.metadata.get('brand', 'unknown')}_{int(time.time())}"
+        brand = sample.metadata.get("brand", "unknown")
+        # Batch callers provide an index-bearing run ID. Direct callers get a
+        # UUID. Unlike the former second-resolution timestamp, both forms stay
+        # unique when same-brand samples are evaluated concurrently.
+        sample_id = f"{brand}_{run_id}" if run_id else f"{brand}_{uuid.uuid4().hex}"
         eval_run_id = run_id or sample_id
 
         if not sample.answer:
@@ -1107,7 +1011,7 @@ class RAGASEvaluator:
         components = _import_ragas_components()
         openai = components["openai"]
         Dataset = components["Dataset"]
-        evaluate = components["evaluate"]
+        aevaluate = components["aevaluate"]
         RagasOpenAIEmbeddings = components["OpenAIEmbeddings"]
         llm_factory = components["llm_factory"]
         faithfulness = components["faithfulness"]
@@ -1163,7 +1067,12 @@ class RAGASEvaluator:
             dataset = Dataset.from_dict(data)
 
             # Run evaluation
-            result = evaluate(
+            # This method already runs inside the application's event loop.
+            # ragas.evaluate() applies nest_asyncio for sync/Jupyter callers;
+            # patching the production loop can corrupt asyncio.run() shutdown.
+            # The async-first API performs the same judging without mutating
+            # event-loop internals.
+            result = await aevaluate(
                 dataset=dataset,
                 metrics=[
                     faithfulness,
@@ -1208,6 +1117,7 @@ class RAGASEvaluator:
             )
 
             metadata = dict(sample.metadata)
+            metadata["evaluation_method"] = "ragas"
             if unmeasured:
                 metadata["unmeasured_metrics"] = unmeasured
 
@@ -1225,7 +1135,7 @@ class RAGASEvaluator:
 
         except ImportError as e:
             # A dependency break can also surface lazily here (ragas importing a
-            # removed langchain symbol during evaluate()). Same #491 failure
+            # removed langchain symbol during aevaluate()). Same #491 failure
             # class as the import block above — fail loud, do not fake scores.
             raise RagasDependencyError(
                 "RAGAS evaluation hit a dependency break at runtime "
@@ -1538,7 +1448,7 @@ class RAGEvaluationPipeline:
             Evaluation report with all metrics
         """
         start_time = time.time()
-        run_id = f"eval_{int(start_time)}"
+        run_id = f"eval_{uuid.uuid4().hex}"
 
         logger.info(f"Starting evaluation run {run_id} with {len(self.dataset)} samples")
 

@@ -75,10 +75,13 @@ def _components(row: dict[str, Any]) -> dict[str, Any]:
     class _Metric:
         """The evaluator assigns .llm / .embeddings onto each metric object."""
 
+    async def _aevaluate(**_kwargs: Any) -> _Frame:
+        return _Frame(row)
+
     return {
         "openai": type("openai", (), {"OpenAI": _OpenAI}),
         "Dataset": _Dataset,
-        "evaluate": lambda **_kwargs: _Frame(row),
+        "aevaluate": _aevaluate,
         "OpenAIEmbeddings": _Embeddings,
         "llm_factory": lambda *a, **k: _Metric(),
         "faithfulness": _Metric(),
