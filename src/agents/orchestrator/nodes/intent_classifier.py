@@ -39,9 +39,11 @@ from src.agents.multi_faceted import (
     split_clauses,
 )
 from src.kpi.business_metric_vocabulary import (
+    KPI_VALUE_LOOKUP_ABBREVIATION_PATTERN,
     KPI_VALUE_LOOKUP_METRIC_PATTERN,
     KPI_VALUE_LOOKUP_UNSUPPORTED_QUALIFIER_PATTERN,
 )
+from src.services.query_entities import SUPPORTED_BRANDS
 from src.utils.llm_content import normalize_llm_content, parse_llm_json
 from src.utils.llm_factory import MODEL_MAPPINGS, get_fast_llm, get_llm_provider
 from src.utils.mock_llm import llm_or_marked_mock
@@ -510,9 +512,9 @@ _ASK_SHAPE_RE = re.compile(
 # layer, which classifies them prediction@0.85 → prediction_synthesizer fails
 # closed on chat.
 #
-# The {0,3} word-bounded gap keeps causal/forecast asks that merely MENTION a
-# metric ("what is the causal impact of rep visits on TRx") outside the match;
-# "teh" is a recurring real-traffic typo (bench-0083/0100/0114/0117/0126).
+# The target grammar keeps causal/forecast/entity asks that merely MENTION a
+# metric outside the match. "teh" is a recurring real-traffic typo
+# (bench-0083/0100/0114/0117/0126).
 #
 # Whole-query forecast guard (codex iter-1/2/3 MEDIUMs): a query containing ANY
 # prediction lexeme anywhere ("show me the trx forecast", "what is the trx for
@@ -537,6 +539,44 @@ _ASK_SHAPE_RE = re.compile(
 # the resolver uses the pre-compiled twin. Identity is pinned by
 # test_explainer_evidence_binding_1475.py.
 _KPI_ENTITY_COUNT_NOUN_PATTERN = r"(?:patients?|hcps?|prescribers?|doctors?|reps?|representatives?)"
+# The product before a compact KPI token ("Kisqali TRx") is a SUPPORTED brand, matched
+# case-insensitively. A capitalisation rule cannot work here: the classifier scores the
+# LOWERCASED query (classify_intent) while the resolver sees the original, so the two
+# layers would disagree on "kisqali trx" / "the remibrutinib NRx".
+_PRODUCT_TOKEN_PATTERN = "(?:" + "|".join(b.lower() for b in SUPPORTED_BRANDS) + ")"
+# Bounded semantic qualifiers. Unlike a generic word budget, they cannot absorb an
+# unrelated subject + verb before a full metric name.
+_KPI_QUALIFIER_PATTERN = (
+    r"(?:current(?:\s+total)?|latest|recent|total|last-\d+-day|(?:patient[\s-])?panel"
+    r"|weekly|monthly|quarterly|daily|annual|yearly)"
+)
+# A supported brand (possessive allowed) optionally followed by one qualifier, then the
+# metric: "Remibrutinib market share", "Kisqali's total prescriptions", "Remibrutinib
+# weekly TRx". The brand set is closed, so this cannot admit "patients receiving ...".
+_BRAND_LED_METRIC_PATTERN = (
+    rf"{_PRODUCT_TOKEN_PATTERN}(?:'s)?\s+(?:{_KPI_QUALIFIER_PATTERN}\s+)?"
+    rf"{KPI_VALUE_LOOKUP_METRIC_PATTERN}"
+)
+_KPI_VALUE_LOOKUP_TARGET_PATTERN = (
+    r"(?:"
+    # The KPI itself is the requested noun phrase.
+    rf"{KPI_VALUE_LOOKUP_METRIC_PATTERN}"
+    rf"|{_KPI_QUALIFIER_PATTERN}\s+{KPI_VALUE_LOOKUP_METRIC_PATTERN}"
+    rf"|{_BRAND_LED_METRIC_PATTERN}"
+    # Trend phrasing over a KPI ("the trend of Remibrutinib NBRx", "how Kisqali's
+    # total prescriptions have evolved"): still a lookup of that KPI over time.
+    r"|(?:trend|trajectory|evolution|history)\s+(?:of|in|for)\s+(?:the\s+)?"
+    rf"(?:{_BRAND_LED_METRIC_PATTERN}|(?:{_KPI_QUALIFIER_PATTERN}\s+)?"
+    rf"{KPI_VALUE_LOOKUP_METRIC_PATTERN})"
+    rf"|how\s+{_BRAND_LED_METRIC_PATTERN}"
+    r"|(?:end|start|as)\s+of\s+(?:q[1-4]|\d{4})\s+"
+    rf"{KPI_VALUE_LOOKUP_ABBREVIATION_PATTERN}"
+    r"|(?:value|number|count)\s+of\s+"
+    rf"{KPI_VALUE_LOOKUP_METRIC_PATTERN}"
+    r"|(?:value|number|count|share)\s+of\s+"
+    rf"{_PRODUCT_TOKEN_PATTERN}\s+{KPI_VALUE_LOOKUP_ABBREVIATION_PATTERN}"
+    r")"
+)
 
 KPI_VALUE_LOOKUP_PATTERN = (
     r"(?s)\A(?!.*(?:predict|expect|forecast|project|likelihood|probabilit|what will))"
@@ -544,8 +584,9 @@ KPI_VALUE_LOOKUP_PATTERN = (
     # A metric phrase can be the OBJECT of a different entity-count question.
     # Without this fail-closed subject guard, "How many patients received new
     # prescriptions?" binds NRx instead of the requested patient count.
-    # Modifiers before the subject remain tolerated, matching the gap budget
-    # below ("How many high-risk patients ...").
+    # Up to two modifiers before the subject are tolerated ("How many high-risk
+    # patients ..."); the target grammar below independently refuses any
+    # subject it does not name (people, pharmacies, ...).
     rf"(?!.*\bhow many(?:\s+[\w'-]+){{0,2}}\s+{_KPI_ENTITY_COUNT_NOUN_PATTERN}\b)"
     # The same entity-count ask also arrives as "patient count for NRx" or
     # "number of high-risk patients ...". The KPI is still the object/axis,
@@ -553,9 +594,20 @@ KPI_VALUE_LOOKUP_PATTERN = (
     rf"(?!.*\b{_KPI_ENTITY_COUNT_NOUN_PATTERN}\s+(?:counts?|totals?)\b)"
     rf"(?!.*\b(?:counts?|totals?|number)\s+of"
     rf"(?:\s+[\w'-]+){{0,2}}\s+{_KPI_ENTITY_COUNT_NOUN_PATTERN}\b)"
-    r".*?(?:what(?:'?s| is| are| was| were)|show me|tell me about|how many|give me)\s+"
-    r"(?:teh\s+|the\s+)?(?:[\w'-]+\s+){0,3}?"
-    rf"{KPI_VALUE_LOOKUP_METRIC_PATTERN}\b"
+    r".*?(?:"
+    # All lookup cues use the same constrained target grammar. In particular,
+    # no cue may skip an arbitrary subject/verb to reach a KPI object.
+    r"(?:what(?:'?s| is| are| was| were)|show me|tell me about|give me)\s+"
+    r"(?:(?:teh|the|a|an)\s+)?"
+    rf"{_KPI_VALUE_LOOKUP_TARGET_PATTERN}"
+    r"|"
+    # For a count question, the KPI must be the counted noun phrase directly
+    # after "how many" (optionally partitive/determined). A generic word gap
+    # here makes the KPI object win over any unseen subject noun: e.g. people,
+    # individuals, or pharmacies that received/filled new prescriptions.
+    r"how many\s+(?:of\s+)?(?:teh\s+|the\s+)?"
+    rf"{_KPI_VALUE_LOOKUP_TARGET_PATTERN}"
+    r")\b"
 )
 KPI_VALUE_LOOKUP_RE = re.compile(KPI_VALUE_LOOKUP_PATTERN, re.IGNORECASE)
 

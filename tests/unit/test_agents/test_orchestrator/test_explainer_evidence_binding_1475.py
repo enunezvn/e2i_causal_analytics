@@ -206,6 +206,29 @@ def test_full_kpi_name_lookup_binds_the_same_real_calculated_value(monkeypatch) 
     assert stub.calls == [("WS3-BI-005", {"brand": "Kisqali"})]
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "How many people received new prescriptions?",
+        "How many individuals received new prescriptions?",
+        "How many pharmacies filled new prescriptions?",
+        "Show me patients receiving new prescriptions",
+        "Give me pharmacies filling new prescriptions",
+        "Tell me about people with new prescriptions",
+    ],
+)
+def test_entity_count_with_full_kpi_object_never_binds_a_bare_value(
+    monkeypatch, query: str
+) -> None:
+    """The KPI is the object, not the quantity requested by ``how many``."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](_agent_input(query), _dispatch())
+
+    assert isinstance(resolved, NeedsStructuredInput), resolved
+    assert stub.calls == []
+
+
 def test_full_kpi_name_as_cost_modifier_never_binds_a_bare_value(monkeypatch) -> None:
     """Widening the route vocabulary must preserve the governing-head fence."""
     stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))

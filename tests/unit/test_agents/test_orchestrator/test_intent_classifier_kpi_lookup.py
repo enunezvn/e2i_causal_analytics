@@ -53,6 +53,14 @@ class TestKpiValueLookupPattern:
             "what is the NBRx for Kisqali in the past month?",  # bench-0095
             "What is the current TRx?",  # bench-0121 (no brand)
             "What is NRx?",  # bench-0052 (bare metric definition ask)
+            # #2130 follow-up: shapes the old 3-word gap admitted and the constrained
+            # target grammar must keep (gold/real traffic, measured 2026-09-19).
+            "What is Remibrutinib market share?",  # gold: explainer
+            "Can you show me the trend of Remibrutinib NBRx over the past 6 months?",  # gold
+            "Can you show me how Kisqali's total prescriptions have evolved throughout the fourth quarter?",  # gold
+            "Show me how Remibrutinib's TRx trend over the last 30 days compares to Kisqali and Fabhalta.",  # gold
+            "What was the weekly TRx share for Remibrutinib across the Southeast region recently?",  # real traffic
+            "What was the weekly TRx trajectory for Remibrutinib across the Southeast during Q2?",  # real traffic
         ],
     )
     def test_kpi_value_lookup_is_explanation(self, query: str) -> None:
