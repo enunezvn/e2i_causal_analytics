@@ -448,9 +448,13 @@ def value_lookup_mentions_supported(
     # (brand_clarify_for_ask, #2114 owner ruling 2026-09-15) -- the same safer
     # path the region clarify gets below. Any other KPI has no clarify to reach,
     # so an unresolved brand there still refuses (#2141).
-    brand_resolved_or_clarified = brand_from_text(normalized_query) is not None or (
-        kpi_id in BRAND_CLARIFY_KPI_IDS and brand_scan(normalized_query).is_ambiguous
-    )
+    # "Resolved" means ONE brand: "Kisqali and PNH" binds Kisqali by name while
+    # grounding Fabhalta by indication, and a Kisqali-only figure drops half of it
+    # (codex iter9 HIGH; the same fail-open existed on main).
+    brands = brand_scan(normalized_query)
+    brand_resolved_or_clarified = (
+        brand_from_text(normalized_query) is not None and not brands.is_ambiguous
+    ) or (kpi_id in BRAND_CLARIFY_KPI_IDS and brands.is_ambiguous)
     region_result = region_scan(normalized_query)
     region_resolved_or_clarified = (
         region_result.region is not None or region_result.ambiguous_phrase is not None

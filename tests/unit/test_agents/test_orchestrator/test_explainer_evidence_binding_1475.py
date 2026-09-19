@@ -1603,17 +1603,20 @@ def test_a_structured_entity_brand_also_wins_over_a_mixed_scope_ask(monkeypatch)
     assert stub.calls == [("WS3-BI-007", {"brand": "Kisqali"})]
 
 
-def test_a_non_volume_kpi_ignores_the_mixed_scope_too(monkeypatch) -> None:
-    """The volume-family boundary holds for the mixed shape as well."""
+def test_a_non_volume_kpi_refuses_the_mixed_scope_too(monkeypatch) -> None:
+    """The mixed shape: "Kisqali and PNH" BINDS Kisqali by name while grounding a
+    second brand (Fabhalta) by indication. A volume KPI asks which; any other KPI must
+    REFUSE -- answering with a Kisqali-only figure drops half the ask (codex iter9 HIGH;
+    the same fail-open existed on main at 4b719abe8, measured, and was pinned here as
+    'not this lane's' until the guard it lives in became this lane's)."""
     stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
 
     resolved = disp.INPUT_RESOLVERS["explainer"](
         _agent_input("What is the conversion rate for Kisqali and PNH?"), _dispatch()
     )
 
-    assert isinstance(resolved, dict), resolved
-    assert resolved["analysis_results"][0]["analysis_type"] == "kpi_lookup"
-    assert stub.calls == [("WS3-BI-009", {"brand": "Kisqali"})]
+    assert not isinstance(resolved, dict), resolved
+    assert stub.calls == []
 
 
 # --------------------------------------------------------------------------
