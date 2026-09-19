@@ -2238,7 +2238,10 @@ def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str,
     if match is None:
         return None
     kpi, normalized_query, match_start, match_end = match
-    if not value_lookup_mentions_supported(normalized_query, kpi.id, match_start, match_end):
+    decided_brand = _structured_brand(agent_input)
+    if not value_lookup_mentions_supported(
+        normalized_query, kpi.id, match_start, match_end, structured_brand=decided_brand
+    ):
         # Governing heads and bare right tails are checked on EVERY occurrence
         # before masking or calculation.  A value cannot answer "cost of TRx",
         # "TRx drivers", "TRx cost", or an unresolved "TRx patients" scope.
@@ -2278,7 +2281,7 @@ def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str,
             return [region_clarify_evidence(kpi, ambiguous_phrase)]
     # #2114: an ask grounding SEVERAL brands must end in a question, not a figure
     # for one of them. Only the ask text tells them apart; the calculator cannot.
-    brand_clarify = brand_clarify_for_ask(kpi, query, _structured_brand(agent_input))
+    brand_clarify = brand_clarify_for_ask(kpi, query, decided_brand)
     if brand_clarify is not None:
         return [brand_clarify]
     context: Dict[str, Any] = {}

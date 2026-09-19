@@ -1450,6 +1450,30 @@ def test_a_structured_brand_wins_over_a_multi_brand_ask(monkeypatch) -> None:
     assert stub.calls == [("WS3-BI-007", {"brand": "Kisqali"})]
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "What is the conversion rate for Kisqali and PNH?",
+        "What is the conversion rate for Kisqali and Fabhalta?",
+    ],
+)
+def test_a_structured_brand_answers_a_non_volume_multi_brand_ask(monkeypatch, query) -> None:
+    """Owner decision 2026-09-15 (plan Task 10c table): an ask where entities /
+    user_context supplied a brand ANSWERS -- "a structured brand is a decision
+    already taken and is never re-asked, even when the text grounds two". The value
+    guard reads only the text, so without the structured brand it refused these
+    (codex iter10 HIGH)."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    agent_input = _agent_input(query)
+    agent_input["user_context"] = {"brand": "Kisqali"}
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](agent_input, _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["analysis_type"] == "kpi_lookup"
+    assert stub.calls == [("WS3-BI-009", {"brand": "Kisqali"})]
+
+
 def test_non_volume_kpi_refuses_rather_than_clarifies(monkeypatch) -> None:
     """Deliberate scope: the clarify covers the Rx-VOLUME family (the ids this
     lane owns, whose unbranded read is a portfolio aggregate). Conversion Rate

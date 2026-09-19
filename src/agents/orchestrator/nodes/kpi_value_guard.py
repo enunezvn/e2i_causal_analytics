@@ -428,9 +428,19 @@ def _tail_changes_quantity(
 
 
 def value_lookup_mentions_supported(
-    normalized_query: str, kpi_id: str, match_start: int, match_end: int
+    normalized_query: str,
+    kpi_id: str,
+    match_start: int,
+    match_end: int,
+    *,
+    structured_brand: Optional[str] = None,
 ) -> bool:
-    """True only when every occurrence can honestly be answered as a value."""
+    """True only when every occurrence can honestly be answered as a value.
+
+    ``structured_brand`` is a brand an entities / user_context source already
+    decided on. It resolves the brand scope whatever the text grounds -- the
+    owner's 2026-09-15 rule that a structured brand is never re-asked.
+    """
     # Lazy import avoids a module cycle: dispatcher imports this helper at the
     # call site while these established head helpers live in dispatcher.
     from src.agents.orchestrator.nodes.dispatcher import (
@@ -453,8 +463,10 @@ def value_lookup_mentions_supported(
     # (codex iter9 HIGH; the same fail-open existed on main).
     brands = brand_scan(normalized_query)
     brand_resolved_or_clarified = (
-        brand_from_text(normalized_query) is not None and not brands.is_ambiguous
-    ) or (kpi_id in BRAND_CLARIFY_KPI_IDS and brands.is_ambiguous)
+        bool(structured_brand)
+        or (brand_from_text(normalized_query) is not None and not brands.is_ambiguous)
+        or (kpi_id in BRAND_CLARIFY_KPI_IDS and brands.is_ambiguous)
+    )
     region_result = region_scan(normalized_query)
     region_resolved_or_clarified = (
         region_result.region is not None or region_result.ambiguous_phrase is not None
