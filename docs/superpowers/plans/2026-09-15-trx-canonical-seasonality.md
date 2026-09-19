@@ -13663,7 +13663,11 @@ done
 while IFS='|' read -r svc name _rest; do
   case "$svc" in bentoml|feast|feast-materializer) check_sidecar "$svc" "$name" ;; esac
 done < "$IMAGES_PRE"
-canon=$(docker exec e2i_api test -f /app/src/kpi/calculators/canonical_volume.py && echo present || echo absent)
+# `sh -c`, not a bare `test`: inside e2i_api, PATH resolves `test` to /app/.venv/bin/test, a
+# console script that crashes (ModuleNotFoundError: scripts), so a bare `docker exec e2i_api test -f`
+# returned 1 even for /app/src/kpi/__init__.py -- this check read "absent" on every generation
+# (measured 2026-09-19 while staging Step 5b).
+canon=$(docker exec e2i_api sh -c 'test -f /app/src/kpi/calculators/canonical_volume.py' && echo present || echo absent)
 fields=$(docker exec e2i_feast feast --chdir /feast feature-views describe hcp_conversion_features 2>&1 | grep -oE '\b(trx_count|nrx_count|total_rx_count|triggers_delivered_count|triggers_accepted_count|triggers_total_count)\b' | sort -u | paste -sd, -)
 calc=$(docker exec e2i_api python -c "from src.api.routes.kpi import get_kpi_calculator; r = get_kpi_calculator().calculate('WS3-BI-005', use_cache=False, context={'brand': 'Kisqali'}); print('ok' if r.error is None and r.value is not None else 'error: %s' % r.error)" 2>&1 | tail -1)
 health=$(curl -sf --max-time 5 http://localhost:8000/health >/dev/null && echo up || echo down)
