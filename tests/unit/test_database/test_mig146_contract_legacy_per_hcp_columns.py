@@ -145,6 +145,23 @@ def test_the_contract_retires_the_legacy_columns_and_the_sync_machinery():
     assert "DROP FUNCTION IF EXISTS public.business_metrics_sync_legacy_trigger_counts()" in sql
 
 
+def _recreates_its_own_split(sql: str, view: str, split: str) -> bool:
+    """Whether ``sql`` recreates ``view`` as ``SELECT *`` filtered to ``split``.
+
+    The literal may carry the ``::data_split_type`` cast ``pg_get_viewdef`` prints for
+    the enum column (ultracode iter8 HIGH-b) -- both forms select the same rows.
+    """
+    return (
+        re.search(
+            rf"CREATE OR REPLACE VIEW public\.{view} AS\s*\n?\s*"
+            rf"SELECT \* FROM public\.business_metrics WHERE data_split = '{split}'"
+            rf"(?:::(?:public\.)?data_split_type)?;",
+            sql,
+        )
+        is not None
+    )
+
+
 def test_the_contract_recreates_the_split_views():
     """``DROP COLUMN`` fails while a view depends on the column, and all four
     ``SELECT *`` split views expand to the legacy names. They are dropped and
@@ -165,11 +182,9 @@ def test_the_contract_recreates_the_split_views():
         # consumers would then have been silently served the training split — the
         # holdout view, whose entire purpose is to be the split nothing trains on,
         # reading the split everything trains on.
-        assert re.search(
-            rf"CREATE OR REPLACE VIEW public\.{view} AS\s*\n?\s*"
-            rf"SELECT \* FROM public\.business_metrics WHERE data_split = '{split}';",
-            sql,
-        ), f"{view} is not recreated as the {split!r} split"
+        assert _recreates_its_own_split(sql, view, split), (
+            f"{view} is not recreated as the {split!r} split"
+        )
         assert sql.index(f"DROP VIEW IF EXISTS public.{view};") < sql.index(
             f"CREATE OR REPLACE VIEW public.{view}"
         ), f"{view} is recreated before it is dropped"
@@ -178,6 +193,31 @@ def test_the_contract_recreates_the_split_views():
     # a mapping that repeated a split would satisfy it four times over only if VIEWS
     # itself were wrong. Pin that here rather than trusting the constant.
     assert len(set(VIEWS.values())) == len(VIEWS), f"VIEWS repeats a split: {VIEWS}"
+
+
+def test_the_split_view_assertion_accepts_the_cast_pg_get_viewdef_emits():
+    """``data_split`` is the ``data_split_type`` ENUM, so ``pg_get_viewdef`` prints
+    each live predicate as ``data_split = 'train'::data_split_type`` (read off the
+    live ``v_train_business_metrics`` on 2026-09-19). A maintainer who copies that
+    form into 146 has written a CORRECT contract; a guard that rejects it invites
+    being loosened (ultracode iter8 HIGH-b). The cast must be accepted -- and only
+    for the view's OWN split, so the per-view teeth survive the relaxation."""
+    sql = CONTRACT.read_text()
+    for view, split in VIEWS.items():
+        cast_form = sql.replace(
+            f"WHERE data_split = '{split}';", f"WHERE data_split = '{split}'::data_split_type;"
+        )
+        assert cast_form != sql, f"{view}: the rewrite did not land"
+        assert _recreates_its_own_split(cast_form, view, split), (
+            f"{view}: the ::data_split_type form pg_get_viewdef emits was rejected"
+        )
+        wrong = next(s for s in VIEWS.values() if s != split)
+        crossed = sql.replace(
+            f"WHERE data_split = '{split}';", f"WHERE data_split = '{wrong}'::data_split_type;"
+        )
+        assert not _recreates_its_own_split(crossed, view, split), (
+            f"{view}: a cast predicate selecting {wrong!r} was accepted"
+        )
 
 
 def test_the_contract_is_ordered_drop_views_then_columns_then_recreate():
