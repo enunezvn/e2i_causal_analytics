@@ -66,6 +66,10 @@ class TestKpiValueLookupPattern:
             "Show me how Remibrutinib's TRx trend over the last 30 days compares to Kisqali and Fabhalta.",  # gold
             "What was the weekly TRx share for Remibrutinib across the Southeast region recently?",  # real traffic
             "What was the weekly TRx trajectory for Remibrutinib across the Southeast during Q2?",  # real traffic
+            # codex r4: parse_window accepts hyphenated month ranges; main counts
+            # "Jan-Mar" as one word, so the grammar must too.
+            "What is Jan-Mar 2025 TRx?",
+            "What is January-March 2025 TRx?",
         ],
     )
     def test_kpi_value_lookup_is_explanation(self, query: str) -> None:
@@ -213,6 +217,38 @@ class TestLlmClassifySuccessLogging:
         assert "0.95" in success_logs[0].getMessage(), "the success log must include the confidence"
 
 
+class TestHowManyCannotReachALaterCue:
+    """#2130 (codex r4 HIGH-2): a query that says "how many" anywhere may only match
+    through the how-many branch. Otherwise the leading `.*?` skips the entity-count
+    subject and latches onto a later ordinary cue, and 'How many people asked, "What
+    is TRx?"' bound the TRx scalar -- the exact defect this PR exists to remove,
+    reached by another route. Widening the entity-noun list would not close it.
+    """
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            'How many people asked, "What is TRx?"',
+            "How many pharmacies requested: give me NRx?",
+            "How many individuals want to know what is Kisqali TRx?",
+            "How many competitors say show me TRx?",
+        ],
+    )
+    def test_a_later_cue_does_not_rescue_an_entity_count_ask(self, query: str) -> None:
+        assert not KPI_VALUE_LOOKUP_RE.search(query)
+        assert _pattern(query)["primary_intent"] != "explanation"
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "How many total prescriptions did Kisqali have?",
+            "How many new-to-brand prescriptions were there?",
+        ],
+    )
+    def test_a_genuine_how_many_kpi_ask_still_routes(self, query: str) -> None:
+        assert KPI_VALUE_LOOKUP_RE.search(query)
+
+
 class TestKpiValueLookupSubsetInvariant:
     """#2130 (codex r3 HIGH-1): the constrained grammar must match a SUBSET of the
     shape main routed — a determiner plus at most three PHYSICAL words before the
@@ -256,6 +292,8 @@ class TestKpiValueLookupSubsetInvariant:
             "How many people received new prescriptions?",
             "How many pharmacies filled new prescriptions?",
             "Show me patients receiving new prescriptions",
+            'How many people asked, "What is TRx?"',
+            "What is Jan-Mar 2025 TRx?",
         ],
     )
     def test_every_match_is_also_a_main_shape_match(self, query: str) -> None:

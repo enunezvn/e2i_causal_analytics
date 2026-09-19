@@ -557,12 +557,17 @@ _BRAND_WORD_PATTERN = "(?:" + "|".join(b.lower() for b in SUPPORTED_BRANDS) + ")
 # The SAME phrases query_entities scans for, so "New England"/"West Coast"/"North East"
 # and the "region"/"area" noise suffix keep routing (codex r2 HIGH-1).
 _REGION_WORD_PATTERN = rf"(?:{region_phrase_source()})(?:'s)?(?:\s+(?:region|area))?"
+_MONTH_NAME_PATTERN = (
+    r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?"
+    r"|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
+)
 _TIME_WORD_PATTERN = (
     r"(?:last|past|this|prior|previous|current|currnt|curent|latest|recent|trailing"
     r"|(?:day|week|month|quarter|year)s?(?:'s)?|today's|ytd|mtd|qtd"
     r"|(?:year|month|quarter)-to-date|q[1-4]|h[12]|fy\d{2,4}|\d{4}-\d{2}-\d{2}"
-    r"|jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?"
-    r"|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?"
+    # parse_window accepts hyphenated month RANGES ("Jan-Mar 2025"), which main counts
+    # as one physical word, so the range must be one scope element too (codex r4).
+    rf"|{_MONTH_NAME_PATTERN}(?:[-\u2013]{_MONTH_NAME_PATTERN})?"
     r"|\d{1,4}(?:-day)?|last-\d+-day|to|end|start|as"
     r"|weekly|monthly|quarterly|daily|annual|annualized|yearly)"
 )
@@ -620,17 +625,23 @@ KPI_VALUE_LOOKUP_PATTERN = (
     rf"(?!.*\b{_KPI_ENTITY_COUNT_NOUN_PATTERN}\s+(?:counts?|totals?)\b)"
     rf"(?!.*\b(?:counts?|totals?|number)\s+of"
     rf"(?:\s+[\w'-]+){{0,2}}\s+{_KPI_ENTITY_COUNT_NOUN_PATTERN}\b)"
-    r".*?(?:"
+    r"(?:"
     # All lookup cues use the same constrained target grammar. In particular,
     # no cue may skip an arbitrary subject/verb to reach a KPI object.
+    #
+    # codex r4: the ordinary cues are unavailable to a query that says "how many"
+    # ANYWHERE, because the leading `.*?` could otherwise skip the entity-count
+    # subject and latch onto a later cue -- 'How many people asked, "What is TRx?"'
+    # bound TRx. Such a multipart ask fails closed instead of serving one scalar.
+    r"(?:(?!.*\bhow many\b).*?"
     r"(?:what(?:'?s| is| are| was| were)|show me|tell me about|give me)\s+"
-    rf"{_KPI_VALUE_LOOKUP_TARGET_PATTERN}"
+    rf"{_KPI_VALUE_LOOKUP_TARGET_PATTERN})"
     r"|"
     # For a count question, the KPI must be the counted noun phrase directly
     # after "how many" (optionally partitive/determined). A generic word gap
     # here makes the KPI object win over any unseen subject noun: e.g. people,
     # individuals, or pharmacies that received/filled new prescriptions.
-    r"how many\s+"
+    r".*?how many\s+"
     rf"{_KPI_VALUE_LOOKUP_TARGET_PATTERN}"
     r")\b"
 )
