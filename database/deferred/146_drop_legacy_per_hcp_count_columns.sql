@@ -116,17 +116,20 @@
 -- migrations (033 and after). Nothing depended on the claim -- but it was wrong,
 -- so it is corrected here rather than quietly removed.
 --
--- Re-runnable: every statement carries IF EXISTS / OR REPLACE, so a second
--- application raises nothing and changes no column, row or privilege. It does
--- recreate the four split views and send NOTIFY -- see "IF THIS FILE IS EVER
--- MOVED" above for exactly what a second application does.
+-- Re-runnable. Each of the 16 statements, by how it survives a second run: the
+-- precondition DO block lets an already-contracted schema through; the 4 view,
+-- 1 trigger, 1 function and 3 column DROPs carry IF EXISTS; the 4 view creates
+-- are CREATE OR REPLACE; the ledger INSERT is ON CONFLICT DO NOTHING; NOTIFY is
+-- a cache reload. So a second application raises nothing and changes no column,
+-- row or privilege; it does recreate the four views -- see "IF THIS FILE IS EVER
+-- MOVED" above for exactly what that does.
 -- ----------------------------------------------------------------------------
 
 -- ----------------------------------------------------------------------------
 -- PRECONDITION: refuse unless the expand really ran and its values really landed.
 -- ----------------------------------------------------------------------------
--- ultracode iter8 HIGH. Every statement below carries IF EXISTS / OR REPLACE so that
--- a second application raises nothing -- and the consequence nobody had drawn is that the
+-- ultracode iter8 HIGH. The DROPs and view creates below carry IF EXISTS / OR REPLACE so
+-- that a second application raises nothing -- and the consequence nobody had drawn is that the
 -- same property makes this file run happily to completion on a schema where 144 was
 -- NEVER applied, or was rolled back. It drops trx_count / nrx_count / total_rx_count
 -- with no canonical column holding the values, and reports exit 0.
