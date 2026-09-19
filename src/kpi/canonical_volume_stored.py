@@ -67,7 +67,12 @@ def canonical_volume_kpi_id(kpi_name: Optional[str]) -> Optional[str]:
     """The canonical volume KPI a data-query ``kpi_name`` names, else None."""
     if not kpi_name:
         return None
-    if kpi_name.strip().lower().replace("-", "_").replace(" ", "_") in _STORED_ONLY_KEYS:
+    # Ask the shared #2130 vocabulary which STORED key the name means rather than
+    # re-deriving it: a narrower local normalization sent "market shares" and
+    # "market/share" to canonical TRx Share (codex iter9 HIGH).
+    from src.kpi.business_metric_vocabulary import canonical_business_metric_name
+
+    if canonical_business_metric_name(kpi_name) in _STORED_ONLY_KEYS:
         return None
     from src.services.kpi_resolution import recognize_kpi
 

@@ -88,6 +88,31 @@ def test_the_stored_only_guard_is_load_bearing_not_decorative():
     assert cvs.canonical_volume_kpi_id("market share") is None
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Market Share",
+        "market shares",
+        "market/share",
+        "Market-Share",
+        "market.share",
+        "market_share",
+    ],
+)
+def test_every_spelling_of_market_share_keeps_the_stored_row_path(name):
+    """codex iter9 HIGH: the stored-only guard normalized only '-' and ' ', while the
+    shared #2130 vocabulary (the seam that picks the stored key) also folds '/', '.',
+    '_' and inflections. "market shares" therefore resolved to canonical TRx Share
+    (WS3-BI-008), a different quantity from the modeled market_share rows the
+    vocabulary says the name means. The guard must ask the vocabulary, not re-derive it."""
+    assert cvs.canonical_volume_kpi_id(name) is None, name
+
+
+@pytest.mark.parametrize("name", ["TRx Share", "trx shares", "trx/share"])
+def test_every_spelling_of_trx_share_still_routes_canonically(name):
+    assert cvs.canonical_volume_kpi_id(name) == "WS3-BI-008", name
+
+
 def test_the_calculation_is_kpi_calculates_own_call_with_the_same_context():
     calc = _Calculator(_result())
     out = _run("TRx", {"brand": "Kisqali", "metric_name": "trx"}, calc)
