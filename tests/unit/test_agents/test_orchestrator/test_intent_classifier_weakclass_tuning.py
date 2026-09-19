@@ -71,6 +71,9 @@ class TestNrxPanelDecompositionRouting2141:
             "What is NRx panel by therapy_line?",
             "What is NRx panel by line of therapy?",
             "What is NRx panel by line-of-therapy?",
+            "Can you show me NRx panel by segment?",
+            "Could you please give me NRx panel by therapy line?",
+            "What is NRx panel by segment for Kisqali?",
         ],
     )
     def test_routes_supported_nrx_breakdowns_to_cohort_profiler(self, query: str) -> None:
@@ -83,6 +86,7 @@ class TestNrxPanelDecompositionRouting2141:
         "query",
         [
             "What is NRx panel by segment cost?",
+            "What is NRx panel cost by segment?",
             "What is NRx panel by therapy line accuracy?",
             "What is NRx panel by segment and TRx cost?",
             "Do not show me NRx panel by segment.",

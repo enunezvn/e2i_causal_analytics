@@ -369,6 +369,9 @@ class TestNrxPanelDecompositionActiveRouting2141:
             "What is NRx panel by therapy_line?",
             "What is NRx panel by line of therapy?",
             "What is NRx panel by line-of-therapy?",
+            "Can you show me NRx panel by segment?",
+            "Could you please give me NRx panel by therapy line?",
+            "What is NRx panel by segment for Kisqali?",
         ],
     )
     async def test_active_classifier_routes_the_real_profile_owner(self, query):
@@ -392,6 +395,7 @@ class TestNrxPanelDecompositionActiveRouting2141:
         "query",
         [
             "What is NRx panel by segment cost?",
+            "What is NRx panel cost by segment?",
             "What is NRx panel by therapy line accuracy?",
             "What is NRx panel by segment and TRx cost?",
             "Do not show me NRx panel by segment.",

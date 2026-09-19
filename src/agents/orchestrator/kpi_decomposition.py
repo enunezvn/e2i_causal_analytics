@@ -12,11 +12,14 @@ import re
 
 NRX_COHORT_DECOMPOSITION_PATTERN = (
     r"(?s)\A\s*(?:please\s+)?"
+    r"(?:(?:can|could|would)\s+you\s+(?:please\s+)?)?"
     r"(?:what(?:'?s| is| are| was| were)|show me|give me|tell me about|how many)\s+"
-    r"(?:the\s+)?(?:current\s+)?nrx(?:\s+panel)?\b"
-    r"[^.?!]{0,80}\b(?:by|per|across)\s+"
+    r"(?:(?:the|an)\s+)?(?:current\s+)?nrx(?:\s+panel)?\b"
+    r"(?:\s+(?:numbers?|counts?|breakdown|profile))?"
+    r"\s+(?:by|per|across)\s+"
     r"(?:(?:(?:patient|clinical|disease[- ]severity|severity)\s+){0,2}segments?"
     r"|severity\s+tiers?|therapy[-_\s]+lines?|lines?[-_\s]+of[-_\s]+therapy)"
+    r"(?:\s+for\s+(?:remibrutinib|fabhalta|kisqali))?"
     r"\s*(?:please|thanks)?[?.!]*\s*\Z"
 )
 NRX_COHORT_DECOMPOSITION_RE = re.compile(NRX_COHORT_DECOMPOSITION_PATTERN, re.IGNORECASE)
