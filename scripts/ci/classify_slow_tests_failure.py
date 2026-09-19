@@ -69,10 +69,31 @@ _HARD = re.compile(
 # echo never counts as hard evidence on its own.
 _ECHO = re.compile(r"static_fallback", re.IGNORECASE)
 
-# The known #1766 code-defect shape must win even when its traceback/request
-# context also contains hard provider text.  Match exception headlines only;
-# the word "TypeError" in a provider response body is not by itself a verdict.
-_TYPE_ERROR = re.compile(r"(?m)^(?:E\s+)?TypeError:")
+# An exception headline outside this explicit provider/transport set is a real
+# failure even when its traceback/request context also contains a 500.  #1766
+# was a TypeError; an open-ended code-defect denylist would just move the hole
+# to the next exception class.  AssertionError is allowed because live-contract
+# assertions expose the provider's actual 500 in their failure representation.
+_EXCEPTION_HEADLINE = re.compile(r"^(?:E\s+)?(?:[A-Za-z_]\w*\.)*([A-Za-z_]\w*(?:Error|Exception)):")
+_UPSTREAM_EXCEPTION_TYPES = frozenset(
+    {
+        "AssertionError",
+        "ChEMBLError",
+        "UMLSError",
+        "HTTPError",
+        "HTTPStatusError",
+        "ReadTimeout",
+        "ConnectTimeout",
+        "PoolTimeout",
+        "WriteTimeout",
+        "TimeoutError",
+        "TimeoutException",
+        "ConnectionError",
+        "ConnectError",
+        "ReadError",
+        "RemoteProtocolError",
+    }
+)
 
 _DETAIL_CAP = 900
 
@@ -104,6 +125,18 @@ def _node_text(testcase: ET.Element, tags: tuple[str, ...]) -> str:
     return "\n".join(parts)
 
 
+def _failure_exception_type(testcase: ET.Element) -> str | None:
+    """Return the exception type from the failure/error headline, if any."""
+    for tag in ("failure", "error"):
+        for node in testcase.findall(tag):
+            text = node.get("message") or node.text or ""
+            first_line = text.lstrip().splitlines()[0] if text.strip() else ""
+            match = _EXCEPTION_HEADLINE.match(first_line)
+            if match:
+                return match.group(1)
+    return None
+
+
 def classify(junit_path: Path) -> tuple[str, str]:
     """Return (classification, one-line detail)."""
     if not junit_path.exists():
@@ -129,9 +162,10 @@ def classify(junit_path: Path) -> tuple[str, str]:
     for tc in failed:
         failure_text = _node_text(tc, ("failure", "error"))
         captured_text = _node_text(tc, ("system-out", "system-err"))
+        exception_type = _failure_exception_type(tc)
         if not _in_family(tc):
             verdict = "foreign"
-        elif _TYPE_ERROR.search(failure_text):
+        elif exception_type is not None and exception_type not in _UPSTREAM_EXCEPTION_TYPES:
             verdict = "unrecognized"
         elif _HARD.search(failure_text):
             verdict = "hard"

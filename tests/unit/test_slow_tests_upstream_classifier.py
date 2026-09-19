@@ -272,6 +272,13 @@ def test_hard_context_in_failure_text_does_not_hide_a_type_error(tmp_path: Path)
     assert outputs.get("classification") == "real", outputs
 
 
+def test_hard_context_does_not_hide_an_attribute_error(tmp_path: Path) -> None:
+    failure = "AttributeError: response has no attribute 'payload'\nUTS error: status=500"
+    cases = [(_UMLS_LIVE, "test_cui_lookup_returns_disease_semantic_type", failure)]
+    _, outputs = _classify(tmp_path, _junit(cases))
+    assert outputs.get("classification") == "real", outputs
+
+
 def test_duplicate_junit_identity_cannot_overwrite_a_real_failure(tmp_path: Path) -> None:
     """Every failure node must vote even when two suites/reruns emit the same
     classname/name.  De-duplicating by display id can erase a real defect when
