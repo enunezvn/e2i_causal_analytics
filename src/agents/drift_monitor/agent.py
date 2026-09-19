@@ -22,13 +22,16 @@ Algorithm: .claude/specialists/Agent_Specialists_Tiers 1-5/drift-monitor.md
 Contract: .claude/contracts/tier3-contracts.md lines 349-562
 """
 
+import asyncio
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
 from src.agents.drift_monitor.graph import drift_monitor_graph
+from src.agents.drift_monitor.memory_hooks import contribute_to_memory
 from src.agents.drift_monitor.state import DriftMonitorState
 from src.utils.frame_registry import release_frame, stash_frame
 
@@ -205,14 +208,20 @@ class DriftMonitorAgent:
     sla_seconds = 10  # <10s for 50 features
     tools = ["scipy", "numpy"]  # Statistical libraries for drift detection
 
-    def __init__(self, enable_mlflow: bool = True):
+    def __init__(self, enable_mlflow: bool = True, enable_memory: bool = True):
         """Initialize drift monitor agent.
 
         Args:
             enable_mlflow: Whether to enable MLflow tracking (default: True)
+            enable_memory: Whether to contribute results to working, episodic
+                and semantic memory after a successful run (default: True)
         """
         self.graph = drift_monitor_graph
         self.enable_mlflow = enable_mlflow
+        self.enable_memory = enable_memory
+        # Upper bound on the post-detection memory contribution. Co-drift writes
+        # are O(n^2) in drifting features; a slow backend must not hold the run.
+        self.memory_timeout_seconds = 8.0
         self._mlflow_tracker: Optional["DriftMonitorMLflowTracker"] = None
 
     def _get_mlflow_tracker(self) -> Optional["DriftMonitorMLflowTracker"]:
@@ -348,6 +357,35 @@ class DriftMonitorAgent:
             # detection failure, raise) — a leaked handle would pin the frame
             # in process memory for the worker's lifetime.
             release_frame(initial_state.get("tier0_frame_ref"))
+
+        # #2177: hand the result to the memory hooks. contribute_to_memory
+        # existed since the 4-memory hooks landed but had no caller, so none of
+        # this agent's memory writes ever ran. A drift run has no conversation,
+        # so the id is a per-run handle, never a chat session id (#2099).
+        # Non-blocking: a memory failure is logged and never fails detection.
+        if self.enable_memory:
+            # Memory gets what is left of the SLA (codex R2), with a 0.5 s floor:
+            # a run that already used its SLA still records its result. That is a
+            # deliberate trade — slow runs are the many-feature runs whose drift
+            # record matters most — so the total may exceed sla_seconds by <= 0.5 s.
+            elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
+            memory_budget = max(0.5, min(self.memory_timeout_seconds, self.sla_seconds - elapsed))
+            try:
+                await asyncio.wait_for(
+                    contribute_to_memory(
+                        result=dict(final_state),
+                        state=dict(final_state),
+                        session_id=f"drift_run_{uuid.uuid4().hex}",
+                    ),
+                    timeout=memory_budget,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"Drift memory contribution exceeded {memory_budget:.1f}s; "
+                    "returning the detection result without waiting"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to contribute drift result to memory: {e}")
 
         # Log execution time and SLA check
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()

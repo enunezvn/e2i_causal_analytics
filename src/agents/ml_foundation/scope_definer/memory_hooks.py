@@ -371,7 +371,7 @@ class ScopeDefinerMemoryHooks:
         experiment_id: str,
         experiment_name: str,
         problem_type: str,
-        target_variable: str,
+        target_variable: Optional[str],
         features: List[str],
         success_criteria: Dict[str, Any],
     ) -> bool:
@@ -410,8 +410,12 @@ class ScopeDefinerMemoryHooks:
             self.semantic_memory.add_e2i_entity(
                 entity_type="ProblemType",
                 entity_id=f"ptype:{problem_type}",
+                # #2174: a ProblemType is agent output — no curated writer creates
+                # one — so ownership is set on match too, repairing nodes written
+                # before this fix (they had no agent and counted as curated).
                 properties={
                     "name": problem_type,
+                    "agent": "scope_definer",
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
@@ -422,23 +426,28 @@ class ScopeDefinerMemoryHooks:
                 properties={"agent": "scope_definer"},
             )
 
-            # Create target variable node and relationship
-            self.semantic_memory.add_e2i_entity(
-                entity_type="Variable",
-                entity_id=f"var:{target_variable}",
-                properties={
-                    "name": target_variable,
-                    "role": "target",
-                    "agent": "scope_definer",
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                },
-            )
-            self.semantic_memory.add_relationship(
-                from_entity_id=f"exp:{experiment_id}",
-                to_entity_id=f"var:{target_variable}",
-                relationship_type="TARGETS",
-                properties={"agent": "scope_definer"},
-            )
+            # Create target variable node and relationship — only for a real
+            # target. A missing target used to MERGE one nameless ``var:`` node
+            # that every untargeted experiment then pointed at (#2175).
+            target = (target_variable or "").strip()
+            if target:
+                self.semantic_memory.add_e2i_entity(
+                    entity_type="Variable",
+                    entity_id=f"var:{target}",
+                    properties={
+                        "name": target,
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                    # #2174: never take ownership of (or re-role) a Variable the
+                    # causal-path sync already curates.
+                    create_only_properties={"role": "target", "agent": "scope_definer"},
+                )
+                self.semantic_memory.add_relationship(
+                    from_entity_id=f"exp:{experiment_id}",
+                    to_entity_id=f"var:{target}",
+                    relationship_type="TARGETS",
+                    properties={"agent": "scope_definer"},
+                )
 
             # Create scope spec node
             self.semantic_memory.add_e2i_entity(
