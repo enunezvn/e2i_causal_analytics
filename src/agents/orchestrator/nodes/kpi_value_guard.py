@@ -341,7 +341,7 @@ def _tail_changes_quantity(
     span_end: int,
     value_heads: frozenset[str],
     *,
-    brand_resolved: bool,
+    brand_resolved_or_clarified: bool,
     region_resolved_or_clarified: bool,
     warned_tail_nouns: frozenset[str],
 ) -> bool:
@@ -415,7 +415,7 @@ def _tail_changes_quantity(
             continue
         consumed, dimension = _scope_span(tokens, index)
         if consumed:
-            if dimension == "brand" and not brand_resolved:
+            if dimension == "brand" and not brand_resolved_or_clarified:
                 return True
             if dimension == "region" and not region_resolved_or_clarified:
                 return True
@@ -439,10 +439,18 @@ def value_lookup_mentions_supported(
         _kpi_governing_of_head,
         _kpi_right_head,
     )
-    from src.services.query_entities import brand_from_text, region_scan
+    from src.services.query_entities import brand_from_text, brand_scan, region_scan
+
+    from .kpi_clarify import BRAND_CLARIFY_KPI_IDS
 
     spans = _owned_spans(normalized_query, kpi_id, match_start, match_end)
-    brand_resolved = brand_from_text(normalized_query) is not None
+    # A multi-brand ask on a brand-scoped volume KPI is ASKED about downstream
+    # (brand_clarify_for_ask, #2114 owner ruling 2026-09-15) -- the same safer
+    # path the region clarify gets below. Any other KPI has no clarify to reach,
+    # so an unresolved brand there still refuses (#2141).
+    brand_resolved_or_clarified = brand_from_text(normalized_query) is not None or (
+        kpi_id in BRAND_CLARIFY_KPI_IDS and brand_scan(normalized_query).is_ambiguous
+    )
     region_result = region_scan(normalized_query)
     region_resolved_or_clarified = (
         region_result.region is not None or region_result.ambiguous_phrase is not None
@@ -471,7 +479,7 @@ def value_lookup_mentions_supported(
             head_checked_query,
             end,
             _VALUE_OF_HEADS,
-            brand_resolved=brand_resolved,
+            brand_resolved_or_clarified=brand_resolved_or_clarified,
             region_resolved_or_clarified=region_resolved_or_clarified,
             warned_tail_nouns=_WARNED_TAIL_NOUNS.get(kpi_id, frozenset()),
         ):

@@ -80,7 +80,6 @@ def calculator(monkeypatch) -> _RecordingCalculator:
         "What is TRx when adherence is low?",
         "What is TRx if adherence drops?",
         "What is TRx for Kisqali or Fabhalta?",
-        "What is TRx for Kisqali and Fabhalta?",
         "What is TRx in west and south?",
         "What is TRx in west oncology?",
         "What is TRx Q3 for the last 30 days?",
@@ -107,14 +106,27 @@ def test_unsupported_right_heads_fail_closed_before_calculation(query, calculato
     assert calculator.calls == [], f"{query!r} reached the calculator"
 
 
+def test_a_two_brand_volume_ask_asks_which_brand_instead_of_calculating(calculator) -> None:
+    """#2114 owner ruling (2026-09-15): a Rx-volume ask grounding more than one brand
+    ASKS which one. It still never reaches the calculator -- this guard's purpose --
+    but the answer is the clarify question, not a refusal. (Other KPIs, and a
+    disjunction like "Kisqali or Fabhalta", still refuse above.)"""
+    evidence = _kpi_lookup_evidence({"query": "What is TRx for Kisqali and Fabhalta?"})
+    assert evidence, "the two-brand volume ask neither clarified nor answered"
+    assert [e["analysis_type"] for e in evidence] == ["kpi_lookup_clarification"], evidence
+    assert calculator.calls == []
+
+
 @pytest.mark.parametrize(
     ("query", "expected_id", "expected_context"),
     [
         ("What is TRx?", "WS3-BI-005", {}),
-        ("What is NRx panel for Kisqali?", "WS3-BI-006", {"brand": "Kisqali"}),
+        # #2114: "NRx panel" is its own KPI (the patient-panel NRx event count,
+        # WS3-BI-012), no longer a qualifier on canonical NRx (WS3-BI-006).
+        ("What is NRx panel for Kisqali?", "WS3-BI-012", {"brand": "Kisqali"}),
         (
             "What is NRx panel in the west region?",
-            "WS3-BI-006",
+            "WS3-BI-012",
             {"region": "west"},
         ),
         ("What is TRx for Kisqali?", "WS3-BI-005", {"brand": "Kisqali"}),

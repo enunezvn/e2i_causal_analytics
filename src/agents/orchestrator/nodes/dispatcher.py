@@ -2224,30 +2224,30 @@ def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str,
     if not KPI_VALUE_LOOKUP_RE.search(query):
         return None
 
-    from src.agents.orchestrator.nodes.kpi_mentions import masked_or_refusal
     from src.services.kpi_resolution import (
         KPI_SEMANTIC_NOTES,
+        mask_spans,
+        owned_mention_spans,
         recognize_distinct_metric,
         recognize_kpi_span,
     )
+
+    from .kpi_value_guard import value_lookup_mentions_supported
 
     match = recognize_kpi_span(query)
     if match is None:
         return None
     kpi, normalized_query, match_start, match_end = match
-    from .kpi_value_guard import value_lookup_mentions_supported
-
     if not value_lookup_mentions_supported(normalized_query, kpi.id, match_start, match_end):
         # Governing heads and bare right tails are checked on EVERY occurrence
         # before masking or calculation.  A value cannot answer "cost of TRx",
         # "TRx drivers", "TRx cost", or an unresolved "TRx patients" scope.
         return None
-    masked = masked_or_refusal(normalized_query, kpi.id, match_start, match_end)
-    if masked is None:
-        # A governing "of"-head ("cost of TRx"), a causal right-head ("TRx
-        # drivers"), or either on ANY later occurrence this KPI owns: the KPI is
-        # not the asked-about value (#1475; #2114 codex r9 added the later ones).
-        return None
+    # Every owned occurrence is masked, not just the first: a redundant repeat
+    # ("TRx ... TRx") must not read as a second metric below (#2114 codex r9).
+    masked = mask_spans(
+        normalized_query, owned_mention_spans(normalized_query, kpi.id, match_start, match_end)
+    )
     if recognize_distinct_metric(masked, exclude_id=kpi.id, original_query=query) is not None:
         # "TRx and NRx" names TWO metrics — one value presented as the whole
         # answer is a wrong answer; fail closed (the bridge answers multi-KPI

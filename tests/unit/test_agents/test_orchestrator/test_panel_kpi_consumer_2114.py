@@ -264,11 +264,22 @@ def test_the_boundary_holds_regardless_of_position_arity_or_owner(query, why, ca
     assert calculator.calls == [], f"{query!r} reached the engine; {why}"
 
 
-def test_three_clean_owned_mentions_still_answer(calculator):
-    """The ANSWER side of the arity probe: redundancy is redundancy however often
-    it repeats, so long as no occurrence carries a disqualifying context."""
+def test_three_owned_mentions_joined_by_and_refuse(calculator):
+    """The arity probe after main's #2139/#2141 guard: every occurrence is still checked
+    (r9), and once the repeats are blanked the tail is a dangling "and ... and" with no
+    object, which that guard refuses rather than guessing a coordination away. Fail-closed
+    on a contrived ask; an appositive restatement still answers
+    (test_a_clause_boundary_ends_the_compound)."""
     query = "What is NRx panel and NRx panel and the NRx panel?"
-    assert _kpi_lookup_evidence({"query": query}) is not None, query
+    assert _kpi_lookup_evidence({"query": query}) is None, query
+    assert calculator.calls == []
+
+
+def test_a_value_head_after_the_panel_answers(calculator):
+    """ "level" is a declared value head (`_VALUE_OF_HEADS`), not a scope noun, so this is
+    the NRx panel value itself -- no qualifier is dropped. ("at the HCP level" still refuses:
+    test_the_2141_witnesses_now_refuse.)"""
+    assert _kpi_lookup_evidence({"query": "What is NRx panel level?"})
     assert calculator.calls == ["WS3-BI-012"]
 
 
@@ -359,7 +370,8 @@ def test_the_mirror_direction_is_a_documented_PIN_not_a_fix(causal_registry):
 
 # --- codex r10 MEDIUM: the causal path masks later UNSUPPORTED governing heads -------------
 # M2's defect, on the causal route. 11b closed it for `_kpi_lookup_evidence` via
-# `masked_or_refusal` (head-checks every owned occurrence); `_causal_path_evidence` still
+# `masked_or_refusal` (head-checks every owned occurrence; since the #2139 merge that is
+# `kpi_value_guard.value_lookup_mentions_supported`); `_causal_path_evidence` still
 # called `owned_mask`, which does no head checks at all — so a later "cost of NRx panel"
 # was masked away as a redundant repeat and the registry was asked for WS3-BI-012.
 #
@@ -824,7 +836,7 @@ def test_a_preposition_behind_a_period_token_still_binds(causal_registry):
 # ⚠ AND "forecast" REFUSING IS NOT EVIDENCE OF A HEAD GUARD. `KPI_VALUE_LOOKUP_PATTERN`
 # (intent_classifier.py:536) opens with a whole-query negative lookahead —
 #     (?s)\A(?!.*(?:predict|expect|forecast|project|likelihood|probabilit|what will))
-# — so those queries die at the ENTRY GATE and never reach `masked_or_refusal`. Reading that
+# — so those queries die at the ENTRY GATE and never reach the value guard. Reading that
 # refusal as a working right-head rule would be a check that cannot fail for the reason you
 # care about. For the same reason NO refusal test below may rely on the entry gate: every one
 # uses a lead-in the gate admits ("what is", "show me"), so the refusal is THIS fix's doing.
@@ -913,25 +925,12 @@ def test_a_qualifier_the_platform_cannot_resolve_fails_closed(query, calculator)
         # test_a_free_text_patient_axis_is_dropped_scope_not_scope below.
         # prepositional scope — ⚠ MOST OF THESE ARRIVE WITH NOTHING BOUND, see the docstring
         ("What is NRx panel for Kisqali?", "WS3-BI-012", ("brand",), "preposition"),
-        ("What is TRx by severity?", "WS3-BI-005", (), "preposition, qualifier DROPPED"),
         ("What is NRx panel in the west region?", "WS3-BI-012", ("region",), "preposition"),
-        ("What is TRx per brand?", "WS3-BI-005", (), "preposition, qualifier DROPPED"),
-        ("What is NRx panel across brands?", "WS3-BI-012", (), "preposition, DROPPED"),
-        ("What is TRx with high adherence?", "WS3-BI-005", (), "preposition, DROPPED"),
-        ("What is NRx panel within the cohort?", "WS3-BI-012", (), "preposition, DROPPED"),
-        ("What is TRx among new patients?", "WS3-BI-005", (), "preposition, DROPPED"),
-        ("What is NRx panel at the HCP level?", "WS3-BI-012", (), "preposition, DROPPED"),
-        ("What is TRx by segment?", "WS3-BI-005", (), "r12 asked for this row: also DROPPED"),
         # temporal
-        ("What is NRx panel in Q3?", "WS3-BI-012", (), "preposition then period, DROPPED"),
         ("What is TRx last quarter?", "WS3-BI-005", ("window",), "determiner then period"),
         ("What is NRx panel this year?", "WS3-BI-012", ("window",), "determiner then period"),
-        ("What is TRx since January?", "WS3-BI-005", (), "preposition then month, DROPPED"),
-        ("What is NRx panel q3?", "WS3-BI-012", (), "bare period token, DROPPED"),
         ("What is TRx q3 2026?", "WS3-BI-005", ("window",), "period chain"),
         # comparison / end of string
-        ("What is NRx panel versus last quarter?", "WS3-BI-012", ("window",), "comparison"),
-        ("What is TRx vs the prior period?", "WS3-BI-005", (), "comparison, DROPPED"),
         ("What is TRx?", "WS3-BI-005", (), "end of string, nothing to bind"),
         ("show me the NRx panel", "WS3-BI-012", (), "another admitted lead-in"),
     ],
@@ -940,46 +939,57 @@ def test_the_value_path_over_refusal_battery(query, expected_id, scope, why, cal
     """THE OVER-REFUSAL BATTERY FOR THIS PATH — every row binds on 6d321cbcf as well as
     after, so it guards the fix rather than describing it.
 
-    ⚠ WHAT A BINDING ROW PROVES, STATED EXACTLY: that THE WALK DOES NOT REFUSE IT. It does
-    NOT prove the answer is scoped. Until r12 this file's double discarded `context`, so
-    these rows could not tell the difference.
+    ⚠ WHAT A BINDING ROW PROVES, STATED EXACTLY: that THE WALK DOES NOT REFUSE IT, and —
+    through the `scope` column, which is the MEASURED calculator context — what it bound.
 
-    OF THE 24 ROWS: 10 bind a dimension; 14 carry `()`, and those 14 split two ways —
+    OF THE 11 ROWS: 9 bind a dimension; 2 carry `()` because nothing was named, so
+    nothing could bind ("What is TRx?" · "show me the NRx panel").
 
-      TWELVE ARE #2141 WITNESSES (a qualifier was named and DROPPED):
-        by severity · per brand · across brands · with high adherence ·
-        within the cohort · among new patients · at the HCP level · by segment ·
-        in Q3 · since January · q3 · vs the prior period
-
-      TWO ARE NOT WITNESSES (nothing was named, so nothing could bind):
-        "What is TRx?" · "show me the NRx panel"
-
-    The `scope` column is the MEASURED context, so the twelve are witnesses rather than
-    silent passes: when #2141 is fixed they fail deliberately and whoever fixes it sees
-    exactly which asks change.
-
-    ⚠ THIS ENUMERATION SAID "TEN" AND THE TABLE HELD TWELVE. It omitted "with high
-    adherence" and "by segment" — the second being the row codex specifically demanded.
-    Corrected by counting the parametrize programmatically instead of by eye: a prose
-    count beside a machine-checkable table is the fourth stale number this lane has
-    caught by arithmetic, and the only one that would have outlived the lane, because a
-    docstring is not executable. The split above is now stated so the total is derivable
-    (10 + 12 + 2 = 24) rather than asserted.
-
-    ⚠ AND IT EXPOSES A LIMIT IN THE LANE'S OWN STORY, which belongs here in plain words.
-    This lane refuses "What is TRx patients?" on the ground that it reaches the calculator
-    with nothing bound — yet "What is TRx among new patients?" binds with nothing bound too.
-    Same dropped qualifier, same empty context, opposite verdict; the only difference is a
-    preposition. That is DELIBERATE and it is not a discriminator we claim to have: the
-    guard closes the BARE dropped-qualifier hole and leaves the PREPOSITIONAL one to #2141,
-    because refusing prepositional scope would refuse most legitimately-scoped asks there
-    are (owner decision #13). The honest statement of the rule is "a bare noun after the
-    mention must resolve", not "an ask must be scoped to answer".
+    The 13 rows this battery used to hold as #2141 WITNESSES (a qualifier named and then
+    DROPPED, or a comparison answered with one side of it) now REFUSE: main's #2139/#2141
+    guard fixed exactly that, and they failed here deliberately, as this docstring said
+    they would. They live on as test_the_2141_witnesses_now_refuse, so the change is
+    pinned in the direction it went rather than deleted.
     """
     evidence = _kpi_lookup_evidence({"query": query})
     assert calculator.calls == [expected_id], (query, why, calculator.calls)
     assert evidence, f"{query!r} produced no evidence; {why}"
     assert tuple(sorted(calculator.contexts[0])) == scope, (query, why, calculator.contexts)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "What is TRx by severity?",
+        "What is TRx per brand?",
+        "What is NRx panel across brands?",
+        "What is TRx with high adherence?",
+        "What is NRx panel within the cohort?",
+        "What is TRx among new patients?",
+        "What is NRx panel at the HCP level?",
+        "What is TRx by segment?",
+        "What is NRx panel in Q3?",
+        "What is TRx since January?",
+        "What is NRx panel q3?",
+        "What is NRx panel versus last quarter?",
+        "What is TRx vs the prior period?",
+        # the same dropped-window shape, formerly in the "still bind" tables below
+        "What is NRx panel q3 kisqali?",
+        "What is NRx panel next quarter?",
+        "What is TRx recently?",
+        # open-class prose after the scope: main's guard refuses it on main as well (it is
+        # not merge-introduced); the CAUSAL path still binds this shape -- see
+        # test_a_preposition_ends_the_walk_on_the_causal_path_too.
+        "What is TRx for Kisqali, given that access issues ate into field time?",
+    ],
+)
+def test_the_2141_witnesses_now_refuse(query, calculator):
+    """Each of these reached the calculator with its qualifier DROPPED (measured context
+    `()`) — or, for "versus last quarter", with only one side of a comparison bound — so
+    the figure returned answered a different question. main's #2139/#2141 value guard
+    refuses them; this pins that the lane's merge kept the refusal."""
+    assert _kpi_lookup_evidence({"query": query}) is None, f"{query!r} answered"
+    assert calculator.calls == [], f"{query!r} called the calculator"
 
 
 @pytest.mark.parametrize(
@@ -1027,7 +1037,6 @@ def test_scope_does_not_license_a_quantity_behind_it_on_the_causal_path(causal_r
     [
         ("What is TRx urticaria?", "WS3-BI-005", "brand via the INDICATION route, not a name"),
         ("What is TRx Kisqali west?", "WS3-BI-005", "two scope tokens in a row"),
-        ("What is NRx panel q3 kisqali?", "WS3-BI-012", "scope AFTER a period token"),
     ],
 )
 def test_scope_binds_in_shapes_the_new_rows_did_not_cover(query, expected_id, why, calculator):
@@ -1041,12 +1050,13 @@ def test_scope_binds_in_shapes_the_new_rows_did_not_cover(query, expected_id, wh
         ("What is TRx west region cost?", "scope + scope-noun does not license a quantity"),
         ("What is NRx panel kisqali accuracy?", "scope does not license a quantity"),
         ("What is TRx new england cost?", "a two-token region does not license a quantity"),
-        ("What is NRx panel level?", "a scope NOUN with no resolved scope before it"),
     ],
 )
 def test_scope_defers_the_decision_it_does_not_license_what_follows(query, why, calculator):
     """`_SCOPE_NOUNS` is reachable only immediately after a resolver-confirmed token, so it
-    cannot open a hole on its own: "level" alone still refuses, as an unresolved qualifier."""
+    cannot open a hole on its own. ("What is NRx panel level?" used to sit here; "level"
+    is a declared VALUE head in `_VALUE_OF_HEADS` on main and the lane alike, so it reads
+    as "the NRx panel level" and answers -- see test_a_value_head_after_the_panel_answers.)"""
     assert _kpi_lookup_evidence({"query": query}) is None, f"{query!r} answered; {why}"
     assert calculator.calls == [], f"{query!r} called the calculator; {why}"
 
@@ -1055,7 +1065,6 @@ def test_scope_defers_the_decision_it_does_not_license_what_follows(query, why, 
     "query,expected_id",
     [
         ("What is NRx panel for Kisqali in the west region?", "WS3-BI-012"),
-        ("What is TRx for Kisqali, given that access issues ate into field time?", "WS3-BI-005"),
         ("show me the NRx panel for Kisqali across the northeast", "WS3-BI-012"),
     ],
 )
@@ -1290,11 +1299,8 @@ def test_a_determiner_does_not_license_the_noun_behind_it_on_the_causal_path(cau
     [
         ("What is TRx last quarter?", "WS3-BI-005", "determiner then period, then EOS"),
         ("What is NRx panel this year?", "WS3-BI-012", "determiner then period"),
-        ("What is NRx panel next quarter?", "WS3-BI-012", "determiner then period"),
-        ("What is TRx vs the prior period?", "WS3-BI-005", "comparison ends the walk first"),
         ("What is NRx panel for Kisqali?", "WS3-BI-012", "preposition still ends the walk"),
         ("What is NRx panel in the west region?", "WS3-BI-012", "preposition, then scope"),
-        ("What is TRx recently?", "WS3-BI-005", "adverb, not a determiner"),
     ],
 )
 def test_temporal_determiners_and_prepositions_still_bind(query, expected_id, why, calculator):

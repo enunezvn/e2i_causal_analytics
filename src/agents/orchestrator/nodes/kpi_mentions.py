@@ -485,7 +485,8 @@ def causal_masked_or_refusal(
 ) -> Optional[str]:
     """The head-checked mask for the CAUSAL path, or ``None`` to refuse.
 
-    The same per-occurrence principle as :func:`masked_or_refusal`, with a
+    The same per-occurrence principle as the value path's guard
+    (``kpi_value_guard.value_lookup_mentions_supported``), with a
     DIFFERENT accepted head set — which is why the value guard is not reused
     here (#2114 codex r10). On this path:
 
@@ -519,45 +520,5 @@ def causal_masked_or_refusal(
         # tail is WALKED, because 11e's one-token read let any period token
         # license the noun behind it.
         if _tail_changes_the_quantity(normalized_query, span_end, _CAUSAL_OF_HEADS):
-            return None
-    return mask_spans(normalized_query, spans)
-
-
-def masked_or_refusal(normalized_query: str, kpi_id: str, start: int, end: int) -> Optional[str]:
-    """The head-checked mask for the VALUE-lookup path, or ``None`` to refuse.
-
-    A repeated mention of the same KPI binds only when the repeat is genuinely
-    REDUNDANT. "cost of X" and "X drivers" are not redundant: they carry a
-    sub-ask a bare value does not answer. So every owned occurrence gets the
-    same two #1475 guards the first one gets, and any one of them refusing
-    refuses the whole ask.
-
-    The dispatcher's head helpers are imported lazily here because dispatcher
-    imports this module — the cycle is real, and every import in that module is
-    function-local for the same reason.
-    """
-    from src.agents.orchestrator.nodes.dispatcher import (
-        _CAUSAL_OF_HEADS,
-        _VALUE_OF_HEADS,
-        _kpi_governing_of_head,
-        _kpi_right_head,
-    )
-    from src.services.kpi_resolution import mask_spans, owned_mention_spans
-
-    spans = owned_mention_spans(normalized_query, kpi_id, start, end)
-    for span_start, span_end in spans:
-        of_head = _kpi_governing_of_head(normalized_query, span_start)
-        if of_head is not None and of_head not in _VALUE_OF_HEADS:
-            return None
-        if _kpi_right_head(normalized_query, span_end) in _CAUSAL_OF_HEADS:
-            return None
-        # 11g / #2139: an unsupported right-head compound ("NRx panel cost") was
-        # never checked on this path either. The accepted set is NOT the causal
-        # one -- no causal heads here, since "drivers" is declined above -- so the
-        # walk is passed an EMPTY accepted-head set. The enumeration is in
-        # test_panel_kpi_consumer_2114.py: a bare noun here is usually SCOPE, and
-        # the walk defers to the platform's own resolver to tell scope from a
-        # second quantity.
-        if _tail_changes_the_quantity(normalized_query, span_end, frozenset()):
             return None
     return mask_spans(normalized_query, spans)

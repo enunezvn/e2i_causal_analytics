@@ -1450,20 +1450,21 @@ def test_a_structured_brand_wins_over_a_multi_brand_ask(monkeypatch) -> None:
     assert stub.calls == [("WS3-BI-007", {"brand": "Kisqali"})]
 
 
-def test_non_volume_kpi_keeps_its_pre_existing_unscoped_behaviour(monkeypatch) -> None:
+def test_non_volume_kpi_refuses_rather_than_clarifies(monkeypatch) -> None:
     """Deliberate scope: the clarify covers the Rx-VOLUME family (the ids this
     lane owns, whose unbranded read is a portfolio aggregate). Conversion Rate
-    (WS3-BI-009) carries the same pre-existing exposure but is not this lane's
-    to change -- pinned here so the boundary is a decision, not an accident."""
+    (WS3-BI-009) used to compute UNSCOPED here -- the pre-existing exposure this
+    lane left alone. main's #2141 closed it independently (an unresolved brand
+    scope refuses), so the boundary now reads: volume KPIs ASK, others REFUSE,
+    and neither computes a figure that silently dropped both brands."""
     stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
 
     resolved = disp.INPUT_RESOLVERS["explainer"](
         _agent_input("What is the conversion rate for Kisqali and Fabhalta?"), _dispatch()
     )
 
-    assert isinstance(resolved, dict), resolved
-    assert resolved["analysis_results"][0]["analysis_type"] == "kpi_lookup"
-    assert stub.calls == [("WS3-BI-009", {})]
+    assert not isinstance(resolved, dict), resolved
+    assert stub.calls == []
 
 
 @pytest.mark.asyncio
