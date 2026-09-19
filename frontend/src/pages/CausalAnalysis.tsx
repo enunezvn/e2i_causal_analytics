@@ -133,6 +133,7 @@ const ESTIMATOR_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'CausalForestDML', label: 'Causal Forest — EconML' },
   { value: 'LinearDML', label: 'Linear DML — EconML' },
   { value: 'drlearner', label: 'DR-Learner — EconML' },
+  { value: 'dml_learner', label: 'DML Learner (flexible final stage) — EconML' },
   { value: 'ols', label: 'Linear Regression (OLS)' },
   { value: 'propensity_score_weighting', label: 'Propensity Score Weighting — DoWhy' },
 ];

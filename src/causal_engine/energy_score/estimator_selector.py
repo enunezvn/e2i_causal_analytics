@@ -83,8 +83,8 @@ _ESTIMATOR_SPEED_RANK: dict[EstimatorType, int] = {
     EstimatorType.T_LEARNER: 1,
     EstimatorType.X_LEARNER: 2,
     EstimatorType.LINEAR_DML: 2,
-    EstimatorType.DML_LEARNER: 2,
     EstimatorType.DRLEARNER: 3,
+    EstimatorType.DML_LEARNER: 3,  # 7.6s vs DRLearner 8.1s at n=5000 (2026-09-19)
     EstimatorType.ORTHO_FOREST: 4,
     EstimatorType.CAUSAL_FOREST: 4,
 }
@@ -730,20 +730,12 @@ class DRLearnerWrapper(BaseEstimatorWrapper):
 
         try:
             from econml.dr import DRLearner
-            from econml.sklearn_extensions.linear_model import StatsModelsLinearRegression
-            from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
 
-            # model_final is the LINEAR statsmodels regression (not GBR): it is
-            # the only final stage exposing prediction stderr, i.e. the only way
-            # DRLearner yields an honest population-ATE sampling interval
-            # (#1188). Nuisances (outcome regression + propensity) stay
-            # gradient-boosted; only the CATE(X) surface becomes linear-in-X.
-            model = DRLearner(
-                model_regression=GradientBoostingRegressor(n_estimators=50, random_state=42),
-                model_propensity=GradientBoostingClassifier(n_estimators=50, random_state=42),
-                model_final=StatsModelsLinearRegression(),
-                random_state=42,
-            )
+            from src.causal_engine.nuisance_config import drlearner_init_params
+
+            # GB nuisances + LINEAR statsmodels final stage (honest ATE CI, #1188);
+            # shared with the refutation rebuild via nuisance_config.
+            model = DRLearner(**drlearner_init_params(), random_state=42)
             X = covariates.values
             model.fit(outcome, treatment, X=X, W=X)
 
@@ -1321,10 +1313,14 @@ class OrthoForestWrapper(BaseEstimatorWrapper):
             )
 
 
-# Estimator factory
+# Estimator factory. dml_learner lives in its own module (module-size ratchet); the
+# package __init__ loads this module first, so the base classes above already exist.
+from src.causal_engine.energy_score.dml_learner import DMLLearnerWrapper
+
 ESTIMATOR_WRAPPERS: dict[EstimatorType, type[BaseEstimatorWrapper]] = {
     EstimatorType.CAUSAL_FOREST: CausalForestWrapper,
     EstimatorType.LINEAR_DML: LinearDMLWrapper,
+    EstimatorType.DML_LEARNER: DMLLearnerWrapper,
     EstimatorType.DRLEARNER: DRLearnerWrapper,
     EstimatorType.S_LEARNER: SLearnerWrapper,
     EstimatorType.T_LEARNER: TLearnerWrapper,

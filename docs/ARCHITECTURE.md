@@ -1526,7 +1526,7 @@ Alertmanager routes to `http://api:8000/api/v1/webhooks/alertmanager` with:
 **Decision**: Use four complementary causal inference libraries, orchestrated through the canonical multi-library pipeline at `src/causal_engine/pipeline/`:
 - **NetworkX**: Symbolic DAG analysis (centrality, paths, structural validation) from upstream `state["causal_graph"]` + state vars
 - **DoWhy**: Causal DAG construction, refutation testing (5 tests), sensitivity analysis
-- **EconML**: CausalForestDML/LinearDML/DRLearner/DMLOrthoForest for CATE estimation with safe config (`min_impurity_decrease=1e-7`, `min_samples_leaf=5`); selection via `energy_score/estimator_selector.py`
+- **EconML**: CausalForestDML/LinearDML/DRLearner/DMLOrthoForest/general `DML` (`dml_learner`, featurized final stage) for CATE estimation with safe config (`min_impurity_decrease=1e-7`, `min_samples_leaf=5`); selection via `energy_score/estimator_selector.py`
 - **CausalML**: UpliftRandomForest + meta-learners (`BaseTClassifier`/`BaseXClassifier`/`BaseSClassifier`) for uplift modeling (`control_name` lexicographically resolved per arm)
 
 **Pipeline orchestration** (post-#354):

@@ -100,6 +100,29 @@ class TestLegacyModeWithExplicitMethod:
         assert result["estimation_result"]["method"] == "LinearDML"
 
     @pytest.mark.asyncio
+    async def test_forced_dml_learner_runs_and_is_labeled_as_itself(
+        self, estimation_node, base_state
+    ):
+        """``dml_learner`` (econml general DML, flexible final stage) forced via
+        ``parameters.method`` -- the agent API override path. Only it is
+        evaluated, the result carries an honest interval (the node fails closed
+        without one), and it is labeled as itself: the old
+        ``estimator_to_method`` default reported an unmapped win as
+        ``CausalForestDML``."""
+        base_state["parameters"] = {"method": "dml_learner"}
+        result = await estimation_node.execute(base_state)
+
+        assert result.get("status") != "failed", result.get("errors")
+        est = result["estimation_result"]
+        assert est["method"] == "dml_learner"
+        assert est["selected_estimator"] == "dml_learner"
+        assert est["ate_ci_lower"] < est["ate"] < est["ate_ci_upper"]
+        assert est["standard_error"] > 0
+        selection = result["estimator_selection_result"]
+        assert selection["selected_estimator"] == "dml_learner"
+        assert selection["n_evaluated"] == 1
+
+    @pytest.mark.asyncio
     async def test_legacy_mode_with_use_energy_score_false(self, estimation_node, base_state):
         """use_energy_score=False uses legacy path (no explicit method).
 

@@ -174,6 +174,7 @@ _SELECTOR_TO_DOWHY_METHOD = {
     "causal_forest": "backdoor.econml.dml.CausalForestDML",
     "linear_dml": "backdoor.econml.dml.LinearDML",
     "drlearner": "backdoor.econml.dr.DRLearner",
+    "dml_learner": "backdoor.econml.dml.DML",
     "ols": "backdoor.linear_regression",
     # EstimationResult.method (legacy + new labels)
     "CausalForestDML": "backdoor.econml.dml.CausalForestDML",
@@ -324,7 +325,8 @@ def _reconstruction_nuisance_init_params(
     build their RF nuisances from ``src/causal_engine/nuisance_config.py`` (one
     shared ``min_samples_leaf`` / tree count), so they cannot drift apart.
 
-    Applied to ``LinearDML`` and ``DRLearner`` (#1188 codex iter-1 MED — the
+    Applied to ``LinearDML``, the general ``DML`` (``dml_learner``) and
+    ``DRLearner`` (#1188 codex iter-1 MED — the
     DR wrapper now uses GradientBoosting nuisances + a
     ``StatsModelsLinearRegression`` final stage for honest ATE inference, so
     the rebuild mirrors those EXACT models; econml's DR defaults would refit a
@@ -333,27 +335,16 @@ def _reconstruction_nuisance_init_params(
       * ``CausalForestDML`` — forest nuisance is scale-invariant (no lbfgs grind).
       * plain ``linear_regression`` / IPW — no iterative nuisance to converge.
     """
+    from src.causal_engine import nuisance_config as nc
+
+    # Every branch builds from nuisance_config -- the same factories the selector
+    # wrappers use -- so the rebuild reproduces the reported ATE by construction.
     if "LinearDML" in dowhy_method:
-        from src.causal_engine.nuisance_config import linear_dml_model_t, linear_dml_model_y
-
-        # Mirror production's LinearDMLWrapper nuisance EXACTLY: both sites build
-        # from ``nuisance_config`` (#2031) so the reconstructed ATE reproduces the
-        # reported one by construction.
-        return {
-            "model_y": linear_dml_model_y(),
-            "model_t": linear_dml_model_t() if discrete_treatment else linear_dml_model_y(),
-        }
+        return nc.linear_dml_init_params(discrete_treatment)
+    if dowhy_method == "backdoor.econml.dml.DML":  # exact: "DML" in would match LinearDML
+        return nc.dml_learner_init_params(discrete_treatment)
     if "DRLearner" in dowhy_method:
-        from econml.sklearn_extensions.linear_model import StatsModelsLinearRegression
-        from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
-
-        # Mirror production's DRLearnerWrapper models EXACTLY
-        # (src/causal_engine/energy_score/estimator_selector.py).
-        return {
-            "model_regression": GradientBoostingRegressor(n_estimators=50, random_state=42),
-            "model_propensity": GradientBoostingClassifier(n_estimators=50, random_state=42),
-            "model_final": StatsModelsLinearRegression(),
-        }
+        return nc.drlearner_init_params()
     return {}
 
 

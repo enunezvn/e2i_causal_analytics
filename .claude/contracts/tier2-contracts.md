@@ -1559,7 +1559,25 @@ ENSEMBLE = "ensemble"              # Future: combine multiple estimators
 
 `causal_forest`, `linear_dml`, `dml_learner`, `drlearner`, `ortho_forest`
 (EconML), `s_learner`, `t_learner`, `x_learner` (CausalML), `ols` (fallback) —
-see `EstimatorType` in `estimator_selector.py`.
+see `EstimatorType` in `estimator_selector.py`. Every declared type has a
+wrapper in `ESTIMATOR_WRAPPERS` (pinned by
+`tests/unit/test_causal_engine/test_dml_learner_wrapper.py`).
+
+- **Default tournament** (Auto): `causal_forest` → `linear_dml` → `drlearner`
+  → `ols`; `ols` is also the fallback estimator.
+- **Opt-in** (not in Auto): `dml_learner`, `ortho_forest`, `s_learner`,
+  `t_learner`, `x_learner` — reachable by passing an explicit
+  `EstimatorSelectorConfig.estimators` list.
+- **`dml_learner`** (2026-09-19) is econml's general `DML` with a flexible
+  final stage: degree-2 polynomial featurization of X into a
+  `StatsModelsLinearRegression`, so the CATE is non-linear in X while
+  `ate_inference` still gives an analytic sampling interval (a CI-less winner
+  fails closed in the estimation node). GradientBoosting nuisances (50
+  rounds, depth 3). Models come from `src/causal_engine/nuisance_config.py`
+  so the refutation rebuild (`backdoor.econml.dml.DML`) fits the same
+  estimator. Forceable through the agent API (`AGENT_FORCEABLE_ESTIMATORS`,
+  `parameters.method="dml_learner"`); the result's `method` is `dml_learner`.
+  Planted-truth measurements: `docs/demos/results/2026-09-19_dml_learner/disproof.md`.
 
 ### 13.3 Quality Tiers
 

@@ -78,6 +78,7 @@ class EstimationResult(TypedDict, total=False):
         "causal_forest",
         "linear_dml",
         "drlearner",
+        "dml_learner",
         "ols",
     ]
     ate: float  # Average Treatment Effect (ADJUSTED, the headline estimate)
