@@ -136,20 +136,3 @@ def _unsupported_route_qualifier_source() -> str:
 
 
 KPI_VALUE_LOOKUP_UNSUPPORTED_QUALIFIER_PATTERN = _unsupported_route_qualifier_source()
-
-
-# A product may naturally precede a compact KPI token ("Kisqali TRx"). Keep
-# this subset separate so routing can permit that grammatical shape without
-# allowing arbitrary nouns before full metric names ("patients receiving new
-# prescriptions").
-KPI_VALUE_LOOKUP_ABBREVIATION_PATTERN = (
-    "(?:"
-    + "|".join(
-        _route_phrase_source(phrase)
-        for phrase, _kpi_id, _stored_name, routes in sorted(
-            _VOCABULARY, key=lambda item: len(item[0]), reverse=True
-        )
-        if routes and " " not in phrase
-    )
-    + ")"
-)

@@ -39,10 +39,10 @@ from src.agents.multi_faceted import (
     split_clauses,
 )
 from src.kpi.business_metric_vocabulary import (
-    KPI_VALUE_LOOKUP_ABBREVIATION_PATTERN,
     KPI_VALUE_LOOKUP_METRIC_PATTERN,
     KPI_VALUE_LOOKUP_UNSUPPORTED_QUALIFIER_PATTERN,
 )
+from src.services.enum_labels import REGION_LABEL_BY_ALIAS
 from src.services.query_entities import SUPPORTED_BRANDS
 from src.utils.llm_content import normalize_llm_content, parse_llm_json
 from src.utils.llm_factory import MODEL_MAPPINGS, get_fast_llm, get_llm_provider
@@ -539,43 +539,40 @@ _ASK_SHAPE_RE = re.compile(
 # the resolver uses the pre-compiled twin. Identity is pinned by
 # test_explainer_evidence_binding_1475.py.
 _KPI_ENTITY_COUNT_NOUN_PATTERN = r"(?:patients?|hcps?|prescribers?|doctors?|reps?|representatives?)"
-# The product before a compact KPI token ("Kisqali TRx") is a SUPPORTED brand, matched
-# case-insensitively. A capitalisation rule cannot work here: the classifier scores the
-# LOWERCASED query (classify_intent) while the resolver sees the original, so the two
-# layers would disagree on "kisqali trx" / "the remibrutinib NRx".
-_PRODUCT_TOKEN_PATTERN = "(?:" + "|".join(b.lower() for b in SUPPORTED_BRANDS) + ")"
-# Bounded semantic qualifiers. Unlike a generic word budget, they cannot absorb an
-# unrelated subject + verb before a full metric name.
-_KPI_QUALIFIER_PATTERN = (
-    r"(?:current(?:\s+total)?|latest|recent|total|last-\d+-day|(?:patient[\s-])?panel"
-    r"|weekly|monthly|quarterly|daily|annual|yearly)"
+# #2130: which words may sit between a lookup cue ("what is", "show me", "how many") and
+# the KPI. The old rule allowed ANY three words, so a metric that was only the OBJECT of
+# a different question won: "How many people received new prescriptions?" bound the NRx
+# total. Now every word in that gap must be a SCOPE word the lookup can honour or safely
+# ignore: a supported brand, a region alias, a time window, a qualifier, a comparison
+# word, or a known typo. Any other word (people, pharmacies, received, ...) FAILS CLOSED:
+# the ask leaves the deterministic scalar path, and no figure is served for it.
+# Vocabularies come from their authorities (SUPPORTED_BRANDS, REGION_LABEL_BY_ALIAS), and
+# brand matching is case-free: the classifier scores the LOWERCASED query while the
+# resolver sees the original, so a capitalisation rule would split the two layers.
+_BRAND_WORD_PATTERN = "(?:" + "|".join(b.lower() for b in SUPPORTED_BRANDS) + ")(?:'s)?"
+_REGION_WORD_PATTERN = (
+    "(?:" + "|".join(sorted(REGION_LABEL_BY_ALIAS, key=len, reverse=True)) + ")(?:'s)?"
 )
-# A supported brand (possessive allowed) optionally followed by one qualifier, then the
-# metric: "Remibrutinib market share", "Kisqali's total prescriptions", "Remibrutinib
-# weekly TRx". The brand set is closed, so this cannot admit "patients receiving ...".
-_BRAND_LED_METRIC_PATTERN = (
-    rf"{_PRODUCT_TOKEN_PATTERN}(?:'s)?\s+(?:{_KPI_QUALIFIER_PATTERN}\s+)?"
-    rf"{KPI_VALUE_LOOKUP_METRIC_PATTERN}"
+_TIME_WORD_PATTERN = (
+    r"(?:last|past|this|prior|previous|current|currnt|curent|latest|recent|trailing"
+    r"|(?:day|week|month|quarter|year)s?(?:'s)?|today's|ytd|mtd|qtd"
+    r"|(?:year|month|quarter)-to-date|q[1-4]|h[12]|fy\d{2,4}|\d{1,4}(?:-day)?|last-\d+-day"
+    r"|end|start|as|weekly|monthly|quarterly|daily|annual|annualized|yearly)"
 )
+_QUALIFIER_WORD_PATTERN = (
+    r"(?:total|overall|national|regional|us|u\.s\.|brand|canonical|patient[\s-]panel|panel"
+    r"|trend|trends|trajectory|evolution|history|how|value|number|count|share"
+    r"|vs\.?|versus|and|compared|comparison|competitor|competitors|competitive"
+    r"|of|for|in|the|a|an|teh)"
+)
+_KPI_SCOPE_WORD_PATTERN = (
+    rf"(?:{_BRAND_WORD_PATTERN}|{_REGION_WORD_PATTERN}|{_TIME_WORD_PATTERN}"
+    rf"|{_QUALIFIER_WORD_PATTERN})"
+)
+# Up to six scope words ("the competitor comparison", "Kisqali versus Fabhalta",
+# "last 30 days"), then the KPI itself.
 _KPI_VALUE_LOOKUP_TARGET_PATTERN = (
-    r"(?:"
-    # The KPI itself is the requested noun phrase.
-    rf"{KPI_VALUE_LOOKUP_METRIC_PATTERN}"
-    rf"|{_KPI_QUALIFIER_PATTERN}\s+{KPI_VALUE_LOOKUP_METRIC_PATTERN}"
-    rf"|{_BRAND_LED_METRIC_PATTERN}"
-    # Trend phrasing over a KPI ("the trend of Remibrutinib NBRx", "how Kisqali's
-    # total prescriptions have evolved"): still a lookup of that KPI over time.
-    r"|(?:trend|trajectory|evolution|history)\s+(?:of|in|for)\s+(?:the\s+)?"
-    rf"(?:{_BRAND_LED_METRIC_PATTERN}|(?:{_KPI_QUALIFIER_PATTERN}\s+)?"
-    rf"{KPI_VALUE_LOOKUP_METRIC_PATTERN})"
-    rf"|how\s+{_BRAND_LED_METRIC_PATTERN}"
-    r"|(?:end|start|as)\s+of\s+(?:q[1-4]|\d{4})\s+"
-    rf"{KPI_VALUE_LOOKUP_ABBREVIATION_PATTERN}"
-    r"|(?:value|number|count)\s+of\s+"
-    rf"{KPI_VALUE_LOOKUP_METRIC_PATTERN}"
-    r"|(?:value|number|count|share)\s+of\s+"
-    rf"{_PRODUCT_TOKEN_PATTERN}\s+{KPI_VALUE_LOOKUP_ABBREVIATION_PATTERN}"
-    r")"
+    rf"(?:{_KPI_SCOPE_WORD_PATTERN}\s+){{0,6}}?{KPI_VALUE_LOOKUP_METRIC_PATTERN}"
 )
 
 KPI_VALUE_LOOKUP_PATTERN = (
@@ -598,14 +595,13 @@ KPI_VALUE_LOOKUP_PATTERN = (
     # All lookup cues use the same constrained target grammar. In particular,
     # no cue may skip an arbitrary subject/verb to reach a KPI object.
     r"(?:what(?:'?s| is| are| was| were)|show me|tell me about|give me)\s+"
-    r"(?:(?:teh|the|a|an)\s+)?"
     rf"{_KPI_VALUE_LOOKUP_TARGET_PATTERN}"
     r"|"
     # For a count question, the KPI must be the counted noun phrase directly
     # after "how many" (optionally partitive/determined). A generic word gap
     # here makes the KPI object win over any unseen subject noun: e.g. people,
     # individuals, or pharmacies that received/filled new prescriptions.
-    r"how many\s+(?:of\s+)?(?:teh\s+|the\s+)?"
+    r"how many\s+"
     rf"{_KPI_VALUE_LOOKUP_TARGET_PATTERN}"
     r")\b"
 )
