@@ -20,12 +20,15 @@ Author: E2I Causal Analytics Team
 Version: 4.1.0
 """
 
+import asyncio
 import logging
 import time
 import uuid
 from dataclasses import asdict
+from dataclasses import replace as dataclass_replace
 from datetime import datetime, timezone
 from enum import Enum
+from functools import partial
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -59,6 +62,9 @@ from src.rag.exceptions import (
 # (the same one src/api/dependencies/rag.py constructs). Importing the package
 # symbol bound the router to the wrong class -> TypeError on every call (C1).
 from src.rag.hybrid_retriever import HybridRetriever
+from src.rag.insight_enricher import InsightEnricher
+from src.rag.query_optimizer import QueryOptimizer
+from src.rag.reranker import CrossEncoderReranker
 
 logger = logging.getLogger(__name__)
 
@@ -293,6 +299,25 @@ class RAGService:
 
             # Initialize components
             self.entity_extractor = EntityExtractor()
+            self.insight_enricher = InsightEnricher()
+
+            # Query expansion is deliberately rule-based on the request path:
+            # it adds domain synonyms without introducing another network LLM
+            # call. The cross-encoder remains lazy and loads its model only on
+            # the first non-empty result set.
+            self.query_optimizer = (
+                QueryOptimizer(typo_correction_enabled=False)
+                if self.config.enable_query_optimization
+                else None
+            )
+            self.reranker = (
+                CrossEncoderReranker(raise_on_error=True) if self.config.enable_reranking else None
+            )
+            self.rerank_candidate_multiplier = max(1, int(self.config.rerank_candidate_multiplier))
+            self.rerank_timeout_seconds = max(0.1, float(self.config.rerank_timeout_seconds))
+            self._rerank_semaphore = asyncio.Semaphore(
+                max(1, int(self.config.rerank_max_concurrency))
+            )
 
             # Note: HybridRetriever and HealthMonitor require external connections
             # In production, these would be properly initialized
@@ -403,6 +428,90 @@ class RAGService:
         """Extract entities from query."""
         return self.entity_extractor.extract(query)  # type: ignore[no-any-return]
 
+    async def _rerank_candidates(
+        self,
+        reranker: Any,
+        candidates: List[RetrievalResult],
+        query: str,
+        top_k: int,
+    ) -> List[RetrievalResult]:
+        """Run bounded cross-encoder inference with a wall-clock deadline.
+
+        Python cannot safely kill a timed-out worker thread. The permit is
+        therefore released by the inference future's completion callback, not
+        by the waiting request, so lingering work continues to occupy capacity
+        and cannot create an inference stampede.
+        """
+        semaphore = getattr(self, "_rerank_semaphore", None)
+        if semaphore is None:
+            semaphore = asyncio.Semaphore(1)
+            self._rerank_semaphore = semaphore
+        timeout_seconds = max(0.1, float(getattr(self, "rerank_timeout_seconds", 30.0)))
+
+        acquired = False
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                await semaphore.acquire()
+                acquired = True
+                loop = asyncio.get_running_loop()
+                future = loop.run_in_executor(
+                    None,
+                    partial(reranker.rerank, candidates, query, top_k=top_k),
+                )
+                future.add_done_callback(lambda _future: semaphore.release())
+                acquired = False  # completion callback now owns the permit
+                return await asyncio.shield(future)
+        finally:
+            if acquired:
+                semaphore.release()
+
+    @staticmethod
+    def _normalize_fused_scores(
+        results: List[RetrievalResult],
+        retriever: HybridRetriever,
+    ) -> List[RetrievalResult]:
+        """Map raw RRF scores against the fixed theoretical RRF maximum.
+
+        This is query-independent: a weak query's best hit is not promoted to
+        1.0 merely because every other hit was worse. The denominator uses the
+        configured source weights, RRF rank-1 constant, and graph boost.
+        """
+        if not results:
+            return []
+
+        config = getattr(retriever, "config", None)
+        search_config = getattr(config, "search", None)
+        weights = getattr(search_config, "fusion_weights", None)
+        if not isinstance(weights, dict):
+            weights = {"vector": 0.4, "fulltext": 0.2, "graph": 0.4}
+        rrf_k = getattr(retriever, "RRF_K", 60)
+        if not isinstance(rrf_k, (int, float)) or rrf_k <= 0:
+            rrf_k = 60
+        graph_boost = getattr(retriever, "GRAPH_BOOST", 1.3)
+        if not isinstance(graph_boost, (int, float)) or graph_boost < 1:
+            graph_boost = 1.3
+        # Every row must use the same denominator or calibration can invert the
+        # RRF order and make min_score retain a weaker row while dropping a
+        # stronger one. Use the maximum possible rank-1 score across every
+        # configured source, including the graph-boost ceiling.
+        theoretical_max = (
+            sum(float(weights.get(key, 0.0)) for key in ("vector", "fulltext", "graph"))
+            / (rrf_k + 1)
+            * graph_boost
+        )
+
+        normalized: List[RetrievalResult] = []
+        for result in results:
+            score = result.score / theoretical_max if theoretical_max > 0 else 0.0
+            normalized.append(
+                dataclass_replace(
+                    result,
+                    score=max(0.0, min(1.0, score)),
+                    metadata={**result.metadata, "fusion_score": result.score},
+                )
+            )
+        return normalized
+
     async def search(
         self,
         query: str,
@@ -418,25 +527,133 @@ class RAGService:
         Returns:
             Tuple of (results, stats)
         """
-        # Extract entities for graph queries
+        # Extract entities from the user's wording. Expanded synonyms improve
+        # candidate recall, but must not fabricate graph filters/entities.
         entities = self.extract_entities(query)
+
+        optimized_query = query
+        optimizer_error: Optional[str] = None
+        query_optimizer = getattr(self, "query_optimizer", None)
+        reranker = getattr(self, "reranker", None)
+        candidate_multiplier = max(1, int(getattr(self, "rerank_candidate_multiplier", 1)))
+        if query_optimizer is not None:
+            try:
+                optimized_query = query_optimizer.expand(query)
+            except Exception as e:
+                optimizer_error = type(e).__name__
+                logger.warning("RAG query optimization failed; using original query: %s", e)
+
+        # Retrieve a wider pool when reranking is active. Asking the retriever
+        # for final top_k and then reranking cannot recover a relevant item that
+        # fusion placed just outside the cut.
+        candidate_top_k = top_k
+        if reranker is not None:
+            candidate_top_k = top_k * candidate_multiplier
 
         # Execute search via the (async-built) retriever
         retriever = await self._get_retriever()
-        results = await retriever.search(
-            query=query,
-            top_k=top_k,
+        candidates = await retriever.search(
+            query=optimized_query,
+            top_k=candidate_top_k,
             entities=entities,  # type: ignore[arg-type]
             filters=filters,
         )
 
-        # Apply minimum score filter
+        reranked = False
+        reranker_error: Optional[str] = None
+        fallback_query: Optional[str] = None
+        score_type = "normalized_fusion"
+        results = self._normalize_fused_scores(candidates[:top_k], retriever)
+        if reranker is not None and candidates:
+            try:
+                results = await self._rerank_candidates(reranker, candidates, query, top_k)
+                reranked = True
+                score_type = "cross_encoder"
+            except Exception as e:
+                reranker_error = type(e).__name__
+                logger.warning("RAG reranking failed; using fused order: %s", e)
+                # Expansion adds related KPIs, not only strict synonyms.
+                # Without a healthy reranker, fail open to the original query
+                # instead of serving fusion over a semantically drifted query.
+                if optimized_query != query:
+                    candidates = await retriever.search(
+                        query=query,
+                        top_k=top_k,
+                        entities=entities,  # type: ignore[arg-type]
+                        filters=filters,
+                    )
+                    fallback_query = query
+                results = self._normalize_fused_scores(candidates[:top_k], retriever)
+
+        # Apply minimum score to the final scoring space (cross-encoder when
+        # enabled, fused score otherwise).
         results = [r for r in results if r.score >= min_score]
 
         # Get stats (last_search_stats is a property; SearchStats.to_dict is JSON-safe)
         stats = retriever.last_search_stats
+        stats_dict = stats.to_dict() if stats else {}
+        stats_dict.update(
+            {
+                "original_query": query,
+                "optimized_query": optimized_query,
+                "query_optimized": optimized_query != query,
+                "query_optimizer_enabled": query_optimizer is not None,
+                "reranker_enabled": reranker is not None,
+                "reranked": reranked,
+                "candidate_count": len(candidates),
+                "returned_count": len(results),
+                "score_type": score_type,
+            }
+        )
+        if optimizer_error:
+            stats_dict["query_optimizer_error"] = optimizer_error
+        if reranker_error:
+            stats_dict["reranker_error"] = reranker_error
+        if fallback_query:
+            stats_dict["fallback_query"] = fallback_query
 
-        return results, stats.to_dict() if stats else {}
+        return results, stats_dict
+
+    async def query(self, query: str) -> Dict[str, Any]:
+        """RAGAS-compatible full hybrid retrieval + generation adapter.
+
+        ``RAGEvaluationPipeline`` consumes exactly ``answer`` and ``contexts``.
+        Keeping this adapter on the live service means a manual RAGAS run
+        exercises the same optimizer, retriever, and reranker as the search API
+        before synthesizing an answer from those actual contexts.
+        """
+        config = getattr(self, "config", None)
+        search_config = getattr(config, "search", None)
+        final_top_k = max(1, int(getattr(search_config, "final_top_k", 10)))
+        results, stats = await self.search(
+            query=query,
+            mode=SearchMode.HYBRID,
+            top_k=final_top_k,
+            min_score=0.0,
+            include_graph_boost=True,
+        )
+        enriched = await self.insight_enricher.enrich(results, query)
+        answer = str(enriched.summary or "")
+        retrieval_hit = bool(results)
+        generation_attempted = retrieval_hit
+        generation_error = answer.startswith(("Unable to synthesize", "No response generated"))
+        # Confidence is answer content, not execution provenance: a valid model
+        # response may honestly self-report zero confidence. Conversely, the
+        # enricher's explicit fallback strings prove generation failed.
+        generation_succeeded = generation_attempted and bool(answer) and not generation_error
+        runtime_metadata = {
+            **stats,
+            "retrieval_hit": retrieval_hit,
+            "generation_attempted": generation_attempted,
+            "generation_succeeded": generation_succeeded,
+        }
+        if generation_error:
+            runtime_metadata["generation_error"] = "insight_enrichment_failed"
+        return {
+            "answer": answer,
+            "contexts": [result.content for result in results],
+            "metadata": runtime_metadata,
+        }
 
     async def get_causal_subgraph(
         self,

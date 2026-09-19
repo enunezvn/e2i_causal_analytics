@@ -54,7 +54,7 @@ ALLOWLIST: dict[str, int] = {
     "src/memory/semantic_memory.py": 1795,
     "src/ml/data_generator.py": 1759,
     "src/rag/cognitive_rag_dspy.py": 1587,
-    "src/rag/evaluation.py": 1824,
+    "src/rag/evaluation.py": 1753,
 }
 
 

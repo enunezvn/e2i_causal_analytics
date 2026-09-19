@@ -45,7 +45,7 @@ class _FakeDataset:
 
 def _ok_components() -> dict:
     """Imported-components dict stub good enough for the dataset-build check."""
-    return {"evaluate": lambda **_: None, "Dataset": _FakeDataset}
+    return {"aevaluate": lambda **_: None, "Dataset": _FakeDataset}
 
 
 class TestVerifyRagasDependencies:

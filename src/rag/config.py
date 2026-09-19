@@ -265,6 +265,12 @@ class RAGConfig:
     enable_graph_search: bool = True
     enable_fulltext_search: bool = True
     enable_vector_search: bool = True
+    # Opt-in until the cross-encoder is baked/warmed in the production image.
+    enable_query_optimization: bool = False
+    enable_reranking: bool = False
+    rerank_candidate_multiplier: int = 3
+    rerank_max_concurrency: int = 1
+    rerank_timeout_seconds: float = 30.0
 
     # Caching
     cache_enabled: bool = True
@@ -307,6 +313,14 @@ class RAGConfig:
             enable_graph_search=os.getenv("RAG_ENABLE_GRAPH", "true").lower() == "true",
             enable_fulltext_search=os.getenv("RAG_ENABLE_FULLTEXT", "true").lower() == "true",
             enable_vector_search=os.getenv("RAG_ENABLE_VECTOR", "true").lower() == "true",
+            enable_query_optimization=os.getenv("RAG_ENABLE_QUERY_OPTIMIZATION", "false").lower()
+            == "true",
+            enable_reranking=os.getenv("RAG_ENABLE_RERANKING", "false").lower() == "true",
+            rerank_candidate_multiplier=max(
+                1, int(os.getenv("RAG_RERANK_CANDIDATE_MULTIPLIER", "3"))
+            ),
+            rerank_max_concurrency=max(1, int(os.getenv("RAG_RERANK_MAX_CONCURRENCY", "1"))),
+            rerank_timeout_seconds=max(0.1, float(os.getenv("RAG_RERANK_TIMEOUT_SECONDS", "30"))),
             cache_enabled=os.getenv("RAG_CACHE_ENABLED", "true").lower() == "true",
             cache_ttl_seconds=int(os.getenv("RAG_CACHE_TTL", "300")),
             log_all_queries=os.getenv("RAG_LOG_ALL_QUERIES", "false").lower() == "true",

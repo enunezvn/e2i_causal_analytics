@@ -7,7 +7,7 @@ Background
 ----------
 RAGAS pulls ``langchain-community`` transitively. When that drifts past the
 version where ``langchain_community.chat_models.vertexai`` exists,
-``from ragas import ...`` (or a lazy import during ``evaluate()``) raises
+``from ragas import ...`` (or a lazy import during ``aevaluate()``) raises
 ``ModuleNotFoundError``. The previous code caught it in a broad
 ``except Exception`` and returned heuristic fallback scores — which look like
 real (but failing) RAG metrics. That cost 5 days of silently-red CI plus
@@ -18,7 +18,7 @@ These tests pin the contract:
 
 * ``ImportError``/``ModuleNotFoundError`` from the RAGAS import path  →  raise
   ``RagasDependencyError`` (loud, with the original cause preserved).
-* A genuine *runtime* failure inside ``evaluate()`` (e.g. a 401 from the LLM)
+* A genuine *runtime* failure inside ``aevaluate()`` (e.g. a 401 from the LLM)
   →  still degrade to the heuristic fallback (existing graceful-degradation
   contract is preserved; the guard is surgical, not a blanket re-raise).
 """
@@ -98,7 +98,7 @@ async def test_runtime_eval_error_still_falls_back_to_heuristic(monkeypatch):
     loud, it does not break the existing graceful-degradation contract."""
     evaluator = _make_ragas_path_evaluator()
 
-    # A fake RAGAS stack that imports cleanly but whose evaluate() raises a
+    # A fake RAGAS stack that imports cleanly but whose aevaluate() raises a
     # genuine runtime error (not an ImportError).
     fake_openai = types.ModuleType("openai")
     fake_openai.OpenAI = lambda *a, **k: MagicMock()
@@ -110,10 +110,10 @@ async def test_runtime_eval_error_still_falls_back_to_heuristic(monkeypatch):
 
     fake_ragas = types.ModuleType("ragas")
 
-    def _evaluate(*a, **k):
+    async def _aevaluate(*a, **k):
         raise RuntimeError("openai.AuthenticationError: 401 Unauthorized")
 
-    fake_ragas.evaluate = _evaluate
+    fake_ragas.aevaluate = _aevaluate
     monkeypatch.setitem(sys.modules, "ragas", fake_ragas)
 
     emb = types.ModuleType("ragas.embeddings")
@@ -136,8 +136,8 @@ async def test_runtime_eval_error_still_falls_back_to_heuristic(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_lazy_import_break_during_evaluate_raises_loud(monkeypatch):
-    """A dependency break that surfaces as ImportError DURING evaluate() (a
+async def test_lazy_import_break_during_aevaluate_raises_loud(monkeypatch):
+    """A dependency break that surfaces as ImportError DURING aevaluate() (a
     lazy import inside ragas, not at initial import) must ALSO fail loud, not
     silently fall back. Guards the runtime-block half of issue #491."""
     evaluator = _make_ragas_path_evaluator()
@@ -152,11 +152,11 @@ async def test_lazy_import_break_during_evaluate_raises_loud(monkeypatch):
 
     fake_ragas = types.ModuleType("ragas")
 
-    def _evaluate(*a, **k):
+    async def _aevaluate(*a, **k):
         # ragas lazily imports a now-removed langchain symbol at call time.
         raise ModuleNotFoundError("No module named 'langchain_community.chat_models.vertexai'")
 
-    fake_ragas.evaluate = _evaluate
+    fake_ragas.aevaluate = _aevaluate
     monkeypatch.setitem(sys.modules, "ragas", fake_ragas)
 
     emb = types.ModuleType("ragas.embeddings")

@@ -6,16 +6,29 @@ for improved relevance.
 """
 
 import logging
-from typing import List, Tuple, cast
+import threading
+from dataclasses import is_dataclass, replace
+from typing import Any, Dict, List, Protocol, Sequence, Tuple, TypeVar, cast
 
 from sentence_transformers import CrossEncoder
-
-from src.rag.models.retrieval_models import RetrievalResult
+from torch import nn
 
 logger = logging.getLogger(__name__)
 
 # Module-level model cache for singleton pattern
-_MODEL_CACHE: dict = {}
+_MODEL_CACHE: Dict[str, CrossEncoder] = {}
+_MODEL_CACHE_LOCK = threading.Lock()
+
+
+class RerankableResult(Protocol):
+    """Structural contract shared by both repository retrieval result models."""
+
+    content: str
+    score: float
+    metadata: Dict[str, Any]
+
+
+ResultT = TypeVar("ResultT", bound=RerankableResult)
 
 
 class CrossEncoderReranker:
@@ -32,6 +45,7 @@ class CrossEncoderReranker:
         model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2",
         batch_size: int = 32,
         max_length: int = 512,
+        raise_on_error: bool = False,
     ):
         """
         Initialize reranker with cross-encoder model.
@@ -40,29 +54,38 @@ class CrossEncoderReranker:
             model_name: HuggingFace model name for cross-encoder
             batch_size: Batch size for scoring (default 32)
             max_length: Maximum sequence length (default 512)
+            raise_on_error: Propagate inference failures so an orchestrator can
+                preserve the upstream ranking. The legacy default keeps the
+                historical neutral-score fallback.
         """
         self.model_name = model_name
         self.batch_size = batch_size
         self.max_length = max_length
+        self.raise_on_error = raise_on_error
 
     @property
     def model(self) -> CrossEncoder:
         """Lazy-load and cache the cross-encoder model."""
         if self.model_name not in _MODEL_CACHE:
-            logger.info(f"Loading cross-encoder model: {self.model_name}")
-            _MODEL_CACHE[self.model_name] = CrossEncoder(
-                self.model_name,
-                max_length=self.max_length,
-            )
-            logger.info("Cross-encoder model loaded successfully")
+            # Cold requests can arrive concurrently via the API's worker
+            # thread. Single-flight construction avoids duplicate downloads
+            # and duplicate model-sized memory spikes.
+            with _MODEL_CACHE_LOCK:
+                if self.model_name not in _MODEL_CACHE:
+                    logger.info(f"Loading cross-encoder model: {self.model_name}")
+                    _MODEL_CACHE[self.model_name] = CrossEncoder(
+                        self.model_name,
+                        max_length=self.max_length,
+                    )
+                    logger.info("Cross-encoder model loaded successfully")
         return _MODEL_CACHE[self.model_name]
 
     def rerank(
         self,
-        results: List[RetrievalResult],
+        results: Sequence[ResultT],
         query,  # ParsedQuery or str
         top_k: int = 5,
-    ) -> List[RetrievalResult]:
+    ) -> List[ResultT]:
         """
         Rerank results using cross-encoder scoring.
 
@@ -85,36 +108,21 @@ class CrossEncoderReranker:
         # Build query-document pairs for batch scoring
         pairs = []
         for result in results:
-            content = result.content if hasattr(result, "content") else str(result)
-            pairs.append((query_text, content))
+            pairs.append((query_text, result.content))
 
         # Batch score all pairs
         scores = self._batch_score(pairs)
 
         # Combine scores with results
-        scored_results: List[Tuple[float, RetrievalResult]] = list(
-            zip(scores, results, strict=False)
-        )
+        scored_results: List[Tuple[float, ResultT]] = list(zip(scores, results, strict=False))
 
         # Sort by score descending
         scored_results.sort(key=lambda x: x[0], reverse=True)
 
         # Create new RetrievalResult objects with updated scores
-        reranked = []
+        reranked: List[ResultT] = []
         for score, result in scored_results[:top_k]:
-            reranked_result = RetrievalResult(
-                source_id=result.source_id,
-                content=result.content,
-                source=result.source,
-                score=score,
-                retrieval_method=result.retrieval_method,
-                metadata={
-                    **result.metadata,
-                    "reranker_score": score,
-                    "original_score": result.score,
-                },
-            )
-            reranked.append(reranked_result)
+            reranked.append(self._copy_with_score(result, score))
 
         logger.debug(
             f"Reranked {len(results)} results to top {len(reranked)}, "
@@ -124,6 +132,40 @@ class CrossEncoderReranker:
         )
 
         return reranked
+
+    @staticmethod
+    def _copy_with_score(result: ResultT, score: float) -> ResultT:
+        """Return a scored copy without collapsing the caller's result model.
+
+        The repository has two intentional retrieval boundaries:
+
+        * ``src.rag.models.retrieval_models.RetrievalResult`` (Pydantic), used
+          by the legacy ``CausalRAG`` orchestrator; and
+        * ``src.rag.types.RetrievalResult`` (dataclass), used by the live
+          ``/api/v1/rag/search`` hybrid retriever.
+
+        Reconstructing every row as the former loses live-only fields (``id``,
+        graph context, latency, and raw score) and raises before reranking can
+        serve the API.  Copy through the model's native update mechanism so
+        both contracts remain intact.
+        """
+        metadata = {
+            **(result.metadata or {}),
+            "reranker_score": score,
+            "original_score": float(result.score),
+        }
+
+        if is_dataclass(result) and not isinstance(result, type):
+            return cast(ResultT, replace(result, score=score, metadata=metadata))
+
+        model_copy = getattr(result, "model_copy", None)
+        if callable(model_copy):
+            return cast(ResultT, model_copy(update={"score": score, "metadata": metadata}))
+
+        raise TypeError(
+            "CrossEncoderReranker requires a dataclass or Pydantic retrieval result; "
+            f"got {type(result).__name__}"
+        )
 
     def _batch_score(self, pairs: List[Tuple[str, str]]) -> List[float]:
         """
@@ -139,22 +181,34 @@ class CrossEncoderReranker:
             return []
 
         try:
-            # CrossEncoder.predict returns raw logits, apply sigmoid for [0, 1] range
-            raw_scores = self.model.predict(
+            # Make the activation explicit. CrossEncoder defaults vary across
+            # sentence-transformers/model configurations; applying Sigmoid in
+            # predict yields probabilities exactly once and avoids either raw
+            # logits or a second post-processing sigmoid.
+            predictions = self.model.predict(
                 pairs,
                 batch_size=self.batch_size,
                 show_progress_bar=False,
+                activation_fn=nn.Sigmoid(),
             )
 
-            # Normalize scores to [0, 1] using sigmoid
             import numpy as np
 
-            normalized_scores = 1 / (1 + np.exp(-raw_scores))
-
-            return cast(List[float], normalized_scores.tolist())
+            scores = np.asarray(predictions, dtype=float).reshape(-1)
+            if len(scores) != len(pairs):
+                raise ValueError(
+                    f"Cross-encoder returned {len(scores)} scores for {len(pairs)} pairs"
+                )
+            if not np.all(np.isfinite(scores)):
+                raise ValueError("Cross-encoder returned non-finite scores")
+            if np.any((scores < 0.0) | (scores > 1.0)):
+                raise ValueError("Cross-encoder activation returned scores outside [0, 1]")
+            return cast(List[float], scores.tolist())
 
         except Exception as e:
             logger.error(f"Batch scoring failed: {e}")
+            if self.raise_on_error:
+                raise
             # Return fallback scores on error
             return [0.5] * len(pairs)
 

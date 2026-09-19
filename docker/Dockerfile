@@ -172,6 +172,7 @@ ENV PATH="/app/.venv/bin:$PATH" \
     VIRTUAL_ENV="/app/.venv" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    HF_HOME=/tmp/huggingface \
     MPLCONFIGDIR=/app/tmp \
     MPLBACKEND=Agg
 

@@ -8,8 +8,10 @@ Tests cover:
 - Mock all external dependencies (HybridRetriever, EntityExtractor, HealthMonitor, Supabase)
 """
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from threading import Event
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -295,15 +297,243 @@ class TestRAGService:
         assert "vector_count" in stats
 
     @pytest.mark.asyncio
+    async def test_search_optimizes_candidates_then_reranks_against_original_query(
+        self, rag_service, mock_hybrid_retriever
+    ):
+        """The live route must exercise optimizer + reranker as one retrieval path."""
+        optimizer = MagicMock()
+        optimizer.expand.return_value = "Kisqali TRx total prescriptions prescription volume"
+        reranker = MagicMock()
+        reranker.rerank.return_value = list(reversed(mock_hybrid_retriever.search.return_value))
+        rag_service.query_optimizer = optimizer
+        rag_service.reranker = reranker
+        rag_service.rerank_candidate_multiplier = 3
+
+        results, stats = await rag_service.search(
+            query="Kisqali TRx",
+            mode=SearchMode.HYBRID,
+            top_k=2,
+            min_score=0.0,
+            include_graph_boost=True,
+        )
+
+        optimizer.expand.assert_called_once_with("Kisqali TRx")
+        assert (
+            mock_hybrid_retriever.search.call_args.kwargs["query"] == optimizer.expand.return_value
+        )
+        assert mock_hybrid_retriever.search.call_args.kwargs["top_k"] == 6
+        reranker.rerank.assert_called_once_with(
+            mock_hybrid_retriever.search.return_value,
+            "Kisqali TRx",
+            top_k=2,
+        )
+        assert results == reranker.rerank.return_value
+        assert stats["original_query"] == "Kisqali TRx"
+        assert stats["optimized_query"] == optimizer.expand.return_value
+        assert stats["query_optimized"] is True
+        assert stats["reranked"] is True
+        assert stats["candidate_count"] == 2
+        assert stats["returned_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_search_degrades_to_fused_results_when_reranker_fails(
+        self, rag_service, mock_hybrid_retriever
+    ):
+        mock_hybrid_retriever.search.return_value[0].score = 0.006
+        mock_hybrid_retriever.search.return_value[1].score = 0.001
+        optimizer = MagicMock()
+        optimizer.expand.return_value = "expanded query"
+        reranker = MagicMock()
+        reranker.rerank.side_effect = RuntimeError("model unavailable")
+        rag_service.query_optimizer = optimizer
+        rag_service.reranker = reranker
+        rag_service.rerank_candidate_multiplier = 2
+
+        results, stats = await rag_service.search(
+            query="original query",
+            mode=SearchMode.HYBRID,
+            top_k=2,
+            min_score=0.25,
+            include_graph_boost=True,
+        )
+
+        assert mock_hybrid_retriever.search.await_count == 2
+        assert mock_hybrid_retriever.search.await_args_list[0].kwargs["query"] == "expanded query"
+        assert mock_hybrid_retriever.search.await_args_list[1].kwargs["query"] == "original query"
+        assert [result.id for result in results] == ["doc1"]
+        assert results[0].score == pytest.approx(0.006 / (1.3 / 61))
+        assert results[0].metadata["fusion_score"] == 0.006
+        assert stats["reranked"] is False
+        assert stats["reranker_error"] == "RuntimeError"
+        assert stats["fallback_query"] == "original query"
+
+    @pytest.mark.asyncio
+    async def test_search_normalizes_fused_scores_when_reranking_is_disabled(
+        self, rag_service, mock_hybrid_retriever
+    ):
+        rag_service.query_optimizer = None
+        rag_service.reranker = None
+        mock_hybrid_retriever.search.return_value[0].score = 0.006
+        mock_hybrid_retriever.search.return_value[1].score = 0.001
+
+        results, stats = await rag_service.search(
+            query="original query",
+            mode=SearchMode.HYBRID,
+            top_k=2,
+            min_score=0.25,
+            include_graph_boost=True,
+        )
+
+        assert [result.id for result in results] == ["doc1"]
+        assert results[0].score == pytest.approx(0.006 / (1.3 / 61))
+        assert results[0].metadata["fusion_score"] == 0.006
+        assert stats["score_type"] == "normalized_fusion"
+
+    @pytest.mark.asyncio
+    async def test_fused_calibration_preserves_multi_source_rrf_order_and_filtering(
+        self, rag_service, mock_hybrid_retriever
+    ):
+        rag_service.query_optimizer = None
+        rag_service.reranker = None
+        mock_hybrid_retriever.search.return_value = [
+            RetrievalResult(
+                id="multi",
+                content="Consensus result",
+                score=1 / 80,
+                source=RetrievalSource.GRAPH,
+                metadata={
+                    "rrf_sources": [
+                        RetrievalSource.VECTOR.value,
+                        RetrievalSource.FULLTEXT.value,
+                        RetrievalSource.GRAPH.value,
+                    ]
+                },
+            ),
+            RetrievalResult(
+                id="vector",
+                content="Vector-only result",
+                score=0.4 / 61,
+                source=RetrievalSource.VECTOR,
+                metadata={"rrf_sources": [RetrievalSource.VECTOR.value]},
+            ),
+        ]
+
+        results, _ = await rag_service.search(
+            query="original query",
+            mode=SearchMode.HYBRID,
+            top_k=2,
+            min_score=0.5,
+            include_graph_boost=True,
+        )
+
+        assert [result.id for result in results] == ["multi"]
+        assert results[0].score == pytest.approx((1 / 80) / (1.3 / 61))
+
+    @pytest.mark.asyncio
+    async def test_query_exposes_live_pipeline_to_ragas(self, rag_service, mock_hybrid_retriever):
+        rag_service.search = AsyncMock(
+            return_value=(mock_hybrid_retriever.search.return_value, {"reranked": True})
+        )
+        rag_service.insight_enricher = MagicMock()
+        rag_service.insight_enricher.enrich = AsyncMock(
+            return_value=MagicMock(summary="Generated from live retrieval", confidence=0.8)
+        )
+
+        result = await rag_service.query("Why did Kisqali TRx change?")
+
+        assert result["answer"] == "Generated from live retrieval"
+        assert result["contexts"] == [
+            item.content for item in mock_hybrid_retriever.search.return_value
+        ]
+        assert result["metadata"] == {
+            "reranked": True,
+            "retrieval_hit": True,
+            "generation_attempted": True,
+            "generation_succeeded": True,
+        }
+        rag_service.insight_enricher.enrich.assert_awaited_once_with(
+            mock_hybrid_retriever.search.return_value,
+            "Why did Kisqali TRx change?",
+        )
+
+    @pytest.mark.asyncio
+    async def test_query_treats_no_hit_as_quality_outcome_not_generation_failure(self, rag_service):
+        rag_service.search = AsyncMock(return_value=([], {"reranked": False}))
+        rag_service.insight_enricher = MagicMock()
+        rag_service.insight_enricher.enrich = AsyncMock(
+            return_value=MagicMock(
+                summary="No relevant insights found for this query.", confidence=0.0
+            )
+        )
+
+        result = await rag_service.query("unknown subject")
+
+        assert result["contexts"] == []
+        assert result["metadata"]["retrieval_hit"] is False
+        assert result["metadata"]["generation_attempted"] is False
+        assert result["metadata"]["generation_succeeded"] is False
+        assert "generation_error" not in result["metadata"]
+
+    @pytest.mark.asyncio
+    async def test_query_accepts_valid_zero_confidence_generation(
+        self, rag_service, mock_hybrid_retriever
+    ):
+        rag_service.search = AsyncMock(
+            return_value=(mock_hybrid_retriever.search.return_value, {"reranked": True})
+        )
+        rag_service.insight_enricher = MagicMock()
+        rag_service.insight_enricher.enrich = AsyncMock(
+            return_value=MagicMock(summary="A cautious but valid answer.", confidence=0.0)
+        )
+
+        result = await rag_service.query("uncertain query")
+
+        assert result["metadata"]["generation_succeeded"] is True
+
+    @pytest.mark.asyncio
+    async def test_reranker_timeout_keeps_capacity_until_worker_finishes(
+        self, rag_service, mock_hybrid_retriever
+    ):
+        started = Event()
+        release = Event()
+        reranker = MagicMock()
+
+        def blocking_rerank(results, query, top_k):
+            started.set()
+            release.wait(timeout=2)
+            return results[:top_k]
+
+        reranker.rerank.side_effect = blocking_rerank
+        rag_service.rerank_timeout_seconds = 0.1
+        rag_service._rerank_semaphore = asyncio.Semaphore(1)
+
+        with pytest.raises(TimeoutError):
+            await rag_service._rerank_candidates(
+                reranker,
+                mock_hybrid_retriever.search.return_value,
+                "query",
+                1,
+            )
+
+        assert started.is_set()
+        assert rag_service._rerank_semaphore.locked()
+        release.set()
+        for _ in range(20):
+            if not rag_service._rerank_semaphore.locked():
+                break
+            await asyncio.sleep(0.01)
+        assert not rag_service._rerank_semaphore.locked()
+
+    @pytest.mark.asyncio
     async def test_search_with_min_score_filter(self, rag_service, mock_hybrid_retriever):
         """Test search applies minimum score filter."""
         # Set up results with different scores
         mock_hybrid_retriever.search.return_value = [
             RetrievalResult(
-                id="doc1", content="High score", score=0.9, source=RetrievalSource.VECTOR
+                id="doc1", content="High score", score=0.006, source=RetrievalSource.VECTOR
             ),
             RetrievalResult(
-                id="doc2", content="Low score", score=0.3, source=RetrievalSource.VECTOR
+                id="doc2", content="Low score", score=0.002, source=RetrievalSource.VECTOR
             ),
         ]
 
@@ -311,12 +541,12 @@ class TestRAGService:
             query="Test",
             mode=SearchMode.HYBRID,
             top_k=10,
-            min_score=0.5,
+            min_score=0.2,
             include_graph_boost=True,
         )
 
         assert len(results) == 1
-        assert results[0].score >= 0.5
+        assert results[0].score >= 0.2
 
     @pytest.mark.asyncio
     async def test_search_with_filters(self, rag_service, mock_hybrid_retriever):

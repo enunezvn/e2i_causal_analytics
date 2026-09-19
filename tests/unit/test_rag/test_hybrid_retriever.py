@@ -5,6 +5,7 @@ Tests for HybridRetriever orchestration, RRF fusion, and graph boost.
 All external dependencies are mocked.
 """
 
+import asyncio
 from typing import Dict
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -131,6 +132,26 @@ class TestHybridRetrieverInit:
 
         assert retriever.config is not None
 
+    def test_rag_config_reads_retrieval_enhancement_flags(self, monkeypatch):
+        monkeypatch.setenv("RAG_ENABLE_QUERY_OPTIMIZATION", "false")
+        monkeypatch.setenv("RAG_ENABLE_RERANKING", "false")
+        monkeypatch.setenv("RAG_RERANK_CANDIDATE_MULTIPLIER", "0")
+
+        config = RAGConfig.from_env()
+
+        assert config.enable_query_optimization is False
+        assert config.enable_reranking is False
+        assert config.rerank_candidate_multiplier == 1
+
+    def test_rag_retrieval_enhancements_are_safe_by_default(self, monkeypatch):
+        monkeypatch.delenv("RAG_ENABLE_QUERY_OPTIMIZATION", raising=False)
+        monkeypatch.delenv("RAG_ENABLE_RERANKING", raising=False)
+
+        config = RAGConfig.from_env()
+
+        assert config.enable_query_optimization is False
+        assert config.enable_reranking is False
+
     def test_repr(self, hybrid_retriever):
         """Test string representation."""
         repr_str = repr(hybrid_retriever)
@@ -232,6 +253,23 @@ class TestRRFFusion:
         # First result should have higher RRF score
         assert fused[0].id == "doc-1"
         assert fused[0].score > fused[1].score
+
+    def test_rrf_uses_configured_source_weights(self, hybrid_retriever):
+        backend_results = {
+            RetrievalSource.VECTOR: [
+                create_mock_result("vector", "Vector", RetrievalSource.VECTOR, 0.9)
+            ],
+            RetrievalSource.FULLTEXT: [
+                create_mock_result("fulltext", "Fulltext", RetrievalSource.FULLTEXT, 0.9)
+            ],
+            RetrievalSource.GRAPH: [],
+        }
+
+        fused = hybrid_retriever._apply_rrf_fusion(backend_results, top_k=2)
+
+        by_id = {result.id: result.score for result in fused}
+        assert by_id["vector"] == pytest.approx(0.4 / 61)
+        assert by_id["fulltext"] == pytest.approx(0.2 / 61)
 
     def test_rrf_multiple_sources(self, hybrid_retriever):
         """Test RRF combines results from multiple sources."""
@@ -467,6 +505,102 @@ class TestHybridRetrieverSearch:
             # Should still get fulltext result
             assert len(results) == 1
             assert results[0].id == "doc-1"
+
+    @pytest.mark.asyncio
+    async def test_search_serializes_backend_failure_without_aborting(self, hybrid_retriever):
+        """A degraded hit remains valid, but its failed leg must be auditable."""
+        with (
+            patch.object(
+                hybrid_retriever, "_safe_vector_search", new_callable=AsyncMock
+            ) as mock_vector,
+            patch.object(
+                hybrid_retriever, "_safe_fulltext_search", new_callable=AsyncMock
+            ) as mock_fulltext,
+            patch.object(
+                hybrid_retriever, "_safe_graph_search", new_callable=AsyncMock
+            ) as mock_graph,
+        ):
+            mock_vector.side_effect = TimeoutError("dense backend timed out")
+            mock_fulltext.return_value = [
+                create_mock_result("doc-1", "Fulltext result", RetrievalSource.FULLTEXT, 0.8)
+            ]
+            mock_graph.return_value = []
+
+            results = await hybrid_retriever.search(query="test", embedding=[0.1] * 1536)
+
+        assert [result.id for result in results] == ["doc-1"]
+        stats = hybrid_retriever.last_search_stats
+        assert stats is not None
+        assert stats.errors == ["supabase_vector:TimeoutError"]
+        assert stats.to_dict()["errors"] == ["supabase_vector:TimeoutError"]
+
+    @pytest.mark.asyncio
+    async def test_zero_result_search_serializes_every_backend_failure(self, hybrid_retriever):
+        with (
+            patch.object(
+                hybrid_retriever, "_safe_vector_search", new_callable=AsyncMock
+            ) as mock_vector,
+            patch.object(
+                hybrid_retriever, "_safe_fulltext_search", new_callable=AsyncMock
+            ) as mock_fulltext,
+            patch.object(
+                hybrid_retriever, "_safe_graph_search", new_callable=AsyncMock
+            ) as mock_graph,
+        ):
+            mock_vector.side_effect = TimeoutError("vector timeout")
+            mock_fulltext.side_effect = ConnectionError("fulltext unavailable")
+            mock_graph.side_effect = RuntimeError("graph unavailable")
+
+            results = await hybrid_retriever.search(query="test", embedding=[0.1] * 1536)
+
+        assert results == []
+        stats = hybrid_retriever.last_search_stats
+        assert stats is not None
+        assert stats.errors == [
+            "supabase_vector:TimeoutError",
+            "supabase_fulltext:ConnectionError",
+            "falkordb_graph:RuntimeError",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_concurrent_dispatch_keeps_failures_and_latencies_per_call(
+        self, hybrid_retriever, monkeypatch
+    ):
+        first_started = asyncio.Event()
+        second_finished = asyncio.Event()
+
+        async def vector_search(embedding, filters):
+            if embedding[0] == 1.0:
+                first_started.set()
+                await second_finished.wait()
+                await asyncio.sleep(0.02)
+                raise TimeoutError("first query timeout")
+            await first_started.wait()
+            await asyncio.sleep(0.001)
+            second_finished.set()
+            return []
+
+        async def no_results(*args, **kwargs):
+            return []
+
+        monkeypatch.setattr(hybrid_retriever, "_safe_vector_search", vector_search)
+        monkeypatch.setattr(hybrid_retriever, "_safe_fulltext_search", no_results)
+        monkeypatch.setattr(hybrid_retriever, "_safe_graph_search", no_results)
+
+        first, second = await asyncio.gather(
+            hybrid_retriever._dispatch_parallel_searches(
+                "first", [1.0] * 1536, ExtractedEntities(), {}
+            ),
+            hybrid_retriever._dispatch_parallel_searches(
+                "second", [2.0] * 1536, ExtractedEntities(), {}
+            ),
+        )
+
+        assert first.errors == ["supabase_vector:TimeoutError"]
+        assert second.errors == []
+        assert first.latencies_ms[RetrievalSource.VECTOR] > (
+            second.latencies_ms[RetrievalSource.VECTOR] + 10
+        )
 
     @pytest.mark.asyncio
     async def test_search_tracks_stats(self, hybrid_retriever):
