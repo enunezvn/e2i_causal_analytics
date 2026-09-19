@@ -13,12 +13,16 @@
 
 ## Overview
 
-The E2I knowledge graph runs on **FalkorDB** (Redis-compatible graph database) using the Cypher query language. It models pharmaceutical commercial relationships — patients, HCPs, brands, triggers, causal paths, and KPIs. The **ontology** in `config/ontology/` defines **8 node types** and **15 edge types** (13 direct + 2 inferred).
+The E2I knowledge graph runs on **FalkorDB** (Redis-compatible graph database) using the Cypher query language. It models pharmaceutical commercial relationships — patients, HCPs, brands, triggers, causal paths, and KPIs. The **ontology** in `config/ontology/` defines **8 node types** and **15 edge types** (13 direct + 2 inferred) with full property schemas, and also declares every other label and edge type the runtime writers create (description, endpoints and writer files, no property schema).
 
 > **The ontology is a design spec, not the runtime schema.** No production code loads
 > `config/ontology/*.yaml` (`src/ontology`'s compiler, validator and inference engine run only
-> in CI tests). The live graph is built by code and carries more labels than the ontology —
-> see [How the graph is built](#how-the-graph-is-built).
+> in CI tests). The live graph is built by code — see
+> [How the graph is built](#how-the-graph-is-built). CI keeps the two in step in one direction:
+> `tests/unit/test_ontology/test_kg_writer_ontology_drift.py` fails when code writes a node label
+> or edge type that `node_types.yaml` / `edge_types.yaml` does not declare. Writers whose type
+> comes from runtime data (LLM triplet predicates, caller-supplied relationship lists) cannot be
+> checked statically and are pinned in that test instead.
 
 **Purpose**: Enables graph-based RAG retrieval, causal path traversal, HCP influence network analysis, and patient journey state tracking for the agent roster in `config/agent_config.yaml` (22 agents, Tier 0 = 9).
 

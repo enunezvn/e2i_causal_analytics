@@ -4,7 +4,8 @@
 # File: ontology/02_edge_types.yaml
 # Lines: ~200
 # Maintainer: Data Architecture Team
-# Purpose: 15 edge types with cardinality and properties
+# Purpose: 15 edge types with cardinality and properties, plus every edge type
+#          the runtime writers create (description + endpoints + writer)
 # Integration: schema_compiler.py, validator.py
 # =============================================================================
 
@@ -345,6 +346,210 @@ edge_types:
         description: "Evidence for high potential classification"
 
 # Cardinality definitions
+
+  # ---------------------------------------------------------------------------
+  # Edge types written by runtime code (added 2026-09-19, #2178 follow-up).
+  # tests/unit/test_ontology/test_kg_writer_ontology_drift.py fails when code
+  # writes edge types not declared in this file. Property schemas are not declared.
+  # ---------------------------------------------------------------------------
+
+  AFFECTS:
+    description: "KPI affects KPI in the seeded causal chain."
+    source: KPI
+    target: KPI
+    written_by:
+      - scripts/seed_falkordb.py
+
+  AFFECTS_MODEL:
+    description: "Drift pattern affects a model."
+    source: DriftPattern
+    target: Model
+    written_by:
+      - src/agents/drift_monitor/memory_hooks.py
+
+  APPLIES_TO:
+    description: "Eligibility rule applies to a brand."
+    source: EligibilityRule
+    target: Brand
+    written_by:
+      - src/agents/cohort_constructor/memory_hooks.py
+
+  BELONGS_TO:
+    description: "Trained model belongs to an experiment."
+    source: Model
+    target: Experiment
+    written_by:
+      - src/agents/ml_foundation/model_trainer/memory_hooks.py
+
+  CO_DRIFTS_WITH:
+    description: "Features that drift together."
+    source: Feature
+    target: Feature
+    written_by:
+      - src/agents/drift_monitor/memory_hooks.py
+
+  DEFINED_BY:
+    description: "Experiment defined by its scope spec."
+    source: Experiment
+    target: ScopeSpec
+    written_by:
+      - src/agents/ml_foundation/scope_definer/memory_hooks.py
+
+  DEPLOYS_FOR:
+    description: "Deployment serves an experiment's model."
+    source: Deployment
+    target: Experiment
+    written_by:
+      - src/agents/ml_foundation/model_deployer/memory_hooks.py
+
+  DETECTED:
+    description: "Health snapshot detected an anomaly."
+    source: HealthSnapshot
+    target: Anomaly
+    written_by:
+      - src/agents/ml_foundation/observability_connector/memory_hooks.py
+
+  EXPLAINS:
+    description: "Causal path or agent explains a KPI (seed)."
+    source: "CausalPath | Agent"
+    target: KPI
+    written_by:
+      - scripts/seed_falkordb.py
+
+  FOR_BRAND:
+    description: "Node scoped to a brand."
+    source: "CohortConfig | Feature"
+    target: Brand
+    written_by:
+      - src/agents/cohort_constructor/memory_hooks.py
+      - src/data/kg/ensemble_voter.py
+
+  HAS_DRIFT:
+    description: "Feature has a drift pattern."
+    source: Feature
+    target: DriftPattern
+    written_by:
+      - src/agents/drift_monitor/memory_hooks.py
+
+  HAS_IMPORTANCE:
+    description: "Feature carries importance in an experiment."
+    source: Feature
+    target: Experiment
+    written_by:
+      - src/agents/ml_foundation/feature_analyzer/memory_hooks.py
+
+  HAS_QC:
+    description: "Data source has a QC report."
+    source: DataSource
+    target: QCReport
+    written_by:
+      - src/agents/ml_foundation/data_preparer/memory_hooks.py
+
+  HAS_TYPE:
+    description: "Experiment has a problem type."
+    source: Experiment
+    target: ProblemType
+    written_by:
+      - src/agents/ml_foundation/scope_definer/memory_hooks.py
+
+  INCLUDES:
+    description: "Health snapshot includes an agent pattern."
+    source: HealthSnapshot
+    target: AgentPattern
+    written_by:
+      - src/agents/ml_foundation/observability_connector/memory_hooks.py
+
+  INTERACTS_WITH:
+    description: "Feature interaction (feature_analyzer)."
+    source: Feature
+    target: Feature
+    written_by:
+      - src/agents/ml_foundation/feature_analyzer/memory_hooks.py
+
+  MONITORS:
+    description: "Agent monitors a brand (seed)."
+    source: Agent
+    target: Brand
+    written_by:
+      - scripts/seed_falkordb.py
+
+  PREDICTS:
+    description: "Agent predicts a KPI (seed)."
+    source: Agent
+    target: KPI
+    written_by:
+      - scripts/seed_falkordb.py
+
+  RECEIVES:
+    description: "Patient receives a treatment (seed)."
+    source: Patient
+    target: Treatment
+    written_by:
+      - scripts/seed_falkordb.py
+
+  ROLLED_BACK:
+    description: "Rollback of a deployment."
+    source: Rollback
+    target: Deployment
+    written_by:
+      - src/agents/ml_foundation/model_deployer/memory_hooks.py
+
+  SHARED_PATIENTS:
+    description: "HCPs that share patients (HCP influence graph)."
+    source: HCP
+    target: HCP
+    written_by:
+      - scripts/persist_hcp_influence_to_falkordb.py
+
+  SUITED_FOR:
+    description: "Algorithm suited for a problem type."
+    source: Algorithm
+    target: ProblemType
+    written_by:
+      - src/agents/ml_foundation/model_selector/memory_hooks.py
+
+  TARGETS:
+    description: "Experiment targets a variable."
+    source: Experiment
+    target: Variable
+    written_by:
+      - src/agents/ml_foundation/scope_definer/memory_hooks.py
+
+  TRACKS:
+    description: "Brand tracks a KPI (seed)."
+    source: Brand
+    target: KPI
+    written_by:
+      - scripts/seed_falkordb.py
+
+  TRAINED_WITH:
+    description: "Model trained with an algorithm."
+    source: Model
+    target: Algorithm
+    written_by:
+      - src/agents/ml_foundation/model_trainer/memory_hooks.py
+
+  USED_BY:
+    description: "Hyperparameter set used by a model."
+    source: Hyperparameters
+    target: Model
+    written_by:
+      - src/agents/ml_foundation/model_trainer/memory_hooks.py
+
+  USED_IN:
+    description: "Algorithm used in an experiment; eligibility rule used in a cohort."
+    source: "Algorithm | EligibilityRule"
+    target: "Experiment | CohortConfig"
+    written_by:
+      - src/agents/cohort_constructor/memory_hooks.py
+      - src/agents/ml_foundation/model_selector/memory_hooks.py
+
+  USES:
+    description: "Treatment uses a brand (seed)."
+    source: Treatment
+    target: Brand
+    written_by:
+      - scripts/seed_falkordb.py
 
 cardinality_definitions:
   "N:1":
