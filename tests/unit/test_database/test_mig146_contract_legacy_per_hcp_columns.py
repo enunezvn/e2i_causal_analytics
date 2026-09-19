@@ -388,6 +388,30 @@ def test_the_contract_refuses_a_schema_where_the_expand_has_not_run():
     )
 
 
+def test_the_precondition_lets_an_already_contracted_schema_through():
+    """codex iter9 MED: the header promises a SECOND application is harmless (the move
+    into database/migrations/ re-keys it and the runner applies it once more), but the
+    row query names the legacy columns, and after the first application they are gone.
+    Measured on the live schema inside BEGIN/ROLLBACK (144, 146, 146): the second run
+    died on `column "trx_count" does not exist`.
+
+    So the row check may only run while the legacy columns exist: all three present ->
+    check the rows; none present -> already contracted, nothing left to lose; some but
+    not all -> a schema nobody designed, refuse."""
+    body = re.search(r"DO \$precondition\$(.*?)\$precondition\$;", CONTRACT.read_text(), re.S)
+    assert body, "no precondition block"
+    body = body.group(1)
+    for legacy in LEGACY:
+        assert f"('{legacy}')" in body, f"the precondition does not look for {legacy}"
+    gate = re.search(r"IF\s+legacy_present\s*=\s*3\s+THEN", body)
+    assert gate, "the row query is not gated on the legacy columns being present"
+    row_query = body.index("FROM public.business_metrics")
+    assert gate.start() < row_query, "the row query runs before the legacy-presence gate"
+    assert re.search(r"legacy_present\s+BETWEEN\s+1\s+AND\s+2", body), (
+        "a PARTIALLY contracted schema must refuse, not pass as 'already done'"
+    )
+
+
 def test_the_documented_apply_command_keeps_the_precondition_armed():
     """``ON_ERROR_STOP=1`` is what turns the precondition's RAISE into a refusal.
 

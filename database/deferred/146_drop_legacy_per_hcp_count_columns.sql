@@ -154,12 +154,18 @@
 --   144 never applied            -> REFUSED, 3 of 3 canonical columns absent, 0 DROPs ran
 --   144 applied first            -> PROCEEDS, legacy 3 -> 0, canonical 3, 12,143 rows kept
 --   144 applied, 1 row disagrees -> REFUSED, names the count (plant verified first)
+-- and again 2026-09-19 after the legacy-presence gate (codex iter9 MED), four ways:
+--   144, 146, 146 again          -> both PROCEED; legacy 0, canonical 3, 4 views
+--   144 never applied            -> REFUSED, 3 of 3 canonical columns absent
+--   144 applied, 1 row disagrees -> REFUSED, 1 row (plant verified landed first)
+--   one legacy column missing    -> REFUSED, "only 2 of the 3 legacy columns remain"
 -- The middle case is why the block asks the catalog before it asks the rows, and the
 -- last is what proves the row query is reached and correct when the columns do exist.
 DO $precondition$
 DECLARE
-    missing      integer;
-    disagreeing  bigint;
+    missing         integer;
+    legacy_present  integer;
+    disagreeing     bigint;
 BEGIN
     SELECT count(*) INTO missing
       FROM (VALUES ('triggers_delivered_count'),
@@ -179,17 +185,40 @@ BEGIN
             'the deploy, then re-run this file.', missing;
     END IF;
 
-    SELECT count(*) INTO disagreeing
-      FROM public.business_metrics
-     WHERE (trx_count      IS NOT NULL AND triggers_delivered_count IS DISTINCT FROM trx_count)
-        OR (nrx_count      IS NOT NULL AND triggers_accepted_count  IS DISTINCT FROM nrx_count)
-        OR (total_rx_count IS NOT NULL AND triggers_total_count     IS DISTINCT FROM total_rx_count);
-    IF disagreeing > 0 THEN
+    -- A SECOND application (the documented move into database/migrations/ re-keys
+    -- this file and the runner applies it once more) finds the legacy three already
+    -- gone. The row query below names them, so it may only run while they exist:
+    -- none left means already contracted and nothing to lose; some but not all is a
+    -- schema nobody designed, and refuses (codex iter9 MED, reproduced live).
+    SELECT count(*) INTO legacy_present
+      FROM (VALUES ('trx_count'),
+                   ('nrx_count'),
+                   ('total_rx_count')) AS legacy(column_name)
+     WHERE EXISTS (SELECT 1
+                     FROM information_schema.columns c
+                    WHERE c.table_schema = 'public'
+                      AND c.table_name   = 'business_metrics'
+                      AND c.column_name  = legacy.column_name);
+    IF legacy_present BETWEEN 1 AND 2 THEN
         RAISE EXCEPTION
-            'contract 146 REFUSED: % rows hold a legacy count that its canonical column '
-            'does not carry, so dropping the legacy three would lose those values. '
-            'Re-run 144''s backfill (it is guarded by IS DISTINCT FROM, so it touches '
-            'only the rows that disagree) and confirm this count reaches 0.', disagreeing;
+            'contract 146 REFUSED: only % of the 3 legacy columns remain on '
+            'public.business_metrics -- a partially contracted schema. Inspect it by '
+            'hand before re-running this file.', legacy_present;
+    END IF;
+
+    IF legacy_present = 3 THEN
+        SELECT count(*) INTO disagreeing
+          FROM public.business_metrics
+         WHERE (trx_count      IS NOT NULL AND triggers_delivered_count IS DISTINCT FROM trx_count)
+            OR (nrx_count      IS NOT NULL AND triggers_accepted_count  IS DISTINCT FROM nrx_count)
+            OR (total_rx_count IS NOT NULL AND triggers_total_count     IS DISTINCT FROM total_rx_count);
+        IF disagreeing > 0 THEN
+            RAISE EXCEPTION
+                'contract 146 REFUSED: % rows hold a legacy count that its canonical column '
+                'does not carry, so dropping the legacy three would lose those values. '
+                'Re-run 144''s backfill (it is guarded by IS DISTINCT FROM, so it touches '
+                'only the rows that disagree) and confirm this count reaches 0.', disagreeing;
+        END IF;
     END IF;
 END
 $precondition$;
