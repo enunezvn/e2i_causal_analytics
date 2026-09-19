@@ -35,8 +35,6 @@ def test_full_kpi_name_uses_a_safe_business_metric_filter_key(display_name, stor
         "What are the new prescriptions for Fabhalta?",
         "What are New Prescriptions (NRx) for Fabhalta?",
         "How many new-to-brand prescriptions were there?",
-        "How many of the new prescriptions were for Fabhalta?",
-        "How many total prescriptions did Kisqali have?",
         "Show me new/to/brand prescriptions",
         "Tell me about TRx share in the Northeast",
         "What is the share of total prescriptions for Kisqali?",

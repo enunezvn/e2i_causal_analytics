@@ -42,8 +42,7 @@ from src.kpi.business_metric_vocabulary import (
     KPI_VALUE_LOOKUP_METRIC_PATTERN,
     KPI_VALUE_LOOKUP_UNSUPPORTED_QUALIFIER_PATTERN,
 )
-from src.services.enum_labels import REGION_LABEL_BY_ALIAS
-from src.services.query_entities import SUPPORTED_BRANDS
+from src.services.query_entities import SUPPORTED_BRANDS, region_phrase_source
 from src.utils.llm_content import normalize_llm_content, parse_llm_json
 from src.utils.llm_factory import MODEL_MAPPINGS, get_fast_llm, get_llm_provider
 from src.utils.mock_llm import llm_or_marked_mock
@@ -546,13 +545,14 @@ _KPI_ENTITY_COUNT_NOUN_PATTERN = r"(?:patients?|hcps?|prescribers?|doctors?|reps
 # ignore: a supported brand, a region alias, a time window, a qualifier, a comparison
 # word, or a known typo. Any other word (people, pharmacies, received, ...) FAILS CLOSED:
 # the ask leaves the deterministic scalar path, and no figure is served for it.
-# Vocabularies come from their authorities (SUPPORTED_BRANDS, REGION_LABEL_BY_ALIAS), and
+# Vocabularies come from their authorities (SUPPORTED_BRANDS, query_entities'
+# free-text region phrases), and
 # brand matching is case-free: the classifier scores the LOWERCASED query while the
 # resolver sees the original, so a capitalisation rule would split the two layers.
 _BRAND_WORD_PATTERN = "(?:" + "|".join(b.lower() for b in SUPPORTED_BRANDS) + ")(?:'s)?"
-_REGION_WORD_PATTERN = (
-    "(?:" + "|".join(sorted(REGION_LABEL_BY_ALIAS, key=len, reverse=True)) + ")(?:'s)?"
-)
+# The SAME phrases query_entities scans for, so "New England"/"West Coast"/"North East"
+# and the "region"/"area" noise suffix keep routing (codex r2 HIGH-1).
+_REGION_WORD_PATTERN = rf"(?:{region_phrase_source()})(?:'s)?(?:\s+(?:region|area))?"
 _TIME_WORD_PATTERN = (
     r"(?:last|past|this|prior|previous|current|currnt|curent|latest|recent|trailing"
     r"|(?:day|week|month|quarter|year)s?(?:'s)?|today's|ytd|mtd|qtd"
@@ -569,10 +569,13 @@ _KPI_SCOPE_WORD_PATTERN = (
     rf"(?:{_BRAND_WORD_PATTERN}|{_REGION_WORD_PATTERN}|{_TIME_WORD_PATTERN}"
     rf"|{_QUALIFIER_WORD_PATTERN})"
 )
-# Up to six scope words ("the competitor comparison", "Kisqali versus Fabhalta",
-# "last 30 days"), then the KPI itself.
+# main's own budget -- a determiner plus at most THREE gap words -- now with every gap
+# word required to be a scope word. Keeping the budget makes this grammar a strict
+# SUBSET of main's: it can never bind something main did not (codex r2 HIGH-2, where a
+# six-word budget let "the number of competitors in new prescriptions" reach NRx).
 _KPI_VALUE_LOOKUP_TARGET_PATTERN = (
-    rf"(?:{_KPI_SCOPE_WORD_PATTERN}\s+){{0,6}}?{KPI_VALUE_LOOKUP_METRIC_PATTERN}"
+    r"(?:teh\s+|the\s+)?"
+    rf"(?:{_KPI_SCOPE_WORD_PATTERN}\s+){{0,3}}?{KPI_VALUE_LOOKUP_METRIC_PATTERN}"
 )
 
 KPI_VALUE_LOOKUP_PATTERN = (

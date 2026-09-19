@@ -207,17 +207,26 @@ _FREE_TEXT_REGION_PHRASES: Tuple[str, ...] = (
 _PHRASE_GUARDS: Dict[str, str] = {"new england": r"(?![\s_-]+journal\b)"}
 
 
+def region_phrase_source() -> str:
+    """Alternation source for the free-text region allowlist (no anchors).
+
+    Exposed because the KPI value-lookup grammar (#2130) has to recognise the SAME
+    region phrases this module scans for: a hand-kept copy there drifted immediately
+    ("new england" and "west coast" were missing, so those asks stopped routing).
+    """
+    return "|".join(
+        r"[\s_-]+".join(re.escape(part) for part in phrase.split()) + _PHRASE_GUARDS.get(phrase, "")
+        for phrase in sorted(_FREE_TEXT_REGION_PHRASES, key=len, reverse=True)
+    )
+
+
 def _build_region_phrase_re() -> "re.Pattern[str]":
     """Word-boundary pattern over the free-text region allowlist.
 
     Longest-first alternation lets "west coast" win over "west" at the same
     position; spaces in a phrase tolerate any separator run.
     """
-    alternation = "|".join(
-        r"[\s_-]+".join(re.escape(part) for part in phrase.split()) + _PHRASE_GUARDS.get(phrase, "")
-        for phrase in sorted(_FREE_TEXT_REGION_PHRASES, key=len, reverse=True)
-    )
-    return re.compile(rf"\b(?:{alternation})\b", re.I)
+    return re.compile(rf"\b(?:{region_phrase_source()})\b", re.I)
 
 
 _REGION_PHRASE_RE = _build_region_phrase_re()
