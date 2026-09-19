@@ -167,6 +167,92 @@ def fetch_validated_paths() -> List[Dict[str, Any]]:
     return rows
 
 
+def write_chains(
+    g: Any,
+    chain_edges: List[Tuple[Dict[str, Any], List[Tuple[str, str, bool]]]],
+    roles: Dict[str, str],
+) -> Dict[str, int]:
+    """MERGE the validated chains, stamp topology roles, bridge outcomes to KPIs.
+
+    This sync is a CURATED writer: the Variables it writes are curated by
+    definition (a validated causal path), and a node is curated when it has no
+    ``agent`` property (``src/tasks/graph_reseed_tasks.py``). ``SET ... agent =
+    NULL`` claims a Variable an agent memory hook created first, so it is not
+    hidden from the curated view or the emptiness sentinel's count (#2174).
+    """
+    written = 0
+    for row, edges in chain_edges:
+        conf = row.get("confidence_level")
+        eff = row.get("causal_effect_size")
+        params = {
+            "conf": float(conf) if conf is not None else None,
+            "eff": float(eff) if eff is not None else None,
+            "method": row.get("method_used"),
+            "brand": row.get("brand"),
+            "region": row.get("region"),
+            "vstatus": row.get("validation_status"),
+            "cc": row.get("confirmation_count"),
+            "ddate": str(row.get("discovery_date")) if row.get("discovery_date") else None,
+        }
+        for src_name, tgt_name, is_terminal in edges:
+            params["sid"] = f"var:{src_name}"
+            params["sname"] = src_name
+            params["tid"] = f"var:{tgt_name}"
+            params["tname"] = tgt_name
+            params["is_terminal"] = is_terminal
+            g.query(
+                """
+                MERGE (a:Variable {id: $sid}) SET a.name = $sname, a.agent = NULL
+                MERGE (b:Variable {id: $tid}) SET b.name = $tname, b.agent = NULL
+                MERGE (a)-[r:CAUSES {brand: $brand, region: $region}]->(b)
+                SET r.confidence = $conf,
+                    r.method = $method,
+                    r.validation_status = $vstatus,
+                    r.confirmation_count = $cc,
+                    r.discovery_date = $ddate,
+                    r.ate_estimate = CASE WHEN $is_terminal THEN $eff ELSE r.ate_estimate END
+                """,
+                params=params,
+            )
+            written += 1
+
+    # Stamp the topology-derived role on every variable node just written —
+    # the AI-Insights "Active Causal Chains" graph colors nodes by it. MATCH
+    # (never MERGE) so a role can only land on nodes this sync owns; SET is
+    # idempotent and self-corrects when new chains change a node's position.
+    stamped = 0
+    for var_name, role in roles.items():
+        res = g.query(
+            "MATCH (v:Variable {id: $vid}) SET v.role = $role RETURN count(v)",
+            params={"vid": f"var:{var_name}", "role": role},
+        )
+        touched = res.result_set[0][0] if getattr(res, "result_set", None) else 0
+        stamped += int(touched or 0)
+
+    # Bridge the terminal variable outcomes into the KPI layer so the variable
+    # graph and the KPI graph are one connected component. MATCH both endpoints
+    # (never CREATE a bare KPI or orphan variable); MERGE a single, idempotent,
+    # brand/region-agnostic CAUSES edge tagged is_bridge.
+    bridged = 0
+    for outcome, kpi_name in _VARIABLE_KPI_BRIDGE.items():
+        res = g.query(
+            """
+            MATCH (v:Variable {id: $vid})
+            MATCH (k:KPI {name: $kpi})
+            MERGE (v)-[r:CAUSES]->(k)
+            SET r.is_bridge = true,
+                r.confidence = $conf,
+                r.validation_status = 'validated'
+            RETURN count(r)
+            """,
+            params={"vid": f"var:{outcome}", "kpi": kpi_name, "conf": 0.7},
+        )
+        touched = res.result_set[0][0] if getattr(res, "result_set", None) else 0
+        bridged += int(touched or 0)
+
+    return {"written": written, "stamped": stamped, "bridged": bridged}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--execute", action="store_true", help="Write to FalkorDB (default: dry-run)")
@@ -221,75 +307,8 @@ def main() -> int:
     db = FalkorDB(host=host, port=port, password=password)
     g = db.select_graph(graph_name)
 
-    written = 0
-    for row, edges in chain_edges:
-        conf = row.get("confidence_level")
-        eff = row.get("causal_effect_size")
-        params = {
-            "conf": float(conf) if conf is not None else None,
-            "eff": float(eff) if eff is not None else None,
-            "method": row.get("method_used"),
-            "brand": row.get("brand"),
-            "region": row.get("region"),
-            "vstatus": row.get("validation_status"),
-            "cc": row.get("confirmation_count"),
-            "ddate": str(row.get("discovery_date")) if row.get("discovery_date") else None,
-        }
-        for src_name, tgt_name, is_terminal in edges:
-            params["sid"] = f"var:{src_name}"
-            params["sname"] = src_name
-            params["tid"] = f"var:{tgt_name}"
-            params["tname"] = tgt_name
-            params["is_terminal"] = is_terminal
-            g.query(
-                """
-                MERGE (a:Variable {id: $sid}) SET a.name = $sname
-                MERGE (b:Variable {id: $tid}) SET b.name = $tname
-                MERGE (a)-[r:CAUSES {brand: $brand, region: $region}]->(b)
-                SET r.confidence = $conf,
-                    r.method = $method,
-                    r.validation_status = $vstatus,
-                    r.confirmation_count = $cc,
-                    r.discovery_date = $ddate,
-                    r.ate_estimate = CASE WHEN $is_terminal THEN $eff ELSE r.ate_estimate END
-                """,
-                params=params,
-            )
-            written += 1
-
-    # Stamp the topology-derived role on every variable node just written —
-    # the AI-Insights "Active Causal Chains" graph colors nodes by it. MATCH
-    # (never MERGE) so a role can only land on nodes this sync owns; SET is
-    # idempotent and self-corrects when new chains change a node's position.
-    stamped = 0
-    for var_name, role in roles.items():
-        res = g.query(
-            "MATCH (v:Variable {id: $vid}) SET v.role = $role RETURN count(v)",
-            params={"vid": f"var:{var_name}", "role": role},
-        )
-        touched = res.result_set[0][0] if getattr(res, "result_set", None) else 0
-        stamped += int(touched or 0)
-
-    # Bridge the terminal variable outcomes into the KPI layer so the variable
-    # graph and the KPI graph are one connected component. MATCH both endpoints
-    # (never CREATE a bare KPI or orphan variable); MERGE a single, idempotent,
-    # brand/region-agnostic CAUSES edge tagged is_bridge.
-    bridged = 0
-    for outcome, kpi_name in _VARIABLE_KPI_BRIDGE.items():
-        res = g.query(
-            """
-            MATCH (v:Variable {id: $vid})
-            MATCH (k:KPI {name: $kpi})
-            MERGE (v)-[r:CAUSES]->(k)
-            SET r.is_bridge = true,
-                r.confidence = $conf,
-                r.validation_status = 'validated'
-            RETURN count(r)
-            """,
-            params={"vid": f"var:{outcome}", "kpi": kpi_name, "conf": 0.7},
-        )
-        touched = res.result_set[0][0] if getattr(res, "result_set", None) else 0
-        bridged += int(touched or 0)
+    counts = write_chains(g, chain_edges, roles)
+    written, stamped, bridged = counts["written"], counts["stamped"], counts["bridged"]
 
     print(
         f"\nEXECUTED — MERGEd {written} causal edges across {len(chains)} chains, "

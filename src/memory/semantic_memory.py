@@ -282,16 +282,17 @@ class FalkorDBSemanticMemory:
         entity_type: Union[E2IEntityType, str],
         entity_id: str,
         properties: Optional[Dict[str, Any]] = None,
+        create_only_properties: Optional[Dict[str, Any]] = None,
     ) -> bool:
-        """
-        Add an E2I entity to the semantic graph.
-
-        Uses MERGE to create or update the entity.
+        """Add or update (MERGE by ``id``) an E2I entity in the semantic graph.
 
         Args:
             entity_type: E2I entity type (enum or string label)
             entity_id: Unique entity identifier
-            properties: Additional properties to store
+            properties: Properties set on create and on match
+            create_only_properties: Set only when this call CREATES the node — for
+                ownership (``agent``) and ``role``, so an agent never takes over a
+                curated (agent-less) seed/sync node (#2174).
 
         Returns:
             True if successful
@@ -303,32 +304,30 @@ class FalkorDBSemanticMemory:
             label = entity_type
             type_value = entity_type
 
-        # H2: validate structural tokens before they are spliced into Cypher.
-        # ``label`` may be a caller-supplied string on the str branch; property
-        # keys are interpolated into the SET clause. Values are bound params.
+        # H2: structural tokens (the label, property keys) are spliced into Cypher,
+        # so validate them; values are bound params.
         _validate_cypher_identifier(label, "node label")
         _validate_property_keys(properties)
+        _validate_property_keys(create_only_properties)
 
         props = properties.copy() if properties else {}
-        # The two keys added below are hardcoded identifier literals (not
-        # caller-controlled), so they need no further validation before being
-        # interpolated into the SET clause alongside the validated caller keys.
+        # Hardcoded identifier keys: safe to splice alongside the validated keys.
         props["e2i_entity_type"] = type_value
         props["updated_at"] = datetime.now(timezone.utc).isoformat()
-
-        # Build property string for Cypher
-        prop_items = [f"{k}: ${k}" for k in props.keys()]
-        prop_string = ", ".join(prop_items)
+        # Create-only values bind as ONE reserved map param, so no caller key can shadow them.
+        co_param = "__e2i_create_only"
+        if co_param in props:
+            raise ValueError(f"Property key {co_param!r} is reserved")
+        create_only = {k: v for k, v in (create_only_properties or {}).items() if k not in props}
+        prop_string = ", ".join(f"{k}: ${k}" for k in props)
 
         query = f"""
         MERGE (e:{label} {{id: $entity_id}})
-        ON CREATE SET e += {{{prop_string}}}
+        ON CREATE SET e += {{{prop_string}}}, e += ${co_param}
         ON MATCH SET e += {{{prop_string}}}
         RETURN e
         """
-
-        params = {"entity_id": entity_id, **props}
-        self.graph.query(query, params)
+        self.graph.query(query, {"entity_id": entity_id, **props, co_param: create_only})
 
         logger.debug(f"Added/updated {label} entity: {entity_id}")
         return True

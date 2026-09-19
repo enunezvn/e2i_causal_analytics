@@ -378,11 +378,18 @@ class TestDriftMonitorMemoryHooksWithMocks:
 
     @pytest.mark.asyncio
     async def test_store_drift_pattern_success(self):
-        """Test successful semantic storage with mocked FalkorDB."""
+        """Test successful semantic storage with a fake of the SYNC graph handle.
+
+        #2177: the old version faked ``semantic_memory.query`` as an AsyncMock,
+        encoding the bug (the real ``query`` is synchronous, so ``await`` raised
+        TypeError after the first MERGE). Writes now go through
+        ``semantic_memory.graph.query`` — a plain synchronous call. The real
+        Cypher is exercised against FalkorDB in
+        tests/integration/test_kg_writer_integrity.py.
+        """
         hooks = DriftMonitorMemoryHooks()
 
-        mock_falkor = AsyncMock()
-        mock_falkor.query = AsyncMock(return_value=[])
+        mock_falkor = MagicMock()
         hooks._semantic_memory = mock_falkor
 
         result = await hooks.store_drift_pattern(
@@ -403,16 +410,22 @@ class TestDriftMonitorMemoryHooksWithMocks:
         )
 
         assert result is True
-        # Should have multiple Cypher queries: Feature node, DriftPattern node, relationship, co-drift, model link
-        assert mock_falkor.query.call_count >= 4
+        # Feature, DriftPattern, HAS_DRIFT, one co-drift, model link.
+        calls = mock_falkor.graph.query.call_args_list
+        assert len(calls) == 5
+        for call in calls:
+            cypher, params = call.args
+            # Values are bound parameters, never spliced into the Cypher text.
+            assert "conversion_rate" not in cypher
+            assert params["agent"] == "drift_monitor"
+        mock_falkor.query.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_store_all_drift_patterns(self):
         """Test storing all drift patterns."""
         hooks = DriftMonitorMemoryHooks()
 
-        mock_falkor = AsyncMock()
-        mock_falkor.query = AsyncMock(return_value=[])
+        mock_falkor = MagicMock()  # the graph handle is synchronous (#2177)
         hooks._semantic_memory = mock_falkor
 
         result_data = {
