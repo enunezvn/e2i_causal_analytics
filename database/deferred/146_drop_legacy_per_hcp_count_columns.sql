@@ -116,15 +116,17 @@
 -- migrations (033 and after). Nothing depended on the claim -- but it was wrong,
 -- so it is corrected here rather than quietly removed.
 --
--- Idempotent: every statement carries IF EXISTS / OR REPLACE, so a second
--- application changes nothing and raises nothing.
+-- Re-runnable: every statement carries IF EXISTS / OR REPLACE, so a second
+-- application raises nothing and changes no column, row or privilege. It does
+-- recreate the four split views and send NOTIFY -- see "IF THIS FILE IS EVER
+-- MOVED" above for exactly what a second application does.
 -- ----------------------------------------------------------------------------
 
 -- ----------------------------------------------------------------------------
 -- PRECONDITION: refuse unless the expand really ran and its values really landed.
 -- ----------------------------------------------------------------------------
 -- ultracode iter8 HIGH. Every statement below carries IF EXISTS / OR REPLACE so that
--- a second application is a no-op -- and the consequence nobody had drawn is that the
+-- a second application raises nothing -- and the consequence nobody had drawn is that the
 -- same property makes this file run happily to completion on a schema where 144 was
 -- NEVER applied, or was rolled back. It drops trx_count / nrx_count / total_rx_count
 -- with no canonical column holding the values, and reports exit 0.
