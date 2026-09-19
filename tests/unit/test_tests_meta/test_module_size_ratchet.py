@@ -28,7 +28,7 @@ ALLOWLIST: dict[str, int] = {
     "src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py": 4238,
     "src/agents/ml_foundation/model_deployer/nodes/registry_manager.py": 1670,
     "src/agents/ml_foundation/model_trainer/nodes/evaluator.py": 4026,
-    "src/agents/orchestrator/nodes/dispatcher.py": 3772,
+    "src/agents/orchestrator/nodes/dispatcher.py": 3770,
     "src/agents/tool_composer/executor.py": 1627,
     "src/agents/tool_composer/tool_registrations.py": 4843,
     "src/api/main.py": 1692,

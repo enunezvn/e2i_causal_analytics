@@ -2301,14 +2301,12 @@ def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str,
     if match is None:
         return None
     kpi, normalized_query, match_start, match_end = match
-    of_head = _kpi_governing_of_head(normalized_query, match_start)
-    if of_head is not None and of_head not in _VALUE_OF_HEADS:
-        # "cost of TRx", "drivers of TRx", ... — the KPI is not the asked-about
-        # value; let Branch B (or the fail-closed default) handle it.
-        return None
-    if _kpi_right_head(normalized_query, match_end) in _CAUSAL_OF_HEADS:
-        # "TRx drivers", "NRx determinants" — a right-headed causal compound;
-        # a bare value does not answer it.
+    from .kpi_value_guard import value_lookup_mentions_supported
+
+    if not value_lookup_mentions_supported(normalized_query, kpi.id, match_start, match_end):
+        # Governing heads and bare right tails are checked on EVERY occurrence
+        # before masking or calculation.  A value cannot answer "cost of TRx",
+        # "TRx drivers", "TRx cost", or an unresolved "TRx patients" scope.
         return None
     masked = (
         normalized_query[:match_start]
