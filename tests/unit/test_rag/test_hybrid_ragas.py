@@ -134,9 +134,7 @@ def test_hybrid_runtime_validation_requires_explicit_complete_ragas_judgment():
     incomplete = _result(context_recall=None)
     incomplete.metadata["unmeasured_metrics"] = ["context_recall"]
 
-    unattested_errors = hybrid_runtime_validation_errors(
-        [_sample(runtime)], [missing_attestation]
-    )
+    unattested_errors = hybrid_runtime_validation_errors([_sample(runtime)], [missing_attestation])
     incomplete_errors = hybrid_runtime_validation_errors([_sample(runtime)], [incomplete])
 
     assert any("not explicitly attested" in error for error in unattested_errors)
@@ -171,9 +169,7 @@ def _corpus_row(**overrides):
 
 
 def test_corpus_grounding_validation_accepts_exact_live_source():
-    assert corpus_grounding_validation_errors(
-        [_grounded_sample()], [_corpus_row()]
-    ) == []
+    assert corpus_grounding_validation_errors([_grounded_sample()], [_corpus_row()]) == []
 
 
 def test_corpus_grounding_validation_rejects_unverified_or_modified_sources():
