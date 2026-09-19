@@ -1,15 +1,14 @@
 """Contract tests: nightly Job A reds caused by an UPSTREAM provider outage are
-routed to a distinct low-priority outcome, not the red nightly alarm (#1804/#1813).
+routed to a distinct low-priority outcome, not the red alarm (#1804/#1813/#2173).
 
-The clinical-context live suite deliberately hits real providers (ChEMBL et al.)
-so that a provider outage goes RED instead of silently skipping (#1612). That
-signal fired correctly on 08-21/08-24/08-25 — three transient EMBL-EBI HTTP 500s
-— but each red filed the same "Nightly slow-tests failed" alarm that a real
-regression files, costing a full triage session each time. #1804 recorded the
-fix: classify "only the clinical-context live suite failed, on upstream
-5xx/timeout" in slow-tests.yml's REPORTER — never skip/xfail in the tests
-(that reintroduces the #1612 blind spot) and never retry 5xx in the client
-(outages outlast backoff).
+The clinical-context and UMLS UTS live suites deliberately hit real providers
+so that an outage goes RED instead of silently skipping (#1612/#1629). That
+signal has correctly detected transient upstream failures, but each red used to
+file the same "Nightly slow-tests failed" alarm that a real regression files.
+#1804 recorded the fix: classify "only recognized live-provider suites failed,
+on upstream 5xx/timeout" in slow-tests.yml's REPORTER — never skip/xfail in the
+tests (that reintroduces the coverage blind spot) and never retry 5xx in the
+client (outages outlast backoff).
 
 These tests pin three layers:
 1. the classifier script's verdicts, on the REAL failure text from run
@@ -51,6 +50,7 @@ UPSTREAM_TITLE_PREFIX = "[upstream-transient] "
 
 _CC_LIVE = "tests.integration.test_clinical_context.test_live_contracts"
 _CC_FANOUT = "tests.integration.test_clinical_context.test_fan_out_degradation_signal"
+_UMLS_LIVE = "tests.integration.test_kg.test_umls_uts_live"
 
 HARD_HTTP_500_ASSERT = (
     "AssertionError: ChEMBL molecule search HTTP 500\n"
@@ -76,6 +76,15 @@ ECHO_PROVENANCE = (
 # arity change that only the nightly exercised.
 REAL_ARITY_TYPEERROR = "TypeError: fetch_citations() takes 4 positional arguments but 5 were given"
 HARD_READ_TIMEOUT = "httpx.ReadTimeout: The read operation timed out"
+HARD_UMLS_HTTP_500 = (
+    "src.data.kg.umls_uts.UMLSError: UTS error: status=500 "
+    'body=\'{"name":"Unexpected Error","message":"Something broke!","status":500}\''
+)
+HARD_UMLS_ENTITY_ASSERT = (
+    "assert False\n"
+    " +  where False = EntityLink(input_code='L20.9', input_system='ICD10CM', "
+    "concept=None, sources=(), error='UTS error: status=500 body=...').resolved"
+)
 
 
 def _junit(
@@ -207,6 +216,104 @@ def test_timeout_flavoured_outage_is_upstream_transient(tmp_path: Path) -> None:
     cases = [(_CC_LIVE, "test_chembl_wire_shape_molecule_and_mechanism", HARD_READ_TIMEOUT)]
     _, outputs = _classify(tmp_path, _junit(cases))
     assert outputs.get("classification") == "upstream-transient", outputs
+
+
+def test_mixed_clinical_context_and_umls_outage_is_upstream_transient(tmp_path: Path) -> None:
+    """Run 35329408521: ChEMBL timed out/returned 500 while both live UMLS
+    assertions received the UTS provider's JSON 500 response."""
+    cases = [
+        (_CC_LIVE, "test_chembl_wire_shape_molecule_and_mechanism", HARD_HTTP_500_ASSERT),
+        (_CC_LIVE, "test_chembl_mechanism_of_action_parsed_contract", HARD_READ_TIMEOUT),
+        (_CC_FANOUT, "test_get_context_payload_carries_live_provenance", ECHO_PROVENANCE),
+        (_UMLS_LIVE, "test_cui_lookup_returns_disease_semantic_type", HARD_UMLS_HTTP_500),
+        (_UMLS_LIVE, "test_entity_linker_end_to_end_for_icd10", HARD_UMLS_ENTITY_ASSERT),
+    ]
+    warning = "clinical-context: ChEMBL MoA lookup failed: ChEMBL HTTP 500"
+    _, outputs = _classify(
+        tmp_path,
+        _junit(cases, system_out={"test_get_context_payload_carries_live_provenance": warning}),
+    )
+    assert outputs.get("classification") == "upstream-transient", outputs
+
+
+def test_umls_code_defect_is_real_even_beside_an_upstream_500(tmp_path: Path) -> None:
+    cases = [
+        (_UMLS_LIVE, "test_cui_lookup_returns_disease_semantic_type", HARD_UMLS_HTTP_500),
+        (_UMLS_LIVE, "test_entity_linker_end_to_end_for_icd10", REAL_ARITY_TYPEERROR),
+    ]
+    _, outputs = _classify(tmp_path, _junit(cases))
+    assert outputs.get("classification") == "real", outputs
+
+
+def test_captured_outage_log_does_not_hide_a_code_defect_in_the_same_test(
+    tmp_path: Path,
+) -> None:
+    """``junit_logging=all`` attaches provider warnings to the testcase that
+    later fails.  A hard warning is sufficient to corroborate a recognized
+    fallback echo, but it must not turn an unrelated TypeError into an outage.
+    """
+    warning = "clinical-context: ChEMBL MoA lookup failed: ChEMBL HTTP 500"
+    cases = [(_CC_FANOUT, "test_get_context_payload_carries_live_provenance", REAL_ARITY_TYPEERROR)]
+    _, outputs = _classify(
+        tmp_path,
+        _junit(cases, system_out={"test_get_context_payload_carries_live_provenance": warning}),
+    )
+    assert outputs.get("classification") == "real", outputs
+
+
+def test_hard_context_in_failure_text_does_not_hide_a_type_error(tmp_path: Path) -> None:
+    """Tracebacks can carry request context below the exception headline.
+    The explicit #1766 code-defect shape remains real even if that context
+    happens to mention a provider 500.
+    """
+    failure = f"{REAL_ARITY_TYPEERROR}\nrequest context: UTS error: status=500"
+    cases = [(_UMLS_LIVE, "test_cui_lookup_returns_disease_semantic_type", failure)]
+    _, outputs = _classify(tmp_path, _junit(cases))
+    assert outputs.get("classification") == "real", outputs
+
+
+def test_hard_context_does_not_hide_an_attribute_error(tmp_path: Path) -> None:
+    failure = "AttributeError: response has no attribute 'payload'\nUTS error: status=500"
+    cases = [(_UMLS_LIVE, "test_cui_lookup_returns_disease_semantic_type", failure)]
+    _, outputs = _classify(tmp_path, _junit(cases))
+    assert outputs.get("classification") == "real", outputs
+
+
+def test_duplicate_junit_identity_cannot_overwrite_a_real_failure(tmp_path: Path) -> None:
+    """Every failure node must vote even when two suites/reruns emit the same
+    classname/name.  De-duplicating by display id can erase a real defect when
+    a later occurrence carries an upstream 500.
+    """
+    cases = [
+        (_UMLS_LIVE, "test_cui_lookup_returns_disease_semantic_type", REAL_ARITY_TYPEERROR),
+        (_UMLS_LIVE, "test_cui_lookup_returns_disease_semantic_type", HARD_UMLS_HTTP_500),
+    ]
+    _, outputs = _classify(tmp_path, _junit(cases))
+    assert outputs.get("classification") == "real", outputs
+
+
+def test_other_kg_http_500_is_not_absorbed_as_an_upstream_transient(tmp_path: Path) -> None:
+    cases = [
+        (
+            "tests.integration.test_kg.test_kg_querier_live",
+            "test_query_drug_disease_edges",
+            HARD_UMLS_HTTP_500,
+        )
+    ]
+    _, outputs = _classify(tmp_path, _junit(cases))
+    assert outputs.get("classification") == "real", outputs
+
+
+def test_similarly_named_umls_module_is_not_treated_as_the_live_suite(tmp_path: Path) -> None:
+    cases = [
+        (
+            "tests.integration.test_kg.test_umls_uts_live_regression",
+            "test_internal_status_handling",
+            HARD_UMLS_HTTP_500,
+        )
+    ]
+    _, outputs = _classify(tmp_path, _junit(cases))
+    assert outputs.get("classification") == "real", outputs
 
 
 def test_system_out_evidence_promotes_an_echo_to_hard(tmp_path: Path) -> None:
