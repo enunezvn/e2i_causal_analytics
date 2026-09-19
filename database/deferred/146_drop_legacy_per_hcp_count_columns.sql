@@ -67,9 +67,15 @@
 -- the lane's SHA, not origin/main, is the automated rollback target — codex iter2
 -- MED-1), the runner will key it as '146_drop_legacy_per_hcp_count_columns.sql'
 -- with no 'deferred/' prefix, will not match the row written below, and will apply
--- it once more. That is harmless by construction: every statement here is
--- IF EXISTS / OR REPLACE, so the second application changes nothing. Delete the
--- stale 'deferred/...' ledger row afterwards if you want the ledger tidy.
+-- it once more. What that second application DOES, stated exactly (codex iter10):
+-- the precondition finds the legacy three already gone and lets it through; the
+-- column/trigger/function drops are IF EXISTS no-ops; the four split views are
+-- dropped and recreated with the same definitions (new OIDs; nothing else depends
+-- on them -- 0 dependents, and a recreated view gets the same privileges as the
+-- live ones, postgres + service_role, both measured 2026-09-19); NOTIFY reloads
+-- the PostgREST schema cache; and the runner records the new ledger key. No
+-- column, row or privilege changes. Delete the stale 'deferred/...' ledger row
+-- afterwards if you want the ledger tidy.
 --
 -- ---------------------------------------------------------------------------
 -- THE VIEWS
