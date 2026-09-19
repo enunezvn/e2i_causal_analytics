@@ -126,6 +126,48 @@ class RedisWorkingMemory:
         return self._checkpointer
 
     # ========================================================================
+    # KEY-VALUE CACHE (agent memory hooks)
+    # ========================================================================
+    # Nine agents' memory hooks cache results with ``set`` / ``get`` / ``delete``.
+    # These methods did not exist, so every call raised AttributeError and the
+    # hooks swallowed it: no hook cache was ever written. The hooks use two
+    # conventions and both are accepted: redis-py style ``set(key, json_str,
+    # ex=ttl)`` and ``set(key, dict, ttl=ttl)`` (drift_monitor, which reads the
+    # dict back with ``get``).
+
+    async def set(
+        self,
+        key: str,
+        value: Any,
+        ttl: Optional[int] = None,
+        ex: Optional[int] = None,
+    ) -> None:
+        """Store ``value`` under ``key`` with a TTL (default: the session TTL).
+
+        A ``str`` is stored verbatim; anything else is JSON-encoded.
+        """
+        redis = await self.get_client()
+        payload = value if isinstance(value, str) else json.dumps(value, default=str)
+        expiry = ttl if ttl is not None else ex
+        await redis.set(key, payload, ex=expiry if expiry is not None else self.ttl_seconds)
+
+    async def get(self, key: str) -> Any:
+        """Return the value under ``key``: decoded JSON when it parses, else the string."""
+        redis = await self.get_client()
+        raw = await redis.get(key)
+        if raw is None:
+            return None
+        try:
+            return json.loads(raw)
+        except (TypeError, ValueError):
+            return raw
+
+    async def delete(self, key: str) -> int:
+        """Delete ``key``; returns the number of keys removed."""
+        redis = await self.get_client()
+        return int(await redis.delete(key))
+
+    # ========================================================================
     # SESSION MANAGEMENT
     # ========================================================================
 
