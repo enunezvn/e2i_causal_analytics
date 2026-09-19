@@ -178,8 +178,11 @@
 --   144 never applied            -> REFUSED, 3 of 3 canonical columns absent
 --   144 applied, 1 row disagrees -> REFUSED, 1 row (plant verified landed first)
 --   one legacy column missing    -> REFUSED, "only 2 of the 3 legacy columns remain"
--- The middle case is why the block asks the catalog before it asks the rows, and the
--- last is what proves the row query is reached and correct when the columns do exist.
+-- Named, not positional (appending a list shifted "middle" and "last" once already,
+-- codex iter15): "144 applied first" / "144, 146, 146 again" are why the block asks
+-- the catalog before it asks the rows; "1 row disagrees" is what proves the row query
+-- is reached and correct when all three legacy columns exist; "one legacy column
+-- missing" is refused by the legacy-presence gate BEFORE the row query.
 DO $precondition$
 DECLARE
     missing         integer;
