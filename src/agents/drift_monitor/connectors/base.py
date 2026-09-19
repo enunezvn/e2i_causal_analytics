@@ -191,11 +191,15 @@ class BaseDataConnector(ABC):
     async def get_available_features(
         self,
         source_table: str | None = None,
+        with_values_since: datetime | None = None,
     ) -> list[str]:
         """Get list of available features for drift monitoring.
 
         Args:
             source_table: Optional table name to filter features
+            with_values_since: When set, only features with at least one value
+                at or after this time (a registry entry with no values cannot
+                be compared)
 
         Returns:
             List of available feature names

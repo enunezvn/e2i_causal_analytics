@@ -149,6 +149,16 @@ def run_async(coro):
         return loop.run_until_complete(coro)
 
 
+# Minimum values per window before the scheduled sweep gives a data-drift
+# verdict. Simulated 2026-09-19 against DataDriftNode's own PSI(10 bins)+KS
+# rule: no-drift features were flagged 99% of the time at n=100 per window,
+# 78% at 250, 27% at 500, and 3-7% from n=1000, while a 0.5-sd shift was caught
+# 100% at every n. The live windows held ~75 values per feature, so without a
+# floor the sweep alerts on noise. Below it, a feature is reported as not
+# compared rather than judged.
+SWEEP_DATA_DRIFT_MIN_SAMPLES = 1000
+
+
 @celery_app.task(bind=True, name="src.tasks.run_drift_detection")
 def run_drift_detection(
     self,
@@ -247,14 +257,22 @@ def run_drift_detection(
         )
 
         try:
-            # Get available features if not specified
+            # Get available features if not specified. Only features with values
+            # in the comparison span: the registry grew to hundreds of value-less
+            # entries (2026-07-16), and an unordered first-50 of it held none of
+            # the features that have data, so every run compared nothing.
             if not state["features_to_monitor"]:
-                available_features = await connector.get_available_features()
+                window_days = int(state["time_window"].replace("d", ""))
+                available_features = await connector.get_available_features(
+                    with_values_since=datetime.now(timezone.utc) - timedelta(days=window_days * 2)
+                )
                 state["features_to_monitor"] = available_features[:50]  # Limit for performance
 
             # Run drift detection nodes
             if check_data_drift:
-                data_drift_node = DataDriftNode(connector=connector)
+                data_drift_node = DataDriftNode(
+                    connector=connector, min_samples=SWEEP_DATA_DRIFT_MIN_SAMPLES
+                )
                 state.update(await data_drift_node.execute(state))
 
             if check_model_drift:
@@ -328,11 +346,27 @@ def run_drift_detection(
                     recommended_actions=state.get("recommended_actions", []),
                 )
 
-            # Complete monitoring run
+            # Complete monitoring run. total_checks counts features actually
+            # compared, not features requested: a feature with no data in either
+            # window yields no result, and counting it made empty runs look healthy.
+            features_compared = {
+                r.get("feature") for r in state.get("data_drift_results", []) if r.get("feature")
+            }
             duration_ms = int((time.time() - start_time) * 1000)
             await run_repo.complete_run(
                 run_id=run_record.id,
-                features_checked=len(state.get("features_to_monitor", [])),
+                features_checked=len(features_compared),
+                summary={
+                    "features_requested": len(state.get("features_to_monitor", [])),
+                    "features_compared": len(features_compared),
+                    "features_not_compared": [
+                        f
+                        for f in state.get("features_to_monitor", [])
+                        if f not in features_compared
+                    ],
+                    "min_samples_per_window": SWEEP_DATA_DRIFT_MIN_SAMPLES,
+                    "warnings": list(state.get("warnings", [])),
+                },
                 drift_detected_count=len(state.get("features_with_drift", [])),
                 alerts_generated=len(alerts),
                 duration_ms=duration_ms,
@@ -343,7 +377,8 @@ def run_drift_detection(
                 "model_id": model_id,
                 "status": state.get("status", "completed"),
                 "overall_drift_score": state.get("overall_drift_score", 0.0),
-                "features_checked": len(state.get("features_to_monitor", [])),
+                "features_checked": len(features_compared),
+                "features_requested": len(state.get("features_to_monitor", [])),
                 "features_with_drift": state.get("features_with_drift", []),
                 "alerts_generated": len(alerts),
                 "alerts_auto_resolved": auto_resolved,
