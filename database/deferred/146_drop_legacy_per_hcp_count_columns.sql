@@ -73,9 +73,10 @@
 -- dropped and recreated with the same definitions (new OIDs; nothing else depends
 -- on them -- 0 dependents, and a recreated view gets the same privileges as the
 -- live ones, postgres + service_role, both measured 2026-09-19); NOTIFY reloads
--- the PostgREST schema cache; and the runner records the new ledger key. No
--- column, row or privilege changes. Delete the stale 'deferred/...' ledger row
--- afterwards if you want the ledger tidy.
+-- the PostgREST schema cache; and the runner records the new ledger key (one new
+-- schema_migrations row). No business_metrics column or row, and no privilege,
+-- changes. Delete the stale 'deferred/...' ledger row afterwards if you want the
+-- ledger tidy.
 --
 -- ---------------------------------------------------------------------------
 -- THE VIEWS
@@ -128,9 +129,9 @@
 -- precondition DO block lets an already-contracted schema through; the 4 view,
 -- 1 trigger, 1 function and 3 column DROPs carry IF EXISTS; the 4 view creates
 -- are CREATE OR REPLACE; the ledger INSERT is ON CONFLICT DO NOTHING; NOTIFY is
--- a cache reload. So a second application raises nothing and changes no column,
--- row or privilege; it does recreate the four views -- see "IF THIS FILE IS EVER
--- MOVED" above for exactly what that does.
+-- a cache reload. So a second application raises nothing and changes no
+-- business_metrics column or row and no privilege; it does recreate the four
+-- views -- see "IF THIS FILE IS EVER MOVED" above for exactly what that does.
 -- ----------------------------------------------------------------------------
 
 -- ----------------------------------------------------------------------------
