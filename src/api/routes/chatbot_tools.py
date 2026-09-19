@@ -433,12 +433,9 @@ def _normalize_metric_name(kpi_name: str) -> str:
 
     business_metrics.metric_name values are lowercase snake_case (trx, nrx,
     market_share, conversion_rate, hcp_engagement_score) while LLM tool calls
-    pass display forms ("TRx", "Market Share") — an exact-match filter on
-    those returns 0 rows. Full names with an equivalent stored quantity
-    ("Total Prescriptions" -> ``trx``) resolve through the shared KPI
-    vocabulary. A distinct quantity with no current row (TRx Share) receives a
-    safe non-matching key instead of being conflated with ``market_share``;
-    unknown names retain the transparent snake-case fallback.
+    pass display forms ("TRx", "Market Share"). Full names resolve via the
+    shared KPI vocabulary ("Total Prescriptions" -> ``trx``); TRx Share gets a
+    safe non-matching key, not ``market_share``; unknown names are snake-cased.
     """
     from src.kpi.business_metric_vocabulary import canonical_business_metric_name
 
@@ -568,13 +565,9 @@ async def _query_kpis(
                 "window_start": window_start,
                 "data_source": "synthetic" if kpi_include_synthetic() else "database",
                 "measure_basis": _BUSINESS_METRICS_BASIS,
-                # No rows, so no stored figure to be confused with anything.
-                # The notice is a caveat ON the rows above it (#1640 codex
-                # iter-3). #2130 aligned supported business-metric aliases
-                # across recognition and filtering, but unsupported registry
-                # KPIs still pass through transparently rather than being
-                # conflated with a different stored metric. With no rows,
-                # there is no stored figure for a notice to describe.
+                # No rows, so no stored figure for the notice (a caveat ON the
+                # rows above it, #1640 codex iter-3) to describe. #2130 aligned
+                # supported aliases; unsupported KPIs pass through unconflated.
                 "cross_substrate_conflict": None,
                 "note": "; ".join(unmatched) + "; returned 0 rows",
             }
