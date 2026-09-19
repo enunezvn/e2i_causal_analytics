@@ -1035,14 +1035,18 @@ class MonitoringRunRepository(BaseRepository[MonitoringRunRecord]):
         alerts_generated: int,
         duration_ms: int,
         error_message: Optional[str] = None,
+        summary: Optional[Dict[str, Any]] = None,
     ) -> Optional[MonitoringRunRecord]:
         """Complete a monitoring run (maps features_checked -> total_checks and
-        duration_ms -> duration_seconds)."""
+        duration_ms -> duration_seconds). ``summary`` fills the run's summary
+        column (e.g. features requested vs compared)."""
         status = "completed" if error_message is None else "failed"
+        fields: Dict[str, Any] = {} if summary is None else {"summary": summary}
 
         return await self.update(
             run_id,
             {
+                **fields,
                 "status": status,
                 "total_checks": features_checked,
                 "drift_detected_count": drift_detected_count,

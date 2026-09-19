@@ -14,6 +14,7 @@ Example:
     )
 """
 
+from datetime import datetime
 from typing import Any
 
 import numpy as np
@@ -208,11 +209,13 @@ class MockDataConnector(BaseDataConnector):
     async def get_available_features(
         self,
         source_table: str | None = None,
+        with_values_since: datetime | None = None,
     ) -> list[str]:
         """Return mock available features.
 
         Args:
             source_table: Ignored in mock
+            with_values_since: Ignored in mock (every mock feature has values)
 
         Returns:
             List of mock feature names

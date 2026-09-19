@@ -38,14 +38,17 @@ class DataDriftNode:
     Performance Target: <8s for 50 features
     """
 
-    def __init__(self, connector: BaseDataConnector | None = None):
+    def __init__(self, connector: BaseDataConnector | None = None, min_samples: int = 30):
         """Initialize data drift node.
 
         Args:
             connector: Data connector instance. If None, uses factory.
+            min_samples: Minimum values per window before a feature gets a
+                verdict. The PSI (10 bins) + KS rule flags most no-drift features
+                below ~1000 per window; the scheduled sweep passes a higher floor.
         """
         self.data_connector = connector or get_connector()
-        self._min_samples = 30  # Minimum samples required for drift detection
+        self._min_samples = min_samples
 
     async def execute(self, state: DriftMonitorState) -> DriftMonitorState:
         """Execute data drift detection.

@@ -411,11 +411,16 @@ class SupabaseDataConnector(BaseDataConnector):
     async def get_available_features(
         self,
         source_table: str | None = None,
+        with_values_since: datetime | None = None,
     ) -> list[str]:
         """Get list of available features from feature store.
 
         Args:
             source_table: Optional table name to filter features
+            with_values_since: When set, only features with at least one
+                ``feature_values`` row at or after this time. The registry holds
+                far more entries than have values (382 vs 15 on 2026-09-19), so
+                an unfiltered list can hand the sweep only value-less features.
 
         Returns:
             List of available feature names
@@ -423,11 +428,28 @@ class SupabaseDataConnector(BaseDataConnector):
         await self._ensure_initialized()
 
         try:
-            from src.repositories.provenance import apply_provenance_filter
+            from src.repositories.provenance import (
+                PROVENANCE_COLUMN,
+                apply_provenance_filter,
+                deployment_includes_synthetic,
+            )
 
             # #894 codex R2: features is is_synthetic-tagged (migration 069) —
             # the sweep must not auto-select planted feature names.
-            query = self._client.table("features").select("name, feature_group_id")
+            if with_values_since is None:
+                query = self._client.table("features").select("name, feature_group_id")
+            else:
+                # ``!inner`` drops features with no matching value; one embedded
+                # row per feature is enough to prove it has data. Filtering the
+                # embed (not scanning feature_values) avoids PostgREST's row cap.
+                query = (
+                    self._client.table("features")
+                    .select("name, feature_group_id, feature_values!inner(id)")
+                    .gte("feature_values.event_timestamp", with_values_since.isoformat())
+                    .limit(1, foreign_table="feature_values")
+                )
+                if not deployment_includes_synthetic():
+                    query = query.eq(f"feature_values.{PROVENANCE_COLUMN}", False)
 
             if source_table:
                 # Filter by feature group's source table
