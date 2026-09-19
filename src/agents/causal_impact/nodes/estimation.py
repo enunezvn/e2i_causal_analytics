@@ -317,6 +317,7 @@ class EstimationNode:
             "linear_regression": EstimatorType.OLS,
             "ols": EstimatorType.OLS,
             "drlearner": EstimatorType.DRLEARNER,
+            "dml_learner": EstimatorType.DML_LEARNER,
             "propensity_score_weighting": EstimatorType.DRLEARNER,
         }
         restrict_to = method_to_type.get(explicit_method) if explicit_method else None
@@ -410,6 +411,7 @@ class EstimationNode:
             "causal_forest": "CausalForestDML",
             "linear_dml": "LinearDML",
             "drlearner": "linear_regression",  # Map to existing
+            "dml_learner": "dml_learner",
             "ols": "linear_regression",
         }
 
@@ -422,6 +424,7 @@ class EstimationNode:
             "causal_forest",
             "linear_dml",
             "drlearner",
+            "dml_learner",
             "ols",
         ]
         method_name = cast(
@@ -791,6 +794,7 @@ class EstimationNode:
                 "causal_forest",
                 "linear_dml",
                 "drlearner",
+                "dml_learner",
                 "ols",
             }
             if explicit_method and explicit_method not in _VALID_EXPLICIT_METHODS:
@@ -890,6 +894,7 @@ class EstimationNode:
                         "causal_forest",
                         "linear_dml",
                         "drlearner",
+                        "dml_learner",
                         "ols",
                     ],
                     explicit_method,

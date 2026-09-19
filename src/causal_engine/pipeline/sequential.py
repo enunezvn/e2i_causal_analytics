@@ -137,10 +137,13 @@ _Z_95 = 1.959963984540054  # z for a 95% normal CI (half-width / z = SE)
 # EconML estimators whose ``ate_ci_*`` is a SAMPLING interval (#2014): econml's
 # ``ate_inference`` for causal_forest / linear_dml / drlearner (#1188, Monte-Carlo
 # validated) and OLS's Welch or seeded-bootstrap SE — the EstimatorSelector's default
-# set. The S/T/X-learner intervals and the OrthoForest fallback are
+# set — plus dml_learner (econml ``DML``, statsmodels final stage; MC coverage 25/25
+# on constant + quadratic-CATE DGPs, 2026-09-19). The S/T/X-learner intervals and the OrthoForest fallback are
 # ``std(CATE) / sqrt(n)``: the spread of heterogeneous effects, not an SE (#1188
 # measured that construction ~50x too narrow).
-ECONML_SAMPLING_INTERVAL_ESTIMATORS = frozenset({"causal_forest", "linear_dml", "drlearner", "ols"})
+ECONML_SAMPLING_INTERVAL_ESTIMATORS = frozenset(
+    {"causal_forest", "linear_dml", "drlearner", "dml_learner", "ols"}
+)
 
 
 def _se_for_library(state: PipelineState, lib: str) -> Optional[float]:

@@ -468,6 +468,7 @@ AGENT_FORCEABLE_ESTIMATORS = (
     "CausalForestDML",
     "LinearDML",
     "drlearner",
+    "dml_learner",
     "ols",
     "propensity_score_weighting",
 )

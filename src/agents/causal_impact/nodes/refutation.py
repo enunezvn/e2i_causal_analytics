@@ -174,6 +174,7 @@ _SELECTOR_TO_DOWHY_METHOD = {
     "causal_forest": "backdoor.econml.dml.CausalForestDML",
     "linear_dml": "backdoor.econml.dml.LinearDML",
     "drlearner": "backdoor.econml.dr.DRLearner",
+    "dml_learner": "backdoor.econml.dml.DML",
     "ols": "backdoor.linear_regression",
     # EstimationResult.method (legacy + new labels)
     "CausalForestDML": "backdoor.econml.dml.CausalForestDML",
@@ -324,7 +325,8 @@ def _reconstruction_nuisance_init_params(
     build their RF nuisances from ``src/causal_engine/nuisance_config.py`` (one
     shared ``min_samples_leaf`` / tree count), so they cannot drift apart.
 
-    Applied to ``LinearDML`` and ``DRLearner`` (#1188 codex iter-1 MED — the
+    Applied to ``LinearDML``, the general ``DML`` (``dml_learner``) and
+    ``DRLearner`` (#1188 codex iter-1 MED — the
     DR wrapper now uses GradientBoosting nuisances + a
     ``StatsModelsLinearRegression`` final stage for honest ATE inference, so
     the rebuild mirrors those EXACT models; econml's DR defaults would refit a
@@ -342,6 +344,24 @@ def _reconstruction_nuisance_init_params(
         return {
             "model_y": linear_dml_model_y(),
             "model_t": linear_dml_model_t() if discrete_treatment else linear_dml_model_y(),
+        }
+    if dowhy_method == "backdoor.econml.dml.DML":
+        # The general DML class (``dml_learner``). EXACT match: ``"DML" in``
+        # would also capture LinearDML / CausalForestDML. Mirror production's
+        # DMLLearnerWrapper models via ``nuisance_config`` (same two-site
+        # contract as LinearDML above).
+        from src.causal_engine.nuisance_config import (
+            dml_learner_featurizer,
+            dml_learner_model_final,
+            dml_learner_model_t,
+            dml_learner_model_y,
+        )
+
+        return {
+            "model_y": dml_learner_model_y(),
+            "model_t": dml_learner_model_t(discrete_treatment=discrete_treatment),
+            "model_final": dml_learner_model_final(),
+            "featurizer": dml_learner_featurizer(),
         }
     if "DRLearner" in dowhy_method:
         from econml.sklearn_extensions.linear_model import StatsModelsLinearRegression

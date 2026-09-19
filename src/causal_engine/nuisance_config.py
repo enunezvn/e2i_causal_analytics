@@ -1,4 +1,5 @@
-"""Single source of truth for the production LinearDML nuisance models (#2031).
+"""Single source of truth for the production LinearDML nuisance models (#2031)
+and the ``dml_learner`` (general econml ``DML``) models (bottom of module).
 
 Two production sites fit a ``LinearDML`` with RandomForest outcome / treatment
 nuisances and MUST build them from this module:
@@ -55,3 +56,75 @@ def linear_dml_model_t() -> Any:
     from sklearn.ensemble import RandomForestClassifier
 
     return RandomForestClassifier(**linear_dml_rf_params())
+
+
+# --------------------------------------------------------------------------
+# ``dml_learner``: econml's general ``DML`` with a flexible (featurized) final
+# stage. Same two-site contract as LinearDML above: the selector's
+# ``DMLLearnerWrapper`` and the refutation node's DoWhy rebuild
+# (``backdoor.econml.dml.DML``) both build from these factories.
+#
+# Why this shape (measured 2026-09-19, ``docs/demos/results/
+# 2026-09-19_dml_learner/disproof.md``):
+#   * The final stage is a degree-2 polynomial featurization of X fed to a
+#     ``StatsModelsLinearRegression`` -- CATE non-linear in X, yet econml's
+#     analytic ``ate_inference`` still applies. A non-parametric final stage
+#     (``NonParamDML`` + GBR/RF) has NO analytic inference on econml 0.16, and
+#     the estimation node fails closed on a CI-less winner.
+#   * Nuisances are GradientBoosting, NOT the LinearDML RF-leaf-50 pair: with
+#     the RF pair the flexible final stage absorbed residual confounding
+#     (+0.06 bias at a CONSTANT effect, coverage 0.84-0.90). With GB
+#     nuisances (50 rounds, depth 3; 25 seeds, n=2000) bias -0.008 / -0.006
+#     and coverage 25/25 on constant / quadratic-CATE DGPs. 100 rounds was no
+#     better (bias -0.016 / -0.019, coverage 0.92 / 0.96) at ~2x the fit time.
+# --------------------------------------------------------------------------
+
+DML_LEARNER_GB_N_ESTIMATORS = 50
+DML_LEARNER_GB_MAX_DEPTH = 3
+DML_LEARNER_RANDOM_STATE = 42
+DML_LEARNER_FEATURIZER_DEGREE = 2
+
+
+def dml_learner_gb_params() -> Dict[str, Any]:
+    """The GradientBoosting constructor kwargs both dml_learner sites use (fresh dict)."""
+    return {
+        "n_estimators": DML_LEARNER_GB_N_ESTIMATORS,
+        "max_depth": DML_LEARNER_GB_MAX_DEPTH,
+        "random_state": DML_LEARNER_RANDOM_STATE,
+    }
+
+
+def dml_learner_model_y() -> Any:
+    """Fresh GradientBoostingRegressor outcome nuisance for dml_learner."""
+    from sklearn.ensemble import GradientBoostingRegressor
+
+    return GradientBoostingRegressor(**dml_learner_gb_params())
+
+
+def dml_learner_model_t(discrete_treatment: bool = True) -> Any:
+    """Fresh treatment nuisance: a classifier for a binary treatment, else a regressor."""
+    from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
+
+    cls = GradientBoostingClassifier if discrete_treatment else GradientBoostingRegressor
+    return cls(**dml_learner_gb_params())
+
+
+def dml_learner_featurizer() -> Any:
+    """Fresh degree-2 polynomial featurizer (the flexible part of the final stage).
+
+    ``include_bias=False``: econml adds the CATE intercept itself
+    (``fit_cate_intercept=True``); a bias column would duplicate it.
+    """
+    from sklearn.preprocessing import PolynomialFeatures
+
+    return PolynomialFeatures(degree=DML_LEARNER_FEATURIZER_DEGREE, include_bias=False)
+
+
+def dml_learner_model_final() -> Any:
+    """Fresh linear final stage exposing prediction stderr (honest ATE inference).
+
+    ``fit_intercept=False``: the intercept is econml's ``fit_cate_intercept``.
+    """
+    from econml.sklearn_extensions.linear_model import StatsModelsLinearRegression
+
+    return StatsModelsLinearRegression(fit_intercept=False)
