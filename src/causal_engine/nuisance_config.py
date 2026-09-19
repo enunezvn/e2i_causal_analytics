@@ -128,3 +128,45 @@ def dml_learner_model_final() -> Any:
     from econml.sklearn_extensions.linear_model import StatsModelsLinearRegression
 
     return StatsModelsLinearRegression(fit_intercept=False)
+
+
+# --------------------------------------------------------------------------
+# Whole init-param dicts, one per production estimator with a DoWhy rebuild.
+# The selector wrappers and ``refutation._reconstruction_nuisance_init_params``
+# both call these, so the rebuilt estimator cannot drift from the reported one.
+# --------------------------------------------------------------------------
+
+
+def linear_dml_init_params(discrete_treatment: bool = True) -> Dict[str, Any]:
+    """LinearDML nuisances; a continuous treatment gets the RF REGRESSOR for model_t."""
+    return {
+        "model_y": linear_dml_model_y(),
+        "model_t": linear_dml_model_t() if discrete_treatment else linear_dml_model_y(),
+    }
+
+
+def drlearner_init_params() -> Dict[str, Any]:
+    """DRLearner models: GB nuisances + a LINEAR statsmodels final stage.
+
+    The final stage is the only one exposing prediction stderr, i.e. the only way
+    DRLearner yields an honest population-ATE sampling interval (#1188); only the
+    CATE(X) surface is linear-in-X.
+    """
+    from econml.sklearn_extensions.linear_model import StatsModelsLinearRegression
+    from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
+
+    return {
+        "model_regression": GradientBoostingRegressor(n_estimators=50, random_state=42),
+        "model_propensity": GradientBoostingClassifier(n_estimators=50, random_state=42),
+        "model_final": StatsModelsLinearRegression(),
+    }
+
+
+def dml_learner_init_params(discrete_treatment: bool = True) -> Dict[str, Any]:
+    """The general ``DML`` (``dml_learner``) models: GB nuisances, featurized final stage."""
+    return {
+        "model_y": dml_learner_model_y(),
+        "model_t": dml_learner_model_t(discrete_treatment=discrete_treatment),
+        "model_final": dml_learner_model_final(),
+        "featurizer": dml_learner_featurizer(),
+    }

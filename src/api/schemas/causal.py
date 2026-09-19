@@ -464,14 +464,8 @@ class EstimationDataResponse(BaseModel):
 # ``_VALID_EXPLICIT_METHODS`` in src/agents/causal_impact/nodes/estimation.py.
 # Leaving ``estimator`` unset runs the agent's data-driven energy-score routing
 # across the full registry (the recommended path); setting it forces one method.
-AGENT_FORCEABLE_ESTIMATORS = (
-    "CausalForestDML",
-    "LinearDML",
-    "drlearner",
-    "dml_learner",
-    "ols",
-    "propensity_score_weighting",
-)
+AGENT_FORCEABLE_ESTIMATORS = ("CausalForestDML", "LinearDML", "drlearner", "dml_learner", "ols")
+AGENT_FORCEABLE_ESTIMATORS += ("propensity_score_weighting",)
 
 
 class AgentCausalAnalysisRequest(BaseModel):
