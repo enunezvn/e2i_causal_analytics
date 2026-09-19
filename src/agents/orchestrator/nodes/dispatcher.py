@@ -18,6 +18,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type, Union,
 
 import numpy as np
 
+from src.kpi.business_metric_vocabulary import VALUE_OF_HEADS
 from src.kpi.measure_basis import measure_basis_for_kpi
 from src.repositories.provenance import coerce_provenance_flag, deployment_includes_synthetic
 from src.utils.llm_content import normalize_llm_content
@@ -2124,24 +2125,10 @@ def _window_from_query(query: str) -> Optional[Dict[str, str]]:
 #: branches fail closed on an unrecognized head. Two whitelists make the
 #: branches self-selecting: "what are the drivers of TRx" skips Branch A
 #: (drivers is not a value-head) and binds registry paths in Branch B.
-_VALUE_OF_HEADS = frozenset(
-    {
-        "value",
-        "values",
-        "level",
-        "levels",
-        "number",
-        "numbers",
-        "count",
-        "counts",
-        "total",
-        "totals",
-        "amount",
-        "figure",
-        "figures",
-        "sum",
-    }
-)
+#: Shared with the KPI value-lookup grammar (#2130): ONE authority, so a head the
+#: resolver binds cannot be missing from the pattern that routes to it.
+_VALUE_OF_HEADS = VALUE_OF_HEADS
+
 _CAUSAL_OF_HEADS = frozenset(
     {
         "driver",

@@ -70,6 +70,12 @@ class TestKpiValueLookupPattern:
             # "Jan-Mar" as one word, so the grammar must too.
             "What is Jan-Mar 2025 TRx?",
             "What is January-March 2025 TRx?",
+            # codex r5: heads the resolver's governing-head guard binds.
+            "What is the current level of TRx for Kisqali?",
+            "Give me the latest amount of NRx for Fabhalta",
+            "What is the current figure of NBRx for Kisqali?",
+            "Show me the sum of TRx for Kisqali",
+            "What are the current values of TRx for Kisqali?",
         ],
     )
     def test_kpi_value_lookup_is_explanation(self, query: str) -> None:
@@ -232,6 +238,12 @@ class TestHowManyCannotReachALaterCue:
             "How many pharmacies requested: give me NRx?",
             "How many individuals want to know what is Kisqali TRx?",
             "How many competitors say show me TRx?",
+            # codex r5: a NESTED how-many, and spelling variants of the cue itself.
+            'How many people asked, "How many TRx?"',
+            "How many pharmacies requested: how many NRx?",
+            'How\nmany pharmacies asked, "What is TRx?"',
+            'How  many pharmacies asked, "What is TRx?"',
+            'How-many pharmacies asked, "What is TRx?"',
         ],
     )
     def test_a_later_cue_does_not_rescue_an_entity_count_ask(self, query: str) -> None:
@@ -247,6 +259,27 @@ class TestHowManyCannotReachALaterCue:
     )
     def test_a_genuine_how_many_kpi_ask_still_routes(self, query: str) -> None:
         assert KPI_VALUE_LOOKUP_RE.search(query)
+
+
+class TestOnlyChronologicalMonthRanges:
+    """#2130 (codex r5 HIGH-3): parse_window REJECTS a reversed month range, and
+    _window_from_query turns that rejection into "no window" — so a reversed range
+    would be answered with a DEFAULT-period figure for an explicitly scoped ask
+    (measured on main: 'What is March-Jan 2025 TRx?' binds WS3-BI-005 with no window).
+    Only chronological ranges are admitted, so the reversed form never reaches the
+    deterministic path. The underlying "explicit but invalid window is silently
+    dropped" defect is main's and is filed separately.
+    """
+
+    @pytest.mark.parametrize(
+        "query", ["What is Jan-Mar 2025 TRx?", "What is January-March 2025 TRx?"]
+    )
+    def test_a_chronological_range_routes(self, query: str) -> None:
+        assert KPI_VALUE_LOOKUP_RE.search(query)
+
+    @pytest.mark.parametrize("query", ["What is March-Jan 2025 TRx?", "What is Dec-Feb 2025 TRx?"])
+    def test_a_reversed_range_does_not(self, query: str) -> None:
+        assert not KPI_VALUE_LOOKUP_RE.search(query)
 
 
 class TestKpiValueLookupSubsetInvariant:

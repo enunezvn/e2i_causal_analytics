@@ -251,6 +251,11 @@ def test_entity_count_with_full_kpi_object_never_binds_a_bare_value(
         ),
         ("what is teh currnt TRx for Kisqali?", "WS3-BI-005", {"brand": "Kisqali"}),
         ("What is Remibrutinib market share?", "WS3-BI-008", {"brand": "Remibrutinib"}),
+        # codex r5: value heads the governing-head guard accepts (VALUE_OF_HEADS).
+        ("What is the current level of TRx for Kisqali?", "WS3-BI-005", {"brand": "Kisqali"}),
+        ("Give me the latest amount of NRx for Fabhalta", "WS3-BI-006", {"brand": "Fabhalta"}),
+        ("What is the current figure of NBRx for Kisqali?", "WS3-BI-007", {"brand": "Kisqali"}),
+        ("Show me the sum of TRx for Kisqali", "WS3-BI-005", {"brand": "Kisqali"}),
     ],
 )
 def test_scoped_kpi_lookup_still_binds_its_kpi(monkeypatch, query, kpi_id, expected) -> None:

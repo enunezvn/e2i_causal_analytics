@@ -41,6 +41,7 @@ from src.agents.multi_faceted import (
 from src.kpi.business_metric_vocabulary import (
     KPI_VALUE_LOOKUP_METRIC_PATTERN,
     KPI_VALUE_LOOKUP_UNSUPPORTED_QUALIFIER_PATTERN,
+    VALUE_OF_HEADS,
 )
 from src.services.query_entities import (
     INDICATION_TO_BRAND,
@@ -557,9 +558,29 @@ _BRAND_WORD_PATTERN = "(?:" + "|".join(b.lower() for b in SUPPORTED_BRANDS) + ")
 # The SAME phrases query_entities scans for, so "New England"/"West Coast"/"North East"
 # and the "region"/"area" noise suffix keep routing (codex r2 HIGH-1).
 _REGION_WORD_PATTERN = rf"(?:{region_phrase_source()})(?:'s)?(?:\s+(?:region|area))?"
-_MONTH_NAME_PATTERN = (
-    r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?"
-    r"|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
+_MONTH_FORMS: tuple[str, ...] = (
+    "jan(?:uary)?",
+    "feb(?:ruary)?",
+    "mar(?:ch)?",
+    "apr(?:il)?",
+    "may",
+    "jun(?:e)?",
+    "jul(?:y)?",
+    "aug(?:ust)?",
+    "sep(?:t|tember)?",
+    "oct(?:ober)?",
+    "nov(?:ember)?",
+    "dec(?:ember)?",
+)
+_MONTH_NAME_PATTERN = "(?:" + "|".join(_MONTH_FORMS) + ")"
+#: Only CHRONOLOGICAL ranges (codex r5): parse_window rejects "March-Jan 2025", and
+#: _window_from_query turns that rejection into "no window", so the resolver would serve
+#: a DEFAULT-period figure for an explicitly scoped ask. Refusing the reversed form keeps
+#: it off the deterministic path entirely.
+_MONTH_RANGE_PATTERN = (
+    "(?:"
+    + "|".join(f"{a}[-\u2013]{b}" for i, a in enumerate(_MONTH_FORMS) for b in _MONTH_FORMS[i:])
+    + ")"
 )
 _TIME_WORD_PATTERN = (
     r"(?:last|past|this|prior|previous|current|currnt|curent|latest|recent|trailing"
@@ -567,7 +588,7 @@ _TIME_WORD_PATTERN = (
     r"|(?:year|month|quarter)-to-date|q[1-4]|h[12]|fy\d{2,4}|\d{4}-\d{2}-\d{2}"
     # parse_window accepts hyphenated month RANGES ("Jan-Mar 2025"), which main counts
     # as one physical word, so the range must be one scope element too (codex r4).
-    rf"|{_MONTH_NAME_PATTERN}(?:[-\u2013]{_MONTH_NAME_PATTERN})?"
+    rf"|{_MONTH_RANGE_PATTERN}|{_MONTH_NAME_PATTERN}"
     r"|\d{1,4}(?:-day)?|last-\d+-day|to|end|start|as"
     r"|weekly|monthly|quarterly|daily|annual|annualized|yearly)"
 )
@@ -584,10 +605,13 @@ _INDICATION_WORD_PATTERN = (
 )
 _QUALIFIER_WORD_PATTERN = (
     r"(?:total|overall|national|regional|us|u\.s\.|brand|canonical|patient[\s-]panel|panel"
-    r"|trend|trends|trajectory|evolution|history|how|value|number|count|share"
+    r"|trend|trends|trajectory|evolution|history|how|share"
     r"|vs\.?|versus|and|compared|comparison|competitor|competitors|competitive"
-    r"|of|for|in|the|a|an|teh)"
+    r"|of|for|in|the|a|an|teh" + "|" + "|".join(sorted(VALUE_OF_HEADS, key=len, reverse=True)) + ")"
+    # The heads the resolver's governing-head guard accepts, from the shared
+    # authority (codex r5): "the current level of TRx", "the sum of TRx".
 )
+
 _KPI_SCOPE_WORD_PATTERN = (
     rf"(?:{_BRAND_WORD_PATTERN}|{_REGION_WORD_PATTERN}|{_TIME_WORD_PATTERN}"
     rf"|{_INDICATION_WORD_PATTERN}|{_QUALIFIER_WORD_PATTERN})"
@@ -633,7 +657,7 @@ KPI_VALUE_LOOKUP_PATTERN = (
     # ANYWHERE, because the leading `.*?` could otherwise skip the entity-count
     # subject and latch onto a later cue -- 'How many people asked, "What is TRx?"'
     # bound TRx. Such a multipart ask fails closed instead of serving one scalar.
-    r"(?:(?!.*\bhow many\b).*?"
+    r"(?:(?!.*\bhow[\s-]+many\b).*?"
     r"(?:what(?:'?s| is| are| was| were)|show me|tell me about|give me)\s+"
     rf"{_KPI_VALUE_LOOKUP_TARGET_PATTERN})"
     r"|"
@@ -641,7 +665,7 @@ KPI_VALUE_LOOKUP_PATTERN = (
     # after "how many" (optionally partitive/determined). A generic word gap
     # here makes the KPI object win over any unseen subject noun: e.g. people,
     # individuals, or pharmacies that received/filled new prescriptions.
-    r".*?how many\s+"
+    r"(?:(?!how[\s-]+many).)*?how[\s-]+many\s+"
     rf"{_KPI_VALUE_LOOKUP_TARGET_PATTERN}"
     r")\b"
 )
