@@ -96,7 +96,10 @@
 -- The widening is safe, and the reason is a measurement rather than an argument
 -- about the base schema: these views have ZERO consumers outside database/
 -- (measured 2026-09-18 across src/, tests/, scripts/, feature_repo/ and
--- frontend/src), so no query selects a column from them at all. The "only other
+-- frontend/src; re-checked 2026-09-19 across src/, scripts/, feature_repo/ and
+-- docker/), so no RUNTIME query selects a column from them. The only queries that
+-- do are the lane plan's own rehearsal probes, inside BEGIN ... ROLLBACK, and they
+-- select the canonical columns the rebuild adds (codex iter13 LOW). The "only other
 -- mention anywhere is docs/data/02-CORE-DATA-DICTIONARY.md" this header used to add
 -- was false, and falsified by this lane's own files (ultracode iter7 LOW). The
 -- complete list of files naming these views is: database/core/
