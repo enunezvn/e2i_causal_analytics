@@ -9,6 +9,7 @@ import re
 from typing import Any, List, Optional
 
 from src.repositories.base import BaseRepository
+from src.repositories.query_utils import escape_like_pattern
 from src.utils.type_helpers import parse_supabase_rows
 
 logger = logging.getLogger(__name__)
@@ -271,7 +272,9 @@ class CausalPathRepository(BaseRepository):
                 )
             )
             if brand:
-                query = query.ilike("brand", brand)
+                # #2114: ``.ilike`` is a PATTERN match, so an unescaped caller
+                # brand wildcards. See the sync twin for the measurement.
+                query = query.ilike("brand", escape_like_pattern(brand))
             query = query.gte("confidence_level", min_confidence)
             if not include_synthetic and getattr(self, "HAS_PROVENANCE", False):
                 from src.repositories.provenance import apply_provenance_filter
@@ -492,7 +495,18 @@ def search_paths_for_outcome_sync(
             )
         )
         if brand:
-            query = query.ilike("brand", brand)
+            # #2114: ``.ilike`` interprets its argument as a PATTERN. ``brand``
+            # is caller-supplied -- the orchestrator's `_extract_brand_region`
+            # here, an LLM tool argument on the async twin's chat callers -- so
+            # an unescaped ``%`` or ``_`` BROADENS the filter instead of
+            # narrowing it. Measured read-only against live ``causal_paths``
+            # (109 rows, 3 brands): ``"%"`` returned all 109 across every brand
+            # and ``"Kis%"``/``"_isqali"`` each returned Kisqali's 37 for an ask
+            # that named neither -- a different brand's paths presented as the
+            # answer. Escaped, all three return 0 while ``"Kisqali"`` and
+            # ``"kisqali"`` still return their own 37, so ILIKE's
+            # case-insensitivity (the reason it is an ilike) is preserved.
+            query = query.ilike("brand", escape_like_pattern(brand))
         query = query.gte("confidence_level", min_confidence)
         if not include_synthetic and CausalPathRepository.HAS_PROVENANCE:
             from src.repositories.provenance import apply_provenance_filter

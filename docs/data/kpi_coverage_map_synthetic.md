@@ -10,14 +10,47 @@
 > the 6-param cap in 120). The mapping is still a useful guide to *which
 > substrate feeds which KPI*; the per-KPI verdicts are not current.
 >
+> **2026-09-17 (canonical TRx lane, #2114):** WS3-BI-005..008 CHANGED SUBSTRATE.
+> They now read the canonical monthly `business_metrics` series via the
+> `canonical_volume_*` statements, and **migration 143 has been applied** — the
+> registry went 300 -> 334 statements. All four were re-probed after the apply.
+> The `treatment_events` substrate those four used to describe now belongs to the
+> patient-panel KPIs WS3-BI-011..014, whose rows below were probed fresh rather
+> than inherited — and the numbers differ (TRx 1238 -> 597, NRx/NBRx 301 -> 114),
+> so carrying them across would have published four wrong figures.
+>
+> **WS3-BI-007 canonical NBRx is EMPTY and stays EMPTY until the reseed.**
+> `business_metrics` holds **no `nbrx` rows at all** — not merely none in the
+> latest complete month. Measured 2026-09-17 synthetic-inclusive, the table's
+> whole metric_type set is `per_hcp_rollup`, `hcp_engagement_score`, `nrx`,
+> `trx`, `conversion_rate`, `market_share`; `trx`/`nrx` each hold 1,980 rows
+> spanning 2013-01 to 2026-09 and `nbrx` holds zero at every date. So canonical
+> NBRx serves NULL on the merged lane until Task 30's reseed populates it: the
+> reseed is a prerequisite, not a tidy-up.
+>
+> Canonical TRx share reads 0.6613 while the patient-panel share reads 0.3291.
+> Different substrates, and the canonical figure reconciles exactly: in
+> 2026-08 the three brands hold Kisqali 800,349.18 / Remibrutinib 271,044.15 /
+> Fabhalta 138,925.43, so Kisqali is 800,349.18 / 1,210,318.76 = 0.66127, digit
+> for digit what the statement returned, and the numerator is WS3-BI-005's own
+> TRx. Note this is share **of the three-brand portfolio**, which is what
+> migration 143 declares; the separately stored `market_share` metric_type reads
+> 0.4375 for the same brand and month and does **not** sum to 1 across the three
+> brands (0.79), so it is a share of a wider market — a different quantity, not a
+> disagreement with this one.
+>
+> Re-run the probe after any substrate change; it exits 1 while any row is EMPTY,
+> but NOTHING IN CI RUNS IT — the refresh is manual, which is why these rows went
+> stale within an hour of 143 being applied.
+>
 > Refresh with `E2I_DB_INTEGRATION=1 python scripts/check_kpi_coverage.py`
 > against the faithful docker Supabase, and see
 > [06-KPI-REFERENCE.md](06-KPI-REFERENCE.md) for the current definitions.
 
 
-**Goal:** map every one of the 45 calculable KPIs in `config/kpi_definitions.yaml` to the
+**Goal:** map every one of the 49 calculable KPIs in `config/kpi_definitions.yaml` to the
 synthetic substrate that makes it return **non-NULL**, and prove it on the faithful
-docker Supabase. **Result: 45/45 MAPPED — ZERO N/A, ZERO EMPTY.** (WS1-MP-008 was decommissioned in #1068 — needs protected-group fairness_metrics the substrate does not populate. WS1-DQ-008 "Label Quality (IAA)" was decommissioned in T8 by product decision — a working metric, κ≈0.76, removed from the live set; `v_kpi_label_quality` + `ml_annotations` retained in the DB. WS2-TR-009 "Trigger Funnel Conversion" was ADDED by the #1360 ruling, 2026-07-30 — its registry statement lands with migration 118; its MAPPED verdict below was measured by executing the migration-118 statement body read-only on the live DB pre-application.)
+docker Supabase. **Result (re-measured 2026-09-17, after migration 143 was applied): 48/49 MAPPED, 1 EMPTY (WS3-BI-007 canonical NBRx), ZERO N/A.** (WS1-MP-008 was decommissioned in #1068 — needs protected-group fairness_metrics the substrate does not populate. WS1-DQ-008 "Label Quality (IAA)" was decommissioned in T8 by product decision — a working metric, κ≈0.76, removed from the live set; `v_kpi_label_quality` + `ml_annotations` retained in the DB. WS2-TR-009 "Trigger Funnel Conversion" was ADDED by the #1360 ruling, 2026-07-30 — its registry statement lands with migration 118; its MAPPED verdict below was measured by executing the migration-118 statement body read-only on the live DB pre-application.)
 
 Reproduce:
 
@@ -25,10 +58,10 @@ Reproduce:
 # load the synthetic substrate (rolling-window anchored):
 PYTHONPATH=$(pwd) LOKY_MAX_CPU_COUNT=1 \
   dotenv -f /path/to/.env run -- python scripts/load_synthetic_data.py --small --anchor-to-now
-# probe all 45 KPIs against the faithful DB:
+# probe all 49 KPIs against the faithful DB:
 E2I_DB_INTEGRATION=1 python scripts/check_kpi_coverage.py
-# -> TOTAL 45  MAPPED 45  EMPTY 0  N/A 0
-# (WS2-TR-009 requires migration 118 to be applied)
+# -> TOTAL 49  MAPPED 48  EMPTY 1  N/A 0   (measured 2026-09-17 post-143; exit 1)
+# (WS2-TR-009 requires migration 118; the one EMPTY is canonical NBRx, awaiting the reseed)
 ```
 
 ## How a KPI is proven
@@ -45,7 +78,7 @@ columns directly; those are proven by a direct COUNT of the populated synthetic 
 Every probe value below is the **measured** output of `kpi_query(<id>_include_synthetic, ...)`
 on the faithful docker DB after a `--small --anchor-to-now` load.
 
-## Coverage table (45 KPIs)
+## Coverage table (49 KPIs)
 
 > WS1-DQ-008 (Label Quality / IAA) was decommissioned in T8 (product decision) and is
 > omitted from this calculable-coverage table — mirroring WS1-MP-008 (#1068).
@@ -81,12 +114,16 @@ on the faithful docker DB after a `--small --anchor-to-now` load.
 | WS3-BI-002 | Weekly Active Users | `user_sessions` → `v_kpi_active_users` / wau fallback (Task 5) | MAPPED | wau=30 |
 | WS3-BI-003 | Patient Touch Rate | `triggers`+`patient_journeys` → `business_impact_patient_touch_rate` (Shard 05/06) | MAPPED | touch_rate=0.916 |
 | WS3-BI-004 | HCP Coverage | `hcp_profiles.coverage_status` → `business_impact_hcp_coverage` | MAPPED | coverage=52.3 (pre-099 probe: unscoped numerator; migration 099 re-scoped both sides to `priority_tier <= 2` and healed synthetic tier/coverage data) |
-| WS3-BI-005 | Total Prescriptions (TRx) | `treatment_events.event_type='prescription'` → `business_impact_trx` (Shard 05) | MAPPED | trx=1238 |
-| WS3-BI-006 | New Prescriptions (NRx) | `treatment_events.event_type/sequence_number=1` → `business_impact_nrx` — **`sequence_number` stamped by Task 5b helper** | MAPPED | nrx=301 |
-| WS3-BI-007 | New-to-Brand Rx (NBRx) | `treatment_events.event_type/brand` (first per patient) → `business_impact_nbrx` | MAPPED | nbrx=301 |
-| WS3-BI-008 | TRx Share | `treatment_events.brand` → `business_impact_trx_share` | MAPPED | share=0.310 |
+| WS3-BI-005 | Total Prescriptions (TRx) | `business_metrics.value` (metric_type='trx', latest complete month) → `canonical_volume_trx` (migration 143) | MAPPED | trx=800349.18 data_month=2026-08-01 data_through=2026-08-31 (measured 2026-09-17, post-143) |
+| WS3-BI-006 | New Prescriptions (NRx) | `business_metrics.value` (metric_type='nrx', latest complete month) → `canonical_volume_nrx` (migration 143) | MAPPED | nrx=250988.81 data_month=2026-08-01 (measured 2026-09-17, post-143) |
+| WS3-BI-007 | New-to-Brand Rx (NBRx) | `business_metrics.value` (metric_type='nbrx', latest complete month) → `canonical_volume_nbrx` (migration 143) | EMPTY: business_metrics holds no nbrx rows at all | nbrx=null (measured 2026-09-17, post-143). Not a month-alignment artifact: the table's metric_type set is per_hcp_rollup, hcp_engagement_score, nrx, trx, conversion_rate, market_share — there is NO nbrx row at any date. Task 30's reseed must populate it. |
+| WS3-BI-008 | TRx Share | `business_metrics.value` (brand trx / portfolio trx, latest complete month) → `canonical_volume_trx_share` (migration 143) | MAPPED | share=0.6613 (measured 2026-09-17, post-143; Kisqali 800349.18 of a 1210318.76 three-brand portfolio — reconciles exactly, see header) |
 | WS3-BI-009 | Conversion Rate | `triggers`+`treatment_events` → `business_impact_conversion_rate` (Shard 05) | MAPPED | conversion=0.615 |
 | WS3-BI-010 | Return on Investment | `business_metrics.roi` → `business_impact_roi_business_metrics` (Shard 02) | MAPPED | avg_roi=1.888 |
+| WS3-BI-011 | Observed Rx Events - Patient Panel TRx | `treatment_events.event_type='prescription'` → `business_impact_trx` (Shard 05) | MAPPED | trx=597 data_through=2026-09-14 (measured 2026-09-17) |
+| WS3-BI-012 | Observed Rx Events - Patient Panel NRx | `treatment_events.event_type/sequence_number=1` → `business_impact_nrx` — **`sequence_number` stamped by Task 5b helper** | MAPPED | nrx=114 data_through=2026-09-14 (measured 2026-09-17) |
+| WS3-BI-013 | Observed Rx Events - Patient Panel NBRx | `treatment_events.event_type/brand` (first per patient) → `business_impact_nbrx` | MAPPED | nbrx=114 data_through=2026-09-14 (measured 2026-09-17) |
+| WS3-BI-014 | Observed Rx Events - Patient Panel TRx Share | `treatment_events.brand` → `business_impact_trx_share` | MAPPED | share=0.3291 data_through=2026-09-14 (measured 2026-09-17) |
 | BR-001 | Remi - AH Uncontrolled % | `patient_journeys.lab_values` → `brand_specific_remi_ah_uncontrolled` (Shard 04/06) | MAPPED | rate=0.763 |
 | BR-002 | Remi - Intent-to-Prescribe Δ | `hcp_intent_surveys.intent_to_prescribe_change` → `v_kpi_intent_to_prescribe` / fallback (Task 5) | MAPPED | intent_delta=1.006 |
 | BR-003 | Fabhalta - % PNH Tested | `treatment_events.event_type` → `brand_specific_fabhalta_pnh_tested` | MAPPED | tested_rate=0.335 |
@@ -153,9 +190,9 @@ defect is `BLOCKED-BY-Fn` (not a Shard-09 failure).
   unique violation — the FeatureStoreSeeder emits fixed names (`hcp_demographics`) that
   already exist while the loader UPSERTs on `id` (uuid); (b) `feature_values`
   `valid_event_timestamp` CHECK rejects the FeatureValueGenerator's future-dated
-  anchored timestamps. **No KPI in the 45 depends on `feature_values`** (drift_monitor's
+  anchored timestamps. **No KPI in the 49 depends on `feature_values`** (drift_monitor's
   WS1-MP-009 reads `ml_drift_history`, which loads fine), so this does not affect the
-  45/45 coverage result. The is_synthetic gap is fixed; the seeder/CHECK bugs are
+  coverage result. The is_synthetic gap is fixed; the seeder/CHECK bugs are
   deferred to their owning shards.
 - The substrate completions added beyond the plan's Task list (model-quality metrics,
   `sequence_number`, change-tracking) are post-hoc column stamps onto **existing,

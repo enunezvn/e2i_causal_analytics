@@ -62,8 +62,20 @@ INITIAL_RETRY_SECONDS=60
 # file registry is not safe for concurrent writers).
 materialize_once() {
     NOW="$(date -u +%Y-%m-%dT%H:%M:%S)"
-    echo "[materializer] feast materialize-incremental ${NOW}"
-    flock "$LOCK" feast --chdir /feast materialize-incremental "${NOW}"
+    # Lookback = each online view's TTL (docker/feast/materialize_windows.py): late-arriving rows, such as
+    # a weekly batch's per-HCP rows (event Tue..Mon 00:00, written Monday 03:15), are re-read on the next cycle.
+    WINDOW_GROUPS="$(python3 /materialize_windows.py --end "${NOW}")" || return 1
+    [ -n "$WINDOW_GROUPS" ] || { echo "[materializer] ERROR: no enabled online feature views" >&2; return 1; }
+    RC=0
+    while read -r START END VIEWS; do
+        echo "[materializer] feast materialize ${START} ${END} ${VIEWS} (bounded lookback)"
+        set --
+        for V in $VIEWS; do set -- "$@" --views "$V"; done
+        flock "$LOCK" feast --chdir /feast materialize "${START}" "${END}" "$@" || RC=1
+    done <<EOF
+$WINDOW_GROUPS
+EOF
+    return $RC
 }
 
 # #556 M1: retry the FIRST cycle with short backoff (not a full interval) and do
@@ -84,7 +96,7 @@ while true; do
     if materialize_once; then
         echo "[materializer] cycle complete"
     else
-        echo "[materializer] WARNING: materialize-incremental failed this cycle; will retry next cycle" >&2
+        echo "[materializer] WARNING: bounded-lookback materialize failed this cycle; will retry next cycle" >&2
     fi
     date -u +%s > "$HEARTBEAT"
 done

@@ -24,10 +24,22 @@ market_dynamics_fv = FeatureView(
     entities=[territory, brand],
     ttl=timedelta(days=7),
     schema=[
-        # Volume metrics
-        Field(name="trx_count", dtype=Int64, description="Territory TRx volume"),
-        Field(name="nrx_count", dtype=Int64, description="Territory NRx volume"),
-        Field(name="total_rx_count", dtype=Int64, description="Total prescriptions"),
+        # Trigger funnel counts (per_hcp_rollup; renamed by migration 144 — not prescriptions)
+        Field(
+            name="triggers_delivered_count",
+            dtype=Int64,
+            description="Territory triggers delivered or viewed",
+        ),
+        Field(
+            name="triggers_accepted_count",
+            dtype=Int64,
+            description="Territory triggers accepted or responded",
+        ),
+        Field(
+            name="triggers_total_count",
+            dtype=Int64,
+            description="Territory triggers generated",
+        ),
         # Market position
         Field(name="market_share", dtype=Float32, description="Market share in territory"),
         # Performance indicators

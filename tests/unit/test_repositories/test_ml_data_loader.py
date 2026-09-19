@@ -8,6 +8,7 @@ Tests:
 - Error handling
 """
 
+import re
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock
 
@@ -235,12 +236,20 @@ class TestGetMLDataLoader:
 
 # ----------------------------------------------------- provenance (R7)
 class _RecordingQuery:
-    """Fluent fake query builder recording every ``.eq`` call."""
+    """Fluent fake query builder recording every ``.eq`` call, and the columns asked for.
 
-    def __init__(self, eq_log):
+    codex iter1 MED: ``select`` used to discard its arguments, so a test could request a
+    column that migration 144 renamed away and still pass — the fake was faithful to the
+    provenance layer it exists to test and silently wrong about the schema. Recording the
+    columns lets the caller assert the request would survive against the real table.
+    """
+
+    def __init__(self, eq_log, select_log=None):
         self._eq_log = eq_log
+        self.select_log = [] if select_log is None else select_log
 
     def select(self, *a, **k):
+        self.select_log.append(a)
         return self
 
     def eq(self, *a, **k):
@@ -267,11 +276,12 @@ class _RecordingQuery:
 
 
 class _RecordingClient:
-    def __init__(self, eq_log):
+    def __init__(self, eq_log, select_log=None):
         self._eq_log = eq_log
+        self.select_log = [] if select_log is None else select_log
 
     def table(self, name):
-        return _RecordingQuery(self._eq_log)
+        return _RecordingQuery(self._eq_log, self.select_log)
 
 
 class TestProvenanceDefaultExclude:
@@ -280,9 +290,19 @@ class TestProvenanceDefaultExclude:
     @pytest.mark.asyncio
     async def test_load_table_sample_excludes_synthetic_on_taggable_table(self):
         eq_log: list = []
-        loader = MLDataLoader(supabase_client=_RecordingClient(eq_log))
-        await loader.load_table_sample("business_metrics", columns=["hcp_id", "trx_count"])
+        client = _RecordingClient(eq_log)
+        loader = MLDataLoader(supabase_client=client)
+        # migration 144 renamed trx_count -> triggers_delivered_count; asking for the
+        # old name here passed only because the fake threw the column list away.
+        await loader.load_table_sample(
+            "business_metrics", columns=["hcp_id", "triggers_delivered_count"]
+        )
         assert ("is_synthetic", False) in eq_log
+        requested = " ".join(str(a) for a in client.select_log)
+        assert "triggers_delivered_count" in requested, client.select_log
+        assert not re.search(r"\b(trx_count|nrx_count|total_rx_count)\b", requested), (
+            f"a legacy per_hcp_rollup column name reached the query: {client.select_log}"
+        )
 
     @pytest.mark.asyncio
     async def test_load_table_sample_excludes_synthetic_on_agent_activities(self):

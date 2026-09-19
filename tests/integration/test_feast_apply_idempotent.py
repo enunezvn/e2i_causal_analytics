@@ -307,7 +307,7 @@ def test_proto_byte_diff_catches_deliberate_ttl_change() -> None:
     and only needs ONE deliberate-failure proof that the helper bites.
     """
     name = "test_6b_infra_5_apply_idem_ttl"
-    feature_names = ["trx_count", "nrx_count"]
+    feature_names = ["triggers_delivered_count", "triggers_accepted_count"]
 
     base = build_minimal_feature_view(name, ttl=timedelta(days=7), feature_names=feature_names)
     drifted = build_minimal_feature_view(name, ttl=timedelta(days=14), feature_names=feature_names)

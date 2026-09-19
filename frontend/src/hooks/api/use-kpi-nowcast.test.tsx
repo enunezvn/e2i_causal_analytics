@@ -3,7 +3,7 @@
  * ==================================================================
  *
  * The /history/nowcast endpoint serves ONLY the Rx-volume family
- * (WS3-BI-005 TRx, WS3-BI-006 NRx, WS3-BI-007 NBRx) and 422s every other
+ * (WS3-BI-011 TRx, WS3-BI-012 NRx, WS3-BI-013 NBRx) and 422s every other
  * KPI. The hook must therefore HARD-gate the fetch on the family — no
  * options spread may point it at an off-family KPI (spec item e).
  */
@@ -34,7 +34,7 @@ const mockGetNowcast = (kpiApi as unknown as Record<string, ReturnType<typeof vi
 ];
 
 const NOWCAST_FIXTURE = {
-  kpi_id: 'WS3-BI-005',
+  kpi_id: 'WS3-BI-011',
   brand: 'Kisqali',
   data_through: '2026-07-21',
   insufficient_maturity: false,
@@ -75,9 +75,9 @@ describe('RX_VOLUME_KPI_IDS', () => {
   it('pins exactly the three Rx-volume KPI ids the endpoint serves', () => {
     expect(RX_VOLUME_KPI_IDS).toBeInstanceOf(Set);
     expect([...(RX_VOLUME_KPI_IDS ?? [])].sort()).toEqual([
-      'WS3-BI-005',
-      'WS3-BI-006',
-      'WS3-BI-007',
+      'WS3-BI-011',
+      'WS3-BI-012',
+      'WS3-BI-013',
     ]);
   });
 });
@@ -99,19 +99,19 @@ describe('useKPIHistoryNowcast', () => {
 
   it('fetches for an Rx-volume KPI with the brand param', async () => {
     mockGetNowcast?.mockResolvedValue(NOWCAST_FIXTURE);
-    const { result } = renderHook(() => useKPIHistoryNowcast?.('WS3-BI-005', 'Kisqali'), {
+    const { result } = renderHook(() => useKPIHistoryNowcast?.('WS3-BI-011', 'Kisqali'), {
       wrapper: createWrapper(),
     });
 
     await waitFor(() => {
       expect((result.current as { isSuccess?: boolean } | undefined)?.isSuccess).toBe(true);
     });
-    expect(mockGetNowcast).toHaveBeenCalledWith('WS3-BI-005', 'Kisqali');
+    expect(mockGetNowcast).toHaveBeenCalledWith('WS3-BI-011', 'Kisqali');
     expect((result.current as { data?: unknown }).data).toEqual(NOWCAST_FIXTURE);
   });
 
   it('options.enabled=false suppresses even Rx-family fetches', async () => {
-    renderHook(() => useKPIHistoryNowcast?.('WS3-BI-006', '', { enabled: false }), {
+    renderHook(() => useKPIHistoryNowcast?.('WS3-BI-012', '', { enabled: false }), {
       wrapper: createWrapper(),
     });
 

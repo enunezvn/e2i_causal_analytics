@@ -291,7 +291,7 @@ def _planted_cohort(n_per_region: int = 300, seed: int = 3):
                     "region": region,
                     "email_campaign_count": rng.poisson(3 + 4 * market).astype(float),
                     "market_share": market,
-                    "total_rx_count": rng.poisson(60, n_per_region).astype(float),
+                    "triggers_total_count": rng.poisson(60, n_per_region).astype(float),
                     "_tau": tau,
                 }
             )

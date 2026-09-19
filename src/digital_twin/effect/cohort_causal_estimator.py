@@ -45,9 +45,9 @@ logger = logging.getLogger(__name__)
 # outcome) in the gold-standard DGP, NOT outcomes/mediators (nrx/trx/conversion are
 # excluded to avoid collider/over-control bias). On RWD the present subset is used;
 # absent columns are skipped (logged by the caller), never invented.
-DEFAULT_CONFOUNDERS: tuple[str, ...] = ("market_share", "total_rx_count")
-# total_rx_count is heavy-tailed -> adjust on log1p scale (matches the DGP probe).
-_LOG_CONFOUNDERS = frozenset({"total_rx_count"})
+DEFAULT_CONFOUNDERS: tuple[str, ...] = ("market_share", "triggers_total_count")
+# triggers_total_count is heavy-tailed -> adjust on log1p scale (matches the DGP probe).
+_LOG_CONFOUNDERS = frozenset({"triggers_total_count"})
 
 _MIN_ROWS = 200  # DML needs a stable nuisance fit; the loader gates cohorts at >= 500.
 _OUTCOME_COL = "conversion_rate"

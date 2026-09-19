@@ -101,6 +101,13 @@ logger = logging.getLogger(__name__)
 #: supplied. 24 hours matches the Celery beat cadence below.
 DEFAULT_WINDOW_HOURS: int = 24
 
+#: Scheduled runs select dates by trigger ARRIVAL (``triggers.created_at``) over one weekly
+#: batch cycle plus margin (the host reseed lands one batch per week). Every daily run
+#: re-touches the last week's arrivals, which is idempotent, so a missed or failed beat
+#: self-heals on any later run within the week (canonical TRx lane, owner decision #2).
+ARRIVAL_MARGIN_HOURS: int = 6
+ARRIVAL_WINDOW_HOURS: int = 7 * 24 + ARRIVAL_MARGIN_HOURS
+
 #: Celery queue this task runs on. Routed to ``worker_medium`` per existing
 #: ``task_routes`` config in ``src.workers.celery_app``.
 TASK_QUEUE: str = "analytics"
@@ -120,11 +127,16 @@ METRIC_TYPE: str = "per_hcp_rollup"
 # through Python.
 #
 # Pipeline:
-#   1. triggers_with_brand: triggers x most-recent-prior patient_journey.brand,
-#      filtered to [start_date, end_date).
+#   0. affected_dates: the metric_dates touched by triggers whose trigger_timestamp
+#      (explicit window) or created_at (scheduled run) falls in [start_date, end_date).
+#   1. triggers_with_brand: ALL triggers of those dates x most-recent-prior
+#      patient_journey.brand (a date is always recomputed whole).
 #   2. hcp_brand_daily: collapse to per-(hcp_id, brand, metric_date) counts +
-#      conversion_rate (NRx / TRx with NULLIF guard).
-#   3. territory_totals: sum total_rx_count per (territory_id, brand,
+#      conversion_rate. That ratio is accepted triggers / delivered triggers
+#      (with a NULLIF guard), NOT NRx / TRx as this line used to say: the three
+#      counts below are trigger funnel stages, which is why migration 144
+#      renamed them to triggers_{delivered,accepted,total}_count.
+#   3. territory_totals: sum triggers_total_count per (territory_id, brand,
 #      metric_date) so the SELECT can compute market_share = HCP /
 #      territory_total within each territory window.
 #   4. INSERT with deterministic metric_id and ON CONFLICT DO UPDATE for
@@ -141,8 +153,19 @@ METRIC_TYPE: str = "per_hcp_rollup"
 #
 # data_split: defaults to 'unassigned' per column default; the rollup row is
 # fed into the ML splitter elsewhere.
-INSERT_PER_HCP_ROLLUP_SQL: str = """
-WITH triggers_with_brand AS (
+_PER_HCP_ROLLUP_CTES_TEMPLATE: str = """
+WITH affected_dates AS (
+    -- Late-arrival fix (canonical TRx lane, owner decision #2): the run window chooses WHICH
+    -- dates to touch; every later CTE recomputes ALL triggers of those dates. market_share
+    -- divides by the per-(territory, brand, date) total, so aggregating only the triggers
+    -- selected by the window would overwrite a complete row with partial counts.
+    SELECT DISTINCT DATE(t.trigger_timestamp) AS metric_date
+      FROM triggers t
+     WHERE t.__WINDOW_COLUMN__ >= %(start_date)s
+       AND t.__WINDOW_COLUMN__ <  %(end_date)s
+       AND t.hcp_id IS NOT NULL
+),
+triggers_with_brand AS (
     SELECT
         t.hcp_id,
         pj.brand,
@@ -163,8 +186,7 @@ WITH triggers_with_brand AS (
          ORDER BY pj_inner.journey_start_date DESC
          LIMIT 1
     ) pj ON TRUE
-    WHERE t.trigger_timestamp >= %(start_date)s
-      AND t.trigger_timestamp <  %(end_date)s
+    WHERE DATE(t.trigger_timestamp) IN (SELECT metric_date FROM affected_dates)
       AND t.hcp_id IS NOT NULL
 ),
 hcp_brand_daily AS (
@@ -177,9 +199,9 @@ hcp_brand_daily AS (
         -- further progression of 'delivered', and once accepted implies viewed
         -- a delivered-exclusive count keeps only the never-viewed remainder
         -- (conversion_rate could then exceed 1).
-        COUNT(*) FILTER (WHERE delivery_status IN ('delivered', 'viewed'))          AS trx_count,
-        COUNT(*) FILTER (WHERE acceptance_status IN ('accepted', 'responded'))      AS nrx_count,
-        COUNT(*)                                                                    AS total_rx_count,
+        COUNT(*) FILTER (WHERE delivery_status IN ('delivered', 'viewed'))          AS triggers_delivered_count,
+        COUNT(*) FILTER (WHERE acceptance_status IN ('accepted', 'responded'))      AS triggers_accepted_count,
+        COUNT(*)                                                                    AS triggers_total_count,
         COALESCE(
             COUNT(*) FILTER (WHERE acceptance_status IN ('accepted', 'responded'))::NUMERIC
             / NULLIF(COUNT(*) FILTER (WHERE delivery_status IN ('delivered', 'viewed')), 0),
@@ -196,7 +218,7 @@ territory_totals AS (
         hp.territory_id,
         hbd.brand,
         hbd.metric_date,
-        SUM(hbd.total_rx_count) AS territory_total,
+        SUM(hbd.triggers_total_count) AS territory_total,
         -- Provenance of the market_share DENOMINATOR (issue #895): if any
         -- HCP cell feeding this territory total is synthetic (or the HCP
         -- profile itself is), every market_share computed against it is a
@@ -206,6 +228,9 @@ territory_totals AS (
     JOIN hcp_profiles  hp ON hbd.hcp_id = hp.hcp_id
     GROUP BY hp.territory_id, hbd.brand, hbd.metric_date
 )
+"""
+
+_PER_HCP_ROLLUP_INSERT_HEAD: str = """
 INSERT INTO business_metrics (
     metric_id,
     metric_date,
@@ -213,9 +238,9 @@ INSERT INTO business_metrics (
     brand,
     region,
     hcp_id,
-    trx_count,
-    nrx_count,
-    total_rx_count,
+    triggers_delivered_count,
+    triggers_accepted_count,
+    triggers_total_count,
     market_share,
     conversion_rate,
     -- engagement_score and call_frequency intentionally NULL: the
@@ -224,6 +249,9 @@ INSERT INTO business_metrics (
     is_synthetic,
     created_at
 )
+"""
+
+_PER_HCP_ROLLUP_ROWS_SELECT: str = """
 SELECT
     -- metric_id = '<prefix>_' || md5(hcp_id ':' brand ':' metric_date).
     -- Hashed because business_metrics.metric_id is VARCHAR(50); the
@@ -240,12 +268,12 @@ SELECT
     hbd.brand,
     hp.geographic_region                        AS region,
     hbd.hcp_id,
-    hbd.trx_count,
-    hbd.nrx_count,
-    hbd.total_rx_count,
+    hbd.triggers_delivered_count,
+    hbd.triggers_accepted_count,
+    hbd.triggers_total_count,
     CASE
         WHEN tt.territory_total > 0
-            THEN hbd.total_rx_count::NUMERIC / tt.territory_total
+            THEN hbd.triggers_total_count::NUMERIC / tt.territory_total
         ELSE 0
     END                                         AS market_share,
     hbd.conversion_rate,
@@ -263,10 +291,13 @@ JOIN territory_totals  tt
   ON tt.territory_id = hp.territory_id
  AND tt.brand        = hbd.brand
  AND tt.metric_date  = hbd.metric_date
+"""
+
+_PER_HCP_ROLLUP_ON_CONFLICT: str = """
 ON CONFLICT (metric_id) DO UPDATE SET
-    trx_count       = EXCLUDED.trx_count,
-    nrx_count       = EXCLUDED.nrx_count,
-    total_rx_count  = EXCLUDED.total_rx_count,
+    triggers_delivered_count       = EXCLUDED.triggers_delivered_count,
+    triggers_accepted_count       = EXCLUDED.triggers_accepted_count,
+    triggers_total_count  = EXCLUDED.triggers_total_count,
     market_share    = EXCLUDED.market_share,
     conversion_rate = EXCLUDED.conversion_rate,
     region          = EXCLUDED.region,
@@ -277,6 +308,97 @@ ON CONFLICT (metric_id) DO UPDATE SET
     -- arm.
     is_synthetic    = EXCLUDED.is_synthetic;
 """
+
+
+def _compose_rollup_insert(window_column: str) -> str:
+    return (
+        _PER_HCP_ROLLUP_CTES_TEMPLATE.replace("__WINDOW_COLUMN__", window_column)
+        + _PER_HCP_ROLLUP_INSERT_HEAD
+        + _PER_HCP_ROLLUP_ROWS_SELECT
+        + _PER_HCP_ROLLUP_ON_CONFLICT
+    )
+
+
+#: Explicit ``start_date``/``end_date`` (manual backfills): the dates of triggers that
+#: HAPPENED in the window, each recomputed whole.
+INSERT_PER_HCP_ROLLUP_SQL: str = _compose_rollup_insert("trigger_timestamp")
+
+#: Scheduled run (no dates): the dates of triggers that ARRIVED in the window, each
+#: recomputed whole.
+INSERT_PER_HCP_ROLLUP_BY_ARRIVAL_SQL: str = _compose_rollup_insert("created_at")
+
+_PREVIEW_COUNTS_SQL: str = """
+SELECT
+    COUNT(DISTINCT r.metric_date)                        AS metric_dates,
+    COUNT(*) FILTER (WHERE b.metric_id IS NULL)          AS rows_new,
+    COUNT(*) FILTER (
+        WHERE b.metric_id IS NOT NULL
+          AND (b.triggers_delivered_count, b.triggers_accepted_count, b.triggers_total_count,
+               b.market_share, b.conversion_rate, b.region, b.metric_type, b.is_synthetic)
+              IS DISTINCT FROM
+              (r.triggers_delivered_count, r.triggers_accepted_count, r.triggers_total_count,
+               r.market_share, r.conversion_rate, r.region, r.metric_type, r.is_synthetic)
+    )                                                    AS rows_changed,
+    COUNT(*) FILTER (WHERE b.metric_id IS NOT NULL)      AS rows_existing,
+    (SELECT count(*) FROM business_metrics o
+      WHERE o.metric_type = %(metric_type)s AND o.hcp_id IS NOT NULL
+        AND o.metric_date >= %(start_date)s::DATE AND o.metric_date < %(end_date)s::DATE
+        AND NOT EXISTS (SELECT 1 FROM rollup r2 WHERE r2.metric_id = o.metric_id))
+                                                         AS rows_obsolete,
+    MIN(r.metric_date)                                   AS first_date,
+    MAX(r.metric_date)                                   AS last_date
+FROM rollup r
+LEFT JOIN business_metrics b ON b.metric_id = r.metric_id
+"""
+
+_PER_HCP_RECONCILE_SCOPE_BY_ARRIVAL: str = (
+    "b.metric_date IN (SELECT metric_date FROM affected_dates)"
+)
+_PER_HCP_RECONCILE_SCOPE_BY_WINDOW: str = (
+    "b.metric_date >= %(start_date)s::DATE AND b.metric_date <  %(end_date)s::DATE"
+)
+
+#: codex r13-08: an upsert cannot delete. A row whose (hcp, brand, date) lost its last
+#: trigger must go, or that date's market shares exceed 1.
+_PER_HCP_RECONCILE_TAIL: str = """
+, rollup AS (__ROWS_SELECT__
+)
+DELETE FROM business_metrics b
+ WHERE b.metric_type = %(metric_type)s
+   AND b.hcp_id IS NOT NULL
+   AND __SCOPE__
+   AND NOT EXISTS (SELECT 1 FROM rollup r WHERE r.metric_id = b.metric_id);
+"""
+
+
+def _compose_rollup_reconcile(window_column: str, scope: str) -> str:
+    return _PER_HCP_ROLLUP_CTES_TEMPLATE.replace("__WINDOW_COLUMN__", window_column) + (
+        _PER_HCP_RECONCILE_TAIL.replace("__ROWS_SELECT__", _PER_HCP_ROLLUP_ROWS_SELECT).replace(
+            "__SCOPE__", scope
+        )
+    )
+
+
+#: Explicit window: reconcile the WHOLE calendar range, so a date that lost every trigger
+#: (and is therefore unselectable by arrival) is cleaned too.
+RECONCILE_PER_HCP_ROLLUP_SQL: str = _compose_rollup_reconcile(
+    "trigger_timestamp", _PER_HCP_RECONCILE_SCOPE_BY_WINDOW
+)
+
+#: Scheduled run: reconcile the dates this run touched.
+RECONCILE_PER_HCP_ROLLUP_BY_ARRIVAL_SQL: str = _compose_rollup_reconcile(
+    "created_at", _PER_HCP_RECONCILE_SCOPE_BY_ARRIVAL
+)
+
+#: Read-only readout of an explicit-window run: the same CTE text and row SELECT as
+#: ``INSERT_PER_HCP_ROLLUP_SQL``, counted instead of written.
+PREVIEW_PER_HCP_ROLLUP_SQL: str = (
+    _PER_HCP_ROLLUP_CTES_TEMPLATE.replace("__WINDOW_COLUMN__", "trigger_timestamp")
+    + ",\nrollup AS ("
+    + _PER_HCP_ROLLUP_ROWS_SELECT
+    + ")"
+    + _PREVIEW_COUNTS_SQL
+)
 
 
 # -----------------------------------------------------------------------------
@@ -322,10 +444,56 @@ def _build_metric_id(hcp_id: str, brand: str, metric_date: date) -> str:
 # -----------------------------------------------------------------------------
 
 
+def preview_per_hcp_rollup(start_date: str, end_date: str) -> Dict[str, Any]:
+    """Read-only readout of what an explicit-window rollup would write.
+
+    Runs ``PREVIEW_PER_HCP_ROLLUP_SQL`` inside a ``READ ONLY`` transaction (Postgres refuses
+    any write in it) and counts the touched dates and the new / changed / existing rows.
+    It is the dry-run before an owner-gated backfill.
+    """
+    start_dt, end_dt = _resolve_window(start_date, end_date)
+    params = {
+        "start_date": start_dt,
+        "end_date": end_dt,
+        "metric_id_prefix": METRIC_ID_PREFIX,
+        "metric_type": METRIC_TYPE,
+    }
+    conn = _connect_to_db()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("SET TRANSACTION READ ONLY")
+                cur.execute(PREVIEW_PER_HCP_ROLLUP_SQL, params)
+                row = cur.fetchone()
+    finally:
+        conn.close()
+    if row is None:  # an aggregate always returns one row
+        raise RuntimeError("per-HCP rollup preview returned no row")
+    keys = (
+        "metric_dates",
+        "rows_new",
+        "rows_changed",
+        "rows_existing",
+        "rows_obsolete",
+        "first_date",
+        "last_date",
+    )
+    return {
+        "window_start": start_dt.isoformat(),
+        "window_end": end_dt.isoformat(),
+        # strict=True is a guard, not lint appeasement: if _PREVIEW_COUNTS_SQL ever
+        # returns a different number of columns than `keys` names, zip would
+        # silently drop the surplus and the readout would lose a count without
+        # anyone noticing. Raise instead.
+        **dict(zip(keys, row, strict=True)),
+    }
+
+
 def _run_per_hcp_rollup_impl(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     request_id: str = "no-task-id",
+    arrived_before: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Pure-Python core of the per-HCP rollup ETL.
 
@@ -340,13 +508,27 @@ def _run_per_hcp_rollup_impl(
         end_date: ISO datetime/date for window end (exclusive). Defaults to
             now (UTC).
         request_id: identifier surfaced in log lines.
+        arrived_before: end of the ARRIVAL window when no dates are given
+            (defaults to now, UTC); refused together with start_date/end_date.
 
     Returns:
-        Dict with ``status``, ``rows_affected``, ``window_start``,
-        ``window_end``, and on failure an ``error`` field.
+        Dict with ``status``, ``rows_affected``, ``rows_deleted`` (obsolete rows
+        the reconcile removed in the same transaction), ``selected_by``
+        (``"arrival"`` for a scheduled run, ``"trigger_timestamp"`` for an
+        explicit window), ``window_start``, ``window_end``, and on failure an
+        ``error`` field.
     """
+    by_arrival = start_date is None and end_date is None
+    selected_by = "arrival" if by_arrival else "trigger_timestamp"
     try:
-        start_dt, end_dt = _resolve_window(start_date, end_date)
+        if arrived_before is not None and not by_arrival:
+            raise ValueError("arrived_before cannot be combined with start_date/end_date")
+        if by_arrival:
+            start_dt, end_dt = _resolve_window(
+                None, arrived_before, default_lookback_seconds=ARRIVAL_WINDOW_HOURS * 3600
+            )
+        else:
+            start_dt, end_dt = _resolve_window(start_date, end_date)
     except ValueError as e:
         logger.error("Invalid window for run_per_hcp_rollup [%s]: %s", request_id, e)
         return {
@@ -355,11 +537,17 @@ def _run_per_hcp_rollup_impl(
             "rows_affected": 0,
             "window_start": start_date,
             "window_end": end_date,
+            "selected_by": selected_by,
         }
+    sql = INSERT_PER_HCP_ROLLUP_BY_ARRIVAL_SQL if by_arrival else INSERT_PER_HCP_ROLLUP_SQL
+    reconcile_sql = (
+        RECONCILE_PER_HCP_ROLLUP_BY_ARRIVAL_SQL if by_arrival else RECONCILE_PER_HCP_ROLLUP_SQL
+    )
 
     logger.info(
-        "Starting per-HCP business_metrics rollup [%s]: window=[%s, %s)",
+        "Starting per-HCP business_metrics rollup [%s]: selected_by=%s window=[%s, %s)",
         request_id,
+        selected_by,
         start_dt.isoformat(),
         end_dt.isoformat(),
     )
@@ -372,14 +560,19 @@ def _run_per_hcp_rollup_impl(
     }
 
     conn = None
+    rows_deleted = 0
     try:
         conn = _connect_to_db()
         with conn:  # transactional: commits on exit, rolls back on exception
             with conn.cursor() as cur:
-                cur.execute(INSERT_PER_HCP_ROLLUP_SQL, params)
+                cur.execute(sql, params)
                 rows_affected = cur.rowcount
+                # codex r13-08: the upsert cannot delete a row whose group lost its last
+                # trigger. Same transaction, same scope, so the date is never left mixed.
+                cur.execute(reconcile_sql, params)
+                rows_deleted = cur.rowcount
 
-        if rows_affected == 0:
+        if rows_affected == 0 and rows_deleted == 0:
             logger.warning(
                 "No rows to roll up for window [%s, %s) [%s]",
                 start_dt.isoformat(),
@@ -391,6 +584,8 @@ def _run_per_hcp_rollup_impl(
                 "rows_affected": 0,
                 "window_start": start_dt.isoformat(),
                 "window_end": end_dt.isoformat(),
+                "selected_by": selected_by,
+                "rows_deleted": rows_deleted,
             }
 
         logger.info(
@@ -403,6 +598,8 @@ def _run_per_hcp_rollup_impl(
             "rows_affected": rows_affected,
             "window_start": start_dt.isoformat(),
             "window_end": end_dt.isoformat(),
+            "selected_by": selected_by,
+            "rows_deleted": rows_deleted,
         }
 
     except Exception as e:
@@ -417,6 +614,8 @@ def _run_per_hcp_rollup_impl(
             "rows_affected": 0,
             "window_start": start_dt.isoformat(),
             "window_end": end_dt.isoformat(),
+            "selected_by": selected_by,
+            "rows_deleted": rows_deleted,
         }
 
     finally:

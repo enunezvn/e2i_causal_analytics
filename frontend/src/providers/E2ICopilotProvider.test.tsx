@@ -975,7 +975,7 @@ describe('Action Handlers', () => {
 
       expect(mockGetKPIHistorySegmented).toHaveBeenCalledTimes(1);
       expect(mockGetKPIHistorySegmented).toHaveBeenCalledWith(
-        'WS3-BI-005',
+        'WS3-BI-011',
         'segment',
         'Remibrutinib',
         undefined
@@ -993,7 +993,7 @@ describe('Action Handlers', () => {
       });
 
       expect(mockGetKPIHistorySegmented).toHaveBeenCalledWith(
-        'WS3-BI-005',
+        'WS3-BI-011',
         'segment',
         undefined,
         'high_severity'
@@ -1010,7 +1010,7 @@ describe('Action Handlers', () => {
       });
 
       expect(mockGetKPIHistorySegmented).toHaveBeenCalledWith(
-        'WS3-BI-006',
+        'WS3-BI-012',
         'therapy_line',
         undefined,
         '2'
@@ -1187,7 +1187,7 @@ describe('Action Handlers', () => {
       });
 
       expect(mockGetKPIHistorySegmented).toHaveBeenCalledWith(
-        'WS3-BI-005',
+        'WS3-BI-011',
         'segment',
         undefined,
         'high_severity'
@@ -1204,7 +1204,7 @@ describe('Action Handlers', () => {
       });
 
       expect(mockGetKPIHistorySegmented).toHaveBeenCalledWith(
-        'WS3-BI-006',
+        'WS3-BI-012',
         'therapy_line',
         undefined,
         '2'

@@ -307,27 +307,27 @@ KPI_DEFINITIONS: List[KPIDefinition] = [
     ),
     KPIDefinition(
         id="WS3-BI-005", name="Total Prescriptions (TRx)", workstream="WS3",
-        category="Business Impact", calculation_type=CalculationType.DERIVED,
-        tables=["treatment_events"],
-        columns=["treatment_events.event_type"]
+        category="Business Impact", calculation_type=CalculationType.DIRECT,
+        tables=["business_metrics"],
+        columns=["business_metrics.value", "business_metrics.metric_type"]
     ),
     KPIDefinition(
         id="WS3-BI-006", name="New Prescriptions (NRx)", workstream="WS3",
-        category="Business Impact", calculation_type=CalculationType.DERIVED,
-        tables=["treatment_events"],
-        columns=["treatment_events.event_type", "treatment_events.sequence_number"]
+        category="Business Impact", calculation_type=CalculationType.DIRECT,
+        tables=["business_metrics"],
+        columns=["business_metrics.value", "business_metrics.metric_type"]
     ),
     KPIDefinition(
         id="WS3-BI-007", name="New-to-Brand (NBRx)", workstream="WS3",
-        category="Business Impact", calculation_type=CalculationType.DERIVED,
-        tables=["treatment_events"],
-        columns=["treatment_events.event_type", "treatment_events.brand"]
+        category="Business Impact", calculation_type=CalculationType.DIRECT,
+        tables=["business_metrics"],
+        columns=["business_metrics.value", "business_metrics.metric_type"]
     ),
     KPIDefinition(
         id="WS3-BI-008", name="TRx Share", workstream="WS3",
         category="Business Impact", calculation_type=CalculationType.DERIVED,
-        tables=["treatment_events"],
-        columns=["treatment_events.brand"]
+        tables=["business_metrics"],
+        columns=["business_metrics.value", "business_metrics.brand"]
     ),
     KPIDefinition(
         id="WS3-BI-009", name="Conversion Rate", workstream="WS3",
@@ -340,6 +340,36 @@ KPI_DEFINITIONS: List[KPIDefinition] = [
         category="Business Impact", calculation_type=CalculationType.DIRECT,
         tables=["business_metrics", "agent_activities"],
         columns=["business_metrics.roi", "agent_activities.roi_estimate"]
+    ),
+    # Canonical TRx lane: the treatment_events prescription counts 005..008 used to
+    # compute are their own KPIs now -- the patient-panel Rx-event family.
+    KPIDefinition(
+        id="WS3-BI-011", name="Observed Rx Events - Patient Panel TRx (TRx Panel)",
+        workstream="WS3",
+        category="Business Impact", calculation_type=CalculationType.DERIVED,
+        tables=["treatment_events"],
+        columns=["treatment_events.event_type"]
+    ),
+    KPIDefinition(
+        id="WS3-BI-012", name="Observed Rx Events - Patient Panel NRx (NRx Panel)",
+        workstream="WS3",
+        category="Business Impact", calculation_type=CalculationType.DERIVED,
+        tables=["treatment_events"],
+        columns=["treatment_events.event_type", "treatment_events.sequence_number"]
+    ),
+    KPIDefinition(
+        id="WS3-BI-013", name="Observed Rx Events - Patient Panel NBRx (NBRx Panel)",
+        workstream="WS3",
+        category="Business Impact", calculation_type=CalculationType.DERIVED,
+        tables=["treatment_events"],
+        columns=["treatment_events.event_type", "treatment_events.brand"]
+    ),
+    KPIDefinition(
+        id="WS3-BI-014", name="Observed Rx Events - Patient Panel TRx Share (TRx Share Panel)",
+        workstream="WS3",
+        category="Business Impact", calculation_type=CalculationType.DERIVED,
+        tables=["treatment_events"],
+        columns=["treatment_events.brand"]
     ),
 
     # -------------------------------------------------------------------------

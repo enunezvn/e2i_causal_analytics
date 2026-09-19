@@ -73,7 +73,13 @@ describe('history routing', () => {
       { month: '2026-05-01', value: 1200 },
       { month: '2026-06-01', value: 1310 },
     ]);
-    expect(data.semanticTypes.value).toBe('Count');
+    // 'Number', not 'Count': the canonical WS3-BI-005 TRx now SUMS
+    // business_metrics values rather than COUNTING treatment_events rows, and
+    // 481d27ced re-declared its semanticType to match. The counting quantity
+    // is the patient-panel WS3-BI-011, which is still 'Count'. This assertion
+    // had been red since that commit — nothing in the lane ran this file until
+    // the Task 19 re-point did.
+    expect(data.semanticTypes.value).toBe('Number');
   });
 
   it('canonicalizes the brand before fetching', async () => {
@@ -97,7 +103,7 @@ describe('history routing', () => {
 describe('patient-axis routing', () => {
   it('fetches the segmented endpoint and colours by bucket', async () => {
     mockGetKPIHistorySegmented.mockResolvedValue({
-      kpi_id: 'WS3-BI-005',
+      kpi_id: 'WS3-BI-011',
       axis: 'segment',
       brand: '',
       data_through: '2026-06-01',
@@ -118,7 +124,7 @@ describe('patient-axis routing', () => {
     const data = await routeKpiChart({ kpis: ['trx'], compareBy: 'severity' });
 
     expect(mockGetKPIHistorySegmented).toHaveBeenCalledWith(
-      'WS3-BI-005',
+      'WS3-BI-011',
       'segment',
       undefined,
       undefined

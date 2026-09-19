@@ -165,7 +165,7 @@ def _region_heterogeneous_cohort(n_per_region: int = 250, seed: int = 7):
                     "region": region,
                     "email_campaign_count": engagement,
                     "market_share": market,
-                    "total_rx_count": rng.gamma(2.0, 50.0, n_per_region),
+                    "triggers_total_count": rng.gamma(2.0, 50.0, n_per_region),
                     "_tau": tau,
                 }
             )

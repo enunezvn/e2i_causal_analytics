@@ -16,8 +16,8 @@ live DB 2026-07-18: Remibrutinib 2026-06 TRx low+medium+high = 272+715+335 =
 1322 == the kpi_history headline point; LOT 0-3 = 331+316+313+362 likewise).
 
 Only the Rx-volume family supports axes — the same set migration 105 scoped:
-WS3-BI-005 TRx, WS3-BI-006 NRx, WS3-BI-007 NBRx. TRx Share has no axis
-monthly variant (it has never had a windowed sibling either).
+WS3-BI-011 TRx Panel, WS3-BI-012 NRx Panel, WS3-BI-013 NBRx Panel. TRx Share
+has no axis monthly variant (it has never had a windowed sibling either).
 """
 
 import logging
@@ -30,10 +30,12 @@ from src.kpi.synthetic_mode import monthly_axis_query_id
 logger = logging.getLogger(__name__)
 
 # KPI registry code -> base query family (mirrors BusinessImpactCalculator).
+# Canonical TRx lane: patient-axis series are EVENT grain, so they belong to
+# the patient-panel KPIs; the canonical TRx/NRx/NBRx series has no patient axis.
 SEGMENTED_KPI_QUERY_FAMILIES: Dict[str, str] = {
-    "WS3-BI-005": "business_impact_trx",
-    "WS3-BI-006": "business_impact_nrx",
-    "WS3-BI-007": "business_impact_nbrx",
+    "WS3-BI-011": "business_impact_trx",
+    "WS3-BI-012": "business_impact_nrx",
+    "WS3-BI-013": "business_impact_nbrx",
 }
 
 # Canonical axis names as the API speaks them -> migration-110 suffix part.

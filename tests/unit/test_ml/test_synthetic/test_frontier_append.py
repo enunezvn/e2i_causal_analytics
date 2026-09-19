@@ -298,7 +298,13 @@ def test_month_cohort_rows_land_on_month_start():
     bm = generate_month_cohort(date(2026, 8, 1))["business_metrics"]
     dates = bm["metric_date"].astype(str).str[:10].unique().tolist()
     assert dates == ["2026-08-01"]
-    assert bm["metric_id"].astype(str).str.startswith("m2608").all()
+    # Canonical TRx lane: the generator's rows are re-keyed under the month
+    # prefix; the nbrx rows appended beside them keep their own content-addressed
+    # namespace (generators/nbrx_series.py).
+    ids = bm["metric_id"].astype(str)
+    nbrx = bm["metric_type"] == "nbrx"
+    assert ids[~nbrx].str.startswith("m2608_").all()
+    assert nbrx.sum() == 12 and ids[nbrx].str.startswith("nbrx_202608_").all()
 
 
 # =============================================================================

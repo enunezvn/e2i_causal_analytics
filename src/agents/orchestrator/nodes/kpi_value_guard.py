@@ -341,7 +341,7 @@ def _tail_changes_quantity(
     span_end: int,
     value_heads: frozenset[str],
     *,
-    brand_resolved: bool,
+    brand_resolved_or_clarified: bool,
     region_resolved_or_clarified: bool,
     warned_tail_nouns: frozenset[str],
 ) -> bool:
@@ -415,7 +415,7 @@ def _tail_changes_quantity(
             continue
         consumed, dimension = _scope_span(tokens, index)
         if consumed:
-            if dimension == "brand" and not brand_resolved:
+            if dimension == "brand" and not brand_resolved_or_clarified:
                 return True
             if dimension == "region" and not region_resolved_or_clarified:
                 return True
@@ -428,9 +428,19 @@ def _tail_changes_quantity(
 
 
 def value_lookup_mentions_supported(
-    normalized_query: str, kpi_id: str, match_start: int, match_end: int
+    normalized_query: str,
+    kpi_id: str,
+    match_start: int,
+    match_end: int,
+    *,
+    structured_brand: Optional[str] = None,
 ) -> bool:
-    """True only when every occurrence can honestly be answered as a value."""
+    """True only when every occurrence can honestly be answered as a value.
+
+    ``structured_brand`` is a brand an entities / user_context source already
+    decided on. It resolves the brand scope whatever the text grounds -- the
+    owner's 2026-09-15 rule that a structured brand is never re-asked.
+    """
     # Lazy import avoids a module cycle: dispatcher imports this helper at the
     # call site while these established head helpers live in dispatcher.
     from src.agents.orchestrator.nodes.dispatcher import (
@@ -439,10 +449,24 @@ def value_lookup_mentions_supported(
         _kpi_governing_of_head,
         _kpi_right_head,
     )
-    from src.services.query_entities import brand_from_text, region_scan
+    from src.services.query_entities import brand_from_text, brand_scan, region_scan
+
+    from .kpi_clarify import BRAND_CLARIFY_KPI_IDS
 
     spans = _owned_spans(normalized_query, kpi_id, match_start, match_end)
-    brand_resolved = brand_from_text(normalized_query) is not None
+    # A multi-brand ask on a brand-scoped volume KPI is ASKED about downstream
+    # (brand_clarify_for_ask, #2114 owner ruling 2026-09-15) -- the same safer
+    # path the region clarify gets below. Any other KPI has no clarify to reach,
+    # so an unresolved brand there still refuses (#2141).
+    # "Resolved" means ONE brand: "Kisqali and PNH" binds Kisqali by name while
+    # grounding Fabhalta by indication, and a Kisqali-only figure drops half of it
+    # (codex iter9 HIGH; the same fail-open existed on main).
+    brands = brand_scan(normalized_query)
+    brand_resolved_or_clarified = (
+        bool(structured_brand)
+        or (brand_from_text(normalized_query) is not None and not brands.is_ambiguous)
+        or (kpi_id in BRAND_CLARIFY_KPI_IDS and brands.is_ambiguous)
+    )
     region_result = region_scan(normalized_query)
     region_resolved_or_clarified = (
         region_result.region is not None or region_result.ambiguous_phrase is not None
@@ -471,7 +495,7 @@ def value_lookup_mentions_supported(
             head_checked_query,
             end,
             _VALUE_OF_HEADS,
-            brand_resolved=brand_resolved,
+            brand_resolved_or_clarified=brand_resolved_or_clarified,
             region_resolved_or_clarified=region_resolved_or_clarified,
             warned_tail_nouns=_WARNED_TAIL_NOUNS.get(kpi_id, frozenset()),
         ):

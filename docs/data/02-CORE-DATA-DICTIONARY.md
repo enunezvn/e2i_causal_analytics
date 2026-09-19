@@ -1349,9 +1349,12 @@ Stores periodic KPI snapshots by brand and region including actuals, targets, ac
 
 | Column | Type | Migration | Description |
 |--------|------|-----------|-------------|
-| `trx_count` | `INTEGER` | 033 | Total prescriptions in the period |
-| `nrx_count` | `INTEGER` | 033 | New prescriptions in the period |
-| `total_rx_count` | `INTEGER` | 033 | Total Rx across brands |
+| `triggers_delivered_count` | `INTEGER` | 144 (added) | Triggers delivered or viewed (per_hcp_rollup). Canonical name for `trx_count` |
+| `triggers_accepted_count` | `INTEGER` | 144 (added) | Triggers accepted or responded (per_hcp_rollup). Canonical name for `nrx_count` |
+| `triggers_total_count` | `INTEGER` | 144 (added) | All triggers generated (per_hcp_rollup). Canonical name for `total_rx_count` |
+| `trx_count` | `INTEGER` | 033 | **DEPRECATED alias** of `triggers_delivered_count`. Retired by `database/deferred/146` |
+| `nrx_count` | `INTEGER` | 033 | **DEPRECATED alias** of `triggers_accepted_count`. Retired by `database/deferred/146` |
+| `total_rx_count` | `INTEGER` | 033 | **DEPRECATED alias** of `triggers_total_count`. Retired by `database/deferred/146` |
 | `market_share` | `NUMERIC` | 033 | Market share for the brand/territory |
 | `conversion_rate` | `NUMERIC` | 033 | Conversion rate for the period |
 | `engagement_score` | `NUMERIC` | 033 | Average engagement score |
@@ -1363,6 +1366,15 @@ Stores periodic KPI snapshots by brand and region including actuals, targets, ac
 | `peer_influence_score` | `NUMERIC` | 099 | Intervention treatment: peer-influence exposure |
 | `patient_support_enrollment` | `NUMERIC` | 099 | Intervention treatment: patient-support enrolment |
 | `rep_training_score` | `NUMERIC` | 099 | Intervention treatment: rep-training level |
+
+> **These six columns are three values, not six.** Migration 144 is the EXPAND half of an
+> expand/contract: it ADDS the `triggers_*` names beside the mislabelled `*rx_count` ones (they count
+> trigger deliveries, never prescriptions), backfills them, and installs the
+> `business_metrics_sync_legacy_trigger_counts_trg` row trigger so a write to either name updates the
+> other. Both names are therefore correct and readable for as long as pre-144 and post-144 code can both
+> run. The CONTRACT half, `database/deferred/146_drop_legacy_per_hcp_count_columns.sql`, retires the
+> three legacy columns, the trigger and its function by hand in a LATER deploy — tracked by issue #2167.
+> Nothing in the repository applies it automatically; until it runs, expect all six columns live.
 
 > The migration-099 columns are the **intervention (treatment) variables** the
 > causal agents estimate effects for; the 033 columns are the outcomes/covariates.

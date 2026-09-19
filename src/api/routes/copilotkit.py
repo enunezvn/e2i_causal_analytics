@@ -349,6 +349,7 @@ from src.api.routes.synthesis_guard import (
 )
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.api.utils.sse_keepalive import with_sse_keepalive
+from src.kpi import capability_policy as _cap
 from src.kpi.synthetic_mode import kpi_include_synthetic, resolve_kpi_query_id
 from src.utils.llm_attribution import (
     drain_run_usage,
@@ -2154,27 +2155,27 @@ async def _ensure_conversation_exists(session_id: str) -> bool:
 # E2I BACKEND ACTIONS
 # =============================================================================
 
-# Fallback sample data when database is unavailable
-# Real KPI substrate for the Home landing tiles. Each metric field maps to a
-# vetted allowlisted query in `public.kpi_query_registry` (migrations 044 + 063),
-# run via the `kpi_query` RPC against REAL tables (treatment_events). This replaces
-# the former synthetic `business_metrics` rollup AND the hardcoded `_FALLBACK_KPIS`
-# sample (an intentional sample fallback, commits 96e2ca24e / 2662a2c04 -- now
-# superseded: showing fabricated/synthetic values as real on the landing page is
-# the exact harm the H1 fix removes).
-#
+# Real KPI substrate for the Home landing tiles. Each metric field maps to a vetted
+# allowlisted query in `public.kpi_query_registry` run via the `kpi_query` RPC --
+# never a hardcoded sample (the old `_FALLBACK_KPIS`, commits 96e2ca24e / 2662a2c04,
+# is gone: fabricated values on the landing page are the harm the H1 fix removed).
+# The volume tiles (TRx / NRx / NBRx / TRx share) read the CANONICAL business_metrics
+# monthly series (migration 143, latest complete month); H1's objection to synthetic
+# business_metrics values is met by the same M4 gate as every tile: the base ids
+# exclude is_synthetic rows, and data_source="synthetic" badges the demo twins.
+# hcp_reach / conversion_rate stay on treatment_events / triggers.
 # field -> (kpi_query registry id, json result key, brand-scoped?, defined-for-"All"?)
-# `defined_for_all=False` marks an inherently per-brand metric (TRx share filters
-# `brand = $1` with no NULL guard, unlike the other queries' `$1 IS NULL OR ...`):
-# for the aggregate "All" view it is N/A, so we return honest None instead of the
-# misleading 0 that a NULL brand would yield from the share SQL.
+# `defined_for_all=False` marks an inherently per-brand metric (TRx share needs a
+# brand): for the aggregate "All" view it is N/A -> honest None, never a misleading 0.
+from src.kpi.home_volume_summary import volume_tile_fields  # noqa: E402
+
 _KPI_SUMMARY_QUERIES: Dict[str, tuple] = {
-    "trx_volume": ("business_impact_trx", "trx", True, True),
-    "nrx_volume": ("business_impact_nrx", "nrx", True, True),
-    "market_share": ("business_impact_trx_share", "share", True, False),
+    "trx_volume": ("canonical_volume_trx", "trx", True, True),
+    "nrx_volume": ("canonical_volume_nrx", "nrx", True, True),
+    "market_share": ("canonical_volume_trx_share", "share", True, False),
     "conversion_rate": ("business_impact_conversion_rate", "conversion_rate", False, True),
     "hcp_reach": ("business_impact_hcp_reach", "hcp_reach", True, True),
-    "patient_starts": ("business_impact_nbrx", "nbrx", True, True),
+    "patient_starts": ("canonical_volume_nbrx", "nbrx", True, True),
 }
 
 
@@ -2233,9 +2234,9 @@ def _kpi_summary_measure_bases(
                 "declared_sources": tables,
                 "measure": f"computed on demand from {', '.join(tables)}",
                 "note": (
-                    "Computed on demand from the operational substrate via the kpi_query "
-                    "registry — NOT read from the stored business_metrics table. Only "
-                    "compare with a figure whose substrate matches."
+                    "Computed on demand via the kpi_query registry from the tables named in "
+                    "`substrate` (the volume tiles rest on the canonical business_metrics "
+                    "series). Only compare with a figure whose comparison_key matches."
                 ),
             }
     return bases
@@ -2311,9 +2312,9 @@ async def get_kpi_summary(brand: str, region: Optional[str] = None) -> Dict[str,
     """
     Get the REAL KPI summary for a brand for the Home landing tiles.
 
-    Reads the vetted allowlisted KPI queries (treatment_events via the `kpi_query`
-    RPC) -- the same real substrate the KPI grid uses -- NOT the synthetic
-    `business_metrics` table and NOT a hardcoded sample. When the source data is
+    Reads the vetted allowlisted KPI queries via the `kpi_query` RPC: the volume
+    tiles from the canonical business_metrics monthly series, hcp_reach and
+    conversion from treatment_events/triggers, never a hardcoded sample. When the source data is
     stale/empty the values are honest zeros with ``data_source="database"``; when
     the DB is unreachable or every query fails the result is fail-closed with
     ``data_source="unavailable"`` and ``None`` metrics. Values are NEVER fabricated.
@@ -2393,11 +2394,11 @@ async def get_kpi_summary(brand: str, region: Optional[str] = None) -> Dict[str,
         # not wall-clock now — "of data" keeps the tile label honest.
         "period": "Last 30 days of data",
         "metrics": metrics,
-        # #1640: per-tile substrate, derived from the registry. Every figure
-        # here is COMPUTED from the operational substrate via the kpi_query
-        # registry — none is a stored business_metrics row — so a tile must not
-        # be read as a check on, or a correction to, a business_metrics value
-        # under the same name (measured ~73x apart for TRx).
+        # #1640 comparability, derived from the registry SQL each tile ran: the
+        # volume tiles rest on the canonical business_metrics series (so they
+        # agree with stored business_metrics rows); hcp_reach and conversion rest
+        # on treatment_events/triggers. comparison_key is the only field a
+        # comparison may rest on.
         "measure_basis": _kpi_summary_measure_bases(client, brand=brand, region=region),
         # When the E2I_KPI_INCLUDE_SYNTHETIC demo flag is on, the figures are
         # computed over synthetic-gold rows (the _include_synthetic twins) rather
@@ -2409,10 +2410,10 @@ async def get_kpi_summary(brand: str, region: Optional[str] = None) -> Dict[str,
             if (any_ok and kpi_include_synthetic())
             else ("database" if any_ok else "unavailable")
         ),
-        # Data-coverage end (latest treatment_events prescription date) so the FE
-        # renders a 0/null tile as "No recent activity -- data through <date>" with
-        # a DYNAMIC date, not a bare 0. None when unavailable.
-        "data_through": _fetch_data_through(client),
+        # data_through = the event frontier (empty hcp_reach / conversion tile labels);
+        # volume_data_through / volume_period = the canonical series' latest complete
+        # month, which the volume tiles report (canonical TRx lane).
+        **volume_tile_fields(client, _fetch_data_through(client)),
     }
 
 
@@ -3396,10 +3397,10 @@ You help users with:
 You MUST use tools proactively when users ask about data:
 - Use `e2i_data_query_tool` for KPI metrics, causal chains, agent analyses (an agent's ACTIVITY LOG — runs, confidences, timestamps; NOT the system health score), triggers
 - Use kpi_calculate_tool to COMPUTE a KPI value for a brand/period (NRx, TRx, NBRx, market share, conversion rate, ROI). Pass the brand and any time window the user names, and state which brand and window your answer covers.
-- BREAKDOWN GUIDANCE: For NRx/TRx/NBRx/conversion-rate patient-segment breakdowns, call `kpi_calculate_tool` once per bucket of ONE axis and present the results as a table. Axes: `segment` ∈ {low_severity, medium_severity, high_severity}; `therapy_line` ∈ {0,1,2,3}; and FOR REMIBRUTINIB ONLY (volume KPIs, NOT conversion rate) `biologic` ∈ {naive, experienced} and `ige_tier` ∈ {low, medium, high}. TRx share is NOT defined on a patient axis (each patient is on one tracked brand, so a per-bucket portfolio share mixes indications; the tool refuses it): for a "share by tier / line / biologic status / IgE tier" ask, call TRx once per bucket and present each bucket's TRx with its % of the brand's TRx total, labelled the within-brand mix. A volume axis's buckets sum to the head-line KPI, so the breakdown reconciles with the total (rates don't sum — their numerators/denominators do). When the user names a period ("last year", "Q1 2025"), ALWAYS pass `window` too — it composes with `segment`/`therapy_line` for TRx/NRx/NBRx and conversion rate. Use exactly one axis per breakdown — they are mutually exclusive.
+- BREAKDOWN GUIDANCE: {breakdown_guidance}
 - HONESTY GUARD: Clinical context is background framing only — never present a clinical sub-population as a data breakdown unless a tool actually returned per-bucket values. Biologic status (`biologic`) and IgE tier (`ige_tier`) are REAL breakdown axes for REMIBRUTINIB ONLY; for Kisqali/Fabhalta `kpi_calculate_tool` returns an error because the data is NULL by design — say it is unavailable for that brand and do NOT fabricate a split or guess. The real breakdown axes are severity tier (`segment`), line-of-therapy (`therapy_line`), biologic status and IgE tier (Remibrutinib only), plus geographic `region` — for TRx share only `region` applies, and a within-brand mix computed from TRx buckets is never a share. TRx Share is the brand's share of the TRACKED PORTFOLIO's prescriptions (Fabhalta + Kisqali + Remibrutinib, cross-indication) — NOT market share vs external competitors; competitor brands (e.g. Xolair, Dupixent) are not in the data model, so NEVER attribute the share complement to named competitors.
 - ROI DISPERSION (#1532): the ROI headline is a pooled point estimate and carries NO interval — never invent one. When the response includes `temporal_variability_band`, present each slice's band as "the range of its monthly ROI values over the past 12 months" with its `n` — it measures recent temporal variability, NOT a confidence interval and NOT uncertainty about the current value; for slices with `band_suppressed: true`, state only the n and that the band is suppressed.
-- SCALE GUARD (#1640): every KPI figure arrives with a `measure_basis` naming the substrate it was computed from. TWO FIGURES ARE COMPARABLE ONLY IF THEIR `measure_basis.comparison_key` MATCHES — that field, not `substrate`. They differ on purpose: a materialized history series is READ from `kpi_history` (its `substrate`) but RESTS on whatever the backfill drew it from (`materialized_from`, reduced to tables in `comparison_key`). Comparing on `substrate` would call a TRx history and an ROI history comparable because both are read from the same table, and would wrongly fence ROI history against stored ROI when both rest on `business_metrics`. If `measure_basis.mixed_sources` is true the series spans more than one substrate and is comparable with NOTHING — say so rather than comparing it. `kpi_calculate_tool` computes volume KPIs from the `treatment_events` ledger; `e2i_data_query_tool(query_type='kpi')` returns stored `business_metrics` rows, whose `value` is a MODELED market-scale level — measured, the national business_metrics TRx total is ~73x the trailing-30-day event count for the same brand. They are different quantities sharing a name. NEVER present one as a check, correction, total, or share-of for the other; never divide or sum across them; and never call the gap a discontinuity or a data error. If an answer needs both, give each its own row with its substrate stated, and say plainly that they measure different things. When a figure carries no `measure_basis`, treat it as NOT comparable rather than assuming it agrees.
+- SCALE GUARD (#1640, TRx fence retired 2026-09-15): every KPI figure arrives with a `measure_basis`. TWO FIGURES ARE COMPARABLE ONLY IF THEIR `measure_basis.comparison_key` MATCHES — that field, not `substrate` (a materialized history is READ from `kpi_history` but RESTS on what the backfill drew it from, `materialized_from`). If `measure_basis.mixed_sources` is true the series is comparable with NOTHING — say so. TRx, NRx, NBRx and TRx Share (WS3-BI-005..008) have ONE canonical figure: the monthly brand x region `business_metrics` series, reported for the latest COMPLETE month (cite its `data_through`) — `kpi_calculate_tool` and `e2i_data_query_tool(query_type='kpi')` return the SAME scale for them, so never describe them as two different TRx numbers. The `treatment_events` prescription counts are a SEPARATE KPI family, 'Observed Rx Events - Patient Panel' (WS3-BI-011..014, e.g. `TRx Panel`): a patient-panel event count about 1,300x smaller that carries the severity / line-of-therapy / biologic / IgE splits and the claims-lag nowcast. Always name the panel KPI when you use one, NEVER present a panel figure as TRx, and never sum, divide or compare panel and canonical figures. The canonical series is seasonal (January trough, December peak): compare a month with the same month a year earlier. When a figure carries no `measure_basis`, treat it as NOT comparable rather than assuming it agrees.
 - Use `causal_analysis_tool` for understanding metric drivers. When the user names a treatment/exposure ("rep visits"), query the registry by the USER'S variable phrasing first (e.g. `kpi_name='rep visit'`) before narrowing by outcome/brand or substituting a "closest match" variable; if you do substitute, every headline and confidence claim must name the substituted variable, never the user's.
 - Use `clinical_context_tool` to fetch a brand's REAL FDA-label indications, mechanism of action, pivotal endpoints, and competitor landscape (OpenFDA / ChEMBL / ClinicalTrials.gov / PubMed) — call it for ANY label / indication / approved-use / mechanism / on-off-label / competitive-landscape question, then frame the answer commercially instead of deflecting.
 - Use `document_retrieval_tool` for searching the knowledge base
@@ -3423,7 +3424,7 @@ Ask-ending (a reply with no tool call that ends on a question) is reserved for e
 
 ## Inline Charts (generative UI)
 
-When the user asks to chart / plot / graph / visualize a KPI's trend over time AND a `renderKpiTrend` tool is available, call `renderKpiTrend` — the UI renders a real line chart from stored KPI history directly inside your reply. Valid kpiId values: `trx`, `nrx`, `nbrx`, `trx_share` (aka `market_share`), `conversion_rate`, `roi`, or a registry code such as `WS3-BI-005` / `BR-001`. `nbrx` and `trx_share` are tracked per brand only — pass `brand` (Remibrutinib, Fabhalta, or Kisqali) for them or the chart will be empty; other KPIs accept an optional brand. History is monthly: requests for finer windows (e.g. "last 90 days") chart the stored monthly series — say so rather than apologizing. For `trx`/`nrx`/`nbrx` the trend can also be split by patient axis: pass `compareBy: "severity"` (or `"lot"`) to render ONE comparison chart with a line per severity tier (low/medium/high) or per line of therapy (0-3 prior lines) — for "compare TRx across segments" requests make a SINGLE call with `compareBy`, never one call per tier. To chart just one tier, pass `segment` ('low'/'medium'/'high') or `therapyLine` ('0'-'3') instead. Segment/LOT splits exist ONLY for trx/nrx/nbrx — `trx_share`, `conversion_rate`, and `roi` have no per-tier series; say so if asked. Call it on its OWN, never combined with other tool calls in the same turn (combined turns drop the chart). If `renderKpiTrend` is not in your tool list, answer with data from the other tools and say inline charts aren't available in this surface — do NOT describe a chart you cannot render.
+When the user asks to chart / plot / graph / visualize a KPI's trend over time AND a `renderKpiTrend` tool is available, call `renderKpiTrend` — the UI renders a real line chart from stored KPI history directly inside your reply. Valid kpiId values: `trx`, `nrx`, `nbrx`, `trx_share` (aka `market_share`), `conversion_rate`, `roi`, or a registry code such as `WS3-BI-005` / `BR-001`. `nbrx` and `trx_share` are tracked per brand only — pass `brand` (Remibrutinib, Fabhalta, or Kisqali) for them or the chart will be empty; other KPIs accept an optional brand. History is monthly: requests for finer windows (e.g. "last 90 days") chart the stored monthly series — say so rather than apologizing. For `trx`/`nrx`/`nbrx` the trend can also be split by patient axis (the split charts the patient-panel event KPIs `trx_panel`/`nrx_panel`/`nbrx_panel`, a different and much smaller quantity than canonical TRx — say so): pass `compareBy: "severity"` (or `"lot"`) to render ONE comparison chart with a line per severity tier (low/medium/high) or per line of therapy (0-3 prior lines) — for "compare TRx across segments" requests make a SINGLE call with `compareBy`, never one call per tier. To chart just one tier, pass `segment` ('low'/'medium'/'high') or `therapyLine` ('0'-'3') instead. Segment/LOT splits exist ONLY for trx/nrx/nbrx — `trx_share`, `conversion_rate`, and `roi` have no per-tier series; say so if asked. Call it on its OWN, never combined with other tool calls in the same turn (combined turns drop the chart). If `renderKpiTrend` is not in your tool list, answer with data from the other tools and say inline charts aren't available in this surface — do NOT describe a chart you cannot render.
 
 ## Response Format
 
@@ -3453,9 +3454,8 @@ a single query to an agent, it is not a directory.
 #
 # factory imports only logging/os/typing at module scope (agents are loaded lazily
 # by module/class name), so this costs nothing at import time.
-E2I_COPILOT_SYSTEM_PROMPT = E2I_COPILOT_SYSTEM_PROMPT.replace(
-    "{agent_roster}", build_agent_roster_block()
-)
+_ROSTERED = E2I_COPILOT_SYSTEM_PROMPT.replace("{agent_roster}", build_agent_roster_block())
+E2I_COPILOT_SYSTEM_PROMPT = _cap.render_blocks(_ROSTERED)
 
 
 class E2IAgentState(TypedDict, total=False):
@@ -5002,7 +5002,7 @@ async def kpi_summary_endpoint(
     """REST exposure of the real business_metrics KPI rollup.
 
     Thin wrapper over the existing :func:`get_kpi_summary` (also registered as a
-    CopilotAction) so the Home QUICK_STATS bar can read Total TRx (MTD) and
+    CopilotAction) so the Home QUICK_STATS bar can read Total TRx (latest full month) and
     HCPs Reached directly. Returns ``{brand, period, metrics, data_source}``;
     ``data_source`` is ``"database"`` for real values, ``"fallback"`` otherwise.
     When ``region`` is supplied the metrics re-scope to that region (migration

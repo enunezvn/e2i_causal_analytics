@@ -6,7 +6,8 @@ Materializes REAL monthly KPI points into ``kpi_history`` (migration 079) for th
 Time-Series "KPI history" view. Two honest mechanisms, dispatched per KPI:
 
 1. **Direct monthly source** — the KPI's value already lives as a monthly series
-   (e.g. ``WS3-BI-010`` ROI <- ``business_metrics.roi``). Read it, group by month.
+   (ROI ``WS3-BI-010`` <- ``business_metrics.roi``; canonical ``WS3-BI-005..008``
+   <- ``business_metrics.value``, history_canonical_volume.py). Read it, group by month.
 2. **As-of recompute** (Batch 2) — recompute the KPI "as of" each month from a
    dated source table, mirroring the CURRENT ``kpi_query_registry`` semantics of
    each KPI (numerators/denominators/filters byte-for-byte where possible; the
@@ -20,8 +21,8 @@ empty-state, never a synthesized flat line).
 
 Batch-2 coverage (each handler documents the registry query it mirrors):
 
-- ``WS3-BI-005/006`` TRx/NRx  <- treatment_events.event_date (global + per-brand)
-- ``WS3-BI-007/008`` NBRx/TRx Share <- treatment_events (per-brand ONLY: the live
+- ``WS3-BI-011/012`` TRx/NRx Panel <- treatment_events.event_date (global + per-brand)
+- ``WS3-BI-013/014`` NBRx/TRx Share Panel <- treatment_events (per-brand ONLY: the live
   calculator fails loud without a brand — a "global NBRx/share" is undefined, so
   no ``brand=''`` rows are fabricated)
 - ``WS3-BI-009`` Conversion Rate <- triggers x treatment_events (30-day
@@ -120,6 +121,7 @@ from collections import defaultdict
 from datetime import date, timedelta
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Tuple
 
+from src.kpi.history_canonical_volume import backfill_canonical_volume
 from src.kpi.models import KPIStatus
 
 logger = logging.getLogger(__name__)
@@ -137,10 +139,14 @@ Handler = Callable[..., Awaitable[List[Dict[str, Any]]]]
 # ---------------------------------------------------------------------------
 HANDLER_SOURCES: Dict[str, str] = {
     "WS3-BI-010": "business_metrics.roi",
-    "WS3-BI-005": "treatment_events.event_date",
-    "WS3-BI-006": "treatment_events.event_date",
-    "WS3-BI-007": "treatment_events.event_date",
-    "WS3-BI-008": "treatment_events.event_date",
+    "WS3-BI-005": "business_metrics.value",
+    "WS3-BI-006": "business_metrics.value",
+    "WS3-BI-007": "business_metrics.value",
+    "WS3-BI-008": "business_metrics.value",
+    "WS3-BI-011": "treatment_events.event_date",
+    "WS3-BI-012": "treatment_events.event_date",
+    "WS3-BI-013": "treatment_events.event_date",
+    "WS3-BI-014": "treatment_events.event_date",
     "WS3-BI-009": "triggers+treatment_events",
     "WS3-BI-001": "user_sessions.session_start",
     "WS3-BI-002": "user_sessions.session_start",
@@ -167,6 +173,10 @@ REGION_AXIS_KPI_IDS: frozenset = frozenset(
         "WS3-BI-006",
         "WS3-BI-007",
         "WS3-BI-008",
+        "WS3-BI-011",
+        "WS3-BI-012",
+        "WS3-BI-013",
+        "WS3-BI-014",
         "WS3-BI-009",
         "WS2-TR-001",
         "WS2-TR-004",
@@ -190,6 +200,10 @@ BRAND_AXIS_KPI_IDS: frozenset = frozenset(
         "WS3-BI-006",
         "WS3-BI-007",
         "WS3-BI-008",
+        "WS3-BI-011",
+        "WS3-BI-012",
+        "WS3-BI-013",
+        "WS3-BI-014",
         "WS3-BI-009",
         "WS2-TR-001",
         "WS2-TR-004",
@@ -520,14 +534,14 @@ async def _backfill_roi(
 
 
 # ---------------------------------------------------------------------------
-# WS3-BI-005/006/007/008 — prescription volume family (as-of monthly recount)
+# WS3-BI-011/012/013/014 — patient-panel Rx-event family (as-of monthly recount)
 # ---------------------------------------------------------------------------
 
 
 async def _backfill_trx(
     client: Any, kpi_meta: Any, cache: Optional[Dict[str, Any]] = None
 ) -> List[Dict[str, Any]]:
-    """WS3-BI-005 TRx: COUNT(prescriptions) per month, global + per-brand.
+    """WS3-BI-011 TRx Panel: COUNT(prescriptions) per month, global + per-brand.
 
     Mirrors ``business_impact_trx`` (COUNT over event_type='prescription' with
     an optional brand filter); the trailing-30-day window becomes the calendar
@@ -583,7 +597,7 @@ async def _backfill_trx(
 async def _backfill_nrx(
     client: Any, kpi_meta: Any, cache: Optional[Dict[str, Any]] = None
 ) -> List[Dict[str, Any]]:
-    """WS3-BI-006 NRx: COUNT(prescriptions with sequence_number=1) per month.
+    """WS3-BI-012 NRx Panel: COUNT(prescriptions with sequence_number=1) per month.
 
     Mirrors ``business_impact_nrx`` (sequence_number = 1 + optional brand
     filter). Global + per-brand + region + brand×region (077 ``_region``
@@ -641,7 +655,7 @@ async def _backfill_nrx(
 async def _backfill_nbrx(
     client: Any, kpi_meta: Any, cache: Optional[Dict[str, Any]] = None
 ) -> List[Dict[str, Any]]:
-    """WS3-BI-007 NBRx: patients whose FIRST prescription of brand X lands in
+    """WS3-BI-013 NBRx Panel: patients whose FIRST prescription of brand X lands in
     the month.
 
     Mirrors ``business_impact_nbrx``: first_brand = MIN(event_date) per patient
@@ -703,7 +717,7 @@ async def _backfill_nbrx(
 async def _backfill_trx_share(
     client: Any, kpi_meta: Any, cache: Optional[Dict[str, Any]] = None
 ) -> List[Dict[str, Any]]:
-    """WS3-BI-008 TRx Share: brand prescriptions / category prescriptions per
+    """WS3-BI-014 TRx Share Panel: brand prescriptions / category prescriptions per
     month.
 
     Mirrors ``business_impact_trx_share`` (brand COUNT / windowed category
@@ -1363,10 +1377,14 @@ async def _backfill_br004_dx_adoption(
 # Batch 3: BR-002 monthly intent-delta).
 HANDLERS: Dict[str, Handler] = {
     "WS3-BI-010": _backfill_roi,
-    "WS3-BI-005": _backfill_trx,
-    "WS3-BI-006": _backfill_nrx,
-    "WS3-BI-007": _backfill_nbrx,
-    "WS3-BI-008": _backfill_trx_share,
+    "WS3-BI-005": backfill_canonical_volume,
+    "WS3-BI-006": backfill_canonical_volume,
+    "WS3-BI-007": backfill_canonical_volume,
+    "WS3-BI-008": backfill_canonical_volume,
+    "WS3-BI-011": _backfill_trx,
+    "WS3-BI-012": _backfill_nrx,
+    "WS3-BI-013": _backfill_nbrx,
+    "WS3-BI-014": _backfill_trx_share,
     "WS3-BI-009": _backfill_conversion_rate,
     "WS3-BI-001": _backfill_mau,
     "WS3-BI-002": _backfill_wau,

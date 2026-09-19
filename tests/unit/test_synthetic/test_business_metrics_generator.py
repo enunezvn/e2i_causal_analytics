@@ -729,3 +729,126 @@ class TestBrandRegionStructure1833:
             BusinessMetricsGenerator.brand_region_factor("Kisqali", "mars", "trx", date(2099, 1, 1))
             == 1.0
         )
+
+
+# ---------------------------------------------------------------------------
+# Canonical TRx lane (2026-09-15): calendar seasonality on trx/nrx VALUE only.
+# Pinned literally (same reason as DB_FINGERPRINTS): a retune of the profile
+# that is not accompanied by a reseed must break this test.
+# ---------------------------------------------------------------------------
+SEASONAL_BP = {
+    1: -800,
+    2: -400,
+    3: 100,
+    4: 100,
+    5: 100,
+    6: -100,
+    7: -300,
+    8: -200,
+    9: 100,
+    10: 300,
+    11: 300,
+    12: 800,
+}
+
+
+class TestCalendarSeasonality:
+    def _pair(self, monkeypatch):
+        seasonal = BusinessMetricsGenerator(GeneratorConfig(**BASE_CONFIG)).generate()
+        from src.ml.synthetic.generators import seasonality
+
+        monkeypatch.setattr(seasonality, "SEASONAL_DEVIATION_BP", dict.fromkeys(range(1, 13), 0))
+        flat = BusinessMetricsGenerator(GeneratorConfig(**BASE_CONFIG)).generate()
+        return seasonal, flat
+
+    def test_value_ratio_is_the_calendar_factor_on_volume_metrics(self, monkeypatch):
+        seasonal, flat = self._pair(monkeypatch)
+        mask = seasonal["metric_type"].isin(["trx", "nrx"]) & (flat["value"] > 100)
+        months = pd.to_datetime(seasonal.loc[mask, "metric_date"]).dt.month
+        expected = months.map(lambda m: 1 + SEASONAL_BP[m] / 10_000).to_numpy()
+        ratio = (seasonal.loc[mask, "value"] / flat.loc[mask, "value"]).to_numpy()
+        assert np.allclose(ratio, expected, rtol=2e-4)
+
+    def test_rng_stream_and_targets_are_untouched(self, monkeypatch):
+        seasonal, flat = self._pair(monkeypatch)
+        for col in (
+            "metric_id",
+            "metric_date",
+            "metric_type",
+            "brand",
+            "region",
+            "target",
+            "year_over_year_change",
+            "month_over_month_change",
+            "roi",
+            "statistical_significance",
+            "sample_size",
+            "data_split",
+        ):
+            pd.testing.assert_series_equal(seasonal[col], flat[col]), col
+
+    def test_non_volume_metrics_are_byte_identical(self, monkeypatch):
+        seasonal, flat = self._pair(monkeypatch)
+        mask = ~seasonal["metric_type"].isin(["trx", "nrx"])
+        for col in (
+            "value",
+            "achievement_rate",
+            "confidence_interval_lower",
+            "confidence_interval_upper",
+        ):
+            pd.testing.assert_series_equal(seasonal.loc[mask, col], flat.loc[mask, col]), col
+
+    def test_national_january_sits_below_the_preceding_december(self):
+        df = BusinessMetricsGenerator(GeneratorConfig(**BASE_CONFIG)).generate()
+        trx = df[df["metric_type"] == "trx"].copy()
+        trx["metric_date"] = pd.to_datetime(trx["metric_date"])
+        national = trx.groupby("metric_date")["value"].sum()
+        ratios = [
+            national[jan] / national[jan - pd.DateOffset(months=1)]
+            for jan in national.index
+            if jan.month == 1 and (jan - pd.DateOffset(months=1)) in national.index
+        ]
+        assert len(ratios) >= 12
+        # expectation 0.92/1.08 x ~1.005 trend ~= 0.855; noise sd of the mean ~0.02
+        assert float(np.mean(ratios)) < 0.95, ratios
+
+
+# ---------------------------------------------------------------------------
+# BASE_CONFIG starts in January 2013, where the positional month_idx % 12 + 1
+# IS the calendar month, so an implementation keyed on month_idx would pass
+# TestCalendarSeasonality. These pairs start in AUGUST (with and without a
+# non-January trend_origin), so the two keys disagree on every row.
+# ---------------------------------------------------------------------------
+AUGUST_START_CONFIG = {
+    "id_prefix": "scv",
+    "seed": 42,
+    # 14 monthly dates x 60 brand/region/metric combos (+1 headroom per date).
+    "n_records": 14 * 61,
+    "start_date": date(2013, 8, 1),
+}
+# |round(x * f, 2) - round(x, 2) * f| <= 0.005 + 0.005 * 1.08
+ROUNDING_TOL = 0.011
+
+
+class TestCalendarSeasonalityKeyedOnCalendarMonth:
+    @pytest.mark.parametrize("trend_origin", [None, date(2013, 3, 1)])
+    def test_factor_follows_metric_date_month_not_month_idx(self, monkeypatch, trend_origin):
+        config = {**AUGUST_START_CONFIG, "trend_origin": trend_origin}
+        seasonal = BusinessMetricsGenerator(GeneratorConfig(**config)).generate()
+        from src.ml.synthetic.generators import seasonality
+
+        monkeypatch.setattr(seasonality, "SEASONAL_DEVIATION_BP", dict.fromkeys(range(1, 13), 0))
+        flat = BusinessMetricsGenerator(GeneratorConfig(**config)).generate()
+        assert list(seasonal["metric_id"]) == list(flat["metric_id"])
+        months = pd.to_datetime(seasonal["metric_date"]).dt.month
+        assert set(months) == set(range(1, 13))  # every calendar month is exercised
+        factor = months.map(lambda m: 1 + SEASONAL_BP[m] / 10_000)
+
+        volume = seasonal["metric_type"].isin(["trx", "nrx"])
+        assert volume.sum() > 0
+        gap = (seasonal.loc[volume, "value"] - flat.loc[volume, "value"] * factor[volume]).abs()
+        assert gap.max() <= ROUNDING_TOL, seasonal.loc[gap.idxmax(), ["metric_date", "metric_type"]]
+
+        share = seasonal["metric_type"] == "market_share"
+        assert share.sum() > 0
+        pd.testing.assert_series_equal(seasonal.loc[share, "value"], flat.loc[share, "value"])

@@ -123,9 +123,9 @@ class TestSQLShape:
         # the SELECT).
         on_conflict_block = sql.split("ON CONFLICT (metric_id) DO UPDATE SET", 1)[1]
         for col in (
-            "trx_count",
-            "nrx_count",
-            "total_rx_count",
+            "triggers_delivered_count",
+            "triggers_accepted_count",
+            "triggers_total_count",
             "market_share",
             "conversion_rate",
         ):
@@ -134,10 +134,10 @@ class TestSQLShape:
             assert re.search(pattern, on_conflict_block), f"missing UPDATE SET clause for {col}"
 
     def test_market_share_is_share_of_territory_total(self) -> None:
-        """market_share = total_rx_count / territory_total, with a >0 guard."""
+        """market_share = triggers_total_count / territory_total, with a >0 guard."""
         sql = etl.INSERT_PER_HCP_ROLLUP_SQL
         assert "tt.territory_total > 0" in sql
-        assert "hbd.total_rx_count::NUMERIC / tt.territory_total" in sql
+        assert "hbd.triggers_total_count::NUMERIC / tt.territory_total" in sql
 
     def test_conversion_rate_uses_nullif_guard(self) -> None:
         """Division by zero is guarded via NULLIF; default to 0 via COALESCE."""
@@ -279,8 +279,15 @@ def test_impl_completed_path() -> None:
     connect.assert_called_once()
     # Cursor was used, query parameters bound by name include our prefix.
     cur = conn.cursor.return_value
-    args, _ = cur.execute.call_args
+    # ORDER-pinned, not last-call-pinned (canonical TRx lane, codex r13-08): the impl now
+    # runs the reconcile DELETE in the SAME transaction, so `call_args` — which is the LAST
+    # call — became the reconcile. Measured on a bare MagicMock: after a second execute,
+    # `call_args[0][0] is INSERT` is False. The old assertion would therefore have failed
+    # because of a statement it was never about, while this one keeps its subject (the
+    # upsert and its bound params) and additionally pins that the reconcile follows it.
+    args, _ = cur.execute.call_args_list[0]
     assert args[0] is etl.INSERT_PER_HCP_ROLLUP_SQL
+    assert cur.execute.call_args_list[1].args[0] is etl.RECONCILE_PER_HCP_ROLLUP_SQL
     params = args[1]
     assert params["metric_id_prefix"] == etl.METRIC_ID_PREFIX
     assert params["metric_type"] == etl.METRIC_TYPE
@@ -329,18 +336,34 @@ def test_impl_invalid_window_returns_failed() -> None:
     connect.assert_not_called()
 
 
-def test_impl_default_window_is_24h() -> None:
-    """No dates supplied -> window defaults to 24 hours ending now(UTC)."""
+def test_impl_default_window_is_the_overlapping_arrival_window() -> None:
+    """No dates supplied (the daily beat) -> an ARRIVAL window of one weekly cycle + margin ending now(UTC).
+
+    Changed deliberately (canonical TRx lane, owner decision #2): the former 24 h
+    trigger_timestamp window rolled up only Monday's share of each weekly trigger batch.
+    The old assertion pinned ``DEFAULT_WINDOW_HOURS`` — 24 — as the correct default, and
+    that default IS the defect: the host reseed lands a whole Tue..Mon week of triggers in
+    one Monday 03:00 batch, each stamped 00:00 of its own day, so a 24 h window at the
+    03:15 beat selects Monday alone. Measured consequence: since 2026-05-01, 89 trigger
+    dates / 24,002 triggers have no per-HCP row, and the last 56 days have rows on Mondays
+    only. So this is not an assertion made inconvenient by the fix — it asserted the wrong
+    thing about the product, and leaving it would have required the fix to fail the suite.
+
+    Duration alone would be a proxy: a 174 h window on the WRONG column would satisfy it.
+    ``selected_by`` below binds the column, and the SQL text is pinned separately by
+    ``test_the_scheduled_variant_selects_dates_by_arrival``.
+    """
     conn = _make_mock_conn(rowcount=1)
 
     with patch.object(etl, "_connect_to_db", return_value=conn):
         result = etl._run_per_hcp_rollup_impl()
 
     assert result["status"] == "completed"
+    assert result["selected_by"] == "arrival"
     start = datetime.fromisoformat(result["window_start"])
     end = datetime.fromisoformat(result["window_end"])
     delta_hours = (end - start).total_seconds() / 3600.0
-    assert delta_hours == pytest.approx(etl.DEFAULT_WINDOW_HOURS, abs=1e-6)
+    assert delta_hours == pytest.approx(etl.ARRIVAL_WINDOW_HOURS, abs=1e-6)
 
 
 def test_impl_closes_conn_even_on_error() -> None:
@@ -503,3 +526,203 @@ class TestProvenanceInheritance:
             "is_synthetic missing from the ON CONFLICT SET list -- a re-run "
             "would keep a stale provenance tag"
         )
+
+
+def test_the_rollup_writes_the_honest_trigger_count_columns():
+    """Canonical TRx lane / migration 144: these are trigger funnel counts.
+
+    The NEGATIVE assertion is what gives this teeth. The three positive
+    ``AS <column>`` bindings alone would pass on a module that had renamed the
+    SELECT aliases and left ``triggers_delivered_count`` in the INSERT list, which is the exact
+    half-done rename worth catching; "no legacy name survives anywhere in the
+    module" cannot pass while any site still writes the old name, comments
+    included.
+
+    The INSERT and ON CONFLICT bindings are asserted separately from the
+    aliases because the negative assertion has one blind spot: a future edit
+    that REMOVED the three columns from the INSERT entirely would satisfy both
+    "no legacy name" and "the aliases exist", while the rollup silently stopped
+    persisting the counts.
+    """
+    import inspect
+    import re as _re
+
+    from src.etl import business_metrics_per_hcp_etl as _etl
+    from tests._checkout_guard import assert_same_checkout
+
+    # Capability, not a literal path: the module must come from THIS checkout.
+    # A `.worktrees/<lane>` substring was the first form and it could only ever
+    # pass inside one directory on one machine -- see tests/_checkout_guard.py.
+    assert_same_checkout(_etl, __file__)
+    source = inspect.getsource(_etl)
+    columns = ("triggers_delivered_count", "triggers_accepted_count", "triggers_total_count")
+    for column in columns:
+        assert f"AS {column}" in source, f"{column}: no SELECT alias binding it"
+    insert_sql = _etl.INSERT_PER_HCP_ROLLUP_SQL
+    on_conflict = insert_sql.split("ON CONFLICT (metric_id) DO UPDATE SET", 1)[1]
+    # The INSERT COLUMN LIST, parsed — not `column in insert_sql`. Measured: each
+    # name occurs SEVEN times in this statement (SELECT alias, territory_total
+    # SUM, the column list, the hbd projection, the market_share divisor, and
+    # both halves of the ON CONFLICT line), so a substring test over the whole
+    # SQL is satisfied by six sites that are not the column list and cannot fail
+    # when the column list is what broke. Proven: dropping
+    # `triggers_total_count,` from the list left the substring version green.
+    listed = re.search(r"INSERT INTO business_metrics\s*\((.*?)\n\)\s*\nSELECT", insert_sql, re.S)
+    assert listed, "could not find the INSERT column list — has the statement been restructured?"
+    insert_columns = {
+        line.strip().rstrip(",")
+        for line in listed.group(1).splitlines()
+        if line.strip() and not line.strip().startswith("--")
+    }
+    for column in columns:
+        assert column in insert_columns, f"{column}: aliased but not in the INSERT column list"
+        assert f"EXCLUDED.{column}" in on_conflict, f"{column}: absent from the re-run arm"
+    assert not _re.search(r"\b(trx_count|nrx_count|total_rx_count)\b", source)
+
+
+# =============================================================================
+# Late-arrival selection (canonical TRx lane, owner decision #2 2026-09-15)
+# =============================================================================
+
+
+def _cte_body(sql: str, name: str, following: str) -> str:
+    return sql.split(f"{name} AS (", 1)[1].split(f"{following} AS (", 1)[0]
+
+
+def test_every_variant_recomputes_each_touched_date_whole() -> None:
+    """The window picks DATES; the aggregate reads all triggers of those dates, because
+    market_share divides by the per-(territory, brand, date) total."""
+    for sql in (
+        etl.INSERT_PER_HCP_ROLLUP_SQL,
+        etl.INSERT_PER_HCP_ROLLUP_BY_ARRIVAL_SQL,
+        etl.PREVIEW_PER_HCP_ROLLUP_SQL,
+    ):
+        body = _cte_body(sql, "triggers_with_brand", "hcp_brand_daily")
+        assert re.search(
+            r"DATE\(t\.trigger_timestamp\)\s+IN\s+\(SELECT metric_date FROM affected_dates\)", body
+        )
+        assert "%(start_date)s" not in body and "%(end_date)s" not in body
+
+
+def test_the_scheduled_variant_selects_dates_by_arrival() -> None:
+    body = _cte_body(
+        etl.INSERT_PER_HCP_ROLLUP_BY_ARRIVAL_SQL, "affected_dates", "triggers_with_brand"
+    )
+    assert re.search(r"t\.created_at\s*>=\s*%\(start_date\)s", body)
+    assert re.search(r"t\.created_at\s*<\s*%\(end_date\)s", body)
+    assert "t.trigger_timestamp >=" not in body
+
+
+def test_the_variants_differ_only_in_the_window_column() -> None:
+    assert "__WINDOW_COLUMN__" not in etl.INSERT_PER_HCP_ROLLUP_SQL
+    assert etl.INSERT_PER_HCP_ROLLUP_BY_ARRIVAL_SQL.count("t.created_at") == 2
+    assert (
+        etl.INSERT_PER_HCP_ROLLUP_BY_ARRIVAL_SQL.replace("t.created_at", "t.trigger_timestamp")
+        == etl.INSERT_PER_HCP_ROLLUP_SQL
+    )
+
+
+def test_the_arrival_window_spans_a_weekly_batch_cycle_plus_margin() -> None:
+    """The host reseed lands one batch per week and the beat runs daily: every run within a
+    week of a batch re-touches it, so a missed or failed beat self-heals."""
+    from src.workers.celery_app import celery_app
+
+    beat = celery_app.conf.beat_schedule["business-metrics-per-hcp-rollup"]["schedule"]
+    assert beat.hour == {3} and beat.minute == {15}  # one run per day
+    assert etl.ARRIVAL_WINDOW_HOURS == 7 * 24 + etl.ARRIVAL_MARGIN_HOURS
+    assert etl.ARRIVAL_MARGIN_HOURS >= 6
+
+
+def test_impl_scheduled_run_uses_the_arrival_variant() -> None:
+    conn = _make_mock_conn(rowcount=3)
+    with patch.object(etl, "_connect_to_db", return_value=conn):
+        result = etl._run_per_hcp_rollup_impl(arrived_before="2026-09-14T03:15:00+00:00")
+    args, _ = conn.cursor.return_value.execute.call_args_list[0]  # [1] is the reconcile
+    assert args[0] is etl.INSERT_PER_HCP_ROLLUP_BY_ARRIVAL_SQL
+    assert result["selected_by"] == "arrival"
+    assert result["window_end"].startswith("2026-09-14T03:15:00")
+    assert result["window_start"].startswith("2026-09-06T21:15:00")
+
+
+def test_impl_explicit_dates_keep_trigger_timestamp_selection() -> None:
+    conn = _make_mock_conn(rowcount=3)
+    with patch.object(etl, "_connect_to_db", return_value=conn):
+        result = etl._run_per_hcp_rollup_impl(start_date="2026-05-01", end_date="2026-09-16")
+    args, _ = conn.cursor.return_value.execute.call_args_list[0]  # [1] is the reconcile
+    assert args[0] is etl.INSERT_PER_HCP_ROLLUP_SQL
+    assert result["selected_by"] == "trigger_timestamp"
+
+
+def test_impl_refuses_arrived_before_with_explicit_dates() -> None:
+    with patch.object(etl, "_connect_to_db") as connect:
+        result = etl._run_per_hcp_rollup_impl(
+            start_date="2026-05-01",
+            end_date="2026-09-16",
+            arrived_before="2026-09-14T03:15:00+00:00",
+        )
+    assert result["status"] == "failed" and "arrived_before" in result["error"]
+    connect.assert_not_called()
+
+
+def test_preview_reads_the_insert_text_and_writes_nothing() -> None:
+    preview = etl.PREVIEW_PER_HCP_ROLLUP_SQL
+    cte_text = etl.INSERT_PER_HCP_ROLLUP_SQL.split("INSERT INTO business_metrics", 1)[0]
+    assert preview.startswith(cte_text.rstrip())
+    assert etl._PER_HCP_ROLLUP_ROWS_SELECT in preview
+    assert etl._PER_HCP_ROLLUP_ROWS_SELECT in etl.INSERT_PER_HCP_ROLLUP_SQL
+    code = "\n".join(line.split("--", 1)[0] for line in preview.splitlines())
+    assert not re.search(r"\b(INSERT|UPDATE|DELETE|MERGE)\b|ON CONFLICT", code)
+
+
+def test_preview_runs_in_a_read_only_transaction() -> None:
+    conn = _make_mock_conn()
+    cur = conn.cursor.return_value
+    cur.fetchone.return_value = (7, 120, 3, 40, 5, date(2026, 5, 1), date(2026, 9, 14))
+    with patch.object(etl, "_connect_to_db", return_value=conn):
+        result = etl.preview_per_hcp_rollup("2026-05-01", "2026-09-16")
+    first, second = cur.execute.call_args_list
+    assert first.args == ("SET TRANSACTION READ ONLY",)
+    assert second.args[0] is etl.PREVIEW_PER_HCP_ROLLUP_SQL
+    assert (
+        result["metric_dates"],
+        result["rows_new"],
+        result["rows_changed"],
+        result["rows_existing"],
+    ) == (7, 120, 3, 40)
+    assert result["rows_obsolete"] == 5  # codex r13-08: rows the upsert cannot remove
+    conn.close.assert_called_once()
+
+
+def test_the_reconcile_deletes_rows_that_are_no_longer_produced() -> None:
+    """codex r13-08: an upsert cannot delete. A group that lost its last trigger on a
+    touched date must go, or that date's market shares exceed 1."""
+    for sql, scope in (
+        (etl.RECONCILE_PER_HCP_ROLLUP_SQL, "b.metric_date >= %(start_date)s::DATE"),
+        (
+            etl.RECONCILE_PER_HCP_ROLLUP_BY_ARRIVAL_SQL,
+            "b.metric_date IN (SELECT metric_date FROM affected_dates)",
+        ),
+    ):
+        assert "DELETE FROM business_metrics b" in sql
+        assert scope in sql
+        assert "NOT EXISTS (SELECT 1 FROM rollup r WHERE r.metric_id = b.metric_id)" in sql
+    # The explicit variant must NOT scope to the touched dates: a date that lost every
+    # trigger is not in affected_dates at all, and its rows would survive for ever.
+    # Deviation from the spec, which asserted `"affected_dates)" not in ...`: that literal
+    # carries a closing paren, so `FROM affected_dates )` with a space would satisfy it
+    # while the scope was exactly the one degree too narrow this test exists to forbid.
+    # The DELETE region has no legitimate use for the CTE at all, so forbid the bare name.
+    delete_region = etl.RECONCILE_PER_HCP_ROLLUP_SQL.split("DELETE FROM", 1)[1]
+    assert "affected_dates" not in delete_region
+
+
+def test_impl_reconciles_in_the_same_transaction_as_the_upsert() -> None:
+    conn = _make_mock_conn(rowcount=2)
+    with patch.object(etl, "_connect_to_db", return_value=conn):
+        result = etl._run_per_hcp_rollup_impl(arrived_before="2026-09-14T03:15:00+00:00")
+    executed = [call.args[0] for call in conn.cursor.return_value.execute.call_args_list]
+    assert executed == [
+        etl.INSERT_PER_HCP_ROLLUP_BY_ARRIVAL_SQL,
+        etl.RECONCILE_PER_HCP_ROLLUP_BY_ARRIVAL_SQL,
+    ]
+    assert result["status"] == "completed" and result["rows_deleted"] == 2

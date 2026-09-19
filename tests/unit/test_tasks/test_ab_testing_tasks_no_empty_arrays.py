@@ -53,7 +53,7 @@ class TestComputeExperimentResultsNoEmptyArrays:
         client = MagicMock()
         (
             client.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value
-        ).data = [{"brand": "Fabhalta", "prediction_target": "total_rx_count"}]
+        ).data = [{"brand": "Fabhalta", "prediction_target": "triggers_total_count"}]
         return client
 
     def test_bails_early_with_insufficient_data_status(self) -> None:
@@ -164,7 +164,7 @@ class TestScheduledInterimAnalysisNoEmptyArrays:
         mock_exp_repo.get_interim_analyses = AsyncMock(return_value=[])
         (
             mock_exp_repo.client.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value
-        ).data = [{"brand": "Fabhalta", "prediction_target": "total_rx_count"}]
+        ).data = [{"brand": "Fabhalta", "prediction_target": "triggers_total_count"}]
 
         outcome_repo = MagicMock()
         outcome_repo.load_arrays = AsyncMock(return_value=(np.array([]), np.array([])))

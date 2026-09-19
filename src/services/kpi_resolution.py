@@ -96,6 +96,16 @@ _ALIASES: Dict[str, str] = {
     # repository filtering. Display names and abbreviations therefore resolve
     # to one KPI id here and one stored key at the query seam (#2130).
     **BUSINESS_METRIC_KPI_ALIASES,
+    # Canonical TRx lane (2026-09-15): the patient-panel event FAMILY. WS3-BI-011 is
+    # the family's stated default — an explicit decision, not the registry-order
+    # accident _best_name_match would produce (all four panel KPIs tie there on two
+    # matched tokens; reversing their registry order flips this to the SHARE).
+    # The member discriminators are NOT here: see _PANEL_MEMBER_ALIASES, which must
+    # be matched BEFORE this loop because "observed rx events" (18 chars) is the
+    # prefix of all four registry names and length order cannot express
+    # "specific before generic" (codex r16-01).
+    "observed rx events": "WS3-BI-011",
+    "rx events": "WS3-BI-011",
     "return on investment": "WS3-BI-010",
     "roi": "WS3-BI-010",
     "hcp coverage": "WS3-BI-004",
@@ -125,6 +135,32 @@ _ALIASES: Dict[str, str] = {
     "pr-auc": "WS1-MP-002",
     "pr auc": "WS1-MP-002",
     "f1 score": "WS1-MP-003",
+}
+
+#: Panel MEMBER discriminators, matched BEFORE the generic alias loop (codex r16-01).
+#: Each entry names ONE panel KPI. They cannot live in _ALIASES: that loop is ordered by
+#: alias LENGTH, and the family alias "observed rx events" is longer than every member
+#: phrase AND a prefix of every member registry name, so it wins on all four names and
+#: shadows 012 / 013 / 014 onto 011. Ordering here is structural, not incidental.
+#:
+#: "patient panel X" forms match the registry NAME. Mind the normalization: whitespace is
+#: collapsed first and separators are mapped to spaces afterwards one-for-one (so spans stay
+#: aligned), which turns " - " into THREE spaces that are never re-collapsed. The names the
+#: matcher sees are 'observed rx events   patient panel nrx (nrx panel)' — so an alias may
+#: not span that gap, and these deliberately start at "patient".
+_PANEL_MEMBER_ALIASES: Dict[str, str] = {
+    "trx share panel": "WS3-BI-014",
+    "panel trx share": "WS3-BI-014",
+    "patient panel trx share": "WS3-BI-014",
+    "nbrx panel": "WS3-BI-013",
+    "panel nbrx": "WS3-BI-013",
+    "patient panel nbrx": "WS3-BI-013",
+    "nrx panel": "WS3-BI-012",
+    "panel nrx": "WS3-BI-012",
+    "patient panel nrx": "WS3-BI-012",
+    "trx panel": "WS3-BI-011",
+    "panel trx": "WS3-BI-011",
+    "patient panel trx": "WS3-BI-011",
 }
 
 # Registry abbreviations that are ordinary English words: admitting them to
@@ -237,6 +273,10 @@ KPI_SEMANTIC_NOTES = {
         "only n, never an invented range."
     ),
 }
+
+# Canonical TRx lane: the patient-panel share is the same portfolio-share concept
+# over treatment_events, so it carries the same fabrication guard.
+KPI_SEMANTIC_NOTES["WS3-BI-014"] = KPI_SEMANTIC_NOTES["WS3-BI-008"]
 
 
 # ---------------------------------------------------------------------------
@@ -411,6 +451,15 @@ def recognize_kpi_span(query: Optional[str]) -> Optional[Tuple[KPIMetadata, str,
         if share_kpi is not None:
             return share_kpi, q, m.start(), m.end()
 
+    # 0b) panel MEMBER discriminators before the generic alias loop (codex r16-01).
+    # Longest-first WITHIN the members, so "trx share panel" beats "trx panel".
+    for alias in sorted(_PANEL_MEMBER_ALIASES, key=len, reverse=True):
+        m = _alias_pattern(alias).search(q)
+        if m is not None:
+            kpi = registry.get(_PANEL_MEMBER_ALIASES[alias])
+            if kpi is not None:
+                return kpi, q, m.start(), m.end()
+
     # 1) alias match — longest alias first so "conversion rate" beats "rate".
     for alias in sorted(_ALIASES, key=len, reverse=True):
         m = _alias_pattern(alias).search(q)
@@ -435,6 +484,15 @@ def _strict_metric_vocabulary() -> Tuple[Tuple[str, str], ...]:
     Longest phrase first so "conversion rate" beats "conversion"."""
     vocab: Dict[str, str] = {}
     for alias, kpi_id in _ALIASES.items():
+        vocab.setdefault(alias, kpi_id)
+    # #2114 codex r8: the panel MEMBER discriminators belong here too. Task 11 added
+    # them as a SECOND resolver vocabulary and taught only `recognize_kpi_span` about
+    # them, so the resolver and this veto scanner disagreed about which phrases name
+    # which KPI -- "panel nrx" RESOLVED to WS3-BI-012 while being invisible here.
+    # Measured consequence: after the first span was masked, a repeated "NRx panel"
+    # had its EMBEDDED "nrx" read as the canonical WS3-BI-006 and the ask was refused
+    # as two metrics. One vocabulary, one answer.
+    for alias, kpi_id in _PANEL_MEMBER_ALIASES.items():
         vocab.setdefault(alias, kpi_id)
     for kpi in get_registry().get_all():
         raw_name = str(kpi.name)
@@ -492,6 +550,85 @@ def _case_sensitive_metric_abbrevs() -> Tuple[Tuple[str, str], ...]:
             if lowered in _ABBREV_BLOCKLIST and sum(1 for c in token if c.isupper()) >= 2:
                 out.append((token, kpi.id))
     return tuple(out)
+
+
+def vocabulary_occurrences(normalized_query: str) -> List[Tuple[int, int, str]]:
+    """Every vocabulary phrase occurrence, with overlaps resolved LONGEST-WINS.
+
+    An OWNERSHIP map over the original text, computed before anything is masked
+    (#2114 codex r9). "trx share panel" and "trx share" both match the same
+    region; the longer phrase owns it, so that region belongs to WS3-BI-014 and
+    not to WS3-BI-008. Ties go to the leftmost occurrence.
+
+    This exists because masking is DESTRUCTIVE: 11a masked every occurrence of
+    every phrase the resolved KPI owned, one phrase at a time, and so masked
+    "trx share" out of the MIDDLE of "trx share panel" -- leaving an orphan
+    "panel" the scanner could not recognise and losing a genuine two-KPI veto.
+    Ownership has to be settled on the intact string first.
+    """
+    claims: List[Tuple[int, int, str]] = []
+    for phrase, kpi_id in _strict_metric_vocabulary():
+        pattern = rf"(?<![\w'-]){re.escape(phrase)}{_PLURAL_SUFFIX}(?![\w'-])"
+        for m in re.finditer(pattern, normalized_query):
+            claims.append((m.start(), m.end(), kpi_id))
+    claims.sort(key=lambda c: (-(c[1] - c[0]), c[0]))
+    kept: List[Tuple[int, int, str]] = []
+    for start, end, kpi_id in claims:
+        if any(start < k_end and k_start < end for k_start, k_end, _ in kept):
+            continue
+        kept.append((start, end, kpi_id))
+    return sorted(kept)
+
+
+def owned_mention_spans(
+    normalized_query: str, kpi_id: str, start: int, end: int
+) -> List[Tuple[int, int]]:
+    """The spans ``kpi_id`` genuinely owns, the resolver's own match included.
+
+    The match is appended when no owning occurrence covers it: ``recognize_kpi_span``
+    can return a span the strict vocabulary does not produce (the reverse-share
+    regex at step 0), and that span is this KPI's by construction.
+    """
+    spans = [(s, e) for s, e, owner in vocabulary_occurrences(normalized_query) if owner == kpi_id]
+    if not any(s <= start and end <= e for s, e in spans):
+        spans.append((start, end))
+    return sorted(set(spans))
+
+
+def mask_spans(normalized_query: str, spans: Iterable[Tuple[int, int]]) -> str:
+    """Blank ``spans``, length-preserving so every coordinate stays valid."""
+    masked = normalized_query
+    for start, end in sorted(spans, reverse=True):
+        masked = masked[:start] + " " * (end - start) + masked[end:]
+    return masked
+
+
+def mask_kpi_mentions(normalized_query: str, kpi_id: str, start: int, end: int) -> str:
+    """Blank the matched span AND every other mention the SAME KPI owns.
+
+    The multi-KPI veto masks the recognized span and rescans; anything still found is
+    a SECOND metric and the ask fails closed. Masking only the FIRST span made a
+    repeated mention of the same KPI look like two (#2114 codex r8): in
+    "What is NRx panel for Kisqali, the NRx panel?" the second occurrence survived,
+    the scanner skipped it as ``exclude_id`` and then matched the EMBEDDED "nrx" as
+    the canonical WS3-BI-006. Measured on all four panel KPIs.
+
+    Ownership, not pattern-shape, is what separates that from a real two-metric ask.
+    Both produce the identical scanner output ``(012, 006)``:
+
+        "What is NRx panel for Kisqali, the NRx panel?"   must ANSWER
+        "What is NRx panel and NRx for Kisqali?"          must REFUSE
+
+    The difference is POSITIONAL -- whether the canonical token lies INSIDE an
+    occurrence this KPI owns. So every occurrence of every phrase owned by
+    ``kpi_id`` is blanked, longest phrase first (so "trx share panel" is consumed
+    before "trx panel" could claim part of it), and a canonical mention standing on
+    its own survives to trigger the veto exactly as before.
+
+    Length-preserving: blanks replace characters one for one, so the #1475
+    governing-head guards and the probe keep the query's coordinates.
+    """
+    return mask_spans(normalized_query, owned_mention_spans(normalized_query, kpi_id, start, end))
 
 
 def recognize_distinct_metric(
@@ -908,3 +1045,29 @@ def resolve_kpi_frame(
         window_days=window_days,
         include_synthetic=include_synthetic,
     )
+
+
+def names_exactly_one_kpi(normalized_query: str, kpi: KPIMetadata) -> bool:
+    """True when the caller's text IS ``kpi``'s own registry name, nothing more.
+
+    A registry name identifies exactly one KPI by construction, so when the ask
+    IS that name there is no ambiguity to adjudicate and the multi-KPI veto must
+    not fire. Without this, the lane's family aliases ("observed rx events" ->
+    WS3-BI-011) matched INSIDE the names of WS3-BI-012/013/014 -- all of which
+    begin "Observed Rx Events - Patient Panel ..." -- and the " - " in the name
+    itself satisfied the coordinator test, so THE NAME COORDINATED WITH ITSELF
+    and three of the four panel KPIs could not be computed by their own name at
+    all, with or without an axis (#2114, r12 CI triage).
+
+    ⭐ A SUBSTRING MATCH READ AS WHOLE-SPAN IDENTITY -- the third instance of that
+    genus in this lane in one day, after `brand_from_text('cost kisqali')` and
+    'west' inside 'west coast'. Three different resolvers, one mistake.
+
+    The comparison runs both strings through :func:`recognize_kpi_span`, which is
+    the normaliser the caller already used, so no normalisation is reimplemented
+    here and the two sides cannot drift apart. It compares the WHOLE string: an
+    ask that merely CONTAINS a registry name ("... (NRx Panel) and ROI") is not
+    equal to it, so a genuine coordination is still vetoed.
+    """
+    own_span = recognize_kpi_span(kpi.name)
+    return own_span is not None and own_span[1] == normalized_query

@@ -1,5 +1,5 @@
 # E2I Causal Analytics - KPI Definitions V3.0
-# 45 KPIs - 100% Calculable from V3 Schema
+# 49 KPIs - 100% Calculable from V3 Schema
 # (WS1-MP-008 "Fairness Gap (ΔRecall)" removed in #1068 — needs protected-group
 #  fairness_metrics the synthetic substrate does not populate. WS1-DQ-008
 #  "Label Quality (IAA)" removed in T8 by product decision — a WORKING metric
@@ -17,16 +17,16 @@ last_updated: "2026-07-30"
 # ═══════════════════════════════════════════════════════════════════
 
 summary:
-  total_kpis: 45
-  direct_calculable: 21
-  derived_calculable: 24
+  total_kpis: 49
+  direct_calculable: 24
+  derived_calculable: 25
   gaps: 0
 
   by_workstream:
     ws1_data_quality: 8
     ws1_model_performance: 8
     ws2_triggers: 9
-    ws3_business: 10
+    ws3_business: 14
     brand_specific: 5
     causal_metrics: 5
 
@@ -38,6 +38,8 @@ ws1_data_quality:
 
   source_coverage_patients:
     id: "WS1-DQ-001"
+    axis_capability:
+      axes: [region]
     name: "Source Coverage - Patients"
     value_format: percent
     definition: "Percentage of eligible patients present in source vs reference universe"
@@ -60,6 +62,8 @@ ws1_data_quality:
 
   source_coverage_hcps:
     id: "WS1-DQ-002"
+    axis_capability:
+      axes: [region]
     name: "Source Coverage - HCPs"
     value_format: percent
     definition: "Percentage of priority HCPs present in source vs universe"
@@ -128,6 +132,8 @@ ws1_data_quality:
     
   completeness_pass_rate:
     id: "WS1-DQ-005"
+    axis_capability:
+      axes: [region]
     name: "Completeness Pass Rate"
     value_format: percent
     definition: "1 minus null rate across brand-critical fields"
@@ -426,6 +432,9 @@ ws2_triggers:
 
   trigger_precision:
     id: "WS2-TR-001"
+    reporting_window: "30-day trigger cohort ending 30 days before the trigger-data frontier (the conversion window must mature)"
+    axis_capability:
+      axes: [region]
     name: "Trigger Precision"
     # definition v2 (2026-07-20, migration 113): the declared truth shape from
     # domain_vocabulary truth_definitions.next_best_action_truth — "trigger
@@ -471,6 +480,9 @@ ws2_triggers:
 
   trigger_recall:
     id: "WS2-TR-002"
+    axis_capability:
+      axes: [region]
+    additive: false
     name: "Trigger Recall"
     # definition v2 (2026-07-20, migration 113): denominator = NEW STARTS
     # (patients whose first-ever prescription lands in the frontier-anchored
@@ -509,6 +521,8 @@ ws2_triggers:
     
   action_rate_uplift:
     id: "WS2-TR-003"
+    axis_capability:
+      axes: [region]
     name: "Action Rate Uplift"
     definition: "Incremental action rate vs control group"
     formula: "(action_rate_treatment - action_rate_control) / action_rate_control"
@@ -535,6 +549,9 @@ ws2_triggers:
     
   acceptance_rate:
     id: "WS2-TR-004"
+    reporting_window: "most recent 30 days of trigger data"
+    axis_capability:
+      axes: [region]
     name: "Acceptance Rate"
     definition: "Percentage of delivered triggers accepted by reps"
     formula: "count(accepted) / count(delivered)"
@@ -567,6 +584,9 @@ ws2_triggers:
 
   false_alert_rate:
     id: "WS2-TR-005"
+    reporting_window: "most recent 30 days of trigger data"
+    axis_capability:
+      axes: [region]
     name: "False Alert Rate"
     definition: "Percentage of triggers marked as false positives"
     formula: "count(false_positive) / total_triggers"
@@ -596,6 +616,9 @@ ws2_triggers:
 
   override_rate:
     id: "WS2-TR-006"
+    reporting_window: "most recent 30 days of trigger data"
+    axis_capability:
+      axes: [region]
     name: "Override Rate"
     definition: "Percentage of triggers overridden by users"
     formula: "count(overridden) / count(delivered)"
@@ -627,6 +650,8 @@ ws2_triggers:
 
   lead_time_days:
     id: "WS2-TR-007"
+    axis_capability:
+      axes: [region]
     name: "Lead Time"
     definition: "Median days between trigger and outcome"
     formula: "median(outcome_date - trigger_date)"
@@ -657,6 +682,8 @@ ws2_triggers:
 
   change_fail_rate:
     id: "WS2-TR-008"
+    axis_capability:
+      axes: [region]
     name: "Change-Fail Rate (CFR)"
     definition: "Percentage of trigger changes that resulted in worse outcomes"
     formula: "count(change_failed) / count(changed_triggers)"
@@ -686,6 +713,9 @@ ws2_triggers:
 
   trigger_funnel_conversion:
     id: "WS2-TR-009"
+    reporting_window: "most recent 30 days of trigger data"
+    axis_capability:
+      axes: [region]
     name: "Trigger Funnel Conversion"
     # ADDED by the #1360 ruling (2026-07-30): trigger-effectiveness KPIs are
     # chat-KPI-path — served by kpi_calculate_tool over the migration-118
@@ -727,7 +757,7 @@ ws2_triggers:
       column: trigger_timestamp
 
 # ═══════════════════════════════════════════════════════════════════
-# WS3: BUSINESS IMPACT (10 KPIs)
+# WS3: BUSINESS IMPACT (14 KPIs)
 # ═══════════════════════════════════════════════════════════════════
 
 ws3_business:
@@ -816,10 +846,13 @@ ws3_business:
     
   trx:
     id: "WS3-BI-005"
+    reporting_window: "most recent complete calendar month"
+    axis_capability:
+      axes: [region]
     name: "Total Prescriptions (TRx)"
-    definition: "Total prescription volume"
-    formula: "count(event_type = 'prescription')"
-    calculation_type: derived
+    definition: "Monthly total prescription volume by brand x region (canonical business_metrics series)"
+    formula: "sum(value) where metric_type = 'trx' for the latest complete calendar month"
+    calculation_type: direct
     data_plane: claims
     actionability: reader_actionable
     actionability_owner: brand_team
@@ -828,10 +861,159 @@ ws3_business:
       - "field-force allocation to underpenetrated territories"
       - "access and copay pull-through programs"
     measurement_caveat: >-
-      Claims-derived volume: the most recent windows under-count until claims
-      fully mature (multi-week adjudication lag on real sources) — prefer trend
-      over level for the newest periods. Expires when per-brand completeness
-      curves land (TRIG-DECOMP).
+      Canonical monthly series (business_metrics, brand x region x calendar
+      month): the headline is the latest COMPLETE month; the in-progress month
+      is never reported. The series is seasonal (January trough, December peak,
+      +/-8%), so compare a month with the same month a year earlier.
+      Patient-axis splits and the claims-lag nowcast live on the patient-panel
+      KPI WS3-BI-011.
+    tables:
+      - business_metrics
+    columns:
+      - business_metrics.value
+      - business_metrics.metric_type
+    view: null
+    threshold: null  # Volume metric
+    frequency: monthly
+    workstream: WS3
+    windowable: clean
+    window:
+      column: metric_date
+
+  nrx:
+    id: "WS3-BI-006"
+    reporting_window: "most recent complete calendar month"
+    axis_capability:
+      axes: [region]
+    name: "New Prescriptions (NRx)"
+    definition: "Monthly new prescriptions by brand x region (canonical business_metrics series)"
+    formula: "sum(value) where metric_type = 'nrx' for the latest complete calendar month"
+    calculation_type: direct
+    data_plane: claims
+    actionability: reader_actionable
+    actionability_owner: brand_team
+    levers:
+      - "new-patient-start programs (diagnostic activation, referral pathways)"
+      - "speaker programs and peer-to-peer education"
+    measurement_caveat: >-
+      Canonical monthly series (business_metrics, brand x region x calendar
+      month): the headline is the latest COMPLETE month; the in-progress month
+      is never reported. The series is seasonal (January trough, December peak,
+      +/-8%), so compare a month with the same month a year earlier.
+      Patient-axis splits and the claims-lag nowcast live on the patient-panel
+      KPI WS3-BI-012.
+    tables:
+      - business_metrics
+    columns:
+      - business_metrics.value
+      - business_metrics.metric_type
+    view: null
+    threshold: null  # Volume metric
+    frequency: monthly
+    workstream: WS3
+    windowable: clean
+    window:
+      column: metric_date
+
+  nbrx:
+    id: "WS3-BI-007"
+    reporting_window: "most recent complete calendar month"
+    axis_capability:
+      axes: [region]
+    name: "New-to-Brand Prescriptions (NBRx)"
+    definition: "Monthly new-to-brand prescriptions by brand x region (canonical business_metrics series)"
+    formula: "sum(value) where metric_type = 'nbrx' for the latest complete calendar month"
+    calculation_type: direct
+    data_plane: claims
+    actionability: reader_actionable
+    actionability_owner: brand_team
+    levers:
+      - "competitive positioning and switch messaging"
+      - "formulary access expansion"
+    measurement_caveat: >-
+      Canonical monthly series (business_metrics, brand x region x calendar
+      month): the headline is the latest COMPLETE month; the in-progress month
+      is never reported. The series is seasonal (January trough, December peak,
+      +/-8%), so compare a month with the same month a year earlier.
+      Patient-axis splits and the claims-lag nowcast live on the patient-panel
+      KPI WS3-BI-013.
+    tables:
+      - business_metrics
+    columns:
+      - business_metrics.value
+      - business_metrics.metric_type
+    view: null
+    threshold: null  # Volume metric
+    frequency: monthly
+    workstream: WS3
+    windowable: clean
+    window:
+      column: metric_date
+
+  trx_share:
+    id: "WS3-BI-008"
+    reporting_window: "most recent complete calendar month"
+    axis_capability:
+      axes: [region]
+    name: "TRx Share"
+    definition: "Brand share of the tracked portfolio's canonical TRx for the latest complete month (competitor brands are not in the data model)"
+    formula: "brand_trx / portfolio_trx over business_metrics metric_type = 'trx'"
+    calculation_type: derived
+    data_plane: claims
+    actionability: reader_actionable
+    actionability_owner: brand_team
+    levers:
+      - "share-of-voice and competitive detailing"
+      - "budget reallocation toward high-opportunity segments"
+    measurement_caveat: >-
+      Canonical monthly series (business_metrics): share of the three tracked
+      brands' TRx in the latest COMPLETE month; the in-progress month is never
+      reported. Brands differ in size, so no portfolio-wide target applies
+      (threshold intentionally null; the event-era 0.30 target assumed a third
+      each). The series is seasonal, but the season cancels in a share.
+      Patient-axis splits live on the patient-panel KPI WS3-BI-011 (the
+      within-brand mix, whose buckets sum to the brand total). NOT on the panel
+      share WS3-BI-014, which has no patient-axis breakdown of its own.
+    tables:
+      - business_metrics
+    columns:
+      - business_metrics.value
+      - business_metrics.brand
+    view: null
+    threshold: null
+    # A share renders as a percentage. Declared, not inferred: gen_kpi_catalog
+    # otherwise reads percent-ness off a 0..1 threshold band, and this KPI has no
+    # target (the event-era 0.30 assumed a third each).
+    value_format: percent
+    frequency: monthly
+    workstream: WS3
+    windowable: clean
+    window:
+      column: metric_date
+
+  trx_panel:
+    id: "WS3-BI-011"
+    reporting_window: "most recent 30 days of prescription data"
+    axis_capability:
+      axes: [biologic, ige_tier, region, segment, therapy_line]
+    additive: true
+    name: "Observed Rx Events - Patient Panel TRx (TRx Panel)"
+    definition: "Prescription events observed for the tracked patient panel in the most recent 30 days of data"
+    formula: "count(event_type = 'prescription')"
+    calculation_type: derived
+    data_plane: claims
+    actionability: reader_actionable
+    actionability_owner: brand_team
+    levers:
+      - "HCP targeting and call-plan coverage"
+      - "field-force allocation to underpenetrated territories"
+    measurement_caveat: >-
+      Patient-panel event count (treatment_events): a different, far smaller
+      quantity than canonical TRx (WS3-BI-005); never compare, sum or divide
+      the two. The window ends at the event data frontier (migration 089), and
+      the newest windows under-count until claims mature, so prefer trend over
+      level for the newest periods. Carries the severity, line-of-therapy,
+      biologic and IgE splits and the claims-lag nowcast.
     tables:
       - treatment_events
     columns:
@@ -843,11 +1025,15 @@ ws3_business:
     windowable: clean
     window:
       column: event_date
-    
-  nrx:
-    id: "WS3-BI-006"
-    name: "New Prescriptions (NRx)"
-    definition: "First-time prescriptions for a patient"
+
+  nrx_panel:
+    id: "WS3-BI-012"
+    reporting_window: "most recent 30 days of prescription data"
+    axis_capability:
+      axes: [biologic, ige_tier, region, segment, therapy_line]
+    additive: true
+    name: "Observed Rx Events - Patient Panel NRx (NRx Panel)"
+    definition: "First-time prescription events for the tracked patient panel in the most recent 30 days of data"
     formula: "count(first_prescription)"
     calculation_type: derived
     data_plane: claims
@@ -855,12 +1041,12 @@ ws3_business:
     actionability_owner: brand_team
     levers:
       - "new-patient-start programs (diagnostic activation, referral pathways)"
-      - "speaker programs and peer-to-peer education"
     measurement_caveat: >-
-      Claims-derived volume: the most recent windows under-count until claims
-      fully mature (multi-week adjudication lag on real sources) — prefer trend
-      over level for the newest periods. Expires when per-brand completeness
-      curves land (TRIG-DECOMP).
+      Patient-panel event count (treatment_events): a different, far smaller
+      quantity than canonical NRx (WS3-BI-006); never compare, sum or divide
+      the two. The window ends at the event data frontier (migration 089), and
+      the newest windows under-count until claims mature. Carries the patient
+      axes and the claims-lag nowcast.
     tables:
       - treatment_events
     columns:
@@ -873,11 +1059,15 @@ ws3_business:
     windowable: clean
     window:
       column: event_date
-    
-  nbrx:
-    id: "WS3-BI-007"
-    name: "New-to-Brand Prescriptions (NBRx)"
-    definition: "First prescription of specific brand for a patient"
+
+  nbrx_panel:
+    id: "WS3-BI-013"
+    reporting_window: "most recent 30 days of prescription data"
+    axis_capability:
+      axes: [biologic, ige_tier, region, segment, therapy_line]
+    additive: true
+    name: "Observed Rx Events - Patient Panel NBRx (NBRx Panel)"
+    definition: "Patients whose first prescription of the brand lands in the most recent 30 days of panel data"
     formula: "count(first_brand_prescription)"
     calculation_type: derived
     data_plane: claims
@@ -885,12 +1075,11 @@ ws3_business:
     actionability_owner: brand_team
     levers:
       - "competitive positioning and switch messaging"
-      - "formulary access expansion"
     measurement_caveat: >-
-      Claims-derived volume: the most recent windows under-count until claims
-      fully mature (multi-week adjudication lag on real sources) — prefer trend
-      over level for the newest periods. Expires when per-brand completeness
-      curves land (TRIG-DECOMP).
+      Patient-panel event count (treatment_events): a different, far smaller
+      quantity than canonical NBRx (WS3-BI-007); never compare, sum or divide
+      the two. Per brand only. The window ends at the event data frontier
+      (migration 089). Carries the patient axes and the claims-lag nowcast.
     tables:
       - treatment_events
     columns:
@@ -903,11 +1092,16 @@ ws3_business:
     windowable: clean
     window:
       column: event_date
-    
-  trx_share:
-    id: "WS3-BI-008"
-    name: "TRx Share"
-    definition: "Brand share of total tracked-portfolio prescriptions (competitor brands are not in the data model)"
+
+  trx_share_panel:
+    id: "WS3-BI-014"
+    reporting_window: "most recent 30 days of prescription data"
+    axis_capability:
+      axes: [region]
+      axes_under_window: []
+    additive: false
+    name: "Observed Rx Events - Patient Panel TRx Share (TRx Share Panel)"
+    definition: "Brand share of the tracked patient panel's prescription events (competitor brands are not in the data model)"
     formula: "brand_trx / category_trx"
     calculation_type: derived
     data_plane: claims
@@ -915,12 +1109,14 @@ ws3_business:
     actionability_owner: brand_team
     levers:
       - "share-of-voice and competitive detailing"
-      - "budget reallocation toward high-opportunity segments"
     measurement_caveat: >-
-      Claims-derived volume: the most recent windows under-count until claims
-      fully mature (multi-week adjudication lag on real sources) — prefer trend
-      over level for the newest periods. Expires when per-brand completeness
-      curves land (TRIG-DECOMP).
+      Patient-panel share (treatment_events): a different quantity from the
+      canonical TRx Share (WS3-BI-008) because the panel seeds the three
+      brands evenly; never compare the two. Carries NO patient axis: every
+      patient is on exactly one tracked brand, so a share within a severity or
+      line-of-therapy bucket divides one indication's prescriptions by another
+      indication's patients, and on the Remibrutinib-only biologic/IgE axes it is
+      identically 100%. Ask for panel TRx (WS3-BI-011) by the axis instead.
     tables:
       - treatment_events
     columns:
@@ -930,6 +1126,9 @@ ws3_business:
       target: 0.30
       warning: 0.20
       critical: 0.10
+    # Declared for the same reason as WS3-BI-008: percent-ness must not depend on
+    # the threshold band surviving.
+    value_format: percent
     frequency: weekly
     workstream: WS3
     windowable: clean
@@ -938,6 +1137,11 @@ ws3_business:
 
   conversion_rate:
     id: "WS3-BI-009"
+    reporting_window: "most recent 30 days of trigger data"
+    axis_capability:
+      axes: [region, segment, therapy_line]
+      axes_under_window: [segment, therapy_line]
+    additive: false
     name: "Conversion Rate"
     definition: "Percentage of triggers resulting in prescription"
     formula: "prescriptions_after_trigger / triggers_delivered"
@@ -972,6 +1176,8 @@ ws3_business:
 
   roi:
     id: "WS3-BI-010"
+    axis_capability:
+      axes: [region]
     name: "Return on Investment"
     definition: "Value generated per dollar invested"
     formula: "value_captured / cost_invested"
@@ -999,6 +1205,9 @@ brand_specific:
 
   remi_ah_uncontrolled_pct:
     id: "BR-001"
+    axis_capability:
+      axes: [region]
+    additive: false
     name: "Remi - AH Uncontrolled %"
     definition: "Percentage of antihistamine patients with uncontrolled symptoms"
     formula: "uncontrolled_patients / ah_patients"
@@ -1020,6 +1229,8 @@ brand_specific:
     
   remi_intent_to_prescribe_delta:
     id: "BR-002"
+    axis_capability:
+      axes: [region]
     name: "Remi - Intent-to-Prescribe Δ"
     definition: "Change in HCP intent-to-prescribe score after intervention"
     formula: "post_intent - pre_intent"
@@ -1043,6 +1254,9 @@ brand_specific:
     
   fabhalta_pnh_tested_pct:
     id: "BR-003"
+    axis_capability:
+      axes: [region]
+    additive: false
     name: "Fabhalta - % PNH Tested"
     definition: "Percentage of eligible patients tested for PNH"
     formula: "pnh_tested / eligible_patients"
@@ -1069,6 +1283,9 @@ brand_specific:
     
   kisqali_dx_adoption:
     id: "BR-004"
+    axis_capability:
+      axes: [region]
+    additive: false
     name: "Kisqali - Dx Adoption"
     definition: "Time from diagnosis to first Kisqali prescription"
     formula: "median(first_kisqali_date - diagnosis_date)"
@@ -1091,6 +1308,8 @@ brand_specific:
     
   kisqali_oncologist_reach:
     id: "BR-005"
+    axis_capability:
+      axes: [region]
     name: "Kisqali - Oncologist Reach"
     definition: "Percentage of oncologists with Kisqali engagement"
     formula: "engaged_oncologists / total_oncologists"
@@ -1132,6 +1351,8 @@ causal_metrics:
     
   treatment_effect_cate:
     id: "CM-002"
+    axis_capability:
+      axes: [segment]
     name: "Conditional ATE (CATE)"
     definition: "Treatment effect conditioned on segment"
     formula: "E[Y(1) - Y(0) | X=x]"

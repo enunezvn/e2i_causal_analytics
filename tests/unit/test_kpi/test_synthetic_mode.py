@@ -36,6 +36,9 @@ _TWIN_MIGRATIONS = (
     _MIGRATIONS_DIR / "124_kpi_roi_temporal_band.sql",
     # 125 adds the #1534 brand/region-scoped ROI headline pair.
     _MIGRATIONS_DIR / "125_kpi_roi_headline_scoping.sql",
+    # 143 adds the canonical TRx lane's canonical_volume_* family (all variants
+    # are twinned, so every base with a twin is listed in the resolver set).
+    _MIGRATIONS_DIR / "143_canonical_volume_kpis.sql",
 )
 
 
@@ -199,6 +202,7 @@ def test_twinned_set_matches_migrations():
     # 36 from 066 + 1 (business_impact_patient_touch_rate) from 085 + 4
     # (the view-backed WS1 data-quality ids) from 095 + 1
     # (business_impact_roi_temporal_band, #1532) from 124 + 1
-    # (business_impact_roi_business_metrics_scoped, #1534) from 125 = 43.
-    assert len(parsed) == 43, f"twin-migration parse found {len(parsed)} twins, expected 43"
+    # (business_impact_roi_business_metrics_scoped, #1534) from 125 = 43, plus the
+    # 17 canonical_volume_* bases (canonical TRx lane) from 143 = 60.
+    assert len(parsed) == 60, f"twin-migration parse found {len(parsed)} twins, expected 60"
     assert parsed == SYNTHETIC_TWINNED_QUERY_IDS

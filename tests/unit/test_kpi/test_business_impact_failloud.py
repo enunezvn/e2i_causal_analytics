@@ -36,16 +36,19 @@ HARDENED = [
     ("_calc_mau", "mau", "WS3-BI-001", 1234.0, True),
     ("_calc_wau", "wau", "WS3-BI-002", 567.0, True),
     ("_calc_hcp_coverage", "coverage", "WS3-BI-004", 0.73, True),
-    ("_calc_trx", "trx", "WS3-BI-005", 4200.0, True),
-    ("_calc_nrx", "nrx", "WS3-BI-006", 880.0, True),
+    # Canonical TRx lane: these event-ledger methods now serve the patient-panel
+    # ids (WS3-BI-011..014); WS3-BI-005..008 compute from business_metrics via
+    # _calc_canonical_volume and are covered by test_canonical_volume_calculator.py.
+    ("_calc_trx", "trx", "WS3-BI-011", 4200.0, True),
+    ("_calc_nrx", "nrx", "WS3-BI-012", 880.0, True),
     ("_calc_conversion_rate", "conversion_rate", "WS3-BI-009", 0.18, True),
     ("_calc_roi", "avg_roi", "WS3-BI-010", 3.4, True),
 ]
 
 # Brand-required metrics carry an extra no-brand fail-loud guard (tested separately).
 HARDENED_BRAND_REQUIRED = [
-    ("_calc_nbrx", "nbrx", "WS3-BI-007", 312.0, True),
-    ("_calc_trx_share", "share", "WS3-BI-008", 0.27, True),
+    ("_calc_nbrx", "nbrx", "WS3-BI-013", 312.0, True),
+    ("_calc_trx_share", "share", "WS3-BI-014", 0.27, True),
 ]
 
 # A context that supplies a brand so the no-brand guard never fires for these tests.
@@ -138,7 +141,8 @@ def test_roi_falls_back_to_agent_activities_then_fails_loud():
 
 @pytest.mark.parametrize(
     "method,kpi_id",
-    [("_calc_nbrx", "WS3-BI-007"), ("_calc_trx_share", "WS3-BI-008")],
+    # Canonical TRx lane: the event-ledger methods name their panel ids.
+    [("_calc_nbrx", "WS3-BI-013"), ("_calc_trx_share", "WS3-BI-014")],
 )
 def test_brand_required_metric_fails_loud_without_brand(method, kpi_id):
     """NBRx and TRx Share are brand-specific by definition: with no brand in context the

@@ -40,7 +40,7 @@ _SYNTHETIC_SUFFIX = "_include_synthetic"
 #: ``src/api/routes/copilotkit.py``).
 _TRUTHY = ("1", "true", "yes")
 
-#: The 43 base ``kpi_query_registry`` ids that have an
+#: The 60 base ``kpi_query_registry`` ids that have an
 #: ``{id}_include_synthetic`` twin: 36 sourced verbatim from
 #: ``database/migrations/066_kpi_query_synthetic_exclusion.sql``, plus
 #: ``business_impact_patient_touch_rate`` from
@@ -57,11 +57,16 @@ _TRUTHY = ("1", "true", "yes")
 #: per-slice trailing-12-month temporal-variability band), plus
 #: ``business_impact_roi_business_metrics_scoped`` from
 #: ``database/migrations/125_kpi_roi_headline_scoping.sql`` (#1534 — the
-#: brand/region-scoped ROI headline). The twins are
+#: brand/region-scoped ROI headline),
+#: plus the 17 ``canonical_volume_*`` bases from
+#: ``database/migrations/143_canonical_volume_kpis.sql`` (canonical TRx lane —
+#: every region/windowed variant there is explicitly twinned, so all of them are
+#: listed; ``region_query_id`` / ``windowed_query_id`` already append the suffix
+#: and ``resolve_kpi_query_id`` no-ops on it). The twins are
 #: the synthetic-taggable statements; everything else in the registry is not
 #: synthetic-gated. This literal is kept in lock-step with the migrations by
 #: ``tests/unit/test_kpi/test_synthetic_mode.py`` (it parses 066 + 085 + 095 +
-#: 124 and asserts equality — drift fails CI), so a future twin added by a later
+#: 124 + 125 + 143 and asserts equality — drift fails CI), so a future twin added by a later
 #: migration is a one-line update guarded by a red test, never a silent miss.
 SYNTHETIC_TWINNED_QUERY_IDS: frozenset[str] = frozenset(
     {
@@ -85,6 +90,23 @@ SYNTHETIC_TWINNED_QUERY_IDS: frozenset[str] = frozenset(
         "business_impact_trx",
         "business_impact_trx_share",
         "business_impact_wau_fallback",
+        "canonical_volume_monthly_series",
+        "canonical_volume_nbrx",
+        "canonical_volume_nbrx_region",
+        "canonical_volume_nbrx_windowed",
+        "canonical_volume_nbrx_windowed_region",
+        "canonical_volume_nrx",
+        "canonical_volume_nrx_region",
+        "canonical_volume_nrx_windowed",
+        "canonical_volume_nrx_windowed_region",
+        "canonical_volume_trx",
+        "canonical_volume_trx_region",
+        "canonical_volume_trx_share",
+        "canonical_volume_trx_share_region",
+        "canonical_volume_trx_share_windowed",
+        "canonical_volume_trx_share_windowed_region",
+        "canonical_volume_trx_windowed",
+        "canonical_volume_trx_windowed_region",
         "causal_metrics_ate",
         "causal_metrics_cate",
         "causal_metrics_causal_impact",

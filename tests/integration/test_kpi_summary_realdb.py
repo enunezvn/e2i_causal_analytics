@@ -8,9 +8,11 @@ SYNTHETIC `business_metrics` table even when fixed, and fell back to hardcoded
 `_FALLBACK_KPIS` (Kisqali trx_volume=22100, hcp_reach=3200) -> fabricated values
 shown as real on the landing page.
 
-The honest fix reads the REAL allowlisted KPI queries (treatment_events / triggers
-via the kpi_query RPC). Stale/empty source -> honest zeros with data_source='database'
-(NOT fabricated); a hard query failure -> data_source='unavailable' (fail-closed).
+The honest fix reads the REAL allowlisted KPI queries via the kpi_query RPC: the
+volume tiles from the canonical business_metrics monthly series (migration 143,
+canonical TRx lane), hcp_reach / conversion from treatment_events / triggers.
+Stale/empty source -> honest zeros with data_source='database' (NOT fabricated);
+a hard query failure -> data_source='unavailable' (fail-closed).
 
 Opt-in (real docker supabase-db required), skipped in CI by default:
     E2I_DB_INTEGRATION=1 .venv/bin/pytest tests/integration/test_kpi_summary_realdb.py -p no:cacheprovider
@@ -52,13 +54,20 @@ async def test_kpi_summary_never_returns_fabricated_fallback():
 
 @pytest.mark.asyncio
 async def test_kpi_summary_trx_matches_real_allowlist_query():
-    """trx_volume must equal the REAL business_impact_trx allowlist query
-    (treatment_events prescriptions, 30d), not a synthetic/fabricated number."""
+    """trx_volume must equal the REAL canonical_volume_trx allowlist query (the
+    canonical business_metrics series' latest complete month), not a
+    synthetic/fabricated number. The id is resolved through
+    ``resolve_kpi_query_id`` for the same reason the tile does it: under the
+    showcase flag the tile reads the ``_include_synthetic`` twin, and comparing
+    it against the BASE statement would read as a disagreement in the numbers
+    when it is only a disagreement in which rows each side counted."""
     from src.api.dependencies.supabase_client import get_supabase
+    from src.kpi.synthetic_mode import resolve_kpi_query_id
 
     client = get_supabase()
     rpc = client.rpc(
-        "kpi_query", {"query_id": "business_impact_trx", "params": ["Kisqali"]}
+        "kpi_query",
+        {"query_id": resolve_kpi_query_id("canonical_volume_trx"), "params": ["Kisqali"]},
     ).execute()
     real_trx = float(rpc.data[0]["trx"]) if rpc.data else 0.0
 

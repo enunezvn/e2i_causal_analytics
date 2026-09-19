@@ -60,9 +60,19 @@ def test_trx_share_on_a_patient_axis_is_refused_before_any_query(axis, windowed)
     with pytest.raises(RuntimeError) as exc:
         calc._calc_trx_share(context)
     msg = str(exc.value)
-    assert "WS3-BI-008" in msg
-    assert "one tracked brand" in msg
-    assert "TRx by" in msg  # the next step: the brand's own volume by bucket
+    # ⚠ 014, NOT 008 (#2114). `_calc_trx_share` is the PANEL share's handler now --
+    # business_impact.py:110 -- while canonical 008 dispatches to
+    # `_calc_canonical_volume` at :106. This method correctly names the KPI it
+    # serves; these rows asserted the one it served BEFORE the lane repointed it.
+    # Stale-by-design, rewritten, not loosened: it still must refuse before any
+    # query, still name a reason, still offer a next step.
+    assert "WS3-BI-014" in msg
+    assert "one tracked brand" in msg  # the panel sentence, true of the panel share
+    # The next step, named EXPLICITLY rather than by the substring "TRx by": that
+    # substring matched the old redirect ("Total Prescriptions (TRx) by ...") and
+    # would silently stop matching whenever the target's name changed — which is
+    # exactly what happened when the redirect moved to the panel.
+    assert "Observed Rx Events - Patient Panel TRx (TRx Panel) by" in msg
 
 
 def test_refusal_names_the_tautology_for_brand_only_axes():
@@ -81,7 +91,14 @@ def test_calculate_surfaces_the_refusal_as_an_error_not_a_value():
         kpi, {"brand": "Remibrutinib", "segment": "high_severity"}
     )
     assert result.value is None
-    assert result.error and "one tracked brand" in result.error
+    # ⚠ 008's OWN reason (owner #14). "one tracked brand" is a statement about
+    # patient_journeys; canonical 008 reads business_metrics at brand x region x
+    # calendar month, so that sentence is FALSE of it and is deliberately absent.
+    # This row was RIGHT to fail — it asserted the old wording on the new contract.
+    assert result.error and "no patient dimension" in result.error
+    assert "one tracked brand" not in result.error, "008 must not reuse the panel reason"
+    # ...and the refusal still offers a working next step, on the panel.
+    assert "Patient Panel TRx (TRx Panel)" in result.error
 
 
 def test_brand_level_share_is_untouched():

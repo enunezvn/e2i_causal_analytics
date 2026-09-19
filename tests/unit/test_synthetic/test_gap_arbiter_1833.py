@@ -23,6 +23,7 @@ from scripts.gap_arbiter_1833 import (
     SEGMENTS,
     TIME_PERIOD,
     FrameRepository,
+    build_frame,
     frontier_positions,
     pinned_clock,
     planted_region,
@@ -189,3 +190,15 @@ async def test_region_page_and_distinct_values_are_brand_scoped(frame):
     assert [r["metric_id"] for r in west] == ["other"]
     assert await repo.get_distinct_values("region", brand="Kisqali") == ["west", "midwest"]
     assert await repo.get_distinct_values("specialty", brand="Kisqali") == []
+
+
+def test_build_frame_carries_the_base_and_cohort_nbrx_series():
+    # Canonical TRx lane: the frame is what the DB holds after the reseed and the
+    # cron appends, so it carries the nbrx series beside the frozen stream.
+    frame = build_frame(date(2026, 8, 1))
+    nbrx = frame[frame["metric_type"] == "nbrx"]
+    assert len(nbrx) == 1956 + 12
+    assert nbrx["metric_date"].min() == "2013-01-01"
+    assert nbrx["metric_date"].max() == "2026-08-01"
+    assert len(frame) == 9780 + 1956 + 60 + 12
+    assert frame["metric_id"].is_unique

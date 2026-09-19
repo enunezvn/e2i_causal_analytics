@@ -177,6 +177,30 @@ class KPIThreshold(BaseModel):
                 return KPIStatus.WARNING
 
 
+class AxisCapability(BaseModel):
+    """Which axes a KPI's calculator actually BINDS, and which survive a window.
+
+    Declared per KPI in ``config/kpi_definitions.yaml`` and parsed by
+    ``registry._parse_kpi``; ``src.kpi.capability_policy`` is the only reader. It
+    exists because a flat ``patient_axes`` list cannot say "served, but not under a
+    window" — MEASURED, two KPIs need exactly that: WS3-BI-014 serves ``region``
+    and refuses it once a window is present (no windowed region share variant is
+    registered), and WS3-BI-009 does the same. A flat list would have to lie about
+    one of the two states.
+
+    ``axes_under_window is None`` means "unchanged by a window", which is true of
+    the other 26 axis-serving KPIs, so the common case stays silent in the YAML.
+    """
+
+    axes: list[str] = Field(default_factory=list)
+    axes_under_window: list[str] | None = None
+
+    def serves(self, axis: str, *, window: bool = False) -> bool:
+        if window and self.axes_under_window is not None:
+            return axis in self.axes_under_window
+        return axis in self.axes
+
+
 class KPIMetadata(BaseModel):
     """Metadata for a KPI definition."""
 
@@ -199,6 +223,27 @@ class KPIMetadata(BaseModel):
     secondary_causal_library: CausalLibrary | None = None
     brand: str | None = None
     note: str | None = None
+    #: Which axes this KPI's calculator binds (see :class:`AxisCapability`).
+    axis_capability: AxisCapability | None = None
+    #: ⚠ A PROPERTY OF THE MEASURE, NOT OF THE AXES — deliberately NOT folded into
+    #: AxisCapability. True iff the measure is a SUM over rows, so a sub-window's
+    #: value is a fraction of the whole; False for every ratio, rate and median.
+    #: Only a declaration will do. `value_format == 'percent'` looks like a ready
+    #: made ratio test and is a DISPLAY hint by its own docstring: MEASURED, five
+    #: non-additive event-grain KPIs carry value_format=None (WS2-TR-002,
+    #: WS3-BI-009, BR-001, BR-003, BR-004), so that proxy would call all five
+    #: additive. Parsing '/' out of the formula fails too — BR-004 is
+    #: ``median(first_kisqali_date - diagnosis_date)``, no slash and not additive.
+    #: ``None`` = undeclared: fail CLOSED at runtime (no probe), and LOUD in the
+    #: completeness test, which requires every event-grain KPI to declare it.
+    additive: bool | None = None
+    #: The period a DEFAULT (windowless) reading covers, disclosed beside the
+    #: figure so it is never read as "the last 30 calendar days". Declared, not
+    #: inferred: `frequency` cannot stand in for it (MEASURED — WS3-BI-014 and
+    #: WS3-BI-009 are both "weekly" yet report different windows), and neither can
+    #: `tables`. ``None`` = no verified window, so the field is OMITTED rather
+    #: than guessed.
+    reporting_window: str | None = None
     windowable: str = "not_applicable"  # "clean" | "needs_care" | "not_applicable"
     window: dict[str, Any] | None = None  # {column, legs?, look_forward_days?} for windowable KPIs
     # Constraint-aware insight classification (2026-07-20 plan). Deterministic

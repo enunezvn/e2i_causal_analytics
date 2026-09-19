@@ -75,8 +75,10 @@ async def test_flag_off_uses_base_ids_and_database_source(recording_client, monk
     assert recording_client.query_ids, "expected at least one kpi_query call"
     # No twin ids leak while the production gate stands.
     assert all(not q.endswith("_include_synthetic") for q in recording_client.query_ids)
-    # The base TRx id was used (and data_through queried).
-    assert "business_impact_trx" in recording_client.query_ids
+    # The base TRx id was used (and data_through queried). The TRx tile reads the
+    # CANONICAL monthly series (canonical TRx lane); the event frontier that labels
+    # the empty tiles still comes from treatment_events.
+    assert "canonical_volume_trx" in recording_client.query_ids
     assert "business_impact_data_through" in recording_client.query_ids
 
 
@@ -86,7 +88,7 @@ async def test_flag_on_uses_twins_and_synthetic_source(recording_client, monkeyp
 
     assert result["data_source"] == "synthetic"
     # The TRx tile + data_through label now read the synthetic-inclusive twins.
-    assert "business_impact_trx_include_synthetic" in recording_client.query_ids
+    assert "canonical_volume_trx_include_synthetic" in recording_client.query_ids
     assert "business_impact_data_through_include_synthetic" in recording_client.query_ids
     # And the populated value flows through (the synthetic-gold TRx).
     assert result["metrics"]["trx_volume"] == 42642

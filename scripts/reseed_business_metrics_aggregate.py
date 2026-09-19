@@ -61,24 +61,38 @@ from src.ml.synthetic.frontier_append import (
     generate_month_cohort,
     iter_month_starts,
 )
+from src.ml.synthetic.generators.nbrx_series import with_nbrx
 from src.ml.synthetic.loaders import BatchLoader, LoaderConfig
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)  # one line per page otherwise
 logger = logging.getLogger(__name__)
 
-# The 5 gap-connector keys (BusinessMetricsGenerator.METRIC_CONFIGS). Rows with
-# any other metric_name (or NULL — the per_hcp_rollup rows) are out of scope.
-AGGREGATE_METRIC_NAMES = ("trx", "nrx", "market_share", "conversion_rate", "hcp_engagement_score")
+# The gap-connector keys plus the canonical-TRx-lane nbrx series. Rows with any
+# other metric_name (or NULL — the per_hcp_rollup rows) are out of scope.
+AGGREGATE_METRIC_NAMES = (
+    "trx",
+    "nrx",
+    "nbrx",
+    "market_share",
+    "conversion_rate",
+    "hcp_engagement_score",
+)
+# Id namespaces of series the DB may never have held (canonical TRx lane). Their
+# absence from the DB is a NEW SERIES, not a missing cron cohort and not id drift.
+NEW_SERIES_PREFIXES = ("nbrx_",)
 DIFF_COLUMNS = ["metric_id", "metric_date", "brand", "region", "metric_name", "value", "target"]
 PAGE_SIZE = 1000
+# metric_id lookups per request (keeps the PostgREST ``in.(...)`` URL short).
+ID_LOOKUP_CHUNK = 100
 
 
 def build_reseed_frame(frontier: date) -> pd.DataFrame:
     """Every aggregate row the DB should hold at ``frontier`` under the
     current DGP: the frozen base plus the cohort months BM_EPOCH..frontier
     (exactly the months the cron's ``iter_month_starts`` emits)."""
-    frames = [base_business_metrics_frame()]
+    base = base_business_metrics_frame()
+    frames = [with_nbrx(base)]
     for month_start in iter_month_starts(frontier):
         frames.append(generate_month_cohort(month_start)["business_metrics"])
     frame = pd.concat(frames, ignore_index=True)
@@ -118,14 +132,20 @@ def _national_trx(df: pd.DataFrame, month: Optional[str]) -> Dict[str, float]:
     return {str(b): float(v) for b, v in d.groupby("brand")["value"].sum().items()}
 
 
+def _differs(new: pd.Series, old: pd.Series, tolerance: float = 0.005) -> pd.Series:
+    """Row-wise change mask. NaN arithmetic compares False, so a null on exactly
+    one side is counted explicitly; null on both sides is unchanged."""
+    return ((new - old).abs() > tolerance) | (new.isna() != old.isna())
+
+
 def diff_summary(db: pd.DataFrame, regen: pd.DataFrame, scale_month: str) -> Dict[str, Any]:
     """What ``--execute`` would change. Pure; both frames carry DIFF_COLUMNS."""
     db_ids, regen_ids = set(db["metric_id"]), set(regen["metric_id"])
     merged = regen[DIFF_COLUMNS].merge(
         db[["metric_id", "value", "target"]], on="metric_id", suffixes=("", "_db")
     )
-    value_changed = int(((merged["value"] - merged["value_db"]).abs() > 0.005).sum())
-    target_changed = int(((merged["target"] - merged["target_db"]).abs() > 0.005).sum())
+    value_changed = int(_differs(merged["value"], merged["value_db"]).sum())
+    target_changed = int(_differs(merged["target"], merged["target_db"]).sum())
 
     def scale(month: Optional[str]) -> Dict[str, Dict[str, float]]:
         before, after = _national_trx(db, month), _national_trx(regen, month)
@@ -153,7 +173,12 @@ def diff_summary(db: pd.DataFrame, regen: pd.DataFrame, scale_month: str) -> Dic
     return {
         "rows_to_upsert": int(len(regen)),
         "db_aggregate_rows": int(len(db)),
-        "ids_only_in_regen": sorted(regen_ids - db_ids),
+        "ids_only_in_regen": sorted(
+            i for i in regen_ids - db_ids if not i.startswith(NEW_SERIES_PREFIXES)
+        ),
+        "new_series_ids": sorted(
+            i for i in regen_ids - db_ids if i.startswith(NEW_SERIES_PREFIXES)
+        ),
         "ids_only_in_db": sorted(db_ids - regen_ids),
         "value_changed": value_changed,
         "value_unchanged": int(len(merged) - value_changed),
@@ -166,7 +191,10 @@ def diff_summary(db: pd.DataFrame, regen: pd.DataFrame, scale_month: str) -> Dic
 
 
 def execute_refusal(
-    summary: Dict[str, Any], allow_id_drift: bool = False, allow_new_cohorts: bool = False
+    summary: Dict[str, Any],
+    allow_id_drift: bool = False,
+    allow_new_cohorts: bool = False,
+    allow_new_series: bool = False,
 ) -> Optional[str]:
     """Why ``--execute`` must NOT proceed, or None. Fails closed on id drift in
     EITHER direction — each direction has its own explicit opt-in, because
@@ -180,6 +208,9 @@ def execute_refusal(
       cron). Upserting would INSERT them — byte-identical to what the cron
       will emit, but not the in-place reseed this script promises.
       ``--allow-new-cohorts`` inserts them now.
+    * ids of a series the DB has never held (``NEW_SERIES_PREFIXES``, e.g. the
+      canonical-TRx-lane nbrx series): upserting INSERTS a whole metric type.
+      ``--allow-new-series`` adds them; neither cohort nor drift opt-in does.
     * targets differ: the RNG stream moved; this is not a value-only reseed.
       No flag — the delete+reinsert path in the issue applies instead.
     """
@@ -201,7 +232,62 @@ def execute_refusal(
             "cohort months the Mon-3AM cron has not appended yet. Run after the cron, use an "
             "earlier --frontier, or pass --allow-new-cohorts to insert them now."
         )
+    new_series = summary.get("new_series_ids") or []
+    if new_series and not allow_new_series:
+        return (
+            f"{len(new_series)} rows of a series the DB has never held would be INSERTED "
+            f"(e.g. {new_series[:3]}). Pass --allow-new-series to add them."
+        )
     return None
+
+
+def existing_metric_ids(
+    client: Any,
+    ids: Sequence[str],
+    chunk_size: int = ID_LOOKUP_CHUNK,
+    page_size: int = PAGE_SIZE,
+) -> List[str]:
+    """Which of ``ids`` already exist in business_metrics under ANY metric_name,
+    NULL included. ``fetch_db_aggregate_rows`` filters on metric_name, so a row
+    this run would INSERT can collide with a non-aggregate row that diff_summary
+    never saw (and whose target it never compared). Each chunk is paged with the
+    same cap-agnostic ``.range()`` idiom as the aggregate read (#931/#938).
+
+    The lookup and the upsert are not atomic, by design: the only other writer of
+    these ids is the frontier-append cron, which builds them with the same
+    deterministic generator (``generate_month_cohort`` / ``generate_nbrx_rows``),
+    so a row it inserts in between is byte-identical to the one written here."""
+    found: set[str] = set()
+    wanted = list(ids)
+    for start in range(0, len(wanted), chunk_size):
+        chunk = wanted[start : start + chunk_size]
+        offset = 0
+        while True:
+            rows = (
+                client.table("business_metrics")
+                .select("metric_id")
+                .in_("metric_id", chunk)
+                .order("metric_id")
+                .range(offset, offset + page_size - 1)
+                .execute()
+            ).data
+            if not rows:
+                break
+            found.update(str(r["metric_id"]) for r in rows)
+            offset += len(rows)
+    return sorted(found)
+
+
+def insert_collision_refusal(collisions: Sequence[str]) -> Optional[str]:
+    """Why ``--execute`` must NOT insert, or None: an id classed as new (a cohort
+    or a new series) already exists outside the aggregate read. No flag."""
+    if not collisions:
+        return None
+    return (
+        f"{len(collisions)} ids this run would INSERT already exist in business_metrics "
+        f"outside the aggregate read (e.g. {list(collisions)[:3]}); upserting would overwrite "
+        "them with no target comparison. Investigate those rows before re-running."
+    )
 
 
 def print_summary(summary: Dict[str, Any]) -> None:
@@ -210,6 +296,8 @@ def print_summary(summary: Dict[str, Any]) -> None:
     only_regen, only_db = summary["ids_only_in_regen"], summary["ids_only_in_db"]
     print(f"ids only in regeneration  : {len(only_regen)} {only_regen[:5]}")
     print(f"ids only in db (stale)    : {len(only_db)} {only_db[:5]}")
+    new_series = summary.get("new_series_ids") or []
+    print(f"new-series ids (insert)   : {len(new_series)} {new_series[:5]}")
     print(f"value changed / unchanged : {summary['value_changed']} / {summary['value_unchanged']}")
     print(f"target changed            : {summary['target_changed']}  (must be 0: RNG untouched)")
     print(f"per-brand national TRx, {summary['scale_month']} (before -> after, ratio):")
@@ -224,7 +312,9 @@ def print_summary(summary: Dict[str, Any]) -> None:
         print(f"  {key:24s} {s['before']:>12,.2f} -> {s['after']:>12,.2f}  x{ratio:.4f}")
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Optional[Sequence[str]] = None, loader: Optional[Any] = None) -> int:
+    """CLI entrypoint. ``loader`` (a ``BatchLoader``-shaped object with ``client``
+    and ``load_table``) is injectable so the execute path is testable offline."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", default=True, help="(default) diff only")
@@ -254,6 +344,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "the cron will upsert"
         ),
     )
+    parser.add_argument(
+        "--allow-new-series",
+        action="store_true",
+        help="execute even though a whole new series (nbrx_ ids) is absent from the DB; INSERTS it",
+    )
     parser.add_argument("--batch-size", type=int, default=500)
     args = parser.parse_args(argv)
 
@@ -265,7 +360,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
-    loader = BatchLoader(LoaderConfig(batch_size=args.batch_size, dry_run=False))
+    if loader is None:
+        loader = BatchLoader(LoaderConfig(batch_size=args.batch_size, dry_run=False))
     client = loader.client
     if client is None:
         logger.error("no Supabase client (SUPABASE_URL / key missing) — nothing read or written")
@@ -286,11 +382,20 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
 
     refusal = execute_refusal(
-        summary, allow_id_drift=args.allow_id_drift, allow_new_cohorts=args.allow_new_cohorts
+        summary,
+        allow_id_drift=args.allow_id_drift,
+        allow_new_cohorts=args.allow_new_cohorts,
+        allow_new_series=args.allow_new_series,
     )
     if refusal is not None:
         logger.error("REFUSING: %s", refusal)
         return 3
+
+    prospective = list(summary["ids_only_in_regen"]) + list(summary.get("new_series_ids") or [])
+    collision = insert_collision_refusal(existing_metric_ids(client, prospective))
+    if collision is not None:
+        logger.error("REFUSING: %s", collision)
+        return 4
 
     logger.info("upserting %d rows on metric_id via BatchLoader.load_table ...", len(regen))
     result = loader.load_table("business_metrics", regen)
@@ -308,9 +413,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     post = diff_summary(after, regen, scale_month=scale_month)
     print(
         f"post-upsert verification: value mismatches={post['value_changed']} "
-        f"target mismatches={post['target_changed']} missing ids={len(post['ids_only_in_regen'])}"
+        f"target mismatches={post['target_changed']} missing ids={len(post['ids_only_in_regen'])} "
+        f"missing new-series ids={len(post['new_series_ids'])}"
     )
-    return 0 if (post["value_changed"] == 0 and not post["ids_only_in_regen"]) else 1
+    return (
+        0
+        if (
+            post["value_changed"] == 0
+            and post["target_changed"] == 0
+            and not post["ids_only_in_regen"]
+            and not post["new_series_ids"]
+        )
+        else 1
+    )
 
 
 if __name__ == "__main__":

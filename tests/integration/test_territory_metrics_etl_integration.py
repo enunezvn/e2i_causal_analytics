@@ -50,6 +50,11 @@ import pytest
 # psycopg2 is a transitive dep of the Supabase client and the ETL itself,
 # but unit-only environments may install without it. Skip the whole module
 # rather than ImportError when the binary is absent.
+from tests.integration._prod_write_guard import (
+    require_isolated_windows,
+    territory_rollup_spec,
+)
+
 psycopg2 = pytest.importorskip("psycopg2")
 
 # Module-level skip: developers must opt in AND have a reachable Postgres URL
@@ -133,6 +138,21 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
     start_dt = datetime(2024, 6, 1, tzinfo=timezone.utc)
     end_dt = datetime(2024, 6, 1, tzinfo=timezone.utc) + timedelta(days=NUM_DAYS)
 
+    # Prod-write guard (owner-approved, 2026-09-17). The key-space leg is the one that
+    # matters here: the territory rollup CROSS JOINs every hcp_profiles.territory_id
+    # with every windowed date, so it writes a row per REAL territory even when every
+    # source row is planted. See tests/integration/_prod_write_guard.py.
+    require_isolated_windows(
+        db_conn,
+        territory_rollup_spec(
+            test_file=__file__,
+            start=start_dt,
+            end=end_dt,
+            territory_like=f"%_{test_run_id}",
+            teardown_deletes_window=False,
+        ),
+    )
+
     # Build the HCP roster.
     hcps: list[dict] = []
     for terr_idx, (territory_short, region) in enumerate(TERRITORIES):
@@ -199,8 +219,8 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
                             """
                             INSERT INTO business_metrics (
                                 metric_id, metric_date, metric_type, brand,
-                                region, hcp_id, trx_count, nrx_count,
-                                total_rx_count, market_share, conversion_rate
+                                region, hcp_id, triggers_delivered_count, triggers_accepted_count,
+                                triggers_total_count, market_share, conversion_rate
                             ) VALUES (
                                 %s, %s, 'per_hcp_rollup',
                                 'Remibrutinib'::brand_type,
@@ -306,7 +326,7 @@ def test_territorial_sums_match_per_hcp_sums(db_conn: Any, synthetic_dataset: di
     """Per the plan: assert territorial sums match per-HCP sums.
 
     For each (territory, metric_date) cell, total_trx must equal SUM(per-HCP
-    trx_count) and total_nrx must equal SUM(per-HCP nrx_count). Drives off
+    triggers_delivered_count) and total_nrx must equal SUM(per-HCP triggers_accepted_count). Drives off
     the synthetic fixture's deterministic per-day rates.
     """
     from src.etl.territory_metrics_etl import _run_territory_rollup_impl

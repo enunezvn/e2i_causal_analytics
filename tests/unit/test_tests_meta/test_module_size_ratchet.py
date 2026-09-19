@@ -28,13 +28,20 @@ ALLOWLIST: dict[str, int] = {
     "src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py": 4238,
     "src/agents/ml_foundation/model_deployer/nodes/registry_manager.py": 1670,
     "src/agents/ml_foundation/model_trainer/nodes/evaluator.py": 4026,
-    "src/agents/orchestrator/nodes/dispatcher.py": 3770,
+    # 3710: MEASURED from the merged tree, not either side's pin. The lane's
+    # value-lookup mask (#2114) and main's #2139 structural guard both run here,
+    # and the guard now receives the structured brand (codex iter10). That costs
+    # lines relative to the lane (3700) and saves them relative to main (3770),
+    # so the pin still shrinks from main's.
+    "src/agents/orchestrator/nodes/dispatcher.py": 3710,
     "src/agents/tool_composer/executor.py": 1627,
     "src/agents/tool_composer/tool_registrations.py": 4843,
     "src/api/main.py": 1692,
     "src/api/routes/chatbot_dspy.py": 4182,
     "src/api/routes/chatbot_graph.py": 3190,
-    "src/api/routes/chatbot_tools.py": 3054,
+    # 3054 -> 3029: #2150 replaced hand-kept capability literals with policy calls
+    # (and then lazy accessors, which removed two more lines).
+    "src/api/routes/chatbot_tools.py": 3033,
     "src/api/routes/copilotkit.py": 6142,
     "src/api/routes/digital_twin.py": 1963,
     "src/api/routes/experiments.py": 1595,

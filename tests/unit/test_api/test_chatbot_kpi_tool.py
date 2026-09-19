@@ -61,7 +61,7 @@ def test_kpi_result_to_response_value_badges_synthetic():
         # Disclosing it stops the chatbot from presenting the figure as
         # "the last 30 calendar days". Included ONLY because
         # window_status == "default".
-        "reporting_window": "most recent 30 days of prescription data",
+        "reporting_window": "most recent complete calendar month",
     }
 
 
@@ -75,8 +75,9 @@ def test_kpi_result_to_response_database_when_not_synthetic():
     resp = _kpi_result_to_response(kpi, result)
     assert resp["success"] is True
     assert resp["data_source"] == "database"
-    # Volume KPIs disclose the real (frontier-anchored) reporting window.
-    assert resp["reporting_window"] == "most recent 30 days of prescription data"
+    # #2114: canonical TRx reads MONTHLY business_metrics, so the disclosed period
+    # is the latest COMPLETE calendar month, not a trailing 30 days.
+    assert resp["reporting_window"] == "most recent complete calendar month"
 
 
 @pytest.mark.unit
@@ -146,10 +147,17 @@ def test_reporting_window_covers_frontier_anchored_ws3_family():
     from src.api.routes.chatbot_tools import KPI_REPORTING_WINDOWS
 
     assert KPI_REPORTING_WINDOWS == {
-        "WS3-BI-005": "most recent 30 days of prescription data",
-        "WS3-BI-006": "most recent 30 days of prescription data",
-        "WS3-BI-007": "most recent 30 days of prescription data",
-        "WS3-BI-008": "most recent 30 days of prescription data",
+        # #2114: 005..008 read MONTHLY business_metrics at the global TRx frontier,
+        # so "most recent 30 days" misstated the period. The 30-day prescription
+        # window moved WITH the event counts to the panel ids below.
+        "WS3-BI-005": "most recent complete calendar month",
+        "WS3-BI-006": "most recent complete calendar month",
+        "WS3-BI-007": "most recent complete calendar month",
+        "WS3-BI-008": "most recent complete calendar month",
+        "WS3-BI-011": "most recent 30 days of prescription data",
+        "WS3-BI-012": "most recent 30 days of prescription data",
+        "WS3-BI-013": "most recent 30 days of prescription data",
+        "WS3-BI-014": "most recent 30 days of prescription data",
         "WS3-BI-009": "most recent 30 days of trigger data",
         "WS2-TR-001": (
             "30-day trigger cohort ending 30 days before the trigger-data "
@@ -453,7 +461,13 @@ async def test_kpi_calculate_tool_unknown_brand_fails_before_calculator(monkeypa
 @pytest.mark.asyncio
 async def test_kpi_calculate_tool_passes_segment_into_context(monkeypatch):
     """A severity-tier filter must reach the calculator under ``context['segment']``
-    (migration 105 -- BusinessImpactCalculator._resolve_windowed_call routes on it)."""
+    (migration 105 -- BusinessImpactCalculator._resolve_windowed_call routes on it).
+
+    ⚠ ASKS FOR THE PANEL KPI SINCE #2114: the axis is threaded for the KPI whose
+    calculator BINDS it, and the lane moved the patient panel to WS3-BI-011..013.
+    Canonical NRx now refuses a patient axis at the tool gate -- pinned over the
+    whole registry in test_chatbot_kpi_axis_gate_1911.py, so it is not re-asserted
+    here. What this file pins is the THREADING, which is KPI-agnostic."""
     import src.api.routes.kpi as kpi_route
     from src.api.routes.chatbot_tools import kpi_calculate_tool
 
@@ -467,7 +481,7 @@ async def test_kpi_calculate_tool_passes_segment_into_context(monkeypatch):
     monkeypatch.setattr(kpi_route, "get_kpi_calculator", lambda: _FakeCalc(), raising=False)
 
     resp = await kpi_calculate_tool.ainvoke(
-        {"kpi_name": "NRx", "brand": "Remibrutinib", "segment": "low_severity"}
+        {"kpi_name": "NRx Panel", "brand": "Remibrutinib", "segment": "low_severity"}
     )
     assert resp["success"] is True
     ctx = captured["context"]
@@ -479,7 +493,7 @@ async def test_kpi_calculate_tool_passes_segment_into_context(monkeypatch):
 @pytest.mark.asyncio
 async def test_kpi_calculate_tool_passes_therapy_line_into_context(monkeypatch):
     """A line-of-therapy filter must reach the calculator under
-    ``context['therapy_line']`` (migration 105). Line 0 is a real, commonly-populated
+    ``context['therapy_line']`` (migration 105, panel KPI since #2114). Line 0 is a real, commonly-populated
     bucket -- the tool threads it with a truthy check on the (non-empty) string, so
     "0" is included, mirroring how the base compute core guards with ``is not None``."""
     import src.api.routes.kpi as kpi_route
@@ -495,7 +509,7 @@ async def test_kpi_calculate_tool_passes_therapy_line_into_context(monkeypatch):
     monkeypatch.setattr(kpi_route, "get_kpi_calculator", lambda: _FakeCalc(), raising=False)
 
     resp = await kpi_calculate_tool.ainvoke(
-        {"kpi_name": "NRx", "brand": "Remibrutinib", "therapy_line": "0"}
+        {"kpi_name": "NRx Panel", "brand": "Remibrutinib", "therapy_line": "0"}
     )
     assert resp["success"] is True
     ctx = captured["context"]
@@ -507,7 +521,7 @@ async def test_kpi_calculate_tool_passes_therapy_line_into_context(monkeypatch):
 @pytest.mark.asyncio
 async def test_kpi_calculate_tool_passes_biologic_into_context(monkeypatch):
     """A biologic-status filter must reach the calculator under
-    ``context['biologic']`` (migration 108 -- Remibrutinib-only axis)."""
+    ``context['biologic']`` (migration 108 -- Remibrutinib-only axis, panel KPI since #2114)."""
     import src.api.routes.kpi as kpi_route
     from src.api.routes.chatbot_tools import kpi_calculate_tool
 
@@ -521,7 +535,7 @@ async def test_kpi_calculate_tool_passes_biologic_into_context(monkeypatch):
     monkeypatch.setattr(kpi_route, "get_kpi_calculator", lambda: _FakeCalc(), raising=False)
 
     resp = await kpi_calculate_tool.ainvoke(
-        {"kpi_name": "NRx", "brand": "Remibrutinib", "biologic": "experienced"}
+        {"kpi_name": "NRx Panel", "brand": "Remibrutinib", "biologic": "experienced"}
     )
     assert resp["success"] is True
     ctx = captured["context"]
@@ -533,7 +547,7 @@ async def test_kpi_calculate_tool_passes_biologic_into_context(monkeypatch):
 @pytest.mark.asyncio
 async def test_kpi_calculate_tool_passes_ige_tier_into_context(monkeypatch):
     """An IgE-tertile filter must reach the calculator under
-    ``context['ige_tier']`` (migration 108 -- Remibrutinib-only axis)."""
+    ``context['ige_tier']`` (migration 108 -- Remibrutinib-only axis, panel KPI since #2114)."""
     import src.api.routes.kpi as kpi_route
     from src.api.routes.chatbot_tools import kpi_calculate_tool
 
@@ -547,7 +561,7 @@ async def test_kpi_calculate_tool_passes_ige_tier_into_context(monkeypatch):
     monkeypatch.setattr(kpi_route, "get_kpi_calculator", lambda: _FakeCalc(), raising=False)
 
     resp = await kpi_calculate_tool.ainvoke(
-        {"kpi_name": "NRx", "brand": "Remibrutinib", "ige_tier": "low"}
+        {"kpi_name": "NRx Panel", "brand": "Remibrutinib", "ige_tier": "low"}
     )
     assert resp["success"] is True
     ctx = captured["context"]

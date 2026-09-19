@@ -71,6 +71,25 @@ _FORBIDDEN_PREFIXES: Tuple[str, ...] = ("/home/", "/Users/")
 # happen to discuss filesystem layout.
 _QUOTED_PREFIX_RE = re.compile(r"""['"](/home/|/Users/)""")
 
+# Checkout-specific path fragments. Added 2026-09-17 after two lane tests shipped
+# `assert ".worktrees/lane-trx-canonical" in _etl.__file__` -- unconditional, and
+# therefore green ONLY inside that one directory. CI checks out to
+# $GITHUB_WORKSPACE (/home/runner/work/<repo>/<repo>), which can never contain it,
+# so both would have failed on the first push.
+#
+# The two passes above could not catch it: it is a RELATIVE fragment, so it carries
+# no /home/ or /Users/ prefix. This file's own docstring already described exactly
+# this failure mode ("In a git worktree: the hard-coded path ... points at the MAIN
+# repo"), so the family was right and only the pattern set was too narrow.
+#
+# Deliberately narrow, and worth naming what it does NOT catch: any other
+# environment-specific literal (a machine name, a container id, an absolute path
+# under /opt or /srv, a sibling checkout named by hand) still passes. Widening it to
+# "anything that looks machine-specific" would need a definition nobody has, and a
+# meta-test with false positives gets weakened rather than fixed. Use
+# tests/_checkout_guard.py instead of writing any path literal at all.
+_CHECKOUT_SPECIFIC_RE = re.compile(r"""['"][^'"]*\.worktrees/""")
+
 
 def _is_forbidden_string(value: object) -> bool:
     """Return True if ``value`` is a string starting with a forbidden prefix."""
@@ -171,3 +190,52 @@ def test_tests_dir_contains_no_hardcoded_home_paths_substring() -> None:
         "derive the repo root via Path(__file__).resolve().parents[N] instead "
         "(see issue #410 for rationale). Findings:\n  - " + "\n  - ".join(findings)
     )
+
+
+def _checkout_specific_scan_file(path: Path) -> List[str]:
+    """Third pass: quoted fragments that name one particular checkout."""
+    findings: List[str] = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:  # pragma: no cover - filesystem read failure
+        return [f"{path}: could not read ({exc!r})"]
+
+    for lineno, line in enumerate(lines, start=1):
+        if _CHECKOUT_SPECIFIC_RE.search(line):
+            findings.append(f"{path}:{lineno}: checkout-specific path literal: {line.strip()!r}")
+    return findings
+
+
+def test_tests_dir_contains_no_checkout_specific_path_literals() -> None:
+    """No test asserts about a path that exists in only one checkout.
+
+    Such a literal is a PROXY for the thing the test actually wants to know -- usually
+    "did this module come from my tree?" -- and the proxy is satisfiable in exactly one
+    directory. ``tests/_checkout_guard.assert_same_checkout`` expresses that capability
+    without naming any path.
+    """
+    assert TESTS_DIR.is_dir(), f"tests/ directory not found at {TESTS_DIR!s}"
+
+    findings: List[str] = []
+    for test_file in _iter_test_files():
+        findings.extend(_checkout_specific_scan_file(test_file))
+
+    assert not findings, (
+        "Checkout-specific path literals detected in tests/ — these pass only inside one "
+        "directory and fail in CI. Use tests/_checkout_guard.assert_same_checkout(module, "
+        "__file__) to assert the capability instead. Findings:\n  - " + "\n  - ".join(findings)
+    )
+
+
+def test_the_checkout_specific_pattern_actually_matches_the_shape_it_forbids() -> None:
+    """Teeth for the pass above, kept in-tree because the offending literal is now gone.
+
+    Without this, a future edit could break the regex and the pass would go on reporting
+    zero findings forever -- green because it matches nothing, not because nothing is
+    wrong. The exact string is the one that shipped in two lane tests.
+    """
+    offender = '    assert ".worktrees/lane-trx-canonical" in _etl.__file__'
+    assert _CHECKOUT_SPECIFIC_RE.search(offender)
+    # And it does not fire on ordinary prose or on a path built at runtime.
+    assert not _CHECKOUT_SPECIFIC_RE.search("# a worktree carries no .env file")
+    assert not _CHECKOUT_SPECIFIC_RE.search("root = Path(__file__).resolve().parents[3]")

@@ -78,7 +78,7 @@ test.describe('Home Page', () => {
     })
 
     test('renders REAL quick-stat values, not the old fabricated constants', async ({ page }) => {
-      // Mocked summary -> Total TRx (MTD) = 125,000 ; HCPs Reached = 8,500 ;
+      // Mocked summary -> Total TRx (latest full month) = 125,000 ; HCPs Reached = 8,500 ;
       // Active Campaigns = 12. Model Accuracy = 80.0% comes from the per-brand
       // gold-standard summary (brand-summary mock, accuracy=0.80) since #1067.
       await expect(page.getByText('125,000')).toBeVisible({ timeout: TIMEOUTS.PAGE_LOAD })

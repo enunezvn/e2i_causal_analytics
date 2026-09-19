@@ -3,9 +3,10 @@ exist in the committed canonical schema DDL.
 
 This runs WITHOUT the feast SDK and WITHOUT a live database — it AST-parses
 ``feature_repo/data_sources.py`` for the query strings and text-parses every
-committed ``*.sql`` under ``database/`` (CREATE TABLE + ADD COLUMN), since the
-canonical columns are spread across the base schema and the migrations
-(e.g. territory_metrics in 031, business_metrics' Feast columns in 033). So
+committed FORWARD ``*.sql`` under ``database/`` (CREATE TABLE + ADD/DROP COLUMN),
+since the canonical columns are spread across the base schema and the migrations
+(e.g. territory_metrics in 031, business_metrics' Feast columns in 033, and the
+per_hcp_rollup count columns across the 144/146 expand/contract pair). So
 unlike the feast-gated ``test_data_sources_canonical_tables.py`` (which skips where the app
 image has no feast), this guard actually executes in CI and catches source-query
 column drift at PR time — the failure mode behind #556 (``business_metrics_source``
@@ -22,6 +23,7 @@ from __future__ import annotations
 
 import ast
 import re
+from collections.abc import Iterable
 from pathlib import Path
 
 import pytest
@@ -31,9 +33,27 @@ _DATA_SOURCES = _ROOT / "feature_repo" / "data_sources.py"
 # Canonical schema DDL is spread across the base schema AND the migrations: the
 # core tables live in database/core, but e.g. territory_metrics is created in
 # migrations/031 and business_metrics' Feast columns are added in migrations/033.
-# Scan every committed *.sql under database/ (CREATE TABLE + ADD COLUMN only) —
-# over-capturing columns can only relax this guard, never produce a false drift.
+# Scan every committed FORWARD *.sql under database/ (CREATE TABLE + ADD/DROP
+# COLUMN). Over-capturing columns can only relax this guard — but a DROP RETIRES a
+# name, so the scan is not purely additive and a stray reverse statement WOULD
+# produce a false drift. That is why only files that actually reach the database
+# on the forward path are scanned; see _is_forward_migration.
 _DATABASE_DIR = _ROOT / "database"
+
+# Forward DDL that a HUMAN applies, after the runner's pass — the contract half of
+# an expand/contract pair (database/deferred/146, which retires the legacy
+# per_hcp_rollup count columns that migration 144 expanded away from). These files
+# are real forward DDL; they simply land in a LATER deploy than everything the
+# runner applies, so the model must apply them LAST rather than in the
+# alphabetical position their directory name happens to occupy.
+#
+# This is not cosmetic. Plain sorted order puts "database/deferred/146" ahead of
+# "database/migrations/033", and 033 re-ADDs trx_count — so 146's DROP would be
+# silently undone and the model would carry three columns the canonical schema
+# retires. TestSchemaModelFollowsTheExpandContractPair::
+# test_the_deferred_contract_is_applied_after_everything_the_runner_applies
+# measures exactly that flip.
+_DEFERRED_DIR = _DATABASE_DIR / "deferred"
 
 # SQL keywords / functions / cast-types that are never column references.
 _NON_COLUMN_TOKENS = {
@@ -149,19 +169,115 @@ def _referenced_columns(query: str) -> set[str]:
     return cols
 
 
-def _ddl_columns() -> dict[str, set[str]]:
+def _is_forward_migration(sql_path: Path) -> bool:
+    """Is this a file the migration runner would actually APPLY?
+
+    Mirrors ``scripts/run_migrations.sh``'s ``apply_dir()`` SAFETY rule verbatim:
+    "rollback_*/*_rollback and *_validation_queries files are NOT forward
+    migrations and are excluded". The DDL model must be built from exactly the
+    files that reach the database, so this is the runner's rule rather than an
+    ad-hoc skip list — if the runner's rule changes, this must follow it.
+
+    MEASURED EFFECT (2026-09-17, re-measured 2026-09-18). Stubbing this to ``True`` changes the modelled
+    columns of FIVE tables — 28 columns lost, 2 gained — via the 30 static
+    ADD/DROP COLUMN statements in ``database/ml/rollback_040-044``, and it moves
+    the model in BOTH harmful directions:
+
+      * FALSE PASS — ``tool_registry.success_rate``. Forward migration
+        ``ml/040_tool_registry_startup_sync.sql:44`` DROPs it; ``ml/rollback_040.sql:57``
+        ADDs it back, and ``rollback_040`` sorts AFTER ``040``, so unfiltered the
+        rollback wins and the model carries a column the forward path removed.
+        A source query naming it would be waved through — the #556 class, with
+        this guard blind to it.
+      * FALSE FAIL — ``tool_performance.attempts`` and ``twin_simulations.cohort_ate``,
+        added by forward migrations ``ml/041``/``ml/042`` and dropped by their
+        rollbacks: unfiltered, real columns vanish from the model.
+
+    THIRD DIRECTION, added 2026-09-18 — and this one is on ``business_metrics``
+    itself. The filter used to have no effect on that table, because rollback_144
+    reversed a rename through ``EXECUTE format(...)``, which no static reader can
+    see. Migration 144 is now an EXPAND, so its rollback is three plain
+    ``ALTER TABLE public.business_metrics DROP COLUMN IF EXISTS
+    triggers_{delivered,accepted,total}_count;`` statements — fully visible to this
+    parser, and sorting AFTER ``144_*`` inside ``database/migrations/``. Unfiltered,
+    the model would lose the three canonical columns every Feast source now selects
+    and fail every source query. See
+    TestSchemaModelFollowsTheExpandContractPair::test_the_rollback_does_not_unbuild_the_expand.
+    """
+    name = sql_path.name.lower()
+    return not (
+        name.startswith("rollback_") or "_rollback" in name or "_validation_queries" in name
+    )
+
+
+def _runner_dir_order() -> list[str]:
+    """The ``$PROJECT_ROOT``-relative directories the runner applies, IN ITS ORDER.
+
+    Parsed from ``scripts/run_migrations.sh`` rather than restated, for the reason
+    the runner's own header gives: "MIGRATION_DIRS is the only source of that scope
+    -- do not restate the dir count here, it has gone stale twice."
+    """
+    block = re.search(
+        r"^MIGRATION_DIRS=\((.*?)^\)",
+        (_ROOT / "scripts" / "run_migrations.sh").read_text(),
+        re.M | re.S,
+    )
+    return re.findall(r'"\$PROJECT_ROOT/([^":]+)::', block.group(1)) if block else []
+
+
+def _scan_order(paths: Iterable[Path]) -> list[Path]:
+    """Lexical, except that by-hand ``database/deferred/`` files come LAST.
+
+    The model applies statements in file order, so file order has to approximate the
+    order in which the statements reach the database. Exactly ONE rule is
+    implemented here, and it is the one that was measured to matter: deferred files
+    last (see ``_DEFERRED_DIR``).
+
+    What this is NOT, despite the temptation to say so: the runner's order. The
+    runner walks ``MIGRATION_DIRS`` in its OWN sequence — migrations, memory, core,
+    ml, causal, chat, rag, audit — which is not alphabetical (codex iter2 LOW-1).
+    Implementing that was considered and rejected: it is not obviously better (it
+    would put the ``migrations`` ALTERs before ``core``'s CREATE TABLE), and
+    ``test_the_lexical_order_still_agrees_with_the_runners_directory_order``
+    measures that the two orders produce the SAME model today. That test is the
+    guard: if they ever diverge, it fails and the choice gets re-made with evidence
+    instead of being assumed away here.
+    """
+    return sorted(paths, key=lambda p: (_DEFERRED_DIR in p.parents, str(p)))
+
+
+def _ddl_columns(paths: Iterable[Path] | None = None) -> dict[str, set[str]]:
     """{table: columns} from base CREATE TABLE + ALTER TABLE ADD/DROP COLUMN.
 
-    Files are processed in sorted (≈ migration) order and ALTERs applied in
-    statement order, so an ADD-then-DROP (e.g. a transient column) ends up
-    correctly absent and a DROP-then-readd ends up present. Remaining over-capture
-    can only relax the guard; under-capture would surface immediately as a false
-    'missing column' in this test's own assertions. Actually-dropped/renamed
-    columns in the live DB are covered by the EXPLAIN + FEAST_INTEGRATION backstops.
+    Files are processed in :func:`_scan_order` (≈ the order they reach the
+    database) and ALTERs applied in statement order, so an ADD-then-DROP (e.g. a
+    transient column) ends up correctly absent and a DROP-then-readd ends up
+    present. Remaining over-capture can only relax the guard; under-capture would
+    surface immediately as a false 'missing column' in this test's own assertions.
+
+    DROP COLUMN is the one statement that is SUBTRACTIVE, which is what makes the
+    scan order and the forward-only filter load-bearing rather than cosmetic: a
+    DROP read from a file that never runs (a rollback), or read before the ADD it
+    is meant to follow, produces a FALSE drift rather than a harmless extra
+    column. See :func:`_is_forward_migration` and :func:`_scan_order`.
+
+    ``paths``, when given, is used EXACTLY as passed — neither re-sorted nor
+    re-filtered — so a test can build the model over a different file set or a
+    different order and compare. That is the only way to show that the scan order
+    and the forward-only filter change the answer rather than merely sounding like
+    they should.
+
+    Statements written in DYNAMIC SQL (``EXECUTE format(...)`` inside a ``DO``
+    block) are invisible to any static reader; keep committed schema changes as
+    plain statements, or the live EXPLAIN + FEAST_INTEGRATION backstops are the
+    only thing left to catch them.
     """
     cols: dict[str, set[str]] = {}
 
-    for sql_path in sorted(_DATABASE_DIR.rglob("*.sql")):
+    if paths is None:
+        paths = _scan_order(p for p in _DATABASE_DIR.rglob("*.sql") if _is_forward_migration(p))
+
+    for sql_path in paths:
         text = sql_path.read_text(errors="ignore")
 
         # CREATE TABLE <t> ( ... );  (CREATE VIEW / MATERIALIZED VIEW won't match)
@@ -195,6 +311,7 @@ def _ddl_columns() -> dict[str, set[str]]:
                     cols.setdefault(table, set()).add(am.group(2).lower())
                 else:
                     cols.get(table, set()).discard(am.group(2).lower())
+
     return cols
 
 
@@ -213,6 +330,149 @@ def test_parsers_are_non_vacuous():
         "territory_metrics",
     ):
         assert _DDL.get(table), f"DDL parser found no columns for {table}"
+
+
+class TestSchemaModelFollowsTheExpandContractPair:
+    """Migration 144 is the repo's first EXPAND/CONTRACT pair, and the first thing
+    ever to make this model's two ordering rules matter on a table a Feast source
+    actually reads.
+
+    144 (``database/migrations/``, applied by the runner) ADDs
+    ``business_metrics.triggers_{delivered,accepted,total}_count`` beside the
+    legacy ``{trx,nrx,total_rx}_count``. 146 (``database/deferred/``, applied by
+    hand in a LATER deploy) retires the legacy three. The canonical schema a Feast
+    source must target is the end state: canonical present, legacy gone.
+
+    Both halves are plain, statically-readable statements, which is the whole
+    reason this parser can see them — and it is also what arms two failure modes
+    that were unreachable while 144 renamed through dynamic SQL. Each test below
+    builds the model a second way and asserts the answer CHANGES, so none of them
+    can pass for a reason unrelated to the rule it names.
+    """
+
+    def test_the_canonical_columns_are_modelled(self):
+        available = _DDL.get("business_metrics", set())
+        for canonical in (
+            "triggers_delivered_count",
+            "triggers_accepted_count",
+            "triggers_total_count",
+        ):
+            assert canonical in available, f"{canonical} missing from the modelled schema"
+
+    def test_the_legacy_names_are_retired_by_the_deferred_contract(self):
+        """Teeth in the FAIL direction: the canonical schema these source queries
+        are checked against is the POST-contract one, so a source still naming a
+        legacy column must be caught (the #556 class)."""
+        available = _DDL.get("business_metrics", set())
+        for legacy in ("trx_count", "nrx_count", "total_rx_count"):
+            assert legacy not in available, f"{legacy} is retired by database/deferred/146"
+
+    def test_the_deferred_contract_is_applied_after_everything_the_runner_applies(self):
+        """THE ORDERING TEETH. ``database/deferred/146`` sorts BEFORE
+        ``database/migrations/033``, and 033 re-ADDs ``trx_count``. Under plain
+        sorted order the contract's DROP is therefore undone by a migration that
+        predates it by a hundred files, and the model silently carries three
+        retired columns. Measured here rather than asserted in prose.
+        """
+        every = [p for p in _DATABASE_DIR.rglob("*.sql") if _is_forward_migration(p)]
+        naive = _ddl_columns(sorted(every))["business_metrics"]
+        ordered = _ddl_columns(_scan_order(every))["business_metrics"]
+        assert "trx_count" in naive, (
+            "plain sorted order no longer re-adds trx_count — the trap this rule "
+            "guards has moved; re-derive it before trusting _scan_order"
+        )
+        assert "trx_count" not in ordered
+        assert naive - ordered == {"trx_count", "nrx_count", "total_rx_count"}, naive - ordered
+
+    def test_the_lexical_order_still_agrees_with_the_runners_directory_order(self):
+        """codex iter2 LOW-1: ``_scan_order`` is lexical, but the runner applies its
+        MIGRATION_DIRS in its own sequence (migrations, memory, core, ml, causal,
+        chat, rag, audit), which is not alphabetical. Rather than assert in a
+        docstring that the difference does not matter, build the model BOTH ways and
+        measure it. If this ever fails, the orders have diverged on a real table and
+        ``_scan_order`` needs the runner's sequence implemented for real.
+
+        WHAT THIS IS NOT, stated so nobody counts it twice (codex iter3 LOW-1):
+        it is a REPOSITORY INVARIANT, not evidence about this lane. Transplanted
+        onto ``origin/main`` it also passes, because the equivalence it measures
+        does not depend on anything the lane changed. It earns its place by
+        catching a future divergence — the day a directory's files start depending
+        on another directory's — not by demonstrating that this lane is correct.
+        The lane's own teeth are the three tests around it.
+        """
+        dirs = _runner_dir_order()
+        assert "database/migrations" in dirs and len(dirs) >= 8, dirs
+        rank = {(_ROOT / d).resolve(): i for i, d in enumerate(dirs)}
+        every = [p for p in _DATABASE_DIR.rglob("*.sql") if _is_forward_migration(p)]
+
+        def runner_key(p: Path):
+            # deferred (and anything else off the runner's list) sorts last, as in
+            # _scan_order; within the runner's scope, by ITS directory sequence.
+            return (rank.get(p.parent.resolve(), len(dirs)), str(p))
+
+        lexical = _ddl_columns(_scan_order(every))
+        runner = _ddl_columns(sorted(every, key=runner_key))
+        differing = {t for t in set(lexical) | set(runner) if lexical.get(t) != runner.get(t)}
+        assert not differing, (
+            "the lexical scan order and the runner's directory order now disagree on "
+            f"{sorted(differing)} — _scan_order's simplification is no longer safe"
+        )
+        # ...and the comparison must be non-vacuous: the two orders really differ.
+        assert _scan_order(every) != sorted(every, key=runner_key), (
+            "the two orderings are identical, so this test compares nothing"
+        )
+
+    def test_the_rollback_does_not_unbuild_the_expand(self):
+        """rollback_144 now holds three STATIC ``DROP COLUMN`` statements against
+        the columns 144 adds, and sorts AFTER ``144_*``. Without the forward-only
+        filter the model would lose every canonical column the Feast sources
+        select — a false drift on the live table, which is new: while 144 renamed
+        dynamically, the filter had no effect on business_metrics at all."""
+        rollback = _DATABASE_DIR / "migrations" / "rollback_144_per_hcp_trigger_count_columns.sql"
+        assert rollback.exists(), "the trap this guards is gone; re-check the filter"
+        assert not _is_forward_migration(rollback)
+        assert "DROP COLUMN IF EXISTS triggers_delivered_count" in rollback.read_text(), (
+            "the rollback no longer removes the expanded columns statically — this "
+            "test's premise, and the filter's third measured direction, have moved"
+        )
+        unfiltered = _ddl_columns(_scan_order(_DATABASE_DIR.rglob("*.sql")))["business_metrics"]
+        assert "triggers_delivered_count" not in unfiltered, (
+            "dropping the forward-only filter no longer costs the canonical columns"
+        )
+        assert "triggers_delivered_count" in _DDL["business_metrics"]
+
+    def test_excluding_non_forward_files_changes_the_model_in_both_directions(self):
+        """MODEL-level teeth for the filter on two OTHER tables, one per harmful
+        direction — kept because they are independent of anything this lane did.
+
+        Both columns were checked against the LIVE database on 2026-09-17
+        (read-only, by the lane dispatcher): tool_performance.attempts EXISTS,
+        tool_registry.success_rate DOES NOT. That is a snapshot of the live
+        schema on that date, not an invariant — the assertions below are about
+        the MODEL built from committed forward migrations, which is what this
+        guard compares source queries against; the live check is corroboration
+        that the model's answer is the true one.
+        """
+        # FALSE-FAIL direction: added by forward ml/041, dropped by its rollback.
+        assert "attempts" in _DDL.get("tool_performance", set())
+        # FALSE-PASS direction: dropped by forward ml/040:44, re-added by
+        # ml/rollback_040.sql:57, which sorts AFTER it.
+        assert "success_rate" not in _DDL.get("tool_registry", set())
+
+    def test_the_forward_only_filter_is_not_vacuous(self):
+        """A filter that excludes nothing would pass every test above by accident."""
+        excluded = [p for p in _DATABASE_DIR.rglob("*.sql") if not _is_forward_migration(p)]
+        assert excluded, "filter excluded no file at all"
+        names = {p.name for p in excluded}
+        assert "rollback_144_per_hcp_trigger_count_columns.sql" in names
+        assert "011_validation_queries.sql" in names
+        # ...and it must not swallow real forward migrations.
+        assert _is_forward_migration(
+            _DATABASE_DIR / "migrations" / "033_feast_canonical_schema.sql"
+        )
+        # The deferred contract is FORWARD DDL — it is deferred in ORDER, not
+        # excluded. Confusing the two rules would retire nothing.
+        assert _is_forward_migration(_DEFERRED_DIR / "146_drop_legacy_per_hcp_count_columns.sql")
 
 
 @pytest.mark.parametrize("source_name", sorted(_QUERIES))

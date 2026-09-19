@@ -941,12 +941,12 @@ class TestKPIHistorySegmentedEndpoint:
             new=AsyncMock(return_value=self._rows()),
         ) as fetch:
             resp = client.get(
-                "/api/kpis/WS3-BI-005/history/segmented",
+                "/api/kpis/WS3-BI-011/history/segmented",
                 params={"axis": "segment", "brand": "Remibrutinib"},
             )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["kpi_id"] == "WS3-BI-005"
+        assert body["kpi_id"] == "WS3-BI-011"
         assert body["brand"] == "Remibrutinib"
         assert body["axis"] == "segment"
         assert body["data_through"] == "2026-06-30"
@@ -959,7 +959,7 @@ class TestKPIHistorySegmentedEndpoint:
         # Feb has no medium/high rows -> genuine zeros, not missing points.
         medium = body["series"][1]
         assert medium["points"][1] == {"metric_date": "2026-02-01", "value": 0.0, "status": None}
-        fetch.assert_awaited_once_with("WS3-BI-005", axis="segment", brand="Remibrutinib")
+        fetch.assert_awaited_once_with("WS3-BI-011", axis="segment", brand="Remibrutinib")
 
     def test_empty_brand_param_means_global_scope(self):
         # The UI's All-Brands scope sends ?brand= (empty string), and the
@@ -972,12 +972,12 @@ class TestKPIHistorySegmentedEndpoint:
             new=AsyncMock(return_value=self._rows()),
         ) as fetch:
             resp = client.get(
-                "/api/kpis/WS3-BI-005/history/segmented",
+                "/api/kpis/WS3-BI-011/history/segmented",
                 params={"axis": "segment", "brand": ""},
             )
         assert resp.status_code == 200
         assert resp.json()["brand"] == ""
-        fetch.assert_awaited_once_with("WS3-BI-005", axis="segment", brand=None)
+        fetch.assert_awaited_once_with("WS3-BI-011", axis="segment", brand=None)
 
     def test_therapy_line_axis_and_value_filter(self):
         rows = [
@@ -994,7 +994,7 @@ class TestKPIHistorySegmentedEndpoint:
             new=AsyncMock(return_value=rows),
         ):
             resp = client.get(
-                "/api/kpis/WS3-BI-006/history/segmented",
+                "/api/kpis/WS3-BI-012/history/segmented",
                 params={"axis": "therapy_line", "value": "2"},
             )
         assert resp.status_code == 200
@@ -1010,15 +1010,15 @@ class TestKPIHistorySegmentedEndpoint:
         assert resp.status_code == 422
         # The app's StarletteHTTPException handler wraps details in the
         # structured error envelope; assert on the surfaced message text.
-        assert "WS3-BI-005" in resp.text
+        assert "WS3-BI-011" in resp.text
 
     def test_unknown_axis_is_422(self):
-        resp = client.get("/api/kpis/WS3-BI-005/history/segmented", params={"axis": "region"})
+        resp = client.get("/api/kpis/WS3-BI-011/history/segmented", params={"axis": "region"})
         assert resp.status_code == 422
 
     def test_unknown_bucket_value_is_422(self):
         resp = client.get(
-            "/api/kpis/WS3-BI-005/history/segmented",
+            "/api/kpis/WS3-BI-011/history/segmented",
             params={"axis": "segment", "value": "extreme"},
         )
         assert resp.status_code == 422
@@ -1028,7 +1028,7 @@ class TestKPIHistorySegmentedEndpoint:
             "src.kpi.segmented_history.fetch_segmented_rows",
             new=AsyncMock(return_value=[]),
         ):
-            resp = client.get("/api/kpis/WS3-BI-007/history/segmented", params={"axis": "segment"})
+            resp = client.get("/api/kpis/WS3-BI-013/history/segmented", params={"axis": "segment"})
         assert resp.status_code == 200
         body = resp.json()
         assert body["series"] == []
@@ -1069,10 +1069,10 @@ class TestKPIHistoryNowcastEndpoint:
         ]
 
     def test_off_family_kpi_is_422_with_family_detail(self):
-        # WS3-BI-010 EXISTS in the registry (it's just not Rx-volume) -> 422.
+        # WS3-BI-010 EXISTS in the registry (it's just not patient-panel) -> 422.
         resp = client.get("/api/kpis/WS3-BI-010/history/nowcast")
         assert resp.status_code == 422
-        assert "WS3-BI-005" in resp.text
+        assert "WS3-BI-011" in resp.text
 
     def test_unknown_kpi_id_is_404_not_422(self):
         # Nonexistent id -> 404 via the same registry lookup /metadata uses
@@ -1092,13 +1092,13 @@ class TestKPIHistoryNowcastEndpoint:
             new=AsyncMock(return_value=self._rows()),
         ) as fetch:
             resp = client.get(
-                "/api/kpis/WS3-BI-005/history/nowcast",
+                "/api/kpis/WS3-BI-011/history/nowcast",
                 params={"brand": "Remibrutinib"},
             )
         assert resp.status_code == 200
         body = resp.json()
-        fetch.assert_awaited_once_with("WS3-BI-005", brand="Remibrutinib")
-        assert body["kpi_id"] == "WS3-BI-005"
+        fetch.assert_awaited_once_with("WS3-BI-011", brand="Remibrutinib")
+        assert body["kpi_id"] == "WS3-BI-011"
         assert body["brand"] == "Remibrutinib"
         assert body["data_through"] == "2026-06-15"
         assert body["insufficient_maturity"] is False
@@ -1132,19 +1132,19 @@ class TestKPIHistoryNowcastEndpoint:
             "src.kpi.nowcast.completion_factor.fetch_nowcast_rows",
             new=AsyncMock(return_value=self._rows()),
         ) as fetch:
-            resp = client.get("/api/kpis/WS3-BI-005/history/nowcast", params={"brand": ""})
+            resp = client.get("/api/kpis/WS3-BI-011/history/nowcast", params={"brand": ""})
         assert resp.status_code == 200
         body = resp.json()
         assert body["brand"] == ""
         assert body["insufficient_maturity"] is False
-        fetch.assert_awaited_once_with("WS3-BI-005", brand=None)
+        fetch.assert_awaited_once_with("WS3-BI-011", brand=None)
 
     def test_insufficient_maturity_is_explicit_with_no_points(self):
         with patch(
             "src.kpi.nowcast.completion_factor.fetch_nowcast_rows",
             new=AsyncMock(return_value=self._rows(first="2026-01-01")),
         ):
-            resp = client.get("/api/kpis/WS3-BI-006/history/nowcast")
+            resp = client.get("/api/kpis/WS3-BI-012/history/nowcast")
         assert resp.status_code == 200
         body = resp.json()
         assert body["insufficient_maturity"] is True
@@ -1158,7 +1158,7 @@ class TestKPIHistoryNowcastEndpoint:
             new=AsyncMock(return_value=self._rows()),
         ):
             resp = client.get(
-                "/api/kpis/WS3-BI-007/history/nowcast",
+                "/api/kpis/WS3-BI-013/history/nowcast",
                 params={"start_date": "2026-03-01", "end_date": "2026-04-30"},
             )
         assert resp.status_code == 200
@@ -1170,7 +1170,7 @@ class TestKPIHistoryNowcastEndpoint:
             "src.kpi.nowcast.completion_factor.fetch_nowcast_rows",
             new=AsyncMock(return_value=[]),
         ):
-            resp = client.get("/api/kpis/WS3-BI-005/history/nowcast")
+            resp = client.get("/api/kpis/WS3-BI-011/history/nowcast")
         assert resp.status_code == 200
         body = resp.json()
         assert body["insufficient_maturity"] is True

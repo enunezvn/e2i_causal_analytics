@@ -35,7 +35,7 @@ vi.mock('@/hooks/api/use-kpi', () => ({
   useKPIHistoryNowcast: vi.fn(),
   useKPIMetadata: vi.fn(),
   useKPIList: vi.fn(),
-  RX_VOLUME_KPI_IDS: new Set(['WS3-BI-005', 'WS3-BI-006', 'WS3-BI-007']),
+  RX_VOLUME_KPI_IDS: new Set(['WS3-BI-011', 'WS3-BI-012', 'WS3-BI-013']),
 }));
 
 vi.mock('recharts', async (importOriginal) => {
@@ -106,7 +106,7 @@ const kpiList = [
   kpiMetadata,
   {
     ...kpiMetadata,
-    id: 'WS3-BI-005',
+    id: 'WS3-BI-011',
     name: 'Total Prescriptions (TRx)',
     workstream: 'ws3_business',
   },
@@ -114,7 +114,7 @@ const kpiList = [
 
 const coverage = [
   { kpi_id: 'WS3-BI-010', brands: [''], points: 3, first_date: '2026-04-01', last_date: '2026-06-01' },
-  { kpi_id: 'WS3-BI-005', brands: [''], points: 7, first_date: '2026-01-01', last_date: '2026-07-01' },
+  { kpi_id: 'WS3-BI-011', brands: [''], points: 7, first_date: '2026-01-01', last_date: '2026-07-01' },
 ];
 
 // Mature /history series for TRx — INCLUDES the frontier month (2026-07-01),
@@ -137,7 +137,7 @@ const roiHistoryPoints = [
 
 /** Populated arrival plane: 4 mature months + 2 provisional, frontier excluded. */
 const NOWCAST_OK = {
-  kpi_id: 'WS3-BI-005',
+  kpi_id: 'WS3-BI-011',
   brand: '',
   data_through: '2026-07-21',
   insufficient_maturity: false,
@@ -159,7 +159,7 @@ const NOWCAST_OK = {
 
 /** The LIVE pre-reseed state: arrival plane not populated, zero points. */
 const NOWCAST_DEGRADED = {
-  kpi_id: 'WS3-BI-005',
+  kpi_id: 'WS3-BI-011',
   brand: '',
   data_through: null,
   insufficient_maturity: true,
@@ -185,7 +185,7 @@ function queryResult(data: unknown) {
 
 function mockNowcast(response: unknown) {
   mockUseKPIHistoryNowcast.mockImplementation((kpiId: string) =>
-    queryResult(kpiId === 'WS3-BI-005' ? response : undefined)
+    queryResult(kpiId === 'WS3-BI-011' ? response : undefined)
   );
 }
 
@@ -207,7 +207,7 @@ beforeEach(() => {
   );
   mockUseKPIHistory.mockImplementation((kpiId: string) =>
     queryResult(
-      kpiId === 'WS3-BI-005'
+      kpiId === 'WS3-BI-011'
         ? { kpi_id: kpiId, brand: '', region: '', count: trxHistoryPoints.length, points: trxHistoryPoints }
         : { kpi_id: kpiId, brand: '', region: '', count: roiHistoryPoints.length, points: roiHistoryPoints }
     )
@@ -275,7 +275,7 @@ describe('TimeSeries nowcast (backlog #45 PR-C)', () => {
 
     await waitFor(() => {
       const calls = mockUseKPIHistoryNowcast.mock.calls.filter(
-        (c: unknown[]) => c[0] === 'WS3-BI-005'
+        (c: unknown[]) => c[0] === 'WS3-BI-011'
       );
       expect(calls.length).toBeGreaterThan(0);
       expect(
@@ -324,7 +324,7 @@ describe('TimeSeries nowcast (backlog #45 PR-C)', () => {
     // The nowcast endpoint has no region dimension: the fetch gates off...
     await waitFor(() => {
       const calls = mockUseKPIHistoryNowcast.mock.calls.filter(
-        (c: unknown[]) => c[0] === 'WS3-BI-005'
+        (c: unknown[]) => c[0] === 'WS3-BI-011'
       );
       expect(
         (calls[calls.length - 1][2] as { enabled?: boolean } | undefined)?.enabled
@@ -466,7 +466,7 @@ describe('TimeSeries nowcast (backlog #45 PR-C)', () => {
     await screen.findByRole('button', { name: /show nowcast/i });
     await user.click(screen.getByRole('button', { name: /export/i }));
     const second = JSON.parse(await readBlob(createObjectURL.mock.calls[1]?.[0] as Blob));
-    expect(second.kpiId).toBe('WS3-BI-005');
+    expect(second.kpiId).toBe('WS3-BI-011');
     expect(second.nowcast).toBeDefined();
     expect(second.nowcast.data_through).toBe('2026-07-21');
     expect(Array.isArray(second.nowcast.points)).toBe(true);

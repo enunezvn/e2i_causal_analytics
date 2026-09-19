@@ -15,6 +15,7 @@ import yaml  # type: ignore[import-untyped]
 logger = logging.getLogger(__name__)
 
 from src.kpi.models import (
+    AxisCapability,
     CalculationType,
     CausalLibrary,
     KPIMetadata,
@@ -153,6 +154,17 @@ class KPIRegistry:
             primary_causal_library=primary_causal,
             brand=data.get("brand"),
             note=data.get("note"),
+            # ⚠ THIS LOADER DROPS ANYTHING IT DOES NOT NAME. KPIMetadata is built
+            # field-by-field from data.get(...), so a new YAML key is silently
+            # ignored until it is added HERE — which is why the capability tests
+            # assert the PARSED object and never the YAML text.
+            axis_capability=(
+                AxisCapability(**data["axis_capability"])
+                if isinstance(data.get("axis_capability"), dict)
+                else None
+            ),
+            additive=data.get("additive"),
+            reporting_window=data.get("reporting_window"),
             windowable=data.get("windowable", "not_applicable"),
             window=data.get("window"),
             actionability=data.get("actionability"),

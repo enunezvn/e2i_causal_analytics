@@ -71,13 +71,32 @@ TRX_TREND = 0.02  # 2%/month
 AUG_2026_IDX = 163
 
 
-def _expected_trx(brand: str, region: str, month_idx: int, events: dict) -> float:
+# Canonical TRx lane: calendar seasonality on trx value (literal pin, same
+# reason as REGION_FACTORS above).
+SEASONAL_BP = {
+    1: -800,
+    2: -400,
+    3: 100,
+    4: 100,
+    5: 100,
+    6: -100,
+    7: -300,
+    8: -200,
+    9: 100,
+    10: 300,
+    11: 300,
+    12: 800,
+}
+
+
+def _expected_trx(brand: str, region: str, month_idx: int, events: dict, month: int) -> float:
     return (
         TRX_BASE[brand]
         * REGION_FACTORS[region]
         * (1 + TRX_TREND * month_idx)
         * BRAND_REGION_PERFORMANCE[brand][region]
         * events.get((brand, region), 1.0)
+        * (1 + SEASONAL_BP[month] / 10_000)
     )
 
 
@@ -105,7 +124,9 @@ class TestMonthCohortContinuity:
         assert len(trx) == 12
 
         expected = trx.apply(
-            lambda r: _expected_trx(r["brand"], r["region"], AUG_2026_IDX, EVENTS_ACTIVE_AUG_2026),
+            lambda r: _expected_trx(
+                r["brand"], r["region"], AUG_2026_IDX, EVENTS_ACTIVE_AUG_2026, month=8
+            ),
             axis=1,
         )
         ratio = float((trx["value"] / expected).mean())
@@ -144,6 +165,7 @@ class TestMonthCohortContinuity:
                 * BusinessMetricsGenerator.brand_region_factor(
                     row["brand"], row["region"], "trx", d
                 )
+                * (1 + SEASONAL_BP[d.month] / 10_000)
             )
             return row["value"] / line
 
@@ -165,6 +187,31 @@ class TestMonthCohortContinuity:
                     residual(row),
                     base_resid,
                 )
+
+
+class TestMonthCohortSeasonality:
+    """The cohort path applies the calendar factor EXACTLY once: same seed, the
+    profile zeroed for the flat run. The tolerance is 2dp rounding only,
+    |round(x * f, 2) - round(x, 2) * f| <= 0.005 + 0.005 * f < 0.01 for f = 0.98;
+    a doubly applied factor moves each value by ~2%."""
+
+    def test_august_cohort_value_is_flat_value_times_the_august_factor(self, monkeypatch):
+        from src.ml.synthetic.generators import seasonality
+
+        seasonal = generate_month_cohort(date(2026, 8, 1))["business_metrics"]
+        monkeypatch.setattr(seasonality, "SEASONAL_DEVIATION_BP", dict.fromkeys(range(1, 13), 0))
+        flat = generate_month_cohort(date(2026, 8, 1))["business_metrics"]
+        assert list(seasonal["metric_id"]) == list(flat["metric_id"])
+        factor = 1 + SEASONAL_BP[8] / 10_000
+
+        # trx / nrx from the generator plus the 12 nbrx rows appended beside them.
+        volume = seasonal["metric_type"].isin(["trx", "nrx", "nbrx"])
+        assert volume.sum() == 36
+        gap = (seasonal.loc[volume, "value"] - flat.loc[volume, "value"] * factor).abs()
+        assert gap.max() <= 0.01, gap.max()
+
+        other = ~volume
+        pd.testing.assert_series_equal(seasonal.loc[other, "value"], flat.loc[other, "value"])
 
 
 class TestBaseBusinessMetricsFrame:
@@ -503,3 +550,55 @@ class TestAsOfRegression:
 
     def test_instant_registry_scope_is_exactly_feature_values(self):
         assert fa.INSTANT_COLUMNS == {"feature_values": "event_timestamp"}
+
+
+class TestNbrxRidesBesideCohorts:
+    """Canonical TRx lane: the monthly cron cohort and the frozen-base
+    regeneration both carry the nbrx series, without perturbing a single
+    existing row."""
+
+    def test_cohort_is_the_old_60_rows_plus_12_nbrx_rows(self):
+        bm = generate_month_cohort(date(2026, 8, 1))["business_metrics"]
+        assert len(bm) == 72
+        old = bm.iloc[:60].reset_index(drop=True)
+        assert (old["metric_id"] == [f"m2608_{i:04d}" for i in range(60)]).all()
+        assert set(old["metric_type"]) == {
+            "trx",
+            "nrx",
+            "market_share",
+            "conversion_rate",
+            "hcp_engagement_score",
+        }
+        expected = BusinessMetricsGenerator(
+            _cohort_config(trend_origin=fa.BM_TREND_ORIGIN)
+        ).generate()
+        # Every legacy column, data_split and the derived fields included, matches
+        # the generator's own frame; only metric_id is re-keyed under the month prefix.
+        assert list(old.columns) == list(expected.columns)
+        pd.testing.assert_frame_equal(
+            old.drop(columns="metric_id"),
+            expected.drop(columns="metric_id").reset_index(drop=True),
+        )
+        new = bm.iloc[60:]
+        assert set(new["metric_type"]) == {"nbrx"}
+        assert new["metric_id"].str.startswith("nbrx_202608_").all()
+
+    def test_base_nbrx_frame_covers_the_frozen_base_months(self):
+        frame = fa.base_nbrx_frame()
+        assert len(frame) == 1956
+        assert frame["metric_date"].min() == "2013-01-01"
+        assert frame["metric_date"].max() == "2026-07-01"
+
+    def test_frontier_datasets_carry_nbrx_up_to_the_frontier(self):
+        datasets = build_frontier_datasets(
+            frontier=date(2026, 8, 3),
+            as_of=datetime(2026, 8, 3, 3, 0),
+            include_coverage=False,
+            hcp_frame_factory=lambda: HCPGenerator(
+                GeneratorConfig(id_prefix="scv", seed=42, n_records=200)
+            ).generate(),
+        )
+        bm = datasets["business_metrics"]
+        nbrx = bm[bm["metric_type"] == "nbrx"]
+        assert len(nbrx) == 12 and set(nbrx["metric_date"]) == {"2026-08-01"}
+        assert bm["is_synthetic"].all()

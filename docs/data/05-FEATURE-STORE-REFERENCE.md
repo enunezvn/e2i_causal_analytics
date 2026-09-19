@@ -150,9 +150,9 @@ window.
 | `territory_id` | VARCHAR | Territory identifier |
 | `brand_id` | VARCHAR | Brand identifier |
 | `event_timestamp` | TIMESTAMP | Metric date |
-| `trx_count` | INT | Total prescriptions |
-| `nrx_count` | INT | New prescriptions |
-| `total_rx_count` | INT | Total Rx count |
+| `triggers_delivered_count` | INT | Triggers delivered or viewed |
+| `triggers_accepted_count` | INT | Triggers accepted or responded |
+| `triggers_total_count` | INT | All triggers generated |
 | `market_share` | FLOAT | Market share |
 | `conversion_rate` | FLOAT | Conversion rate |
 | `engagement_score` | FLOAT | Engagement score |
@@ -248,9 +248,9 @@ For on-demand feature computation at serving time.
 
 | Feature | Type | Description |
 |---------|------|-------------|
-| `trx_count` | Int64 | Total TRx in period |
-| `nrx_count` | Int64 | New prescriptions |
-| `total_rx_count` | Int64 | Total prescriptions |
+| `triggers_delivered_count` | Int64 | Triggers delivered or viewed |
+| `triggers_accepted_count` | Int64 | Triggers accepted or responded |
+| `triggers_total_count` | Int64 | All triggers generated |
 | `market_share` | Float32 | HCP's market share for brand (0-1) |
 | `conversion_rate` | Float32 | Historical conversion rate |
 | `engagement_score` | Float32 | Overall engagement score (0-100) |
@@ -366,9 +366,9 @@ For on-demand feature computation at serving time.
 
 | Feature | Type | Description |
 |---------|------|-------------|
-| `trx_count` | Int64 | Territory TRx volume |
-| `nrx_count` | Int64 | Territory NRx volume |
-| `total_rx_count` | Int64 | Total prescriptions |
+| `triggers_delivered_count` | Int64 | Triggers delivered or viewed |
+| `triggers_accepted_count` | Int64 | Triggers accepted or responded |
+| `triggers_total_count` | Int64 | All triggers generated |
 | `market_share` | Float32 | Market share in territory |
 | `conversion_rate` | Float32 | Territory conversion rate |
 | `engagement_score` | Float32 | Average engagement score |
@@ -520,7 +520,7 @@ store = FeatureStore(repo_path="feature_repo/")
 training_df = store.get_historical_features(
     entity_df=entity_df,
     features=[
-        "hcp_conversion_features:trx_count",
+        "hcp_conversion_features:triggers_delivered_count",
         "hcp_conversion_features:market_share",
         "hcp_profile_features:specialty",
     ],

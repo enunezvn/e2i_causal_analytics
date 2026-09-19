@@ -40,7 +40,7 @@ def _make_cohort(n: int = 3000, seed: int = 0) -> pd.DataFrame:
     conversion = base + 0.06 * engagement + 0.01 * call_frequency + rng.normal(0, 0.08, size=n)
     # Pre-treatment confounder columns the direct estimator adjusts for (present subset).
     market_share = np.clip(base * 0.5 + rng.uniform(0, 0.5, size=n), 0, 1)
-    total_rx_count = rng.poisson(lam=np.clip(50 + 80 * base, 1, None)).astype(float)
+    triggers_total_count = rng.poisson(lam=np.clip(50 + 80 * base, 1, None)).astype(float)
     return pd.DataFrame(
         {
             "region": regions,
@@ -48,7 +48,7 @@ def _make_cohort(n: int = 3000, seed: int = 0) -> pd.DataFrame:
             "call_frequency": call_frequency,
             "conversion_rate": conversion,
             "market_share": market_share,
-            "total_rx_count": total_rx_count,
+            "triggers_total_count": triggers_total_count,
         }
     )
 
@@ -92,7 +92,7 @@ def test_cohort_provider_returns_raw_cohort_frame():
     assert frame.treatment_var == "engagement_score"
     assert frame.outcome_var == "conversion_rate"
     assert frame.ground_truth_ate is None  # estimated from data, NOT injected
-    assert frame.confounders == ["market_share", "total_rx_count"]
+    assert frame.confounders == ["market_share", "triggers_total_count"]
     assert frame.effect_modifiers == ["region"]
     assert frame.df is cohort  # raw cohort, not a synthetic resample
 

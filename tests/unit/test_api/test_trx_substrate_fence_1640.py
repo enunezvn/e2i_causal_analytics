@@ -49,13 +49,19 @@ class TestTheRegistryDeclaresEverySubstrate:
         undeclared = [k.id for k in get_registry().get_all() if not k.tables]
         assert not undeclared, f"KPIs with no substrate declared: {undeclared}"
 
-    def test_trx_reads_the_event_ledger_not_business_metrics(self):
+    def test_trx_reads_canonical_business_metrics(self):
         from src.services.kpi_resolution import recognize_kpi
 
         trx = recognize_kpi("TRx")
         assert trx is not None and trx.id == "WS3-BI-005"
-        assert "treatment_events" in trx.tables
-        assert "business_metrics" not in trx.tables
+        assert trx.tables == ["business_metrics"]
+
+    def test_trx_panel_reads_the_event_ledger(self):
+        from src.services.kpi_resolution import recognize_kpi
+
+        panel = recognize_kpi("TRx panel")
+        assert panel is not None and panel.id == "WS3-BI-011"
+        assert panel.tables == ["treatment_events"]
 
     def test_roi_genuinely_reads_business_metrics(self):
         """The exception that makes a derived rule better than a map."""
@@ -72,7 +78,7 @@ class TestBothToolsDeclareTheirBasis:
         from src.services.kpi_resolution import recognize_kpi
 
         basis = _measure_basis_for_kpi(recognize_kpi("TRx"))
-        assert basis["substrate"] == ["treatment_events"]
+        assert basis["substrate"] == ["business_metrics"]
         assert basis["computed"] is True
 
     def test_roi_basis_reports_business_metrics(self):
@@ -88,7 +94,19 @@ class TestBothToolsDeclareTheirBasis:
         assert _BUSINESS_METRICS_BASIS["substrate"] == ["business_metrics"]
         assert _BUSINESS_METRICS_BASIS["computed"] is False
 
-    def test_the_two_bases_are_not_comparable(self):
+    def test_canonical_trx_is_comparable_with_stored_rows(self):
+        from src.api.routes.chatbot_tools import (
+            _BUSINESS_METRICS_BASIS,
+            _measure_basis_for_kpi,
+            bases_are_comparable,
+        )
+        from src.services.kpi_resolution import recognize_kpi
+
+        assert bases_are_comparable(
+            _measure_basis_for_kpi(recognize_kpi("TRx")), _BUSINESS_METRICS_BASIS
+        )
+
+    def test_the_panel_basis_is_not_comparable_with_stored_rows(self):
         from src.api.routes.chatbot_tools import (
             _BUSINESS_METRICS_BASIS,
             _measure_basis_for_kpi,
@@ -97,7 +115,7 @@ class TestBothToolsDeclareTheirBasis:
         from src.services.kpi_resolution import recognize_kpi
 
         assert not bases_are_comparable(
-            _measure_basis_for_kpi(recognize_kpi("TRx")), _BUSINESS_METRICS_BASIS
+            _measure_basis_for_kpi(recognize_kpi("TRx panel")), _BUSINESS_METRICS_BASIS
         )
 
     def test_roi_is_not_certified_comparable_either(self):
@@ -127,7 +145,7 @@ class TestBothToolsDeclareTheirBasis:
         from src.services.kpi_resolution import recognize_kpi
 
         conv = _measure_basis_for_kpi(recognize_kpi("conversion rate"))
-        trx = _measure_basis_for_kpi(recognize_kpi("TRx"))
+        trx = _measure_basis_for_kpi(recognize_kpi("TRx panel"))
         assert set(conv["substrate"]) & set(trx["substrate"]), "precondition: they DO overlap"
         assert not bases_are_comparable(conv, trx)
 
@@ -143,8 +161,8 @@ class TestBothToolsDeclareTheirBasis:
         from src.api.routes.chatbot_tools import _BUSINESS_METRICS_BASIS
 
         note = _BUSINESS_METRICS_BASIS["note"]
-        assert "73" in note, note
-        assert "treatment_events" in note
+        assert "800,349" in note and "597" in note, note
+        assert "treatment_events" in note and "WS3-BI-011" in note
 
 
 class TestBothChatBrainsCarryTheScaleGuard:
@@ -168,7 +186,8 @@ class TestBothChatBrainsCarryTheScaleGuard:
     def test_every_surface_names_the_comparability_rule(self):
         for name, prompt in self._prompts().items():
             assert "SCALE GUARD" in prompt, name
-            assert "73x" in prompt or "73×" in prompt, name
+            assert "WS3-BI-011" in prompt and "Patient Panel" in prompt, name
+            assert "latest COMPLETE month" in prompt, name
             assert "treatment_events" in prompt and "business_metrics" in prompt, name
 
     def test_the_rule_fails_closed_on_a_missing_basis(self):
@@ -182,13 +201,15 @@ class TestTheBasisIsNotSelfReferential:
     CALLING ``_measure_basis_for_kpi``, which would pass even if the helper
     returned nonsense. This pins the actual content independently."""
 
-    def test_nbrx_basis_is_the_event_ledger(self):
+    def test_nbrx_basis_is_canonical_and_its_panel_is_the_event_ledger(self):
         from src.api.routes.chatbot_tools import _measure_basis_for_kpi
         from src.kpi.registry import get_registry
 
-        basis = _measure_basis_for_kpi(get_registry().get("WS3-BI-007"))
-        assert basis["substrate"] == ["treatment_events"]
-        assert basis["computed"] is True
+        assert _measure_basis_for_kpi(get_registry().get("WS3-BI-007"))["substrate"] == [
+            "business_metrics"
+        ]
+        panel = _measure_basis_for_kpi(get_registry().get("WS3-BI-013"))
+        assert panel["substrate"] == ["treatment_events"] and panel["computed"] is True
 
     def test_an_undeclared_kpi_fails_closed(self):
         """A KPI with no declared substrate must not read as comparable with
@@ -221,22 +242,27 @@ class TestTheFenceIsFunctionalNotJustLabelled:
     payload, in code, at that moment.
     """
 
-    def test_asking_for_trx_declares_the_conflict(self):
+    def test_asking_for_canonical_trx_declares_no_conflict(self):
         from src.api.routes.chatbot_tools import _cross_substrate_conflict
 
-        conflict = _cross_substrate_conflict("TRx")
-        assert conflict, "TRx is computable from a different substrate"
+        assert _cross_substrate_conflict("TRx") is None
+
+    def test_asking_for_the_trx_panel_declares_the_conflict(self):
+        from src.api.routes.chatbot_tools import _cross_substrate_conflict
+
+        conflict = _cross_substrate_conflict("TRx panel")
+        assert conflict, "the panel is computable from a different substrate"
         assert conflict["other_tool"] == "kpi_calculate_tool"
         assert conflict["other_substrate"] == ["treatment_events"]
         assert conflict["this_substrate"] == ["business_metrics"]
         assert "not comparable" in conflict["note"].lower()
 
     def test_the_metric_name_is_normalized_like_the_query_is(self):
-        """``trx`` is what reaches the column filter; the notice must fire on
-        the same spellings the tool actually serves."""
         from src.api.routes.chatbot_tools import _cross_substrate_conflict
 
         for spelling in ("TRx", "trx", "total prescriptions", "NRx"):
+            assert _cross_substrate_conflict(spelling) is None, spelling
+        for spelling in ("TRx panel", "panel NRx", "observed Rx events"):
             assert _cross_substrate_conflict(spelling), spelling
 
     def test_an_unrecognized_metric_declares_nothing(self):
@@ -256,7 +282,7 @@ class TestTheFenceIsFunctionalNotJustLabelled:
         original = mb.substrates_agree
         try:
             mb.substrates_agree = lambda a, b: True
-            assert ct._cross_substrate_conflict("TRx") is None
+            assert ct._cross_substrate_conflict("TRx panel") is None
         finally:
             mb.substrates_agree = original
 
@@ -442,8 +468,8 @@ class TestTheBasisPrefersTheSourceThatActuallyAnswered:
         from src.services.kpi_resolution import recognize_kpi
 
         basis = measure_basis_for_kpi(recognize_kpi("TRx"))
-        assert basis["substrate"] == ["treatment_events"]
-        assert basis["declared_sources"] == ["treatment_events"]
+        assert basis["substrate"] == ["business_metrics"]
+        assert basis["declared_sources"] == ["business_metrics"]
         assert basis["runtime_confirmed"] is False
 
     def test_a_scoped_roi_becomes_comparable_with_stored_rows(self):
@@ -589,7 +615,7 @@ class TestTheNoticeDescribesTheRowsItSitsBeside:
     def test_the_helper_still_answers_for_a_real_metric(self):
         from src.api.routes.chatbot_tools import _cross_substrate_conflict
 
-        assert _cross_substrate_conflict("TRx")["kpi_id"] == "WS3-BI-005"
+        assert _cross_substrate_conflict("TRx panel")["kpi_id"] == "WS3-BI-011"
 
     def test_supported_full_name_converges_and_unsupported_name_stays_transparent(self):
         from src.api.routes.chatbot_tools import _normalize_metric_name
@@ -682,7 +708,38 @@ class TestTheTileSubstratesMatchTheLiveRegistry:
     shipped a wrong ``hcp_reach`` label: nothing tied the declared substrate to
     the SQL the tile actually runs. Skips rather than fails without a DB — a
     unit lane with no database must not turn into a false green OR a false red.
+
+    ⚠ **THIS CLASS DOES NOT RUN IN CI, AND NEVER HAS.** The CI unit lane sets
+    ``SUPABASE_URL``/``SUPABASE_KEY`` but stands up no Supabase service, so the
+    registry read refuses and every test here skips on ``if not bases`` below.
+    Measured 2026-09-17 under a CI-faithful env (credentials configured,
+    endpoint refusing) over the whole ``tests/unit/test_api/`` directory: 8
+    skips, ``kpi_query_registry unreadable``, with the same result at the lane
+    base — so this is pre-existing, not something the canonical re-point
+    introduced. On a box WITH a reachable registry it does run, and whether it
+    runs is also selection-dependent (it reads the registry after
+    ``test_copilotkit_kpi_synthetic.py`` has run, but not on its own —
+    mechanism unidentified, and irrelevant to CI where the endpoint refuses in
+    every ordering).
+
+    Treat it as a post-deploy check on a box, NOT as a gate. A permanently
+    skipped test is indistinguishable from a passing one, which is how
+    ``test_kpi_endpoints.py`` hid 16 failures until #2151. The CI-visible half
+    of this claim lives in
+    ``tests/unit/test_api/test_home_volume_tiles.py::TestTheVolumeTilesShippedSqlReadsBusinessMetrics``,
+    which proves the SHIPPED SQL and cannot speak for the deployed registry —
+    only this class can do that.
     """
+
+    #: A migration-143 statement NO tile runs. Its presence separates "143 is not
+    #: deployed to this registry" (an environment fact -> skip) from "a tile's
+    #: query id does not exist" (a defect -> the KeyError below, loudly). A guard
+    #: that skipped whenever a tile id was missing would sit green forever over a
+    #: typo in ``_KPI_SUMMARY_QUERIES`` — the proxy-for-a-capability shape this
+    #: lane keeps finding. Measured 2026-09-17: the droplet registry holds ZERO
+    #: ``canonical_volume%`` ids, so without this the re-pointed tiles read as a
+    #: product failure rather than an undeployed migration.
+    _MIGRATION_143_WITNESS = "canonical_volume_monthly_series"
 
     def _bases(self):
         from src.api.dependencies.supabase_client import get_supabase, init_supabase
@@ -691,11 +748,17 @@ class TestTheTileSubstratesMatchTheLiveRegistry:
             init_supabase()
         if get_supabase() is None:
             pytest.skip("no Supabase client available")
-        from src.api.routes.copilotkit import _kpi_summary_measure_bases
+        from src.api.routes.copilotkit import _KPI_SUMMARY_QUERIES, _kpi_summary_measure_bases
+        from src.kpi.measure_basis import query_substrates_cached
+        from src.kpi.synthetic_mode import resolve_kpi_query_id
 
         bases = _kpi_summary_measure_bases(get_supabase())
         if not bases:
             pytest.skip("kpi_query_registry unreadable")
+        missing = sorted(set(_KPI_SUMMARY_QUERIES) - set(bases))
+        witness = resolve_kpi_query_id(self._MIGRATION_143_WITNESS)
+        if missing and not query_substrates_cached((witness,)):
+            pytest.skip(f"migration 143 not in this registry ({witness}); tiles absent: {missing}")
         return bases
 
     def test_hcp_reach_is_the_event_ledger_not_hcp_profiles(self):
@@ -716,14 +779,31 @@ class TestTheTileSubstratesMatchTheLiveRegistry:
             "patient_starts",
         }, sorted(bases)
 
-    def test_no_tile_claims_business_metrics(self):
-        for field, basis in self._bases().items():
-            assert "business_metrics" not in basis["substrate"], (field, basis["substrate"])
+    def test_volume_tiles_rest_on_business_metrics_and_the_rest_do_not(self):
+        """Flipped by Task 17, which re-pointed the four volume tiles at the
+        canonical ``canonical_volume_*`` statements. Before that they ran the
+        PANEL ``business_impact_*`` statements and this asserted the opposite.
 
-    def test_a_tile_is_not_comparable_with_stored_rows(self):
+        Both halves matter: asserting only that the volume tiles reach
+        business_metrics would pass just as well if EVERY tile had been moved,
+        and hcp_reach / conversion are exactly the tiles that must not be.
+        """
+        bases = self._bases()
+        for field in ("trx_volume", "nrx_volume", "market_share", "patient_starts"):
+            assert bases[field]["substrate"] == ["business_metrics"], (field, bases[field])
+        for field in ("conversion_rate", "hcp_reach"):
+            assert "business_metrics" not in bases[field]["substrate"], (field, bases[field])
+
+    def test_the_trx_tile_is_comparable_with_stored_rows_and_hcp_reach_is_not(self):
+        """The #1640 fence was built because the TRx tile and a stored
+        business_metrics row were ~1,300x apart. They are now the same series,
+        so fencing them would be the new wrong answer — while hcp_reach still
+        counts events and stays fenced."""
         from src.kpi.measure_basis import BUSINESS_METRICS_BASIS, substrates_agree
 
-        assert not substrates_agree(self._bases()["trx_volume"], BUSINESS_METRICS_BASIS)
+        bases = self._bases()
+        assert substrates_agree(bases["trx_volume"], BUSINESS_METRICS_BASIS)
+        assert not substrates_agree(bases["hcp_reach"], BUSINESS_METRICS_BASIS)
 
 
 @pytest.mark.integration
@@ -949,7 +1029,7 @@ class TestEveryChartableSeriesCarriesItsBasis:
         # the registry's union of the calculator's POSSIBLE sources, and for
         # ROI it names agent_activities, which never backfilled a single row.
         # Provenance comes from the backfill tag (codex iter-7).
-        assert basis["materialized_from"] == ["treatment_events.event_date"]
+        assert basis["materialized_from"] == ["business_metrics.value"]
         assert "business_metrics" in basis["note"]
 
     @pytest.mark.parametrize(
@@ -1022,8 +1102,14 @@ class TestHistoryProvenanceComesFromTheRowsNotTheRegistry:
         assert basis["materialized_from"] == ["business_metrics.roi"], basis
         assert basis["runtime_confirmed"] is True
 
-    def test_trx_history_names_the_event_ledger(self):
-        basis = self._basis("TRx", rows=[{"source": "treatment_events.event_date", "value": 11298}])
+    def test_trx_history_names_business_metrics(self):
+        basis = self._basis("TRx", rows=[{"source": "business_metrics.value", "value": 784342.0}])
+        assert basis["materialized_from"] == ["business_metrics.value"]
+
+    def test_panel_history_names_the_event_ledger(self):
+        basis = self._basis(
+            "TRx panel", rows=[{"source": "treatment_events.event_date", "value": 597}]
+        )
         assert basis["materialized_from"] == ["treatment_events.event_date"]
 
     def test_an_empty_series_falls_back_to_the_registered_handler(self):
@@ -1171,17 +1257,21 @@ class TestComparabilityRestsOnOneKey:
                 recognize_kpi("ROI"), rows=[{"source": "business_metrics.roi"}]
             ),
             "trx_history": materialized_history_basis(
-                recognize_kpi("TRx"), rows=[{"source": "treatment_events.event_date"}]
+                recognize_kpi("TRx"), rows=[{"source": "business_metrics.value"}]
+            ),
+            "panel_history": materialized_history_basis(
+                recognize_kpi("TRx panel"), rows=[{"source": "treatment_events.event_date"}]
             ),
             "stored_roi": BUSINESS_METRICS_BASIS,
             "computed_trx": measure_basis_for_kpi(recognize_kpi("TRx")),
+            "computed_panel": measure_basis_for_kpi(recognize_kpi("TRx panel")),
         }
 
     def test_two_histories_of_different_measures_are_not_comparable(self):
         from src.kpi.measure_basis import substrates_agree
 
         b = self._keys()
-        assert not substrates_agree(b["roi_history"], b["trx_history"]), (
+        assert not substrates_agree(b["roi_history"], b["panel_history"]), (
             "both read from kpi_history, but one is a return ratio and one a prescription count"
         )
 
@@ -1198,13 +1288,14 @@ class TestComparabilityRestsOnOneKey:
 
         b = self._keys()
         assert substrates_agree(b["trx_history"], b["computed_trx"])
+        assert substrates_agree(b["panel_history"], b["computed_panel"])
 
-    def test_trx_history_and_stored_business_metrics_are_not(self):
-        """The original defect: ~73x apart, and the whole point of the fence."""
+    def test_panel_history_and_stored_business_metrics_are_not(self):
+        """The original defect, now scoped to the family that still has it."""
         from src.kpi.measure_basis import substrates_agree
 
         b = self._keys()
-        assert not substrates_agree(b["trx_history"], b["stored_roi"])
+        assert not substrates_agree(b["panel_history"], b["stored_roi"])
 
     def test_a_mixed_series_is_comparable_with_nothing(self):
         """codex iter-9 HIGH: the flag has to reach the COMPARATOR.
@@ -1351,10 +1442,10 @@ class TestAConfirmedRoiIsNotFalselyFenced:
 
         assert cross_substrate_conflict("ROI") is not None
 
-    def test_a_volume_kpi_always_warns(self):
+    def test_a_panel_volume_kpi_always_warns(self):
         from src.kpi.measure_basis import cross_substrate_conflict
 
-        conflict = cross_substrate_conflict("TRx")
+        conflict = cross_substrate_conflict("TRx panel")
         assert conflict is not None
         assert "treatment_events" in conflict["other_substrate"]
 
@@ -1378,13 +1469,13 @@ class TestAConfirmedRoiIsNotFalselyFenced:
         assert "~73x" not in note
 
     def test_a_disjoint_substrate_is_still_stated_flatly(self):
-        """TRx has no business_metrics leg — nothing conditional about it."""
+        """The panel has no business_metrics leg — nothing conditional about it."""
         from src.kpi.measure_basis import cross_substrate_conflict
 
-        conflict = cross_substrate_conflict("TRx")
+        conflict = cross_substrate_conflict("TRx panel")
         assert conflict is not None
         assert conflict.get("conditional") is not True
-        assert "73x" in conflict["note"]
+        assert "1,300x" in conflict["note"]
 
 
 class TestTheSuggestionsPromptWillNotCompareUnlabelledNumbers:

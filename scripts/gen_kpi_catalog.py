@@ -76,9 +76,14 @@ SEMANTIC_OVERRIDES: dict[str, str] = {
     # WS3 volumes / population counts: integers, never fractional.
     "WS3-BI-001": "Count",  # MAU
     "WS3-BI-002": "Count",  # WAU
-    "WS3-BI-005": "Count",  # TRx
-    "WS3-BI-006": "Count",  # NRx
-    "WS3-BI-007": "Count",  # NBRx
+    # Canonical TRx lane: WS3-BI-005..007 are modeled monthly LEVELS (fractional),
+    # not event counts; the patient-panel event KPIs are the integer counts.
+    "WS3-BI-005": "Number",  # TRx (canonical business_metrics level)
+    "WS3-BI-006": "Number",  # NRx (canonical)
+    "WS3-BI-007": "Number",  # NBRx (canonical)
+    "WS3-BI-011": "Count",  # TRx Panel (observed Rx events)
+    "WS3-BI-012": "Count",  # NRx Panel
+    "WS3-BI-013": "Count",  # NBRx Panel
     "WS3-BI-010": "Number",  # ROI is a signed multiple, not a percentage
     # Causal metrics: signed effect sizes; a zero-based percent axis would hide
     # negative effects, which are the whole point of reading a CI.

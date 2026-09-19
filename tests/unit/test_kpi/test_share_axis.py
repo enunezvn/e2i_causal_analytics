@@ -7,9 +7,23 @@ from src.kpi.registry import get_registry
 
 
 def test_kpi_ids_and_trx_name_match_the_registry():
+    """REWRITTEN to the post-merge contract under OWNER DECISION #11 (#2114), not loosened.
+
+    #2137 wrote this against the pre-lane substrate, where the share KPI was the canonical
+    WS3-BI-008 ("TRx Share") and the redirect target was canonical TRx WS3-BI-005. The lane
+    makes business_metrics canonical and moves the patient panel to WS3-BI-011..014, so the
+    share with no patient-axis breakdown is now PANEL share WS3-BI-014 and the within-brand
+    mix lives on PANEL TRx WS3-BI-011. `share.name == "TRx Share"` pinned 008's name and had
+    to move with it.
+
+    The assertion is kept as strong as it was: both constants must resolve to real KPIs, and
+    the share must be the PANEL share rather than any KPI that happens to exist."""
     share = get_registry().get(sa.TRX_SHARE_KPI_ID)
     trx = get_registry().get(sa.TRX_KPI_ID)
-    assert share is not None and share.name == "TRx Share"
+    assert (
+        share is not None
+        and share.name == "Observed Rx Events - Patient Panel TRx Share (TRx Share Panel)"
+    )
     assert trx is not None and trx.name == sa.TRX_NAME
 
 

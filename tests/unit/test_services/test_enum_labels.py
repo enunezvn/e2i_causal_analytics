@@ -7,9 +7,20 @@ synonyms, cohort resolution stays strict (fail-closed) — and neither can drift
 from the enum labels the database actually holds.
 """
 
+import functools
+import inspect
+
 import pytest
 
 from src.services import enum_labels
+from src.services.enum_labels import (
+    first_named_scope,
+    names_something,
+    resolve_brand_label,
+    resolve_region_label,
+)
+
+resolve_region_label_syn = functools.partial(resolve_region_label, allow_synonyms=True)
 
 
 class TestEnumLabelSets:
@@ -364,3 +375,118 @@ class TestSingleOwner:
         from src.rag import entity_extractor
 
         assert entity_extractor.REGION_ALIASES is enum_labels.REGION_ALIASES
+
+
+class TestNamesSomething:
+    """#2114 codex r4: the positive replacement for "is this not blank".
+
+    ``str.strip()`` removes Unicode WHITESPACE only, so U+200B and U+FEFF
+    (category ``Cf``) and NUL (``Cc``) survived it and kept arriving as
+    decisions across four review rounds. Asking whether anything VISIBLE is
+    present closes the class rather than the instance.
+    """
+
+    @pytest.mark.parametrize("value", ["Kisqali", " Kisqali ", "Xolair", "-", "12345", "a", "​K"])
+    def test_visible_content_names_something(self, value) -> None:
+        assert names_something(value) is True
+
+    @pytest.mark.parametrize("value", ["", " ", "\t\n", "   \t ", "​", "﻿", "\xa0", "\x00", "​﻿"])
+    def test_invisible_or_empty_names_nobody(self, value) -> None:
+        assert names_something(value) is False
+
+    @pytest.mark.parametrize("value", [None, 42, [], {}])
+    def test_non_strings_name_nobody(self, value) -> None:
+        assert names_something(value) is False
+
+    def test_strip_alone_would_not_have_caught_the_zero_width_cases(self) -> None:
+        """The measurement that motivated the change, kept as a test so the
+        distinction cannot be quietly re-broken."""
+        for ch in ("​", "﻿"):
+            assert ch.strip() != "", "strip() leaves format characters"
+            assert names_something(ch) is False
+
+
+class TestFirstNamedScope:
+    """Validation precedes source selection; recognition normalises, never deletes."""
+
+    def test_the_first_resolvable_candidate_wins(self) -> None:
+        assert first_named_scope(["Kisqali", "competitor"], resolve_brand_label) == "Kisqali"
+
+    def test_an_unresolvable_candidate_does_not_mask_a_later_valid_one(self) -> None:
+        """r4 HIGH-1: a junk entity used to win outright and then be nulled."""
+        assert first_named_scope(["NotABrand", "competitor"], resolve_brand_label) == "competitor"
+        assert first_named_scope(["​", "Kisqali"], resolve_brand_label) == "Kisqali"
+
+    def test_a_resolvable_candidate_is_normalised(self) -> None:
+        assert first_named_scope([" kisqali "], resolve_brand_label) == "Kisqali"
+        assert first_named_scope([" COMPETITOR "], resolve_brand_label) == "competitor"
+
+    def test_nothing_resolvable_returns_the_first_meaningful_candidate_unchanged(self) -> None:
+        """r4 HIGH-2: erasing this is what widened the cohort. 'Xolair' is a
+        decision the substrate cannot serve, not an absent one."""
+        assert first_named_scope(["Xolair", "Dupixent"], resolve_brand_label) == "Xolair"
+        assert first_named_scope(["​", "Xolair"], resolve_brand_label) == "Xolair"
+
+    def test_only_meaningless_candidates_return_none(self) -> None:
+        assert first_named_scope(["", " ", "​", None], resolve_brand_label) is None
+        assert first_named_scope([], resolve_brand_label) is None
+
+    def test_it_is_resolver_agnostic(self) -> None:
+        """One implementation, so brand and region cannot drift apart.
+
+        ``resolve_region_label`` takes a keyword-only ``allow_synonyms``, so a
+        region caller must bind it -- noted here because that is the one wiring
+        difference if the region half is routed through this helper.
+        """
+        region = functools.partial(resolve_region_label, allow_synonyms=True)
+        assert first_named_scope(["NotARegion", "west"], region) == "west"
+        assert first_named_scope(["Atlantis"], region) == "Atlantis"
+        assert first_named_scope([" West "], region) == "west"
+
+
+class TestFirstNamedScopeHasNoRejectedOptionResidue:
+    """#2114: `normalise=False` was an OPTION-2 parameter that survived the
+    revert/reapply of the option-3 decision. No caller ever passed it, and its
+    docstring argued for the rejected option against the behaviour its own test
+    asserts. These tests fail if the parameter or its branch returns.
+    """
+
+    def test_the_signature_takes_no_normalise_parameter(self) -> None:
+        """Teeth: re-adding `normalise=...` to the signature fails here."""
+        params = inspect.signature(first_named_scope).parameters
+        assert "normalise" not in params, f"rejected-option residue is back: {list(params)}"
+        assert list(params) == ["candidates", "resolve"]
+
+    def test_passing_the_removed_parameter_is_an_error(self) -> None:
+        """Teeth with a positive control: the same call WITHOUT the removed
+        keyword must succeed, so this proves the keyword is rejected rather than
+        that the call is broken for some unrelated reason."""
+        assert first_named_scope([" west "], resolve_region_label_syn) == "west"
+        with pytest.raises(TypeError):
+            first_named_scope([" west "], resolve_region_label_syn, normalise=False)
+
+    def test_a_resolvable_candidate_is_always_returned_normalised(self) -> None:
+        """The branch `return resolved if normalise else candidate` cannot come
+        back without failing this: both scopes normalise, unconditionally."""
+        assert first_named_scope([" kisqali "], resolve_brand_label) == "Kisqali"
+        assert first_named_scope([" West "], resolve_region_label_syn) == "west"
+        assert first_named_scope(["  COMPETITOR "], resolve_brand_label) == "competitor"
+
+    def test_the_docstring_does_not_argue_for_the_rejected_option(self) -> None:
+        """The module a reviewer reads first must not describe `normalise=False`
+        or call region predicates case-sensitive (that census is RETRACTED).
+
+        Why prose is pinned by a test, which normally deserves suspicion: this
+        lane published a census claiming live registry SQL compares `region`
+        case-sensitively, then retracted it, and the retraction had to be
+        grepped back out of five separate artifacts. This function is the one a
+        reviewer of the scope seam opens first, so it is pinned to carry the
+        correction. REWORDING IS FINE — the retraction merely has to survive it.
+        If you rephrase the docstring, update the assertion to match the new
+        wording; do not drop the assertion.
+        """
+        doc = first_named_scope.__doc__ or ""
+        assert "normalise=False" not in doc
+        low = doc.lower()
+        assert "region predicates are not case-sensitive" in low
+        assert "region predicates are case-sensitive" not in low

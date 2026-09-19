@@ -179,7 +179,9 @@ export async function getKPIHistory(
  *
  * Computed live from the vetted kpi_query registry (migration 110) — NOT the
  * materialized kpi_history table, which has no patient-segment dimension.
- * Only TRx/NRx/NBRx (WS3-BI-005/006/007) support axes; other KPIs 422.
+ * Only the patient-panel Rx-event family (WS3-BI-011/012/013) supports axes;
+ * other KPIs 422, including the canonical TRx/NRx/NBRx — business_metrics has
+ * no patient dimension. Route canonical ids through `toPanelKpiId`.
  *
  * @param value - Optional single bucket (e.g. 'high_severity' or '2') to
  *   restrict the response to one series.
@@ -201,8 +203,9 @@ export async function getKPIHistorySegmented(
  *
  * Computed live from the claims-arrival lag triangle (migration 116) — NOT
  * the materialized kpi_history table, whose figures stay the mature values.
- * Only TRx/NRx/NBRx (WS3-BI-005/006/007) are served; other KPIs 422 — gate
- * calls via RX_VOLUME_KPI_IDS (hooks/api/use-kpi).
+ * Only the patient-panel Rx-event family (WS3-BI-011/012/013) is served; other
+ * KPIs 422, including the canonical TRx/NRx/NBRx — business_metrics carries no
+ * claims-arrival plane. Gate calls via RX_VOLUME_KPI_IDS (hooks/api/use-kpi).
  */
 export async function getKPIHistoryNowcast(
   kpiId: string,

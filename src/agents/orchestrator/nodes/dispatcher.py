@@ -24,6 +24,11 @@ from src.utils.llm_content import normalize_llm_content
 
 from .._agent_method_map import get_method_spec
 from ..state import AgentDispatch, AgentResult, OrchestratorState
+from .kpi_clarify import (
+    KPI_LOOKUP_CONFIDENCE as _KPI_LOOKUP_CONFIDENCE,
+)
+from .kpi_clarify import brand_clarify_for_ask, region_clarify_evidence
+from .structured_scope import _structured_brand, _structured_region
 
 logger = logging.getLogger(__name__)
 
@@ -192,28 +197,6 @@ def _coerce_to_input_model(
     return input_cls(**merged)
 
 
-def _entity_value(payload: Dict[str, Any], entity_type: str) -> Optional[str]:
-    """Return the first ``parsed_query.entities`` value of ``entity_type``.
-
-    Mirrors the ``parsed_query.entities`` derivation used for ``drift_monitor``'s
-    ``features_to_monitor`` default (KPI/feature mentions): walk the structured
-    NLP entities the orchestrator already carries and return the first non-empty
-    string ``value`` whose ``type`` matches. Returns ``None`` when no such entity
-    exists (the caller then falls back to ``user_context`` or proceeds without).
-    """
-    parsed_query = payload.get("parsed_query") or {}
-    entities = (parsed_query.get("entities") if isinstance(parsed_query, dict) else None) or []
-    for ent in entities:
-        if (
-            isinstance(ent, dict)
-            and ent.get("type") == entity_type
-            and isinstance(ent.get("value"), str)
-            and ent["value"].strip()
-        ):
-            return cast(str, ent["value"])
-    return None
-
-
 def _extract_brand_region(payload: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
     """Derive ``(brand, region)`` for cohort resolution from the dispatch context.
 
@@ -229,15 +212,8 @@ def _extract_brand_region(payload: Dict[str, Any]) -> tuple[Optional[str], Optio
     fabricates. Returns ``(None, None)`` when no source names them — the
     consuming resolvers then fail closed honestly.
     """
-    brand = _entity_value(payload, "brand")
-    region = _entity_value(payload, "region")
-
-    user_context = payload.get("user_context") or {}
-    if isinstance(user_context, dict):
-        if brand is None and isinstance(user_context.get("brand"), str):
-            brand = user_context["brand"] or None
-        if region is None and isinstance(user_context.get("region"), str):
-            region = user_context["region"] or None
+    brand = _structured_brand(payload)
+    region = _structured_region(payload)
 
     if brand is None or region is None:
         from src.services import query_entities
@@ -2081,9 +2057,6 @@ def _successful_results(raw: List[Any]) -> List[Dict[str, Any]]:
 # substrate resolves, the same fail-closed return fires.
 # --------------------------------------------------------------------------
 
-#: A vetted-SQL KPI read is deterministic, not an estimate.
-_KPI_LOOKUP_CONFIDENCE = 1.0
-
 #: Registry-read parameters, mirroring ``causal_analysis_tool``'s defaults
 #: (src/api/routes/chatbot_tools.py) so the orchestrator and the chat tool
 #: surface the same paths for the same ask.
@@ -2230,46 +2203,6 @@ def _kpi_right_head(normalized_query: str, match_end: int) -> Optional[str]:
     return m.group(1) if m else None
 
 
-def _region_clarify_evidence(kpi: Any, phrase: str) -> Dict[str, Any]:
-    """Evidence payload that ASKS which census region is meant (#1572).
-
-    "East Coast" spans the northeast AND south census regions, so no label can
-    honestly serve it — the #1565 ruling that keeps it out of the shared alias
-    table. The chat KPI tool already pairs that miss with its clarify hint
-    (``_REGION_CLARIFY_HINT``, src/api/routes/chatbot_tools.py), but /chat's
-    Branch A never passes the phrase to the tool: the free-text scan dropped
-    it, so the ask was answered with a silent NATIONAL figure. This mirrors
-    the same facts as a direct question to the user.
-
-    Shaped like the Branch A value payload (context_assembler reads "agent" /
-    "analysis_type" / "key_findings" / "confidence" / "warnings"), with the
-    question in ``key_findings`` so the explainer's deterministic template
-    narrates it verbatim — and NO ``value``: the national figure is never
-    computed, which is the point.
-    """
-    from src.services.enum_labels import REGION_ENUM_LABELS
-
-    labels = ", ".join(REGION_ENUM_LABELS[:-1]) + f", or {REGION_ENUM_LABELS[-1]}"
-    question = (
-        f"Which US census region do you mean: {labels}? "
-        f"'{phrase}' spans more than one census region, so {kpi.name} "
-        "cannot be scoped to it without your choice."
-    )
-    return {
-        "agent": "kpi_calculator",
-        "analysis_type": "kpi_lookup_clarification",
-        "key_findings": [question],
-        "warnings": [question],
-        # The DECISION to clarify is deterministic (vocabulary miss + probe
-        # hit), not a hedge — same confidence as the vetted-SQL value read.
-        "confidence": _KPI_LOOKUP_CONFIDENCE,
-        "needs_clarification": True,
-        "unresolved_region_phrase": phrase,
-        "kpi_id": kpi.id,
-        "kpi_name": kpi.name,
-    }
-
-
 def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     """Branch A — bind the REAL computed value for a KPI value-lookup ask.
 
@@ -2293,25 +2226,30 @@ def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str,
 
     from src.services.kpi_resolution import (
         KPI_SEMANTIC_NOTES,
+        mask_spans,
+        owned_mention_spans,
         recognize_distinct_metric,
         recognize_kpi_span,
     )
+
+    from .kpi_value_guard import value_lookup_mentions_supported
 
     match = recognize_kpi_span(query)
     if match is None:
         return None
     kpi, normalized_query, match_start, match_end = match
-    from .kpi_value_guard import value_lookup_mentions_supported
-
-    if not value_lookup_mentions_supported(normalized_query, kpi.id, match_start, match_end):
+    decided_brand = _structured_brand(agent_input)
+    if not value_lookup_mentions_supported(
+        normalized_query, kpi.id, match_start, match_end, structured_brand=decided_brand
+    ):
         # Governing heads and bare right tails are checked on EVERY occurrence
         # before masking or calculation.  A value cannot answer "cost of TRx",
         # "TRx drivers", "TRx cost", or an unresolved "TRx patients" scope.
         return None
-    masked = (
-        normalized_query[:match_start]
-        + " " * (match_end - match_start)
-        + normalized_query[match_end:]
+    # Every owned occurrence is masked, not just the first: a redundant repeat
+    # ("TRx ... TRx") must not read as a second metric below (#2114 codex r9).
+    masked = mask_spans(
+        normalized_query, owned_mention_spans(normalized_query, kpi.id, match_start, match_end)
     )
     if recognize_distinct_metric(masked, exclude_id=kpi.id, original_query=query) is not None:
         # "TRx and NRx" names TWO metrics — one value presented as the whole
@@ -2340,7 +2278,12 @@ def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str,
                 "-> returning the census-region clarify instead of a national figure.",
                 ambiguous_phrase,
             )
-            return [_region_clarify_evidence(kpi, ambiguous_phrase)]
+            return [region_clarify_evidence(kpi, ambiguous_phrase)]
+    # #2114: an ask grounding SEVERAL brands must end in a question, not a figure
+    # for one of them. Only the ask text tells them apart; the calculator cannot.
+    brand_clarify = brand_clarify_for_ask(kpi, query, decided_brand)
+    if brand_clarify is not None:
+        return [brand_clarify]
     context: Dict[str, Any] = {}
     if brand:
         context["brand"] = brand
@@ -2501,6 +2444,7 @@ def _causal_path_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str
     if not isinstance(query, str) or not query.strip():
         return None
 
+    from src.agents.orchestrator.nodes.kpi_mentions import causal_masked_or_refusal
     from src.services.kpi_resolution import recognize_distinct_metric, recognize_kpi_span
 
     match = recognize_kpi_span(query)
@@ -2519,16 +2463,12 @@ def _causal_path_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str
         and not any(pattern.search(query) for pattern in _causal_ask_patterns())
     ):
         return None
-    if of_head is not None and of_head not in _CAUSAL_OF_HEADS:
-        # "what drives the cost of TRx up" (codex iter-1): TRx is a MODIFIER of
-        # a head the registry does not model — binding TRx drivers would answer
-        # a different question. Fail closed instead.
+    masked = causal_masked_or_refusal(normalized_query, kpi.id, match_start, match_end)
+    if masked is None:
+        # A governing of-head outside _CAUSAL_OF_HEADS on ANY owned occurrence
+        # ("the cost of TRx up", codex iter-1; a LATER one, codex r10): the KPI
+        # is a MODIFIER of a head the registry does not model. Fail closed.
         return None
-    masked = (
-        normalized_query[:match_start]
-        + " " * (match_end - match_start)
-        + normalized_query[match_end:]
-    )
     second = recognize_distinct_metric(masked, exclude_id=kpi.id, original_query=query)
     if second is not None:
         # Two distinct metrics in a causal ask (codex iter-5). The "on <Y>"

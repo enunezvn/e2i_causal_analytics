@@ -1329,3 +1329,575 @@ async def test_sync_and_async_causal_path_search_build_the_same_filters() -> Non
     assert sync_rec["table"] == async_rec["table"] == "causal_paths"
     assert sync_rec["filters"] == async_rec["filters"]
     assert sync_rows == async_rows == [PATH_ROW]
+
+
+# --------------------------------------------------------------------------
+# #2114 (canonical TRx lane, codex Task 10 r1 HIGH) — an ask that names SEVERAL
+# brands must end in a clarify QUESTION, never a portfolio total presented as a
+# brand figure.
+#
+# ``query_entities.brand_from_text`` returns None both when the text names NO
+# brand and when it names TWO ("the caller must keep its honest unscoped
+# behaviour rather than guess"), and Branch A only sets context["brand"] when
+# it is truthy — so by the time the calculator sees the context the two cases
+# are indistinguishable. Task 10 made WS3-BI-007 answer an unbranded call with
+# the all-brand portfolio NBRx instead of raising, which turns "What is NBRx
+# for Kisqali and Fabhalta?" into a number belonging to neither brand.
+#
+# Same defect class, same fix location and same shape as the #1572 region
+# clarify twelve lines above: the ambiguity is resolved where the information
+# still exists (the dispatcher knows the ask text), not inside the calculator.
+# The AG-UI tool surface already covers its own ingress (copilotkit.py's
+# "Multiple brands in play - ambiguous is not absent" rule); this pins /chat's
+# multi-agent Branch A.
+# --------------------------------------------------------------------------
+
+TWO_BRAND_NBRX_QUERY = "What is NBRx for Kisqali and Fabhalta?"
+
+
+def test_two_brand_volume_ask_clarifies_instead_of_the_portfolio_total(monkeypatch) -> None:
+    """The exact codex case: Branch A must ask which brand and must NOT ask the
+    engine for the unbranded (portfolio) figure."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](_agent_input(TWO_BRAND_NBRX_QUERY), _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    results = resolved["analysis_results"]
+    assert len(results) == 1
+    payload = results[0]
+    assert payload["agent"] == "kpi_calculator"
+    assert payload["analysis_type"] == "kpi_lookup_clarification"
+    assert payload["needs_clarification"] is True
+    assert payload["kpi_id"] == "WS3-BI-007"
+    assert payload["ambiguous_brands"] == ["Fabhalta", "Kisqali"]
+    assert "value" not in payload
+    findings = payload["key_findings"]
+    assert findings and all(isinstance(f, str) for f in findings)
+    for brand in ("Kisqali", "Fabhalta"):
+        assert brand in findings[0], findings
+    assert "?" in findings[0], "the clarify must be a QUESTION"
+    # The defect itself: the portfolio figure must never be computed.
+    assert stub.calls == []
+
+
+@pytest.mark.parametrize(
+    "query,kpi_id",
+    [
+        ("What is TRx for Kisqali and Fabhalta?", "WS3-BI-005"),
+        ("What is NRx for Kisqali and Fabhalta?", "WS3-BI-006"),
+        ("What is NBRx for Kisqali and Fabhalta?", "WS3-BI-007"),
+        ("What is TRx share for Kisqali and Fabhalta?", "WS3-BI-008"),
+        # The indication pass names brands just as surely as a brand token.
+        ("What is NBRx for CSU and PNH?", "WS3-BI-007"),
+    ],
+)
+def test_every_canonical_volume_kpi_clarifies_a_multi_brand_ask(monkeypatch, query, kpi_id) -> None:
+    """005 and 006 widen an unbranded ask to the portfolio total (they did
+    before this lane too); 007 started doing so in Task 10; 008 refuses. All
+    four now ask instead -- one rule for the family, no per-id exceptions."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](_agent_input(query), _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    payload = resolved["analysis_results"][0]
+    assert payload["analysis_type"] == "kpi_lookup_clarification"
+    assert payload["kpi_id"] == kpi_id
+    assert stub.calls == []
+
+
+def test_intentional_portfolio_volume_ask_still_computes(monkeypatch) -> None:
+    """Naming NO brand is the portfolio ask the lane deliberately serves
+    (plan line 141): it keeps computing, unbranded, with no clarify."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](_agent_input("What is NBRx?"), _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    payload = resolved["analysis_results"][0]
+    assert payload["analysis_type"] == "kpi_lookup"
+    assert payload["value"] == 12345.0
+    assert stub.calls == [("WS3-BI-007", {})]
+
+
+def test_single_brand_volume_ask_still_computes(monkeypatch) -> None:
+    """One brand named binds it exactly as before; no spurious clarify."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("What is NBRx for Kisqali?"), _dispatch()
+    )
+
+    assert isinstance(resolved, dict), resolved
+    payload = resolved["analysis_results"][0]
+    assert payload["analysis_type"] == "kpi_lookup"
+    assert stub.calls == [("WS3-BI-007", {"brand": "Kisqali"})]
+
+
+def test_a_structured_brand_wins_over_a_multi_brand_ask(monkeypatch) -> None:
+    """Mirrors the region rule: the scan is consulted ONLY when no structured
+    source bound a brand -- an explicit user_context/entities brand is a
+    decision already taken, so it is honoured, not questioned."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    agent_input = _agent_input(TWO_BRAND_NBRX_QUERY)
+    agent_input["user_context"] = {"brand": "Kisqali"}
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](agent_input, _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["analysis_type"] == "kpi_lookup"
+    assert stub.calls == [("WS3-BI-007", {"brand": "Kisqali"})]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "What is the conversion rate for Kisqali and PNH?",
+        "What is the conversion rate for Kisqali and Fabhalta?",
+    ],
+)
+def test_a_structured_brand_answers_a_non_volume_multi_brand_ask(monkeypatch, query) -> None:
+    """Owner decision 2026-09-15 (plan Task 10c table): an ask where entities /
+    user_context supplied a brand ANSWERS -- "a structured brand is a decision
+    already taken and is never re-asked, even when the text grounds two". The value
+    guard reads only the text, so without the structured brand it refused these
+    (codex iter10 HIGH)."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    agent_input = _agent_input(query)
+    agent_input["user_context"] = {"brand": "Kisqali"}
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](agent_input, _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["analysis_type"] == "kpi_lookup"
+    assert stub.calls == [("WS3-BI-009", {"brand": "Kisqali"})]
+
+
+def test_non_volume_kpi_refuses_rather_than_clarifies(monkeypatch) -> None:
+    """Deliberate scope: the clarify covers the Rx-VOLUME family (the ids this
+    lane owns, whose unbranded read is a portfolio aggregate). Conversion Rate
+    (WS3-BI-009) used to compute UNSCOPED here -- the pre-existing exposure this
+    lane left alone. main's #2141 closed it independently (an unresolved brand
+    scope refuses), so the boundary now reads: volume KPIs ASK, others REFUSE,
+    and neither computes a figure that silently dropped both brands."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("What is the conversion rate for Kisqali and Fabhalta?"), _dispatch()
+    )
+
+    assert not isinstance(resolved, dict), resolved
+    assert stub.calls == []
+
+
+@pytest.mark.asyncio
+async def test_explainer_narrates_the_brand_clarify_question(monkeypatch) -> None:
+    """The question must reach the user-visible narrative verbatim, with NO
+    figure beside it -- the whole point is that no number is presented."""
+    from src.agents.explainer import ExplainerAgent
+
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    resolved = disp.INPUT_RESOLVERS["explainer"](_agent_input(TWO_BRAND_NBRX_QUERY), _dispatch())
+    assert isinstance(resolved, dict), resolved
+
+    output = await ExplainerAgent(use_llm=False).explain(**resolved)
+
+    narrative = f"{output.executive_summary}\n{output.detailed_explanation}"
+    assert "Kisqali" in narrative, narrative
+    assert "Fabhalta" in narrative, narrative
+    assert "12,345" not in narrative, "no figure may accompany the clarify"
+    assert stub.calls == []
+
+
+def test_the_brand_clarify_gate_is_exactly_the_rx_volume_family() -> None:
+    """The gate is built from the lane's SSOT, not a hand-listed set: both the
+    canonical ids and their patient-panel twins. Today's KPI recognizer resolves
+    every volume alias to a CANONICAL id, so the panel half is not reachable
+    through Branch A yet -- it is pinned here so a recognizer that later learns
+    the panel names inherits the rule instead of the defect."""
+    from src.agents.orchestrator.nodes.kpi_clarify import BRAND_CLARIFY_KPI_IDS
+    from src.kpi.volume_family import CANONICAL_TO_PANEL
+
+    expected = frozenset(CANONICAL_TO_PANEL) | frozenset(CANONICAL_TO_PANEL.values())
+    assert BRAND_CLARIFY_KPI_IDS == expected
+    assert len(expected) == 8
+    # The boundary: brand-filterable KPIs outside the volume family keep their
+    # pre-existing behaviour (see the Conversion Rate test above).
+    assert "WS3-BI-009" not in BRAND_CLARIFY_KPI_IDS
+
+
+# --------------------------------------------------------------------------
+# #2114 codex r2 HIGH — the MIXED scope: a brand NAMED plus a different brand's
+# INDICATION. `brand_from_text` runs the indication pass only when no brand is
+# named (#1356 precedence), so "NBRx for Kisqali and PNH" bound Kisqali, never
+# reached the r1 gate (which fired only when `brand` was None), and answered a
+# two-brand ask with a Kisqali-only figure. The clarify must therefore key off
+# the STRUCTURED brand -- what a caller explicitly decided -- not off whatever
+# the text scan happened to bind.
+# --------------------------------------------------------------------------
+
+MIXED_SCOPE_QUERY = "What is NBRx for Kisqali and PNH?"
+
+
+@pytest.mark.parametrize(
+    "query,kpi_id",
+    [
+        ("What is NBRx for Kisqali and PNH?", "WS3-BI-007"),
+        ("What is NBRx for PNH and Kisqali?", "WS3-BI-007"),
+        ("What is TRx for Kisqali and PNH?", "WS3-BI-005"),
+        ("What is NRx for Kisqali and CSU?", "WS3-BI-006"),
+        # Indication first, brand second -- the scan is order-free.
+        ("What is TRx for urticaria and Kisqali?", "WS3-BI-005"),
+    ],
+)
+def test_a_named_brand_plus_another_brands_indication_clarifies(monkeypatch, query, kpi_id) -> None:
+    """Both candidates must be named in the question, no figure may be bound,
+    and the engine must never be asked -- even though the text scan bound a
+    single brand and the r1 gate would have waved it through."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](_agent_input(query), _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    payload = resolved["analysis_results"][0]
+    assert payload["analysis_type"] == "kpi_lookup_clarification"
+    assert payload["kpi_id"] == kpi_id
+    assert payload["needs_clarification"] is True
+    assert "value" not in payload
+    assert len(payload["ambiguous_brands"]) == 2
+    for brand in payload["ambiguous_brands"]:
+        assert brand in payload["key_findings"][0], payload["key_findings"]
+    assert stub.calls == []
+
+
+def test_the_mixed_scope_clarify_names_the_indication_brand(monkeypatch) -> None:
+    """PNH -> Fabhalta, so the question must offer Fabhalta as the alternative
+    -- naming only Kisqali would be the same wrong-scope answer in question
+    form."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](_agent_input(MIXED_SCOPE_QUERY), _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    payload = resolved["analysis_results"][0]
+    assert payload["ambiguous_brands"] == ["Kisqali", "Fabhalta"]
+    assert "Fabhalta" in payload["key_findings"][0]
+    assert stub.calls == []
+
+
+def test_a_brand_beside_its_own_indication_still_computes(monkeypatch) -> None:
+    """The measured decision: both routes grounding the SAME brand is ONE
+    scope, so the commonest clinical phrasing keeps its answer."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("What is TRx for Kisqali in HR+ breast cancer?"), _dispatch()
+    )
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["analysis_type"] == "kpi_lookup"
+    assert stub.calls == [("WS3-BI-005", {"brand": "Kisqali"})]
+
+
+def test_a_structured_brand_wins_over_a_mixed_scope_ask(monkeypatch) -> None:
+    """The gate keys off the STRUCTURED brand: an explicit user_context brand
+    is a decision already taken, so even a mixed-scope ask is honoured."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    agent_input = _agent_input(MIXED_SCOPE_QUERY)
+    agent_input["user_context"] = {"brand": "Fabhalta"}
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](agent_input, _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["analysis_type"] == "kpi_lookup"
+    assert stub.calls == [("WS3-BI-007", {"brand": "Fabhalta"})]
+
+
+def test_a_structured_entity_brand_also_wins_over_a_mixed_scope_ask(monkeypatch) -> None:
+    """Same for the NLP entities channel, the other structured source."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    agent_input = _agent_input(MIXED_SCOPE_QUERY)
+    agent_input["parsed_query"] = {"entities": [{"type": "brand", "value": "Kisqali"}]}
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](agent_input, _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["analysis_type"] == "kpi_lookup"
+    assert stub.calls == [("WS3-BI-007", {"brand": "Kisqali"})]
+
+
+def test_a_non_volume_kpi_refuses_the_mixed_scope_too(monkeypatch) -> None:
+    """The mixed shape: "Kisqali and PNH" BINDS Kisqali by name while grounding a
+    second brand (Fabhalta) by indication. A volume KPI asks which; any other KPI must
+    REFUSE -- answering with a Kisqali-only figure drops half the ask (codex iter9 HIGH;
+    the same fail-open existed on main at 4b719abe8, measured, and was pinned here as
+    'not this lane's' until the guard it lives in became this lane's)."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("What is the conversion rate for Kisqali and PNH?"), _dispatch()
+    )
+
+    assert not isinstance(resolved, dict), resolved
+    assert stub.calls == []
+
+
+# --------------------------------------------------------------------------
+# #2114 codex r3 HIGH — a BLANK structured brand is not a decision. The gate
+# skips the clarify when a structured source supplied a brand, and
+# `_structured_brand` mapped "" to None but returned " " and "\t\n" unchanged,
+# so a whitespace-only `user_context.brand` re-opened the two-scope leak 10c
+# closed: the ask reached the calculator and was answered for one brand.
+#
+# Measured 2026-09-15, both ingresses: the typed-entities path was ALREADY
+# correct -- it dropped every blank form before the chooser saw it. Only the
+# `user_context` path had the gap. These tests pin both so the two ingresses
+# can never drift apart again. (r5 later replaced `_entity_value` with
+# `_entity_values`, which offers EVERY entity to `first_named_scope`; blanks
+# are still absent, now because the chooser's `names_something` drops them
+# rather than because the reader filtered on `.strip()`.)
+# --------------------------------------------------------------------------
+
+BLANK_BRANDS = ["", " ", "\t\n", "   \t "]
+
+
+@pytest.mark.parametrize("blank", BLANK_BRANDS)
+def test_a_blank_user_context_brand_is_not_a_decision(monkeypatch, blank) -> None:
+    """A brand of whitespace names nobody, so it must not suppress the clarify:
+    the mixed-scope ask still asks, names both candidates, binds no figure and
+    makes ZERO engine calls."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    agent_input = _agent_input(MIXED_SCOPE_QUERY)
+    agent_input["user_context"] = {"brand": blank}
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](agent_input, _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    payload = resolved["analysis_results"][0]
+    assert payload["analysis_type"] == "kpi_lookup_clarification"
+    assert payload["ambiguous_brands"] == ["Kisqali", "Fabhalta"]
+    assert "value" not in payload
+    for brand in ("Kisqali", "Fabhalta"):
+        assert brand in payload["key_findings"][0], payload["key_findings"]
+    assert stub.calls == []
+
+
+@pytest.mark.parametrize("blank", BLANK_BRANDS)
+def test_a_blank_typed_entity_brand_is_not_a_decision(monkeypatch, blank) -> None:
+    """The other structured ingress, held to the SAME rule. This path was
+    already correct -- a blank entity names nobody and is dropped before any
+    decision; pinned here so a future edit cannot make the two ingresses
+    disagree."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    agent_input = _agent_input(MIXED_SCOPE_QUERY)
+    agent_input["parsed_query"] = {"entities": [{"type": "brand", "value": blank}]}
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](agent_input, _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    payload = resolved["analysis_results"][0]
+    assert payload["analysis_type"] == "kpi_lookup_clarification"
+    assert payload["ambiguous_brands"] == ["Kisqali", "Fabhalta"]
+    assert stub.calls == []
+
+
+@pytest.mark.parametrize("blank", BLANK_BRANDS)
+def test_blank_structured_brands_agree_across_both_ingresses(blank) -> None:
+    """The seam itself, stated once: every blank form reads as 'nobody decided'
+    whichever structured source carried it."""
+    from_ctx = {"query": MIXED_SCOPE_QUERY, "user_context": {"brand": blank}}
+    from_entities = {
+        "query": MIXED_SCOPE_QUERY,
+        "parsed_query": {"entities": [{"type": "brand", "value": blank}]},
+    }
+    assert disp._structured_brand(from_ctx) is None, blank
+    assert disp._structured_brand(from_entities) is None, blank
+
+
+def test_a_blank_context_brand_falls_through_to_the_text_scan() -> None:
+    """The consequence of fixing the seam, pinned deliberately: a blank context
+    brand now behaves EXACTLY like an absent one for cohort resolution too --
+    which is how "" has always behaved -- so `_extract_brand_region` reaches the
+    #1351 text scan instead of handing ' ' to a case-sensitive brand predicate
+    that can match no row."""
+    blank_ctx = {
+        "query": MIXED_SCOPE_QUERY,
+        "user_context": {"brand": " "},
+        "parsed_query": {"entities": []},
+    }
+    absent_ctx = {
+        "query": MIXED_SCOPE_QUERY,
+        "user_context": {},
+        "parsed_query": {"entities": []},
+    }
+    assert disp._extract_brand_region(blank_ctx) == disp._extract_brand_region(absent_ctx)
+    assert disp._extract_brand_region(blank_ctx) == ("Kisqali", None)
+
+    brandless = {"query": "What is NBRx?", "user_context": {"brand": "\t"}, "parsed_query": {}}
+    assert disp._extract_brand_region(brandless) == (None, None)
+
+
+def test_a_real_structured_brand_is_still_a_decision(monkeypatch) -> None:
+    """The guard must not over-reach: a genuine brand still wins the mixed-scope
+    ask, exactly as the 10c pin requires."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    agent_input = _agent_input(MIXED_SCOPE_QUERY)
+    agent_input["user_context"] = {"brand": "Fabhalta"}
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](agent_input, _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["analysis_type"] == "kpi_lookup"
+    assert stub.calls == [("WS3-BI-007", {"brand": "Fabhalta"})]
+
+
+# --------------------------------------------------------------------------
+# #2114 codex r3 — two HIGHs, one root cause each.
+#
+# HIGH-1: `\bhr\+\b` could not match a standalone "HR+", so Kisqali's indication
+# grounded nothing in "NBRx for HR+ and PNH?" and the ask was answered with a
+# Fabhalta-only figure. Fixed in the alias table (see TestHrPlusIndicationAlias).
+#
+# HIGH-2: U+200B / U+FEFF survive `.strip()`, so they stayed truthy on the
+# `user_context` path while `entities` returned None — the two ingresses 10d
+# unified had drifted apart again. That was the FOURTH blank shape to leak in
+# four rounds, so the predicate changed rather than the patch: `_structured_brand`
+# now asks the POSITIVE question "is this a brand the substrate recognises?"
+# instead of the open-ended negative "is this not blank".
+# --------------------------------------------------------------------------
+
+HR_PLUS_QUERIES = [
+    ("What is NBRx for HR+ and PNH?", "WS3-BI-007"),
+    ("What is NBRx for PNH and HR+?", "WS3-BI-007"),
+    ("What is TRx for HR+ and PNH?", "WS3-BI-005"),
+    ("What is NRx for HR+ and CSU?", "WS3-BI-006"),
+]
+
+INVISIBLE_BRANDS = ["​", "﻿", "\xa0"]
+
+
+@pytest.mark.parametrize("query,kpi_id", HR_PLUS_QUERIES)
+def test_standalone_hr_plus_beside_another_indication_clarifies(monkeypatch, query, kpi_id) -> None:
+    """HIGH-1 at the consumer: both brands named, no figure, no engine call."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](_agent_input(query), _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    payload = resolved["analysis_results"][0]
+    assert payload["analysis_type"] == "kpi_lookup_clarification"
+    assert payload["kpi_id"] == kpi_id
+    assert "value" not in payload
+    assert set(payload["ambiguous_brands"]) == {"Kisqali", "Fabhalta"} or set(
+        payload["ambiguous_brands"]
+    ) == {"Kisqali", "Remibrutinib"}, payload["ambiguous_brands"]
+    assert stub.calls == []
+
+
+@pytest.mark.parametrize("invisible", INVISIBLE_BRANDS)
+def test_an_invisible_character_brand_is_not_a_decision(monkeypatch, invisible) -> None:
+    """HIGH-2, `user_context` ingress: a zero-width or non-breaking space names
+    nobody, so it must not suppress the clarify."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    agent_input = _agent_input(MIXED_SCOPE_QUERY)
+    agent_input["user_context"] = {"brand": invisible}
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](agent_input, _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    payload = resolved["analysis_results"][0]
+    assert payload["analysis_type"] == "kpi_lookup_clarification"
+    assert payload["ambiguous_brands"] == ["Kisqali", "Fabhalta"]
+    assert "value" not in payload
+    assert stub.calls == []
+
+
+@pytest.mark.parametrize("invisible", INVISIBLE_BRANDS)
+def test_an_invisible_character_entity_is_not_a_decision(monkeypatch, invisible) -> None:
+    """HIGH-2, the other ingress, held to the same rule so the two cannot drift."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    agent_input = _agent_input(MIXED_SCOPE_QUERY)
+    agent_input["parsed_query"] = {"entities": [{"type": "brand", "value": invisible}]}
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](agent_input, _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["analysis_type"] == "kpi_lookup_clarification"
+    assert stub.calls == []
+
+
+@pytest.mark.parametrize("padded", [" Kisqali ", "kisqali", "  KISQALI\t"])
+def test_a_padded_or_miscased_brand_resolves_to_a_real_scope(monkeypatch, padded) -> None:
+    """The positive predicate normalises as a side effect, which closes the
+    padded-brand defect: the calculator receives 'Kisqali', not a string the
+    case-sensitive `brand::text = $1` predicate can never match."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    agent_input = _agent_input(MIXED_SCOPE_QUERY)
+    agent_input["user_context"] = {"brand": padded}
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](agent_input, _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["analysis_type"] == "kpi_lookup"
+    assert stub.calls == [("WS3-BI-007", {"brand": "Kisqali"})]
+
+
+@pytest.mark.parametrize("real_enum_brand", ["competitor", "other", "COMPETITOR"])
+def test_a_substrate_brand_outside_the_commercial_three_is_still_a_decision(
+    monkeypatch, real_enum_brand
+) -> None:
+    """`brand_type` carries five labels, not three: `competitor` and `other` are
+    real values with real rows (patient_journeys carries competitor RWD). The
+    predicate resolves against that FULL enum, so a competitor-scoped ask keeps
+    its scope instead of silently widening -- which would be this lane's own
+    defect class reintroduced by the fix for it."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    agent_input = _agent_input(MIXED_SCOPE_QUERY)
+    agent_input["user_context"] = {"brand": real_enum_brand}
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](agent_input, _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["analysis_type"] == "kpi_lookup"
+    assert stub.calls == [("WS3-BI-007", {"brand": real_enum_brand.lower()})]
+
+
+@pytest.mark.parametrize("unserveable", ["Xolair", "NotABrand", "12345", "-"])
+def test_an_unrecognised_brand_string_IS_a_decision(monkeypatch, unserveable) -> None:
+    """REVERSED from the r3 version of this test, deliberately (r4 HIGH-2).
+
+    r3 treated a value outside the `brand_type` enum as nobody-decided, so the
+    ambiguous ask re-asked. That conflated two different facts and, at the other
+    consumer, erased the value entirely -- cohort resolution then read "no brand
+    specified" and widened to every patient. A caller who sets `brand='Xolair'`
+    HAS decided; the substrate simply cannot serve it. So the clarify does not
+    re-ask, the value travels unchanged, and the honest failure happens where the
+    scope is applied rather than being papered over with a question.
+    """
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    agent_input = _agent_input(MIXED_SCOPE_QUERY)
+    agent_input["user_context"] = {"brand": unserveable}
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](agent_input, _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["analysis_type"] == "kpi_lookup"
+    assert stub.calls == [("WS3-BI-007", {"brand": unserveable})], (
+        "the unrecognised scope must reach the calculator unchanged, not be erased"
+    )
+
+
+def test_an_unresolvable_entity_does_not_hide_a_valid_context_brand(monkeypatch) -> None:
+    """r4 HIGH-1 at the clarify gate: validation precedes source selection, so a
+    junk `entities` value no longer masks a servable `user_context` one."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+    agent_input = _agent_input(MIXED_SCOPE_QUERY)
+    agent_input["parsed_query"] = {"entities": [{"type": "brand", "value": "NotABrand"}]}
+    agent_input["user_context"] = {"brand": "competitor"}
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](agent_input, _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["analysis_type"] == "kpi_lookup"
+    assert stub.calls == [("WS3-BI-007", {"brand": "competitor"})]

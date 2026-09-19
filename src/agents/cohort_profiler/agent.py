@@ -35,15 +35,15 @@ distinct concepts separate: population *profiling* (this), cohort *materializati
   were applied and which could not be — never answering a different question
   than was asked. If nothing the ask pinned down can be served, it fails closed
   with guidance instead of returning a canned profile.
-* **HCP-entity cohorts** — "HCPs who prescribed >50 TRx last quarter" runs a
-  per-HCP aggregation over an explicit half-open window with a threshold filter
-  (allowlisted ``kpi_query`` statements registered in migration 117, over the
-  same ``treatment_events`` prescription substrate as the platform TRx KPI),
-  returning cohort size + specialty / priority-tier breakdowns that mirror the
-  patient-profile shape.
+* **HCP-entity cohorts** — "HCPs who prescribed >50 TRx Panel events last
+  quarter" runs a per-HCP aggregation over an explicit half-open window with a
+  threshold filter (allowlisted ``kpi_query`` statements registered in migration
+  117, over the ``treatment_events`` prescription substrate of the TRx Panel KPI
+  WS3-BI-011 — canonical TRx has no per-HCP grain), returning cohort size +
+  specialty / priority-tier breakdowns that mirror the patient-profile shape.
 * **Volume tiers (#1736)** — "Segment HCPs by prescription volume into
   high, medium, and low tiers" (eval 4.3, undeliverable-promise shape across
-  two runs) buckets the same per-HCP TRx cohort into value-based terciles
+  two runs) buckets the same per-HCP TRx Panel cohort into value-based terciles
   computed WITHIN the queried scope (mig-130 statements), returning real
   counts per high/medium/low tier with the measured cut points disclosed —
   never the DISTINCT ``hcp_profiles.priority_tier`` targeting attribute.
@@ -75,7 +75,9 @@ SUPPORTED_BRANDS: Tuple[str, ...] = ("Remibrutinib", "Fabhalta", "Kisqali")
 # NRx (new prescriptions) — the "new prescribing patients" proxy used to SIZE the
 # population. Reusing the mig-105 ``_segment`` / ``_line`` variants keeps this in
 # lock-step with the chat tool and the /api/kpis breakdown.
-_NRX_KPI_ID = "WS3-BI-006"
+# Canonical TRx lane: the cohort NRx breakdown runs per patient axis, which only
+# the patient-panel NRx (treatment_events) serves.
+_NRX_KPI_ID = "WS3-BI-012"
 
 # Allowlisted kpi_query statement ids (migration 117). Each has an
 # ``_include_synthetic`` twin following the ADDITIVE-variant idiom of
@@ -148,6 +150,27 @@ def _profiler_query_id(base: str) -> str:
     return f"{base}_include_synthetic" if kpi_include_synthetic() else base
 
 
+# Canonical TRx lane (codex r2-r6). Every per-HCP volume figure is the patient-panel
+# measure TRx Panel (WS3-BI-011): canonical TRx has no HCP axis, so there is no
+# canonical per-HCP value to serve or to substitute. Every per-HCP volume result
+# carries CANONICAL_GRAIN_DISCLOSURE; an ask that mentions the canonical measure
+# also gets CANONICAL_REQUEST_SENTENCE first. Neither changes what executes.
+PANEL_COHORT_FOOTER = (
+    "\n_These are cohort sizes from per-HCP TRx Panel counts (observed "
+    "prescription events — the patient-panel KPI WS3-BI-011), not an outreach "
+    "list with contact routing._"
+)
+CANONICAL_GRAIN_DISCLOSURE = (
+    "Canonical TRx (WS3-BI-005) is reported only at brand × region × month and has no "
+    "per-HCP value; the figures below are the patient-panel measure TRx Panel (WS3-BI-011)."
+)
+CANONICAL_REQUEST_SENTENCE = (
+    "You asked for canonical TRx per HCP: that measure does not exist at HCP grain, so no "
+    "canonical per-HCP value is reported; the per-HCP figures below are TRx Panel "
+    "(WS3-BI-011), and canonical TRx itself is available by brand and region from the KPI tools."
+)
+
+
 class CohortProfilerAgent:
     """Profiles the eligible prescribing population by clinical segment axes."""
 
@@ -202,7 +225,10 @@ class CohortProfilerAgent:
             )
 
         if ask.entity_type == "hcp":
-            return await self._analyze_hcp(ask)
+            # Canonical TRx lane (codex r6): every per-HCP volume result is served as
+            # TRx Panel and discloses the canonical grain; a canonical mention only adds
+            # a leading sentence. Detection never changes what executes.
+            return self._disclose_canonical_grain(ask, await self._analyze_hcp(ask))
         return await self._analyze_patients(ask)
 
     # ----------------------------------------------------------- patient path
@@ -249,8 +275,8 @@ class CohortProfilerAgent:
                     value=ask.threshold.min_exclusive,
                     guidance=(
                         "quantitative prescribing thresholds are served on "
-                        "HCP-entity cohorts only today (TRx metric) — re-ask as "
-                        "e.g. 'HCPs who prescribed more than 50 TRx last "
+                        "HCP-entity cohorts only today (TRx Panel metric, WS3-BI-011) — re-ask as "
+                        "e.g. 'HCPs who prescribed more than 50 TRx Panel events last "
                         "quarter', or materialize per-patient criteria via the "
                         "ML cohort pipeline (scope_definer → cohort_constructor)"
                     ),
@@ -268,7 +294,7 @@ class CohortProfilerAgent:
                     servable=False,
                     guidance=(
                         "prescription-volume tiers bucket PRESCRIBERS by "
-                        "per-HCP TRx — re-ask as an HCP segmentation (e.g. "
+                        "per-HCP TRx Panel counts — re-ask as an HCP segmentation (e.g. "
                         "'Segment HCPs by prescription volume into high, "
                         "medium and low tiers'), or use the severity / "
                         "line-of-therapy axes for patient populations"
@@ -522,9 +548,10 @@ class CohortProfilerAgent:
         """HCP-entity cohort with a quantitative KPI threshold (#1356 part 2).
 
         Per-HCP aggregation over an explicit half-open window with a threshold
-        filter, over the SAME ``treatment_events`` prescription substrate as the
-        platform TRx KPI (``business_impact_trx``), joined to ``hcp_profiles``
-        for the specialty / priority-tier segment axes. A zero-match cohort over
+        filter, over the ``treatment_events`` prescription substrate of the TRx
+        Panel KPI WS3-BI-011 (canonical TRx has no per-HCP grain), joined to
+        ``hcp_profiles`` for the specialty / priority-tier segment axes. A
+        zero-match cohort over
         a NONZERO prescribing base is an honest answer (the threshold filtered
         everyone out), distinguished from a genuine empty by a threshold-free
         probe — only the latter fails closed.
@@ -622,7 +649,7 @@ class CohortProfilerAgent:
                     f"(hcp_profiles.geographic_region, '{region.label}')"
                 )
             if ask.threshold:
-                applied.append(f"TRx threshold ({ask.threshold.label})")
+                applied.append(f"TRx Panel threshold ({ask.threshold.label})")
             applied.append(
                 f"window = {window.label} ({window.start.isoformat()} → "
                 f"{(window.end - timedelta(days=1)).isoformat()})"
@@ -653,6 +680,11 @@ class CohortProfilerAgent:
                     "stated": ask.threshold.label if ask.threshold else None,
                 },
                 "cohort_size": cohort_size,
+                "volume_kpi_id": "WS3-BI-011",
+                "volume_measure": (
+                    "patient-panel prescription events (treatment_events); canonical "
+                    "TRx WS3-BI-005 has no per-HCP grain"
+                ),
                 "specialty": specialty,
                 "priority_tier": tiers,
                 "trx_total": total_trx,
@@ -663,7 +695,8 @@ class CohortProfilerAgent:
             },
             "confidence": 0.9,
             "recommendations": [
-                "'High-value' here is threshold-filtered TRx volume only; "
+                "'High-value' here is threshold-filtered TRx Panel volume "
+                "(observed prescription events) only; "
                 "model-scored adoption-propensity ranking is planned once the "
                 "hcp_adoption models are promoted (#1354).",
             ],
@@ -716,13 +749,16 @@ class CohortProfilerAgent:
         if region is not None:
             scope += f", {region.text_value} region"
         window_disp = f"{window.start.isoformat()} → {(window.end - timedelta(days=1)).isoformat()}"
-        thr_disp = ask.threshold.label if ask.threshold else f"more than {thr} TRx"
+        thr_disp = ask.threshold.label if ask.threshold else f"more than {thr} TRx Panel events"
 
         parts: List[str] = [f"**HCP cohort profile — {scope}**"]
-        parts.append(f"HCPs with {thr_disp} (prescription events, {window.label}: {window_disp}):")
+        parts.append(
+            f"HCPs with {thr_disp} (TRx Panel — observed prescription events, "
+            f"{window.label}: {window_disp}):"
+        )
         if cohort_size == 0:
             parts.append(
-                f"\n**0 HCPs** met the threshold (> {thr} TRx) in this window"
+                f"\n**0 HCPs** met the threshold (> {thr} TRx Panel events) in this window"
                 + (
                     f" — of {base_size:,} HCPs with any prescriptions in the same window."
                     if base_size is not None
@@ -736,8 +772,8 @@ class CohortProfilerAgent:
             )
         else:
             parts.append(
-                f"\n### {cohort_size:,} HCPs — {self._fmt(total_trx)} TRx combined "
-                f"(top prescriber: {self._fmt(max_trx)} TRx)"
+                f"\n### {cohort_size:,} HCPs — {self._fmt(total_trx)} TRx Panel events combined "
+                f"(top prescriber: {self._fmt(max_trx)} events)"
             )
             parts.append("\n_By specialty:_\n")
             parts.append("| Specialty | HCPs |\n|---|---|")
@@ -752,11 +788,7 @@ class CohortProfilerAgent:
                 f"\n_No time window was named — defaulted to the {window.label.split(' (')[0]} "
                 f"({window_disp}). Name a window (e.g. 'last quarter') to change it._"
             )
-        parts.append(
-            "\n_These are cohort sizes from per-HCP TRx aggregation (same "
-            "prescription substrate as the platform TRx KPI), not an outreach "
-            "list with contact routing._"
-        )
+        parts.append(PANEL_COHORT_FOOTER)
         return "\n".join(parts)
 
     # ------------------------------------------------- volume tiers (#1736)
@@ -866,7 +898,7 @@ class CohortProfilerAgent:
                 f"region = {region.text_value} (hcp_profiles.geographic_region, '{region.label}')"
             )
         if ask.threshold:
-            applied.append(f"TRx threshold ({ask.threshold.label})")
+            applied.append(f"TRx Panel threshold ({ask.threshold.label})")
         applied.append(self._window_applied_text(window))
         if unserved or region is not None or ask.threshold:
             narrative += self._render_criteria_accounting(applied, unserved)
@@ -892,11 +924,16 @@ class CohortProfilerAgent:
                     "stated": ask.threshold.label if ask.threshold else None,
                 },
                 "cohort_size": cohort_size,
+                "volume_kpi_id": "WS3-BI-011",
+                "volume_measure": (
+                    "patient-panel prescription events (treatment_events); canonical "
+                    "TRx WS3-BI-005 has no per-HCP grain"
+                ),
                 "volume_tiers": tiers,
                 "tier_boundaries": {
                     "method": (
                         "value-based terciles (percentile_disc 1/3 and 2/3) of "
-                        "the per-HCP TRx distribution within this scope; ties "
+                        "the per-HCP TRx Panel distribution within this scope; ties "
                         "share a tier"
                     ),
                     "low_max_trx": cut_low,
@@ -917,8 +954,8 @@ class CohortProfilerAgent:
             "confidence": 0.9,
             "recommendations": [
                 "Tier boundaries are scope-relative terciles measured from this "
-                "cohort's TRx distribution — for a FIXED cutoff cohort instead, "
-                "state an explicit threshold (e.g. 'HCPs with more than 10 TRx').",
+                "cohort's TRx Panel distribution — for a FIXED cutoff cohort instead, "
+                "state an explicit threshold (e.g. 'HCPs with more than 10 TRx Panel events').",
             ],
         }
 
@@ -941,15 +978,15 @@ class CohortProfilerAgent:
         window_disp = f"{window.start.isoformat()} → {(window.end - timedelta(days=1)).isoformat()}"
 
         parts: List[str] = [f"**HCP volume-tier segmentation — {scope}**"]
-        thr_note = f", TRx > {thr}" if thr else ""
+        thr_note = f", TRx Panel > {thr}" if thr else ""
         parts.append(
             "Prescribing HCPs bucketed into high/medium/low prescription-volume "
-            f"tiers by per-HCP TRx (prescription events, {window.label}: "
+            f"tiers by per-HCP TRx Panel counts (observed prescription events, {window.label}: "
             f"{window_disp}{thr_note}):"
         )
         if cohort_size == 0:
             parts.append(
-                f"\n**0 HCPs** met the threshold (> {thr} TRx) in this window"
+                f"\n**0 HCPs** met the threshold (> {thr} TRx Panel events) in this window"
                 + (
                     f" — of {base_size:,} HCPs with any prescriptions in the same window."
                     if base_size is not None
@@ -963,7 +1000,9 @@ class CohortProfilerAgent:
             )
         else:
             parts.append(f"\n### {cohort_size:,} HCPs — counts per tier")
-            parts.append("\n| Volume tier | Per-HCP TRx | HCPs | TRx combined |\n|---|---|---|---|")
+            parts.append(
+                "\n| Volume tier | Per-HCP TRx Panel | HCPs | TRx Panel combined |\n|---|---|---|---|"
+            )
             for key, label in _VOLUME_TIER_ORDER:
                 bucket = tiers[key]
                 rng = (
@@ -980,20 +1019,20 @@ class CohortProfilerAgent:
                 # say what actually happened instead.
                 parts.append(
                     f"\n_The measured tercile cut points coincide at {cut_low} "
-                    "TRx — this cohort's per-HCP TRx distribution is too "
+                    "TRx Panel events — this cohort's per-HCP TRx Panel distribution is too "
                     "concentrated to support three distinct tiers: every HCP "
-                    f"at or below {cut_low} TRx is 'low' and anything above is "
+                    f"at or below {cut_low} TRx Panel events is 'low' and anything above is "
                     "'high'; an empty tier here is empty by measurement, not "
                     "missing data. Cut points are scope-relative measurements, "
-                    "not fixed global constants; HCPs with equal TRx always "
+                    "not fixed global constants; HCPs with equal TRx Panel counts always "
                     "share a tier._"
                 )
             else:
                 parts.append(
                     "\n_Tier boundaries are value-based terciles of THIS cohort's "
-                    f"per-HCP TRx distribution — measured cut points: low ≤ {cut_low} "
+                    f"per-HCP TRx Panel distribution — measured cut points: low ≤ {cut_low} "
                     f"< medium ≤ {cut_medium} < high. They are scope-relative "
-                    "measurements, not fixed global constants; HCPs with equal TRx "
+                    "measurements, not fixed global constants; HCPs with equal TRx Panel counts "
                     "always share a tier. This axis is computed from prescribing "
                     "volume and is distinct from the static priority-tier targeting "
                     "attribute._"
@@ -1007,11 +1046,7 @@ class CohortProfilerAgent:
                 f"\n_No time window was named — defaulted to the {window.label.split(' (')[0]} "
                 f"({window_disp}). Name a window (e.g. 'last quarter') to change it._"
             )
-        parts.append(
-            "\n_These are cohort sizes from per-HCP TRx aggregation (same "
-            "prescription substrate as the platform TRx KPI), not an outreach "
-            "list with contact routing._"
-        )
+        parts.append(PANEL_COHORT_FOOTER)
         return "\n".join(parts)
 
     # --------------------------------------------------------------- internals
@@ -1138,3 +1173,24 @@ class CohortProfilerAgent:
     def _failed(self, message: str) -> Dict[str, Any]:
         """Honest fail-closed result (dispatcher fails the dispatch on this)."""
         return {"status": "failed", "errors": [{"error": message}], "narrative": ""}
+
+    @staticmethod
+    def _disclose_canonical_grain(ask: CohortAsk, result: Dict[str, Any]) -> Dict[str, Any]:
+        """Attach the standing canonical-grain disclosure to a served per-HCP volume result.
+
+        Threshold and volume-tier cohorts both return through here. A failed result
+        carries no figures and is returned unchanged.
+        """
+        profile = result.get("cohort_profile")
+        if result.get("status") != "completed" or not isinstance(profile, dict):
+            return result
+        profile["basis_note"] = CANONICAL_GRAIN_DISCLOSURE
+        profile["canonical_requested"] = ask.canonical_requested
+        if ask.canonical_requested:
+            # Codex r8: the synthesizer strips this from LLM input and re-adds it verbatim.
+            profile["canonical_request_note"] = CANONICAL_REQUEST_SENTENCE
+        lead = [CANONICAL_REQUEST_SENTENCE] if ask.canonical_requested else []
+        result["narrative"] = "\n\n".join(
+            lead + [f"_{CANONICAL_GRAIN_DISCLOSURE}_", result["narrative"]]
+        )
+        return result

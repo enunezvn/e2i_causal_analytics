@@ -100,7 +100,7 @@ def _cohort_rows(n: int = 600, seed: int = 0, *, with_all_channels: bool = False
             "conversion_rate": float(conv[i]),
             # Pre-treatment confounders the direct estimator/gate now require.
             "market_share": float(market[i]),
-            "total_rx_count": float(total_rx[i]),
+            "triggers_total_count": float(total_rx[i]),
         }
         for i in range(n)
     ]

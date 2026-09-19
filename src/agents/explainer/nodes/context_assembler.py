@@ -15,6 +15,8 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol, runtime_checkable
 
+from src.agents.cohort_profiler.notes import cohort_key_findings
+
 from ..state import AnalysisContext, ExplainerState
 
 if TYPE_CHECKING:
@@ -188,6 +190,13 @@ class ContextAssemblerNode:
         try:
             # Extract key findings from various possible formats
             key_findings = result.get("key_findings", [])
+            if not key_findings and isinstance(result.get("cohort_profile"), dict):
+                # Canonical TRx lane (codex r11): a cohort result carries no key_findings, and
+                # the deterministic reasoner reads nothing else (deep_reasoner.py:117). Like
+                # #1475's KPI evidence (dispatcher _kpi_lookup_evidence), the real figures must
+                # ride in key_findings to be narrated; they come only from the result's own
+                # cohort_profile fields.
+                key_findings = cohort_key_findings(result)
             if isinstance(key_findings, dict):
                 # If key_findings is a dict, convert to list of strings
                 key_findings = [f"{k}: {v}" for k, v in key_findings.items()]

@@ -168,7 +168,7 @@ class TestRxFamily:
         return _FakeClient({"treatment_events": rows})
 
     def test_trx_counts_global_and_brand_with_genuine_zero(self):
-        points = _run(hb._backfill_trx(self._client(), _meta("WS3-BI-005")))
+        points = _run(hb._backfill_trx(self._client(), _meta("WS3-BI-011")))
         glob = {p["metric_date"]: p["value"] for p in points if p["brand"] == ""}
         assert glob == {"2026-01-01": 3.0, "2026-02-01": 1.0}
         kis = {p["metric_date"]: p["value"] for p in points if p["brand"] == "Kisqali"}
@@ -180,13 +180,13 @@ class TestRxFamily:
         assert all(p["source"] == "treatment_events.event_date" for p in points)
 
     def test_nrx_counts_only_sequence_number_1(self):
-        points = _run(hb._backfill_nrx(self._client(), _meta("WS3-BI-006")))
+        points = _run(hb._backfill_nrx(self._client(), _meta("WS3-BI-012")))
         glob = {p["metric_date"]: p["value"] for p in points if p["brand"] == ""}
         # Jan: p2 + p3 are seq 1; p1's Jan script is seq 2.
         assert glob == {"2026-01-01": 2.0, "2026-02-01": 1.0}
 
     def test_nbrx_first_brand_prescription_month_and_no_global_series(self):
-        points = _run(hb._backfill_nbrx(self._client(), _meta("WS3-BI-007")))
+        points = _run(hb._backfill_nbrx(self._client(), _meta("WS3-BI-013")))
         # NBRx is undefined without a brand (live calculator fails loud) ->
         # no fabricated global rows.
         assert all(p["brand"] != "" for p in points)
@@ -198,7 +198,7 @@ class TestRxFamily:
         assert fab == {"2026-01-01": 1.0, "2026-02-01": 1.0}
 
     def test_trx_share_is_brand_over_category(self):
-        points = _run(hb._backfill_trx_share(self._client(), _meta("WS3-BI-008")))
+        points = _run(hb._backfill_trx_share(self._client(), _meta("WS3-BI-014")))
         assert all(p["brand"] != "" for p in points)
         kis = {p["metric_date"]: p["value"] for p in points if p["brand"] == "Kisqali"}
         assert kis["2026-01-01"] == pytest.approx(2 / 3)
@@ -651,6 +651,11 @@ class TestBrandSpecific:
 
 class TestReplaceSemantics:
     def test_run_backfill_deletes_source_rows_before_upserting(self):
+        # Canonical TRx lane: this pins the delete-before-upsert ORDER, which is
+        # KPI-agnostic, so it asks the patient-panel TRx WS3-BI-011 — the id the
+        # event handler now serves. Canonical WS3-BI-005 reads business_metrics
+        # (``.in_`` on the real client, source business_metrics.value), which this
+        # treatment_events-only fake cannot serve and which is not what is tested.
         calls = []
 
         def _record_delete(kpi_id, source):
@@ -685,12 +690,12 @@ class TestReplaceSemantics:
             ),
             patch("src.kpi.registry.KPIRegistry", new=lambda: registry),
         ):
-            summary = _run(hb.run_backfill(["WS3-BI-005"]))
+            summary = _run(hb.run_backfill(["WS3-BI-011"]))
 
-        assert calls[0] == ("delete", "WS3-BI-005", "treatment_events.event_date")
+        assert calls[0] == ("delete", "WS3-BI-011", "treatment_events.event_date")
         assert calls[1][0] == "upsert"
-        assert summary["deleted"]["WS3-BI-005"] == 7
-        assert summary["written"]["WS3-BI-005"] == calls[1][1] > 0
+        assert summary["deleted"]["WS3-BI-011"] == 7
+        assert summary["written"]["WS3-BI-011"] == calls[1][1] > 0
         assert summary["errors"] == {}
 
     def test_delete_source_filters_on_kpi_and_source(self):
@@ -742,8 +747,22 @@ class TestRegistryCoherence:
             meta = registry.get(kpi_id)
             assert meta is not None, f"{kpi_id} missing from config/kpi_definitions.yaml"
             if meta.threshold is None:
-                # Volume metrics tracked without a target BY DESIGN.
-                assert kpi_id in {"WS3-BI-005", "WS3-BI-006", "WS3-BI-007"}
+                # Volume metrics tracked without a target BY DESIGN. WS3-BI-008 joined
+                # them in the canonical TRx lane: brands differ in size, so no
+                # portfolio-wide share target applies (the event-era 0.30 assumed a
+                # third each); the panel share WS3-BI-014 keeps that target.
+                # The three panel COUNTS 011..013 are volume metrics for the same
+                # reason their canonical twins are (measured: threshold is None for
+                # 005..008 and 011..013, and (0.3, 0.2, 0.1) for 014 alone).
+                assert kpi_id in {
+                    "WS3-BI-005",
+                    "WS3-BI-006",
+                    "WS3-BI-007",
+                    "WS3-BI-008",
+                    "WS3-BI-011",
+                    "WS3-BI-012",
+                    "WS3-BI-013",
+                }
                 continue
             target, warning = meta.threshold.target, meta.threshold.warning
             if target is None or warning is None:

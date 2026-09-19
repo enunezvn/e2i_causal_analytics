@@ -43,9 +43,9 @@ business_metrics_source = PostgreSQLSource(
             hcp_id::VARCHAR,
             hcp_brand_id::VARCHAR,
             event_timestamp,
-            trx_count,
-            nrx_count,
-            total_rx_count,
+            triggers_delivered_count,
+            triggers_accepted_count,
+            triggers_total_count,
             market_share,
             conversion_rate,
             engagement_score,
@@ -57,7 +57,7 @@ business_metrics_source = PostgreSQLSource(
     """,
     timestamp_field="event_timestamp",
     created_timestamp_column="created_at",
-    description="Business metrics from Supabase - TRx, NRx, market share, etc.",
+    description="Per-HCP trigger funnel rollups from business_metrics (per_hcp_rollup rows)",
 )
 
 # Patient journey table - therapy adherence and outcomes.

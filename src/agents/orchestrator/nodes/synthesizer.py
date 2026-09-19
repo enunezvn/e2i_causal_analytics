@@ -8,6 +8,7 @@ import logging
 import time
 from typing import Any, Dict, List
 
+from src.agents.cohort_profiler.notes import standing_notes as _standing_notes
 from src.utils.llm_content import normalize_llm_content
 from src.utils.llm_factory import get_fast_llm, get_llm_provider
 from src.utils.mock_llm import llm_or_marked_mock
@@ -16,6 +17,27 @@ from .._agent_method_map import extract_narrative
 from ..state import AgentResult, OrchestratorState
 
 logger = logging.getLogger(__name__)
+
+
+def strip_standing_notes(narrative: str, notes: List[str]) -> str:
+    """``narrative`` without the standing notes (plain or ``_..._``), before an LLM prompt."""
+    for note in notes:
+        narrative = narrative.replace(f"_{note}_", "").replace(note, "")
+    return narrative.strip()
+
+
+def append_basis_notes(response: str, results: List[AgentResult]) -> str:
+    """Append each result's standing notes verbatim, once, in result order (codex r7/r8).
+
+    A basis note states what a result's figures ARE (TRx Panel, because canonical TRx has
+    no per-HCP value), so it must survive synthesis deterministically. The notes are
+    stripped from each multi-agent summary (``strip_standing_notes``), so every note the text
+    does not already contain verbatim is appended here. One rule for every branch.
+    """
+    missing = [note for note in _standing_notes(results) if note not in response]
+    if not missing:
+        return response
+    return "\n\n".join([response.rstrip(), *(f"_{note}_" for note in missing)])
 
 
 def _get_opik_connector():
@@ -77,6 +99,11 @@ class SynthesizerNode:
         else:
             # All failed
             synthesized = self._generate_error_response(failed_results)
+
+        # Canonical TRx lane (codex r7): a result's basis note (what its figures ARE)
+        # survives every branch above, deterministically. The multi-agent LLM text and its
+        # fallback are composed fresh, so the note is re-added unless present verbatim.
+        synthesized["response"] = append_basis_notes(synthesized["response"], successful_results)
 
         synthesis_time = int((time.time() - start_time) * 1000)
         total_latency = (
@@ -322,7 +349,12 @@ class SynthesizerNode:
             agent_output = result.get("result") or {}
             agent_name = result["agent_name"]
             agent_names.append(agent_name)
-            narrative = extract_narrative(agent_name, agent_output)[:500]
+            # Canonical TRx lane (codex r8/r9): the standing notes are stripped from each summary
+            # (they are re-added verbatim at the single exit). Measured: for a canonical ask the
+            # two notes alone take 420 of the 500 chars and push the panel figures out.
+            narrative = strip_standing_notes(
+                extract_narrative(agent_name, agent_output), _standing_notes([result])
+            )[:500]
 
             # Include key metrics in summary for LLM context
             metrics_str = self._extract_key_metrics_str(agent_name, agent_output)
@@ -333,6 +365,22 @@ class SynthesizerNode:
             summaries.append(summary)
             all_recommendations.extend(agent_output.get("recommendations", []))
             confidences.append(agent_output.get("confidence", 0.5))
+
+        # Canonical TRx lane (codex r9): no LLM synthesis beside a per-HCP cohort result. A
+        # detector over LLM wording can always be bypassed, so the channel is removed: the
+        # answer is the deterministic composition of the agents' own narratives (pure
+        # concatenation, no LLM call), recomposed exactly like the fallback branch below.
+        if _standing_notes(results):
+            logger.info(
+                "synthesizer: per-HCP cohort result present; "
+                "deterministic composition, LLM not called"
+            )
+            return {
+                "response": self._build_fallback_synthesis(summaries, results),
+                "confidence": round(sum(confidences) / len(confidences) if confidences else 0.5, 2),
+                "recommendations": all_recommendations[:5],
+                "follow_ups": self._generate_multi_agent_follow_ups(agent_names, results),
+            }
 
         synthesis_prompt = f"""Synthesize these analysis results into actionable strategic insights.
 

@@ -35,7 +35,8 @@ COHORT_METRIC_TYPE = "per_hcp_rollup"
 _TREATMENT_COLUMNS: tuple[str, ...] = tuple(sorted(set(INTERVENTION_TREATMENT_MAP.values())))
 # ``specialty`` lives on hcp_profiles, its single source of truth.  The declared FK lets
 # PostgREST embed the one matching profile without a second query or an IN-list cap.
-# region + specialty (heterogeneity axes) + every treatment channel + outcome + controls.
+# region + specialty (heterogeneity axes) + every treatment channel + outcome +
+# pre-treatment confounders (market_share, triggers_total_count).
 _COHORT_COLUMNS = ",".join(
     [
         "hcp_id",
@@ -43,14 +44,14 @@ _COHORT_COLUMNS = ",".join(
         "hcp_profiles(specialty)",
         "conversion_rate",
         "market_share",
-        "total_rx_count",
+        "triggers_total_count",
         *_TREATMENT_COLUMNS,
     ]
 )
 _NUMERIC_COLUMNS: tuple[str, ...] = (
     "conversion_rate",
     "market_share",
-    "total_rx_count",
+    "triggers_total_count",
     *_TREATMENT_COLUMNS,
 )
 # Generous cap so we read the full per-brand cohort (~7k rows) past PostgREST's

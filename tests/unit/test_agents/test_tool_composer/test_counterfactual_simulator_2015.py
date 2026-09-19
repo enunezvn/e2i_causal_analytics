@@ -59,7 +59,7 @@ def _cohort(n_per_region: int = 300, seed: int = 3) -> pd.DataFrame:
                     "region": region,
                     "email_campaign_count": emails,
                     "market_share": market,
-                    "total_rx_count": rng.poisson(60, n_per_region).astype(float),
+                    "triggers_total_count": rng.poisson(60, n_per_region).astype(float),
                     "_tau": tau,
                 }
             )

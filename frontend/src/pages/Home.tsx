@@ -470,7 +470,7 @@ function Home() {
     status: AlertStatus.ACTIVE,
   });
 
-  // QUICK_STATS: real business_metrics rollup (Total TRx (MTD), HCPs Reached).
+  // QUICK_STATS: canonical business_metrics TRx (latest full month) + HCPs Reached.
   const {
     data: kpiSummary,
     isLoading: summaryLoading,
@@ -944,10 +944,10 @@ function Home() {
       const m = kpiSummary.metrics;
       // #1640: a bare number here reaches the suggestions LLM as prose, and the
       // prompt asks for a trend/comparison pill whenever numeric KPIs are on
-      // screen — so an unlabelled TRx could seed a comparison against a
-      // business_metrics figure measured ~73x larger. Each tile carries its
-      // substrate inline; this summary is prose, so there is nowhere else to
-      // put it.
+      // screen — so each tile carries its substrate inline (the volume tiles
+      // rest on the canonical business_metrics series; a patient-panel event
+      // count elsewhere is a different, far smaller quantity). This summary is
+      // prose, so there is nowhere else to put it.
       const basis = kpiSummary.measure_basis ?? {};
       const label = (key: string) => {
         const tables = basis[key]?.comparison_key ?? basis[key]?.substrate;
@@ -955,7 +955,9 @@ function Home() {
       };
       const parts: string[] = [];
       if (m.trx_volume != null)
-        parts.push(`Total TRx (MTD): ${m.trx_volume}${label('trx_volume')}`);
+        parts.push(
+          `Total TRx (${kpiSummary.volume_period ?? 'latest full month'}): ${m.trx_volume}${label('trx_volume')}`
+        );
       if (m.market_share != null)
         parts.push(`market share: ${m.market_share}%${label('market_share')}`);
       if (m.hcp_reach != null) parts.push(`HCPs reached: ${m.hcp_reach}${label('hcp_reach')}`);
@@ -1121,18 +1123,19 @@ function Home() {
       {/* Primary Causal Value Chains — live, scoped by the brand/region dropdowns */}
       <CausalValueChains brand={selectedBrand} region={selectedRegion} />
 
-      {/* Quick Stats Bar — REAL data: Total TRx (MTD) + HCPs Reached from the
-          business_metrics rollup; Active Campaigns = running experiments; Model
+      {/* Quick Stats Bar — REAL data: Total TRx (latest full month, canonical
+          business_metrics series) + HCPs Reached; Active Campaigns = running experiments; Model
           Accuracy = real ROC-AUC (ml_predictions.model_auc). Honest loading /
           '—' / "sample data" badge where appropriate — never a fabricated value. */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <QuickStatTile
-          label="Total TRx (MTD)"
+          label="Total TRx (latest full month)"
           icon={<Pill className="h-4 w-4 text-blue-500" />}
           loading={summaryLoading}
           error={!!summaryError}
           display={trxTile.display}
           muted={trxTile.muted}
+          sublabel={kpiSummary?.volume_period ?? undefined}
           provenanceBadge={kpiProvenance}
         />
         <QuickStatTile

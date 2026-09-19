@@ -64,7 +64,7 @@ def _cohort(n_per_region: int = 200, seed: int = 42) -> pd.DataFrame:
                     "region": region,
                     "engagement_score": 10.0 / (1.0 + np.exp(-eng_logit)),
                     "market_share": market,
-                    "total_rx_count": np.expm1(np.abs(logvol) * 2.0),
+                    "triggers_total_count": np.expm1(np.abs(logvol) * 2.0),
                     "_tau": tau,
                 }
             )
@@ -91,7 +91,7 @@ def _population(n: int, regions: tuple[str, ...] = tuple(TRUE_CATE), seed: int =
                 "decile": int(rng.integers(1, 11)),
                 "adoption_stage": str(rng.choice(ADOPTION)),
                 "market_share": float(rng.uniform(0.0, 1.0)),
-                "total_rx_count": float(rng.uniform(0.0, 500.0)),
+                "triggers_total_count": float(rng.uniform(0.0, 500.0)),
             },
             baseline_outcome=float(rng.uniform(0.05, 0.25)),
             baseline_propensity=float(rng.uniform(0.3, 0.8)),

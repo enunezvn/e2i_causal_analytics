@@ -42,6 +42,7 @@ import {
   resolveRegion,
   resolveSegment,
   resolveTherapyLine,
+  toPanelKpiId,
 } from './kpi-alias';
 // The Rx-volume family is the ONLY family the segmented endpoint serves (it
 // 422s the rest). That set already exists as the gate on useKPIHistoryNowcast
@@ -220,14 +221,15 @@ export async function routeKpiChart(query: KpiChartQuery): Promise<KpiChartData>
         query.title ?? `${displayName(kpiId)} trend`
       );
     }
-    if (!RX_VOLUME_KPI_IDS.has(kpiId)) {
+    const axisKpiId = toPanelKpiId(kpiId);
+    if (!RX_VOLUME_KPI_IDS.has(axisKpiId)) {
       return emptyResult(
         `${displayName(kpiId)} is not tracked by severity tier or line of therapy — ` +
-          'only TRx, NRx and NBRx carry a patient axis.',
+          'only the patient-panel TRx, NRx and NBRx carry a patient axis.',
         query.title ?? `${displayName(kpiId)} trend`
       );
     }
-    return await routeSegmented(kpiId, axis, brand, compareAxis, segmentValue, lineValue, query);
+    return await routeSegmented(axisKpiId, axis, brand, compareAxis, segmentValue, lineValue, query);
   }
 
   // --- Materialized monthly history, when this KPI has one. ----------------

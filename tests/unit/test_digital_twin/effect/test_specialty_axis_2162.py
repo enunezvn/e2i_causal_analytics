@@ -40,7 +40,7 @@ def _cohort(seed: int = 2162) -> pd.DataFrame:
                     "specialty": specialty,
                     "engagement_score": treatment,
                     "market_share": market,
-                    "total_rx_count": volume,
+                    "triggers_total_count": volume,
                     "_tau": np.where(region == "north", 0.24, 0.14),
                 }
             )

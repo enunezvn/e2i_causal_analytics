@@ -49,11 +49,12 @@ profile.
   is always named with explicit dates in the narrative and in
   `cohort_profile.window`.
 - **HCP-entity cohorts with quantitative KPI thresholds** (#1356 part 2):
-  "HCPs who prescribed more than 50 TRx last quarter" → per-HCP TRx
+  "HCPs who prescribed more than 50 TRx last quarter" → per-HCP TRx Panel
   aggregation over an explicit half-open window with a strict threshold
   filter, via the allowlisted `cohort_profiler_hcp_trx_cohort` statement
-  (migration 117). Substrate = `treatment_events` prescription rows — the SAME
-  substrate as the platform TRx KPI (`business_impact_trx`) — joined to
+  (migration 117). Substrate = `treatment_events` prescription rows — the
+  substrate of the TRx Panel KPI WS3-BI-011 (canonical TRx has no per-HCP
+  grain) — joined to
   `hcp_profiles` for the segment axes. Returns cohort size + specialty and
   priority-tier breakdowns, mirroring the patient-profile shape. A zero-match
   cohort over a NONZERO prescribing base (verified by a threshold-free probe)

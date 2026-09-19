@@ -5,12 +5,12 @@ must never invent a region reading the live platform cannot produce):
 
 - WS3-BI-010 ROI: ``business_metrics.region`` DIRECT (migration 125 idiom) —
   region-only + brand×region monthly means; global/per-brand series unchanged.
-- WS3-BI-005/006 TRx/NRx: region via the event's OWN ``patient_journey_id`` →
+- WS3-BI-011/012 TRx/NRx Panel: region via the event's OWN ``patient_journey_id`` →
   ``patient_journeys.geographic_region`` (migration 077 join). Events with a
   NULL journey link or a region-less journey are dropped from region series
   ONLY (they still count globally) — exactly what the live
   ``patient_journey_id IN (...)`` predicate does.
-- WS3-BI-007 NBRx / WS3-BI-008 TRx Share: brand×region ONLY (the live
+- WS3-BI-013 NBRx / WS3-BI-014 TRx Share Panel: brand×region ONLY (the live
   calculators fail loud without a brand; 077's share category = the REGION's
   prescriptions).
 - WS3-BI-009 Conversion + WS2-TR-*: region via ``patient_id`` MEMBERSHIP
@@ -83,7 +83,7 @@ class _FakeClient:
         return _FakeTableQuery(self._tables.get(name, []))
 
 
-def _meta(kpi_id="WS3-BI-005"):
+def _meta(kpi_id="WS3-BI-011"):
     return SimpleNamespace(id=kpi_id, threshold=None)
 
 
@@ -244,13 +244,13 @@ class TestRoiRegionAxis:
 
 
 # ---------------------------------------------------------------------------
-# WS3-BI-005/006 TRx / NRx — journey-link attribution
+# WS3-BI-011/012 TRx / NRx Panel — journey-link attribution
 # ---------------------------------------------------------------------------
 
 
 class TestTrxRegionAxis:
     def _points(self):
-        return asyncio.run(hb._backfill_trx(_rx_client(), _meta("WS3-BI-005")))
+        return asyncio.run(hb._backfill_trx(_rx_client(), _meta("WS3-BI-011")))
 
     def test_global_series_unchanged_by_region_rows(self):
         scopes = _by_scope(self._points())
@@ -287,7 +287,7 @@ class TestTrxRegionAxis:
 
 class TestNrxRegionAxis:
     def test_region_counts_first_fills_only(self):
-        points = asyncio.run(hb._backfill_nrx(_rx_client(), _meta("WS3-BI-006")))
+        points = asyncio.run(hb._backfill_nrx(_rx_client(), _meta("WS3-BI-012")))
         scopes = _by_scope(points)
         assert scopes[("", "")] == {"2025-03-01": 2.0, "2025-04-01": 2.0}
         assert scopes[("", "northeast")] == {"2025-03-01": 1.0, "2025-04-01": 1.0}
@@ -297,13 +297,13 @@ class TestNrxRegionAxis:
 
 
 # ---------------------------------------------------------------------------
-# WS3-BI-007 NBRx / WS3-BI-008 TRx Share — brand×region only
+# WS3-BI-013 NBRx / WS3-BI-014 TRx Share Panel — brand×region only
 # ---------------------------------------------------------------------------
 
 
 class TestNbrxRegionAxis:
     def _scopes(self):
-        points = asyncio.run(hb._backfill_nbrx(_rx_client(), _meta("WS3-BI-007")))
+        points = asyncio.run(hb._backfill_nbrx(_rx_client(), _meta("WS3-BI-013")))
         return _by_scope(points)
 
     def test_no_region_only_rows(self):
@@ -321,7 +321,7 @@ class TestNbrxRegionAxis:
 
 class TestTrxShareRegionAxis:
     def _scopes(self):
-        points = asyncio.run(hb._backfill_trx_share(_rx_client(), _meta("WS3-BI-008")))
+        points = asyncio.run(hb._backfill_trx_share(_rx_client(), _meta("WS3-BI-014")))
         return _by_scope(points)
 
     def test_no_region_only_rows(self):
@@ -521,10 +521,14 @@ class TestRegionAxisLockstep:
             "125_kpi_roi_headline_scoping.sql",
             "business_impact_roi_business_metrics_scoped",
         ),
-        "WS3-BI-005": ("077_kpi_region_variants.sql", "business_impact_trx_region"),
-        "WS3-BI-006": ("077_kpi_region_variants.sql", "business_impact_nrx_region"),
-        "WS3-BI-007": ("077_kpi_region_variants.sql", "business_impact_nbrx_region"),
-        "WS3-BI-008": ("077_kpi_region_variants.sql", "business_impact_trx_share_region"),
+        "WS3-BI-005": ("143_canonical_volume_kpis.sql", "canonical_volume_trx_region"),
+        "WS3-BI-006": ("143_canonical_volume_kpis.sql", "canonical_volume_nrx_region"),
+        "WS3-BI-007": ("143_canonical_volume_kpis.sql", "canonical_volume_nbrx_region"),
+        "WS3-BI-008": ("143_canonical_volume_kpis.sql", "canonical_volume_trx_share_region"),
+        "WS3-BI-011": ("077_kpi_region_variants.sql", "business_impact_trx_region"),
+        "WS3-BI-012": ("077_kpi_region_variants.sql", "business_impact_nrx_region"),
+        "WS3-BI-013": ("077_kpi_region_variants.sql", "business_impact_nbrx_region"),
+        "WS3-BI-014": ("077_kpi_region_variants.sql", "business_impact_trx_share_region"),
         "WS3-BI-009": ("077_kpi_region_variants.sql", "business_impact_conversion_rate_region"),
         "WS2-TR-001": (
             "113_kpi_ws2_truth_metrics_brand_variants.sql",

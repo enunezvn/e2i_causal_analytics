@@ -355,11 +355,14 @@ async def test_axis_rules_window_composition_matches_calculators():
     assert suffix(ige_qid).endswith("_ige_tier_windowed")
 
     # 2. TRx Share / Conversion Rate: a window does NOT compose with region.
-    for kpi_id in ("WS3-BI-008", "WS3-BI-009"):
+    # ⚠ WS3-BI-014, not 008: `_calc_trx_share` is the PANEL share's handler now
+    # (business_impact.py:110); canonical 008 dispatches to `_calc_canonical_volume`.
+    # The guard being exercised is the same one; only the KPI that owns it moved.
+    for kpi_id in ("WS3-BI-014", "WS3-BI-009"):
         kpi = get_registry().get(kpi_id)
         assert kpi is not None, kpi_id
         context = {"brand": "Kisqali", "window": window, "region": "west"}
-        guard = calc._calc_trx_share if kpi_id == "WS3-BI-008" else calc._calc_conversion_rate
+        guard = calc._calc_trx_share if kpi_id == "WS3-BI-014" else calc._calc_conversion_rate
         with pytest.raises(RuntimeError, match=kpi_id):
             guard(dict(context))
         # calculate() records the guard instead of re-raising, so the chat layer
@@ -389,8 +392,12 @@ async def test_axis_rules_window_composition_matches_calculators():
 
     # The sentence's three families partition the windowable set exactly.
     c = await make_catalog()
-    volume = {"WS3-BI-005", "WS3-BI-006", "WS3-BI-007"}
-    share_conversion = {"WS3-BI-008", "WS3-BI-009"}
+    # ⚠ FOUR families now, not three (#2114): the lane made the PANEL KPIs windowable
+    # too, so the partition must name them or they fall into "triggers". Measured:
+    # 13 windowable ids = canonical trio + canonical share + conversion + panel trio
+    # + panel share + the four trigger KPIs.
+    volume = {"WS3-BI-005", "WS3-BI-006", "WS3-BI-007", "WS3-BI-011", "WS3-BI-012", "WS3-BI-013"}
+    share_conversion = {"WS3-BI-008", "WS3-BI-009", "WS3-BI-014"}
     assert volume <= c.windowable_kpi_ids
     assert share_conversion <= c.windowable_kpi_ids
     triggers = c.windowable_kpi_ids - volume - share_conversion
@@ -426,16 +433,28 @@ async def test_axis_rules_patient_axes_match_calculators(monkeypatch):
     # TRx Share (WS3-BI-008) is refused on every patient axis: each patient is on
     # one tracked brand, so a per-bucket portfolio share mixes indications
     # (session_1789548670222_fcscf3u, 2026-09-16).
-    three = {"WS3-BI-005", "WS3-BI-006", "WS3-BI-007"}
-    assert {short(i) for i in three} == {"TRx", "NRx", "NBRx"}
+    # ⚠ THE PANEL TRIO, not the canonical one (#2114, owner #11). Canonical
+    # 005/006/007 no longer bind any patient axis -- `refuse_patient_axis` turns
+    # them away -- so the KPIs this sentence may name are 011/012/013.
+    three = {"WS3-BI-011", "WS3-BI-012", "WS3-BI-013"}
+    assert {short(i) for i in three} == {"TRx Panel", "NRx Panel", "NBRx Panel"}
     assert short("WS3-BI-008") == "TRx Share"
     assert short("WS3-BI-009") == "Conversion Rate" and short("CM-002") == "CATE"
 
     # 1. Prose <-> tool allowlist: the sentence's three clauses ARE the sets.
     sentence = next(s for s in cat.AXIS_RULES.split(". ") if "patient axes are served" in s)
-    assert "TRx, NRx and NBRx (all four axes)" in sentence
-    assert "never TRx Share" in sentence
+    # ⚠ THE PROSE MOVED WITH THE CONTRACT (#2114, owner #11/#14), so these pins move
+    # with it — the guard is "prose matches the calculators", and the calculators
+    # changed. The PANEL KPIs serve the patient axes now; canonical TRx/NRx/NBRx do
+    # not. This test is doing its job: it caught SHIPPED PROMPT TEXT that would have
+    # had the model promise a canonical breakdown the tool then refuses.
+    assert "TRx Panel, NRx Panel and NBRx Panel (all four axes)" in sentence
+    # Still pinned: neither share is offered on a patient axis. "never TRx Share"
+    # became ambiguous once two shares existed, so the pin names the property
+    # instead of the old phrase.
+    assert "NEITHER share supports a patient axis" in cat.AXIS_RULES
     assert "TRx Share (all four axes)" not in sentence
+    assert "TRx Share Panel (all four axes)" not in sentence
     assert "Conversion Rate (segment/therapy_line only)" in sentence
     assert "CATE by segment" in sentence
     assert "NO other KPI" in sentence

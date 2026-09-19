@@ -16,6 +16,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
+  PANEL_KPI_FOR_CANONICAL,
   regionClarifyMessage,
   resolveBrand,
   resolveCompareAxis,
@@ -23,6 +24,7 @@ import {
   resolveRegion,
   resolveSegment,
   resolveTherapyLine,
+  toPanelKpiId,
 } from './kpi-alias';
 
 describe('resolveKpiId', () => {
@@ -215,5 +217,34 @@ describe('regionClarifyMessage (#1565)', () => {
     expect(msg).toContain('narnia');
     expect(msg).toMatch(/northeast.*south.*midwest.*west/i);
     expect(msg).toMatch(/\?/);
+  });
+});
+
+describe('toPanelKpiId (canonical TRx lane)', () => {
+  it('maps the canonical volume ids to their patient-panel ids', () => {
+    expect(toPanelKpiId('WS3-BI-005')).toBe('WS3-BI-011');
+    expect(toPanelKpiId('WS3-BI-006')).toBe('WS3-BI-012');
+    expect(toPanelKpiId('WS3-BI-007')).toBe('WS3-BI-013');
+    expect(toPanelKpiId('WS3-BI-008')).toBe('WS3-BI-014');
+  });
+
+  it('passes every other id through unchanged', () => {
+    expect(toPanelKpiId('WS3-BI-011')).toBe('WS3-BI-011');
+    expect(toPanelKpiId('WS3-BI-010')).toBe('WS3-BI-010');
+  });
+
+  it('resolves friendly panel ids from the generated catalog', () => {
+    expect(resolveKpiId('trx_panel')).toBe('WS3-BI-011');
+    expect(Object.keys(PANEL_KPI_FOR_CANONICAL)).toHaveLength(4);
+  });
+
+  it('every mapped destination is a real registry id, not just a string', () => {
+    // The lane's recurring defect was a destination named from an ID MAP that
+    // nothing could serve. A map is only as good as its targets existing, so
+    // resolve each one through the generated catalog rather than trusting the
+    // literal — a typo'd 'WS3-BI-O11' would otherwise sit here forever.
+    for (const panelId of Object.values(PANEL_KPI_FOR_CANONICAL)) {
+      expect(resolveKpiId(panelId)).toBe(panelId);
+    }
   });
 });

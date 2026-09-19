@@ -35,6 +35,7 @@ from src.api.routes.chatbot_dspy import (
     route_agent_hardcoded,
 )
 from src.api.routes.cognitive import get_orchestrator
+from src.kpi import capability_policy as _cap
 from src.kpi.synthetic_mode import kpi_include_synthetic
 from src.memory.services.factories import get_async_supabase_client
 from src.rag.retriever import hybrid_search
@@ -511,12 +512,12 @@ async def _query_kpis(
     since: datetime,
     limit: int,
 ) -> Dict[str, Any]:
-    """Query KPI metrics from business_metrics table (newest first, windowed).
+    """The volume family answers as the canonical aggregate; every other KPI as rows.
 
-    Synthetic provenance rides the SSOT deployment gate inside
-    ``apply_provenance_filter`` (showcase instances include synthetic rows,
-    real-mode deployments exclude them); ``data_source`` labels the answer
-    honestly either way (kpi_calculate_tool precedent).
+    TRx/NRx/NBRx/TRx share route to ``canonical_volume_stored_rows`` (Task 15A) so one
+    KPI is never answered at two shapes; the rest return stored business_metrics rows,
+    newest first. Synthetic provenance rides the SSOT gate in ``apply_provenance_filter``;
+    ``data_source`` labels the answer honestly either way (kpi_calculate_tool precedent).
     """
     try:
         filters: Dict[str, Any] = {}
@@ -576,8 +577,12 @@ async def _query_kpis(
                 response["hint"] = _REGION_CLARIFY_HINT
             return response
 
-        client = await get_async_supabase_client()
-        repo = BusinessMetricRepository(client)
+        from src.kpi.canonical_volume_stored import canonical_volume_stored_rows
+
+        canonical = await canonical_volume_stored_rows(kpi_name, filters, window_start, limit)
+        if canonical is not None:
+            return canonical
+        repo = BusinessMetricRepository(await get_async_supabase_client())
 
         metrics = await repo.query_metrics(
             filters=filters,
@@ -1026,11 +1031,11 @@ async def e2i_data_query_tool(
     Query E2I analytics data across multiple data types.
 
     This tool provides unified access to ALL E2I analytics data including:
-    - KPIs: STORED snapshot rows from business_metrics. For a COMPUTED KPI VALUE
-      for a brand (e.g. "what is the NBRx/NRx/TRx/market share for Kisqali?"),
-      prefer ``kpi_calculate_tool`` — it resolves the KPI definition and calculates
-      from the real substrate, whereas this returns the raw stored rows (and 0 for
-      a derived KPI like NBRx that is not materialized here).
+    - KPIs: TRx / NRx / NBRx / TRx share return the CANONICAL aggregate — the
+      latest complete calendar month, regions summed — the SAME figure
+      ``kpi_calculate_tool`` gives; ``time_range`` is a lookback that gates it,
+      never a reporting window. Any other kpi_name returns stored business_metrics
+      rows. For an explicit reporting window use ``kpi_calculate_tool(window=...)``.
     - Causal chains: Discovered cause-effect relationships
     - Agent analyses: Outputs from the 22-agent system
     - Triggers: Alerts and explanations for metric changes
@@ -1987,8 +1992,8 @@ class KpiCalculateInput(BaseModel):
         default=None,
         description=(
             "Optional severity tier filter: one of low_severity, "
-            "medium_severity, high_severity. Served ONLY by TRx, NRx, NBRx, "
-            "conversion rate and CATE (#1911) -- any other KPI (TRx share "
+            "medium_severity, high_severity. "
+            f"{_cap.axis_served_clause('segment')} -- any other KPI (either share "
             "included) returns an error, the filter is never silently dropped. "
             "Mutually exclusive with region/therapy_line."
         ),
@@ -1997,8 +2002,8 @@ class KpiCalculateInput(BaseModel):
         default=None,
         description=(
             "Optional line-of-therapy filter: one of '0', '1', '2', '3'. "
-            "Served ONLY by TRx, NRx, NBRx and conversion rate (#1911) -- any "
-            "other KPI (TRx share included) returns an error, the filter is "
+            f"{_cap.axis_served_clause('therapy_line')} -- any "
+            "other KPI (either share included) returns an error, the filter is "
             "never silently dropped. Mutually exclusive with region/segment."
         ),
     )
@@ -2006,7 +2011,7 @@ class KpiCalculateInput(BaseModel):
         default=None,
         description=(
             "Optional biologic-status filter: 'naive' or 'experienced'. "
-            "Served ONLY by TRx, NRx and NBRx (#1911) -- any other KPI (TRx "
+            f"{_cap.axis_served_clause('biologic')} -- any other KPI (either "
             "share included) returns an error, the filter is never silently "
             "dropped. AVAILABLE FOR REMIBRUTINIB ONLY -- for any other brand the tool "
             "returns an error (the data is 100% NULL by design); do NOT retry "
@@ -2018,8 +2023,8 @@ class KpiCalculateInput(BaseModel):
         default=None,
         description=(
             "Optional IgE-tertile filter: 'low', 'medium', or 'high' "
-            "(data-driven tertiles, not a clinical threshold). Served ONLY by "
-            "TRx, NRx and NBRx (#1911) -- any other KPI (TRx share included) "
+            "(data-driven tertiles, not a clinical threshold). "
+            f"{_cap.axis_served_clause('ige_tier')} -- any other KPI (either share included) "
             "returns an error, the filter is never silently dropped. AVAILABLE FOR "
             "REMIBRUTINIB ONLY -- other brands return an error; do NOT fabricate. "
             "Mutually exclusive with region/segment/therapy_line/biologic."
@@ -2041,10 +2046,10 @@ class KpiCalculateInput(BaseModel):
         default=None,
         description=(
             "Time window, e.g. 'last 3 months', 'last year', 'Q1 2025', or "
-            "'2025-01-01 to 2025-03-31'. Supported for TRx/NRx/NBRx (alone or "
-            "combined with any ONE axis), TRx share (alone only) and conversion "
-            "rate (alone or with segment/therapy_line; other combinations error "
-            "honestly), and the trigger-"
+            f"'2025-01-01 to 2025-03-31'. Combines with any ONE axis for "
+            f"{_cap.short_names(_cap.axis_kpi_ids('biologic'))}; the canonical "
+            "TRx/NRx/NBRx and TRx share take a window ALONE (they carry no patient "
+            "axis); conversion rate takes segment/therapy_line; and the trigger-"
             "effectiveness KPIs (alone or combined with brand/trigger_type/"
             "region -- migration 120). ALWAYS pass this when the user names "
             "a period. Omit for the engine's default window (the most recent "
@@ -2067,28 +2072,7 @@ class KpiCalculateInput(BaseModel):
 # KPI the field is omitted (honest absence over a guessed period -- ROI stays
 # out: its two source probes' frontiers diverge). KEEP IN SYNC with those
 # migrations.
-KPI_REPORTING_WINDOWS = {
-    "WS3-BI-005": "most recent 30 days of prescription data",  # TRx
-    "WS3-BI-006": "most recent 30 days of prescription data",  # NRx
-    "WS3-BI-007": "most recent 30 days of prescription data",  # NBRx
-    "WS3-BI-008": "most recent 30 days of prescription data",  # TRx share
-    "WS3-BI-009": "most recent 30 days of trigger data",  # Conversion rate
-    # #1360 trigger-effectiveness family (migrations 089/113/118). Precision's
-    # default cohort is LAGGED so the 30-day conversion window has matured --
-    # describing it as a plain trailing window would misstate the figure.
-    "WS2-TR-001": (
-        "30-day trigger cohort ending 30 days before the trigger-data "
-        "frontier (the conversion window must mature)"
-    ),
-    "WS2-TR-004": "most recent 30 days of trigger data",  # Acceptance rate
-    # #1713: verified against migration 089 (same frontier-anchored 30-day
-    # trigger window as WS2-TR-006). Omitting it while its sibling disclosed a
-    # window was the substrate of the eval-certified borrowing defect
-    # (Override Rate's window label asserted in prose for False Alert Rate).
-    "WS2-TR-005": "most recent 30 days of trigger data",  # False alert rate
-    "WS2-TR-006": "most recent 30 days of trigger data",  # Override rate
-    "WS2-TR-009": "most recent 30 days of trigger data",  # Funnel conversion
-}
+KPI_REPORTING_WINDOWS = _cap.lazy_reporting_windows()
 
 # Definition clarifications the synthesizer MUST carry into the answer.
 # SSOT moved to src/services/kpi_resolution.py (#1475): the orchestrator's
@@ -2217,7 +2201,7 @@ def _kpi_result_to_response(
 # get the trailing-30d coverage probe below: for a ratio/share KPI (e.g.
 # WS3-BI-008 TRx Share) the trailing value is not additive, so the share math
 # would fire false warnings.
-_VOLUME_KPI_IDS = frozenset({"WS3-BI-005", "WS3-BI-006", "WS3-BI-007"})
+_VOLUME_KPI_IDS = _cap.lazy_trailing_coverage_kpi_ids()
 
 _COVERAGE_MIN_WINDOW_DAYS = 45  # a window this short IS its own trailing period
 _COVERAGE_WARN_FACTOR = 2.0  # warn when trailing share > 2x the uniform share
@@ -2339,29 +2323,24 @@ _PATIENT_AXIS_LABELS: Dict[str, str] = {
 #     the prod substrate 2026-09-07), and 'CATE' / 'conditional ATE' resolve to
 #     CM-002 here, so refusing it would drop a combination the calculator
 #     serves. It reads none of the other three axes.
-_PATIENT_AXIS_KPI_IDS: Dict[str, frozenset[str]] = {
-    "segment": frozenset({"WS3-BI-005", "WS3-BI-006", "WS3-BI-007", "WS3-BI-009", "CM-002"}),
-    "therapy_line": frozenset({"WS3-BI-005", "WS3-BI-006", "WS3-BI-007", "WS3-BI-009"}),
-    "biologic": frozenset({"WS3-BI-005", "WS3-BI-006", "WS3-BI-007"}),
-    "ige_tier": frozenset({"WS3-BI-005", "WS3-BI-006", "WS3-BI-007"}),
-}
+_PATIENT_AXIS_KPI_IDS = _cap.lazy_axis_kpi_ids()
 
 
-def _patient_axis_refusal(kpi: Any, axis: str) -> Dict[str, Any]:
-    """The #1911 refusal for a patient axis on a KPI whose calculator does not
-    bind it. The served KPIs are named in registry order (volume KPIs first)
-    and the hint offers both ways out (#1565: a next step, not a dead end)."""
+def _patient_axis_refusal(kpi: Any, axis: str, brand: Optional[str]) -> Dict[str, Any]:
+    """The #1911 refusal for a patient axis on a KPI whose calculator does not bind
+    it. The WORDING lives in ``src.kpi.share_axis`` ("stated once for every
+    surface"), and the BRAND goes with it: on a brand-scoped axis asked for another
+    brand there is no destination to offer, so none is named (#2114)."""
     from src.kpi import share_axis as sa
-    from src.kpi.registry import get_registry
 
-    label = _PATIENT_AXIS_LABELS[axis]
-    served_ids = _PATIENT_AXIS_KPI_IDS[axis]
-    served = ", ".join(k.name for k in get_registry().get_all() if k.id in served_ids)
-    error = f"{axis} ({label}) applies only to {served}, not {kpi.name}."
-    hint = f"Ask for {kpi.name} without the {label} filter, or ask for one of {served} by {label}."
-    if kpi.id == sa.TRX_SHARE_KPI_ID:  # why, and the real answer (src.kpi.share_axis)
-        error += " " + sa.share_axis_reason(axis, label)
-        hint = f"{sa.share_axis_next_step(sa.TRX_NAME, label)} {hint}"
+    error, hint = sa.patient_axis_refusal_text(
+        kpi.id,
+        kpi.name,
+        axis,
+        label=_PATIENT_AXIS_LABELS[axis],
+        served_ids=_PATIENT_AXIS_KPI_IDS[axis],
+        brand=brand,
+    )
     return {
         "success": False,
         "query_type": "kpi_calculate",
@@ -2589,7 +2568,7 @@ async def kpi_calculate_tool(
         # for/else: the loop ran the full range without breaking, i.e. it never
         # ran out of mentions -- the cap stopped it, not the text.
         _scan_complete = False
-    if not _scan_complete:
+    if not _scan_complete and not kpi_resolution.names_exactly_one_kpi(_normalized, kpi):
         # Fail CLOSED, not just loudly (codex iter-6). Having established that a
         # further coordinated metric may be unexamined, computing one KPI and
         # returning success is exactly the false-complete this guard exists to
@@ -2612,7 +2591,7 @@ async def kpi_calculate_tool(
             "hint": "Call kpi_calculate_tool once per metric, naming each metric on its own.",
         }
 
-    if _coordinated:
+    if _coordinated and not kpi_resolution.names_exactly_one_kpi(_normalized, kpi):
         _all_named = sorted({str(kpi.name), *_coordinated})
         return {
             "success": False,
@@ -2661,7 +2640,7 @@ async def kpi_calculate_tool(
         ("ige_tier", ige_tier),
     ):
         if _axis_value and kpi.id not in _PATIENT_AXIS_KPI_IDS[_axis]:
-            return _patient_axis_refusal(kpi, _axis)
+            return _patient_axis_refusal(kpi, _axis, brand)
 
     # Parse the requested window BEFORE touching the calculator: an unparseable
     # window is a user-input error, not a calculation error, so fail fast with a

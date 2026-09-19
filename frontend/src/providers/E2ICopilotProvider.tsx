@@ -29,6 +29,7 @@ import {
   resolveRegion,
   resolveSegment,
   resolveTherapyLine,
+  toPanelKpiId,
 } from '@/lib/kpi-alias';
 import { KpiTrendChart } from '@/components/chat/KpiTrendChart';
 import { FlintChart } from '@/components/chat/FlintChart';
@@ -1081,7 +1082,7 @@ const CopilotHooksInner: React.FC = () => {
           : axis === 'segment'
             ? segmentValue
             : lineValue;
-        return await getKPIHistorySegmented(resolvedKpi, axis, resolvedBrand, value);
+        return await getKPIHistorySegmented(toPanelKpiId(resolvedKpi), axis, resolvedBrand, value);
       }
       return await getKPIHistory(resolvedKpi, resolvedBrand, resolvedRegion);
     },

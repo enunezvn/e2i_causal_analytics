@@ -291,7 +291,7 @@ async def test_outcome_feed_assignments_exclude_synthetic() -> None:
 
     client = _RecordingClient(sync=True)
     repo = ExperimentOutcomeRepository(supabase_client=client)
-    await repo.load_arrays(uuid4(), "trx")
+    await repo.load_arrays(uuid4(), "triggers_delivered")
     _assert_excludes(client.last("ab_experiment_assignments"), "load_arrays assignments")
 
 
@@ -308,7 +308,7 @@ async def test_outcome_feed_assignments_opt_in() -> None:
         },
     )
     repo = ExperimentOutcomeRepository(supabase_client=client)
-    await repo.load_arrays(uuid4(), "trx", include_synthetic=True)
+    await repo.load_arrays(uuid4(), "triggers_delivered", include_synthetic=True)
     _assert_no_predicate(client.last("ab_experiment_assignments"), "load_arrays assignments")
     # the business_metrics leg honors the same opt-in (pre-existing behavior)
     _assert_no_predicate(client.last("business_metrics"), "load_arrays business_metrics")

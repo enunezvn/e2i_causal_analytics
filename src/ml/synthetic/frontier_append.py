@@ -90,6 +90,7 @@ from src.ml.synthetic.generators.data_lag import (
     stamp_sequence_number,
 )
 from src.ml.synthetic.generators.model_metrics import stamp_model_metrics
+from src.ml.synthetic.generators.nbrx_series import with_nbrx
 
 logger = logging.getLogger(__name__)
 
@@ -362,6 +363,17 @@ def base_business_metrics_frame() -> pd.DataFrame:
     ).generate()
 
 
+def base_nbrx_frame(base: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+    """The nbrx series for the frozen base months (2013-01..2026-07, 1,956 rows).
+
+    Canonical TRx lane: nbrx is generated BESIDE the frozen stream
+    (generators/nbrx_series.py) — pass an already-regenerated base to avoid
+    regenerating it twice. NOT part of append runs. The rows come from the one seam,
+    ``with_nbrx``: this is the nbrx slice of ``with_nbrx(base)``."""
+    frame = base if base is not None else base_business_metrics_frame()
+    return with_nbrx(frame).iloc[len(frame) :].reset_index(drop=True)
+
+
 def generate_month_cohort(month_start: date) -> Dict[str, pd.DataFrame]:
     """One deterministic monthly business_metrics cohort (rows land on
     month_start — the generator floors to month grain)."""
@@ -385,6 +397,9 @@ def generate_month_cohort(month_start: date) -> Dict[str, pd.DataFrame]:
     # prefix so cohort ids can NEVER collide with the frozen base's ~10k hex
     # ids (or another month's) and are purgeable by prefix.
     bm["metric_id"] = [f"{prefix}_{i:04d}" for i in range(len(bm))]
+    # Canonical TRx lane: the nbrx series rides beside the 60 re-keyed cohort
+    # rows (own RNG + own id namespace), so appending it changes none of them.
+    bm = with_nbrx(bm)
     return {"business_metrics": bm}
 
 

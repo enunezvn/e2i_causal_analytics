@@ -32,7 +32,7 @@ class TestPipelineConfigFeast:
         """Test custom Feast configuration."""
         feature_refs = [
             "hcp_conversion_features:engagement_score",
-            "hcp_conversion_features:trx_count",
+            "hcp_conversion_features:triggers_delivered_count",
         ]
 
         config = PipelineConfig(
