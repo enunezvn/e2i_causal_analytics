@@ -245,6 +245,46 @@ def test_umls_code_defect_is_real_even_beside_an_upstream_500(tmp_path: Path) ->
     assert outputs.get("classification") == "real", outputs
 
 
+def test_captured_outage_log_does_not_hide_a_code_defect_in_the_same_test(
+    tmp_path: Path,
+) -> None:
+    """``junit_logging=all`` attaches provider warnings to the testcase that
+    later fails.  A hard warning is sufficient to corroborate a recognized
+    fallback echo, but it must not turn an unrelated TypeError into an outage.
+    """
+    warning = "clinical-context: ChEMBL MoA lookup failed: ChEMBL HTTP 500"
+    cases = [(_CC_FANOUT, "test_get_context_payload_carries_live_provenance", REAL_ARITY_TYPEERROR)]
+    _, outputs = _classify(
+        tmp_path,
+        _junit(cases, system_out={"test_get_context_payload_carries_live_provenance": warning}),
+    )
+    assert outputs.get("classification") == "real", outputs
+
+
+def test_hard_context_in_failure_text_does_not_hide_a_type_error(tmp_path: Path) -> None:
+    """Tracebacks can carry request context below the exception headline.
+    The explicit #1766 code-defect shape remains real even if that context
+    happens to mention a provider 500.
+    """
+    failure = f"{REAL_ARITY_TYPEERROR}\nrequest context: UTS error: status=500"
+    cases = [(_UMLS_LIVE, "test_cui_lookup_returns_disease_semantic_type", failure)]
+    _, outputs = _classify(tmp_path, _junit(cases))
+    assert outputs.get("classification") == "real", outputs
+
+
+def test_duplicate_junit_identity_cannot_overwrite_a_real_failure(tmp_path: Path) -> None:
+    """Every failure node must vote even when two suites/reruns emit the same
+    classname/name.  De-duplicating by display id can erase a real defect when
+    a later occurrence carries an upstream 500.
+    """
+    cases = [
+        (_UMLS_LIVE, "test_cui_lookup_returns_disease_semantic_type", REAL_ARITY_TYPEERROR),
+        (_UMLS_LIVE, "test_cui_lookup_returns_disease_semantic_type", HARD_UMLS_HTTP_500),
+    ]
+    _, outputs = _classify(tmp_path, _junit(cases))
+    assert outputs.get("classification") == "real", outputs
+
+
 def test_other_kg_http_500_is_not_absorbed_as_an_upstream_transient(tmp_path: Path) -> None:
     cases = [
         (

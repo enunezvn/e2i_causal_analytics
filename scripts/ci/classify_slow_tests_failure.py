@@ -69,6 +69,11 @@ _HARD = re.compile(
 # echo never counts as hard evidence on its own.
 _ECHO = re.compile(r"static_fallback", re.IGNORECASE)
 
+# The known #1766 code-defect shape must win even when its traceback/request
+# context also contains hard provider text.  Match exception headlines only;
+# the word "TypeError" in a provider response body is not by itself a verdict.
+_TYPE_ERROR = re.compile(r"(?m)^(?:E\s+)?TypeError:")
+
 _DETAIL_CAP = 900
 
 
@@ -90,11 +95,9 @@ def _in_family(testcase: ET.Element) -> bool:
     )
 
 
-def _evidence_text(testcase: ET.Element) -> str:
-    """Everything the XML holds for this test: failure/error nodes plus any
-    captured output (present once Job A passes ``-o junit_logging=all``)."""
+def _node_text(testcase: ET.Element, tags: tuple[str, ...]) -> str:
     parts: list[str] = []
-    for tag in ("failure", "error", "system-out", "system-err"):
+    for tag in tags:
         for node in testcase.findall(tag):
             parts.append(node.get("message") or "")
             parts.append(node.text or "")
@@ -118,22 +121,32 @@ def classify(junit_path: Path) -> tuple[str, str]:
     if not failed:
         return "real", "junit records 0 failures/errors — the red was infra, not a test (fail-safe)"
 
-    verdicts: dict[str, str] = {}
+    # Keep one verdict per failure node, not per display id.  JUnit may contain
+    # the same classname/name more than once (for example after a rerun or when
+    # suites are combined), and a later outage must not overwrite an earlier
+    # real failure with the same id.
+    verdicts: list[tuple[str, str]] = []
     for tc in failed:
-        text = _evidence_text(tc)
+        failure_text = _node_text(tc, ("failure", "error"))
+        captured_text = _node_text(tc, ("system-out", "system-err"))
         if not _in_family(tc):
             verdict = "foreign"
-        elif _HARD.search(text):
+        elif _TYPE_ERROR.search(failure_text):
+            verdict = "unrecognized"
+        elif _HARD.search(failure_text):
             verdict = "hard"
-        elif _ECHO.search(text):
-            verdict = "echo"
+        elif _ECHO.search(failure_text):
+            # Captured output corroborates a recognized fail-open echo.  It
+            # cannot by itself reclassify an unrelated assertion/exception:
+            # a test can log an upstream 500 and then fail on a code defect.
+            verdict = "hard" if _HARD.search(captured_text) else "echo"
         else:
             verdict = "unrecognized"
-        verdicts[_test_id(tc)] = verdict
+        verdicts.append((_test_id(tc), verdict))
         print(f"  {verdict:<12} {_test_id(tc)}", file=sys.stderr)
 
     counts = {
-        v: sum(1 for x in verdicts.values() if x == v)
+        v: sum(1 for _, verdict in verdicts if verdict == v)
         for v in ("foreign", "hard", "echo", "unrecognized")
     }
     print(f"derived: {len(failed)} failed -> {counts}", file=sys.stderr)
@@ -152,7 +165,7 @@ def classify(junit_path: Path) -> tuple[str, str]:
             f"all {len(failed)} failures are fallback echoes (static_fallback) with no hard "
             "5xx/timeout evidence anywhere — a client bug produces exactly this shape"
         )
-    names = ", ".join(sorted(t.rsplit(".", 1)[-1] for t in verdicts))
+    names = ", ".join(sorted(test_id.rsplit(".", 1)[-1] for test_id, _ in verdicts))
     return "upstream-transient", (
         f"{len(failed)}/{len(failed)} failures in recognized live-provider suites "
         f"(hard 5xx/timeout evidence: {counts['hard']}, fallback echoes: {counts['echo']}) — {names}"
