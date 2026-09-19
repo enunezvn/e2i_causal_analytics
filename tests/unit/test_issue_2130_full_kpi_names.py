@@ -31,7 +31,9 @@ def test_full_kpi_name_uses_a_safe_business_metric_filter_key(display_name, stor
     "query",
     [
         "Show me total prescriptions for Kisqali",
+        "Show me Total Prescriptions (TRx) for Kisqali",
         "What are the new prescriptions for Fabhalta?",
+        "What are New Prescriptions (NRx) for Fabhalta?",
         "How many new-to-brand prescriptions were there?",
         "Show me new/to/brand prescriptions",
         "Tell me about TRx share in the Northeast",
@@ -39,6 +41,22 @@ def test_full_kpi_name_uses_a_safe_business_metric_filter_key(display_name, stor
     ],
 )
 def test_full_kpi_name_routes_to_the_value_lookup_evidence_path(query):
+    from src.agents.orchestrator.nodes.intent_classifier import KPI_VALUE_LOOKUP_RE
+
+    assert KPI_VALUE_LOOKUP_RE.search(query), query
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "query",
+    [
+        "What are the conversion rates for Kisqali?",
+        "Show me the market shares for the three brands",
+        "Tell me about conversion/rates in the Northeast",
+    ],
+)
+def test_inflected_kpi_name_routes_with_the_shared_suffix_and_separator_rules(query):
+    """Recognition, filtering, and direct routing must share one grammar."""
     from src.agents.orchestrator.nodes.intent_classifier import KPI_VALUE_LOOKUP_RE
 
     assert KPI_VALUE_LOOKUP_RE.search(query), query
@@ -87,6 +105,28 @@ def test_abbreviations_and_unsafe_mismatches_keep_their_existing_behavior(
 
 @pytest.mark.unit
 @pytest.mark.parametrize(
+    ("display_name", "unsafe_stored_name"),
+    [
+        ("Total Prescriptions (patients)", "trx"),
+        ("New Prescriptions (patients)", "nrx"),
+        ("TRx Share (market share)", "trx_share"),
+    ],
+)
+def test_unknown_parenthetical_qualifier_does_not_collapse_to_the_base_metric(
+    display_name, unsafe_stored_name
+):
+    """Only the registry abbreviation is presentation metadata.
+
+    A quantity/axis in parentheses can change what the caller asked for.  It
+    must not be discarded and silently filtered as the unqualified KPI.
+    """
+    from src.api.routes.chatbot_tools import _normalize_metric_name
+
+    assert _normalize_metric_name(display_name) != unsafe_stored_name
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
     "query",
     [
         "Show me the prescription details for this patient",
@@ -94,6 +134,11 @@ def test_abbreviations_and_unsafe_mismatches_keep_their_existing_behavior(
         "How many total prescription errors occurred?",
         "How many patients received new prescriptions?",
         "How many HCPs wrote total prescriptions?",
+        "Show me the patient count for new prescriptions",
+        "What is the HCP count for total prescriptions?",
+        "Give me prescriber counts for NRx",
+        "Show me total prescriptions (patients) for Kisqali",
+        "Tell me about TRx Share (market share)",
         "How many total calls did the HCP receive?",
         "Show me the total prescriptions forecast for next month",
     ],

@@ -38,7 +38,10 @@ from src.agents.multi_faceted import (
     has_dependency_composition,
     split_clauses,
 )
-from src.kpi.business_metric_vocabulary import KPI_VALUE_LOOKUP_METRIC_PATTERN
+from src.kpi.business_metric_vocabulary import (
+    KPI_VALUE_LOOKUP_METRIC_PATTERN,
+    KPI_VALUE_LOOKUP_UNSUPPORTED_QUALIFIER_PATTERN,
+)
 from src.utils.llm_content import normalize_llm_content, parse_llm_json
 from src.utils.llm_factory import MODEL_MAPPINGS, get_fast_llm, get_llm_provider
 from src.utils.mock_llm import llm_or_marked_mock
@@ -533,15 +536,23 @@ _ASK_SHAPE_RE = re.compile(
 # (the classifier scores with ``re.search(pattern, query, re.IGNORECASE)``);
 # the resolver uses the pre-compiled twin. Identity is pinned by
 # test_explainer_evidence_binding_1475.py.
+_KPI_ENTITY_COUNT_NOUN_PATTERN = r"(?:patients?|hcps?|prescribers?|doctors?|reps?|representatives?)"
+
 KPI_VALUE_LOOKUP_PATTERN = (
     r"(?s)\A(?!.*(?:predict|expect|forecast|project|likelihood|probabilit|what will))"
+    rf"(?!.*{KPI_VALUE_LOOKUP_UNSUPPORTED_QUALIFIER_PATTERN})"
     # A metric phrase can be the OBJECT of a different entity-count question.
     # Without this fail-closed subject guard, "How many patients received new
     # prescriptions?" binds NRx instead of the requested patient count.
     # Modifiers before the subject remain tolerated, matching the gap budget
     # below ("How many high-risk patients ...").
-    r"(?!.*\bhow many(?:\s+[\w'-]+){0,2}\s+"
-    r"(?:patients?|hcps?|prescribers?|doctors?|reps?|representatives?)\b)"
+    rf"(?!.*\bhow many(?:\s+[\w'-]+){{0,2}}\s+{_KPI_ENTITY_COUNT_NOUN_PATTERN}\b)"
+    # The same entity-count ask also arrives as "patient count for NRx" or
+    # "number of high-risk patients ...". The KPI is still the object/axis,
+    # not the requested quantity; keep those off the value-calculator path.
+    rf"(?!.*\b{_KPI_ENTITY_COUNT_NOUN_PATTERN}\s+(?:counts?|totals?)\b)"
+    rf"(?!.*\b(?:counts?|totals?|number)\s+of"
+    rf"(?:\s+[\w'-]+){{0,2}}\s+{_KPI_ENTITY_COUNT_NOUN_PATTERN}\b)"
     r".*?(?:what(?:'?s| is| are| was| were)|show me|tell me about|how many|give me)\s+"
     r"(?:teh\s+|the\s+)?(?:[\w'-]+\s+){0,3}?"
     rf"{KPI_VALUE_LOOKUP_METRIC_PATTERN}\b"

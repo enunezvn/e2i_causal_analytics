@@ -66,17 +66,23 @@ def canonical_business_metric_name(value: str) -> Optional[str]:
     canonical = _STORED_NAMES.get(normalized)
     if canonical is not None:
         return canonical
-    # Registry display names append their abbreviation, e.g. "Total
-    # Prescriptions (TRx)". The base name is the metric phrase; a parenthetical
-    # suffix is presentation metadata, not part of the stored key.
-    without_parenthetical = _normalize_phrase(re.sub(r"\s*\([^)]*\)\s*$", "", value))
-    canonical = _STORED_NAMES.get(without_parenthetical)
-    if canonical is not None:
-        return canonical
+
+    # Registry display names append the SAME metric's abbreviation, e.g.
+    # "Total Prescriptions (TRx)".  Do not strip arbitrary parentheticals:
+    # "Total Prescriptions (patients)" names a different quantity/axis and
+    # must keep the transparent no-match behavior rather than querying TRx.
+    parenthetical = re.fullmatch(r"(.*?)\s*\(([^()]*)\)\s*", value.strip())
+    if parenthetical is not None:
+        base = _STORED_NAMES.get(_normalize_phrase(parenthetical.group(1)))
+        qualifier = _STORED_NAMES.get(_normalize_phrase(parenthetical.group(2)))
+        if base is not None and qualifier == base:
+            return base
+        return None
+
     for phrase, stored_name in sorted(
         _STORED_NAMES.items(), key=lambda item: len(item[0]), reverse=True
     ):
-        if re.fullmatch(rf"{re.escape(phrase)}{KPI_ALIAS_SUFFIX_PATTERN}", without_parenthetical):
+        if re.fullmatch(rf"{re.escape(phrase)}{KPI_ALIAS_SUFFIX_PATTERN}", normalized):
             return stored_name
     return None
 
@@ -97,4 +103,36 @@ KPI_VALUE_LOOKUP_METRIC_PATTERN = (
         if routes
     )
     + ")"
+    + KPI_ALIAS_SUFFIX_PATTERN
 )
+
+
+def _unsupported_route_qualifier_source() -> str:
+    """Regex source for a routed metric followed by an unknown qualifier.
+
+    The direct router matches KPI phrases inside a larger query, so the
+    full-string validation in :func:`canonical_business_metric_name` cannot
+    protect it by itself.  A parenthetical is allowed only when it is another
+    alias for the SAME stored quantity (the registry-name case is
+    ``Total Prescriptions (TRx)``).
+    """
+    clauses: list[str] = []
+    for phrase, _kpi_id, stored_name, routes in _VOCABULARY:
+        if not routes:
+            continue
+        allowed = "|".join(
+            _route_phrase_source(alias)
+            for alias, alias_stored in sorted(
+                _STORED_NAMES.items(), key=lambda item: len(item[0]), reverse=True
+            )
+            if alias_stored == stored_name
+        )
+        clauses.append(
+            rf"(?<![\w'-]){_route_phrase_source(phrase)}"
+            rf"{KPI_ALIAS_SUFFIX_PATTERN}(?![\w'-])\s*\("
+            rf"(?!(?:{allowed}){KPI_ALIAS_SUFFIX_PATTERN}\s*\))"
+        )
+    return "(?:" + "|".join(clauses) + ")"
+
+
+KPI_VALUE_LOOKUP_UNSUPPORTED_QUALIFIER_PATTERN = _unsupported_route_qualifier_source()
