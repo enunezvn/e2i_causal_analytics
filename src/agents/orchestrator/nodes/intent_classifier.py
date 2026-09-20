@@ -665,7 +665,12 @@ KPI_VALUE_LOOKUP_PATTERN = (
     # after "how many" (optionally partitive/determined). A generic word gap
     # here makes the KPI object win over any unseen subject noun: e.g. people,
     # individuals, or pharmacies that received/filled new prescriptions.
-    r"(?:(?!how[\s-]+many).)*?how[\s-]+many\s+"
+    # The POSITIVE cue stays main's literal "how many" (codex r6: normalising it on
+    # both sides made "How-many TRx?" match here while main refused, breaking the
+    # subset property). The normalised form is used only where it REFUSES: the
+    # ordinary-cue lookahead above and this tempered prefix, which stops the branch
+    # skipping an earlier count question to reach a nested one.
+    r"(?:(?!how[\s-]+many).)*?how many\s+"
     rf"{_KPI_VALUE_LOOKUP_TARGET_PATTERN}"
     r")\b"
 )

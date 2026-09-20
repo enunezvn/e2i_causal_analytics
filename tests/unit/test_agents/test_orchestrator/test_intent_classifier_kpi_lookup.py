@@ -244,6 +244,11 @@ class TestHowManyCannotReachALaterCue:
             'How\nmany pharmacies asked, "What is TRx?"',
             'How  many pharmacies asked, "What is TRx?"',
             'How-many pharmacies asked, "What is TRx?"',
+            # codex r6: the normalised spelling REFUSES but must never MATCH — main's
+            # positive cue is the literal "how many", so admitting "How-many TRx?"
+            # here would make this grammar a superset of main's.
+            "How-many TRx?",
+            "HOW-MANY Kisqali TRx?",
         ],
     )
     def test_a_later_cue_does_not_rescue_an_entity_count_ask(self, query: str) -> None:
@@ -327,6 +332,8 @@ class TestKpiValueLookupSubsetInvariant:
             "Show me patients receiving new prescriptions",
             'How many people asked, "What is TRx?"',
             "What is Jan-Mar 2025 TRx?",
+            "How-many TRx?",
+            "HOW-MANY Kisqali TRx?",
         ],
     )
     def test_every_match_is_also_a_main_shape_match(self, query: str) -> None:
