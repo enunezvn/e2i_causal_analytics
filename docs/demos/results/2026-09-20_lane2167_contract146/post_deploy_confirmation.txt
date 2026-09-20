@@ -1,0 +1,126 @@
+#2167 -- POST-DEPLOY CONFIRMATION for migration 146
+====================================================
+The README's sections 5 and 7 PREDICTED what the first deploy after the move would
+do: apply 146 a second time, under the runner's bare-basename key, idempotently.
+This file is that prediction measured after the fact. Captured 2026-09-20.
+
+Deploy under test
+-----------------
+  merge commit   5d0d3c19ada8db08854f0cb1a9e4668a47c6d9b6  (PR #2192)
+  workflow run   "Deploy to Production" 35493823050, conclusion=success
+                 2026-09-20T06:16:59Z -> 2026-09-20T06:54:26Z, event=push
+  deploy job     "Deploy to Droplet" 106036184633, conclusion=success
+
+A. THE TRIGGER -- database/** is why this deploy ran at all
+----------------------------------------------------------
+This is the part that could not be proven before the merge. `git diff --name-only
+349858db5 5d0d3c19a` lists 19 paths, in four groups:
+
+    .github/workflows/deploy.yml
+    database/migrations/146_drop_legacy_per_hcp_count_columns.sql
+    docs/data/... and docs/demos/results/...          (12 files)
+    tests/unit/...                                    (5 files)
+
+Matched against the `on.push.paths` globs in .github/workflows/deploy.yml, exactly
+ONE of those paths matches ONE glob: database/migrations/146_*.sql against
+'database/**' -- the entry added by this very PR (commit 2656eaee3). There is no
+'.github/**' glob, no 'tests/**' glob and no 'docs/**' glob in the list.
+
+So the deploy that applied 146 fired ONLY because of the trigger fix shipped in the
+same merge. Before 2656eaee3, this merge would have deployed nothing, and 146 would
+have sat in database/migrations/ unapplied until some unrelated src/** push carried
+it incidentally -- the #1783 failure mode, one layer over, which is the defect
+#2167 existed to close. The fix proved itself on its own merge.
+
+B. RAW DEPLOY LOG -- the blocking gate, then the apply
+------------------------------------------------------
+From `gh api repos/enunezvn/e2i_causal_analytics/actions/jobs/106036184633/logs`,
+unedited lines (the gate line is wrapped here for width; it is one line in the log):
+
+    2026-09-20T06:47:29.6756242Z learning-loop real-DB: prod ledger 228 keys; pending 
+    ['146_drop_legacy_per_hcp_count_columns.sql']; simulated None; deployed template 
+    learning_loop_deployed; registry sync {'updated': 0, 'inserted': 0, 'deprecated': 0, 
+    'dependencies_deleted': 0, 'dependencies_upserted': 0}; tools the pre-upgrade schema refused []
+
+    2026-09-20T06:47:38.9105721Z === E2I Database Migration Runner (mode=docker) ===
+    2026-09-20T06:47:39.0069217Z NOTICE:  relation "schema_migrations" already exists, skipping
+    2026-09-20T06:47:40.1277804Z Applying 146_drop_legacy_per_hcp_count_columns.sql ... OK
+    2026-09-20T06:47:40.7662452Z Applied 1 migration(s) successfully.
+
+"Applied 1 migration(s) successfully" -- one, not a batch: 146 was the only pending
+file, exactly as the gate reported seconds earlier. The runner's ledger timestamp
+below is 06:47:40.016422+00 -- 0.11 s BEFORE the runner printed its OK line at
+06:47:40.1277804Z, which is the expected order: the file writes its own ledger row
+inside the transaction, then the runner reports the file done.
+
+C. RAW LIVE PROBE -- the state the second application left behind
+-----------------------------------------------------------------
+`docker exec -i supabase-db psql -U postgres -d postgres -X -v ON_ERROR_STOP=1 \
+   < docs/demos/results/2026-09-20_lane2167_contract146/post_deploy_probe.sql`
+
+    -- 1. ledger: both applications of 146, hand then runner
+                          filename                      |          applied_at           
+    ----------------------------------------------------+-------------------------------
+     deferred/146_drop_legacy_per_hcp_count_columns.sql | 2026-09-20 01:51:04.274881+00
+     146_drop_legacy_per_hcp_count_columns.sql          | 2026-09-20 06:47:40.016422+00
+    (2 rows)
+    
+    -- 2. the legacy three are gone from EVERY table/view in every schema
+     legacy_cols_anywhere 
+    ----------------------
+                        0
+    (1 row)
+    
+    -- 3. canonical columns, row count and the three sums
+     rows  | delivered | accepted | total 
+    -------+-----------+----------+-------
+     25489 |     21786 |    11906 | 24682
+    (1 row)
+    
+    -- 4. the sync machinery 146 removed is still absent
+     sync_trigger | sync_function 
+    --------------+---------------
+                0 |             0
+    (1 row)
+    
+    -- 5. the four split views, at their contracted width
+              table_name           | cols 
+    -------------------------------+------
+     v_holdout_business_metrics    |   36
+     v_test_business_metrics       |   36
+     v_train_business_metrics      |   36
+     v_validation_business_metrics |   36
+    (4 rows)
+    
+     v_train_business_metrics_rows 
+    -------------------------------
+                              7130
+    (1 row)
+    
+
+Every number is IDENTICAL to the post-apply probe taken at 01:51Z, before the deploy
+(README section 4): 0 legacy columns, 25489 rows, sums 21786 / 11906 / 24682, sync
+trigger and function absent, the four split views 36 columns wide, v_train 7130 rows.
+The second application changed nothing, which is what the migration header claimed
+and what second_application_raw.txt rehearsed inside BEGIN ... ROLLBACK.
+
+Note on naming: README sections 1, 4 and 5 call the split views "v_train / v_test /
+v_validation / v_holdout". Their real names carry the table suffix --
+v_train_business_metrics and so on -- and that is what the probe above queries.
+
+D. APPLICATION STATE AFTER THE DEPLOY
+-------------------------------------
+
+    docker inspect e2i_api --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'
+    5d0d3c19ada8db08854f0cb1a9e4668a47c6d9b6   started 2026-09-20T06:53:09.456224107Z
+
+    GET /health -> 200
+
+    e2i-causal-analytics-worker_light-1  Up 4 hours (healthy)
+    e2i-causal-analytics-worker_light-2  Up 4 hours (healthy)
+    e2i-causal-analytics-worker_medium-1  Up 4 hours (healthy)
+    e2i_api  Up 5 hours (healthy)
+    e2i_feast  Up 5 hours (healthy)
+    e2i_feast_materializer  Up 5 hours (healthy)
+    e2i_frontend  Up 4 hours (healthy)
+    e2i_scheduler  Up 4 hours (healthy)

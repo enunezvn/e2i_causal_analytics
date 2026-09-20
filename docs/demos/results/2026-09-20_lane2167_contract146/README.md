@@ -90,6 +90,9 @@ does not hold that key, so the first deploy after the move applies 146 again. Th
 claims that is inert, so it was measured against the live, ALREADY-CONTRACTED schema inside
 `BEGIN … ROLLBACK`.
 
+**That deploy has since happened, and this rehearsal held.** See section 8 — the rehearsed
+no-op is what the runner actually performed at 06:47:40Z on 2026-09-20.
+
 The probe is built the way `apply_dir()` builds it — the file body plus **the runner's own
 appended** `INSERT … ON CONFLICT DO NOTHING` under the bare-basename key, not a psql `\i` — so the
 ledger write the deploy will actually perform is inside the rehearsal. (This is the one thing
@@ -138,3 +141,36 @@ only queryable record that this DDL reached production by hand on this date. The
 file records the runner's key (the bare basename), so the first deploy after the move
 applies it once more, idempotently, and writes a second row. The migration's header
 states exactly what that second application does and does not change.
+
+That second row now exists: `146_drop_legacy_per_hcp_count_columns.sql` @
+`2026-09-20 06:47:40.016422+00`, beside the hand row @ `2026-09-20 01:51:04.274881+00`.
+Both are in the live ledger, and the pair is the queryable record of how this DDL
+reached production — by hand first, then by the runner. Section 8.
+
+## 8. Post-deploy confirmation — `post_deploy_confirmation.txt`, `post_deploy_probe.sql`
+
+Sections 5 and 7 were written before the merge and **predicted** what the first deploy would do.
+PR #2192 merged as `5d0d3c19a` at 2026-09-20T06:16:56Z; the deploy fired three seconds later and
+succeeded. `post_deploy_confirmation.txt` is the prediction measured after the fact — raw deploy-log
+lines and a raw live psql capture, not prose:
+
+* **The trigger.** Of the 19 paths in the merge, exactly one matches exactly one `on.push.paths`
+  glob: `database/migrations/146_*.sql` against `'database/**'` — the entry added by this same PR.
+  There is no `.github/**`, `tests/**` or `docs/**` glob. So the deploy that applied 146 fired ONLY
+  because of the trigger fix riding with it; without that fix this merge would have deployed
+  nothing and 146 would have sat unapplied. The fix proved itself on its own merge.
+* **The apply.** The blocking real-DB gate reported `pending
+  ['146_drop_legacy_per_hcp_count_columns.sql']` at 06:47:29Z, then the runner printed `Applying
+  146_drop_legacy_per_hcp_count_columns.sql ... OK` and `Applied 1 migration(s) successfully.` —
+  one file, not a batch.
+* **The effect: none.** Every number in the live probe is identical to the 01:51Z post-apply probe
+  of section 4 — 0 legacy columns anywhere, 25,489 rows, sums 21786 / 11906 / 24682, sync trigger
+  and function absent, the four split views 36 columns wide, 7,130 rows in the train split. The
+  second application changed nothing, exactly as `second_application_raw.txt` rehearsed.
+* **The app.** `e2i_api` runs image revision `5d0d3c19a` (started 06:53:09Z), `GET /health` → 200,
+  every app container healthy.
+
+Naming footnote, because it misleads on a first read: sections 1, 4 and 5 above call the split
+views `v_train` / `v_test` / `v_validation` / `v_holdout`. Those are shorthand. The real relations
+are `v_train_business_metrics`, `v_test_business_metrics`, `v_validation_business_metrics` and
+`v_holdout_business_metrics`, which is what `post_deploy_probe.sql` queries by name.
