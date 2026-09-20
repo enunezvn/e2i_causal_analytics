@@ -59,6 +59,18 @@ class NoChampion(RuntimeError):
     """No model was scorable, so nothing can be served."""
 
 
+class DegenerateBand(RuntimeError):
+    """The champion's error distribution implies an unbounded interval.
+
+    Raised when a signed relative error reaches -100% or beyond — the model forecast
+    zero or less while the actual was positive. ``actual = point / (1 + s)`` then has a
+    non-positive denominator and the implied actual is unbounded above. That is a real
+    measurement, not a numerical artefact: it says this model's fit is broken for this
+    series. A band of "0 to infinity" conveys nothing and would invite a reader to take
+    the point estimate and ignore the interval, so the forecast is refused instead.
+    """
+
+
 @dataclass(frozen=True)
 class BacktestScore:
     """What one model actually did on this series, at this horizon."""
@@ -231,8 +243,14 @@ def band_from_errors(
         arr = np.asarray(errors, dtype=float) / 100.0
         lo_err = float(np.quantile(arr, lower_q))
         hi_err = float(np.quantile(arr, upper_q))
-        lo = point / (1.0 + hi_err) if (1.0 + hi_err) > 0 else 0.0
-        hi = point / (1.0 + lo_err) if (1.0 + lo_err) > 0 else float("inf")
+        if (1.0 + lo_err) <= 0 or (1.0 + hi_err) <= 0:
+            raise DegenerateBand(
+                f"{score.name!r} forecast zero or less against a positive actual at "
+                f"horizon step {i + 1}, so the interval implied by its own errors is "
+                "unbounded above"
+            )
+        lo = point / (1.0 + hi_err)
+        hi = point / (1.0 + lo_err)
         lo, hi = min(lo, hi), max(lo, hi)
         lo, hi = min(lo, point), max(hi, point)
         if floor_at_zero:
@@ -245,5 +263,14 @@ def band_from_errors(
             # quantity -- this only guarantees the invariant holds whatever it is given.
             lo, hi = max(lo, 0.0), max(hi, 0.0)
             lo, hi = min(lo, hi), max(lo, hi)
+        # Nothing non-finite may leave this function. A NaN or inf edge serialises as a
+        # bare `Infinity`/`NaN` token that only Python's permissive encoder accepts:
+        # `json.dumps(..., allow_nan=False)` -- which FastAPI and every orjson-backed
+        # path use -- raises on it, so the failure would surface as a 500 at the chat
+        # boundary rather than as anything this module could explain.
+        if not (math.isfinite(lo) and math.isfinite(hi)):
+            raise DegenerateBand(
+                f"{score.name!r} produced a non-finite band at horizon step {i + 1}"
+            )
         out.append((float(lo), float(hi)))
     return out

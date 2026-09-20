@@ -283,3 +283,42 @@ def test_an_unfloored_band_may_go_negative_because_not_every_metric_is_a_volume(
     score = _band_score("mixed", [(-50.0, 0.0, 50.0)], horizon=1)
     lo, hi = bt.band_from_errors(score, [10.0], quantile=1.0, floor_at_zero=False)[0]
     assert lo <= hi
+
+
+# ------------------------------------------- a band that cannot be honest is refused
+# `actual = point / (1 + s)`: when a signed error reaches -100% or beyond (the model
+# forecast zero or less against a positive actual) the denominator is non-positive and
+# the implied interval is unbounded above. The old code served float("inf") for that
+# edge, which survives `json.dumps` only through Python's permissive `Infinity` token —
+# `allow_nan=False`, which FastAPI and every orjson-backed path use, raises on it.
+
+
+def test_an_error_of_minus_one_hundred_percent_refuses_instead_of_serving_infinity():
+    score = _band_score("broken", [(-150.0, -200.0, -300.0)], horizon=1)
+    with pytest.raises(bt.DegenerateBand):
+        bt.band_from_errors(score, [100.0], quantile=1.0, floor_at_zero=True)
+
+
+def test_the_refusal_names_the_horizon_step_so_it_can_be_diagnosed():
+    score = _band_score("broken", [(0.0, 0.0, 0.0), (-120.0, -140.0, -160.0)], horizon=2)
+    with pytest.raises(bt.DegenerateBand) as exc:
+        bt.band_from_errors(score, [100.0, 100.0], quantile=1.0)
+    assert "step 2" in str(exc.value)
+
+
+@pytest.mark.parametrize("floored", [True, False])
+def test_no_band_edge_is_ever_non_finite(floored):
+    """Flooring at zero does not rescue an infinity: max(inf, 0.0) is still inf."""
+    import math
+
+    score = _band_score("wide", [(-99.0, 0.0, 500.0)], horizon=1)
+    lo, hi = bt.band_from_errors(score, [100.0], quantile=1.0, floor_at_zero=floored)[0]
+    assert math.isfinite(lo) and math.isfinite(hi)
+
+
+def test_a_band_that_is_merely_very_wide_is_still_served():
+    """The negative control: -99% is survivable arithmetic, only <= -100% is not."""
+    score = _band_score("wide", [(-99.0, -50.0, 0.0)], horizon=1)
+    lo, hi = bt.band_from_errors(score, [100.0], quantile=1.0, floor_at_zero=True)[0]
+    assert lo <= 100.0 <= hi
+    assert hi > 1000.0, "a -99% miss really does imply a very large actual"

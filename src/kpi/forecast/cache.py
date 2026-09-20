@@ -76,7 +76,11 @@ def forecast_cache_key(
     parts = [
         FORECAST_CONTRACT_VERSION,
         metric,
-        brand or "*",
+        # Both dimensions are case-folded. Today every production caller canonicalises
+        # brand and region through resolve_brand_label / resolve_region_label before
+        # reaching here, so the asymmetry was inert — but a key that folds one
+        # dimension and not the other is a trap for the first caller that does not.
+        (brand or "*").lower(),
         (region or "*").lower(),
         str(horizon),
         str(origins),

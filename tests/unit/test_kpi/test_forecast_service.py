@@ -502,3 +502,47 @@ def test_a_champion_returning_a_non_finite_value_is_refused_not_served():
             svc.forecast_series(series, horizon=6, include_timesfm=False, cache=None)
     finally:
         monkey.undo()
+
+
+def test_every_served_payload_survives_STRICT_json_encoding(kisqali):
+    """`json.dumps` alone is not the bar the chat boundary applies.
+
+    Python's default encoder emits bare `Infinity` / `NaN` tokens, which are not valid
+    JSON; `allow_nan=False` — what FastAPI and every orjson-backed path use — raises on
+    them. A band edge that reached the payload as `inf` would therefore surface as a 500
+    at the API boundary rather than as anything this module could explain, so the
+    assertion is strict here and not merely "it serialises".
+    """
+    import json
+
+    json.dumps(kisqali.to_payload(), allow_nan=False)
+
+
+def test_a_declining_brands_payload_is_also_strictly_encodable():
+    import json
+
+    out = svc.forecast_series(_declining_series(), horizon=6, include_timesfm=False, cache=None)
+    json.dumps(out.to_payload(), allow_nan=False)
+
+
+def test_a_model_whose_own_errors_imply_an_unbounded_band_is_refused_not_served():
+    """A champion that forecast <= 0 against a positive actual has a broken fit, and
+    "somewhere between 0 and infinity" is not a band. Refuse, naming why."""
+    from src.kpi.forecast import backtest as bt
+
+    real_band = bt.band_from_errors
+
+    def degenerate(score, point_forecast, **kw):
+        raise bt.DegenerateBand("planted: unbounded above")
+
+    monkey = pytest.MonkeyPatch()
+    try:
+        monkey.setattr(svc.bt, "band_from_errors", degenerate)
+        with pytest.raises(svc.ForecastRefused) as exc:
+            svc.forecast_series(
+                build_series("Kisqali"), horizon=6, include_timesfm=False, cache=None
+            )
+    finally:
+        monkey.undo()
+    assert "prediction band" in str(exc.value)
+    assert svc.bt.band_from_errors is real_band, "the patch must not leak"

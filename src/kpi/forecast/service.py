@@ -462,9 +462,15 @@ def forecast_series(
     # before the band, so lo <= point <= hi holds by construction.
     floored_idx = [i for i, v in enumerate(point_forecast) if v < 0]
     point_forecast = [max(float(v), 0.0) for v in point_forecast]
-    band = bt.band_from_errors(
-        champion_score, point_forecast, quantile=band_quantile, floor_at_zero=True
-    )
+    try:
+        band = bt.band_from_errors(
+            champion_score, point_forecast, quantile=band_quantile, floor_at_zero=True
+        )
+    except bt.DegenerateBand as exc:
+        raise ForecastRefused(
+            f"a forecast for {series.metric} / {series.brand or 'all brands'} cannot be "
+            f"given an honest prediction band: {exc}"
+        ) from exc
     if series.data_through is None:  # pragma: no cover - guarded by the length check
         raise ForecastRefused("the series has no data_through, so a forecast has no start month")
     months = _forecast_months(series.data_through, horizon)
