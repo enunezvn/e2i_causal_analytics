@@ -35,6 +35,20 @@ ledger row written in-txn;  v_train still returns 7130 rows
 legacy cols live  3     trigger live  1     ledger 146 rows  0     v_train cols  29
 ```
 
+**Rigor note, raised by the codex iter1 review and recorded rather than quietly fixed.** The
+numbers in this section are TRANSCRIBED from the rehearsal run; its raw psql stdout was not
+captured to a file, unlike `apply_stdout.txt` and `post_apply_probe.txt`, which are raw
+captures. The rehearsal cannot be re-run to produce that file, because its "BEFORE" state (three
+legacy columns present) no longer exists — the apply consumed it. What DOES corroborate these
+numbers, independently of this prose:
+
+* `apply_stdout.txt` + `post_apply_probe.txt` — the real apply reproduced every rehearsed number.
+* `second_application_raw.txt` — a raw capture of a rehearsal that IS still reproducible.
+* The codex reviewer re-ran an equivalent live rehearsal at review time and it corroborated them.
+
+`rehearsal.sql` is the exact wrapper that was used, so the method is reproducible even though
+that particular run's stdout is not.
+
 ## 2. Backup — `legacy_counts_backup_preapply.csv.gz`
 
 `(metric_id, trx_count, nrx_count, total_rx_count)` for all 25,489 rows, dumped
@@ -69,7 +83,49 @@ v_train cols                   36      v_holdout cols  36      v_train rows  713
 
 `GET /health` → **200**; api / frontend / worker_light ×2 / worker_medium all healthy.
 
-## 5. Ledger
+## 5. The second, automatic application — `second_application_raw.txt`, `second_application_probe.sql`
+
+The hand apply recorded the key the file had then; the moved file records the RUNNER's key. Prod
+does not hold that key, so the first deploy after the move applies 146 again. The migration header
+claims that is inert, so it was measured against the live, ALREADY-CONTRACTED schema inside
+`BEGIN … ROLLBACK`.
+
+The probe is built the way `apply_dir()` builds it — the file body plus **the runner's own
+appended** `INSERT … ON CONFLICT DO NOTHING` under the bare-basename key, not a psql `\i` — so the
+ledger write the deploy will actually perform is inside the rehearsal. (This is the one thing
+`rehearsal.sql` never exercised; the codex iter1 review raised it.)
+
+```
+rows true · canonical sums true · table col count true
+view privileges true · view definitions true
+      (relacl and md5(pg_get_viewdef) compared for all four split views)
+ledger rows for 146: 146_drop_legacy_per_hcp_count_columns.sql
+                   + deferred/146_drop_legacy_per_hcp_count_columns.sql
+```
+
+The two INSERT results in the raw output are the point: `INSERT 0 1` from the file's own ledger
+write, then `INSERT 0 0` from the runner's appended one — the runner's write is a no-op precisely
+because the file already recorded the same key. psql exit 0. Negative control after the ROLLBACK
+(legacy columns / 146 ledger rows / v_train width):
+
+```
+0 / deferred/146_drop_legacy_per_hcp_count_columns.sql / 36
+```
+
+## 6. Other verification in this directory
+
+* `deploy_gate_realdb_suite.txt` — the deploy's own blocking gate, run on this branch. It derives
+  what is pending from prod's ledger and reports `pending
+  ['146_drop_legacy_per_hcp_count_columns.sql']`, so its green rehearsed this change on a
+  throwaway copy of prod rather than ignoring it.
+* `fresh_db_scour_coverage.txt` — the real runner, `--dry-run`, against an EMPTY ephemeral
+  postgres: the fresh-database path this move newly puts 146 on, and proof the runner's
+  destructive/utility exclusion patterns do not wrongly swallow a file whose content is all DROPs.
+* `../2026-09-15_trx_canonical/iter9_13_146_rehearsal_20260919.txt` — the lane-#2114-era raw
+  evidence for the precondition block's four refusal/pass cases and the view ACLs. The migration
+  header cites it; the codex iter1 review found it was **untracked**, so this lane commits it.
+
+## 7. Ledger
 
 The hand application recorded the key the file had at the time,
 `deferred/146_drop_legacy_per_hcp_count_columns.sql`. That row is **kept** — it is the

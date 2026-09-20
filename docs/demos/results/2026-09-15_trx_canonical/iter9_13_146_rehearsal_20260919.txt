@@ -1,0 +1,30 @@
+# 146 re-application evidence, lane #2114, 2026-09-19T13:02:52Z
+# worktree HEAD 69d3baadf683ce6ca3ef758c2a610e19ef3cfd2a; 144 sha256 67cf75faa0d1bda3; 146 sha256 12396122fbe28e52
+## BEFORE
+cols legacy/canonical|3|0
+## A: 144, 146, 146 again
+cols legacy/canonical|0|3
+second 146 OK
+cols legacy/canonical|0|3
+views|4
+recreated acl|v_holdout_business_metrics|{postgres=arwdDxt/postgres,service_role=arwdDxt/postgres}
+recreated acl|v_test_business_metrics|{postgres=arwdDxt/postgres,service_role=arwdDxt/postgres}
+recreated acl|v_train_business_metrics|{postgres=arwdDxt/postgres,service_role=arwdDxt/postgres}
+recreated acl|v_validation_business_metrics|{postgres=arwdDxt/postgres,service_role=arwdDxt/postgres}
+## B: 146 without 144
+ERROR:  contract 146 REFUSED: 3 of the 3 canonical columns are absent from public.business_metrics, so dropping the legacy three would destroy the per-HCP trigger counts outright. Apply database/migrations/144_per_hcp_trigger_count_columns.sql first, verify the deploy, then re-run this file.
+## C: 144, planted disagreement, 146
+plant landed|1
+ERROR:  contract 146 REFUSED: 1 rows hold a legacy count that its canonical column does not carry, so dropping the legacy three would lose those values. Re-run 144's backfill (it is guarded by IS DISTINCT FROM, so it touches only the rows that disagree) and confirm this count reaches 0.
+## D: 144, one legacy column dropped, 146
+ERROR:  contract 146 REFUSED: only 2 of the 3 legacy columns remain on public.business_metrics -- a partially contracted schema. Inspect it by hand before re-running this file.
+## live view ACLs and dependents
+live acl|v_holdout_business_metrics|{postgres=arwdDxt/postgres,service_role=arwdDxt/postgres}
+live acl|v_test_business_metrics|{postgres=arwdDxt/postgres,service_role=arwdDxt/postgres}
+live acl|v_train_business_metrics|{postgres=arwdDxt/postgres,service_role=arwdDxt/postgres}
+live acl|v_validation_business_metrics|{postgres=arwdDxt/postgres,service_role=arwdDxt/postgres}
+dependents|0
+## AFTER
+cols legacy/canonical|3|0
+ledger 144/146|0
+sync triggers|0

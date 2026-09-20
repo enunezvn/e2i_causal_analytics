@@ -1,0 +1,44 @@
+# Runner-faithful second application of 146, live production, BEGIN ... ROLLBACK
+# 2026-09-20T02:23:14Z; 146 sha256 82d1ffce5a7870ee; branch 003d694fa
+# Built the way apply_dir() builds it: file body + the runner's OWN appended
+# INSERT ... ON CONFLICT DO NOTHING under the bare-basename key -- NOT psql \i --
+# so the ledger write the deploy will actually perform is inside the rehearsal.
+
+BEGIN
+WARNING:  there is already a transaction in progress
+SELECT 1
+DO
+DROP VIEW
+DROP VIEW
+DROP VIEW
+DROP VIEW
+DROP TRIGGER
+DROP FUNCTION
+NOTICE:  trigger "business_metrics_sync_legacy_trigger_counts_trg" for relation "public.business_metrics" does not exist, skipping
+NOTICE:  function public.business_metrics_sync_legacy_trigger_counts() does not exist, skipping
+NOTICE:  column "trx_count" of relation "business_metrics" does not exist, skipping
+NOTICE:  column "nrx_count" of relation "business_metrics" does not exist, skipping
+NOTICE:  column "total_rx_count" of relation "business_metrics" does not exist, skipping
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+CREATE VIEW
+CREATE VIEW
+CREATE VIEW
+CREATE VIEW
+INSERT 0 1
+NOTIFY
+INSERT 0 0
+          p          |                                              same                                              
+---------------------+------------------------------------------------------------------------------------------------
+ rows                | true
+ canonical sums      | true
+ table col count     | true
+ view privileges     | true
+ view definitions    | true
+ ledger rows for 146 | 146_drop_legacy_per_hcp_count_columns.sql + deferred/146_drop_legacy_per_hcp_count_columns.sql
+(6 rows)
+
+ROLLBACK
+WARNING:  there is no transaction in progress
+PSQL_EXIT=0

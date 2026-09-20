@@ -1,16 +1,10 @@
 BEGIN;
 CREATE TEMP TABLE _b AS
   SELECT (SELECT count(*) FROM public.business_metrics) n,
-         (SELECT sum(triggers_delivered_count) FROM public.business_metrics) d,
-         (SELECT sum(triggers_accepted_count) FROM public.business_metrics) a,
-         (SELECT sum(triggers_total_count) FROM public.business_metrics) t,
+         (SELECT sum(triggers_delivered_count)||'/'||sum(triggers_accepted_count)||'/'||sum(triggers_total_count) FROM public.business_metrics) sums,
          (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='business_metrics') cols,
-         (SELECT string_agg(c.relname||':'||coalesce(array_to_string(c.relacl,','),'<none>'), ' | ' ORDER BY c.relname)
-            FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-           WHERE n.nspname='public' AND c.relname LIKE 'v_%_business_metrics') acl,
-         (SELECT string_agg(c.relname||'='||md5(pg_get_viewdef(c.oid)), ' | ' ORDER BY c.relname)
-            FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-           WHERE n.nspname='public' AND c.relname LIKE 'v_%_business_metrics') defs;
+         (SELECT string_agg(c.relname||':'||coalesce(array_to_string(c.relacl,','),'<none>'),' | ' ORDER BY c.relname) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname LIKE 'v_%_business_metrics') acl,
+         (SELECT string_agg(c.relname||'='||md5(pg_get_viewdef(c.oid)),' | ' ORDER BY c.relname) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname LIKE 'v_%_business_metrics') defs;
 -- ============================================================================
 -- Migration 146 (CONTRACT): retire the legacy per_hcp_rollup count columns
 -- ============================================================================
@@ -323,12 +317,11 @@ ON CONFLICT DO NOTHING;
 
 NOTIFY pgrst, 'reload schema';
 
-SELECT 'rows'  p, (b.n = (SELECT count(*) FROM public.business_metrics))::text same FROM _b b
-UNION ALL SELECT 'sums', (b.d=(SELECT sum(triggers_delivered_count) FROM public.business_metrics)
-                      AND b.a=(SELECT sum(triggers_accepted_count) FROM public.business_metrics)
-                      AND b.t=(SELECT sum(triggers_total_count) FROM public.business_metrics))::text FROM _b b
-UNION ALL SELECT 'table col count', (b.cols=(SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='business_metrics'))::text FROM _b b
-UNION ALL SELECT 'view privileges', (b.acl IS NOT DISTINCT FROM (SELECT string_agg(c.relname||':'||coalesce(array_to_string(c.relacl,','),'<none>'), ' | ' ORDER BY c.relname) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname LIKE 'v_%_business_metrics'))::text FROM _b b
-UNION ALL SELECT 'view definitions', (b.defs IS NOT DISTINCT FROM (SELECT string_agg(c.relname||'='||md5(pg_get_viewdef(c.oid)), ' | ' ORDER BY c.relname) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname LIKE 'v_%_business_metrics'))::text FROM _b b
-UNION ALL SELECT 'new ledger key', (SELECT count(*)::text FROM public.schema_migrations WHERE filename='146_drop_legacy_per_hcp_count_columns.sql');
+INSERT INTO public.schema_migrations(filename) VALUES ('146_drop_legacy_per_hcp_count_columns.sql') ON CONFLICT DO NOTHING;
+SELECT 'rows'             p, (b.n    = (SELECT count(*) FROM public.business_metrics))::text same FROM _b b
+UNION ALL SELECT 'canonical sums',   (b.sums = (SELECT sum(triggers_delivered_count)||'/'||sum(triggers_accepted_count)||'/'||sum(triggers_total_count) FROM public.business_metrics))::text FROM _b b
+UNION ALL SELECT 'table col count',  (b.cols = (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='business_metrics'))::text FROM _b b
+UNION ALL SELECT 'view privileges',  (b.acl IS NOT DISTINCT FROM (SELECT string_agg(c.relname||':'||coalesce(array_to_string(c.relacl,','),'<none>'),' | ' ORDER BY c.relname) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname LIKE 'v_%_business_metrics'))::text FROM _b b
+UNION ALL SELECT 'view definitions', (b.defs IS NOT DISTINCT FROM (SELECT string_agg(c.relname||'='||md5(pg_get_viewdef(c.oid)),' | ' ORDER BY c.relname) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname LIKE 'v_%_business_metrics'))::text FROM _b b
+UNION ALL SELECT 'ledger rows for 146', (SELECT string_agg(filename,' + ' ORDER BY filename) FROM public.schema_migrations WHERE filename LIKE '%146_drop_legacy%');
 ROLLBACK;
