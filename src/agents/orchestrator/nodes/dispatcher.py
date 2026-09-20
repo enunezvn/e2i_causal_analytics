@@ -29,6 +29,7 @@ from .kpi_clarify import (
     KPI_LOOKUP_CONFIDENCE as _KPI_LOOKUP_CONFIDENCE,
 )
 from .kpi_clarify import brand_clarify_for_ask, region_clarify_evidence
+from .kpi_window import window_from_query as _window_from_query
 from .structured_scope import _structured_brand, _structured_region
 
 logger = logging.getLogger(__name__)
@@ -2066,22 +2067,6 @@ _CAUSAL_PATH_LIMIT = 15
 #: How many paths become key_findings (the rest ride along in data_summary).
 _CAUSAL_PATH_FINDINGS = 5
 
-#: Longest window phrase (in tokens) offered to the KPI engine's parser.
-_WINDOW_MAX_TOKENS = 4
-
-# Explicit range shapes accepted by ``parse_window``.  These are detected
-# before the permissive n-gram search so an invalid/reversed range cannot be
-# confused with an absent window and answered using the engine default.
-_WINDOW_MONTH_NAME = (
-    r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
-    r"jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
-)
-_EXPLICIT_WINDOW_RANGE_RE = re.compile(
-    r"(?:\b\d{4}-\d{2}-\d{2}\s+(?:to|\u2013)\s+\d{4}-\d{2}-\d{2}\b"
-    rf"|\b{_WINDOW_MONTH_NAME}\s*(?:-|to|\u2013)\s*{_WINDOW_MONTH_NAME}\s+\d{{4}}\b)",
-    re.IGNORECASE,
-)
-
 
 def _format_kpi_value(value: float, kpi: Any) -> str:
     """Render a KPI value the way the dashboard does.
@@ -2098,45 +2083,6 @@ def _format_kpi_value(value: float, kpi: Any) -> str:
     rendered = f"{value:,.2f}".rstrip("0").rstrip(".")
     unit = getattr(kpi, "unit", None)
     return f"{rendered} {unit}".strip() if unit else rendered
-
-
-def _window_from_query(query: str) -> Optional[Dict[str, str]]:
-    """The longest window phrase in ``query`` that the KPI engine's own parser
-    accepts, as its ``{start, end}`` dict — or ``None``.  Raises
-    ``WindowParseError`` when the query contains an explicit range shape that
-    is invalid; callers must fail closed rather than use a default window.
-
-    The grammar is NOT re-implemented here: candidate token n-grams (longest
-    first) are handed to :func:`src.services.time_window.parse_window`, which
-    stays the sole authority on what a window phrase means. ``parse_window``
-    ``fullmatch``es, so it cannot be pointed at a whole sentence.
-
-    Single tokens are deliberately never tried: a bare 4-digit number parses as
-    a full-year window, so "the top 2000 HCPs" would silently bind calendar-year
-    2000 to the figure. No recognized phrase → ``None`` → the engine's default
-    window, which ``KPIResult.window_status`` then reports honestly as
-    "default" rather than implying the user's period was applied.
-    """
-    from src.services.time_window import WindowParseError, parse_window
-
-    for explicit in _EXPLICIT_WINDOW_RANGE_RE.finditer(query):
-        try:
-            window = parse_window(explicit.group(0))
-        except (WindowParseError, ValueError) as exc:
-            raise WindowParseError(f"invalid explicit window: {explicit.group(0)!r}") from exc
-        if window is not None:
-            return window.as_dict()
-
-    tokens = re.findall(r"[\w'-]+", query.lower())
-    for size in range(min(_WINDOW_MAX_TOKENS, len(tokens)), 1, -1):
-        for start in range(len(tokens) - size + 1):
-            try:
-                window = parse_window(" ".join(tokens[start : start + size]))
-            except WindowParseError:
-                continue
-            if window is not None:
-                return window.as_dict()
-    return None
 
 
 #: Governing-head guard (codex iter-1): when the KPI mention sits inside a
