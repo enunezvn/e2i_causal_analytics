@@ -46,6 +46,7 @@ from src.kpi.business_metric_vocabulary import (
 from src.services.query_entities import (
     INDICATION_TO_BRAND,
     SUPPORTED_BRANDS,
+    ambiguous_region_phrase_source,
     region_phrase_source,
 )
 from src.utils.llm_content import normalize_llm_content, parse_llm_json
@@ -558,6 +559,13 @@ _BRAND_WORD_PATTERN = "(?:" + "|".join(b.lower() for b in SUPPORTED_BRANDS) + ")
 # The SAME phrases query_entities scans for, so "New England"/"West Coast"/"North East"
 # and the "region"/"area" noise suffix keep routing (codex r2 HIGH-1).
 _REGION_WORD_PATTERN = rf"(?:{region_phrase_source()})(?:'s)?(?:\s+(?:region|area))?"
+# The phrases that CANNOT resolve to one census region are scope words too: the ask
+# must REACH the resolver so #1572 can answer it with a question. Refusing to route
+# is not the safe choice here — both paths decline to serve a figure, but only the
+# routed one tells the user what to ask instead (#2191 residual 2).
+_AMBIGUOUS_REGION_WORD_PATTERN = (
+    rf"(?:{ambiguous_region_phrase_source()})(?:'s)?(?:\s+(?:region|area))?"
+)
 _MONTH_FORMS: tuple[str, ...] = (
     "jan(?:uary)?",
     "feb(?:ruary)?",
@@ -613,7 +621,8 @@ _QUALIFIER_WORD_PATTERN = (
 )
 
 _KPI_SCOPE_WORD_PATTERN = (
-    rf"(?:{_BRAND_WORD_PATTERN}|{_REGION_WORD_PATTERN}|{_TIME_WORD_PATTERN}"
+    rf"(?:{_BRAND_WORD_PATTERN}|{_REGION_WORD_PATTERN}|{_AMBIGUOUS_REGION_WORD_PATTERN}"
+    rf"|{_TIME_WORD_PATTERN}"
     rf"|{_INDICATION_WORD_PATTERN}|{_QUALIFIER_WORD_PATTERN})"
 )
 # The target is the INTERSECTION of two grammars anchored at the same position:

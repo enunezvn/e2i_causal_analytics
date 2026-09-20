@@ -246,10 +246,21 @@ _NON_US_EAST_RE = re.compile(r"\b(?:middle|far)[\s_-]+east\b", re.I)
 #: phrase) is deliberately NOT matched here — a locality mention is not
 #: evidence the user meant a census region, so it keeps the honest unscoped
 #: behaviour instead of a spurious clarify.
-_AMBIGUOUS_REGION_RE = re.compile(
-    r"\beast(?:ern)?(?:[\s_-]+(?:coast|seaboard))?\b",
-    re.I,
-)
+_AMBIGUOUS_REGION_PATTERN = r"east(?:ern)?(?:[\s_-]+(?:coast|seaboard))?"
+_AMBIGUOUS_REGION_RE = re.compile(rf"\b{_AMBIGUOUS_REGION_PATTERN}\b", re.I)
+
+
+def ambiguous_region_phrase_source() -> str:
+    """Alternation source for the region phrases that CANNOT resolve (no anchors).
+
+    Exposed for the same reason as :func:`region_phrase_source` (#2130): the KPI
+    value-lookup grammar has to admit these phrases too. An ambiguous phrase is
+    not a reason to refuse the ASK — #1572's whole design is that the ask routes
+    and is answered WITH A QUESTION. While the grammar knew only the canonical
+    phrases, "What is East Coast TRx?" stopped routing at all and that clarify
+    became unreachable for its own canonical example (#2191 residual 2).
+    """
+    return _AMBIGUOUS_REGION_PATTERN
 
 
 @dataclass(frozen=True)

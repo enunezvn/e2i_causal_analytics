@@ -580,9 +580,15 @@ def value_lookup_mentions_supported(
             region_resolved_or_clarified=region_resolved_or_clarified,
             warned_tail_nouns=_WARNED_TAIL_NOUNS.get(kpi_id, frozenset()),
             allow_recorded_completion=(
+                # Keyed to the KPI the ask RESOLVED to, not to how the user spelled
+                # it. "panel TRx" and "patient panel TRx" are the same patient-panel
+                # count, so "... were recorded" is the same trailing discourse in
+                # both; keying it to the literal `patient panel` left the bare
+                # compound stranded (#2191 residual 1). The pass still only skips
+                # the two discourse tokens themselves — every other tail token is
+                # walked by the same allowlist as before.
                 kpi_id in PANEL_RX_COUNT_KPI_IDS
-                and re.search(r"\bhow\s+many\s+patient[\s-]+panel\b", head_checked_query[:end])
-                is not None
+                and re.search(r"\bhow\s+many\b", head_checked_query[:end]) is not None
             ),
         ):
             return False
