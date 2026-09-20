@@ -85,9 +85,12 @@ def _as_value_shape(normalized: str, metric_end: int) -> str:
     for match in _CHANGE_RE.finditer(normalized):
         chars[match.start() : match.end()] = " " * (match.end() - match.start())
     for pattern in (_OVER_TIME_RE, _TIME_SERIES_RE):
-        match = pattern.match(normalized[metric_end:])
-        if match is not None:
-            start_at, end_at = metric_end + match.start(), metric_end + match.end()
+        # Distinct name: reusing the finditer loop variable above widened it to
+        # ``Match[str] | None`` and cost the tree one mypy error (59 -> 60).
+        tail_match = pattern.match(normalized[metric_end:])
+        if tail_match is not None:
+            start_at = metric_end + tail_match.start()
+            end_at = metric_end + tail_match.end()
             chars[start_at:end_at] = " " * (end_at - start_at)
     return "".join(chars)
 
