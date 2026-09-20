@@ -54,10 +54,33 @@ half for free: the runner emits 144 at line 130 and 146 at line 132, so the
 expand-before-contract ordering is visible in the REAL runner's real output on an
 empty database, not only in a sorted() call inside a test.
 
-The total cross-validates independently: 228 here, and deploy_gate_realdb_suite.txt
-reports "prod ledger 228 keys" — 227 files already applied under matching keys, plus
-the one stale 'deferred/146_...' row from the hand apply. Two different methods
-against two different databases agreeing on the same count.
+WHY THE ORDER CLAIM IS NOT ITSELF A PROXY. "Printed in that sequence" and "applied
+in that sequence" are not automatically the same thing, and asserting the second from
+the first would be the very defect this section was added to fix. They are the same
+here for a structural reason, in scripts/run_migrations.sh apply_dir(): the
+`[PENDING]` echo and the `Applying $key` path are the SAME
+`for migration_file in "$dir"/*.sql` loop body, differing only by the DRY_RUN branch
+that echoes and `continue`s instead of applying. So a dry run walks the identical
+sequence a real run does. Both filenames are also pure ASCII digits and underscores,
+so `144_` sorts before `146_` under any locale's collation.
+
+ON THE "228 = 228" CROSS-CHECK, CORRECTED. An earlier draft of this section called it
+"two different methods against two different databases agreeing on the same count".
+That is loose in exactly the way the codex iter2 finding above was loose, so here is
+what is actually true. The two 228s are NOT independent: they are the same set with
+one element re-keyed, and the count matching is therefore structural rather than
+corroborating. The real evidence is the SET DIFFERENCE, both directions, which is
+sharper than any count:
+
+  ledger keys NOT in the tree :  deferred/146_drop_legacy_per_hcp_count_columns.sql
+  tree keys NOT in the ledger :  146_drop_legacy_per_hcp_count_columns.sql
+
+One element each way, and both are this migration. That says the thing worth saying:
+**the next deploy applies exactly one migration, 146, and nothing else** — no
+unrelated file has quietly become pending alongside it. Derived by keying every
+forward `*.sql` under the runner's eight MIGRATION_DIRS with that dir's keyprefix and
+applying the runner's own three exclusion patterns, then `comm`-ing against
+`SELECT filename FROM public.schema_migrations`.
 
 Re-run with:
   CTR=e2i_lane2167_freshdb_$$
