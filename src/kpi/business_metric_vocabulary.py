@@ -136,3 +136,30 @@ def _unsupported_route_qualifier_source() -> str:
 
 
 KPI_VALUE_LOOKUP_UNSUPPORTED_QUALIFIER_PATTERN = _unsupported_route_qualifier_source()
+
+
+#: Heads that keep a "<head> of <KPI>" chain a VALUE ask ("the value of TRx", "the
+#: current level of TRx"), as opposed to a causal or cost head. The dispatcher's
+#: governing-head guard and the intent classifier's value-lookup grammar BOTH read
+#: this: codex r5 found "the current level of TRx for Kisqali" bound by the resolver
+#: but no longer routed, because the two lists were kept separately.
+VALUE_OF_HEADS = frozenset(
+    {
+        "value",
+        "values",
+        "level",
+        "levels",
+        "number",
+        "numbers",
+        "count",
+        "counts",
+        "total",
+        "totals",
+        "amount",
+        "amounts",
+        "figure",
+        "figures",
+        "sum",
+        "sums",
+    }
+)

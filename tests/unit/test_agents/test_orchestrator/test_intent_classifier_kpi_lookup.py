@@ -21,11 +21,16 @@ Two defects unmasked by PR #1364 (which revived the previously-dead
 from __future__ import annotations
 
 import logging
+import re
 from unittest.mock import AsyncMock
 
 import pytest
 
-from src.agents.orchestrator.nodes.intent_classifier import IntentClassifierNode
+from src.agents.orchestrator.nodes.intent_classifier import (
+    KPI_VALUE_LOOKUP_RE,
+    IntentClassifierNode,
+)
+from src.kpi.business_metric_vocabulary import KPI_VALUE_LOOKUP_METRIC_PATTERN
 
 
 def _pattern(query: str):
@@ -53,6 +58,24 @@ class TestKpiValueLookupPattern:
             "what is the NBRx for Kisqali in the past month?",  # bench-0095
             "What is the current TRx?",  # bench-0121 (no brand)
             "What is NRx?",  # bench-0052 (bare metric definition ask)
+            # #2130 follow-up: shapes the old 3-word gap admitted and the constrained
+            # target grammar must keep (gold/real traffic, measured 2026-09-19).
+            "What is Remibrutinib market share?",  # gold: explainer
+            "Can you show me the trend of Remibrutinib NBRx over the past 6 months?",  # gold
+            "Can you show me how Kisqali's total prescriptions have evolved throughout the fourth quarter?",  # gold
+            "Show me how Remibrutinib's TRx trend over the last 30 days compares to Kisqali and Fabhalta.",  # gold
+            "What was the weekly TRx share for Remibrutinib across the Southeast region recently?",  # real traffic
+            "What was the weekly TRx trajectory for Remibrutinib across the Southeast during Q2?",  # real traffic
+            # codex r4: parse_window accepts hyphenated month ranges; main counts
+            # "Jan-Mar" as one word, so the grammar must too.
+            "What is Jan-Mar 2025 TRx?",
+            "What is January-March 2025 TRx?",
+            # codex r5: heads the resolver's governing-head guard binds.
+            "What is the current level of TRx for Kisqali?",
+            "Give me the latest amount of NRx for Fabhalta",
+            "What is the current figure of NBRx for Kisqali?",
+            "Show me the sum of TRx for Kisqali",
+            "What are the current values of TRx for Kisqali?",
         ],
     )
     def test_kpi_value_lookup_is_explanation(self, query: str) -> None:
@@ -198,3 +221,124 @@ class TestLlmClassifySuccessLogging:
             "_llm_classify success path; got none"
         )
         assert "0.95" in success_logs[0].getMessage(), "the success log must include the confidence"
+
+
+class TestHowManyCannotReachALaterCue:
+    """#2130 (codex r4 HIGH-2): a query that says "how many" anywhere may only match
+    through the how-many branch. Otherwise the leading `.*?` skips the entity-count
+    subject and latches onto a later ordinary cue, and 'How many people asked, "What
+    is TRx?"' bound the TRx scalar -- the exact defect this PR exists to remove,
+    reached by another route. Widening the entity-noun list would not close it.
+    """
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            'How many people asked, "What is TRx?"',
+            "How many pharmacies requested: give me NRx?",
+            "How many individuals want to know what is Kisqali TRx?",
+            "How many competitors say show me TRx?",
+            # codex r5: a NESTED how-many, and spelling variants of the cue itself.
+            'How many people asked, "How many TRx?"',
+            "How many pharmacies requested: how many NRx?",
+            'How\nmany pharmacies asked, "What is TRx?"',
+            'How  many pharmacies asked, "What is TRx?"',
+            'How-many pharmacies asked, "What is TRx?"',
+            # codex r6: the normalised spelling REFUSES but must never MATCH — main's
+            # positive cue is the literal "how many", so admitting "How-many TRx?"
+            # here would make this grammar a superset of main's.
+            "How-many TRx?",
+            "HOW-MANY Kisqali TRx?",
+        ],
+    )
+    def test_a_later_cue_does_not_rescue_an_entity_count_ask(self, query: str) -> None:
+        assert not KPI_VALUE_LOOKUP_RE.search(query)
+        assert _pattern(query)["primary_intent"] != "explanation"
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "How many total prescriptions did Kisqali have?",
+            "How many new-to-brand prescriptions were there?",
+        ],
+    )
+    def test_a_genuine_how_many_kpi_ask_still_routes(self, query: str) -> None:
+        assert KPI_VALUE_LOOKUP_RE.search(query)
+
+
+class TestOnlyChronologicalMonthRanges:
+    """#2130 (codex r5 HIGH-3): parse_window REJECTS a reversed month range, and
+    _window_from_query turns that rejection into "no window" — so a reversed range
+    would be answered with a DEFAULT-period figure for an explicitly scoped ask
+    (measured on main: 'What is March-Jan 2025 TRx?' binds WS3-BI-005 with no window).
+    Only chronological ranges are admitted, so the reversed form never reaches the
+    deterministic path. The underlying "explicit but invalid window is silently
+    dropped" defect is main's and is filed separately.
+    """
+
+    @pytest.mark.parametrize(
+        "query", ["What is Jan-Mar 2025 TRx?", "What is January-March 2025 TRx?"]
+    )
+    def test_a_chronological_range_routes(self, query: str) -> None:
+        assert KPI_VALUE_LOOKUP_RE.search(query)
+
+    @pytest.mark.parametrize("query", ["What is March-Jan 2025 TRx?", "What is Dec-Feb 2025 TRx?"])
+    def test_a_reversed_range_does_not(self, query: str) -> None:
+        assert not KPI_VALUE_LOOKUP_RE.search(query)
+
+
+class TestKpiValueLookupSubsetInvariant:
+    """#2130 (codex r3 HIGH-1): the constrained grammar must match a SUBSET of the
+    shape main routed — a determiner plus at most three PHYSICAL words before the
+    metric. Counting scope-pattern repetitions is NOT that budget: one scope element
+    can span several words ("new england", "patient panel", "u.s."), and the branch
+    then matched "What is New England and West TRx?", which main refused and whose
+    resolver served a NATIONAL figure for a two-region ask.
+
+    The reference below is rebuilt here from the public metric vocabulary, so it stays
+    an INDEPENDENT statement of main's shape rather than a copy of the implementation.
+    """
+
+    _MAIN_SHAPE = re.compile(
+        r"(?s)\A.*?(?:what(?:'?s| is| are| was| were)|show me|tell me about|how many"
+        r"|give me)\s+(?:teh\s+|the\s+)?(?:[\w'-]+\s+){0,3}?"
+        + KPI_VALUE_LOOKUP_METRIC_PATTERN
+        + r"\b",
+        re.IGNORECASE,
+    )
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            # codex r3 counterexamples: branch-only matches under the old budget.
+            "What is New England and West TRx?",
+            "What is New England region total TRx?",
+            "What is U.S. TRx?",
+            "What is Kisqali vs. TRx?",
+            "What is patient panel total current TRx?",
+            "What is West Coast's total current TRx?",
+            # scoped shapes that must keep matching
+            "What is the Northeast region TRx for Kisqali?",
+            "Show me New England TRx for Kisqali",
+            "What is PNH TRx?",
+            "What is March 2026 TRx?",
+            "What is 2026-01-01 to 2026-02-01 TRx?",
+            "Show me last 30 days NRx for Fabhalta",
+            "what is teh currnt TRx for Kisqali?",
+            "Show me the competitor comparison market share for Kisqali",
+            # entity-count asks: must match neither
+            "How many people received new prescriptions?",
+            "How many pharmacies filled new prescriptions?",
+            "Show me patients receiving new prescriptions",
+            'How many people asked, "What is TRx?"',
+            "What is Jan-Mar 2025 TRx?",
+            "How-many TRx?",
+            "HOW-MANY Kisqali TRx?",
+        ],
+    )
+    def test_every_match_is_also_a_main_shape_match(self, query: str) -> None:
+        if KPI_VALUE_LOOKUP_RE.search(query):
+            assert self._MAIN_SHAPE.search(query), (
+                f"{query!r} matches the lookup pattern but NOT main's "
+                "determiner-plus-three-words shape; the subset invariant is broken"
+            )

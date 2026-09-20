@@ -41,6 +41,12 @@ from src.agents.multi_faceted import (
 from src.kpi.business_metric_vocabulary import (
     KPI_VALUE_LOOKUP_METRIC_PATTERN,
     KPI_VALUE_LOOKUP_UNSUPPORTED_QUALIFIER_PATTERN,
+    VALUE_OF_HEADS,
+)
+from src.services.query_entities import (
+    INDICATION_TO_BRAND,
+    SUPPORTED_BRANDS,
+    region_phrase_source,
 )
 from src.utils.llm_content import normalize_llm_content, parse_llm_json
 from src.utils.llm_factory import MODEL_MAPPINGS, get_fast_llm, get_llm_provider
@@ -510,9 +516,9 @@ _ASK_SHAPE_RE = re.compile(
 # layer, which classifies them prediction@0.85 → prediction_synthesizer fails
 # closed on chat.
 #
-# The {0,3} word-bounded gap keeps causal/forecast asks that merely MENTION a
-# metric ("what is the causal impact of rep visits on TRx") outside the match;
-# "teh" is a recurring real-traffic typo (bench-0083/0100/0114/0117/0126).
+# The target grammar keeps causal/forecast/entity asks that merely MENTION a
+# metric outside the match. "teh" is a recurring real-traffic typo
+# (bench-0083/0100/0114/0117/0126).
 #
 # Whole-query forecast guard (codex iter-1/2/3 MEDIUMs): a query containing ANY
 # prediction lexeme anywhere ("show me the trx forecast", "what is the trx for
@@ -537,6 +543,95 @@ _ASK_SHAPE_RE = re.compile(
 # the resolver uses the pre-compiled twin. Identity is pinned by
 # test_explainer_evidence_binding_1475.py.
 _KPI_ENTITY_COUNT_NOUN_PATTERN = r"(?:patients?|hcps?|prescribers?|doctors?|reps?|representatives?)"
+# #2130: which words may sit between a lookup cue ("what is", "show me", "how many") and
+# the KPI. The old rule allowed ANY three words, so a metric that was only the OBJECT of
+# a different question won: "How many people received new prescriptions?" bound the NRx
+# total. Now every word in that gap must be a SCOPE word the lookup can honour or safely
+# ignore: a supported brand, a region alias, a time window, a qualifier, a comparison
+# word, or a known typo. Any other word (people, pharmacies, received, ...) FAILS CLOSED:
+# the ask leaves the deterministic scalar path, and no figure is served for it.
+# Vocabularies come from their authorities (SUPPORTED_BRANDS, query_entities'
+# free-text region phrases), and
+# brand matching is case-free: the classifier scores the LOWERCASED query while the
+# resolver sees the original, so a capitalisation rule would split the two layers.
+_BRAND_WORD_PATTERN = "(?:" + "|".join(b.lower() for b in SUPPORTED_BRANDS) + ")(?:'s)?"
+# The SAME phrases query_entities scans for, so "New England"/"West Coast"/"North East"
+# and the "region"/"area" noise suffix keep routing (codex r2 HIGH-1).
+_REGION_WORD_PATTERN = rf"(?:{region_phrase_source()})(?:'s)?(?:\s+(?:region|area))?"
+_MONTH_FORMS: tuple[str, ...] = (
+    "jan(?:uary)?",
+    "feb(?:ruary)?",
+    "mar(?:ch)?",
+    "apr(?:il)?",
+    "may",
+    "jun(?:e)?",
+    "jul(?:y)?",
+    "aug(?:ust)?",
+    "sep(?:t|tember)?",
+    "oct(?:ober)?",
+    "nov(?:ember)?",
+    "dec(?:ember)?",
+)
+_MONTH_NAME_PATTERN = "(?:" + "|".join(_MONTH_FORMS) + ")"
+#: Only CHRONOLOGICAL ranges (codex r5): parse_window rejects "March-Jan 2025", and
+#: _window_from_query turns that rejection into "no window", so the resolver would serve
+#: a DEFAULT-period figure for an explicitly scoped ask. Refusing the reversed form keeps
+#: it off the deterministic path entirely.
+_MONTH_RANGE_PATTERN = (
+    "(?:"
+    + "|".join(f"{a}[-\u2013]{b}" for i, a in enumerate(_MONTH_FORMS) for b in _MONTH_FORMS[i:])
+    + ")"
+)
+_TIME_WORD_PATTERN = (
+    r"(?:last|past|this|prior|previous|current|currnt|curent|latest|recent|trailing"
+    r"|(?:day|week|month|quarter|year)s?(?:'s)?|today's|ytd|mtd|qtd"
+    r"|(?:year|month|quarter)-to-date|q[1-4]|h[12]|fy\d{2,4}|\d{4}-\d{2}-\d{2}"
+    # parse_window accepts hyphenated month RANGES ("Jan-Mar 2025"), which main counts
+    # as one physical word, so the range must be one scope element too (codex r4).
+    rf"|{_MONTH_RANGE_PATTERN}|{_MONTH_NAME_PATTERN}"
+    r"|\d{1,4}(?:-day)?|last-\d+-day|to|end|start|as"
+    r"|weekly|monthly|quarterly|daily|annual|annualized|yearly)"
+)
+# Indications ground a brand (brand_scan / INDICATION_TO_BRAND), so "PNH TRx" is a
+# scoped lookup the resolver binds -- derived from that authority, not re-listed.
+_INDICATION_WORD_PATTERN = (
+    "(?:"
+    + "|".join(
+        part
+        for pattern, _brand in INDICATION_TO_BRAND
+        for part in pattern.replace(r"\b", "").split("|")
+    )
+    + ")"
+)
+_QUALIFIER_WORD_PATTERN = (
+    r"(?:total|overall|national|regional|us|u\.s\.|brand|canonical|patient[\s-]panel|panel"
+    r"|trend|trends|trajectory|evolution|history|how|share"
+    r"|vs\.?|versus|and|compared|comparison|competitor|competitors|competitive"
+    r"|of|for|in|the|a|an|teh" + "|" + "|".join(sorted(VALUE_OF_HEADS, key=len, reverse=True)) + ")"
+    # The heads the resolver's governing-head guard accepts, from the shared
+    # authority (codex r5): "the current level of TRx", "the sum of TRx".
+)
+
+_KPI_SCOPE_WORD_PATTERN = (
+    rf"(?:{_BRAND_WORD_PATTERN}|{_REGION_WORD_PATTERN}|{_TIME_WORD_PATTERN}"
+    rf"|{_INDICATION_WORD_PATTERN}|{_QUALIFIER_WORD_PATTERN})"
+)
+# The target is the INTERSECTION of two grammars anchored at the same position:
+# (a) main's own shape -- a determiner plus at most three PHYSICAL words before the
+#     metric -- as a lookahead, and (b) the scope-word form.
+# Counting scope repetitions alone did NOT give main's budget, because one scope
+# element can consume several words ("new england", "patient panel", "u.s."): codex r3
+# matched "What is New England and West TRx?" here while main did not, and the resolver
+# then served a NATIONAL figure for a two-region ask. With (a) as a gate the subset
+# property is structural, so the scope vocabulary can hold multi-word forms safely.
+_KPI_MAIN_SHAPE_PATTERN = (
+    rf"(?:teh\s+|the\s+)?(?:[\w'-]+\s+){{0,3}}?{KPI_VALUE_LOOKUP_METRIC_PATTERN}\b"
+)
+_KPI_VALUE_LOOKUP_TARGET_PATTERN = (
+    rf"(?={_KPI_MAIN_SHAPE_PATTERN})"
+    r"(?:teh\s+|the\s+)?"
+    rf"(?:{_KPI_SCOPE_WORD_PATTERN}\s+){{0,3}}?{KPI_VALUE_LOOKUP_METRIC_PATTERN}"
+)
 
 KPI_VALUE_LOOKUP_PATTERN = (
     r"(?s)\A(?!.*(?:predict|expect|forecast|project|likelihood|probabilit|what will))"
@@ -544,8 +639,9 @@ KPI_VALUE_LOOKUP_PATTERN = (
     # A metric phrase can be the OBJECT of a different entity-count question.
     # Without this fail-closed subject guard, "How many patients received new
     # prescriptions?" binds NRx instead of the requested patient count.
-    # Modifiers before the subject remain tolerated, matching the gap budget
-    # below ("How many high-risk patients ...").
+    # Up to two modifiers before the subject are tolerated ("How many high-risk
+    # patients ..."); the target grammar below independently refuses any
+    # subject it does not name (people, pharmacies, ...).
     rf"(?!.*\bhow many(?:\s+[\w'-]+){{0,2}}\s+{_KPI_ENTITY_COUNT_NOUN_PATTERN}\b)"
     # The same entity-count ask also arrives as "patient count for NRx" or
     # "number of high-risk patients ...". The KPI is still the object/axis,
@@ -553,9 +649,30 @@ KPI_VALUE_LOOKUP_PATTERN = (
     rf"(?!.*\b{_KPI_ENTITY_COUNT_NOUN_PATTERN}\s+(?:counts?|totals?)\b)"
     rf"(?!.*\b(?:counts?|totals?|number)\s+of"
     rf"(?:\s+[\w'-]+){{0,2}}\s+{_KPI_ENTITY_COUNT_NOUN_PATTERN}\b)"
-    r".*?(?:what(?:'?s| is| are| was| were)|show me|tell me about|how many|give me)\s+"
-    r"(?:teh\s+|the\s+)?(?:[\w'-]+\s+){0,3}?"
-    rf"{KPI_VALUE_LOOKUP_METRIC_PATTERN}\b"
+    r"(?:"
+    # All lookup cues use the same constrained target grammar. In particular,
+    # no cue may skip an arbitrary subject/verb to reach a KPI object.
+    #
+    # codex r4: the ordinary cues are unavailable to a query that says "how many"
+    # ANYWHERE, because the leading `.*?` could otherwise skip the entity-count
+    # subject and latch onto a later cue -- 'How many people asked, "What is TRx?"'
+    # bound TRx. Such a multipart ask fails closed instead of serving one scalar.
+    r"(?:(?!.*\bhow[\s-]+many\b).*?"
+    r"(?:what(?:'?s| is| are| was| were)|show me|tell me about|give me)\s+"
+    rf"{_KPI_VALUE_LOOKUP_TARGET_PATTERN})"
+    r"|"
+    # For a count question, the KPI must be the counted noun phrase directly
+    # after "how many" (optionally partitive/determined). A generic word gap
+    # here makes the KPI object win over any unseen subject noun: e.g. people,
+    # individuals, or pharmacies that received/filled new prescriptions.
+    # The POSITIVE cue stays main's literal "how many" (codex r6: normalising it on
+    # both sides made "How-many TRx?" match here while main refused, breaking the
+    # subset property). The normalised form is used only where it REFUSES: the
+    # ordinary-cue lookahead above and this tempered prefix, which stops the branch
+    # skipping an earlier count question to reach a nested one.
+    r"(?:(?!how[\s-]+many).)*?how many\s+"
+    rf"{_KPI_VALUE_LOOKUP_TARGET_PATTERN}"
+    r")\b"
 )
 KPI_VALUE_LOOKUP_RE = re.compile(KPI_VALUE_LOOKUP_PATTERN, re.IGNORECASE)
 

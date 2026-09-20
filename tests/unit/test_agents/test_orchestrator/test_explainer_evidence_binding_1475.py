@@ -206,6 +206,70 @@ def test_full_kpi_name_lookup_binds_the_same_real_calculated_value(monkeypatch) 
     assert stub.calls == [("WS3-BI-005", {"brand": "Kisqali"})]
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "How many people received new prescriptions?",
+        "How many individuals received new prescriptions?",
+        "How many pharmacies filled new prescriptions?",
+        "Show me patients receiving new prescriptions",
+        "Give me pharmacies filling new prescriptions",
+        "Tell me about people with new prescriptions",
+    ],
+)
+def test_entity_count_with_full_kpi_object_never_binds_a_bare_value(
+    monkeypatch, query: str
+) -> None:
+    """The KPI is the object, not the quantity requested by ``how many``."""
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](_agent_input(query), _dispatch())
+
+    assert isinstance(resolved, NeedsStructuredInput), resolved
+    assert stub.calls == []
+
+
+@pytest.mark.parametrize(
+    ("query", "kpi_id", "expected"),
+    [
+        # #2130 follow-up (codex r1 HIGH): scoped asks the old 3-word gap admitted. The
+        # scope-word gap must keep BINDING them, not merely classify them (measured on
+        # main 2026-09-19 with the same resolver, identical calls).
+        (
+            "What is the Northeast TRx for Kisqali?",
+            "WS3-BI-005",
+            {"brand": "Kisqali", "region": "northeast"},
+        ),
+        ("Show me last 30 days NRx for Fabhalta", "WS3-BI-006", {"brand": "Fabhalta"}),
+        ("What is Kisqali's year-to-date TRx?", "WS3-BI-005", {"brand": "Kisqali"}),
+        ("What was last month's NRx for Fabhalta?", "WS3-BI-006", {"brand": "Fabhalta"}),
+        ("What is Q2 TRx for Kisqali?", "WS3-BI-005", {"brand": "Kisqali"}),
+        (
+            "Show me the competitor comparison market share for Kisqali",
+            "WS3-BI-008",
+            {"brand": "Kisqali"},
+        ),
+        ("what is teh currnt TRx for Kisqali?", "WS3-BI-005", {"brand": "Kisqali"}),
+        ("What is Remibrutinib market share?", "WS3-BI-008", {"brand": "Remibrutinib"}),
+        # codex r5: value heads the governing-head guard accepts (VALUE_OF_HEADS).
+        ("What is the current level of TRx for Kisqali?", "WS3-BI-005", {"brand": "Kisqali"}),
+        ("Give me the latest amount of NRx for Fabhalta", "WS3-BI-006", {"brand": "Fabhalta"}),
+        ("What is the current figure of NBRx for Kisqali?", "WS3-BI-007", {"brand": "Kisqali"}),
+        ("Show me the sum of TRx for Kisqali", "WS3-BI-005", {"brand": "Kisqali"}),
+    ],
+)
+def test_scoped_kpi_lookup_still_binds_its_kpi(monkeypatch, query, kpi_id, expected) -> None:
+    stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](_agent_input(query), _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    assert len(stub.calls) == 1, stub.calls
+    called_id, context = stub.calls[0]
+    assert called_id == kpi_id
+    assert {k: context.get(k) for k in expected} == expected, context
+
+
 def test_full_kpi_name_as_cost_modifier_never_binds_a_bare_value(monkeypatch) -> None:
     """Widening the route vocabulary must preserve the governing-head fence."""
     stub = _install_calculator(monkeypatch, _StubCalculator(_kpi_result()))
