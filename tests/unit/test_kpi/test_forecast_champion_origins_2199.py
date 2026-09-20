@@ -29,6 +29,11 @@ import pytest
 
 from src.kpi.forecast import backtest as bt
 
+#: The service-level tests here fit real Holt-Winters models over rolling origins.
+#: 300s, not more: tests/unit/test_tests_meta/test_session_stall_watchdog_1655.py
+#: requires a lane's stall timeout to be at least 2x the longest per-test budget.
+pytestmark = pytest.mark.timeout(300)
+
 
 def _score(name, mape, cutoffs, *, per_origin=None, horizon=2):
     """A score whose per-step errors are keyed to explicit cutoffs.
@@ -279,11 +284,18 @@ def test_the_cache_contract_version_was_bumped_for_the_new_champion_rule():
 
 
 def test_a_long_series_selects_on_every_origin_so_nothing_changes_there():
-    """The live shape: at 164 months all models share all 24 cutoffs."""
+    """The live shape: every model shares all 24 cutoffs, so the fix is a no-op.
+
+    60 months, not the live 164: measured, both give every model the full 24 origins
+    (the asymmetry closes at 60), and 164 costs three seasonal Holt-Winters refits
+    over 24 origins each -- the ~40s workload that made this file time out. A test
+    that is slow enough to flake is a worse guard than the cheaper one proving the
+    same property.
+    """
     from src.kpi.forecast import service as svc
 
     result = svc.forecast_series(
-        _series(_seasonal(164)), horizon=6, include_timesfm=False, cache=None
+        _series(_seasonal(60)), horizon=6, include_timesfm=False, cache=None
     )
     counts = {s.n_origins for s in result.scores}
     assert counts == {24}
