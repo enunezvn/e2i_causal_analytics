@@ -112,6 +112,26 @@ def test_timesfm_is_not_loaded_inside_the_api_or_the_bentoml_service(compose):
         )
 
 
-def test_the_worker_has_a_healthcheck_so_a_broken_start_is_visible(forecast):
+def test_the_healthcheck_asks_about_THIS_node_not_whether_any_worker_is_alive(forecast):
+    """A bare `celery inspect ping` is a proxy, and on this box a false one.
+
+    With no destination it broadcasts to every worker on the broker and exits 0 if ANY
+    answers -- so alongside worker_light and worker_medium it would report this
+    container healthy while it was dead. MEASURED 2026-09-20 in the prod api image:
+    `-d worker_forecast@$HOSTNAME` exits 0 for a live node and 69 for an absent one,
+    while the bare broadcast exits 0 for both.
+    """
     assert "healthcheck" in forecast
-    assert "inspect" in " ".join(str(x) for x in forecast["healthcheck"]["test"])
+    test = forecast["healthcheck"]["test"]
+    assert test[0] == "CMD-SHELL", "$HOSTNAME has to be expanded by a shell"
+    command = " ".join(str(x) for x in test[1:])
+    assert "inspect ping" in command
+    assert "-d worker_forecast@" in command, "the check must name this node"
+    assert "$$HOSTNAME" in command or "$HOSTNAME" in command
+
+
+def test_the_healthcheck_names_the_same_node_the_worker_registers_as(forecast):
+    """A destination that does not match --hostname would fail forever."""
+    command = " ".join(str(x) for x in forecast["healthcheck"]["test"][1:])
+    assert "--hostname=worker_forecast@" in " ".join(str(forecast["command"]).split())
+    assert "worker_forecast@" in command

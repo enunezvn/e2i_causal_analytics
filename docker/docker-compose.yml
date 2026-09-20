@@ -1231,7 +1231,16 @@ services:
       --soft-time-limit=540
       --hostname=worker_forecast@%h
     healthcheck:
-      test: ["CMD", "celery", "-A", "src.workers.celery_app", "inspect", "ping"]
+      # Scoped to THIS node with -d, not the bare broadcast the other worker tiers use.
+      # `celery inspect ping` with no destination asks every worker on the broker and
+      # exits 0 if ANY of them answers, so on a box already running worker_light and
+      # worker_medium it would report this container healthy while it was dead.
+      # MEASURED 2026-09-20 in this image: `-d worker_forecast@$HOSTNAME` exits 0 while
+      # the node is up and 69 for a node that is not there; the bare broadcast exits 0
+      # in both cases. CMD-SHELL because $HOSTNAME has to be expanded.
+      test:
+        - CMD-SHELL
+        - celery -A src.workers.celery_app inspect ping -d worker_forecast@$$HOSTNAME
       interval: 60s
       timeout: 30s
       retries: 3
