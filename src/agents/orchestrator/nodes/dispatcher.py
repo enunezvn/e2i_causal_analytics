@@ -2577,10 +2577,9 @@ def _resolve_explainer_input(
     (2) Otherwise bind the successful upstream results carried in the dispatch
         state — this turn's earlier/sibling agent outputs on the fallback path,
         prior turns' outputs on a resumed conversation state.
-    (3) With no upstream at all, resolve the evidence the ASK itself points at
-        (#1475): the KPI engine's computed value for a KPI value lookup, or the
-        curated causal-path registry for a causal ask / a fallback after a
-        failed ``causal_impact``. Both bind REAL data or nothing.
+    (3) With no upstream, resolve ASK-directed evidence (#1475/#2191): a scalar KPI
+        lookup, monthly KPI history, or curated causal paths. Each binds REAL data
+        or nothing.
     (4) With none of those, fail closed: an explanation of nothing would have to
         be fabricated.
     """
@@ -2598,19 +2597,20 @@ def _resolve_explainer_input(
         # must not be shadowed by a bare KPI lookup; codex iter-6). Threaded
         # under its own key, separate from the cross-turn channel.
         analysis_results = _successful_results(agent_input.get("current_turn_agent_results") or [])
-        # (2b) an explicit CURRENT-ask value lookup outranks CARRIED upstream
-        # results: the operator.add ``agent_results`` channel carries PRIOR
-        # turns' successes across a checkpointer-resumed conversation (#1442
-        # class), and "What is the TRx?" is never an anaphoric
-        # explain-that-analysis ask (codex iter-5). Anaphora ("explain the
-        # analysis") cannot match the lookup regex, so branch (2c) below
-        # keeps serving it. On a causal-fallback turn the turn IS causal,
-        # whatever the lookup regex thinks — Branch A is skipped outright
-        # (iter-2 self-audit: "impact of TRx on conversion rate" fits the
-        # regex's {0,3} gap).
+        # (2b) CURRENT-ask KPI evidence outranks the ``agent_results`` channel's PRIOR
+        # successes across a resumed conversation (#1442); "What is the TRx?" is
+        # never anaphoric. "Explain the analysis" cannot match the lookup regex, so
+        # keeps serving it. A causal-fallback turn skips ask-directed KPI evidence.
+        ask_directed = False
         if not analysis_results and not _is_causal_fallback(agent_input):
-            analysis_results = _kpi_lookup_evidence(agent_input) or []
-        if not analysis_results:
+            from .kpi_trend_evidence import resolve_kpi_trend_evidence
+
+            trend_evidence = resolve_kpi_trend_evidence(agent_input)
+            ask_directed = trend_evidence is not None
+            analysis_results = (
+                trend_evidence if ask_directed else (_kpi_lookup_evidence(agent_input) or [])
+            )
+        if not analysis_results and not ask_directed:
             # (2c) carried upstream results (#883 §3 anaphora).
             analysis_results = _successful_upstream_results(agent_input)
 
