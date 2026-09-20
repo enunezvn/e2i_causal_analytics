@@ -1109,8 +1109,29 @@ class ToolPlanner:
             "DESCRIPTIVE": ("cohort_statistics", "cohort_constructor"),
         }
 
+        # #2115: PREDICTIVE covers two different questions -- "what will this KPI be"
+        # and "which entities are risky" -- and the map above answers both with
+        # risk_scorer. A forecast-shaped ask goes to the forecaster instead; if it is
+        # not registered, the mapping falls through to risk_scorer exactly as before,
+        # so an unregistered forecaster degrades rather than returning nothing.
+        if intent == "PREDICTIVE" and is_forecast_question(question_lower):
+            if self.registry.validate_tool_exists("kpi_forecaster"):
+                return ToolMapping(
+                    sub_question_id=sq.id,
+                    tool_name="kpi_forecaster",
+                    source_agent="prediction_synthesizer",
+                    confidence=0.6,
+                    reasoning="Auto-mapped: a PREDICTIVE ask about a KPI's future level",
+                )
+
         # Keyword-based fallbacks (when intent doesn't match well)
         keyword_mappings = [
+            # Forecast cues come FIRST: "forecast TRx risk" contains 'risk', and the
+            # entry below would otherwise claim it for the entity scorer.
+            (
+                ["forecast", "project", "outlook", "trajectory"],
+                ("kpi_forecaster", "prediction_synthesizer"),
+            ),
             (["segment", "high-risk", "risk", "score"], ("risk_scorer", "prediction_synthesizer")),
             (["causal", "effect", "impact", "cause"], ("causal_effect_estimator", "causal_impact")),
             (["compare", "difference", "gap", "vs"], ("gap_calculator", "gap_analyzer")),
@@ -1155,6 +1176,62 @@ class ToolPlanner:
             )
 
         return None
+
+
+# ============================================================================
+# FORECAST ROUTING (#2115)
+# ============================================================================
+
+#: A question is a FORECAST question when it asks what a quantity WILL BE, not which
+#: entities are risky. Before #2115 the PREDICTIVE intent mapped everything to
+#: ``risk_scorer``, so demo 6.5 ("Forecast Kisqali TRx volume for the next two
+#: quarters") came back with an entity-level risk score -- the platform had no
+#: forecaster to map to, and the intent map has had no reason to distinguish the two
+#: shapes since.
+_FORECAST_CUES: tuple[str, ...] = (
+    "forecast",
+    "project",
+    "projection",
+    "outlook",
+    "extrapolat",
+    "trajectory",
+    "headed",
+    "will be",
+    "by the end of",
+    "year end",
+    "year-end",
+    "next quarter",
+    "next two quarters",
+    "next month",
+    "months out",
+    "going to be",
+)
+
+#: ...and it is NOT a forecast question, however it is phrased, when it scores ENTITIES.
+#: "Which HCP segments will churn next quarter" carries a horizon and a future tense but
+#: wants a per-entity score, which ``risk_scorer`` has always served correctly. Without
+#: this veto the fix would fire on the asks the old mapping got right -- a regression
+#: dressed up as a feature.
+_ENTITY_SCORING_CUES: tuple[str, ...] = (
+    "risk",
+    "propensity",
+    "likelihood",
+    "churn",
+    "score",
+    "segment",
+    "hcp",
+    "prescriber",
+    "physician",
+    "patient",
+)
+
+
+def is_forecast_question(text: str) -> bool:
+    """True when the ask is about a KPI's future LEVEL rather than an entity's score."""
+    lowered = (text or "").lower()
+    if any(cue in lowered for cue in _ENTITY_SCORING_CUES):
+        return False
+    return any(cue in lowered for cue in _FORECAST_CUES)
 
 
 # ============================================================================

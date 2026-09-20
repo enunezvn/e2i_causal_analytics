@@ -1,0 +1,365 @@
+{
+  "generated_at": "2026-09-20T12:49:06.108228+00:00",
+  "src_file": "/work/src/__init__.py",
+  "worker_available": {
+    "ready": true,
+    "why": "worker_forecast@e99a1b181ce8 is consuming forecast"
+  },
+  "dispatch_round_trip_s": 3.74,
+  "brands": {
+    "Kisqali": {
+      "metric": "trx",
+      "brand": "Kisqali",
+      "region": null,
+      "horizon_months": 6,
+      "data_through": "2026-08-31",
+      "n_observations": 164,
+      "series_query_id": "canonical_volume_monthly_series_include_synthetic",
+      "champion": "holt_winters_seasonal_add",
+      "champion_description": "Holt-Winters, additive trend and additive 12-month season (statsmodels)",
+      "forecast": [
+        {
+          "month": "2026-09",
+          "value": 848331.7,
+          "lower": 779229.5,
+          "upper": 947209.3
+        },
+        {
+          "month": "2026-10",
+          "value": 858332.0,
+          "lower": 788179.6,
+          "upper": 955470.3
+        },
+        {
+          "month": "2026-11",
+          "value": 875063.9,
+          "lower": 801955.4,
+          "upper": 978742.4
+        },
+        {
+          "month": "2026-12",
+          "value": 907096.7,
+          "lower": 826036.2,
+          "upper": 1008798.2
+        },
+        {
+          "month": "2027-01",
+          "value": 809803.4,
+          "lower": 735904.5,
+          "upper": 909020.7
+        },
+        {
+          "month": "2027-02",
+          "value": 853613.8,
+          "lower": 783734.1,
+          "upper": 956157.2
+        }
+      ],
+      "horizon_total": 5152241.6,
+      "band": {
+        "coverage": 0.8,
+        "basis": "the champion's own rolling-origin miss distribution at each horizon step, not a model-internal confidence interval"
+      },
+      "backtest": {
+        "horizon_months": 6,
+        "origins": 24,
+        "champion_monthly_mape_pct": 6.85,
+        "champion_horizon_total_error_pct": 4.4,
+        "models": [
+          {
+            "model": "holt_winters_seasonal_add",
+            "monthly_mape_pct": 6.85,
+            "horizon_total_error_pct": 4.4,
+            "origins_scored": 24,
+            "origins_failed": 0
+          },
+          {
+            "model": "holt_winters_seasonal_mul",
+            "monthly_mape_pct": 6.89,
+            "horizon_total_error_pct": 4.3,
+            "origins_scored": 24,
+            "origins_failed": 0
+          },
+          {
+            "model": "holt_winters_trend",
+            "monthly_mape_pct": 7.38,
+            "horizon_total_error_pct": 3.92,
+            "origins_scored": 24,
+            "origins_failed": 0
+          },
+          {
+            "model": "timesfm_2_5",
+            "monthly_mape_pct": 7.58,
+            "horizon_total_error_pct": 4.27,
+            "origins_scored": 24,
+            "origins_failed": 0
+          }
+        ],
+        "models_not_run": [],
+        "selection_rule": "lowest mean monthly MAPE over the same rolling origins; the horizon total is reported but not selected on, because opposite-signed monthly errors cancel in a sum"
+      },
+      "success": true,
+      "query_type": "kpi_forecast",
+      "is_forecast": true,
+      "note": "A forecast, not an observation: the monthly values below are projected from the canonical business_metrics series and no month among them has happened yet. The model was chosen by rolling-origin backtest on this same series and the band is its own measured error.",
+      "measure_basis": {
+        "substrate": [
+          "business_metrics"
+        ],
+        "comparison_key": [
+          "business_metrics"
+        ],
+        "computed": false,
+        "grain": "brand x region x calendar month",
+        "measure": "modeled market-scale monthly level",
+        "note": "business_metrics.value is the MODELED market-scale monthly level (brand x region x calendar month) and the canonical substrate of TRx, NRx, NBRx and TRx Share (WS3-BI-005..008): kpi_calculate_tool figures for those KPIs agree with these rows. Do NOT compare it with, sum it against, or divide it by a patient-panel event KPI (WS3-BI-011..014, computed from treatment_events): measured 2026-09-15, Kisqali canonical TRx for 2026-08 was 800,349 (business_metrics, brand x region x calendar month) against 597 patient-panel prescription events from 2026-08-14 through 2026-09-14 inclusive (treatment_events), about 1,300x. If both appear in one answer, name each KPI and say plainly that they measure different things."
+      },
+      "limitations": [
+        "This is a univariate extrapolation: every model is fitted on the brand's own past monthly volume and nothing else.",
+        "It therefore cannot see anything that has not already happened to this series \u2014 a competitor launch, a payer or formulary change, a label change, a sales-force reallocation or a regional step change inside the forecast window are all invisible to it, however large.",
+        "The band is the model's own measured error on this series at each horizon step, so it describes how wrong this model has BEEN \u2014 not the chance of an event it has never seen."
+      ],
+      "risk_analysis_requires": [
+        "For the risk half of a forecast question, call the gap analyzer (via `orchestrator_tool` or `tool_composer_tool`) for the brand x region gaps that are opening now, and `causal_analysis_tool` for what is driving them.",
+        "A regional step change already underway shows up in the gap and causal views before it shows up in a national monthly total, so those tools can see risks this forecast structurally cannot."
+      ],
+      "_elapsed_s": 44.7
+    },
+    "Fabhalta": {
+      "metric": "trx",
+      "brand": "Fabhalta",
+      "region": null,
+      "horizon_months": 6,
+      "data_through": "2026-08-31",
+      "n_observations": 164,
+      "series_query_id": "canonical_volume_monthly_series_include_synthetic",
+      "champion": "holt_winters_seasonal_add",
+      "champion_description": "Holt-Winters, additive trend and additive 12-month season (statsmodels)",
+      "forecast": [
+        {
+          "month": "2026-09",
+          "value": 135684.7,
+          "lower": 122807.1,
+          "upper": 154332.9
+        },
+        {
+          "month": "2026-10",
+          "value": 138016.8,
+          "lower": 124230.9,
+          "upper": 157487.7
+        },
+        {
+          "month": "2026-11",
+          "value": 137683.9,
+          "lower": 123593.3,
+          "upper": 156995.2
+        },
+        {
+          "month": "2026-12",
+          "value": 147298.4,
+          "lower": 131933.0,
+          "upper": 167273.1
+        },
+        {
+          "month": "2027-01",
+          "value": 136038.5,
+          "lower": 122385.4,
+          "upper": 153885.5
+        },
+        {
+          "month": "2027-02",
+          "value": 136232.5,
+          "lower": 123443.6,
+          "upper": 153093.5
+        }
+      ],
+      "horizon_total": 830954.8,
+      "band": {
+        "coverage": 0.8,
+        "basis": "the champion's own rolling-origin miss distribution at each horizon step, not a model-internal confidence interval"
+      },
+      "backtest": {
+        "horizon_months": 6,
+        "origins": 24,
+        "champion_monthly_mape_pct": 7.06,
+        "champion_horizon_total_error_pct": 3.47,
+        "models": [
+          {
+            "model": "holt_winters_seasonal_add",
+            "monthly_mape_pct": 7.06,
+            "horizon_total_error_pct": 3.47,
+            "origins_scored": 24,
+            "origins_failed": 0
+          },
+          {
+            "model": "holt_winters_trend",
+            "monthly_mape_pct": 7.09,
+            "horizon_total_error_pct": 3.73,
+            "origins_scored": 24,
+            "origins_failed": 0
+          },
+          {
+            "model": "holt_winters_seasonal_mul",
+            "monthly_mape_pct": 7.5,
+            "horizon_total_error_pct": 2.86,
+            "origins_scored": 24,
+            "origins_failed": 0
+          },
+          {
+            "model": "timesfm_2_5",
+            "monthly_mape_pct": 8.0,
+            "horizon_total_error_pct": 4.48,
+            "origins_scored": 24,
+            "origins_failed": 0
+          }
+        ],
+        "models_not_run": [],
+        "selection_rule": "lowest mean monthly MAPE over the same rolling origins; the horizon total is reported but not selected on, because opposite-signed monthly errors cancel in a sum"
+      },
+      "success": true,
+      "query_type": "kpi_forecast",
+      "is_forecast": true,
+      "note": "A forecast, not an observation: the monthly values below are projected from the canonical business_metrics series and no month among them has happened yet. The model was chosen by rolling-origin backtest on this same series and the band is its own measured error.",
+      "measure_basis": {
+        "substrate": [
+          "business_metrics"
+        ],
+        "comparison_key": [
+          "business_metrics"
+        ],
+        "computed": false,
+        "grain": "brand x region x calendar month",
+        "measure": "modeled market-scale monthly level",
+        "note": "business_metrics.value is the MODELED market-scale monthly level (brand x region x calendar month) and the canonical substrate of TRx, NRx, NBRx and TRx Share (WS3-BI-005..008): kpi_calculate_tool figures for those KPIs agree with these rows. Do NOT compare it with, sum it against, or divide it by a patient-panel event KPI (WS3-BI-011..014, computed from treatment_events): measured 2026-09-15, Kisqali canonical TRx for 2026-08 was 800,349 (business_metrics, brand x region x calendar month) against 597 patient-panel prescription events from 2026-08-14 through 2026-09-14 inclusive (treatment_events), about 1,300x. If both appear in one answer, name each KPI and say plainly that they measure different things."
+      },
+      "limitations": [
+        "This is a univariate extrapolation: every model is fitted on the brand's own past monthly volume and nothing else.",
+        "It therefore cannot see anything that has not already happened to this series \u2014 a competitor launch, a payer or formulary change, a label change, a sales-force reallocation or a regional step change inside the forecast window are all invisible to it, however large.",
+        "The band is the model's own measured error on this series at each horizon step, so it describes how wrong this model has BEEN \u2014 not the chance of an event it has never seen."
+      ],
+      "risk_analysis_requires": [
+        "For the risk half of a forecast question, call the gap analyzer (via `orchestrator_tool` or `tool_composer_tool`) for the brand x region gaps that are opening now, and `causal_analysis_tool` for what is driving them.",
+        "A regional step change already underway shows up in the gap and causal views before it shows up in a national monthly total, so those tools can see risks this forecast structurally cannot."
+      ],
+      "_elapsed_s": 41.3
+    },
+    "Remibrutinib": {
+      "metric": "trx",
+      "brand": "Remibrutinib",
+      "region": null,
+      "horizon_months": 6,
+      "data_through": "2026-08-31",
+      "n_observations": 164,
+      "series_query_id": "canonical_volume_monthly_series_include_synthetic",
+      "champion": "holt_winters_seasonal_mul",
+      "champion_description": "Holt-Winters, additive trend and multiplicative 12-month season (statsmodels)",
+      "forecast": [
+        {
+          "month": "2026-09",
+          "value": 252758.1,
+          "lower": 229930.7,
+          "upper": 286673.7
+        },
+        {
+          "month": "2026-10",
+          "value": 269354.1,
+          "lower": 245106.7,
+          "upper": 305780.8
+        },
+        {
+          "month": "2026-11",
+          "value": 273976.4,
+          "lower": 246758.5,
+          "upper": 311589.8
+        },
+        {
+          "month": "2026-12",
+          "value": 287240.2,
+          "lower": 254199.7,
+          "upper": 326727.4
+        },
+        {
+          "month": "2027-01",
+          "value": 240307.9,
+          "lower": 212666.0,
+          "upper": 273872.6
+        },
+        {
+          "month": "2027-02",
+          "value": 251195.9,
+          "lower": 222646.9,
+          "upper": 287377.0
+        }
+      ],
+      "horizon_total": 1574832.7,
+      "band": {
+        "coverage": 0.8,
+        "basis": "the champion's own rolling-origin miss distribution at each horizon step, not a model-internal confidence interval"
+      },
+      "backtest": {
+        "horizon_months": 6,
+        "origins": 24,
+        "champion_monthly_mape_pct": 7.06,
+        "champion_horizon_total_error_pct": 3.01,
+        "models": [
+          {
+            "model": "holt_winters_seasonal_mul",
+            "monthly_mape_pct": 7.06,
+            "horizon_total_error_pct": 3.01,
+            "origins_scored": 24,
+            "origins_failed": 0
+          },
+          {
+            "model": "holt_winters_seasonal_add",
+            "monthly_mape_pct": 7.22,
+            "horizon_total_error_pct": 3.33,
+            "origins_scored": 24,
+            "origins_failed": 0
+          },
+          {
+            "model": "timesfm_2_5",
+            "monthly_mape_pct": 7.4,
+            "horizon_total_error_pct": 4.02,
+            "origins_scored": 24,
+            "origins_failed": 0
+          },
+          {
+            "model": "holt_winters_trend",
+            "monthly_mape_pct": 8.09,
+            "horizon_total_error_pct": 3.85,
+            "origins_scored": 24,
+            "origins_failed": 0
+          }
+        ],
+        "models_not_run": [],
+        "selection_rule": "lowest mean monthly MAPE over the same rolling origins; the horizon total is reported but not selected on, because opposite-signed monthly errors cancel in a sum"
+      },
+      "success": true,
+      "query_type": "kpi_forecast",
+      "is_forecast": true,
+      "note": "A forecast, not an observation: the monthly values below are projected from the canonical business_metrics series and no month among them has happened yet. The model was chosen by rolling-origin backtest on this same series and the band is its own measured error.",
+      "measure_basis": {
+        "substrate": [
+          "business_metrics"
+        ],
+        "comparison_key": [
+          "business_metrics"
+        ],
+        "computed": false,
+        "grain": "brand x region x calendar month",
+        "measure": "modeled market-scale monthly level",
+        "note": "business_metrics.value is the MODELED market-scale monthly level (brand x region x calendar month) and the canonical substrate of TRx, NRx, NBRx and TRx Share (WS3-BI-005..008): kpi_calculate_tool figures for those KPIs agree with these rows. Do NOT compare it with, sum it against, or divide it by a patient-panel event KPI (WS3-BI-011..014, computed from treatment_events): measured 2026-09-15, Kisqali canonical TRx for 2026-08 was 800,349 (business_metrics, brand x region x calendar month) against 597 patient-panel prescription events from 2026-08-14 through 2026-09-14 inclusive (treatment_events), about 1,300x. If both appear in one answer, name each KPI and say plainly that they measure different things."
+      },
+      "limitations": [
+        "This is a univariate extrapolation: every model is fitted on the brand's own past monthly volume and nothing else.",
+        "It therefore cannot see anything that has not already happened to this series \u2014 a competitor launch, a payer or formulary change, a label change, a sales-force reallocation or a regional step change inside the forecast window are all invisible to it, however large.",
+        "The band is the model's own measured error on this series at each horizon step, so it describes how wrong this model has BEEN \u2014 not the chance of an event it has never seen."
+      ],
+      "risk_analysis_requires": [
+        "For the risk half of a forecast question, call the gap analyzer (via `orchestrator_tool` or `tool_composer_tool`) for the brand x region gaps that are opening now, and `causal_analysis_tool` for what is driving them.",
+        "A regional step change already underway shows up in the gap and causal views before it shows up in a national monthly total, so those tools can see risks this forecast structurally cannot."
+      ],
+      "_elapsed_s": 34.3
+    }
+  }
+}

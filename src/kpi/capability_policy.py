@@ -377,10 +377,62 @@ def composed_caveat(kpi_meta) -> Optional[str]:
     return f"{authored} {derived}".strip() or None
 
 
+def forecast_guidance_block() -> str:
+    """Tell the model that the platform can now forecast, and what that forecast is NOT.
+
+    Demo 6.5 ("forecast Kisqali TRx for the next two quarters and tell me the biggest
+    risk to that forecast") refused on every run from 2026-07-29 partly because neither
+    system prompt named a forecaster, so the model reached for causal_analysis_tool.
+    Naming the tool is half the fix; the other half is the boundary around it.
+
+    THE BOUNDARY IS THE POINT. 6.5 asks two questions in one breath, and only one of
+    them is forecastable. Every model behind forecast_kpi_tool is univariate: it sees
+    the brand's own past volume and nothing else, so a competitor entry, a payer change
+    or a regional step inside the window moves nothing in the fit. Without this text the
+    model narrates a risk as though the forecast had priced it in — confidently wrong
+    about precisely what the user asked for. The metric list is derived from the
+    forecaster's own SUPPORTED_METRICS, so the prompt can never offer a KPI the tool
+    would refuse.
+    """
+    from src.kpi.canonical_volume_series import SUPPORTED_METRICS
+
+    metrics = ", ".join(m.upper() for m in SUPPORTED_METRICS)
+    return (
+        "- FORECASTING: use `forecast_kpi_tool` for any FORWARD-looking volume question "
+        f"({metrics} only — these are the KPIs stored as a canonical brand x region "
+        "monthly series). It backtests Holt-Winters and, when the forecast worker is "
+        "running, TimesFM 2.5 over the same rolling origins, serves the lower-error "
+        "model, and returns a per-month prediction band that IS that model's measured "
+        "error — present it as measured error, not as a confidence interval, and cite "
+        "`data_through` and the champion's backtest MAPE. `kpi_calculate_tool` reports "
+        "what a month WAS and never forecasts; `e2i_data_query_tool"
+        "(query_type='predictions')` searches stored prediction memories and never "
+        "forecasts either — do not substitute them for a forecast ask, and do not "
+        "extrapolate a series yourself. THE FORECAST IS UNIVARIATE: it is fitted on the "
+        "brand's own past volume alone, so it cannot see a competitor launch, a payer or "
+        "formulary change, a label change or a regional step change inside the window, "
+        "however large. When the user also asks about RISK, say that plainly and get the "
+        "risk half from the gap analyzer (via `orchestrator_tool` or "
+        "`tool_composer_tool`) and `causal_analysis_tool` — never narrate a risk as if "
+        "the forecast had accounted for it."
+    )
+
+
 def render_blocks(prompt: str) -> str:
     """Substitute every capability-derived block into a system prompt.
 
     One entry point so a new generated block never costs another line in the two
-    ratchet-pinned prompt modules.
+    ratchet-pinned prompt modules. ``{capability_guidance}`` is the SHARED slot: it
+    renders every guidance bullet, so adding the next one costs a function here and
+    nothing at all in copilotkit.py or chatbot_graph.py. ``{breakdown_guidance}`` is
+    kept as the narrower legacy slot for any surface that wants only that bullet.
     """
-    return prompt.replace("{breakdown_guidance}", breakdown_guidance_block())
+    guidance = "\n".join(
+        [
+            f"- BREAKDOWN GUIDANCE: {breakdown_guidance_block()}",
+            forecast_guidance_block(),
+        ]
+    )
+    return prompt.replace("{capability_guidance}", guidance).replace(
+        "{breakdown_guidance}", breakdown_guidance_block()
+    )
