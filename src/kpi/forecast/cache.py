@@ -34,7 +34,12 @@ KEY_PREFIX = "kpi:forecast:"
 #: Bump when the MEANING of a forecast changes -- a new band rule, a different champion
 #: metric, a changed default horizon. An entry written under the old meaning can then
 #: never be served under the new one. (Same idea as KPI_CACHE_BASIS_VERSION.)
-FORECAST_CONTRACT_VERSION = "forecast-v1-2026-09-20"
+#: v1 -> v2 (#2199): the champion is now chosen on the origins every model SHARES,
+#: not on each model's own origin set, so a v1 entry can hold a different champion
+#: for the same series. A v1 entry also predates ``BacktestScore.origin_cutoffs`` and
+#: would raise on deserialisation -- the version bump is what stops it being read at
+#: all, rather than being caught as an error per key.
+FORECAST_CONTRACT_VERSION = "forecast-v2-2026-09-20"
 
 #: Eight days: longer than the gap between monthly appends would need, because
 #: ``data_through`` already makes staleness impossible. This only stops keys for
