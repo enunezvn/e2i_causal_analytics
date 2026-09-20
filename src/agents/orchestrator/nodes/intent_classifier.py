@@ -633,6 +633,15 @@ _KPI_VALUE_LOOKUP_TARGET_PATTERN = (
     rf"(?:{_KPI_SCOPE_WORD_PATTERN}\s+){{0,3}}?{KPI_VALUE_LOOKUP_METRIC_PATTERN}"
 )
 
+# ``patient panel`` is one recognized KPI qualifier, not an entity-count
+# subject.  Keep this exception as narrow as the target it protects: singular
+# ``patient``, immediately followed by ``panel`` and a routed metric.  Ordinary
+# patient/HCP/prescriber counts continue to hit the fail-closed veto below.
+_PATIENT_PANEL_KPI_TARGET_PATTERN = (
+    rf"patient[\s-]+panel\s+{KPI_VALUE_LOOKUP_METRIC_PATTERN}\b"
+    rf"(?!\s+{_KPI_ENTITY_COUNT_NOUN_PATTERN}\b)"
+)
+
 KPI_VALUE_LOOKUP_PATTERN = (
     r"(?s)\A(?!.*(?:predict|expect|forecast|project|likelihood|probabilit|what will))"
     rf"(?!.*{KPI_VALUE_LOOKUP_UNSUPPORTED_QUALIFIER_PATTERN})"
@@ -642,7 +651,8 @@ KPI_VALUE_LOOKUP_PATTERN = (
     # Up to two modifiers before the subject are tolerated ("How many high-risk
     # patients ..."); the target grammar below independently refuses any
     # subject it does not name (people, pharmacies, ...).
-    rf"(?!.*\bhow many(?:\s+[\w'-]+){{0,2}}\s+{_KPI_ENTITY_COUNT_NOUN_PATTERN}\b)"
+    rf"(?!.*\bhow many(?!\s+{_PATIENT_PANEL_KPI_TARGET_PATTERN})"
+    rf"(?:\s+[\w'-]+){{0,2}}\s+{_KPI_ENTITY_COUNT_NOUN_PATTERN}\b)"
     # The same entity-count ask also arrives as "patient count for NRx" or
     # "number of high-risk patients ...". The KPI is still the object/axis,
     # not the requested quantity; keep those off the value-calculator path.

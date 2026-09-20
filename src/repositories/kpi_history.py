@@ -16,6 +16,46 @@ from .base import BaseRepository
 logger = logging.getLogger(__name__)
 
 
+def get_kpi_history_sync(
+    kpi_id: str,
+    *,
+    brand: Optional[str] = None,
+    region: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    limit: int = 2000,
+    client: Any = None,
+) -> List[Dict[str, Any]]:
+    """Synchronous twin of :meth:`KPIHistoryRepository.get_history`.
+
+    Dispatcher input resolvers are synchronous and run in ``asyncio.to_thread``;
+    they therefore cannot await the API endpoint's async repository.  This read
+    intentionally mirrors that endpoint's filters and ordering so chat trend
+    evidence and the Time-Series page consume the same materialized series.
+
+    ``client`` must be a synchronous Supabase client.  With no configured
+    client the function returns an empty list, allowing the resolver to fail
+    closed rather than manufacture a series.
+    """
+    if client is None:
+        from src.api.dependencies.supabase_client import get_supabase
+
+        client = get_supabase()
+    if not client:
+        return []
+
+    query = client.table(KPIHistoryRepository.table_name).select("*").eq("kpi_id", kpi_id)
+    query = query.eq("brand", brand if brand is not None else "")
+    query = query.eq("region", (region or "").lower())
+    if start_date:
+        query = query.gte("metric_date", start_date)
+    if end_date:
+        query = query.lte("metric_date", end_date)
+    result = query.order("metric_date", desc=False).limit(limit).execute()
+    rows = getattr(result, "data", None) or []
+    return [row for row in rows if isinstance(row, dict)]
+
+
 class KPIHistoryRepository(BaseRepository):
     """Repository for the ``kpi_history`` table."""
 

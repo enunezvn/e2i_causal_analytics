@@ -352,13 +352,15 @@ class TestRegionScan:
         assert scan.region is None
         assert scan.ambiguous_phrase is None
 
-    def test_two_canonical_regions_stay_ambiguous_without_clarify(self) -> None:
-        # A comparison naming two REAL labels keeps the honest exactly-one
-        # semantics: no region binds, and no clarify fires (the ask is a
-        # comparison, not an unresolvable scope).
+    def test_two_canonical_regions_are_retained_for_clarification(self) -> None:
+        # #2191: exactly-one still means no region binds, but the scan must not
+        # collapse "named several" into the same result as "named none". A
+        # scalar consumer can now clarify/fail closed instead of serving its
+        # national default.
         scan = region_scan("compare northeast and west conversion")
         assert scan.region is None
-        assert not scan.needs_clarification
+        assert scan.grounded_regions == ("northeast", "west")
+        assert scan.needs_clarification
 
     def test_empty_and_none_produce_neither(self) -> None:
         for query in (None, "", "   "):

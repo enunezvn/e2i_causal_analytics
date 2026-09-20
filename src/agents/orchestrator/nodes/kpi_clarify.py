@@ -6,9 +6,10 @@ the substrate cannot honour, the honest fallback is NOT the unscoped figure —
 that figure is real, plausible, and answers a different question than the one
 asked. Two axes hit this, for the same reason and with the same fix:
 
-* **Region** (#1572) — "East Coast" spans the northeast AND south census
-  regions, so no label can serve it; without a clarify the ask was answered with
-  a silent NATIONAL figure.
+* **Region** (#1572/#2191) — "East Coast" spans the northeast AND south census
+  regions, and an ask can explicitly name several canonical regions; neither
+  shape has one label a scalar lookup can serve. Without a clarify each was
+  answered with a silent NATIONAL figure.
 * **Brand** (#2114) — an ask naming SEVERAL brands grounds none:
   :func:`src.services.query_entities.brand_from_text` deliberately returns
   ``None`` so callers "keep their honest unscoped behaviour rather than guess".
@@ -55,7 +56,7 @@ BRAND_CLARIFY_KPI_IDS: frozenset[str] = CANONICAL_VOLUME_KPI_IDS | PANEL_VOLUME_
 
 
 def region_clarify_evidence(kpi: Any, phrase: str) -> Dict[str, Any]:
-    """Evidence payload that ASKS which census region is meant (#1572).
+    """Evidence payload that ASKS which census region is meant (#1572/#2191).
 
     "East Coast" spans the northeast AND south census regions, so no label can
     honestly serve it — the #1565 ruling that keeps it out of the shared alias

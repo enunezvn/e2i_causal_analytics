@@ -29,6 +29,7 @@ from .kpi_clarify import (
     KPI_LOOKUP_CONFIDENCE as _KPI_LOOKUP_CONFIDENCE,
 )
 from .kpi_clarify import brand_clarify_for_ask, region_clarify_evidence
+from .kpi_window import window_from_query as _window_from_query
 from .structured_scope import _structured_brand, _structured_region
 
 logger = logging.getLogger(__name__)
@@ -2066,9 +2067,6 @@ _CAUSAL_PATH_LIMIT = 15
 #: How many paths become key_findings (the rest ride along in data_summary).
 _CAUSAL_PATH_FINDINGS = 5
 
-#: Longest window phrase (in tokens) offered to the KPI engine's parser.
-_WINDOW_MAX_TOKENS = 4
-
 
 def _format_kpi_value(value: float, kpi: Any) -> str:
     """Render a KPI value the way the dashboard does.
@@ -2085,35 +2083,6 @@ def _format_kpi_value(value: float, kpi: Any) -> str:
     rendered = f"{value:,.2f}".rstrip("0").rstrip(".")
     unit = getattr(kpi, "unit", None)
     return f"{rendered} {unit}".strip() if unit else rendered
-
-
-def _window_from_query(query: str) -> Optional[Dict[str, str]]:
-    """The longest window phrase in ``query`` that the KPI engine's own parser
-    accepts, as its ``{start, end}`` dict — or ``None``.
-
-    The grammar is NOT re-implemented here: candidate token n-grams (longest
-    first) are handed to :func:`src.services.time_window.parse_window`, which
-    stays the sole authority on what a window phrase means. ``parse_window``
-    ``fullmatch``es, so it cannot be pointed at a whole sentence.
-
-    Single tokens are deliberately never tried: a bare 4-digit number parses as
-    a full-year window, so "the top 2000 HCPs" would silently bind calendar-year
-    2000 to the figure. No recognized phrase → ``None`` → the engine's default
-    window, which ``KPIResult.window_status`` then reports honestly as
-    "default" rather than implying the user's period was applied.
-    """
-    from src.services.time_window import WindowParseError, parse_window
-
-    tokens = re.findall(r"[\w'-]+", query.lower())
-    for size in range(min(_WINDOW_MAX_TOKENS, len(tokens)), 1, -1):
-        for start in range(len(tokens) - size + 1):
-            try:
-                window = parse_window(" ".join(tokens[start : start + size]))
-            except WindowParseError:
-                continue
-            if window is not None:
-                return window.as_dict()
-    return None
 
 
 #: Governing-head guard (codex iter-1): when the KPI mention sits inside a
@@ -2258,10 +2227,11 @@ def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str,
         # region — an explicit entities/user_context region wins as before.
         from src.services.query_entities import region_scan
 
-        ambiguous_phrase = region_scan(query).ambiguous_phrase
-        if ambiguous_phrase is not None:
+        scan = region_scan(query)
+        if scan.needs_clarification:
+            ambiguous_phrase = scan.ambiguous_phrase or " and ".join(scan.grounded_regions)
             logger.info(
-                "explainer resolver: region phrase %r is unresolvable by design "
+                "explainer resolver: region scope %r names multiple regions "
                 "-> returning the census-region clarify instead of a national figure.",
                 ambiguous_phrase,
             )
@@ -2276,7 +2246,15 @@ def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str,
         context["brand"] = brand
     if region:
         context["region"] = region
-    window = _window_from_query(query)
+    from src.services.time_window import WindowParseError
+
+    try:
+        window = _window_from_query(query)
+    except WindowParseError as exc:
+        logger.info(
+            "explainer resolver: explicit KPI window is invalid (%s) -> failing closed", exc
+        )
+        return None
     if window is not None:
         context["window"] = window
 
@@ -2545,10 +2523,9 @@ def _resolve_explainer_input(
     (2) Otherwise bind the successful upstream results carried in the dispatch
         state — this turn's earlier/sibling agent outputs on the fallback path,
         prior turns' outputs on a resumed conversation state.
-    (3) With no upstream at all, resolve the evidence the ASK itself points at
-        (#1475): the KPI engine's computed value for a KPI value lookup, or the
-        curated causal-path registry for a causal ask / a fallback after a
-        failed ``causal_impact``. Both bind REAL data or nothing.
+    (3) With no upstream, resolve ASK-directed evidence (#1475/#2191): a scalar KPI
+        lookup, monthly KPI history, or curated causal paths. Each binds REAL data
+        or nothing.
     (4) With none of those, fail closed: an explanation of nothing would have to
         be fabricated.
     """
@@ -2566,19 +2543,31 @@ def _resolve_explainer_input(
         # must not be shadowed by a bare KPI lookup; codex iter-6). Threaded
         # under its own key, separate from the cross-turn channel.
         analysis_results = _successful_results(agent_input.get("current_turn_agent_results") or [])
-        # (2b) an explicit CURRENT-ask value lookup outranks CARRIED upstream
-        # results: the operator.add ``agent_results`` channel carries PRIOR
-        # turns' successes across a checkpointer-resumed conversation (#1442
-        # class), and "What is the TRx?" is never an anaphoric
-        # explain-that-analysis ask (codex iter-5). Anaphora ("explain the
-        # analysis") cannot match the lookup regex, so branch (2c) below
-        # keeps serving it. On a causal-fallback turn the turn IS causal,
-        # whatever the lookup regex thinks — Branch A is skipped outright
-        # (iter-2 self-audit: "impact of TRx on conversion rate" fits the
-        # regex's {0,3} gap).
+        # (2b) CURRENT-ask KPI evidence outranks the ``agent_results`` channel's PRIOR
+        # successes across a resumed conversation (#1442); "What is the TRx?" is
+        # never anaphoric. "Explain the analysis" cannot match the lookup regex, so
+        # keeps serving it. A causal-fallback turn skips ask-directed KPI evidence.
+        ask_directed = False
         if not analysis_results and not _is_causal_fallback(agent_input):
-            analysis_results = _kpi_lookup_evidence(agent_input) or []
-        if not analysis_results:
+            from .intent_classifier import KPI_VALUE_LOOKUP_RE
+            from .kpi_trend_evidence import resolve_kpi_trend_evidence
+            from .kpi_value_guard import is_anaphoric_explanation
+
+            query = agent_input.get("query")
+            anaphoric = isinstance(query, str) and is_anaphoric_explanation(query)
+            trend_evidence = None if anaphoric else resolve_kpi_trend_evidence(agent_input)
+            scalar_ask = (
+                isinstance(query, str)
+                and not anaphoric
+                and KPI_VALUE_LOOKUP_RE.search(query) is not None
+            )
+            if trend_evidence is not None:
+                ask_directed = True
+                analysis_results = trend_evidence
+            elif not anaphoric:
+                ask_directed = scalar_ask
+                analysis_results = _kpi_lookup_evidence(agent_input) or []
+        if not analysis_results and not ask_directed:
             # (2c) carried upstream results (#883 §3 anaphora).
             analysis_results = _successful_upstream_results(agent_input)
 
