@@ -79,6 +79,23 @@ on:
       # data/kg_cache/** and not data/**: the rest of data/ is .dockerignore'd and
       # never reaches any image, so triggering on it would be a pure false deploy.
       - 'data/kg_cache/**'
+      # #2167: the #1783 family, one layer over. Every entry above is an IMAGE input;
+      # this one is a path the deploy CONSUMES AT DEPLOY TIME out of the droplet
+      # checkout. The rollout runs `bash scripts/run_migrations.sh` (below), which
+      # applies every pending forward *.sql under each of its MIGRATION_DIRS — all
+      # eight are under database/ — and none of them matched any entry here. So a
+      # migration-only push changed what the deploy WOULD APPLY without running the
+      # deploy that applies it, and the migration sat unapplied until an unrelated
+      # src/** push carried it incidentally: unbounded, unannounced, self-healing.
+      # Found while shipping the per_hcp_rollup contract (146), whose entire diff was
+      # database/ + tests/ + docs/ and would therefore have deployed NOTHING.
+      # ACCEPTED COST, stated rather than hidden: a migration-only push now runs the
+      # full deploy pipeline. An unapplied migration is worth more than a saved
+      # pipeline. Scoped to database/** rather than a per-dir list because
+      # MIGRATION_DIRS is the runner's to change, and
+      # tests/unit/test_docker/test_deploy_trigger_covers_migration_inputs_2167.py
+      # parses it from there and fails here if a ninth dir ever lands outside.
+      - 'database/**'
   workflow_dispatch:
 
 # Serialize production deploys: at most one run of THIS workflow proceeds at a
