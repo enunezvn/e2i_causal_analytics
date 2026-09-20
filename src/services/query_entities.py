@@ -16,8 +16,9 @@ Design constraints (mirrors ask.py):
 * Deterministic regex only — no LLM calls; the resolvers run inline on the
   dispatch path under the 150s chat budget.
 * Conservative: a value binds only when the text pins down EXACTLY ONE
-  candidate. Two brands (or two regions) named means the ask is ambiguous and
-  the caller keeps its honest unscoped/fail-closed behaviour rather than guess.
+  candidate. Two brands (or two regions) named means the ask is ambiguous;
+  scans retain that fact so an interactive caller can clarify while scalar
+  consumers without a clarify path can fail closed rather than guess.
 * Never fabricate: no defaults, ``None`` means "the text does not say".
 """
 
@@ -261,14 +262,19 @@ class RegionScan:
                           ("East Coast", bare "East") — a caller that can
                           speak to the user should ask which census region is
                           meant instead of silently answering unscoped.
+    ``grounded_regions``  every DISTINCT canonical region named by an
+                          allowlisted phrase. More than one is itself an
+                          ambiguity signal: it must not be collapsed into the
+                          same ``None`` used for an intentionally national ask.
     """
 
     region: Optional[str]
     ambiguous_phrase: Optional[str]
+    grounded_regions: Tuple[str, ...] = ()
 
     @property
     def needs_clarification(self) -> bool:
-        return self.ambiguous_phrase is not None
+        return self.ambiguous_phrase is not None or len(self.grounded_regions) > 1
 
 
 def region_scan(query: Optional[str]) -> RegionScan:
@@ -289,7 +295,7 @@ def region_scan(query: Optional[str]) -> RegionScan:
     and the clarify signal is raised instead. Never fabricates.
     """
     if not query:
-        return RegionScan(region=None, ambiguous_phrase=None)
+        return RegionScan(region=None, ambiguous_phrase=None, grounded_regions=())
     labels: List[str] = []
     masked = query
     for match in _REGION_PHRASE_RE.finditer(query):
@@ -305,7 +311,7 @@ def region_scan(query: Optional[str]) -> RegionScan:
     ambiguous = _AMBIGUOUS_REGION_RE.search(masked)
     phrase = ambiguous.group(0) if ambiguous is not None else None
     region = labels[0] if len(labels) == 1 and phrase is None else None
-    return RegionScan(region=region, ambiguous_phrase=phrase)
+    return RegionScan(region=region, ambiguous_phrase=phrase, grounded_regions=tuple(labels))
 
 
 def region_from_text(query: Optional[str]) -> Optional[str]:

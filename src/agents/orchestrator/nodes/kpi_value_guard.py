@@ -226,6 +226,20 @@ _TAIL_TOKEN_RE = re.compile(r"[\w'+-]+")
 _METRIC_SUFFIX = r"(?:'s|’s|e?s)?"
 _DISCOURSE_SUFFIXES = frozenset({"please", "thanks"})
 
+# Request scaffolding immediately before the actual lookup cue is not a scope.
+# Remove only these closed, punctuation-delimited forms; everything else in a
+# front-loaded phrase is validated by the same allowlist walk as a KPI tail.
+_REQUEST_PREAMBLE_SUFFIX_RE = re.compile(
+    r"(?:^|[,.?!;:]\s*)"
+    r"(?:(?:please|kindly)\s+)?"
+    r"(?:(?:can|could|would|will)\s+you(?:\s+(?:please|kindly))?|please|kindly)"
+    r"\s*$"
+)
+_LOOKUP_CUE_RE = re.compile(
+    r"\b(?:what(?:'?s|\s+is|\s+are|\s+was|\s+were)|show\s+me|tell\s+me\s+about|"
+    r"give\s+me|how\s+many)\b"
+)
+
 # These nouns are established value-lookup vocabulary on this surface even
 # when the current registry resolves through a shorter alias (``NRx panel`` and
 # the routed benchmark ``current TRx volume``). They are consumed rather than
@@ -427,6 +441,41 @@ def _tail_changes_quantity(
     return needs_object
 
 
+def _front_scope_changes_quantity(
+    normalized_query: str,
+    match_start: int,
+    value_heads: frozenset[str],
+    *,
+    brand_resolved_or_clarified: bool,
+    region_resolved_or_clarified: bool,
+) -> bool:
+    """Whether text before the lookup cue asks for an unsupported scope.
+
+    The routing grammar constrains the KPI phrase after ``show me`` / ``how
+    many`` but deliberately permits a leading preamble.  Treat a fronted scope
+    exactly like the already-guarded KPI tail: brands, regions, and parsed
+    windows are representable; open-class decompositions such as ``by
+    pharmacy`` or ``for high-severity patients`` are not.
+    """
+    cues = [
+        match for match in _LOOKUP_CUE_RE.finditer(normalized_query) if match.end() <= match_start
+    ]
+    if not cues:
+        return False
+    prefix = normalized_query[: cues[-1].start()].strip()
+    prefix = _REQUEST_PREAMBLE_SUFFIX_RE.sub("", prefix).strip(" \t\n,.;:?!")
+    if not prefix:
+        return False
+    return _tail_changes_quantity(
+        prefix,
+        0,
+        value_heads,
+        brand_resolved_or_clarified=brand_resolved_or_clarified,
+        region_resolved_or_clarified=region_resolved_or_clarified,
+        warned_tail_nouns=frozenset(),
+    )
+
+
 def value_lookup_mentions_supported(
     normalized_query: str,
     kpi_id: str,
@@ -471,6 +520,21 @@ def value_lookup_mentions_supported(
     region_resolved_or_clarified = (
         region_result.region is not None or region_result.ambiguous_phrase is not None
     )
+    # Unlike a tail multi-region ask (which already fails closed during the
+    # safety walk), a front-loaded one must be allowed through to the
+    # dispatcher's explicit clarification payload.  It still never reaches the
+    # calculator.
+    front_region_resolved_or_clarified = (
+        region_resolved_or_clarified or region_result.needs_clarification
+    )
+    if _front_scope_changes_quantity(
+        normalized_query,
+        match_start,
+        _VALUE_OF_HEADS,
+        brand_resolved_or_clarified=brand_resolved_or_clarified,
+        region_resolved_or_clarified=front_region_resolved_or_clarified,
+    ):
+        return False
     for start, end in spans:
         of_head = _kpi_governing_of_head(normalized_query, start)
         if of_head is not None and of_head not in _VALUE_OF_HEADS:

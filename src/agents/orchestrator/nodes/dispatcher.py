@@ -2281,10 +2281,11 @@ def _kpi_lookup_evidence(agent_input: Dict[str, Any]) -> Optional[List[Dict[str,
         # region — an explicit entities/user_context region wins as before.
         from src.services.query_entities import region_scan
 
-        ambiguous_phrase = region_scan(query).ambiguous_phrase
-        if ambiguous_phrase is not None:
+        scan = region_scan(query)
+        if scan.needs_clarification:
+            ambiguous_phrase = scan.ambiguous_phrase or " and ".join(scan.grounded_regions)
             logger.info(
-                "explainer resolver: region phrase %r is unresolvable by design "
+                "explainer resolver: region scope %r names multiple regions "
                 "-> returning the census-region clarify instead of a national figure.",
                 ambiguous_phrase,
             )
