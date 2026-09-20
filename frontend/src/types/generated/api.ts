@@ -10056,12 +10056,12 @@ export interface components {
             supports_heterogeneous_effects: boolean;
             /**
              * Agent Override
-             * @description Exact causal-impact agent override label; null when not forceable there
+             * @description Exact agent override label
              */
             agent_override?: string | null;
             /**
              * Default Enabled
-             * @description Whether the estimator participates in the Auto tournament
+             * @description Included in the Auto tournament
              * @default false
              */
             default_enabled: boolean;

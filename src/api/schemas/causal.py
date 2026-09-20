@@ -16,9 +16,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.causal_engine.estimator_registry import (
-    AGENT_FORCEABLE_ESTIMATORS as _REGISTRY_FORCEABLE_ESTIMATORS,
-)
+from src.causal_engine import estimator_registry as registry
 
 # =============================================================================
 # GATE VOCABULARY (#1991 debt 4)
@@ -465,12 +463,8 @@ class EstimationDataResponse(BaseModel):
 # =============================================================================
 # AGENT ANALYSIS SCHEMAS (causal_impact LangGraph agent, end-to-end)
 # =============================================================================
-# The forceable estimator overrides MUST stay in sync with
-# ``_VALID_EXPLICIT_METHODS`` in src/agents/causal_impact/nodes/estimation.py.
-# Leaving ``estimator`` unset runs the agent's data-driven energy-score routing
-# across the registry entries marked default-enabled; setting it forces one method.
-
-AGENT_FORCEABLE_ESTIMATORS = _REGISTRY_FORCEABLE_ESTIMATORS + ("propensity_score_weighting",)
+# Forceable labels are registry-owned; propensity weighting remains API-only.
+AGENT_FORCEABLE_ESTIMATORS = registry.AGENT_FORCEABLE_ESTIMATORS + ("propensity_score_weighting",)
 
 
 class AgentCausalAnalysisRequest(BaseModel):
@@ -1886,21 +1880,14 @@ class EstimatorInfo(BaseModel):
     parameters: List[str] = Field(default_factory=list, description="Key parameters")
     supports_confidence_intervals: bool = Field(..., description="Whether CI is supported")
     supports_heterogeneous_effects: bool = Field(..., description="Whether HTE is supported")
-    agent_override: Optional[str] = Field(
-        default=None,
-        description="Exact causal-impact agent override label; null when not forceable there",
-    )
-    default_enabled: bool = Field(
-        default=False, description="Whether the estimator participates in the Auto tournament"
-    )
+    agent_override: Optional[str] = Field(default=None, description="Exact agent override label")
+    default_enabled: bool = Field(default=False, description="Included in the Auto tournament")
 
 
 class EstimatorListResponse(BaseModel):
     """Response listing available estimators."""
 
-    estimators: List[EstimatorInfo] = Field(
-        default_factory=list, description="Available estimators"
-    )
+    estimators: List[EstimatorInfo] = Field(default_factory=list, description="Available estimators")
     total: int = Field(..., description="Total estimators")
     by_library: Dict[str, List[str]] = Field(
         default_factory=dict, description="Estimators grouped by library"
