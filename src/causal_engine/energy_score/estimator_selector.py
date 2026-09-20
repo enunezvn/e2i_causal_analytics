@@ -40,6 +40,14 @@ import pandas as pd
 from numpy.typing import NDArray
 
 from src.causal.stats import z_score_for_confidence
+from src.causal_engine.estimator_registry import (
+    CONFOUNDING_BLIND_ESTIMATORS,
+    DEFAULT_ESTIMATOR_SPECS,
+    EMPTY_BACKDOOR_CAPABLE,
+    ESTIMATOR_SPECS,
+    ESTIMATOR_SPEED_RANK,
+    EstimatorType,
+)
 
 from .score_calculator import (
     EnergyScoreCalculator,
@@ -48,20 +56,6 @@ from .score_calculator import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-class EstimatorType(str, Enum):
-    """Supported causal estimator types."""
-
-    CAUSAL_FOREST = "causal_forest"
-    LINEAR_DML = "linear_dml"
-    DML_LEARNER = "dml_learner"
-    DRLEARNER = "drlearner"
-    ORTHO_FOREST = "ortho_forest"
-    S_LEARNER = "s_learner"
-    T_LEARNER = "t_learner"
-    X_LEARNER = "x_learner"
-    OLS = "ols"
 
 
 # Relative estimation+refutation cost rank for each estimator (lower = faster).
@@ -77,17 +71,7 @@ class EstimatorType(str, Enum):
 # closed-form / single-fit linear models are cheapest; meta-learners that fit a
 # handful of boosted models are mid; ensemble/forest DML estimators that fit
 # many trees with cross-fitting are the most expensive.
-_ESTIMATOR_SPEED_RANK: dict[EstimatorType, int] = {
-    EstimatorType.OLS: 0,
-    EstimatorType.S_LEARNER: 1,
-    EstimatorType.T_LEARNER: 1,
-    EstimatorType.X_LEARNER: 2,
-    EstimatorType.LINEAR_DML: 2,
-    EstimatorType.DRLEARNER: 3,
-    EstimatorType.DML_LEARNER: 3,  # 7.6s vs DRLearner 8.1s at n=5000 (2026-09-19)
-    EstimatorType.ORTHO_FOREST: 4,
-    EstimatorType.CAUSAL_FOREST: 4,
-}
+_ESTIMATOR_SPEED_RANK = ESTIMATOR_SPEED_RANK
 
 
 # Estimators that do NOT orthogonalize / cross-fit, and so are more exposed to
@@ -102,7 +86,7 @@ _ESTIMATOR_SPEED_RANK: dict[EstimatorType, int] = {
 # silently selects the fast-but-biased estimator. (#622 had broken ties by raw
 # speed, which always picked OLS; this restricts the speed tiebreak to the
 # confounding-robust subset.)
-_CONFOUNDING_BLIND_ESTIMATORS: frozenset[EstimatorType] = frozenset({EstimatorType.OLS})
+_CONFOUNDING_BLIND_ESTIMATORS = CONFOUNDING_BLIND_ESTIMATORS
 
 
 # Estimators that can produce an estimate from a ZERO-covariate design matrix (an
@@ -113,7 +97,7 @@ _CONFOUNDING_BLIND_ESTIMATORS: frozenset[EstimatorType] = frozenset({EstimatorTy
 # raises sklearn's "Found array with 0 feature(s)" on an empty X. So on an empty
 # backdoor the covariate-requiring estimators are NOT applicable (not "failed"):
 # they are skipped with an honest reason instead of surfacing a raw traceback.
-_EMPTY_BACKDOOR_CAPABLE: frozenset[EstimatorType] = frozenset({EstimatorType.OLS})
+_EMPTY_BACKDOOR_CAPABLE = EMPTY_BACKDOOR_CAPABLE
 
 _EMPTY_BACKDOOR_SKIP_REASON = (
     "not applicable: no covariates to adjust for (randomized / empty-backdoor "
@@ -445,10 +429,8 @@ class EstimatorSelectorConfig:
     # Estimator chain (ordered by priority)
     estimators: list[EstimatorConfig] = field(
         default_factory=lambda: [
-            EstimatorConfig(EstimatorType.CAUSAL_FOREST, priority=1),
-            EstimatorConfig(EstimatorType.LINEAR_DML, priority=2),
-            EstimatorConfig(EstimatorType.DRLEARNER, priority=3),
-            EstimatorConfig(EstimatorType.OLS, priority=4),
+            EstimatorConfig(spec.estimator_type, priority=int(spec.default_priority or 0))
+            for spec in DEFAULT_ESTIMATOR_SPECS
         ]
     )
 
@@ -1317,16 +1299,22 @@ class OrthoForestWrapper(BaseEstimatorWrapper):
 # package __init__ loads this module first, so the base classes above already exist.
 from src.causal_engine.energy_score.dml_learner import DMLLearnerWrapper
 
+_WRAPPER_CLASSES: dict[str, type[BaseEstimatorWrapper]] = {
+    cls.__name__: cls
+    for cls in (
+        CausalForestWrapper,
+        LinearDMLWrapper,
+        DMLLearnerWrapper,
+        DRLearnerWrapper,
+        SLearnerWrapper,
+        TLearnerWrapper,
+        XLearnerWrapper,
+        OrthoForestWrapper,
+        OLSWrapper,
+    )
+}
 ESTIMATOR_WRAPPERS: dict[EstimatorType, type[BaseEstimatorWrapper]] = {
-    EstimatorType.CAUSAL_FOREST: CausalForestWrapper,
-    EstimatorType.LINEAR_DML: LinearDMLWrapper,
-    EstimatorType.DML_LEARNER: DMLLearnerWrapper,
-    EstimatorType.DRLEARNER: DRLearnerWrapper,
-    EstimatorType.S_LEARNER: SLearnerWrapper,
-    EstimatorType.T_LEARNER: TLearnerWrapper,
-    EstimatorType.X_LEARNER: XLearnerWrapper,
-    EstimatorType.ORTHO_FOREST: OrthoForestWrapper,
-    EstimatorType.OLS: OLSWrapper,
+    spec.estimator_type: _WRAPPER_CLASSES[spec.wrapper_symbol] for spec in ESTIMATOR_SPECS
 }
 
 
@@ -1396,6 +1384,33 @@ class EstimatorSelector:
         total_start = time.perf_counter()
 
         results: list[EstimatorResult] = []
+
+        # A mixed float/bool pandas frame materializes as an ``object`` NumPy
+        # array, which EconML rejects even though every column is numeric in
+        # meaning.  Normalize supported numeric/boolean dtypes once at the
+        # selector boundary so every wrapper and the energy-score calculator
+        # see the same float design.  Strings/categories must be explicitly
+        # encoded by the caller; accepting them here would make refutation use
+        # a potentially different design matrix.
+        def _numeric_design(frame: pd.DataFrame, label: str) -> pd.DataFrame:
+            unsupported = [
+                column
+                for column in frame.columns
+                if not (
+                    pd.api.types.is_numeric_dtype(frame[column].dtype)
+                    or pd.api.types.is_bool_dtype(frame[column].dtype)
+                )
+            ]
+            if unsupported:
+                raise TypeError(
+                    f"{label} must be numeric or boolean after encoding; "
+                    f"unsupported columns={unsupported}"
+                )
+            return frame.astype(float, copy=False)
+
+        covariates = _numeric_design(covariates, "covariates")
+        if efficiency_controls is not None:
+            efficiency_controls = _numeric_design(efficiency_controls, "efficiency_controls")
 
         # Empty backdoor (zero covariates) = the correct adjustment set for a
         # randomized / exogenous treatment. Covariate-requiring estimators cannot

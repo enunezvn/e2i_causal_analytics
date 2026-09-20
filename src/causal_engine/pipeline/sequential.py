@@ -10,6 +10,8 @@ import math
 import time
 from typing import Dict, List, Optional, Tuple
 
+from src.causal_engine.estimator_registry import SAMPLING_INTERVAL_ESTIMATOR_VALUES
+
 from .orchestrator import (
     LibraryExecutor,
     PipelineOrchestrator,
@@ -141,9 +143,7 @@ _Z_95 = 1.959963984540054  # z for a 95% normal CI (half-width / z = SE)
 # on constant + quadratic-CATE DGPs, 2026-09-19). The S/T/X-learner intervals and the OrthoForest fallback are
 # ``std(CATE) / sqrt(n)``: the spread of heterogeneous effects, not an SE (#1188
 # measured that construction ~50x too narrow).
-ECONML_SAMPLING_INTERVAL_ESTIMATORS = frozenset(
-    {"causal_forest", "linear_dml", "drlearner", "dml_learner", "ols"}
-)
+ECONML_SAMPLING_INTERVAL_ESTIMATORS = SAMPLING_INTERVAL_ESTIMATOR_VALUES
 
 
 def _se_for_library(state: PipelineState, lib: str) -> Optional[float]:

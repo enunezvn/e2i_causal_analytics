@@ -302,6 +302,10 @@ class TestListEstimators:
         assert "total" in data
         assert "by_library" in data
         assert data["total"] > 0
+        dml = next(item for item in data["estimators"] if item["name"] == "dml_learner")
+        assert dml["agent_override"] == "dml_learner"
+        assert dml["default_enabled"] is False
+        assert dml["supports_heterogeneous_effects"] is True
 
     def test_list_estimators_filtered_by_library(self):
         """Should filter estimators by library."""

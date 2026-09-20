@@ -55,6 +55,9 @@ from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
 
+from src.causal_engine.estimator_registry import get_estimator_spec
+from src.causal_engine.heterogeneity import analyze_heterogeneity
+
 from ..data_resolver import resolve_estimation_dataframe
 from ..router import CausalLibrary
 from ..state import LibraryExecutionResult, PipelineConfig, PipelineState
@@ -89,58 +92,6 @@ def _quality_tier(energy_score: float) -> str:
         if energy_score <= threshold:
             return tier
     return "unreliable"
-
-
-def _build_cate_segments(cate: np.ndarray) -> dict[str, dict[str, Any]]:
-    """Build per-segment CATE summary from a real per-record CATE array.
-
-    Mirrors the high/low half-split in
-    ``agents/causal_impact/nodes/estimation.py`` (iter-2 onward) -- uses REAL
-    CATE means per half, NEVER the legacy ``ate * 1.2`` / ``ate * 0.8`` mock
-    multipliers. Returns ``{}`` if the array is too small to split (the caller
-    treats this as "heterogeneity not detected"; never substitutes a fake
-    segment).
-    """
-    arr = np.asarray(cate, dtype=float).ravel()
-    if arr.size < 2 or not np.all(np.isfinite(arr)):
-        return {}
-    threshold = float(np.median(arr))
-    high_mask = arr >= threshold
-    low_mask = ~high_mask
-    out: dict[str, dict[str, Any]] = {}
-    if high_mask.any():
-        out["High CATE"] = {
-            "cate": float(np.mean(arr[high_mask])),
-            "size": int(high_mask.sum()),
-            "description": "Records with CATE at or above median",
-        }
-    if low_mask.any():
-        out["Low CATE"] = {
-            "cate": float(np.mean(arr[low_mask])),
-            "size": int(low_mask.sum()),
-            "description": "Records with CATE below median",
-        }
-    return out
-
-
-def _heterogeneity_score(cate: Optional[np.ndarray]) -> float:
-    """Quantify CATE spread (coefficient-of-variation-like) when CATE is real.
-
-    For single-ATE estimators (LinearDML, DRLearner, OLS) ``cate`` is None and
-    we return 0.0 (NOT a fabricated heterogeneity); the executor flags the
-    estimator's lack of per-record CATE by emitting an empty
-    ``cate_by_segment`` dict.
-    """
-    if cate is None:
-        return 0.0
-    arr = np.asarray(cate, dtype=float).ravel()
-    if arr.size < 2 or not np.all(np.isfinite(arr)):
-        return 0.0
-    spread = float(np.std(arr))
-    mean = float(np.mean(np.abs(arr)))
-    if mean <= 0.0:
-        return 0.0
-    return spread / mean
 
 
 def _resolve_dataframe(state: PipelineState) -> Optional["pd.DataFrame"]:
@@ -435,11 +386,17 @@ class EconMLExecutor(LibraryExecutor):
                 )
 
             # ---- Step 8: pack real outputs into LibraryExecutionResult.result ----
-            cate_arr: Optional[np.ndarray] = None
-            if selected.cate is not None:
-                cate_arr = np.asarray(selected.cate, dtype=float)
-            cate_segments = _build_cate_segments(cate_arr) if cate_arr is not None else {}
-            het_score = _heterogeneity_score(cate_arr)
+            estimator_spec = get_estimator_spec(selected.estimator_type)
+            heterogeneity = analyze_heterogeneity(
+                model=selected.raw_estimate,
+                X=np.asarray(covariates.values, dtype=float),
+                cate=selected.cate if estimator_spec.produces_cate else None,
+            )
+            cate_segments = {
+                segment["segment"]: {k: v for k, v in segment.items() if k != "segment"}
+                for segment in heterogeneity.segments
+            }
+            het_score = heterogeneity.score
             energy_score_f = energy_score_raw  # already finiteness-checked
 
             successful_results = [r for r in (selection_result.all_results or []) if r.success]
@@ -468,6 +425,10 @@ class EconMLExecutor(LibraryExecutor):
                 "ate_std": ate_std_f,
                 "cate_by_segment": cate_segments,
                 "heterogeneity_score": het_score,
+                "cate_available": heterogeneity.cate_available,
+                "heterogeneity_detected": heterogeneity.detected,
+                "heterogeneity_test_method": heterogeneity.method,
+                "heterogeneity_p_value": heterogeneity.p_value,
                 "energy_score": energy_score_f,
                 "quality_tier": _quality_tier(energy_score_f),
                 "selection_strategy": selection_result.selection_strategy.value,

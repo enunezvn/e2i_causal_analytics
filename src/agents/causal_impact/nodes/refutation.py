@@ -52,6 +52,10 @@ from src.causal_engine import (
     evalue,
     log_validation_outcome_with_status,
 )
+from src.causal_engine.estimator_registry import (
+    DOWHY_METHOD_BY_LABEL,
+    ESTIMATOR_SPEC_BY_DOWHY_METHOD,
+)
 from src.causal_engine.refutation_runner import seed_for_estimate, seed_identity_for
 from src.repositories.causal_validation import (
     CAUSAL_QUERY_ESTIMATE_SOURCE,
@@ -170,16 +174,8 @@ _GATE_STATUS_TRANSITIONS: Dict[GateDecision, Tuple[str, Tuple[str, ...]]] = {
 # critique a linear_regression estimate while the chat UI displays a
 # CausalForestDML one.
 _SELECTOR_TO_DOWHY_METHOD = {
-    # Energy-score selector estimator_type.value
-    "causal_forest": "backdoor.econml.dml.CausalForestDML",
-    "linear_dml": "backdoor.econml.dml.LinearDML",
-    "drlearner": "backdoor.econml.dr.DRLearner",
-    "dml_learner": "backdoor.econml.dml.DML",
-    "ols": "backdoor.linear_regression",
-    # EstimationResult.method (legacy + new labels)
-    "CausalForestDML": "backdoor.econml.dml.CausalForestDML",
-    "LinearDML": "backdoor.econml.dml.LinearDML",
-    "linear_regression": "backdoor.linear_regression",
+    **DOWHY_METHOD_BY_LABEL,
+    # DoWhy-only legacy method; it is not an energy-selector estimator.
     "propensity_score_weighting": "backdoor.propensity_score_weighting",
 }
 
@@ -337,13 +333,16 @@ def _reconstruction_nuisance_init_params(
     """
     from src.causal_engine import nuisance_config as nc
 
-    # Every branch builds from nuisance_config -- the same factories the selector
-    # wrappers use -- so the rebuild reproduces the reported ATE by construction.
-    if "LinearDML" in dowhy_method:
+    # Every branch is selected by an EXACT registered estimator identity.  A
+    # substring match is unsafe: SparseLinearDML/LinearDML/CausalForestDML/DML
+    # are distinct estimator classes and must never share a rebuild by accident.
+    spec = ESTIMATOR_SPEC_BY_DOWHY_METHOD.get(dowhy_method)
+    reconstruction_key = spec.reconstruction_key if spec is not None else None
+    if reconstruction_key == "linear_dml":
         return nc.linear_dml_init_params(discrete_treatment)
-    if dowhy_method == "backdoor.econml.dml.DML":  # exact: "DML" in would match LinearDML
+    if reconstruction_key == "dml_learner":
         return nc.dml_learner_init_params(discrete_treatment)
-    if "DRLearner" in dowhy_method:
+    if reconstruction_key == "drlearner":
         return nc.drlearner_init_params()
     return {}
 

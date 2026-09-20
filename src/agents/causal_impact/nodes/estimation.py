@@ -47,6 +47,11 @@ from src.causal_engine.energy_score import (
 
 # F-006 fix (#417): structured fail-closed error for legacy method dispatch
 from src.causal_engine.errors import EstimationError
+from src.causal_engine.estimator_registry import (
+    FORCEABLE_ESTIMATOR_TYPE_BY_ALIAS,
+    get_estimator_spec,
+)
+from src.causal_engine.heterogeneity import analyze_heterogeneity
 
 logger = logging.getLogger(__name__)
 
@@ -309,17 +314,10 @@ class EstimationNode:
         # restrict the selector to that single estimator so the result
         # actually reflects the requested method (not whichever the
         # energy-score chain prefers).
-        method_to_type = {
-            "CausalForestDML": EstimatorType.CAUSAL_FOREST,
-            "causal_forest": EstimatorType.CAUSAL_FOREST,
-            "LinearDML": EstimatorType.LINEAR_DML,
-            "linear_dml": EstimatorType.LINEAR_DML,
-            "linear_regression": EstimatorType.OLS,
-            "ols": EstimatorType.OLS,
-            "drlearner": EstimatorType.DRLEARNER,
-            "dml_learner": EstimatorType.DML_LEARNER,
-            "propensity_score_weighting": EstimatorType.DRLEARNER,
-        }
+        method_to_type = dict(FORCEABLE_ESTIMATOR_TYPE_BY_ALIAS)
+        # Legacy compatibility: this request label historically delegates to
+        # the doubly-robust learner on the agent path.
+        method_to_type["propensity_score_weighting"] = EstimatorType.DRLEARNER
         restrict_to = method_to_type.get(explicit_method) if explicit_method else None
         selector = self._get_estimator_selector(selection_strategy, restrict_to=restrict_to)
 
@@ -406,14 +404,7 @@ class EstimationNode:
         else:
             quality_tier = self._get_quality_tier(energy_score)
 
-        # Map estimator type to method name
-        estimator_to_method = {
-            "causal_forest": "CausalForestDML",
-            "linear_dml": "LinearDML",
-            "drlearner": "linear_regression",  # Map to existing
-            "dml_learner": "dml_learner",
-            "ols": "linear_regression",
-        }
+        estimator_spec = get_estimator_spec(selected.estimator_type)
 
         # Cast method to the expected Literal type
         MethodType = Literal[
@@ -427,46 +418,32 @@ class EstimationNode:
             "dml_learner",
             "ols",
         ]
-        method_name = cast(
-            MethodType, estimator_to_method.get(selected.estimator_type.value, "CausalForestDML")
+        if estimator_spec.result_method is None:
+            raise EstimationError(
+                f"Estimator {selected.estimator_type.value!r} has no response method label.",
+                details={"reason": "estimator_registry_missing_result_method"},
+            )
+        method_name = cast(MethodType, estimator_spec.result_method)
+
+        # CATE availability is a model capability; detected heterogeneity is a
+        # statistical conclusion.  Never equate a non-null prediction array
+        # with significant variation.  The shared diagnostic performs a
+        # model-specific, multiplicity-controlled test and only then emits
+        # exploratory score strata carrying model-based intervals.
+        heterogeneity_frame = covariates
+        if (
+            selection_result.adjustment_type == "efficiency"
+            and efficiency_frame is not None
+            and not estimator_spec.empty_backdoor_capable
+        ):
+            heterogeneity_frame = efficiency_frame
+        heterogeneity = analyze_heterogeneity(
+            model=selected.raw_estimate,
+            X=np.asarray(heterogeneity_frame.values, dtype=float),
+            cate=selected.cate if estimator_spec.produces_cate else None,
         )
-
-        # CausalForestDML produces real CATE estimates per data point → emits
-        # heterogeneity-aware segments. Other estimators (LinearDML, DRLearner,
-        # OLS) produce a single ATE without per-segment CATE. Map this via
-        # ``selected.cate`` non-None + ``estimator_type == CAUSAL_FOREST``.
-        is_causal_forest = selected.estimator_type.value in ("causal_forest", "CausalForestDML")
-        heterogeneity_detected = bool(is_causal_forest and selected.cate is not None)
-
-        # Build CATE segments from real CATE estimates when available.
-        cate_segments: List[Dict[str, Any]] = []
-        if heterogeneity_detected and selected.cate is not None:
-            cate_arr = np.asarray(selected.cate, dtype=float)
-            # Split into high/low halves by CATE magnitude to mirror the
-            # legacy two-segment shape; uses REAL CATE means per half (not
-            # the deleted hardcoded ate * 1.2 / 0.8 mock multipliers).
-            if cate_arr.size >= 2:
-                threshold = float(np.median(cate_arr))
-                high_mask = cate_arr >= threshold
-                low_mask = ~high_mask
-                if high_mask.any():
-                    cate_segments.append(
-                        {
-                            "segment": "High CATE",
-                            "cate": float(np.mean(cate_arr[high_mask])),
-                            "size": int(high_mask.sum()),
-                            "description": "Records with CATE at or above median",
-                        }
-                    )
-                if low_mask.any():
-                    cate_segments.append(
-                        {
-                            "segment": "Low CATE",
-                            "cate": float(np.mean(cate_arr[low_mask])),
-                            "size": int(low_mask.sum()),
-                            "description": "Records with CATE below median",
-                        }
-                    )
+        heterogeneity_detected = heterogeneity.detected
+        cate_segments: List[Dict[str, Any]] = heterogeneity.segments
 
         # Iter-4 codex H-iter3-1 + iter-5 codex H-iter4-1 (#417): CI bounds +
         # standard_error must come from the estimator AND be usable. If they
@@ -605,6 +582,11 @@ class EstimationNode:
                 baseline_cols if selection_result.adjustment_type == "efficiency" else []
             ),
             "heterogeneity_detected": heterogeneity_detected,
+            "cate_available": heterogeneity.cate_available,
+            "heterogeneity_test_method": heterogeneity.method,
+            "heterogeneity_p_value": heterogeneity.p_value,
+            "heterogeneity_score": heterogeneity.score,
+            "heterogeneity_reason": heterogeneity.reason,
             "cate_segments": cate_segments,
             # V4.2: Energy score fields
             "selection_strategy": cast(
@@ -786,16 +768,8 @@ class EstimationNode:
 
             # Validate explicit method name (preserves the legacy contract
             # that ``parameters.method`` must be a known estimator label).
-            _VALID_EXPLICIT_METHODS = {
-                "CausalForestDML",
-                "LinearDML",
-                "linear_regression",
-                "propensity_score_weighting",
-                "causal_forest",
-                "linear_dml",
-                "drlearner",
-                "dml_learner",
-                "ols",
+            _VALID_EXPLICIT_METHODS = set(FORCEABLE_ESTIMATOR_TYPE_BY_ALIAS) | {
+                "propensity_score_weighting"
             }
             if explicit_method and explicit_method not in _VALID_EXPLICIT_METHODS:
                 raise ValueError(f"Unknown estimation method: {explicit_method}")

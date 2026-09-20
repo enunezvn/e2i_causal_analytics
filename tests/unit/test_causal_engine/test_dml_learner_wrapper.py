@@ -30,11 +30,12 @@ Fast: ~300-row synthetic frames, no Monte Carlo.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
 from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
-from sklearn.preprocessing import PolynomialFeatures
 
 from src.causal_engine import nuisance_config
 from src.causal_engine.energy_score.estimator_selector import (
@@ -42,6 +43,11 @@ from src.causal_engine.energy_score.estimator_selector import (
     EstimatorConfig,
     EstimatorSelectorConfig,
     EstimatorType,
+)
+from src.causal_engine.estimator_registry import (
+    AGENT_FORCEABLE_ESTIMATORS,
+    FORCEABLE_ESTIMATOR_TYPE_BY_ALIAS,
+    get_estimator_spec,
 )
 
 DML_METHOD = "backdoor.econml.dml.DML"
@@ -105,7 +111,7 @@ def test_fit_is_econml_dml_with_the_shared_models(fitted):
     model = result.raw_estimate
     # The general DML class itself -- not the LinearDML special case.
     assert type(model) is DML and not isinstance(model, LinearDML)
-    assert isinstance(model.featurizer, PolynomialFeatures)
+    assert isinstance(model.featurizer, nuisance_config.RankSafePolynomialFeatures)
     assert model.featurizer.get_params() == nuisance_config.dml_learner_featurizer().get_params()
     assert isinstance(model.model_final, StatsModelsLinearRegression)
     models_y = [m for fold in model.models_y for m in fold]
@@ -142,31 +148,122 @@ def test_fit_is_deterministic(frame, fitted):
     assert second.ate_ci_lower == pytest.approx(first.ate_ci_lower, abs=1e-12)
 
 
+def test_binary_and_one_hot_features_are_rank_safe_and_inference_valid():
+    """Squares/interactions of binary indicators must not make the final-stage
+    covariance singular while still returning a seemingly valid CI."""
+    rng = np.random.default_rng(77)
+    n = 600
+    region_a = rng.binomial(1, 0.35, n)
+    region_b = rng.binomial(1, 0.25, n) * (1 - region_a)
+    continuous = rng.normal(size=n)
+    treatment = rng.binomial(
+        1, 1 / (1 + np.exp(-(0.6 * region_a - 0.3 * region_b + 0.2 * continuous)))
+    )
+    outcome = (
+        (0.4 + 0.35 * region_a + 0.2 * continuous**2) * treatment
+        + 0.7 * continuous
+        + rng.normal(scale=0.7, size=n)
+    )
+    covariates = pd.DataFrame(
+        {
+            # A real mixed bool/float frame would otherwise materialize as an
+            # object ndarray at the EconML boundary.
+            "region_a": region_a.astype(bool),
+            "region_b": region_b,
+            "continuous": continuous,
+        }
+    )
+    wrapper = ESTIMATOR_WRAPPERS[EstimatorType.DML_LEARNER](
+        EstimatorConfig(EstimatorType.DML_LEARNER)
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = wrapper.fit(treatment, outcome, covariates)
+
+    assert result.success, result.error_message
+    assert result.ate_ci_lower < result.ate < result.ate_ci_upper
+    assert not any("inference will be invalid" in str(w.message).lower() for w in caught)
+    fitted_featurizer = result.raw_estimate.featurizer_
+    expanded = fitted_featurizer.transform(covariates.to_numpy(dtype=float))
+    assert np.linalg.matrix_rank(expanded) == expanded.shape[1]
+
+
+def test_invalid_final_stage_inference_warning_fails_closed(monkeypatch, frame):
+    """EconML can warn and still return numeric intervals; those numbers must
+    never be promoted as valid inference."""
+    import econml.dml
+
+    class _WarningDML:
+        def __init__(self, **_kwargs):
+            pass
+
+        def fit(self, *_args, **_kwargs):
+            warnings.warn(
+                "Co-variance matrix is underdetermined. Inference will be invalid!",
+                UserWarning,
+                stacklevel=2,
+            )
+            return self
+
+    monkeypatch.setattr(econml.dml, "DML", _WarningDML)
+    treatment, outcome, covariates = frame
+    wrapper = ESTIMATOR_WRAPPERS[EstimatorType.DML_LEARNER](
+        EstimatorConfig(EstimatorType.DML_LEARNER)
+    )
+    result = wrapper.fit(treatment, outcome, covariates)
+
+    assert result.success is False
+    assert "inference is not identified" in (result.error_message or "")
+
+
+def test_real_dml_heterogeneity_test_emits_segments_with_intervals():
+    from src.causal_engine.heterogeneity import analyze_heterogeneity
+
+    rng = np.random.default_rng(123)
+    n = 500
+    x = rng.normal(size=n)
+    binary = rng.binomial(1, 0.4, n)
+    treatment = rng.binomial(1, 1 / (1 + np.exp(-(0.4 * x + 0.4 * binary))))
+    outcome = (
+        (0.3 + 1.2 * x + 0.6 * binary) * treatment
+        + 0.5 * x
+        + 0.4 * binary
+        + rng.normal(scale=0.6, size=n)
+    )
+    covariates = pd.DataFrame({"x": x, "binary": binary})
+    wrapper = ESTIMATOR_WRAPPERS[EstimatorType.DML_LEARNER](
+        EstimatorConfig(EstimatorType.DML_LEARNER)
+    )
+    fitted_result = wrapper.fit(treatment, outcome, covariates)
+    assert fitted_result.success, fitted_result.error_message
+
+    diagnostic = analyze_heterogeneity(
+        model=fitted_result.raw_estimate,
+        X=covariates.values,
+        cate=fitted_result.cate,
+    )
+    assert diagnostic.cate_available is True
+    assert diagnostic.detected is True
+    assert diagnostic.p_value is not None and diagnostic.p_value < 0.05
+    assert len(diagnostic.segments) == 2
+    assert all(
+        segment["cate_ci_lower"] < segment["cate_ci_upper"] for segment in diagnostic.segments
+    )
+
+
 # ---------------------------------------------------------------- estimation node
 
 
 def test_estimation_node_labels_a_dml_learner_win_as_itself():
-    import inspect
-
-    from src.agents.causal_impact.nodes import estimation as est_mod
-
-    src = inspect.getsource(est_mod.EstimationNode._select_estimator_with_energy_score)
-    assert '"dml_learner": "dml_learner"' in src
+    spec = get_estimator_spec(EstimatorType.DML_LEARNER)
+    assert spec.result_method == "dml_learner"
 
 
 def test_dml_learner_is_forceable_end_to_end():
     """Forced through the agent API -> accepted by the node's allowlist -> mapped
     to the real selector type (so the forced run evaluates ONLY dml_learner)."""
-    import inspect
-
-    from src.agents.causal_impact.nodes import estimation as est_mod
-    from src.api.schemas.causal import AGENT_FORCEABLE_ESTIMATORS
-
     assert "dml_learner" in AGENT_FORCEABLE_ESTIMATORS
-    execute_src = inspect.getsource(est_mod.EstimationNode.execute)
-    assert '"dml_learner",' in execute_src
-    select_src = inspect.getsource(est_mod.EstimationNode._select_estimator_with_energy_score)
-    assert '"dml_learner": EstimatorType.DML_LEARNER' in select_src
+    assert FORCEABLE_ESTIMATOR_TYPE_BY_ALIAS["dml_learner"] is EstimatorType.DML_LEARNER
 
 
 def test_dml_learner_is_in_the_sampling_interval_set():
@@ -196,7 +293,7 @@ def test_reconstruction_params_mirror_the_wrapper():
     assert isinstance(p1["model_y"], GradientBoostingRegressor)
     assert isinstance(p1["model_t"], GradientBoostingClassifier)
     assert isinstance(p1["model_final"], StatsModelsLinearRegression)
-    assert isinstance(p1["featurizer"], PolynomialFeatures)
+    assert isinstance(p1["featurizer"], nuisance_config.RankSafePolynomialFeatures)
     for key in p1:
         assert p1[key] is not p2[key], key  # DoWhy fits them in place
     cont = _reconstruction_nuisance_init_params(DML_METHOD, discrete_treatment=False)

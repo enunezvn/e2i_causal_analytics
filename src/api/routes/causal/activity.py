@@ -37,6 +37,7 @@ from src.api.schemas.causal import (
     EstimatorListResponse,
     TreatmentEffectResponse,
 )
+from src.causal_engine.estimator_registry import ESTIMATOR_SPECS
 from src.causal_engine.pipeline.state import PipelineInput
 
 # #931: the health check's analysis-activity fields and the Analysis History tab
@@ -86,77 +87,21 @@ _activity_cache: dict[str, Any] = {"expires_at": 0.0, "value": (0, None)}
 # (``estimators_loaded``) read from this so the health count can never drift
 # from the registry (previously ``estimators_loaded`` was a hardcoded ``12``).
 _ESTIMATOR_REGISTRY: List[EstimatorInfo] = [
-    # EconML
-    EstimatorInfo(
-        name="causal_forest",
-        library=CausalLibrary.ECONML,
-        estimator_type="CATE",
-        description="Causal Forest for heterogeneous treatment effects",
-        best_for=["Effect heterogeneity", "Feature importance"],
-        parameters=["n_estimators", "min_samples_leaf", "max_depth"],
-        supports_confidence_intervals=True,
-        supports_heterogeneous_effects=True,
-    ),
-    EstimatorInfo(
-        name="linear_dml",
-        library=CausalLibrary.ECONML,
-        estimator_type="CATE",
-        description="Double Machine Learning with linear final stage",
-        best_for=["High-dimensional confounders", "Linear effects"],
-        parameters=["model_y", "model_t", "cv"],
-        supports_confidence_intervals=True,
-        supports_heterogeneous_effects=True,
-    ),
-    EstimatorInfo(
-        name="ortho_forest",
-        library=CausalLibrary.ECONML,
-        estimator_type="CATE",
-        description="Orthogonal Random Forest for CATE",
-        best_for=["Non-linear effects", "SHAP integration"],
-        parameters=["n_trees", "subsample_ratio", "max_depth"],
-        supports_confidence_intervals=True,
-        supports_heterogeneous_effects=True,
-    ),
-    EstimatorInfo(
-        name="dr_learner",
-        library=CausalLibrary.ECONML,
-        estimator_type="CATE",
-        description="Doubly Robust Learner",
-        best_for=["Robustness to misspecification"],
-        parameters=["model_propensity", "model_regression"],
-        supports_confidence_intervals=True,
-        supports_heterogeneous_effects=True,
-    ),
-    EstimatorInfo(
-        name="x_learner",
-        library=CausalLibrary.ECONML,
-        estimator_type="Meta-Learner",
-        description="X-Learner for heterogeneous effects",
-        best_for=["Imbalanced treatment groups"],
-        parameters=["models", "propensity_model"],
-        supports_confidence_intervals=True,
-        supports_heterogeneous_effects=True,
-    ),
-    EstimatorInfo(
-        name="t_learner",
-        library=CausalLibrary.ECONML,
-        estimator_type="Meta-Learner",
-        description="Two-Model approach",
-        best_for=["Simple interpretation"],
-        parameters=["models"],
-        supports_confidence_intervals=False,
-        supports_heterogeneous_effects=True,
-    ),
-    EstimatorInfo(
-        name="s_learner",
-        library=CausalLibrary.ECONML,
-        estimator_type="Meta-Learner",
-        description="Single-Model approach",
-        best_for=["Limited data"],
-        parameters=["overall_model"],
-        supports_confidence_intervals=False,
-        supports_heterogeneous_effects=True,
-    ),
+    *[
+        EstimatorInfo(
+            name=spec.public_name or spec.estimator_type.value,
+            library=CausalLibrary(spec.public_library),
+            estimator_type=spec.public_estimator_type,
+            description=spec.description,
+            best_for=list(spec.best_for),
+            parameters=list(spec.parameters),
+            supports_confidence_intervals=spec.supports_confidence_intervals,
+            supports_heterogeneous_effects=spec.produces_cate,
+            agent_override=spec.forceable_alias,
+            default_enabled=spec.default_priority is not None,
+        )
+        for spec in ESTIMATOR_SPECS
+    ],
     # CausalML
     EstimatorInfo(
         name="uplift_random_forest",
@@ -198,6 +143,7 @@ _ESTIMATOR_REGISTRY: List[EstimatorInfo] = [
         parameters=["propensity_model", "stabilized"],
         supports_confidence_intervals=True,
         supports_heterogeneous_effects=False,
+        agent_override="propensity_score_weighting",
     ),
     EstimatorInfo(
         name="instrumental_variable",

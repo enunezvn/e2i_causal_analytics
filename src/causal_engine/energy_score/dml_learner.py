@@ -49,6 +49,7 @@ class DMLLearnerWrapper(BaseEstimatorWrapper):
         **kwargs,
     ) -> EstimatorResult:
         import time
+        import warnings
 
         start = time.perf_counter()
 
@@ -65,8 +66,23 @@ class DMLLearnerWrapper(BaseEstimatorWrapper):
                 discrete_treatment=True,
                 random_state=DML_LEARNER_RANDOM_STATE,
             )
-            X = covariates.values
-            model.fit(outcome, treatment, X=X, W=X)
+            # ``DataFrame.values`` becomes dtype=object for an otherwise valid
+            # mixed float/bool design.  EconML requires a numeric ndarray.
+            X = covariates.to_numpy(dtype=float)
+            with warnings.catch_warnings(record=True) as fit_warnings:
+                warnings.simplefilter("always")
+                model.fit(outcome, treatment, X=X, W=X)
+            invalid_inference = [
+                str(w.message)
+                for w in fit_warnings
+                if "inference will be invalid" in str(w.message).lower()
+                or "biased variance calculation" in str(w.message).lower()
+            ]
+            if invalid_inference:
+                raise ValueError(
+                    "dml_learner final-stage inference is not identified: "
+                    + "; ".join(invalid_inference)
+                )
 
             cate = model.effect(X)
             ate = float(np.mean(cate))

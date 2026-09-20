@@ -627,7 +627,9 @@ class TestEconMLExecutorEnergyScoreSanitization:
 class TestEconMLExecutorHappyPath:
     @pytest.mark.asyncio
     async def test_returns_real_estimator_output_in_result(self):
-        cate = np.array([0.08, 0.12, 0.18, 0.22], dtype=float)
+        # Row-aligned with ``_real_data_frame``: a CATE vector with a
+        # different length is not an available per-row effect surface.
+        cate = np.linspace(0.08, 0.22, len(_real_data_frame()), dtype=float)
         er = _good_estimator_result(
             ate=0.15, ate_std=0.02, ate_ci_lower=0.10, ate_ci_upper=0.20, cate=cate
         )
@@ -650,12 +652,13 @@ class TestEconMLExecutorHappyPath:
         assert body["ate_ci_lower"] == pytest.approx(0.10)
         assert body["ate_ci_upper"] == pytest.approx(0.20)
         assert body["ate_std"] == pytest.approx(0.02)
-        # CATE segments derived from real per-record CATE array (mean per half).
-        assert "cate_by_segment" in body
-        seg = body["cate_by_segment"]
-        assert "High CATE" in seg and "Low CATE" in seg
-        assert seg["High CATE"]["cate"] > seg["Low CATE"]["cate"]
-        # Heterogeneity score derived from the real CATE spread (NOT 0.0).
+        # CATE availability does not fabricate statistically validated segments:
+        # this stub exposes predictions but no inference API.
+        assert body["cate_available"] is True
+        assert body["heterogeneity_detected"] is False
+        assert body["heterogeneity_test_method"] == "inference_unavailable"
+        assert body["cate_by_segment"] == {}
+        # The descriptive spread remains available and is not significance.
         assert "heterogeneity_score" in body
         assert body["heterogeneity_score"] != 0.0
         # Energy-score / quality metadata for transparency.

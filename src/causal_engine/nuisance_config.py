@@ -85,6 +85,91 @@ DML_LEARNER_RANDOM_STATE = 42
 DML_LEARNER_FEATURIZER_DEGREE = 2
 
 
+class RankSafePolynomialFeatures:
+    """Degree-2 features with deterministic constant/collinearity pruning.
+
+    Plain ``PolynomialFeatures`` makes inference invalid on mixed production
+    designs: for a binary indicator ``x**2 == x`` and mutually-exclusive
+    one-hot interactions can be identically zero.  EconML's statsmodels final
+    stage warns about the singular covariance matrix but still returns numbers.
+    This sklearn-compatible transformer removes constant and linearly dependent
+    columns at fit time and applies the same projection at prediction time.
+
+    Imports stay inside methods so importing ``nuisance_config`` remains cheap.
+    """
+
+    def __init__(self, degree: int = DML_LEARNER_FEATURIZER_DEGREE, rank_tolerance: float = 1e-10):
+        self.degree = degree
+        self.rank_tolerance = rank_tolerance
+
+    def get_params(self, deep: bool = True) -> Dict[str, Any]:
+        return {"degree": self.degree, "rank_tolerance": self.rank_tolerance}
+
+    def set_params(self, **params: Any) -> "RankSafePolynomialFeatures":
+        for key, value in params.items():
+            if key not in {"degree", "rank_tolerance"}:
+                raise ValueError(f"Unknown parameter {key!r}")
+            setattr(self, key, value)
+        return self
+
+    def fit(self, X: Any, y: Any = None) -> "RankSafePolynomialFeatures":
+        import numpy as np
+        from scipy.linalg import qr
+        from sklearn.preprocessing import PolynomialFeatures
+
+        self.polynomial_ = PolynomialFeatures(degree=self.degree, include_bias=False)
+        expanded = np.asarray(self.polynomial_.fit_transform(X), dtype=float)
+        if expanded.ndim != 2 or expanded.shape[1] == 0:
+            raise ValueError("dml_learner featurizer produced no candidate columns")
+
+        scale = np.maximum(np.max(np.abs(expanded), axis=0), 1.0)
+        varying = np.ptp(expanded, axis=0) > self.rank_tolerance * scale
+        candidate_indices = np.flatnonzero(varying)
+        if candidate_indices.size == 0:
+            raise ValueError("dml_learner effect modifiers contain no varying features")
+
+        # Rank selection must not depend on the units of the input columns
+        # (for example, an age-squared term versus a binary flag).  Normalize
+        # each candidate before pivoted QR, then retain the corresponding
+        # unscaled polynomial columns for the actual model fit.
+        candidates = expanded[:, candidate_indices]
+        normalized_candidates = candidates / scale[candidate_indices]
+        _q, r, pivots = qr(normalized_candidates, mode="economic", pivoting=True)
+        diagonal = np.abs(np.diag(r))
+        threshold = (
+            self.rank_tolerance
+            * max(candidates.shape)
+            * (float(diagonal.max()) if diagonal.size else 1.0)
+        )
+        rank = int(np.sum(diagonal > threshold))
+        if rank < 1:
+            raise ValueError("dml_learner effect-modifier basis has zero numerical rank")
+
+        # Keep original PolynomialFeatures order for stable coefficient names;
+        # QR pivoting is used only to choose an independent subset.
+        self.selected_indices_ = np.sort(candidate_indices[np.asarray(pivots[:rank], dtype=int)])
+        self.n_features_in_ = int(np.asarray(X).shape[1])
+        return self
+
+    def transform(self, X: Any) -> Any:
+        import numpy as np
+        from sklearn.utils.validation import check_is_fitted
+
+        check_is_fitted(self, ("polynomial_", "selected_indices_"))
+        expanded = np.asarray(self.polynomial_.transform(X), dtype=float)
+        return expanded[:, self.selected_indices_]
+
+    def fit_transform(self, X: Any, y: Any = None, **fit_params: Any) -> Any:
+        return self.fit(X, y).transform(X)
+
+    def get_feature_names_out(self, input_features: Any = None) -> Any:
+        from sklearn.utils.validation import check_is_fitted
+
+        check_is_fitted(self, ("polynomial_", "selected_indices_"))
+        names = self.polynomial_.get_feature_names_out(input_features)
+        return names[self.selected_indices_]
+
+
 def dml_learner_gb_params() -> Dict[str, Any]:
     """The GradientBoosting constructor kwargs both dml_learner sites use (fresh dict)."""
     return {
@@ -110,14 +195,13 @@ def dml_learner_model_t(discrete_treatment: bool = True) -> Any:
 
 
 def dml_learner_featurizer() -> Any:
-    """Fresh degree-2 polynomial featurizer (the flexible part of the final stage).
+    """Fresh rank-safe degree-2 featurizer for the flexible final stage.
 
-    ``include_bias=False``: econml adds the CATE intercept itself
-    (``fit_cate_intercept=True``); a bias column would duplicate it.
+    EconML adds the CATE intercept itself.  The transformer also removes
+    constant and collinear terms (notably ``binary_x**2 == binary_x``), which
+    keeps the statsmodels covariance matrix identified on encoded categoricals.
     """
-    from sklearn.preprocessing import PolynomialFeatures
-
-    return PolynomialFeatures(degree=DML_LEARNER_FEATURIZER_DEGREE, include_bias=False)
+    return RankSafePolynomialFeatures(degree=DML_LEARNER_FEATURIZER_DEGREE)
 
 
 def dml_learner_model_final() -> Any:
