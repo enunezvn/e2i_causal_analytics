@@ -2551,14 +2551,20 @@ def _resolve_explainer_input(
         if not analysis_results and not _is_causal_fallback(agent_input):
             from .intent_classifier import KPI_VALUE_LOOKUP_RE
             from .kpi_trend_evidence import resolve_kpi_trend_evidence
+            from .kpi_value_guard import is_anaphoric_explanation
 
-            trend_evidence = resolve_kpi_trend_evidence(agent_input)
             query = agent_input.get("query")
-            scalar_ask = isinstance(query, str) and KPI_VALUE_LOOKUP_RE.search(query) is not None
+            anaphoric = isinstance(query, str) and is_anaphoric_explanation(query)
+            trend_evidence = None if anaphoric else resolve_kpi_trend_evidence(agent_input)
+            scalar_ask = (
+                isinstance(query, str)
+                and not anaphoric
+                and KPI_VALUE_LOOKUP_RE.search(query) is not None
+            )
             if trend_evidence is not None:
                 ask_directed = True
                 analysis_results = trend_evidence
-            else:
+            elif not anaphoric:
                 ask_directed = scalar_ask
                 analysis_results = _kpi_lookup_evidence(agent_input) or []
         if not analysis_results and not ask_directed:

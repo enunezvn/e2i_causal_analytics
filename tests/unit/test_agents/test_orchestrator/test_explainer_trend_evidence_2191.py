@@ -285,6 +285,26 @@ def test_refused_current_scalar_ask_does_not_explain_stale_prior_results(
     assert isinstance(resolved, NeedsStructuredInput), resolved
 
 
+def test_nested_kpi_question_keeps_anaphoric_prior_results() -> None:
+    stale = [
+        {
+            "agent_name": "gap_analyzer",
+            "success": True,
+            "result": {"key_findings": ["STALE PRIOR"]},
+        }
+    ]
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("Explain the analysis that answered: What is TRx?", agent_results=stale),
+        _dispatch(),
+    )
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"] == [
+        {"agent_name": "gap_analyzer", "key_findings": ["STALE PRIOR"]}
+    ]
+
+
 def test_multi_region_trend_clarifies_without_reading_national_history(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

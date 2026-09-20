@@ -13,6 +13,8 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+from src.kpi.volume_family import PANEL_RX_COUNT_KPI_IDS
+
 _RIGHT_HEAD_FUNCTION_WORDS = frozenset(
     {
         # Prepositions / scope.
@@ -238,6 +240,12 @@ _REQUEST_PREAMBLE_SUFFIX_RE = re.compile(
 _LOOKUP_CUE_RE = re.compile(
     r"\b(?:what(?:'?s|\s+is|\s+are|\s+was|\s+were)|show\s+me|tell\s+me\s+about|"
     r"give\s+me|how\s+many)\b"
+)
+_ANAPHORIC_EXPLANATION_RE = re.compile(
+    r"^\s*(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?"
+    r"(?:explain|summarize|interpret|describe)\b.{0,120}\b"
+    r"(?:analysis|results?|findings?|answer|response)\b",
+    re.I,
 )
 
 # These nouns are established value-lookup vocabulary on this surface even
@@ -479,6 +487,11 @@ def _front_scope_changes_quantity(
     )
 
 
+def is_anaphoric_explanation(query: str) -> bool:
+    """Whether the ask explicitly refers back to an existing analysis/result."""
+    return _ANAPHORIC_EXPLANATION_RE.search(query) is not None
+
+
 def value_lookup_mentions_supported(
     normalized_query: str,
     kpi_id: str,
@@ -566,7 +579,9 @@ def value_lookup_mentions_supported(
             region_resolved_or_clarified=region_resolved_or_clarified,
             warned_tail_nouns=_WARNED_TAIL_NOUNS.get(kpi_id, frozenset()),
             allow_recorded_completion=(
-                re.search(r"\bhow\s+many\b", head_checked_query[:start]) is not None
+                kpi_id in PANEL_RX_COUNT_KPI_IDS
+                and re.search(r"\bhow\s+many\s+patient[\s-]+panel\b", head_checked_query[:end])
+                is not None
             ),
         ):
             return False

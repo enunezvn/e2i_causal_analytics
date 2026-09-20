@@ -90,6 +90,20 @@ def test_how_many_patient_panel_trx_reaches_the_panel_kpi(
 @pytest.mark.parametrize(
     "query",
     [
+        "How many conversion rates were recorded?",
+        "How many market shares were recorded?",
+    ],
+)
+def test_recorded_completion_does_not_turn_ratio_observation_counts_into_values(
+    query: str, calculator: _RecordingCalculator
+) -> None:
+    assert _kpi_lookup_evidence({"query": query}) is None
+    assert calculator.calls == []
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
         "How many patients received TRx?",
         "How many high-risk patients received TRx?",
         "How many patient panel patients received TRx?",
