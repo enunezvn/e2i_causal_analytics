@@ -95,11 +95,44 @@ def test_the_forecast_is_in_the_scale_of_the_series_it_extends(kisqali):
         assert lo < p.value < hi, f"{p.month} forecast {p.value} outside {lo}..{hi}"
 
 
-def test_the_band_widens_over_the_horizon(kisqali):
-    """Six months out is genuinely less knowable than one, and the band must say so."""
-    first = kisqali.points[0].upper - kisqali.points[0].lower
-    last = kisqali.points[-1].upper - kisqali.points[-1].lower
-    assert last > first
+def test_each_month_s_band_comes_from_THAT_month_s_measured_errors(kisqali):
+    """The band at step i is the champion's error distribution AT STEP i, recomputed.
+
+    This replaces an assertion that the band widens over the horizon. That sounded
+    obvious — six months out is less knowable than one — and it is FALSE for this band,
+    which is why it is worth a comment rather than a quiet deletion. MEASURED 2026-09-20
+    on the live series, per-step widths:
+
+        Kisqali      167,980  167,291  176,787  182,762  173,116  172,423
+        Fabhalta      31,526   33,257   33,402   35,340   31,500   29,650
+        Remibrutinib  56,743   60,674   64,831   72,528   61,207   64,730
+
+    None is monotone, and Fabhalta's LAST step is narrower than its first. That is a
+    property of the thing, not a defect: the band is the model's EMPIRICAL miss
+    distribution per horizon step, and a seasonal fit really does predict some later
+    months better than earlier ones — December's peak is pinned by the seasonal
+    component in a way that a mid-year month is not. The old assertion held locally by
+    numeric luck and failed in CI, where a slightly different scipy changed the fit.
+
+    So what is asserted here is the invariant that actually holds and actually matters:
+    each month's interval is derived from its OWN step's errors. A band that reused one
+    step's spread everywhere, or shifted the steps by one, would satisfy every other
+    test in this file.
+    """
+    import numpy as np
+
+    champion = next(s for s in kisqali.scores if s.name == kisqali.champion)
+    for i, point in enumerate(kisqali.points):
+        errors = np.asarray(champion.signed_step_pct_errors[i], dtype=float) / 100.0
+        lo_q, hi_q = np.quantile(errors, 0.1), np.quantile(errors, 0.9)
+        assert point.lower == pytest.approx(point.value / (1.0 + hi_q), rel=1e-9)
+        assert point.upper == pytest.approx(point.value / (1.0 + lo_q), rel=1e-9)
+
+
+def test_every_band_has_actual_width(kisqali):
+    """A degenerate zero-width band would pass the derivation check above trivially."""
+    widths = [p.upper - p.lower for p in kisqali.points]
+    assert all(w > 0 for w in widths), widths
 
 
 # --------------------------------------------------------------------------- the scores
