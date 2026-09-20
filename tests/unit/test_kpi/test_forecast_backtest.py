@@ -167,6 +167,10 @@ def _score(name, mape):
         horizon=6,
         step_pct_errors=((mape,) * 24,) * 6,
         signed_step_pct_errors=((mape,) * 24,) * 6,
+        # The same 24 cutoffs for every model built here, which is the live shape
+        # (at 164 months all models share [135..158]). These tests are about the
+        # ranking rule, not the unequal-origin case #2199 covers separately.
+        origin_cutoffs=tuple(range(24)),
     )
 
 
@@ -204,6 +208,7 @@ def _band_score(name, signed_by_step, horizon):
         horizon=horizon,
         step_pct_errors=tuple(tuple(abs(v) for v in step) for step in signed_by_step),
         signed_step_pct_errors=tuple(tuple(step) for step in signed_by_step),
+        origin_cutoffs=tuple(range(len(signed_by_step[0]))),
     )
 
 

@@ -43,6 +43,15 @@ DEFAULT_HORIZON = 6
 #: near-vacuous 95% interval on a series whose month-to-month noise is ~15%.
 DEFAULT_BAND_QUANTILE = 0.8
 
+#: Origins two models must SHARE before the champion is decided on that shared
+#: ground (#2199). Below it the comparison would rest on one or two common
+#: cutoffs, which is noisier than the unequal comparison it replaces -- so the
+#: selection falls back to the full MAPEs rather than trading one wrong answer
+#: for a louder one. Mirrors ``service.MIN_BACKTEST_ORIGINS``, which is the same
+#: judgement applied per model; it lives here because ``select_champion`` must
+#: not import the service.
+MIN_COMMON_ORIGINS = 4
+
 Predictor = Callable[[Sequence[float], int], Sequence[float]]
 #: A model that is cheaper to run once over every origin than once per origin --
 #: TimesFM pays a weight load and a Celery round trip per call. It returns one
@@ -86,6 +95,12 @@ class BacktestScore:
     #: Same, signed as (forecast-actual)/actual * 100 — positive means the model
     #: ran HIGH, so the actual landed below it. The band needs the direction.
     signed_step_pct_errors: Tuple[Tuple[float, ...], ...]
+    #: The cutoff ``t`` of each SCORED origin, positionally aligned with index k of
+    #: ``step_pct_errors[i][k]``. Failed origins are absent from both, together.
+    #: Without this, k is only an offset into each model's OWN origin list, so two
+    #: models' errors cannot be compared origin-for-origin and the champion can be
+    #: decided by which model happened to be graded on the easier months (#2199).
+    origin_cutoffs: Tuple[int, ...]
 
 
 def rolling_origin_splits(
@@ -167,6 +182,7 @@ def score_model(
     splits = rolling_origin_splits(len(values), horizon, origins, min_train=min_train)
     signed: List[List[float]] = [[] for _ in range(horizon)]
     totals: List[float] = []
+    scored_cutoffs: List[int] = []
     failed = 0
     if splits:
         # `.tolist()` and not the raw ndarray: a model's `predict` is typed over
@@ -178,7 +194,7 @@ def score_model(
             raise ModelUnscorable(
                 f"{name!r} returned {len(results)} forecasts for {len(splits)} origins"
             )
-        for (_train, test), raw in zip(splits, results, strict=True):
+        for (train, test), raw in zip(splits, results, strict=True):
             actual = values[test.start : test.stop]
             if raw is None:
                 failed += 1
@@ -194,6 +210,10 @@ def score_model(
             for i in range(horizon):
                 signed[i].append(_relative_error(float(forecast[i]), float(actual[i])))
             totals.append(_relative_error(float(forecast.sum()), float(actual.sum())))
+            # Appended in the SAME branch as the errors: a failed origin must vanish
+            # from the cutoffs and the errors together, or every later error is
+            # attributed to the wrong origin and the intersection is nonsense.
+            scored_cutoffs.append(train.stop)
     if not totals:
         raise ModelUnscorable(
             f"{name!r} produced no usable forecast on any of {len(splits)} origins"
@@ -208,19 +228,84 @@ def score_model(
         horizon=horizon,
         step_pct_errors=tuple(tuple(step) for step in absolute),
         signed_step_pct_errors=tuple(tuple(step) for step in signed),
+        origin_cutoffs=tuple(scored_cutoffs),
     )
 
 
+def common_origins(scores: Sequence[BacktestScore]) -> Tuple[int, ...]:
+    """The cutoffs EVERY score was actually graded on, ascending.
+
+    A real set intersection rather than "the shortest range": absent failures the
+    origin sets are nested suffixes (all models share ``last_cutoff = n - horizon``
+    and differ only in ``first_cutoff``), but one failed origin punches a hole in
+    the middle and the nesting no longer holds.
+    """
+    if not scores:
+        return ()
+    shared = set(scores[0].origin_cutoffs)
+    for score in scores[1:]:
+        shared &= set(score.origin_cutoffs)
+    return tuple(sorted(shared))
+
+
+def mape_on_origins(score: BacktestScore, cutoffs: Sequence[int]) -> float:
+    """``score``'s mean absolute % error restricted to ``cutoffs``.
+
+    Raises ``KeyError`` if a cutoff is not one this model was graded on — callers
+    pass an intersection, so asking for a cutoff it never saw is a bug, not a
+    number to invent.
+    """
+    index = {cutoff: k for k, cutoff in enumerate(score.origin_cutoffs)}
+    picked = [index[c] for c in cutoffs]
+    values = [step[k] for step in score.step_pct_errors for k in picked]
+    if not values:
+        raise KeyError("no common origins to score on")
+    return float(np.mean(values))
+
+
 def select_champion(scores: Sequence[BacktestScore]) -> BacktestScore:
-    """Lowest monthly MAPE wins; ties break on name so the choice is reproducible.
+    """Lowest monthly MAPE ON THE ORIGINS EVERY MODEL SHARES; ties break on name.
 
     MAPE, not the horizon total: opposite-signed monthly errors cancel in a total, so
     a model can win the two-quarter sum while tracking the path badly — and 6.5 asks
     for the path as well as the sum. Both numbers are reported either way.
+
+    The comparison is restricted to the shared cutoffs because each model is
+    backtested from its own ``min_observations`` (seasonal 24, trend 8), so on a
+    short series their full MAPEs average DIFFERENT months. Measured on the real PROD
+    series (#2199): 9 of 21 served cases compared unequal origin sets, and on
+    Remibrutinib at 42 months the champion flips — ``trend`` shows 8.63% over 24
+    origins and ``seasonal_mul`` 8.33% over 13, but on the 13 they share ``trend`` is
+    8.17% and is the better model. At the live length of 164 months every model has
+    the same 24 cutoffs, so this is a no-op there and the served answer is unchanged.
+
+    Below ``MIN_COMMON_ORIGINS`` of shared ground the restricted comparison would be
+    noisier than the unequal one, so the full MAPEs decide instead. Each model's
+    REPORTED ``monthly_mape`` and ``n_origins`` are untouched either way: they say how
+    much evidence stands behind that model's own number, which is what a reader needs.
     """
     if not scores:
         raise NoChampion("no model was scorable on this series")
-    return min(scores, key=lambda s: (s.monthly_mape, s.name))
+    shared = common_origins(scores)
+    return min(scores, key=lambda s: ranking_key(s, shared))
+
+
+def ranking_key(score: BacktestScore, shared: Sequence[int]) -> Tuple[float, str]:
+    """The sort key that decides the contest, given the shared ground.
+
+    THE one definition. ``select_champion`` picks the minimum of it and the payload
+    orders its model rows by it, so the crowned model is necessarily the first row.
+    Two separate implementations of "the deciding order" would eventually disagree,
+    and a payload that crowns one model while listing another first is worse than
+    either ordering on its own.
+
+    Below ``MIN_COMMON_ORIGINS`` of shared ground the full MAPE decides: comparing on
+    one or two common origins would be noisier than the unequal comparison it
+    replaces, so the fix must not trade one wrong answer for a louder one.
+    """
+    if len(shared) < MIN_COMMON_ORIGINS:
+        return (score.monthly_mape, score.name)
+    return (mape_on_origins(score, shared), score.name)
 
 
 def band_from_errors(
@@ -238,6 +323,13 @@ def band_from_errors(
     exactly when the model's misses were. The interval is then widened if needed to
     contain the point forecast — a band that excluded the number the answer shows
     would be incoherent to present — and floored at zero for a volume.
+
+    Deliberately uses the champion's FULL origin set, not the shared subset that
+    ``select_champion`` ranks on (#2199). The two answer different questions: ranking
+    must be fair between models, so it can only use months they were all graded on;
+    the band asks "how wrong is THIS model", which should use every miss it actually
+    made. Restricting it would throw away evidence about the served model to no
+    benefit and give a noisier interval.
     """
     lower_q = (1.0 - quantile) / 2.0
     upper_q = 1.0 - lower_q
