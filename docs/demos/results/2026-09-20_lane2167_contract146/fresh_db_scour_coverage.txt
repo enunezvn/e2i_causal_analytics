@@ -1,0 +1,25 @@
+Lane #2167 — scripts/test_migration_scour_coverage.sh on the lane branch
+
+The REAL runner, --dry-run, against an EMPTY ephemeral postgres — i.e. the fresh-database
+path that adding 146 to database/migrations/ newly puts it on. It also proves 146 is NOT
+swallowed by the runner's destructive/utility exclusion patterns (its name starts with a
+number but its content is all DROPs, so 'is it wrongly excluded' is a real question).
+
+=== starting ephemeral Postgres (postgres:15-alpine) ===
+    ready.
+=== run_migrations.sh --dry-run against EMPTY db (docker-exec mode) ===
+--- COVERAGE: each reconciled dir contributes a pending key ---
+  PASS dir scanned: core/
+  PASS dir scanned: ml/
+  PASS dir scanned: causal/
+  PASS dir scanned: chat/
+  PASS dir scanned: rag/
+  PASS dir scanned: audit/
+--- SAFETY: no destructive/utility file is ever in the apply set ---
+  PASS excluded from apply set: rollback_
+  PASS excluded from apply set: _rollback\.sql
+  PASS excluded from apply set: _validation_queries\.sql
+
+SCOUR COVERAGE + SAFETY: ALL PASS
+
+[exited with code 0]

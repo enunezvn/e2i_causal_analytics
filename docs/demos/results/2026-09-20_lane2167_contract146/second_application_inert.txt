@@ -1,0 +1,37 @@
+Lane #2167 — is the SECOND (automatic) application of 146 really inert?
+
+The hand apply recorded the ledger key 'deferred/146_drop_legacy_per_hcp_count_columns.sql'.
+The moved file records the runner's key (the bare basename), which prod does NOT hold, so the
+first deploy after the move will apply this file a second time. The migration header claims
+that second application changes no column, no row and no privilege. Claimed is not measured,
+so it was measured — against the live, ALREADY-CONTRACTED schema, inside BEGIN ... ROLLBACK,
+2026-09-20 shortly after the hand apply.
+
+Method: capture rows, the three canonical sums, business_metrics' column count, the four split
+views' relacl (privileges) and md5(pg_get_viewdef(...)) (definitions) into a TEMP table; run
+the moved file verbatim; compare; ROLLBACK.
+
+  p                  same
+  ------------------ ----
+  rows               true
+  sums               true
+  table col count    true
+  view privileges    true      <- relacl string identical for all four views
+  view definitions   true      <- md5(pg_get_viewdef) identical for all four views
+  new ledger key     1         <- '146_drop_legacy_per_hcp_count_columns.sql' written once
+
+psql exit 0; the precondition block passed the already-contracted schema through (legacy_present
+= 0), the DROPs were IF EXISTS no-ops, the four views were dropped and recreated to byte-identical
+definitions, and NOTIFY reloaded the PostgREST cache.
+
+Negative control immediately after the ROLLBACK — legacy columns / ledger 146 rows / v_train
+column count:
+
+  0/1/36
+
+i.e. still contracted, still exactly ONE ledger row (the hand-apply key), views still 36 wide.
+The rehearsal changed nothing.
+
+Re-run it with:
+  { echo 'BEGIN;'; cat database/migrations/146_drop_legacy_per_hcp_count_columns.sql; echo 'ROLLBACK;'; } \
+    | docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 --single-transaction

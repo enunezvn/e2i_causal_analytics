@@ -1,0 +1,17 @@
+learning-loop real-DB: prod ledger 228 keys; pending ['146_drop_legacy_per_hcp_count_columns.sql']; simulated None; deployed template learning_loop_deployed; registry sync {'updated': 0, 'inserted': 0, 'deprecated': 0, 'dependencies_deleted': 0, 'dependencies_upserted': 0}; tools the pre-upgrade schema refused []
+================== 243 passed, 8 skipped in 204.37s (0:03:24) ==================
+
+The deploy's BLOCKING gate (deploy.yml:951 -> scripts/deploy/realdb_suite_gate.sh) runs
+tests/unit/test_database/learning_loop/ on the box BEFORE migrations. It derives what is
+pending from PROD's ledger and rehearses those migrations on a throwaway copy of prod.
+
+Because the hand apply recorded 'deferred/146_...' and the moved file keys as the bare
+basename, this lane makes 146 the one pending migration -- so the banner above is not a
+green that ignored the change, it is a green that REHEARSED it. Run on the lane branch in
+the worktree, 2026-09-20:
+
+  env -u E2I_DB_SIMULATE_PENDING -u E2I_LIVE_LLM E2I_DB_INTEGRATION=1 \
+    .venv/bin/python -m pytest -n 0 -p no:cacheprovider -q -rs tests/unit/test_database/learning_loop/
+
+exit 0. The 8 skips are pre-existing and unrelated (already-applied ml/* upgrade paths and
+live-LLM spend); none of them is 146.
