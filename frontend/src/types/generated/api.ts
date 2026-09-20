@@ -6006,7 +6006,7 @@ export interface components {
             covariates?: string[] | null;
             /**
              * Estimator
-             * @description Force a specific estimator (one of AGENT_FORCEABLE_ESTIMATORS); omit for Auto (the agent's energy-score routing over the full registry).
+             * @description Force a specific estimator (one of AGENT_FORCEABLE_ESTIMATORS); omit for Auto (the agent's energy-score routing over default-enabled registry entries).
              */
             estimator?: string | null;
             /**
@@ -10054,6 +10054,17 @@ export interface components {
              * @description Whether HTE is supported
              */
             supports_heterogeneous_effects: boolean;
+            /**
+             * Agent Override
+             * @description Exact causal-impact agent override label; null when not forceable there
+             */
+            agent_override?: string | null;
+            /**
+             * Default Enabled
+             * @description Whether the estimator participates in the Auto tournament
+             * @default false
+             */
+            default_enabled: boolean;
         };
         /**
          * EstimatorListResponse
@@ -10119,7 +10130,7 @@ export interface components {
          * @description Available causal estimators.
          * @enum {string}
          */
-        EstimatorType: "causal_forest" | "linear_dml" | "ortho_forest" | "dr_learner" | "x_learner" | "t_learner" | "s_learner" | "ols" | "uplift_random_forest" | "uplift_gradient_boosting" | "propensity_score_matching" | "inverse_propensity_weighting" | "regression_discontinuity" | "instrumental_variable";
+        EstimatorType: "causal_forest" | "linear_dml" | "dml_learner" | "ortho_forest" | "dr_learner" | "x_learner" | "t_learner" | "s_learner" | "ols" | "uplift_random_forest" | "uplift_gradient_boosting" | "propensity_score_matching" | "inverse_propensity_weighting" | "regression_discontinuity" | "instrumental_variable";
         /**
          * EvidenceItem
          * @description Single piece of evidence from memory retrieval.
