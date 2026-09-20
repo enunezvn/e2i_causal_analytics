@@ -323,6 +323,13 @@ def band_from_errors(
     exactly when the model's misses were. The interval is then widened if needed to
     contain the point forecast — a band that excluded the number the answer shows
     would be incoherent to present — and floored at zero for a volume.
+
+    Deliberately uses the champion's FULL origin set, not the shared subset that
+    ``select_champion`` ranks on (#2199). The two answer different questions: ranking
+    must be fair between models, so it can only use months they were all graded on;
+    the band asks "how wrong is THIS model", which should use every miss it actually
+    made. Restricting it would throw away evidence about the served model to no
+    benefit and give a noisier interval.
     """
     lower_q = (1.0 - quantile) / 2.0
     upper_q = 1.0 - lower_q

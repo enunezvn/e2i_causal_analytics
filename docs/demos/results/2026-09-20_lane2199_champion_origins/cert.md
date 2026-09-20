@@ -52,6 +52,27 @@ origins while `trend` showed 8.63% over 24 — but on the **13 origins they shar
 — the issue's third "done when". At the live length every model has the same 24
 cutoffs, so the new rule is a provable no-op there.
 
+## Scope of the empirical counts — stated, not implied
+
+**Every number above was measured with `include_timesfm=False`**, i.e. the 3-model
+Holt-Winters contest. The forecast worker ships `replicas: 0` and is unreachable in
+this environment, so a 4-model contest could not be run end to end here.
+
+What that does and does not limit:
+
+* The **mechanism** is model-count-agnostic — `common_origins` is a set intersection
+  over whatever scores it is handed, and TimesFM's batched path records cutoffs
+  through the same loop as the per-origin path (asserted by
+  `test_a_mid_batch_failure_drops_its_cutoff_on_the_BATCHED_path_too`).
+* The **live no-op claim still holds a fortiori**: at 164 months TimesFM's
+  `min_observations` is 8, so it gets the same 24 cutoffs as everyone else and cannot
+  create an asymmetry that was not already there.
+* The specific counts — *9 of 21 unequal, 1 of 21 flips* — are proven for the
+  3-model contest only. With TimesFM in the field a short-series contest has one more
+  competitor and the flip count could differ.
+
+Raised by review as a caveat worth writing down rather than leaving implicit.
+
 ## Structural fact that makes the fix cheap
 
 All models share `last_cutoff = n - horizon` and differ only in `first_cutoff`, so

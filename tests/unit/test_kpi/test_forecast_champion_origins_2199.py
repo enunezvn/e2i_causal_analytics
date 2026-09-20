@@ -93,6 +93,46 @@ def test_a_failed_origin_is_dropped_from_the_cutoffs_not_just_counted():
     assert len(score.step_pct_errors[0]) == 3
 
 
+def test_a_mid_batch_failure_drops_its_cutoff_on_the_BATCHED_path_too():
+    """The batched path is the one TimesFM actually uses in production.
+
+    `predict_many` is exercised elsewhere and cutoff alignment is asserted above, but
+    nothing joined the two: a batch with a failure in the MIDDLE. That combination is
+    the issue's second source (origins failing), reachable on any series length, and
+    it is where a positional bug would hide — `None` at batch index k must drop cutoff
+    k, not the k-th surviving one. Raised as a coverage seam by review; correct by
+    construction today because one loop serves both predictor shapes, which is exactly
+    the kind of thing a future refactor of that branch breaks silently.
+    """
+    y = [10.0 + i for i in range(20)]
+
+    def batched(contexts, h):
+        # cutoffs are 15,16,17,18 -> fail the SECOND one, mid-batch
+        return [None if len(ctx) == 16 else [float(ctx[-1])] * h for ctx in contexts]
+
+    score = bt.score_model(
+        predict_many=batched, y=y, horizon=2, origins=4, name="batched", min_train=8
+    )
+    assert score.n_failed_origins == 1
+    assert score.origin_cutoffs == (15, 17, 18)
+    assert len(score.step_pct_errors[0]) == 3
+
+    # And the surviving errors belong to the surviving cutoffs, not shifted by one.
+    # A flat "repeat the last value" predictor at cutoff t errs by a known amount, so
+    # a misalignment would show up as the wrong error against the wrong month.
+    per_origin = bt.score_model(
+        predict=lambda ctx, h: [float(ctx[-1])] * h,
+        y=y,
+        horizon=2,
+        origins=4,
+        name="per_origin",
+        min_train=8,
+    )
+    keep = [k for k, c in enumerate(per_origin.origin_cutoffs) if c in score.origin_cutoffs]
+    for i, step in enumerate(score.step_pct_errors):
+        assert list(step) == [per_origin.step_pct_errors[i][k] for k in keep]
+
+
 # ------------------------------------------------------------------ the shared ground
 def test_common_origins_is_the_intersection():
     a = _score("a", 5.0, [24, 25, 26, 27])
