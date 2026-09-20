@@ -1,0 +1,240 @@
+{
+  "generated_at": "2026-09-20T18:58:05.914310+00:00",
+  "src_file": "/app/src/__init__.py",
+  "checks": [
+    {
+      "check": "forecast_kpi_tool registered in E2I_CHATBOT_TOOLS",
+      "pass": true,
+      "detail": "['agent_routing_tool', 'causal_analysis_tool', 'clinical_context_tool', 'conversation_memory_tool', 'document_retrieval_tool', 'e2i_data_query_tool', 'forecast_kpi_tool', 'kpi_calculate_tool', 'orchestrator_tool', 'predict_hcp_segment_likelihood_tool', 'tool_composer_tool']"
+    },
+    {
+      "check": "forecast_kpi_tool in E2I_TOOL_MAP",
+      "pass": true,
+      "detail": "['agent_routing_tool', 'causal_analysis_tool', 'clinical_context_tool', 'conversation_memory_tool', 'document_retrieval_tool', 'e2i_data_query_tool', 'forecast_kpi_tool', 'kpi_calculate_tool', 'orchestrator_tool', 'predict_hcp_segment_likelihood_tool', 'tool_composer_tool']"
+    },
+    {
+      "check": "kpi_forecaster registry tool importable",
+      "pass": true,
+      "detail": "kpi_forecaster"
+    },
+    {
+      "check": "copilotkit prompt carries the forecast guidance",
+      "pass": true,
+      "detail": "- FORECASTING: use `forecast_kpi_tool` for any FORWARD-looking volume question (TRX, NRX, NBRX only \u2014 these are the KPIs stored as a canonical brand x region mo"
+    },
+    {
+      "check": "copilotkit prompt has no unsubstituted slot",
+      "pass": true,
+      "detail": "none"
+    },
+    {
+      "check": "copilotkit prompt names forecast_kpi_tool",
+      "pass": true,
+      "detail": "True"
+    },
+    {
+      "check": "chatbot_graph prompt carries the forecast guidance",
+      "pass": true,
+      "detail": "- FORECASTING: use `forecast_kpi_tool` for any FORWARD-looking volume question (TRX, NRX, NBRX only \u2014 these are the KPIs stored as a canonical brand x region mo"
+    },
+    {
+      "check": "chatbot_graph prompt has no unsubstituted slot",
+      "pass": true,
+      "detail": "none"
+    },
+    {
+      "check": "chatbot_graph prompt names forecast_kpi_tool",
+      "pass": true,
+      "detail": "True"
+    },
+    {
+      "check": "real forecast succeeded",
+      "pass": true,
+      "detail": "None"
+    },
+    {
+      "check": "champion is a Holt-Winters model (worker dark)",
+      "pass": true,
+      "detail": "holt_winters_seasonal_add"
+    },
+    {
+      "check": "worker DARK: timesfm refused with a reason, not silently dropped",
+      "pass": true,
+      "detail": "{'timesfm_2_5': \"the TimesFM forecast worker is not available: no worker is consuming the 'forecast' queue\"}"
+    },
+    {
+      "check": "every served month has a band containing the point",
+      "pass": true,
+      "detail": "[('2026-09', 779229.5, 848331.7, 947209.3), ('2026-10', 788179.6, 858332.0, 955470.3), ('2026-11', 801955.4, 875063.9, 978742.4), ('2026-12', 826036.2, 907096.7, 1008798.2), ('2027-01', 735904.5, 809803.4, 909020.7), ('2027-02', 783734.1, 853613.8, 956157.2)]"
+    },
+    {
+      "check": "payload is strict-JSON serialisable (no NaN/Infinity)",
+      "pass": true,
+      "detail": "ok"
+    },
+    {
+      "check": "demo 6.5 FORECAST half -> kpi_forecaster",
+      "pass": true,
+      "detail": "{'q': \"What's the Kisqali TRx forecast for the next two quarters?\", 'tool': 'kpi_forecaster'}"
+    },
+    {
+      "check": "demo 6.5 RISK half -> a causal tool, NOT the entity risk_scorer",
+      "pass": true,
+      "detail": "{'q': 'What are the risks to that forecast?', 'tool': 'causal_effect_estimator'}"
+    },
+    {
+      "check": "CONTROL: an entity-scoring ask still reaches risk_scorer (the fix did not swallow it)",
+      "pass": true,
+      "detail": "{'q': 'Which HCP segments are highest risk of churn?', 'tool': 'risk_scorer'}"
+    },
+    {
+      "check": "degraded: forecast ask with NO forecaster registered still maps somewhere",
+      "pass": true,
+      "detail": "risk_scorer"
+    }
+  ],
+  "worker_available": {
+    "ready": false,
+    "why": "no worker is consuming the 'forecast' queue"
+  },
+  "kisqali": {
+    "metric": "trx",
+    "brand": "Kisqali",
+    "region": null,
+    "horizon_months": 6,
+    "data_through": "2026-08-31",
+    "n_observations": 164,
+    "series_query_id": "canonical_volume_monthly_series_include_synthetic",
+    "served_from_cache": true,
+    "champion": "holt_winters_seasonal_add",
+    "champion_description": "Holt-Winters, additive trend and additive 12-month season (statsmodels)",
+    "forecast": [
+      {
+        "month": "2026-09",
+        "value": 848331.7,
+        "lower": 779229.5,
+        "upper": 947209.3,
+        "floored_at_zero": false
+      },
+      {
+        "month": "2026-10",
+        "value": 858332.0,
+        "lower": 788179.6,
+        "upper": 955470.3,
+        "floored_at_zero": false
+      },
+      {
+        "month": "2026-11",
+        "value": 875063.9,
+        "lower": 801955.4,
+        "upper": 978742.4,
+        "floored_at_zero": false
+      },
+      {
+        "month": "2026-12",
+        "value": 907096.7,
+        "lower": 826036.2,
+        "upper": 1008798.2,
+        "floored_at_zero": false
+      },
+      {
+        "month": "2027-01",
+        "value": 809803.4,
+        "lower": 735904.5,
+        "upper": 909020.7,
+        "floored_at_zero": false
+      },
+      {
+        "month": "2027-02",
+        "value": 853613.8,
+        "lower": 783734.1,
+        "upper": 956157.2,
+        "floored_at_zero": false
+      }
+    ],
+    "horizon_total": 5152241.6,
+    "floored_at_zero_months": [],
+    "band": {
+      "coverage": 0.8,
+      "basis": "the champion's own rolling-origin miss distribution at each horizon step, not a model-internal confidence interval"
+    },
+    "backtest": {
+      "horizon_months": 6,
+      "origins": 24,
+      "champion_monthly_mape_pct": 6.85,
+      "champion_horizon_total_error_pct": 4.4,
+      "models": [
+        {
+          "model": "holt_winters_seasonal_add",
+          "monthly_mape_pct": 6.85,
+          "horizon_total_error_pct": 4.4,
+          "origins_scored": 24,
+          "origins_failed": 0
+        },
+        {
+          "model": "holt_winters_seasonal_mul",
+          "monthly_mape_pct": 6.89,
+          "horizon_total_error_pct": 4.3,
+          "origins_scored": 24,
+          "origins_failed": 0
+        },
+        {
+          "model": "holt_winters_trend",
+          "monthly_mape_pct": 7.38,
+          "horizon_total_error_pct": 3.92,
+          "origins_scored": 24,
+          "origins_failed": 0
+        }
+      ],
+      "models_not_run": [
+        {
+          "model": "timesfm_2_5",
+          "reason": "the TimesFM forecast worker is not available: no worker is consuming the 'forecast' queue"
+        }
+      ],
+      "selection_rule": "lowest mean monthly MAPE over the same rolling origins; the horizon total is reported but not selected on, because opposite-signed monthly errors cancel in a sum"
+    },
+    "success": true,
+    "query_type": "kpi_forecast",
+    "is_forecast": true,
+    "note": "A forecast, not an observation: the monthly values below are projected from the canonical business_metrics series and no month among them has happened yet. The model was chosen by rolling-origin backtest on this same series and the band is its own measured error.",
+    "measure_basis": {
+      "substrate": [
+        "business_metrics"
+      ],
+      "comparison_key": [
+        "business_metrics"
+      ],
+      "computed": false,
+      "grain": "brand x region x calendar month",
+      "measure": "modeled market-scale monthly level",
+      "note": "business_metrics.value is the MODELED market-scale monthly level (brand x region x calendar month) and the canonical substrate of TRx, NRx, NBRx and TRx Share (WS3-BI-005..008): kpi_calculate_tool figures for those KPIs agree with these rows. Do NOT compare it with, sum it against, or divide it by a patient-panel event KPI (WS3-BI-011..014, computed from treatment_events): measured 2026-09-15, Kisqali canonical TRx for 2026-08 was 800,349 (business_metrics, brand x region x calendar month) against 597 patient-panel prescription events from 2026-08-14 through 2026-09-14 inclusive (treatment_events), about 1,300x. If both appear in one answer, name each KPI and say plainly that they measure different things."
+    },
+    "limitations": [
+      "This is a univariate extrapolation: every model is fitted on the brand's own past monthly volume and nothing else.",
+      "It therefore cannot see anything that has not already happened to this series \u2014 a competitor launch, a payer or formulary change, a label change, a sales-force reallocation or a regional step change inside the forecast window are all invisible to it, however large.",
+      "The band is the model's own measured error on this series at each horizon step, so it describes how wrong this model has BEEN \u2014 not the chance of an event it has never seen.",
+      "A month flagged `floored_at_zero` is NOT a prediction of exactly zero: the model extrapolated this non-negative volume below zero, which means its trend has run past the range the fit is valid in. Report such a month as 'at or near zero, and beyond what this model can project' \u2014 never as a precise figure."
+    ],
+    "risk_analysis_requires": [
+      "For the risk half of a forecast question, call the gap analyzer (via `orchestrator_tool` or `tool_composer_tool`) for the brand x region gaps that are opening now, and `causal_analysis_tool` for what is driving them.",
+      "A regional step change already underway shows up in the gap and causal views before it shows up in a national monthly total, so those tools can see risks this forecast structurally cannot."
+    ]
+  },
+  "routing": {
+    "forecast_half": {
+      "q": "What's the Kisqali TRx forecast for the next two quarters?",
+      "tool": "kpi_forecaster"
+    },
+    "risk_half": {
+      "q": "What are the risks to that forecast?",
+      "tool": "causal_effect_estimator"
+    },
+    "entity_scoring_control": {
+      "q": "Which HCP segments are highest risk of churn?",
+      "tool": "risk_scorer"
+    }
+  },
+  "failures": [],
+  "verdict": "PASS"
+}

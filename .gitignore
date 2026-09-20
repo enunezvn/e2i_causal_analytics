@@ -94,6 +94,10 @@ data/rwd/
 # Logs
 *.log
 logs/
+# ...except certification evidence, which a cert.md cites by name and which
+# must therefore survive its lane worktree (see
+# tests/unit/test_docs/test_cert_evidence_is_tracked.py).
+!docs/demos/results/**/*.log
 
 # Authentication files
 *.htpasswd

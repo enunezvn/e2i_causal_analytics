@@ -1,0 +1,46 @@
+worker_available: True | worker_forecast@e99a1b181ce8 is consuming forecast
+dispatch round trip: 3.74 s -> [[41.318782806396484, 41.784759521484375, 42.80950164794922]]
+
+=== Kisqali  (44.7s)  success=True
+  data_through=2026-08-31  n=164  champion=holt_winters_seasonal_add  origins=24
+    holt_winters_seasonal_add  MAPE   6.85%  total   4.40%  origins=24
+    holt_winters_seasonal_mul  MAPE   6.89%  total   4.30%  origins=24
+    holt_winters_trend         MAPE   7.38%  total   3.92%  origins=24
+    timesfm_2_5                MAPE   7.58%  total   4.27%  origins=24
+    2026-09       848,332   [     779,230 ..      947,209]
+    2026-10       858,332   [     788,180 ..      955,470]
+    2026-11       875,064   [     801,955 ..      978,742]
+    2026-12       907,097   [     826,036 ..    1,008,798]
+    2027-01       809,803   [     735,904 ..      909,021]
+    2027-02       853,614   [     783,734 ..      956,157]
+  two-quarter total: 5,152,242
+
+=== Fabhalta  (41.3s)  success=True
+  data_through=2026-08-31  n=164  champion=holt_winters_seasonal_add  origins=24
+    holt_winters_seasonal_add  MAPE   7.06%  total   3.47%  origins=24
+    holt_winters_trend         MAPE   7.09%  total   3.73%  origins=24
+    holt_winters_seasonal_mul  MAPE   7.50%  total   2.86%  origins=24
+    timesfm_2_5                MAPE   8.00%  total   4.48%  origins=24
+    2026-09       135,685   [     122,807 ..      154,333]
+    2026-10       138,017   [     124,231 ..      157,488]
+    2026-11       137,684   [     123,593 ..      156,995]
+    2026-12       147,298   [     131,933 ..      167,273]
+    2027-01       136,038   [     122,385 ..      153,886]
+    2027-02       136,232   [     123,444 ..      153,094]
+  two-quarter total: 830,955
+
+=== Remibrutinib  (34.3s)  success=True
+  data_through=2026-08-31  n=164  champion=holt_winters_seasonal_mul  origins=24
+    holt_winters_seasonal_mul  MAPE   7.06%  total   3.01%  origins=24
+    holt_winters_seasonal_add  MAPE   7.22%  total   3.33%  origins=24
+    timesfm_2_5                MAPE   7.40%  total   4.02%  origins=24
+    holt_winters_trend         MAPE   8.09%  total   3.85%  origins=24
+    2026-09       252,758   [     229,931 ..      286,674]
+    2026-10       269,354   [     245,107 ..      305,781]
+    2026-11       273,976   [     246,758 ..      311,590]
+    2026-12       287,240   [     254,200 ..      326,727]
+    2027-01       240,308   [     212,666 ..      273,873]
+    2027-02       251,196   [     222,647 ..      287,377]
+  two-quarter total: 1,574,833
+
+WROTE /out/live_cert.json

@@ -118,3 +118,90 @@ narrating a risk as though the forecast had priced it in.
 
 `live_cert.py` is the script that produced `live_cert.log` / `live_cert.json`. It needs
 a `worker_forecast` container on `e2i_network` and the api service's Supabase env.
+
+---
+
+# POST-DEPLOY LIVE VERIFICATION — 2026-09-20, merge `096ceecc3`
+
+Run **inside the deployed `e2i_api` container**, against the live PROD Supabase, after
+PR #2198 merged and the rollout flipped the app tier. **VERDICT: PASS — 18/18 checks,
+0 failures.** Evidence: `postdeploy_verify.py` (the script), `postdeploy_verify.log`
+(its output), `postdeploy_verify.json` (the structured result).
+
+## The flip is proven, not assumed
+
+A one-sided "the module is there" check cannot tell a successful deploy from a module
+that was always there, so the control was taken **before** the rollout:
+
+| | image tag | `src.kpi.forecast` present |
+|---|---|---|
+| before | `ghcr.io/enunezvn/e2i-api:97f83be64` | **False** |
+| after | `ghcr.io/enunezvn/e2i-api:096ceecc3` | **True** |
+
+`e2i_api` `StartedAt` moved `2026-09-20T17:22:24Z` → `18:53:26Z`, health `healthy`,
+`/health` 200. Every app-tier container (`api`, `frontend`, `scheduler`,
+`worker_light` x2, `worker_medium`) is on `096ceecc3`.
+
+## What was verified, and why these things
+
+**Registration (3).** `forecast_kpi_tool` is in `E2I_CHATBOT_TOOLS` and `E2I_TOOL_MAP`
+(11 tools), and `kpi_forecaster` imports from the registry.
+
+**The real deployed prompts (6).** Asserted against `E2I_COPILOT_SYSTEM_PROMPT` and
+`E2I_CHATBOT_SYSTEM_PROMPT` themselves — not by calling `render_blocks` and checking its
+return, which would prove only that the helper works. Each prompt carries the forecast
+guidance, names `forecast_kpi_tool`, and has **no unsubstituted `{capability_guidance}`
+or `{breakdown_guidance}` slot** — an unsubstituted brace would ship to the model as a
+literal.
+
+**The degraded path PROD actually runs (5).** `worker_forecast` ships `replicas: 0`, so
+there is no forecast worker and `worker_available()` is `False`:
+`no worker is consuming the 'forecast' queue`. TimesFM is therefore **refused with that
+reason in `models_not_run`, not silently dropped**, and the forecast still serves on a
+Holt-Winters champion. Certifying only the worker-up path would have certified a
+configuration that is not deployed.
+
+```
+champion=holt_winters_seasonal_add   n=164   data_through=2026-08-31
+  holt_winters_seasonal_add   MAPE  6.85%  origins=24
+  holt_winters_seasonal_mul   MAPE  6.89%  origins=24
+  holt_winters_trend          MAPE  7.38%  origins=24
+  NOT RUN timesfm_2_5: the TimesFM forecast worker is not available:
+          no worker is consuming the 'forecast' queue
+
+  2026-09    848,332   [ 779,230 ..   947,209]
+  2026-10    858,332   [ 788,180 ..   955,470]
+  2026-11    875,064   [ 801,955 ..   978,742]
+  2026-12    907,097   [ 826,036 .. 1,008,798]
+  2027-01    809,803   [ 735,904 ..   909,021]
+  2027-02    853,614   [ 783,734 ..   956,157]
+```
+
+Every month's band contains its point, and the payload survives
+`json.dumps(allow_nan=False)` — the strict encoder FastAPI uses, which rejects the
+`Infinity` a degenerate band produced during review.
+
+**Routing, at the capability level (4).** The first version of this check asserted that
+the compound demo 6.5 ask satisfies both `is_forecast_question` and
+`is_forecast_risk_question`. **It does not, by design** — `planner.py:1259` returns
+`False` from `is_forecast_question` when the risk predicate fires, because each
+predicate grades a *decomposed sub-question*, not the compound ask. The assertion was
+mine and it was wrong; asserting predicate truthiness was a proxy for the thing that
+matters. Replaced with the capability:
+
+| decomposed ask | tool reached |
+|---|---|
+| "What's the Kisqali TRx forecast for the next two quarters?" | `kpi_forecaster` |
+| "What are the risks to that forecast?" | `causal_effect_estimator` |
+| CONTROL — "Which HCP segments are highest risk of churn?" | `risk_scorer` |
+| DEGRADED — forecast ask, forecaster unregistered | `risk_scorer` |
+
+The control matters: a fix that sent *every* PREDICTIVE ask to the forecaster would
+pass the first two rows and break entity scoring, which this map has served all along.
+
+## Known and intentional
+
+`worker_forecast` stays at `replicas: 0` until the box has headroom (same rule as
+`worker_heavy`). Until it is scaled up, PROD forecasts are Holt-Winters only, and the
+payload says so in `models_not_run` rather than pretending a four-model contest ran.
+Champion selection across unequal origin sets on short series is tracked in **#2199**.
