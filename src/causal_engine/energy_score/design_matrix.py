@@ -17,7 +17,6 @@ def numeric_design_frame(frame: pd.DataFrame, label: str) -> pd.DataFrame:
     ]
     if unsupported:
         raise TypeError(
-            f"{label} must be numeric or boolean after encoding; "
-            f"unsupported columns={unsupported}"
+            f"{label} must be numeric or boolean after encoding; unsupported columns={unsupported}"
         )
     return frame.astype(float, copy=False)

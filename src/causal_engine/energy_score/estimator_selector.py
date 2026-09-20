@@ -1389,9 +1389,7 @@ class EstimatorSelector:
         # Normalize numeric/boolean dtypes for EconML; reject unencoded categoricals.
         covariates = numeric_design_frame(covariates, "covariates")
         if efficiency_controls is not None:
-            efficiency_controls = numeric_design_frame(
-                efficiency_controls, "efficiency_controls"
-            )
+            efficiency_controls = numeric_design_frame(efficiency_controls, "efficiency_controls")
 
         # Empty backdoor (zero covariates) = the correct adjustment set for a
         # randomized / exogenous treatment. Covariate-requiring estimators cannot

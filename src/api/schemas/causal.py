@@ -463,7 +463,6 @@ class EstimationDataResponse(BaseModel):
 # =============================================================================
 # AGENT ANALYSIS SCHEMAS (causal_impact LangGraph agent, end-to-end)
 # =============================================================================
-# Forceable labels are registry-owned; propensity weighting remains API-only.
 AGENT_FORCEABLE_ESTIMATORS = registry.AGENT_FORCEABLE_ESTIMATORS + ("propensity_score_weighting",)
 
 
@@ -1887,7 +1886,9 @@ class EstimatorInfo(BaseModel):
 class EstimatorListResponse(BaseModel):
     """Response listing available estimators."""
 
-    estimators: List[EstimatorInfo] = Field(default_factory=list, description="Available estimators")
+    estimators: List[EstimatorInfo] = Field(
+        default_factory=list, description="Available estimators"
+    )
     total: int = Field(..., description="Total estimators")
     by_library: Dict[str, List[str]] = Field(
         default_factory=dict, description="Estimators grouped by library"
