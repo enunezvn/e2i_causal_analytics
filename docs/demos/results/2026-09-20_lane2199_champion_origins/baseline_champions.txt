@@ -1,0 +1,21 @@
+Fabhalta      L= 30  champion=holt_winters_trend origins_used=17
+Fabhalta      L= 36  champion=holt_winters_seasonal_mul origins_used=7   <<< UNEQUAL ORIGIN SETS COMPARED
+Fabhalta      L= 42  champion=holt_winters_trend origins_used=24   <<< UNEQUAL ORIGIN SETS COMPARED
+Fabhalta      L= 48  champion=holt_winters_trend origins_used=24   <<< UNEQUAL ORIGIN SETS COMPARED
+Fabhalta      L= 54  champion=holt_winters_seasonal_mul origins_used=24
+Fabhalta      L= 60  champion=holt_winters_trend origins_used=24
+Fabhalta      L=164  champion=holt_winters_seasonal_add origins_used=24
+Kisqali       L= 30  champion=holt_winters_trend origins_used=17
+Kisqali       L= 36  champion=holt_winters_seasonal_mul origins_used=7   <<< UNEQUAL ORIGIN SETS COMPARED
+Kisqali       L= 42  champion=holt_winters_seasonal_add origins_used=13   <<< UNEQUAL ORIGIN SETS COMPARED
+Kisqali       L= 48  champion=holt_winters_seasonal_mul origins_used=19   <<< UNEQUAL ORIGIN SETS COMPARED
+Kisqali       L= 54  champion=holt_winters_seasonal_add origins_used=24
+Kisqali       L= 60  champion=holt_winters_seasonal_add origins_used=24
+Kisqali       L=164  champion=holt_winters_seasonal_add origins_used=24
+Remibrutinib  L= 30  champion=holt_winters_trend origins_used=17
+Remibrutinib  L= 36  champion=holt_winters_seasonal_mul origins_used=7   <<< UNEQUAL ORIGIN SETS COMPARED
+Remibrutinib  L= 42  champion=holt_winters_seasonal_mul origins_used=13   <<< UNEQUAL ORIGIN SETS COMPARED
+Remibrutinib  L= 48  champion=holt_winters_seasonal_mul origins_used=19   <<< UNEQUAL ORIGIN SETS COMPARED
+Remibrutinib  L= 54  champion=holt_winters_seasonal_mul origins_used=24
+Remibrutinib  L= 60  champion=holt_winters_seasonal_mul origins_used=24
+Remibrutinib  L=164  champion=holt_winters_seasonal_mul origins_used=24
