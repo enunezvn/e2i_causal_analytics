@@ -68,6 +68,14 @@ class ForecastMonth(BaseModel):
     value: float = Field(..., description="Point forecast for that month")
     lower: float = Field(..., description="Lower edge of the measured-error band")
     upper: float = Field(..., description="Upper edge of the measured-error band")
+    floored_at_zero: bool = Field(
+        False,
+        description=(
+            "True when the model extrapolated this non-negative volume below zero and "
+            "it was floored. The month is at or near zero and beyond the range the fit "
+            "is valid in — it is NOT a precise prediction of zero."
+        ),
+    )
 
 
 class KpiForecastOutput(BaseModel):
@@ -94,6 +102,13 @@ class KpiForecastOutput(BaseModel):
     champion: Optional[str] = Field(None, description="Model chosen by the backtest")
     backtest: Optional[Dict[str, Any]] = Field(
         None, description="Rolling-origin scores for every model that ran"
+    )
+    floored_at_zero_months: Optional[list[str]] = Field(
+        None,
+        description=(
+            "Months (YYYY-MM) whose raw forecast came back below zero and were floored; "
+            "each is also flagged on its own forecast entry"
+        ),
     )
     limitations: Optional[list[str]] = Field(
         None, description="What this univariate forecast structurally cannot see"

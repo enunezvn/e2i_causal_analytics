@@ -105,7 +105,15 @@ class KpiForecast:
     n_observations: int
     series_query_id: str
     band_quantile: float
+    #: The CHAMPION's own origin count -- never the best any model managed. Reported
+    #: beside the champion's MAPE, so borrowing a losing model's larger number would
+    #: overstate the evidence behind the figure the answer leads with.
     origins_used: int
+    #: Months whose raw point forecast came back below zero and were floored. A
+    #: volume cannot be negative, and a model extrapolating a steep decline past zero
+    #: is saying its trend has stopped being physical -- which the reader is told,
+    #: rather than being shown a silent 0.
+    floored_months: Tuple[date, ...] = ()
     #: True when this result was read back from the cache rather than fitted now. It is
     #: reported rather than hidden: a reader comparing two answers minutes apart should
     #: be able to tell that the second did not re-fit anything.
@@ -136,10 +144,21 @@ class KpiForecast:
                     "value": round(p.value, 1),
                     "lower": round(p.lower, 1),
                     "upper": round(p.upper, 1),
+                    # ON THE MONTH, not only in the separate list below: a synthesising
+                    # model reading the forecast array has to cross-reference a
+                    # top-level list of month strings to notice otherwise, and the one
+                    # it drops renders as a bare "0.0" -- the silent zero the floor
+                    # exists to prevent, moved one layer up.
+                    "floored_at_zero": p.month in self.floored_months,
                 }
                 for p in self.points
             ],
             "horizon_total": round(self.horizon_total, 1),
+            # Disclosed, never silent: a floored month means the model extrapolated a
+            # non-negative quantity below zero, so the honest reading of that month is
+            # "at or near zero and the trend has left the range the fit is valid in",
+            # not "exactly zero".
+            "floored_at_zero_months": [m.strftime("%Y-%m") for m in self.floored_months],
             "band": {
                 "coverage": self.band_quantile,
                 "basis": (
@@ -227,6 +246,7 @@ def _to_cache_entry(result: "KpiForecast") -> Dict[str, Any]:
         "series_query_id": result.series_query_id,
         "band_quantile": result.band_quantile,
         "origins_used": result.origins_used,
+        "floored_months": [m.isoformat() for m in result.floored_months],
     }
 
 
@@ -256,6 +276,7 @@ def _from_cache_entry(raw: Dict[str, Any]) -> "KpiForecast":
         series_query_id=raw["series_query_id"],
         band_quantile=raw["band_quantile"],
         origins_used=raw["origins_used"],
+        floored_months=tuple(date.fromisoformat(m) for m in raw.get("floored_months", ())),
         from_cache=True,
     )
 
@@ -344,6 +365,7 @@ def forecast_series(
         origins=origins,
         data_through=series.data_through,
         n_observations=len(values),
+        band_quantile=band_quantile,
         models=[m.name for m in candidates],
     )
     if cache is not None:
@@ -417,6 +439,14 @@ def forecast_series(
             f"the champion {champion_score.name!r} scored but could not fit the full series: {exc}"
         ) from exc
 
+    # TRx / NRx / NBRx are counts: they cannot be negative. An additive Holt-Winters
+    # trend is unbounded, so a steeply declining brand (a late-lifecycle or post-LOE
+    # erosion curve -- an ordinary case here, not a pathology) extrapolates straight
+    # through zero. Measured 2026-09-20 on such a series: [2.98, 0.96, -1.06, -3.09,
+    # -5.11, -7.13]. Flooring is done HERE, where the metric's domain is known, and
+    # before the band, so lo <= point <= hi holds by construction.
+    floored_idx = [i for i, v in enumerate(point_forecast) if v < 0]
+    point_forecast = [max(float(v), 0.0) for v in point_forecast]
     band = bt.band_from_errors(
         champion_score, point_forecast, quantile=band_quantile, floor_at_zero=True
     )
@@ -443,7 +473,8 @@ def forecast_series(
         n_observations=len(values),
         series_query_id=series.query_id,
         band_quantile=band_quantile,
-        origins_used=max(s.n_origins for s in scores),
+        origins_used=champion_score.n_origins,
+        floored_months=tuple(months[i] for i in floored_idx),
     )
     if cache is not None:
         cache.set(cache_key, _to_cache_entry(result))

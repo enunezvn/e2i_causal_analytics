@@ -55,6 +55,10 @@ LIMITATIONS: tuple[str, ...] = (
     "The band is the model's own measured error on this series at each horizon step, so "
     "it describes how wrong this model has BEEN — not the chance of an event it has "
     "never seen.",
+    "A month flagged `floored_at_zero` is NOT a prediction of exactly zero: the model "
+    "extrapolated this non-negative volume below zero, which means its trend has run "
+    "past the range the fit is valid in. Report such a month as 'at or near zero, and "
+    "beyond what this model can project' — never as a precise figure.",
 )
 
 #: 6.5 asks for a forecast AND its biggest risk. The risk half is a different question
@@ -257,6 +261,10 @@ async def forecast_kpi_tool(
     HOW TO USE THE RESULT. Report the monthly path AND the horizon total, cite
     `data_through` (the last month that actually happened) and the champion's backtest
     error, and present the band as measured error rather than as a confidence interval.
+    If any month carries `floored_at_zero: true` (or appears in
+    `floored_at_zero_months`), say plainly that the model ran past zero there and the
+    month is at or near zero rather than a precise prediction — do NOT present it as a
+    forecast of 0.
     The forecast is UNIVARIATE — it cannot see a competitor entry, a payer change or a
     regional step inside the window, so when the user also asks about RISK (demo 6.5
     does), say plainly that the forecast cannot see such events and get the risk half

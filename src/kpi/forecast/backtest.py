@@ -236,6 +236,14 @@ def band_from_errors(
         lo, hi = min(lo, hi), max(lo, hi)
         lo, hi = min(lo, point), max(hi, point)
         if floor_at_zero:
-            lo = max(lo, 0.0)
+            # BOTH ends, and the point with them. Flooring only ``lo`` produced a band
+            # with lower ABOVE upper whenever the point forecast itself was negative:
+            # measured 2026-09-20 on a steeply declining series, step 3 came back
+            # ``point=-1.06, lower=0.00, upper=-1.06``. A volume's band cannot go below
+            # zero, but neither can its upper edge sit below its lower one, and the
+            # caller is responsible for not handing a negative point to a non-negative
+            # quantity -- this only guarantees the invariant holds whatever it is given.
+            lo, hi = max(lo, 0.0), max(hi, 0.0)
+            lo, hi = min(lo, hi), max(lo, hi)
         out.append((float(lo), float(hi)))
     return out

@@ -113,9 +113,41 @@ def test_the_champion_is_one_of_the_reported_models_and_the_lowest_error_one(kis
     assert kisqali.champion_mape == pytest.approx(best.monthly_mape)
 
 
-def test_the_backtest_is_reported_with_the_origins_it_actually_used(kisqali):
-    assert kisqali.origins_used == max(s.n_origins for s in kisqali.scores)
+def test_the_backtest_is_reported_with_the_origins_the_CHAMPION_actually_used(kisqali):
+    """The reported origin count must be the champion's own, not the best any model got.
+
+    The previous version of this test asserted ``origins_used == max(s.n_origins for s
+    in scores)`` -- the production formula restated, so it could not fail whatever the
+    code did, and it passed on the full-length fixture where every model reaches the
+    same origin cap and the two formulas coincide.
+    """
+    champion = next(s for s in kisqali.scores if s.name == kisqali.champion)
+    assert kisqali.origins_used == champion.n_origins
     assert kisqali.origins_used >= 12
+
+
+def test_a_short_series_reports_the_champion_origins_not_a_losing_model_s():
+    """The case the full-length fixture structurally cannot show.
+
+    Models have different minimum histories (8 months for the trend fit, 24 for the
+    seasonal ones), so on a series too short for the full origin target the trend model
+    accumulates far MORE origins than the seasonal ones. MEASURED 2026-09-20 on 36
+    months of live Kisqali TRx: the champion (seasonal-multiplicative, 6.77% MAPE) was
+    scored on 7 origins while the losing trend model got 23. Reporting 23 beside the
+    champion's 6.77% would tell a reader that figure rested on three times the evidence
+    it actually does.
+    """
+    out = svc.forecast_series(
+        build_series("Kisqali", months=36), horizon=6, include_timesfm=False, cache=None
+    )
+    by_name = {s.name: s for s in out.scores}
+    champion = by_name[out.champion]
+    assert len(by_name) > 1, "this only bites when several models were scored"
+    assert max(s.n_origins for s in out.scores) > champion.n_origins, (
+        "the fixture no longer produces asymmetric origin counts; pick another length"
+    )
+    assert out.origins_used == champion.n_origins
+    assert out.to_payload()["backtest"]["origins"] == champion.n_origins
 
 
 def test_the_forecast_comes_from_the_champion_not_from_some_other_model(kisqali):
@@ -239,7 +271,7 @@ def test_the_result_serialises_to_something_a_chat_payload_can_carry(kisqali):
     assert payload["data_through"] == "2026-08-31"
     assert len(payload["forecast"]) == 6
     first = payload["forecast"][0]
-    assert set(first) == {"month", "value", "lower", "upper"}
+    assert set(first) == {"month", "value", "lower", "upper", "floored_at_zero"}
     assert first["month"] == "2026-09"
     assert payload["horizon_total"] == pytest.approx(sum(p.value for p in kisqali.points))
     assert payload["served_from_cache"] is False
@@ -328,3 +360,89 @@ def test_a_cached_result_reports_the_same_models_and_skips_as_the_computed_one()
     assert second.origins_used == first.origins_used
     assert second.data_through == first.data_through
     assert second.champion_mape == pytest.approx(first.champion_mape, abs=0.005)
+
+
+# --------------------------------------------- a volume forecast cannot go negative
+def _declining_series(months: int = 48):
+    """A late-lifecycle erosion curve: real volumes, falling steeply, never negative.
+
+    This is an ordinary pharma shape (post-LOE, a competitor taking share), not a
+    constructed pathology — which is why an additive trend extrapolating it straight
+    through zero matters.
+    """
+    from datetime import date as _date
+
+    values = [float(v) for v in range(months * 2, 0, -2)]
+    values[-6:] = [28.0, 22.0, 18.0, 14.0, 9.0, 5.0]
+    rows = []
+    year, month = 2022, 9
+    for v in values:
+        rows.append({"metric_date": _date(year, month, 1).isoformat(), "value": v, "n_rows": 4})
+        month += 1
+        if month > 12:
+            month, year = 1, year + 1
+    return cvs.shape_monthly_series(
+        rows,
+        metric="trx",
+        brand="Kisqali",
+        region=None,
+        as_of=_date(2026, 9, 20),
+        query_id="q",
+    )
+
+
+def test_a_declining_brand_never_gets_a_negative_volume_forecast():
+    """MEASURED 2026-09-20 before the floor: holt_winters_trend returned
+    [2.98, 0.96, -1.06, -3.09, -5.11, -7.13] TRx for this series."""
+    out = svc.forecast_series(_declining_series(), horizon=6, include_timesfm=False, cache=None)
+    for p in out.points:
+        assert p.value >= 0.0, f"{p.month} forecast {p.value} TRx"
+
+
+def test_every_band_on_a_declining_brand_is_still_ordered_and_brackets_its_point():
+    out = svc.forecast_series(_declining_series(), horizon=6, include_timesfm=False, cache=None)
+    for p in out.points:
+        assert 0.0 <= p.lower <= p.value <= p.upper, (
+            f"{p.month}: lower={p.lower} value={p.value} upper={p.upper}"
+        )
+
+
+def test_a_floored_month_is_disclosed_rather_than_served_as_a_silent_zero():
+    """A model extrapolating past zero has left the range its fit is valid in, and the
+    reader is told which months that happened in."""
+    out = svc.forecast_series(_declining_series(), horizon=6, include_timesfm=False, cache=None)
+    payload = out.to_payload()
+    if out.floored_months:
+        assert payload["floored_at_zero_months"] == [
+            m.strftime("%Y-%m") for m in out.floored_months
+        ]
+        assert all(
+            p["value"] == 0.0
+            for p in payload["forecast"]
+            if p["month"] in payload["floored_at_zero_months"]
+        )
+    else:
+        assert payload["floored_at_zero_months"] == []
+
+
+def test_the_floor_is_flagged_on_the_MONTH_not_only_in_a_separate_list():
+    """A separate list of month strings is the easiest thing for a synthesiser to drop.
+
+    A dropped flag renders as a bare "0.0" — the silent zero the floor exists to
+    prevent, moved one layer up from the code into the answer. So the flag rides on the
+    forecast entry a reader is already looking at.
+    """
+    out = svc.forecast_series(_declining_series(), horizon=6, include_timesfm=False, cache=None)
+    payload = out.to_payload()
+    flagged = {p["month"] for p in payload["forecast"] if p["floored_at_zero"]}
+    assert flagged == set(payload["floored_at_zero_months"])
+    assert all("floored_at_zero" in p for p in payload["forecast"]), "every month carries it"
+
+
+def test_a_healthy_brand_forecast_floors_nothing():
+    """The negative control: the floor must not fire on an ordinary series."""
+    out = svc.forecast_series(build_series("Kisqali"), horizon=6, include_timesfm=False, cache=None)
+    assert out.floored_months == ()
+    payload = out.to_payload()
+    assert payload["floored_at_zero_months"] == []
+    assert not any(p["floored_at_zero"] for p in payload["forecast"])

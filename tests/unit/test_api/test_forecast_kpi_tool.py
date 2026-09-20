@@ -154,6 +154,22 @@ def test_the_payload_routes_the_risk_half_of_the_question_to_the_tools_that_can_
     assert "causal" in follow_up
 
 
+def test_the_tool_tells_the_model_what_a_floored_month_means(kisqali):
+    """The flag existing in the payload is not the same as the answer using it.
+
+    Without an instruction, a floored month renders as a bare "0.0" — a precise-looking
+    prediction of zero, which is the opposite of what it means. The rule has to be
+    somewhere the presenting model reads.
+    """
+    limitations = " ".join(kisqali["limitations"]).lower()
+    assert "floored_at_zero" in limitations
+    assert "near zero" in limitations
+    assert "not a prediction of exactly zero" in limitations or "never as a precise" in limitations
+
+    doc = cft.forecast_kpi_tool.description.lower()
+    assert "floored_at_zero" in doc, "the tool docstring must carry the rule too"
+
+
 def test_the_band_says_what_it_is_made_of(kisqali):
     assert kisqali["band"]["coverage"] == 0.8
     assert "rolling-origin" in kisqali["band"]["basis"]

@@ -51,6 +51,7 @@ def forecast_cache_key(
     origins: int,
     data_through: Optional[date],
     n_observations: int,
+    band_quantile: float,
     models: Sequence[str],
 ) -> str:
     """Everything that can change the answer, and nothing that cannot.
@@ -62,6 +63,12 @@ def forecast_cache_key(
     one short. MEASURED 2026-09-20 before this field existed: 13, 14 and 164 complete
     months of Kisqali TRx all hashed to the same key, so a forecast fitted on fourteen
     years of history would have been served to a request whose series held one.
+
+    ``band_quantile`` is here because it changes the SERVED BAND, and ``origins``
+    because it changes the measured error the band is built from. No wired caller
+    varies either today, so neither can collide right now -- they are in the key
+    because this function's contract is "everything that can change the answer", and a
+    contract that is only true by accident of the current call sites is not one.
 
     ``models`` is SORTED: the same contest is the same contest however the models were
     enumerated, and an unsorted key would miss on every other call for no reason.
@@ -75,6 +82,7 @@ def forecast_cache_key(
         str(origins),
         data_through.isoformat() if data_through else "none",
         str(n_observations),
+        f"{band_quantile:.6f}",
         ",".join(sorted(models)),
     ]
     digest = hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]

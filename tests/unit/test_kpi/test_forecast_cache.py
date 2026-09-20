@@ -32,6 +32,7 @@ def _key(**kw):
         "origins": 24,
         "data_through": date(2026, 8, 31),
         "n_observations": 164,
+        "band_quantile": 0.8,
         "models": ("holt_winters_seasonal_add", "holt_winters_trend"),
     }
     params.update(kw)
@@ -52,6 +53,7 @@ def test_the_same_request_against_the_same_history_is_the_same_key():
         ("origins", 12),
         ("data_through", date(2026, 9, 30)),
         ("n_observations", 120),
+        ("band_quantile", 0.95),
         ("models", ("holt_winters_trend",)),
     ],
 )
@@ -89,6 +91,18 @@ def test_the_model_set_order_does_not_change_the_key():
     a = _key(models=("timesfm_2_5", "holt_winters_trend"))
     b = _key(models=("holt_winters_trend", "timesfm_2_5"))
     assert a == b
+
+
+def test_the_band_coverage_is_in_the_key_even_though_nothing_varies_it_yet():
+    """The key's contract is "everything that can change the answer".
+
+    ``band_quantile`` changes the served band and ``origins`` changes the measured error
+    behind it. No wired caller varies either today, so neither can collide right now —
+    they are in the key because a contract that holds only by accident of the current
+    call sites is not a contract.
+    """
+    assert _key(band_quantile=0.8) != _key(band_quantile=0.95)
+    assert _key(origins=24) != _key(origins=12)
 
 
 def test_the_contract_version_is_in_the_key():

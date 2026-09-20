@@ -736,7 +736,7 @@ class IntentClassifierNode:
             # ("the risk of a stockout"), both single asks for a single agent. The
             # pattern is anchored on the same anaphoric shape the dependency marker
             # uses, so it fires only when the risk is asked ABOUT a produced projection.
-            r"\b(risks?|threats?|headwinds?) to (that|this|the) "
+            r"\b(risks?|threats?|headwinds?) to (that|this) "
             r"(forecast|projection|outlook|trajectory|number|numbers|estimate)\b",
         ],
         "performance_gap": [
@@ -1160,11 +1160,21 @@ class IntentClassifierNode:
         # degradation in our predictive analytics" = drift+health+prediction in
         # ONE drift ask). The 2-domain dependent pipelines promote on a marker.
         structural_pipeline = len(strong_components) >= 3 and n_intent_clauses >= 3
+        # #2115: the marker path must ALSO see two intent-bearing clauses, exactly as
+        # ``requires_multi_agent`` above does. Without it a marker whose vocabulary
+        # overlaps a strong intent's own trigger words promotes a SINGLE clause that
+        # co-matched two intents — the #1337 incidental-co-match class this gate exists
+        # to block, reached through the one path that did not check it. Measured
+        # 2026-09-20: "What's the risk to that forecast?" is one clause, co-fires
+        # causal_effect + prediction, and promoted to the composer. ``structural_pipeline``
+        # already carries its own stricter >=3-clause requirement, so it is unaffected.
         if (
             primary != "multi_faceted"
             and len(strong_components) >= 2
             and not is_parallel_pair
-            and (has_dependency_composition(query) or structural_pipeline)
+            and (
+                (has_dependency_composition(query) and n_intent_clauses >= 2) or structural_pipeline
+            )
         ):
             primary = "multi_faceted"
             confidence = max(confidence, scores.get("multi_faceted", 0.0), 0.85)

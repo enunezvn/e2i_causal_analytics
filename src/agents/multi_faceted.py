@@ -151,7 +151,7 @@ _DEPENDENCY_MARKER_REGEX = re.compile(
     # "which segments are highest risk of churn" (one ask, one agent) do not match --
     # they carry no back-reference and no projection noun. Without this marker 6.5
     # scores two strong intents and still never promotes.
-    r"|\b(risks?|threats?|headwinds?) to (that|this|the) "
+    r"|\b(risks?|threats?|headwinds?) to (that|this) "
     r"(forecast|projection|outlook|trajectory|number|numbers|estimate)\b",
     re.IGNORECASE,
 )

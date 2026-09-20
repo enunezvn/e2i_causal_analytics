@@ -255,3 +255,31 @@ def test_a_narrower_quantile_gives_a_narrower_band():
     lo80, hi80 = bt.band_from_errors(score, [100.0], quantile=0.8)[0]
     lo95, hi95 = bt.band_from_errors(score, [100.0], quantile=0.95)[0]
     assert (hi80 - lo80) < (hi95 - lo95)
+
+
+# ------------------------------------------------- the band stays a band, always
+# Every band test above hands band_from_errors a POSITIVE point forecast, which is why
+# none of them caught this: when the point itself is negative, flooring only the LOWER
+# edge leaves lower ABOVE upper. Measured 2026-09-20 on a steeply declining series,
+# step 3 came back point=-1.06, lower=0.00, upper=-1.06.
+
+
+def test_the_lower_edge_is_never_above_the_upper_edge_even_for_a_negative_point():
+    score = _band_score("declining", [(-5.0, 0.0, 5.0)], horizon=1)
+    lo, hi = bt.band_from_errors(score, [-10.0], quantile=1.0, floor_at_zero=True)[0]
+    assert lo <= hi, f"lower {lo} is above upper {hi}"
+    assert lo >= 0.0 and hi >= 0.0
+
+
+@pytest.mark.parametrize("point", [-100.0, -1.0, 0.0, 1.0, 100.0])
+def test_a_floored_band_is_ordered_and_non_negative_for_any_point(point):
+    score = _band_score("mixed", [(-40.0, -5.0, 0.0, 5.0, 40.0)], horizon=1)
+    lo, hi = bt.band_from_errors(score, [point], quantile=1.0, floor_at_zero=True)[0]
+    assert 0.0 <= lo <= hi
+
+
+def test_an_unfloored_band_may_go_negative_because_not_every_metric_is_a_volume():
+    """floor_at_zero is the CALLER's statement about the quantity, not a global truth."""
+    score = _band_score("mixed", [(-50.0, 0.0, 50.0)], horizon=1)
+    lo, hi = bt.band_from_errors(score, [10.0], quantile=1.0, floor_at_zero=False)[0]
+    assert lo <= hi
