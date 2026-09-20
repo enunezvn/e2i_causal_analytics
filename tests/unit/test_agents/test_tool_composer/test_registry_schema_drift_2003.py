@@ -43,6 +43,7 @@ import pytest
 from src.agents.tool_composer import composer as _composer  # noqa: F401 - registers every tool
 from src.tool_registry.registry import get_registry
 from src.tool_registry.tools.causal_discovery import register_all_discovery_tools
+from src.tool_registry.tools.kpi_forecast import register_kpi_forecast_tool  # noqa: F401
 from src.tool_registry.tools.model_inference import register_model_inference_tool
 from src.tool_registry.tools.structural_drift import register_structural_drift_tool
 
@@ -62,6 +63,7 @@ LIVE_TOOLS = frozenset(
         "discover_dag",
         "distribution_comparator",
         "gap_calculator",
+        "kpi_forecaster",
         "model_inference",
         "power_calculator",
         "propensity_estimator",
@@ -229,8 +231,13 @@ def _dump(result: Any) -> Dict[str, Any]:
 # structurally instead of called: ``model_inference`` calls a BentoML endpoint;
 # ``counterfactual_simulator`` reads the twin model and cohort from Supabase and MLflow
 # (#2015 — its output builder runs on a real engine result in
-# test_counterfactual_simulator_2015.py).
-NOT_CALLED = frozenset({"model_inference", "counterfactual_simulator"})
+# test_counterfactual_simulator_2015.py); ``kpi_forecaster`` (#2115) reads the canonical
+# monthly business_metrics series through the Supabase kpi_query RPC and is async, so
+# calling it here would return a coroutine and, with no client, a refusal — its real
+# output keys are pinned against the real PROD series in
+# tests/unit/test_api/test_forecast_kpi_tool.py and certified end to end in
+# docs/demos/results/2026-09-20_lane2115_forecast/.
+NOT_CALLED = frozenset({"model_inference", "counterfactual_simulator", "kpi_forecaster"})
 
 
 def _call_every_tool() -> Dict[str, Dict[str, Any]]:

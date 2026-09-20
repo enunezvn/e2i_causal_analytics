@@ -153,7 +153,7 @@ def register_kpi_forecast_tool() -> None:
                 default=bt.DEFAULT_HORIZON,
             ),
         ],
-        output_schema="Dict[str, Any]",
+        output_schema="KpiForecastOutput",
         # Measured 2026-09-20: three Holt-Winters fits over 24 rolling origins on the
         # 164-month live series. The planner uses this to estimate plan duration.
         avg_execution_ms=12000,

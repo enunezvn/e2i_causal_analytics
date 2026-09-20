@@ -724,6 +724,20 @@ class IntentClassifierNode:
             r"how does.*affect",
             r"what drives",
             r"attribution",
+            # "the biggest risk to that forecast" (#2115, demo 6.5). Asking what
+            # THREATENS a projection is a causal question about a different substrate
+            # than the projection itself -- the forecast is univariate and cannot see
+            # a competitor entry or a payer change, so this half belongs to the gap and
+            # causal tools. Scoring it here is what gives 6.5 its SECOND strong intent;
+            # the classifier promotes to multi_faceted (-> tool_composer) only on two.
+            #
+            # Deliberately NOT a bare "risk": that word carries entity scoring
+            # ("which HCP segments are highest risk of churn") and ordinary nouns
+            # ("the risk of a stockout"), both single asks for a single agent. The
+            # pattern is anchored on the same anaphoric shape the dependency marker
+            # uses, so it fires only when the risk is asked ABOUT a produced projection.
+            r"\b(risks?|threats?|headwinds?) to (that|this|the) "
+            r"(forecast|projection|outlook|trajectory|number|numbers|estimate)\b",
         ],
         "performance_gap": [
             r"(gap|opportunit|underperform|potential|improve)",

@@ -120,6 +120,43 @@ def test_the_availability_probe_is_bounded_however_the_broker_behaves():
     )
 
 
+def test_an_unreachable_broker_is_bounded_by_the_timeout_not_by_the_os():
+    """The failure mode a refused port cannot show you.
+
+    ``inspect(timeout=...)`` bounds how long it waits for workers to REPLY; it does not
+    bound establishing the connection. A CLOSED port is refused instantly, so the
+    ordinary "no broker in a unit-test process" case returns fast and proves nothing
+    about this. An UNREACHABLE host -- a real network partition, a security group, a
+    down node -- leaves connect() blocking on the SYN instead.
+
+    MEASURED 2026-09-20 before the socket pre-check: against 10.255.255.1 (non-routable,
+    TEST-NET-like: the SYN goes nowhere) ``worker_available(timeout=2.0)`` had still not
+    returned after TWO MINUTES, which in production is a chat turn hanging on an
+    optional model. After: 2.2s. The bound is asserted here in wall-clock, because the
+    bug was precisely a timeout argument that was accepted and not honoured.
+    """
+    import time
+    from types import SimpleNamespace
+
+    unreachable = SimpleNamespace(conf=SimpleNamespace(broker_url="redis://10.255.255.1:6379/1"))
+    started = time.monotonic()
+    reachable, why = tf._broker_reachable(unreachable, 2.0)
+    elapsed = time.monotonic() - started
+    assert reachable is False
+    assert "not reachable" in why
+    assert elapsed < 8.0, f"the unreachable-broker probe took {elapsed:.1f}s, not ~2s"
+
+
+def test_a_broker_that_is_not_a_tcp_endpoint_is_left_to_celery():
+    """An in-memory broker has no host to connect to; the probe must not veto it."""
+    from types import SimpleNamespace
+
+    reachable, _why = tf._broker_reachable(
+        SimpleNamespace(conf=SimpleNamespace(broker_url="memory://")), 2.0
+    )
+    assert reachable is True
+
+
 def test_a_dispatch_refuses_immediately_when_no_worker_consumes_the_queue():
     """With no worker the dispatch must raise from the PROBE, never reach send_task.
 

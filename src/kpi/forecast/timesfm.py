@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Any, List, Optional, Sequence
 
 logger = logging.getLogger(__name__)
@@ -90,6 +91,43 @@ def batched_predictor(transport: Any):
 
 
 # --------------------------------------------------------------------------- transport
+def _broker_reachable(celery_app: Any, timeout: float) -> tuple[bool, str]:
+    """Can a TCP connection to the broker be opened within ``timeout``?
+
+    ``inspect(timeout=...)`` bounds how long it waits for workers to REPLY. It does not
+    bound ESTABLISHING the connection. MEASURED 2026-09-20 against a non-routable broker
+    host (10.255.255.1, where the SYN goes nowhere and connect() blocks instead of being
+    refused): ``worker_available(timeout=2.0)`` had still not returned after two
+    minutes. A refused port returns instantly, which is why the ordinary
+    "no broker in a unit-test process" case hid this completely -- it is the UNREACHABLE
+    case, the one a real network partition produces, that hangs.
+
+    That is the same defect this probe exists to prevent, one layer down, so it is fixed
+    the same way: with a bound that does not depend on a library honouring one. A plain
+    socket connect is transport-agnostic and cannot block past its own timeout.
+    """
+    import socket
+    from urllib.parse import urlparse
+
+    url = getattr(celery_app.conf, "broker_url", None) or ""
+    parsed = urlparse(url)
+    host, port = parsed.hostname, parsed.port
+    if not host:
+        # No TCP endpoint to probe (memory:// and friends) -- let inspect decide.
+        return True, "the broker is not a TCP endpoint"
+    port = port or 6379
+    started = time.monotonic()
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            pass
+    except Exception as exc:  # noqa: BLE001
+        return False, (
+            f"the broker at {host}:{port} was not reachable in "
+            f"{time.monotonic() - started:.1f}s: {exc}"
+        )
+    return True, f"the broker at {host}:{port} is reachable"
+
+
 def worker_available(timeout: float = PROBE_TIMEOUT_SECONDS) -> tuple[bool, str]:
     """Is a worker actually CONSUMING the forecast queue right now?
 
@@ -110,6 +148,10 @@ def worker_available(timeout: float = PROBE_TIMEOUT_SECONDS) -> tuple[bool, str]
         from src.workers.celery_app import celery_app
     except Exception as exc:  # noqa: BLE001
         return False, f"Celery is not importable: {exc}"
+
+    reachable, why = _broker_reachable(celery_app, timeout)
+    if not reachable:
+        return False, why
     try:
         inspector = celery_app.control.inspect(timeout=timeout)
         active = inspector.active_queues() or {}
