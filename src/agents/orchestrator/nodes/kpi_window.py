@@ -16,7 +16,7 @@ _WINDOW_MONTH_NAME = (
     r"jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
 )
 _EXPLICIT_WINDOW_RANGE_RE = re.compile(
-    r"(?:\b\d{4}-\d{2}-\d{2}\s+(?:to|\u2013)\s+\d{4}-\d{2}-\d{2}\b"
+    r"(?:\b\d{4}-\d{2}-\d{2}\s*(?:to|\u2013|-)\s*\d{4}-\d{2}-\d{2}\b"
     rf"|\b{_WINDOW_MONTH_NAME}\s*(?:-|to|\u2013)\s*{_WINDOW_MONTH_NAME}\s+\d{{4}}\b)",
     re.IGNORECASE,
 )
@@ -45,7 +45,7 @@ def window_from_query(query: str) -> Optional[Dict[str, str]]:
         for start in range(len(tokens) - size + 1):
             try:
                 window = parse_window(" ".join(tokens[start : start + size]))
-            except WindowParseError:
+            except (WindowParseError, ValueError):
                 continue
             if window is not None:
                 return window.as_dict()

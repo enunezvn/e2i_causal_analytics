@@ -285,7 +285,15 @@ def test_refused_current_scalar_ask_does_not_explain_stale_prior_results(
     assert isinstance(resolved, NeedsStructuredInput), resolved
 
 
-def test_nested_kpi_question_keeps_anaphoric_prior_results() -> None:
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Explain the analysis that answered: What is TRx?",
+        "Could you please explain the analysis that answered: What is TRx?",
+        "Can you kindly summarize the results that answered: What is TRx?",
+    ],
+)
+def test_nested_kpi_question_keeps_anaphoric_prior_results(query: str) -> None:
     stale = [
         {
             "agent_name": "gap_analyzer",
@@ -295,7 +303,7 @@ def test_nested_kpi_question_keeps_anaphoric_prior_results() -> None:
     ]
 
     resolved = disp.INPUT_RESOLVERS["explainer"](
-        _agent_input("Explain the analysis that answered: What is TRx?", agent_results=stale),
+        _agent_input(query, agent_results=stale),
         _dispatch(),
     )
 

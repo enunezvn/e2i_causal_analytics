@@ -242,7 +242,8 @@ _LOOKUP_CUE_RE = re.compile(
     r"give\s+me|how\s+many)\b"
 )
 _ANAPHORIC_EXPLANATION_RE = re.compile(
-    r"^\s*(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?"
+    r"^\s*(?:please\s+)?"
+    r"(?:(?:can|could|would)\s+you(?:\s+(?:please|kindly))?\s+)?"
     r"(?:explain|summarize|interpret|describe)\b.{0,120}\b"
     r"(?:analysis|results?|findings?|answer|response)\b",
     re.I,

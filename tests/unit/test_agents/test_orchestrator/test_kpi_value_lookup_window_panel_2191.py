@@ -36,6 +36,8 @@ def calculator(monkeypatch: pytest.MonkeyPatch) -> _RecordingCalculator:
     [
         "What is 2026-05-01 to 2026-01-01 TRx?",
         "What is 2026-02-30 to 2026-03-01 TRx?",
+        "What is TRx for 2026-05-01 - 2026-01-01?",
+        "What is TRx for 2026-02-30 - 2026-03-01?",
     ],
 )
 def test_an_explicit_invalid_iso_window_fails_before_calculation(
@@ -51,6 +53,8 @@ def test_an_explicit_invalid_iso_window_fails_before_calculation(
     "query",
     [
         "What is 2026-05-01 to 2026-01-01 TRx?",
+        "What is TRx for 2026-05-01 - 2026-01-01?",
+        "What is TRx for 2026-02-30 - 2026-03-01?",
         "What is March-Jan 2025 TRx?",
     ],
 )
