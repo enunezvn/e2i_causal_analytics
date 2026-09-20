@@ -64,6 +64,25 @@ that echoes and `continue`s instead of applying. So a dry run walks the identica
 sequence a real run does. Both filenames are also pure ASCII digits and underscores,
 so `144_` sorts before `146_` under any locale's collation.
 
+WHAT THAT ARGUMENT IS, STATED SO IT IS NOT MISTAKEN FOR MORE. It is a code-level and
+design-level proof over a 25-line loop, plus a dry-run measurement — NOT a fresh
+empirical measurement of multi-file apply ORDER. The repo does own an empirical proof
+of this exact mechanism:
+tests/unit/test_database/learning_loop/test_migration_runner.py::
+test_runner_failure_first_then_real_files_then_nothing_pending injects a failure into
+a MID-sequence file among several pending ones and asserts the ledger holds exactly
+the files before it and none after. But it is `@pytest.mark.realdb_upgrade`-gated on
+the ml/039-044 lane being pending, that lane is already applied, so it SKIPS — it is
+among the 8 skips in deploy_gate_realdb_suite.txt and did NOT run for this lane. The
+generic test that DID run, test_pending_migrations_apply_through_the_runner_failure_first,
+had exactly ONE pending file (146), so it exercised atomicity but not multi-file order.
+Building a fresh multi-file real-apply harness would need stub kpi_query_registry /
+kpi_history tables for 143 and 145 to apply for real, which buys its own unfaithfulness;
+the loop is simple enough and fully enough inspected that the code read was judged
+decisive instead. Recorded here so a future reader weighs it as what it is. (codex iter3
+attacked this claim four ways -- separate collect-then-sort passes, async reordering, a
+stale $APPLIED snapshot, locale-dependent digit collation -- and ruled out all four.)
+
 ON THE "228 = 228" CROSS-CHECK, CORRECTED. An earlier draft of this section called it
 "two different methods against two different databases agreeing on the same count".
 That is loose in exactly the way the codex iter2 finding above was loose, so here is
