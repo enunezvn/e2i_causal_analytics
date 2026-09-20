@@ -29,14 +29,17 @@ from typing import Any, List, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
-TIMESFM_MODEL_ID = "google/timesfm-2.5-200m-transformers"
+#: Overridable so the worker can be pointed at another checkpoint without a code
+#: change; the compose service sets it explicitly so the deployed value is visible in
+#: the service definition rather than buried here.
+TIMESFM_MODEL_ID = os.getenv("E2I_TIMESFM_MODEL", "google/timesfm-2.5-200m-transformers")
 TIMESFM_TASK_NAME = "src.tasks.forecast_timesfm_batch"
 FORECAST_QUEUE = "forecast"
 
 #: The model's own default is 16384, which OOMs a 3 GB worker. 256 months is ~21 years
 #: — longer than any canonical series (165 months on 2026-09-20) — and peaks at
 #: 1394 MB, which is what the worker is sized for.
-FORECAST_CONTEXT_LEN = 256
+FORECAST_CONTEXT_LEN = int(os.getenv("E2I_FORECAST_CONTEXT_LEN", "256"))
 
 #: A chat turn cannot wait longer than this. Measured cost of the real work is ~9 s for
 #: 24 origins plus a 0.6 s warm load, so 90 s is a generous ceiling that still fails the

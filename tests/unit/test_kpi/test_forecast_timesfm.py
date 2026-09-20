@@ -97,9 +97,51 @@ def test_an_unreachable_worker_raises_the_typed_unavailable_error():
         tf.batched_predictor(transport)([[1.0] * 30], 6)
 
 
-def test_a_worker_that_never_answers_gives_up_rather_than_hanging_the_chat_turn():
-    assert tf.WORKER_TIMEOUT_SECONDS > 0
-    assert tf.WORKER_TIMEOUT_SECONDS <= 120, "a chat turn cannot wait longer than this"
+def test_the_availability_probe_is_bounded_however_the_broker_behaves():
+    """The probe is what bounds the chat turn, so the probe is what gets timed.
+
+    MEASURED 2026-09-20: ``celery_app.send_task`` does NOT respect the
+    ``.get(timeout=...)`` that follows it. ``on_task_call`` starts the Redis result
+    consumer, and with no broker that enters kombu's ``retry_over_time`` loop and sleeps
+    a second at a time indefinitely; a local run of the service suite hung there until
+    pytest killed it. Asserting ``WORKER_TIMEOUT_SECONDS`` would have stayed green
+    through exactly that bug -- the constant was always right, the dispatch just ignored
+    it -- so what is asserted here is wall-clock behaviour against whatever broker this
+    process actually has.
+    """
+    import time
+
+    started = time.monotonic()
+    ready, why = tf.worker_available()
+    elapsed = time.monotonic() - started
+    assert isinstance(ready, bool) and why, "the probe must always say what it found"
+    assert elapsed < 4 * tf.PROBE_TIMEOUT_SECONDS, (
+        f"the probe took {elapsed:.1f}s; it runs on the common path and bounds the turn"
+    )
+
+
+def test_a_dispatch_refuses_immediately_when_no_worker_consumes_the_queue():
+    """With no worker the dispatch must raise from the PROBE, never reach send_task.
+
+    Skipped rather than faked if a forecast worker happens to be running in this
+    environment -- the live path is certified separately in
+    docs/demos/results/2026-09-20_lane2115_forecast/.
+    """
+    import time
+
+    ready, why = tf.worker_available()
+    if ready:
+        pytest.skip(f"a forecast worker is live here ({why}); the absent-worker path needs none")
+
+    started = time.monotonic()
+    with pytest.raises(tf.ForecastWorkerUnavailable) as exc:
+        tf.dispatch_batch([[float(i) for i in range(40)]], 6)
+    elapsed = time.monotonic() - started
+    assert "not available" in str(exc.value)
+    assert elapsed < 4 * tf.PROBE_TIMEOUT_SECONDS, (
+        f"dispatch took {elapsed:.1f}s with no worker; it must fail over to Holt-Winters fast"
+    )
+    assert 0 < tf.WORKER_TIMEOUT_SECONDS <= 120, "a chat turn cannot wait longer than this"
 
 
 def test_the_queue_and_task_name_are_the_ones_the_worker_actually_consumes():
@@ -132,6 +174,28 @@ def test_the_task_is_registered_by_importing_the_package_a_worker_imports():
 
 
 # ---------------------------------------------------------------- context length guard
+def test_the_context_length_and_model_are_the_ones_the_compose_service_sets():
+    """A service that sets an env var the code ignores is a knob that does nothing.
+
+    Both are read from the environment, so the values declared on worker_forecast are
+    the values the worker actually uses.
+    """
+    import importlib
+
+    monkey = pytest.MonkeyPatch()
+    try:
+        monkey.setenv("E2I_FORECAST_CONTEXT_LEN", "128")
+        monkey.setenv("E2I_TIMESFM_MODEL", "google/timesfm-2.0-500m-pytorch")
+        reloaded = importlib.reload(tf)
+        assert reloaded.FORECAST_CONTEXT_LEN == 128
+        assert reloaded.TIMESFM_MODEL_ID == "google/timesfm-2.0-500m-pytorch"
+        assert len(reloaded.trim_context([float(i) for i in range(500)])) == 128
+    finally:
+        monkey.undo()
+        importlib.reload(tf)
+    assert tf.FORECAST_CONTEXT_LEN == 256, "the default must survive the reload"
+
+
 def test_the_context_is_truncated_to_the_length_that_fits_the_worker_memory_budget():
     """The model default context_length is 16384 and OOMs a 3 GB worker.
 
