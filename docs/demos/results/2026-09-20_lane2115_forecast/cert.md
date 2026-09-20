@@ -12,8 +12,12 @@ production substrate, in the environment that actually runs it.
 The **faithful environment for TimesFM is the prod api image, not a CI runner** — the
 local `.venv` carries transformers 4.57.3, which does not ship
 `TimesFm2_5ModelForPrediction`. Everything below ran inside
-`ghcr.io/enunezvn/e2i-api:5d0d3c19ada8db08854f0cb1a9e4668a47c6d9b6` against the live
+the prod api image tagged `5d0d3c19a` (`ghcr.io/enunezvn/e2i-api`), against the live
 `supabase-db` and the live `e2i_redis`.
+
+(The image tag is written short on purpose: a full 40-character commit SHA in a code
+span trips Gitleaks' `generic-api-key` rule, which cannot tell one from an API key. The
+honest fix is the document, not an allowlist entry that would weaken the scanner.)
 
 Provenance was asserted inside each run, not assumed:
 `src.__file__ == /work/src/__init__.py` (the lane's code, never the image's baked
