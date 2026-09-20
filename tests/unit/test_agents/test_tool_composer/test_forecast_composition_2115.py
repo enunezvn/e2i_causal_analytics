@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = pytest.mark.timeout(600)
+pytestmark = pytest.mark.timeout(300)
 
 
 def test_the_forecaster_is_named_in_the_metadata_the_planner_reads():
@@ -119,3 +119,57 @@ def test_the_forecast_route_falls_back_when_the_forecaster_is_not_registered():
     mapping = _map("Forecast Kisqali TRx for two quarters", known=("risk_scorer",))
     assert mapping is not None
     assert mapping.tool_name == "risk_scorer"
+
+
+# ------------------------------- the RISK half of 6.5 in the planner's fallback path
+# The forecast half was the only one this map handled. The risk half is ALSO
+# PREDICTIVE-shaped — the decomposer's own prompt defines PREDICTIVE as "questions
+# about future outcomes", which a forward-looking risk question fits — so it fell
+# through to the unconditional `intent_to_tool["PREDICTIVE"] = risk_scorer`, an
+# ENTITY-level scorer. That is the same wrong-tool defect this lane exists to fix, one
+# layer down in the degraded path, and nothing here exercised it in either direction.
+
+_RISK_KNOWN = ("kpi_forecaster", "risk_scorer", "causal_effect_estimator", "gap_calculator")
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "tell me the biggest risk to that forecast",
+        "what is the biggest risk to this projection",
+        "the main threat to that outlook",
+        "what are the headwinds to that trajectory",
+    ],
+)
+def test_the_risk_half_of_a_forecast_ask_does_not_go_to_the_entity_scorer(question):
+    mapping = _map(question, known=_RISK_KNOWN)
+    assert mapping is not None
+    assert mapping.tool_name != "risk_scorer", f"{question!r} -> the entity scorer"
+    assert mapping.tool_name == "causal_effect_estimator"
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Which HCP segments are highest risk of churn?",
+        "Score the risk of discontinuation for these prescribers",
+    ],
+)
+def test_entity_risk_scoring_still_goes_to_the_entity_scorer(question):
+    """The negative control: this map was RIGHT about these, and must stay right."""
+    mapping = _map(question, known=_RISK_KNOWN)
+    assert mapping is not None and mapping.tool_name == "risk_scorer"
+
+
+def test_the_forecast_half_is_not_swallowed_by_the_risk_route():
+    """Both halves of 6.5 must map to DIFFERENT tools, or the composer plans one twice."""
+    forecast = _map("Forecast Kisqali TRx volume for the next two quarters", known=_RISK_KNOWN)
+    risk = _map("tell me the biggest risk to that forecast", known=_RISK_KNOWN)
+    assert forecast.tool_name == "kpi_forecaster"
+    assert risk.tool_name == "causal_effect_estimator"
+    assert forecast.tool_name != risk.tool_name
+
+
+def test_the_risk_route_degrades_when_the_causal_tool_is_not_registered():
+    mapping = _map("tell me the biggest risk to that forecast", known=("risk_scorer",))
+    assert mapping is not None and mapping.tool_name == "risk_scorer"

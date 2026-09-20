@@ -25,7 +25,11 @@ from tests.unit.test_kpi.conftest_forecast_fixture import series_values
 
 # Importing the Celery app autodiscovers every task module (dowhy, torch); the real
 # TimesFM cases below load 200M weights. Explicit budget, not the 30 s default.
-pytestmark = pytest.mark.timeout(600)
+pytestmark = pytest.mark.timeout(300)
+# 300 and not more: test_session_stall_watchdog_1655 requires every lane's stall
+# timeout (600s here) to be at least TWICE its longest per-test budget, so a test
+# that hung would otherwise trip the lane watchdog before its own timeout fired.
+# The real cost of the slowest test in this file is well under a minute.
 
 
 # ---------------------------------------------------------------- batching, the point
@@ -261,7 +265,7 @@ def _timesfm_ready() -> str:
     return ""
 
 
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(300)
 @pytest.mark.skipif(bool(_timesfm_ready()), reason=_timesfm_ready() or "ready")
 def test_timesfm_really_forecasts_the_live_series_and_beats_naive():
     """A real forward pass, real weights, the real PROD series — no stand-in anywhere."""
@@ -286,7 +290,7 @@ def test_timesfm_really_forecasts_the_live_series_and_beats_naive():
     assert score.monthly_mape < 10.0
 
 
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(300)
 @pytest.mark.skipif(bool(_timesfm_ready()), reason=_timesfm_ready() or "ready")
 def test_the_celery_task_body_returns_exactly_what_the_model_returns():
     """The worker must not transform the forecast on its way back.

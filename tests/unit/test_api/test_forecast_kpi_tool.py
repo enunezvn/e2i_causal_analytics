@@ -25,7 +25,7 @@ import pytest
 from src.api.routes import chat_forecast_tool as cft
 from tests.unit.test_kpi.conftest_forecast_fixture import load_canonical_trx
 
-pytestmark = pytest.mark.timeout(600)
+pytestmark = pytest.mark.timeout(300)
 
 
 class FixtureClient:

@@ -24,6 +24,7 @@ visible instead of silent.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -438,6 +439,20 @@ def forecast_series(
         raise ForecastRefused(
             f"the champion {champion_score.name!r} scored but could not fit the full series: {exc}"
         ) from exc
+
+    # The champion's FINAL full-series refit is a SEPARATE call from the ones the
+    # backtest graded, and only the backtest checks its own shapes. Without this, a
+    # model returning the wrong length reached `zip(..., strict=True)` below and raised
+    # a bare ValueError -- not the typed refusal this module's contract promises, and
+    # not something a caller catching ForecastRefused would see. models.py's own design
+    # is that adding a model costs one object and nothing else in the lane needs to know
+    # it exists, so the length discipline cannot be assumed from the two models here.
+    point_forecast = list(point_forecast)
+    if len(point_forecast) != horizon or not all(math.isfinite(v) for v in point_forecast):
+        raise ForecastRefused(
+            f"the champion {champion_score.name!r} returned {len(point_forecast)} usable "
+            f"values for a {horizon}-month horizon"
+        )
 
     # TRx / NRx / NBRx are counts: they cannot be negative. An additive Holt-Winters
     # trend is unbounded, so a steeply declining brand (a late-lifecycle or post-LOE

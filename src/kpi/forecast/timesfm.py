@@ -192,11 +192,23 @@ def dispatch_batch(
 
 
 def predict_via_worker(y: Sequence[float], horizon: int) -> List[float]:
-    """The single-series entry the model catalogue uses."""
+    """The single-series entry the model catalogue uses.
+
+    The length is re-checked HERE as well as in the worker. ``forecast_batch`` already
+    returns ``None`` for a context it cannot serve, but that guard runs in the worker
+    process, across a serialisation boundary, in code a future change could alter
+    independently -- and a short list that got past it would reach the caller's
+    ``zip(..., strict=True)`` as a bare ValueError rather than a typed failure.
+    """
     out = batched_predictor(dispatch_batch)([y], horizon)[0]
     if out is None:
         raise ForecastWorkerUnavailable("TimesFM returned no forecast for the series")
-    return [float(v) for v in out]
+    values = [float(v) for v in out]
+    if len(values) != horizon:
+        raise ForecastWorkerUnavailable(
+            f"TimesFM returned {len(values)} values for a {horizon}-month horizon"
+        )
+    return values
 
 
 # ------------------------------------------------------------- the model, in the worker

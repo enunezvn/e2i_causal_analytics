@@ -15,7 +15,7 @@ import pytest
 from src.tool_registry import get_registry
 from src.tool_registry.tools import kpi_forecast as kf
 
-pytestmark = pytest.mark.timeout(600)
+pytestmark = pytest.mark.timeout(300)
 
 
 @pytest.fixture(autouse=True)

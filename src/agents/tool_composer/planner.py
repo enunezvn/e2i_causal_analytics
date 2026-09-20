@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 from collections import Counter
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, cast
@@ -1114,6 +1115,20 @@ class ToolPlanner:
         # risk_scorer. A forecast-shaped ask goes to the forecaster instead; if it is
         # not registered, the mapping falls through to risk_scorer exactly as before,
         # so an unregistered forecaster degrades rather than returning nothing.
+        # The RISK half first: it is also PREDICTIVE-shaped, and "risk" would otherwise
+        # send it to the entity scorer. What THREATENS a projection is a causal question
+        # about a different substrate than the projection — which is exactly why the
+        # univariate forecast cannot answer it.
+        if intent == "PREDICTIVE" and is_forecast_risk_question(question_lower):
+            if self.registry.validate_tool_exists("causal_effect_estimator"):
+                return ToolMapping(
+                    sub_question_id=sq.id,
+                    tool_name="causal_effect_estimator",
+                    source_agent="causal_impact",
+                    confidence=0.6,
+                    reasoning="Auto-mapped: what threatens a projection is a causal ask",
+                )
+
         if intent == "PREDICTIVE" and is_forecast_question(question_lower):
             if self.registry.validate_tool_exists("kpi_forecaster"):
                 return ToolMapping(
@@ -1226,12 +1241,38 @@ _ENTITY_SCORING_CUES: tuple[str, ...] = (
 )
 
 
+#: The RISK half of a forecast ask ("the biggest risk to that forecast"). Same anaphoric
+#: shape the intent classifier and the multi-faceted markers use, deliberately: the
+#: three layers must agree about what this question is, or a query promoted to the
+#: composer for being a forecast-plus-risk pipeline gets its risk step planned as if it
+#: were something else.
+_FORECAST_RISK_RE = re.compile(
+    r"\b(risks?|threats?|headwinds?) to (that|this|the) "
+    r"(forecast|projection|outlook|trajectory|number|numbers|estimate)\b",
+    re.IGNORECASE,
+)
+
+
 def is_forecast_question(text: str) -> bool:
     """True when the ask is about a KPI's future LEVEL rather than an entity's score."""
     lowered = (text or "").lower()
+    if is_forecast_risk_question(lowered):
+        return False
     if any(cue in lowered for cue in _ENTITY_SCORING_CUES):
         return False
     return any(cue in lowered for cue in _FORECAST_CUES)
+
+
+def is_forecast_risk_question(text: str) -> bool:
+    """True when the ask is what THREATENS a projection, not what the projection is.
+
+    This is the half of demo 6.5 the forecaster cannot answer. The decomposer may tag
+    it PREDICTIVE — its own prompt defines that as "questions about future outcomes",
+    which a forward-looking risk question fits — and the PREDICTIVE fallback then sent
+    it to ``risk_scorer``, an ENTITY-level scorer, which is the same wrong-tool defect
+    this lane exists to fix, one layer down in the degraded path.
+    """
+    return bool(_FORECAST_RISK_RE.search(text or ""))
 
 
 # ============================================================================

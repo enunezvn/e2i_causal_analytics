@@ -20,7 +20,11 @@ from tests.unit.test_kpi.conftest_forecast_fixture import load_canonical_trx
 # import the Celery app (which autodiscovers the causal tasks, pulling in dowhy).
 # That cost is the point of these tests, so the file gets an explicit budget rather
 # than the 30 s default meant for cheap unit tests.
-pytestmark = pytest.mark.timeout(600)
+pytestmark = pytest.mark.timeout(300)
+# 300 and not more: test_session_stall_watchdog_1655 requires every lane's stall
+# timeout (600s here) to be at least TWICE its longest per-test budget, so a test
+# that hung would otherwise trip the lane watchdog before its own timeout fired.
+# The real cost of the slowest test in this file is well under a minute.
 
 
 def build_series(
@@ -446,3 +450,55 @@ def test_a_healthy_brand_forecast_floors_nothing():
     payload = out.to_payload()
     assert payload["floored_at_zero_months"] == []
     assert not any(p["floored_at_zero"] for p in payload["forecast"])
+
+
+def test_a_champion_returning_the_wrong_length_is_a_typed_refusal_not_a_bare_error():
+    """The champion's FINAL full-series refit is a separate call from the graded ones.
+
+    Only the backtest checked its own shapes, so a short forecast reached
+    ``zip(..., strict=True)`` and raised a bare ValueError — not the typed refusal this
+    module's contract promises, and not what a caller catching ForecastRefused sees.
+    Adding a model is supposed to cost one object and nothing else, so the length
+    discipline of the two models shipped here cannot be assumed of the next one.
+    """
+    from src.kpi.forecast import models as fm
+
+    series = build_series("Kisqali")
+    full_length = len(series.points)
+    real_predict = fm.ForecastModel.predict
+
+    def truncating(self, y, horizon):
+        out = real_predict(self, y, horizon)
+        # Only the full-series refit; every backtest origin is left untouched.
+        return out[:-1] if len(y) == full_length else out
+
+    monkey = pytest.MonkeyPatch()
+    try:
+        monkey.setattr(fm.ForecastModel, "predict", truncating)
+        with pytest.raises(svc.ForecastRefused) as exc:
+            svc.forecast_series(series, horizon=6, include_timesfm=False, cache=None)
+    finally:
+        monkey.undo()
+    assert "horizon" in str(exc.value)
+
+
+def test_a_champion_returning_a_non_finite_value_is_refused_not_served():
+    from src.kpi.forecast import models as fm
+
+    series = build_series("Kisqali")
+    full_length = len(series.points)
+    real_predict = fm.ForecastModel.predict
+
+    def nan_tail(self, y, horizon):
+        out = list(real_predict(self, y, horizon))
+        if len(y) == full_length:
+            out[-1] = float("nan")
+        return out
+
+    monkey = pytest.MonkeyPatch()
+    try:
+        monkey.setattr(fm.ForecastModel, "predict", nan_tail)
+        with pytest.raises(svc.ForecastRefused):
+            svc.forecast_series(series, horizon=6, include_timesfm=False, cache=None)
+    finally:
+        monkey.undo()
