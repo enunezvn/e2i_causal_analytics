@@ -119,8 +119,13 @@ because the file already recorded the same key. psql exit 0. Negative control af
   ['146_drop_legacy_per_hcp_count_columns.sql']`, so its green rehearsed this change on a
   throwaway copy of prod rather than ignoring it.
 * `fresh_db_scour_coverage.txt` — the real runner, `--dry-run`, against an EMPTY ephemeral
-  postgres: the fresh-database path this move newly puts 146 on, and proof the runner's
-  destructive/utility exclusion patterns do not wrongly swallow a file whose content is all DROPs.
+  postgres: the fresh-database path this move newly puts 146 on. Read the section appended after
+  the codex iter2 review, not just the ALL PASS banner: the script's safety loop only detects
+  wrongful INCLUSION of destructive filenames and is structurally blind to wrongful EXCLUSION,
+  which is the direction that matters here, so the apply set itself is recorded. 146 is in it, and
+  the runner emits 144 two lines ahead of it — the expand-before-contract ordering visible in the
+  real runner's real output rather than in a `sorted()` call inside a test. 228 pending files,
+  cross-validating against the deploy gate's independent "prod ledger 228 keys".
 * `../2026-09-15_trx_canonical/iter9_13_146_rehearsal_20260919.txt` — the lane-#2114-era raw
   evidence for the precondition block's four refusal/pass cases and the view ACLs. The migration
   header cites it; the codex iter1 review found it was **untracked**, so this lane commits it.
