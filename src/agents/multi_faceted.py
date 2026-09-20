@@ -143,7 +143,16 @@ _DEPENDENCY_MARKER_REGEX = re.compile(
     r"highest|lowest) (one|ones)\b"
     # "to close it", "to reverse that" — purpose clause acting on a prior result
     r"|\bto (close|reverse|fix|address|protect|mitigate|recover|retain|solve|"
-    r"improve) (it|that|them|this|those|these)\b",
+    r"improve) (it|that|them|this|those|these)\b"
+    # "the biggest risk to THAT forecast" (#2115, demo 6.5) -- a risk/threat clause
+    # whose object is the PREVIOUS clause's result. Anaphoric like every marker above:
+    # the demonstrative is required, and the head noun is restricted to the words that
+    # name a produced projection, so "the risk of a stockout in the midwest" and
+    # "which segments are highest risk of churn" (one ask, one agent) do not match --
+    # they carry no back-reference and no projection noun. Without this marker 6.5
+    # scores two strong intents and still never promotes.
+    r"|\b(risks?|threats?|headwinds?) to (that|this) "
+    r"(forecast|projection|outlook|trajectory|number|numbers|estimate)\b",
     re.IGNORECASE,
 )
 

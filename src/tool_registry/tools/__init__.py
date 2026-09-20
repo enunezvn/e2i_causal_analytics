@@ -7,6 +7,7 @@ Available Tools:
 - discover_dag: Automatic DAG structure learning (GES, PC, etc.)
 - rank_drivers: Causal vs predictive feature importance comparison
 - detect_structural_drift: Detect drift in causal DAG structure over time
+- kpi_forecaster: Forecast a canonical monthly volume KPI with a measured band
 """
 
 from src.tool_registry.tools.causal_discovery import (
@@ -22,6 +23,13 @@ from src.tool_registry.tools.causal_discovery import (
     get_ranker_tool,
     rank_drivers,
     register_all_discovery_tools,
+)
+from src.tool_registry.tools.kpi_forecast import (
+    ForecastMonth,
+    KpiForecastInput,
+    KpiForecastOutput,
+    kpi_forecaster,
+    register_kpi_forecast_tool,
 )
 from src.tool_registry.tools.model_inference import (
     ModelInferenceInput,
@@ -68,6 +76,12 @@ __all__ = [
     "get_structural_drift_tool",
     "detect_structural_drift",
     "register_structural_drift_tool",
+    # KPI forecasting (#2115)
+    "KpiForecastInput",
+    "KpiForecastOutput",
+    "ForecastMonth",
+    "kpi_forecaster",
+    "register_kpi_forecast_tool",
     # Registration helpers
     "register_all_discovery_tools",
 ]

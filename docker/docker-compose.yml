@@ -365,6 +365,12 @@ volumes:
   falkordb_data:
     driver: local
     name: e2i_falkordb_data
+  # #2115: the TimesFM 2.5 weights (~200M parameters). Named and persistent so a
+  # restart reads them from disk instead of re-downloading, and so a worker with no
+  # route to huggingface.co still starts.
+  hf_cache:
+    driver: local
+    name: e2i_hf_cache
   mlflow_db:
     driver: local
     name: e2i_mlflow_db
@@ -1176,6 +1182,95 @@ services:
       - "e2i.component=worker"
       - "e2i.worker_tier=heavy"
       - "e2i.autoscale=true"
+
+  # Worker Forecast (#2115) - TimesFM 2.5 for forecast_kpi_tool
+  #
+  # Its own service because of what was MEASURED, not for tidiness. In this image,
+  # capped at 3G/2CPU on 2026-09-20: the 200M weights load in 0.6 s warm, a forecast
+  # takes 0.37 s, and peak RSS is 1394 MB. That spike cannot live in `api` (it serves
+  # every chat turn on a box whose swap is already half used) and cannot live in
+  # `bentoml` (no torch, 512M limit, and a failed start there rolls back the app tier).
+  #
+  # It ships DARK (replicas: 0) under the same headroom rule as worker_heavy. That is
+  # safe here in a way it would not be for a required service: forecast_kpi_tool probes
+  # for a worker consuming this queue and, finding none, serves Holt-Winters in-process
+  # and reports TimesFM as not run. Scaling this to 1 adds a second model to the
+  # champion contest; it never gates the answer.
+  worker_forecast:
+    <<: *common-worker
+    logging: *default-logging
+    volumes:
+      - hf_cache:/hf
+      - agent_outputs:/app/data/agent_outputs
+      # *common-env sets ADAPTIVE_VALIDITY_ARTIFACTS_DIR for EVERY service that merges
+      # it, so a service that merges the anchor without this mount fails mkdir'ing the
+      # sidecar dir. Guarded by tests/integration/test_audit_artifacts_compose_wiring.py,
+      # which is what caught its absence here.
+      - audit_artifacts:/app/data/audit_artifacts
+    tmpfs:
+      - /app/tmp:size=256M,uid=1000,gid=1000,mode=0700
+    environment:
+      <<: *common-env
+      WORKER_TYPE: forecast
+      # A NAMED volume: without it every restart re-downloads 200M parameters, and a
+      # container that cannot reach huggingface.co starts permanently broken.
+      HF_HOME: /hf
+      E2I_TIMESFM_MODEL: google/timesfm-2.5-200m-transformers
+      # The model's own default context_length is 16384, which OOMs at 3G. 256 months
+      # is ~21 years — longer than any canonical series (165 months on 2026-09-20).
+      E2I_FORECAST_CONTEXT_LEN: 256
+      # Match the cpus limit below; more torch threads than cores is slower here, not
+      # faster, and oversubscribes a box with no room to spare.
+      E2I_FORECAST_TORCH_THREADS: 2
+      OMP_NUM_THREADS: 2
+      OPENBLAS_NUM_THREADS: 2
+      MKL_NUM_THREADS: 2
+    command: >
+      celery -A src.workers.celery_app worker
+      --loglevel=INFO
+      --concurrency=1
+      --queues=forecast
+      --prefetch-multiplier=1
+      --max-tasks-per-child=50
+      --time-limit=600
+      --soft-time-limit=540
+      --hostname=worker_forecast@%h
+    healthcheck:
+      # Scoped to THIS node with -d, not the bare broadcast the other worker tiers use.
+      # `celery inspect ping` with no destination asks every worker on the broker and
+      # exits 0 if ANY of them answers, so on a box already running worker_light and
+      # worker_medium it would report this container healthy while it was dead.
+      # MEASURED 2026-09-20 in this image: `-d worker_forecast@$HOSTNAME` exits 0 while
+      # the node is up and 69 for a node that is not there; the bare broadcast exits 0
+      # in both cases. CMD-SHELL because $HOSTNAME has to be expanded.
+      test:
+        - CMD-SHELL
+        - celery -A src.workers.celery_app inspect ping -d worker_forecast@$$HOSTNAME
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      # The first start downloads the weights; later starts read the named volume.
+      start_period: 120s
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          # 2.5G clears the measured 1394 MB peak plus the ~400 MB Celery app with
+          # headroom, and stays well under worker_heavy's 3G on a 16 GB box.
+          memory: 2.5G
+        reservations:
+          cpus: '1'
+          memory: 1G
+      # KEEP replicas: 0 until the box has headroom (same rule as worker_heavy). The
+      # forecast tool degrades to Holt-Winters when nothing consumes this queue.
+      replicas: 0
+    depends_on:
+      redis:
+        condition: service_healthy
+    labels:
+      - "e2i.service=application"
+      - "e2i.component=worker"
+      - "e2i.worker_tier=forecast"
 
   # Celery Beat - Scheduled Tasks (Drift Monitoring, Health Checks)
   scheduler:

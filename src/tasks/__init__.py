@@ -98,6 +98,15 @@ from src.tasks.feedback_loop_tasks import (
     run_full_feedback_loop,
 )
 
+# TimesFM forecasting (#2115, DARK by default): importing the module fires the
+# @celery_app.task decorator so worker_forecast discovers
+# ``src.tasks.forecast_timesfm_batch``, whose name matches the task_routes entry.
+# autodiscover_tasks() does NOT reach this module on its own -- it looks for a
+# ``tasks`` submodule of each listed package -- so without this line every dispatch
+# would sit on the forecast queue until the caller timed out. The import is inert:
+# torch and transformers load lazily inside the task, never at module scope.
+from src.tasks.forecast_tasks import forecast_timesfm_batch
+
 # Knowledge-graph emptiness sentinel (#1761): importing the module fires the
 # @celery_app.task decorator so the "graph-emptiness-sentinel" beat entry is
 # discoverable by the Celery worker + beat. Without this line the beat entry
@@ -136,6 +145,8 @@ from src.tasks.risk_score_prediction_tasks import write_risk_score_predictions
 from src.tasks.routing_label_tasks import run_routing_label_cycle
 
 __all__ = [
+    # KPI forecasting (#2115)
+    "forecast_timesfm_batch",
     # Feature Store
     "materialize_features",
     "materialize_incremental_features",

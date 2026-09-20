@@ -30,6 +30,7 @@ import src.tool_registry.tools  # noqa: F401
 from src.agents.base.audit_chain_mixin import get_audit_chain_service
 from src.tool_registry.registry import ToolRegistry, get_registry
 from src.tool_registry.tools.causal_discovery import register_all_discovery_tools
+from src.tool_registry.tools.kpi_forecast import register_kpi_forecast_tool
 from src.tool_registry.tools.model_inference import register_model_inference_tool
 from src.tool_registry.tools.structural_drift import register_structural_drift_tool
 from src.utils.audit_chain import AgentTier
@@ -103,6 +104,7 @@ def _ensure_tools_registered():
     """Ensure composable tools are registered in the registry."""
     try:
         register_all_discovery_tools()
+        register_kpi_forecast_tool()
         register_model_inference_tool()
         register_structural_drift_tool()
         logger.info("Tool registry initialized with composable tools")

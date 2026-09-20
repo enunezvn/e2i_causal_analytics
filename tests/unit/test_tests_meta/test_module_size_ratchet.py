@@ -41,7 +41,10 @@ ALLOWLIST: dict[str, int] = {
     "src/api/routes/chatbot_graph.py": 3190,
     # 3054 -> 3029: #2150 replaced hand-kept capability literals with policy calls
     # (and then lazy accessors, which removed two more lines).
-    "src/api/routes/chatbot_tools.py": 3029,
+    # 3029 -> 2909: #2115 registers forecast_kpi_tool here (its body and prompt text are
+    # in their own modules) and pays for those lines by lifting the causal-path and
+    # refutation-evidence shaping into src/api/routes/chat_causal_evidence.py.
+    "src/api/routes/chatbot_tools.py": 2909,
     "src/api/routes/copilotkit.py": 6142,
     "src/api/routes/digital_twin.py": 1963,
     "src/api/routes/experiments.py": 1595,

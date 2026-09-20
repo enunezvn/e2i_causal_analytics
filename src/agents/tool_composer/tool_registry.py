@@ -241,6 +241,11 @@ TOOL_METADATA: dict[str, tuple[ToolCategory, list[str]]] = {
     ),
     # Prediction synthesizer
     "risk_scorer": (ToolCategory.PREDICTION, []),
+    # #2115: the only tool that projects a KPI forward. It reads the canonical monthly
+    # series itself, so it consumes no other step's output -- which is also why a plan
+    # can run it in parallel with the gap and causal steps that answer the RISK half of
+    # demo 6.5.
+    "kpi_forecaster": (ToolCategory.PREDICTION, []),
     "propensity_estimator": (ToolCategory.PREDICTION, []),
     "model_inference": (ToolCategory.PREDICTION, []),
     # Drift monitor
@@ -338,11 +343,13 @@ def create_default_tools() -> list[ToolSchema]:
     from src.agents.tool_composer import tool_registrations  # noqa: F401
     from src.tool_registry.registry import get_registry as get_live_registry
     from src.tool_registry.tools.causal_discovery import register_all_discovery_tools
+    from src.tool_registry.tools.kpi_forecast import register_kpi_forecast_tool
     from src.tool_registry.tools.model_inference import register_model_inference_tool
     from src.tool_registry.tools.structural_drift import register_structural_drift_tool
 
     live = get_live_registry()
     register_all_discovery_tools()
+    register_kpi_forecast_tool()
     register_model_inference_tool()
     register_structural_drift_tool()
 

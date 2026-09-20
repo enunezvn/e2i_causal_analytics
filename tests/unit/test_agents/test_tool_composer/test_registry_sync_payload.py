@@ -55,7 +55,7 @@ def test_payload_covers_exactly_the_live_tools(payload):
     names = [t["name"] for t in tools]
     assert sorted(names) == names, "payload order is deterministic (by name)"
     assert set(names) == LIVE_TOOLS
-    assert len(names) == len(LIVE_TOOLS) == 20
+    assert len(names) == len(LIVE_TOOLS) == 21
 
 
 def test_payload_rows_have_exactly_the_sync_fields(payload):

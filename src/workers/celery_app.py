@@ -91,6 +91,10 @@ celery_app.conf.task_queues = (
     Queue("causal", exchange=default_exchange, routing_key="causal"),
     Queue("ml", exchange=default_exchange, routing_key="ml"),
     Queue("twins", exchange=default_exchange, routing_key="twins"),
+    # Forecast worker queue (#2115): TimesFM 2.5 is a 1.4 GB peak in the prod api
+    # image, so it gets its own concurrency-1 service rather than a slot on an
+    # existing tier. Its own queue is what keeps a 9 s batch off the light workers.
+    Queue("forecast", exchange=default_exchange, routing_key="forecast"),
     # Dead letter queue for failed tasks
     Queue("dead_letter", exchange=default_exchange, routing_key="dead_letter"),
 )
@@ -153,6 +157,13 @@ celery_app.conf.task_routes = {
     "src.tasks.refutation.*": {"queue": "causal"},
     "src.tasks.sensitivity_analysis": {"queue": "causal"},
     "src.tasks.bootstrap_*": {"queue": "causal"},
+    # -------------------------------------------------------------------------
+    # Forecast Worker Tasks (#2115) - TimesFM 2.5, concurrency 1, own 2.5G service
+    # -------------------------------------------------------------------------
+    # Named in full, never by glob: `src.tasks.f*` patterns already route
+    # `fetch_*` to api and `fit_*` to ml, and a forecast batch landing on either
+    # tier would put a 1.4 GB torch load inside a 1.5 GB worker.
+    "src.tasks.forecast_timesfm_batch": {"queue": "forecast"},
     # ML training and cross-validation
     "src.tasks.train_model": {"queue": "ml"},
     "src.tasks.cross_validate_model": {"queue": "ml"},
