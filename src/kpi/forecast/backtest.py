@@ -287,9 +287,25 @@ def select_champion(scores: Sequence[BacktestScore]) -> BacktestScore:
     if not scores:
         raise NoChampion("no model was scorable on this series")
     shared = common_origins(scores)
+    return min(scores, key=lambda s: ranking_key(s, shared))
+
+
+def ranking_key(score: BacktestScore, shared: Sequence[int]) -> Tuple[float, str]:
+    """The sort key that decides the contest, given the shared ground.
+
+    THE one definition. ``select_champion`` picks the minimum of it and the payload
+    orders its model rows by it, so the crowned model is necessarily the first row.
+    Two separate implementations of "the deciding order" would eventually disagree,
+    and a payload that crowns one model while listing another first is worse than
+    either ordering on its own.
+
+    Below ``MIN_COMMON_ORIGINS`` of shared ground the full MAPE decides: comparing on
+    one or two common origins would be noisier than the unequal comparison it
+    replaces, so the fix must not trade one wrong answer for a louder one.
+    """
     if len(shared) < MIN_COMMON_ORIGINS:
-        return min(scores, key=lambda s: (s.monthly_mape, s.name))
-    return min(scores, key=lambda s: (mape_on_origins(s, shared), s.name))
+        return (score.monthly_mape, score.name)
+    return (mape_on_origins(score, shared), score.name)
 
 
 def band_from_errors(

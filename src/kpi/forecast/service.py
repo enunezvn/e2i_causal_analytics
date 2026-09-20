@@ -152,14 +152,14 @@ class KpiForecast:
     def _ranking_key(self, score: "bt.BacktestScore") -> Tuple[float, str]:
         """The order the contest was actually decided in.
 
-        Must agree with ``bt.select_champion`` -- if these two ever disagree the
-        payload crowns one model and lists another first, which is worse than either
-        ordering alone.
+        Delegates to ``bt.ranking_key`` -- the SAME function ``bt.select_champion``
+        minimises -- rather than restating the rule. A second implementation of the
+        deciding order would eventually drift from the first, and a payload that
+        crowns one model while listing another first is worse than either ordering
+        alone. Sharing the function makes that disagreement impossible instead of
+        merely tested against.
         """
-        shared = self._shared_cutoffs
-        if shared is None:
-            return (score.monthly_mape, score.name)
-        return (bt.mape_on_origins(score, shared), score.name)
+        return bt.ranking_key(score, self.shared_cutoffs)
 
     @property
     def horizon_total(self) -> float:

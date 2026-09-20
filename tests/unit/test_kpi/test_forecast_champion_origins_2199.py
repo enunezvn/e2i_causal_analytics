@@ -285,6 +285,52 @@ def test_the_shared_origin_mape_is_the_same_statistic_restricted_not_a_new_one()
         assert bt.mape_on_origins(score, score.origin_cutoffs) == pytest.approx(score.monthly_mape)
 
 
+def test_the_crowned_model_is_the_minimum_of_the_very_key_the_payload_sorts_by():
+    """``select_champion`` and the payload ordering are ONE function, not two.
+
+    Checked structurally rather than by sampling: the champion must be the argmin of
+    ``bt.ranking_key`` under the same shared ground the payload uses, for every shape
+    that could plausibly separate them -- equal sets, nested sets, a thin overlap that
+    forces the fallback, and an exact tie.
+    """
+    cases = {
+        "equal sets": (
+            _score("a", 7.0, [24, 25, 26, 27]),
+            _score("b", 6.0, [24, 25, 26, 27]),
+        ),
+        "nested, shared disagrees with full": (
+            _score(
+                "narrow", None, [24, 25, 26, 27], per_origin=dict.fromkeys([24, 25, 26, 27], 6.0)
+            ),
+            _score(
+                "wide",
+                None,
+                [20, 21, 22, 23, 24, 25, 26, 27],
+                per_origin={20: 0.1, 21: 0.1, 22: 0.1, 23: 0.1, 24: 9.0, 25: 9.0, 26: 9.0, 27: 9.0},
+            ),
+        ),
+        "overlap too thin -> fallback": (
+            _score("a", 6.0, [27]),
+            _score("b", 5.0, [20, 21, 22, 23, 24, 25, 26, 27]),
+        ),
+        "exact tie": (
+            _score("zebra", 6.0, [24, 25, 26, 27]),
+            _score("alpha", 6.0, [24, 25, 26, 27]),
+        ),
+        "disjoint": (
+            _score("a", 6.0, [1, 2, 3, 4]),
+            _score("b", 5.0, [20, 21, 22, 23]),
+        ),
+    }
+    for label, scores in cases.items():
+        shared = bt.common_origins(scores)
+        champion = bt.select_champion(scores)
+        ordered = sorted(scores, key=lambda s: bt.ranking_key(s, shared))
+        assert ordered[0].name == champion.name, (
+            f"{label}: crowned {champion.name} but the payload would list {ordered[0].name} first"
+        )
+
+
 def test_the_counters_cannot_disagree_with_the_set_they_count():
     """selection_origins/selection_fell_back are derived, not stored beside the set."""
     from src.kpi.forecast import service as svc
