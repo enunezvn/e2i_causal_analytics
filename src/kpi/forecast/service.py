@@ -110,16 +110,16 @@ class KpiForecast:
     #: beside the champion's MAPE, so borrowing a losing model's larger number would
     #: overstate the evidence behind the figure the answer leads with.
     origins_used: int
-    #: How many origins EVERY scored model shared, which is the ground the champion
-    #: was actually chosen on (#2199). Distinct from ``origins_used``: on a short
-    #: series the champion may be graded on 24 origins while only 13 were common to
-    #: all models, and it is the 13 that decided the contest. Equal to
-    #: ``origins_used`` at the live length, where every model has the same cutoffs.
-    selection_origins: int = 0
-    #: True when too little common ground existed to compare on it and the full
-    #: MAPEs decided instead. Disclosed rather than silent: it means the models were
-    #: graded on different months and the ranking carries that caveat.
-    selection_fell_back: bool = False
+    #: The cutoffs EVERY scored model was graded on -- the ground the champion was
+    #: actually chosen on (#2199). Distinct from ``origins_used``: on a short series
+    #: the champion may be graded on 24 origins while only 13 were common to all
+    #: models, and it is the 13 that decided the contest. At the live length every
+    #: model has the same 24 cutoffs and this is all of them.
+    #:
+    #: ONE source of truth: ``selection_origins`` and ``selection_fell_back`` are
+    #: derived from it rather than stored alongside, so no cache round trip or future
+    #: call site can leave a count that disagrees with the set it counts.
+    shared_cutoffs: Tuple[int, ...] = ()
     #: Months whose raw point forecast came back below zero and were floored. A
     #: volume cannot be negative, and a model extrapolating a steep decline past zero
     #: is saying its trend has stopped being physical -- which the reader is told,
@@ -129,6 +129,37 @@ class KpiForecast:
     #: reported rather than hidden: a reader comparing two answers minutes apart should
     #: be able to tell that the second did not re-fit anything.
     from_cache: bool = False
+
+    @property
+    def selection_origins(self) -> int:
+        """How many origins every scored model shared."""
+        return len(self.shared_cutoffs)
+
+    @property
+    def selection_fell_back(self) -> bool:
+        """True when too little common ground existed and the full MAPEs decided.
+
+        Disclosed rather than silent: it means the models were graded on different
+        months and the ranking carries that caveat.
+        """
+        return len(self.shared_cutoffs) < bt.MIN_COMMON_ORIGINS
+
+    @property
+    def _shared_cutoffs(self) -> Optional[Tuple[int, ...]]:
+        """The cutoffs that ranked the models, or None if they did not rank them."""
+        return None if self.selection_fell_back else self.shared_cutoffs
+
+    def _ranking_key(self, score: "bt.BacktestScore") -> Tuple[float, str]:
+        """The order the contest was actually decided in.
+
+        Must agree with ``bt.select_champion`` -- if these two ever disagree the
+        payload crowns one model and lists another first, which is worse than either
+        ordering alone.
+        """
+        shared = self._shared_cutoffs
+        if shared is None:
+            return (score.monthly_mape, score.name)
+        return (bt.mape_on_origins(score, shared), score.name)
 
     @property
     def horizon_total(self) -> float:
@@ -182,15 +213,33 @@ class KpiForecast:
                 "origins": self.origins_used,
                 "champion_monthly_mape_pct": round(self.champion_mape, 2),
                 "champion_horizon_total_error_pct": round(self.champion_total_error, 2),
+                # Ordered by the number the contest was actually decided on, so the
+                # champion is the first row. Ordering by each model's own MAPE would
+                # put the champion LAST whenever the shared ground disagrees with the
+                # full scores -- measured on the real series at Remibrutinib/42 months,
+                # where the champion is 3rd of 3 by its own MAPE. A reader seeing the
+                # worst-scoring model crowned, with no visible reason, would read a
+                # correct answer as a bug.
                 "models": [
                     {
                         "model": s.name,
                         "monthly_mape_pct": round(s.monthly_mape, 2),
+                        # The same statistic restricted to the shared origins: this is
+                        # what ranked them. Equal to monthly_mape_pct whenever a model
+                        # was graded on exactly the shared set (always, at the live
+                        # length). None when there was too little common ground and the
+                        # full MAPEs decided instead -- reported as absent rather than
+                        # as a number that did not do the deciding.
+                        "monthly_mape_on_shared_origins_pct": (
+                            None
+                            if self._shared_cutoffs is None
+                            else round(bt.mape_on_origins(s, self._shared_cutoffs), 2)
+                        ),
                         "horizon_total_error_pct": round(s.horizon_total_error, 2),
                         "origins_scored": s.n_origins,
                         "origins_failed": s.n_failed_origins,
                     }
-                    for s in sorted(self.scores, key=lambda s: (s.monthly_mape, s.name))
+                    for s in sorted(self.scores, key=self._ranking_key)
                 ],
                 "models_not_run": [
                     {"model": name, "reason": reason} for name, reason in self.models_skipped
@@ -276,11 +325,11 @@ def _to_cache_entry(result: "KpiForecast") -> Dict[str, Any]:
         "series_query_id": result.series_query_id,
         "band_quantile": result.band_quantile,
         "origins_used": result.origins_used,
-        # Without these a cache hit would render selection_origins as its 0 default
-        # and claim the champion was chosen on zero shared origins -- a silent wrong
-        # number, which is exactly what the cache is not allowed to introduce.
-        "selection_origins": result.selection_origins,
-        "selection_fell_back": result.selection_fell_back,
+        # Without this a cache hit would render selection_origins as its 0 default and
+        # claim the champion was chosen on zero shared origins -- a silent wrong
+        # number, which is exactly what the cache is not allowed to introduce. It also
+        # carries the per-model shared-origin MAPE that explains the ranking.
+        "shared_cutoffs": list(result.shared_cutoffs),
         "floored_months": [m.isoformat() for m in result.floored_months],
     }
 
@@ -311,8 +360,7 @@ def _from_cache_entry(raw: Dict[str, Any]) -> "KpiForecast":
         series_query_id=raw["series_query_id"],
         band_quantile=raw["band_quantile"],
         origins_used=raw["origins_used"],
-        selection_origins=raw["selection_origins"],
-        selection_fell_back=raw["selection_fell_back"],
+        shared_cutoffs=tuple(raw["shared_cutoffs"]),
         floored_months=tuple(date.fromisoformat(m) for m in raw.get("floored_months", ())),
         from_cache=True,
     )
@@ -464,7 +512,6 @@ def forecast_series(
         )
 
     shared_origins = bt.common_origins(scores)
-    selection_fell_back = len(shared_origins) < bt.MIN_COMMON_ORIGINS
     champion_score = bt.select_champion(scores)
     champion = fm.get_model(champion_score.name)
     try:
@@ -533,8 +580,7 @@ def forecast_series(
         series_query_id=series.query_id,
         band_quantile=band_quantile,
         origins_used=champion_score.n_origins,
-        selection_origins=len(shared_origins),
-        selection_fell_back=selection_fell_back,
+        shared_cutoffs=shared_origins,
         floored_months=tuple(months[i] for i in floored_idx),
     )
     if cache is not None:

@@ -244,6 +244,58 @@ def test_the_payload_reports_the_shared_ground_the_champion_was_chosen_on():
     assert "EVERY model was graded on" in payload["backtest"]["selection_rule"]
 
 
+def test_the_champion_is_the_first_row_even_when_its_own_mape_is_the_worst():
+    """Measured on the real series at Remibrutinib/42 months: the champion is 3rd of 3
+    by its OWN MAPE, because the shared ground disagrees with the full scores.
+
+    Ordering the payload by each model's own MAPE would then crown the worst-listed
+    model with no visible reason, and a correct answer would read as a bug. The rows
+    are ordered by the number that actually decided the contest, and each row carries
+    that number, so the ranking is checkable by the reader.
+    """
+    from src.kpi.forecast import service as svc
+
+    # seasonal models are graded from month 24, trend from month 8 -> unequal sets
+    result = svc.forecast_series(
+        _series(_seasonal(42)), horizon=6, include_timesfm=False, cache=None
+    )
+    rows = result.to_payload()["backtest"]["models"]
+    assert rows[0]["model"] == result.champion, (
+        f"the crowned model must be the first row: {[r['model'] for r in rows]}"
+    )
+    shared = [r["monthly_mape_on_shared_origins_pct"] for r in rows]
+    assert all(v is not None for v in shared)
+    assert shared == sorted(shared), f"rows are not in the deciding order: {shared}"
+    # And the deciding number really is the champion's minimum.
+    assert shared[0] == min(shared)
+
+
+def test_the_shared_origin_mape_is_the_same_statistic_restricted_not_a_new_one():
+    """If it were a different statistic, the fix would silently change the metric as
+    well as the comparison set, and 'no-op when all origins are equal' would be false.
+
+    Verified on real PROD data across 36 scores: max difference 0.0.
+    """
+    from src.kpi.forecast import service as svc
+
+    result = svc.forecast_series(
+        _series(_seasonal(60)), horizon=6, include_timesfm=False, cache=None
+    )
+    for score in result.scores:
+        assert bt.mape_on_origins(score, score.origin_cutoffs) == pytest.approx(score.monthly_mape)
+
+
+def test_the_counters_cannot_disagree_with_the_set_they_count():
+    """selection_origins/selection_fell_back are derived, not stored beside the set."""
+    from src.kpi.forecast import service as svc
+
+    result = svc.forecast_series(
+        _series(_seasonal(42)), horizon=6, include_timesfm=False, cache=None
+    )
+    assert result.selection_origins == len(result.shared_cutoffs)
+    assert result.selection_fell_back == (len(result.shared_cutoffs) < bt.MIN_COMMON_ORIGINS)
+
+
 def test_each_model_s_reported_mape_is_still_over_its_own_origins():
     """Selection moved to shared ground; the per-model numbers must not, or the
     reader loses the only signal of how much evidence each model has."""

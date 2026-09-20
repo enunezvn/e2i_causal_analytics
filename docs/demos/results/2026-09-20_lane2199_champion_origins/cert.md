@@ -60,6 +60,46 @@ the smallest. A failed origin punches a hole in the middle and breaks the nestin
 which is why `common_origins` is a real set intersection and not "the shortest
 range".
 
+## A defect my own adversarial self-check found, after the first green
+
+Two questions I had asserted but not directly proved, checked on the real series:
+
+**Q1 — is the restricted MAPE the SAME statistic?** `mape_on_origins(score, its own
+cutoffs)` vs `score.monthly_mape` over **36 real scores: max difference 0.0**. Identical.
+So the fix changes only the comparison *set*, never the metric — which is what makes
+"no-op when every model shares every origin" exact rather than approximate.
+
+**Q2 — can the champion be the worst-looking model?** **Yes, and it happens.** At
+Remibrutinib L=42 the champion is **3rd of 3 by its own reported MAPE**. The payload
+sorted models by full MAPE ascending, so a reader saw:
+
+```
+holt_winters_seasonal_mul  8.33
+holt_winters_seasonal_add  8.55
+holt_winters_trend         8.63   <-- crowned champion, listed LAST
+```
+
+Correct under the new rule, and indistinguishable from a bug. `selection_origins: 13`
+was present but the rows carried no per-model number for those 13, so *why* `trend` won
+was invisible.
+
+Fixed by ordering the rows by the number that actually decided the contest and putting
+that number in each row:
+
+```
+#  model                       own MAPE   on shared  origins
+1  holt_winters_trend              8.63        8.17       24  <-- CHAMPION
+2  holt_winters_seasonal_mul       8.33        8.33       13
+3  holt_winters_seasonal_add       8.55        8.55       13
+```
+
+The seasonal models' own MAPE **equals** their shared MAPE because they were graded on
+exactly those 13 origins — a free internal-consistency signal in every payload.
+
+`selection_origins` and `selection_fell_back` are now **derived** from `shared_cutoffs`
+rather than stored beside it, so no cache round trip or future call site can leave a
+count that disagrees with the set it counts.
+
 ## Teeth
 
 Both plants landed, each failing **only** its own test:
