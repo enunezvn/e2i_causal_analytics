@@ -1,0 +1,14 @@
+              p               |                         n                          
+------------------------------+----------------------------------------------------
+ ledger row                   | deferred/146_drop_legacy_per_hcp_count_columns.sql
+ sync function                | 0
+ sync trigger                 | 0
+ v_holdout cols               | 36
+ v_train cols                 | 36
+ legacy cols remaining        | 0
+ canonical cols present       | 3
+ rows                         | 25489
+ v_train rows                 | 7130
+ sum delivered/accepted/total | 21786/11906/24682
+(10 rows)
+

@@ -1,3 +1,10 @@
+BEGIN;
+CREATE TEMP TABLE _b AS
+  SELECT (SELECT count(*) FROM public.business_metrics) n,
+         (SELECT sum(triggers_delivered_count)||'/'||sum(triggers_accepted_count)||'/'||sum(triggers_total_count) FROM public.business_metrics) sums,
+         (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='business_metrics') cols,
+         (SELECT string_agg(c.relname||':'||coalesce(array_to_string(c.relacl,','),'<none>'),' | ' ORDER BY c.relname) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname LIKE 'v_%_business_metrics') acl,
+         (SELECT string_agg(c.relname||'='||md5(pg_get_viewdef(c.oid)),' | ' ORDER BY c.relname) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname LIKE 'v_%_business_metrics') defs;
 -- ============================================================================
 -- Migration 146 (CONTRACT): retire the legacy per_hcp_rollup count columns
 -- ============================================================================
@@ -12,71 +19,106 @@
 -- machinery that kept them true.
 --
 -- ---------------------------------------------------------------------------
--- WHY THIS FILE IS NOT IN database/migrations/ -- DO NOT MOVE IT THERE
+-- WHY THIS FILE WAS DEFERRED, AND WHY IT NOW LIVES HERE (ISSUE #2167)
 -- ---------------------------------------------------------------------------
--- scripts/run_migrations.sh applies EVERY pending forward *.sql in each of its
--- MIGRATION_DIRS in a single pass. A 146_*.sql committed beside 144 would run
--- seconds after it, the legacy columns would be gone before one container had
--- been replaced, and the deploy would be exactly as unsafe as the in-place name
--- swap that HIGH-1 rejected. Expand and contract are only expand/contract if they
--- land in two different deploys.
+-- It was written into database/deferred/ -- a directory that appears in no
+-- MIGRATION_DIRS entry of scripts/run_migrations.sh -- because that runner applies
+-- EVERY pending forward *.sql in each of its directories in a SINGLE pass. A
+-- 146_*.sql committed beside 144 would have run seconds after it, the legacy
+-- columns would have been gone before one container was replaced, and the deploy
+-- would have been exactly as unsafe as the in-place name swap that codex iter1
+-- HIGH-1 rejected. Expand and contract are only expand/contract if they land in
+-- two different deploys. The separation was STRUCTURAL rather than a naming
+-- convention, so no typo and no new skip-pattern could arm it.
 --
--- database/deferred/ appears in no MIGRATION_DIRS entry, so the runner cannot see
--- this file at all -- a structural separation, not a naming convention that a
--- typo or a new skip-pattern could arm. It is pinned by
+-- That brake had a precondition, and the precondition is now discharged. Issue
+-- #2167 verified all three conditions below against the live database, applied
+-- this file by hand, and moved it here. The brake had to come OFF at that point:
+-- a file the runner never sees is not a safe migration, it is an UNAPPLIED one,
+-- and leaving it in database/deferred/ forever was the failure #2167 existed to
+-- close.
+--
+-- What keeps the pair safe now that both halves sit in one directory is no longer
+-- the directory. It is two other things, and both are checkable:
+--   * ORDER. The runner iterates a bare `"$dir"/*.sql` glob, which expands in
+--     collation order, and 144 sorts before 146. So a FRESH database (a new
+--     environment, an ephemeral CI database) applying both in one pass still runs
+--     the expand first.
+--   * THE PRECONDITION BLOCK BELOW. On any schema where 144 did not run, it
+--     REFUSES rather than dropping columns whose values nothing else carries.
+-- Both are pinned by
 -- tests/unit/test_database/test_mig146_contract_legacy_per_hcp_columns.py, which
 -- parses MIGRATION_DIRS out of the runner rather than restating it.
 --
 -- ---------------------------------------------------------------------------
--- WHO OWNS APPLYING THIS: ISSUE #2167
+-- APPLIED TO PRODUCTION 2026-09-20T01:51:04Z (ISSUE #2167)
 -- ---------------------------------------------------------------------------
--- Nothing in the repository causes this file to run, which is the point and also
--- the risk: without a tracked owner the lane PR merges, #2114 closes, and the
--- legacy columns live forever (codex iter2/iter3 MED-1). Issue #2167 is that
--- owner. It carries the preconditions below, the apply command, and the later PR
--- that moves this file into database/migrations/. If you apply this file, close
--- #2167; if you decide NOT to, say so there rather than letting it lapse.
---
--- ---------------------------------------------------------------------------
--- APPLY THIS BY HAND, AND ONLY WHEN ALL OF THE FOLLOWING ARE TRUE
--- ---------------------------------------------------------------------------
+-- Applied by hand with the command below, sha256
+-- cc9d952f783ccf041d18a9bdd02606f1c781a24c852fc912a8ef6b8ab9114fb4, psql exit 0.
+-- The three preconditions this file demanded, re-measured that day rather than
+-- taken from the issue:
 --   1. the deploy carrying 144 completed and its health checks passed, so no
---      app-only rollback (deploy.yml:1104) can put pre-lane containers back;
+--      app-only rollback (deploy.yml:1104) can put pre-lane containers back --
+--      144 is in the ledger at 2026-09-19 16:28Z and TWO further deploys have
+--      landed since; every app container was on main HEAD 349858db5 and healthy;
 --   2. no image that reads or writes the legacy names is still deployable as a
---      rollback target -- on origin/main at the time of the lane there were 52
---      such references, among them src/etl/business_metrics_per_hcp_etl.py's
---      `ON CONFLICT DO UPDATE SET trx_count = EXCLUDED.trx_count`;
+--      rollback target -- deploy.yml:739-742 sets PREV_SHA to the RUNNING sha,
+--      which is 349858db5, and tests/unit/test_etl/
+--      test_per_hcp_legacy_column_names_absent.py is green on that tree. (On
+--      origin/main at the time of the lane there were 52 such references, among
+--      them src/etl/business_metrics_per_hcp_etl.py's `ON CONFLICT DO UPDATE SET
+--      trx_count = EXCLUDED.trx_count`.);
 --   3. the per-HCP rollup ETL has run at least once on the new code, so the
---      canonical columns are the ones being written.
+--      canonical columns are the ones being written -- business_metrics' newest
+--      created_at was 2026-09-19 17:08Z, AFTER 144, with 13,609 rows carrying
+--      both names and ZERO disagreeing.
+--
+-- Rehearsed first in the same shape with a trailing ROLLBACK instead of a commit,
+-- against the live database minutes before: 0 legacy columns, 0 sync trigger, 0
+-- sync function, all four split views back at 36 columns, and the three sums
+-- carried across unchanged (21786 / 11906 / 24682 over 25,489 rows). The real
+-- application reproduced every one of those numbers. Raw output, the pre-apply
+-- CSV backup of the dropped values, and the negative control proving the
+-- rehearsal's ROLLBACK left the database untouched are in
+-- docs/demos/results/2026-09-20_lane2167_contract146/.
 --
 --   docker exec -i supabase-db psql -U postgres -d postgres -v ON_ERROR_STOP=1 \
---     --single-transaction < database/deferred/146_drop_legacy_per_hcp_count_columns.sql
+--     --single-transaction < database/migrations/146_drop_legacy_per_hcp_count_columns.sql
 --
--- Verify first, in the same shape, with a trailing ROLLBACK instead of a commit.
+-- ON_ERROR_STOP=1 is what turns the precondition's RAISE into a refusal instead of
+-- a printed error followed by the first DROP; --single-transaction is what couples
+-- the ledger row to the schema change. The runner supplies both itself, so the
+-- command above is now for a deliberate manual re-application or a rehearsal, not
+-- for the routine path.
 --
 -- The ledger row is written AFTER every schema statement in this file -- only the
--- trailing NOTIFY follows it -- inside the same --single-transaction as the schema
--- change (codex iter2 MED-1; the "last statement" wording was corrected in iter4,
--- because NOTIFY does follow it and a claim in a permanent artifact has to be true
--- as written). It used to be a
--- second, separate command in this header, which could be forgotten or could fail
--- on its own, leaving the ledger disagreeing with the schema. Nothing else writes
--- it: this file is outside every MIGRATION_DIRS entry, so the runner never sees it.
+-- trailing NOTIFY follows it -- inside the same transaction as the schema change
+-- (codex iter2 MED-1; the "last statement" wording was corrected in iter4, because
+-- NOTIFY does follow it and a claim in a permanent artifact has to be true as
+-- written). It used to be a second, separate command in this header, which could be
+-- forgotten or could fail on its own, leaving the ledger disagreeing with the
+-- schema. It records the key the RUNNER uses for this directory -- the bare
+-- basename, since database/migrations carries an empty keyprefix -- so a hand apply
+-- and an automatic one write the same row, and the runner's own appended INSERT is
+-- an ON CONFLICT DO NOTHING no-op.
 --
--- IF THIS FILE IS EVER MOVED INTO database/migrations/ (the right end state once
--- the lane's SHA, not origin/main, is the automated rollback target — codex iter2
--- MED-1), the runner will key it as '146_drop_legacy_per_hcp_count_columns.sql'
--- with no 'deferred/' prefix, will not match the row written below, and will apply
--- it once more. What that second application DOES, stated exactly (codex iter10):
--- the precondition finds the legacy three already gone and lets it through; the
+-- THE HAND APPLICATION ABOVE PREDATES THIS MOVE and therefore recorded the key the
+-- file had THEN, 'deferred/146_drop_legacy_per_hcp_count_columns.sql'. That row is
+-- KEPT, deliberately: it is not stale data, it is the true record that this DDL
+-- reached production by hand on 2026-09-20 from that path, and the ledger is the
+-- only place that fact is queryable. It does mean production carries two rows for
+-- one migration, because the runner does not match that key and will therefore
+-- apply this file ONCE MORE, on the first deploy after the move, writing
+-- '146_drop_legacy_per_hcp_count_columns.sql' beside it. Issue #2167 weighed
+-- deleting the older row (its own text offers that as optional tidying) and chose
+-- history over tidiness. What that second application DOES, stated exactly (codex iter10): the
+-- precondition finds the legacy three already gone and lets it through; the
 -- column/trigger/function drops are IF EXISTS no-ops; the four split views are
 -- dropped and recreated with the same definitions (new OIDs; nothing else depends
 -- on them -- 0 dependents, and a recreated view gets the same privileges as the
--- live ones, postgres + service_role, both measured 2026-09-19); NOTIFY reloads
--- the PostgREST schema cache; and the runner records the new ledger key (one new
--- schema_migrations row). No business_metrics column or row, and no privilege,
--- changes. Delete the stale 'deferred/...' ledger row afterwards if you want the
--- ledger tidy.
+-- live ones, postgres + service_role, both measured 2026-09-19); NOTIFY reloads the
+-- PostgREST schema cache; and one schema_migrations row is written. No
+-- business_metrics column or row, and no privilege, changes.
 --
 -- ---------------------------------------------------------------------------
 -- THE VIEWS
@@ -270,7 +312,16 @@ CREATE OR REPLACE VIEW public.v_holdout_business_metrics AS
 
 -- Record the application in the same transaction as the change it records.
 INSERT INTO public.schema_migrations(filename)
-VALUES ('deferred/146_drop_legacy_per_hcp_count_columns.sql')
+VALUES ('146_drop_legacy_per_hcp_count_columns.sql')
 ON CONFLICT DO NOTHING;
 
 NOTIFY pgrst, 'reload schema';
+
+INSERT INTO public.schema_migrations(filename) VALUES ('146_drop_legacy_per_hcp_count_columns.sql') ON CONFLICT DO NOTHING;
+SELECT 'rows'             p, (b.n    = (SELECT count(*) FROM public.business_metrics))::text same FROM _b b
+UNION ALL SELECT 'canonical sums',   (b.sums = (SELECT sum(triggers_delivered_count)||'/'||sum(triggers_accepted_count)||'/'||sum(triggers_total_count) FROM public.business_metrics))::text FROM _b b
+UNION ALL SELECT 'table col count',  (b.cols = (SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='business_metrics'))::text FROM _b b
+UNION ALL SELECT 'view privileges',  (b.acl IS NOT DISTINCT FROM (SELECT string_agg(c.relname||':'||coalesce(array_to_string(c.relacl,','),'<none>'),' | ' ORDER BY c.relname) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname LIKE 'v_%_business_metrics'))::text FROM _b b
+UNION ALL SELECT 'view definitions', (b.defs IS NOT DISTINCT FROM (SELECT string_agg(c.relname||'='||md5(pg_get_viewdef(c.oid)),' | ' ORDER BY c.relname) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='public' AND c.relname LIKE 'v_%_business_metrics'))::text FROM _b b
+UNION ALL SELECT 'ledger rows for 146', (SELECT string_agg(filename,' + ' ORDER BY filename) FROM public.schema_migrations WHERE filename LIKE '%146_drop_legacy%');
+ROLLBACK;

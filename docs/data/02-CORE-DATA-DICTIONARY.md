@@ -1349,12 +1349,9 @@ Stores periodic KPI snapshots by brand and region including actuals, targets, ac
 
 | Column | Type | Migration | Description |
 |--------|------|-----------|-------------|
-| `triggers_delivered_count` | `INTEGER` | 144 (added) | Triggers delivered or viewed (per_hcp_rollup). Canonical name for `trx_count` |
-| `triggers_accepted_count` | `INTEGER` | 144 (added) | Triggers accepted or responded (per_hcp_rollup). Canonical name for `nrx_count` |
-| `triggers_total_count` | `INTEGER` | 144 (added) | All triggers generated (per_hcp_rollup). Canonical name for `total_rx_count` |
-| `trx_count` | `INTEGER` | 033 | **DEPRECATED alias** of `triggers_delivered_count`. Retired by `database/deferred/146` |
-| `nrx_count` | `INTEGER` | 033 | **DEPRECATED alias** of `triggers_accepted_count`. Retired by `database/deferred/146` |
-| `total_rx_count` | `INTEGER` | 033 | **DEPRECATED alias** of `triggers_total_count`. Retired by `database/deferred/146` |
+| `triggers_delivered_count` | `INTEGER` | 144 (added) | Triggers delivered or viewed (per_hcp_rollup). Replaced the mislabelled `trx_count`, dropped by 146 |
+| `triggers_accepted_count` | `INTEGER` | 144 (added) | Triggers accepted or responded (per_hcp_rollup). Replaced the mislabelled `nrx_count`, dropped by 146 |
+| `triggers_total_count` | `INTEGER` | 144 (added) | All triggers generated (per_hcp_rollup). Replaced the mislabelled `total_rx_count`, dropped by 146 |
 | `market_share` | `NUMERIC` | 033 | Market share for the brand/territory |
 | `conversion_rate` | `NUMERIC` | 033 | Conversion rate for the period |
 | `engagement_score` | `NUMERIC` | 033 | Average engagement score |
@@ -1367,14 +1364,16 @@ Stores periodic KPI snapshots by brand and region including actuals, targets, ac
 | `patient_support_enrollment` | `NUMERIC` | 099 | Intervention treatment: patient-support enrolment |
 | `rep_training_score` | `NUMERIC` | 099 | Intervention treatment: rep-training level |
 
-> **These six columns are three values, not six.** Migration 144 is the EXPAND half of an
-> expand/contract: it ADDS the `triggers_*` names beside the mislabelled `*rx_count` ones (they count
-> trigger deliveries, never prescriptions), backfills them, and installs the
-> `business_metrics_sync_legacy_trigger_counts_trg` row trigger so a write to either name updates the
-> other. Both names are therefore correct and readable for as long as pre-144 and post-144 code can both
-> run. The CONTRACT half, `database/deferred/146_drop_legacy_per_hcp_count_columns.sql`, retires the
-> three legacy columns, the trigger and its function by hand in a LATER deploy — tracked by issue #2167.
-> Nothing in the repository applies it automatically; until it runs, expect all six columns live.
+> **`trx_count` / `nrx_count` / `total_rx_count` are GONE — do not add them back.** They never held
+> prescriptions; they counted trigger deliveries. Migration 144 was the EXPAND half of an
+> expand/contract: it ADDED the honest `triggers_*` names beside them, backfilled them, and installed
+> the `business_metrics_sync_legacy_trigger_counts_trg` row trigger so either name could be read or
+> written while pre-144 and post-144 code both ran. The CONTRACT half,
+> `database/migrations/146_drop_legacy_per_hcp_count_columns.sql` (issue #2167), dropped the three
+> legacy columns, the trigger and its function; it was **applied to production 2026-09-20T01:51:04Z**
+> with every value carried across unchanged (21,786 / 11,906 / 24,682 over 25,489 rows), and now ships
+> in `database/migrations/` like any other migration. `tests/unit/test_etl/
+> test_per_hcp_legacy_column_names_absent.py` is the static census that keeps a reader from reappearing.
 
 > The migration-099 columns are the **intervention (treatment) variables** the
 > causal agents estimate effects for; the 033 columns are the outcomes/covariates.

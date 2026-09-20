@@ -1,0 +1,108 @@
+Lane #2167 — scripts/test_migration_scour_coverage.sh on the lane branch
+
+The REAL runner, --dry-run, against an EMPTY ephemeral postgres — i.e. the fresh-database
+path that adding 146 to database/migrations/ newly puts it on. It also proves 146 is NOT
+swallowed by the runner's destructive/utility exclusion patterns (its name starts with a
+number but its content is all DROPs, so 'is it wrongly excluded' is a real question).
+
+=== starting ephemeral Postgres (postgres:15-alpine) ===
+    ready.
+=== run_migrations.sh --dry-run against EMPTY db (docker-exec mode) ===
+--- COVERAGE: each reconciled dir contributes a pending key ---
+  PASS dir scanned: core/
+  PASS dir scanned: ml/
+  PASS dir scanned: causal/
+  PASS dir scanned: chat/
+  PASS dir scanned: rag/
+  PASS dir scanned: audit/
+--- SAFETY: no destructive/utility file is ever in the apply set ---
+  PASS excluded from apply set: rollback_
+  PASS excluded from apply set: _rollback\.sql
+  PASS excluded from apply set: _validation_queries\.sql
+
+SCOUR COVERAGE + SAFETY: ALL PASS
+
+[exited with code 0]
+
+================================================================================
+ADDED after the codex iter2 review — POSITIVE DISCOVERY, because the run above
+does not prove it
+================================================================================
+
+codex iter2 (LOW, non-blocking) read the script and found the framing above too
+generous. Its SAFETY loop only asserts that no [PENDING] line MATCHES one of three
+destructive-filename patterns (rollback_ / _rollback.sql / _validation_queries.sql).
+146's name matches none of them, so that loop prints PASS whether or not 146 is
+discovered at all. It can detect wrongful INCLUSION; it is structurally blind to
+wrongful EXCLUSION, which is the direction that actually matters here. And the
+summary output committed above prints only PASS/FAIL lines, never the apply set —
+so a reader cannot check it either.
+
+That is a PROXY standing where a CAPABILITY was claimed. Rather than soften the
+claim, here is the measurement. Same method — the REAL runner, --dry-run, against a
+fresh empty postgres:15-alpine — but keeping the apply set itself:
+
+  total [PENDING] files: 228
+
+  line 129:[PENDING] 143_canonical_volume_kpis.sql
+  line 130:[PENDING] 144_per_hcp_trigger_count_columns.sql
+  line 131:[PENDING] 145_drop_trx_share_patient_axis_variants.sql
+  line 132:[PENDING] 146_drop_legacy_per_hcp_count_columns.sql
+
+146 IS in the fresh-database apply set. And the two line numbers carry the other
+half for free: the runner emits 144 at line 130 and 146 at line 132, so the
+expand-before-contract ordering is visible in the REAL runner's real output on an
+empty database, not only in a sorted() call inside a test.
+
+WHY THE ORDER CLAIM IS NOT ITSELF A PROXY. "Printed in that sequence" and "applied
+in that sequence" are not automatically the same thing, and asserting the second from
+the first would be the very defect this section was added to fix. They are the same
+here for a structural reason, in scripts/run_migrations.sh apply_dir(): the
+`[PENDING]` echo and the `Applying $key` path are the SAME
+`for migration_file in "$dir"/*.sql` loop body, differing only by the DRY_RUN branch
+that echoes and `continue`s instead of applying. So a dry run walks the identical
+sequence a real run does. Both filenames are also pure ASCII digits and underscores,
+so `144_` sorts before `146_` under any locale's collation.
+
+WHAT THAT ARGUMENT IS, STATED SO IT IS NOT MISTAKEN FOR MORE. It is a code-level and
+design-level proof over a 25-line loop, plus a dry-run measurement — NOT a fresh
+empirical measurement of multi-file apply ORDER. The repo does own an empirical proof
+of this exact mechanism:
+tests/unit/test_database/learning_loop/test_migration_runner.py::
+test_runner_failure_first_then_real_files_then_nothing_pending injects a failure into
+a MID-sequence file among several pending ones and asserts the ledger holds exactly
+the files before it and none after. But it is `@pytest.mark.realdb_upgrade`-gated on
+the ml/039-044 lane being pending, that lane is already applied, so it SKIPS — it is
+among the 8 skips in deploy_gate_realdb_suite.txt and did NOT run for this lane. The
+generic test that DID run, test_pending_migrations_apply_through_the_runner_failure_first,
+had exactly ONE pending file (146), so it exercised atomicity but not multi-file order.
+Building a fresh multi-file real-apply harness would need stub kpi_query_registry /
+kpi_history tables for 143 and 145 to apply for real, which buys its own unfaithfulness;
+the loop is simple enough and fully enough inspected that the code read was judged
+decisive instead. Recorded here so a future reader weighs it as what it is. (codex iter3
+attacked this claim four ways -- separate collect-then-sort passes, async reordering, a
+stale $APPLIED snapshot, locale-dependent digit collation -- and ruled out all four.)
+
+ON THE "228 = 228" CROSS-CHECK, CORRECTED. An earlier draft of this section called it
+"two different methods against two different databases agreeing on the same count".
+That is loose in exactly the way the codex iter2 finding above was loose, so here is
+what is actually true. The two 228s are NOT independent: they are the same set with
+one element re-keyed, and the count matching is therefore structural rather than
+corroborating. The real evidence is the SET DIFFERENCE, both directions, which is
+sharper than any count:
+
+  ledger keys NOT in the tree :  deferred/146_drop_legacy_per_hcp_count_columns.sql
+  tree keys NOT in the ledger :  146_drop_legacy_per_hcp_count_columns.sql
+
+One element each way, and both are this migration. That says the thing worth saying:
+**the next deploy applies exactly one migration, 146, and nothing else** — no
+unrelated file has quietly become pending alongside it. Derived by keying every
+forward `*.sql` under the runner's eight MIGRATION_DIRS with that dir's keyprefix and
+applying the runner's own three exclusion patterns, then `comm`-ing against
+`SELECT filename FROM public.schema_migrations`.
+
+Re-run with:
+  CTR=e2i_lane2167_freshdb_$$
+  docker run -d --name "$CTR" -e POSTGRES_PASSWORD=test postgres:15-alpine
+  SUPABASE_DB_CONTAINER="$CTR" bash scripts/run_migrations.sh --dry-run | grep PENDING
+  docker rm -f "$CTR"
