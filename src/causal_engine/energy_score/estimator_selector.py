@@ -49,6 +49,7 @@ from src.causal_engine.estimator_registry import (
     EstimatorType,
 )
 
+from .design_matrix import numeric_design_frame
 from .score_calculator import (
     EnergyScoreCalculator,
     EnergyScoreConfig,
@@ -1385,32 +1386,10 @@ class EstimatorSelector:
 
         results: list[EstimatorResult] = []
 
-        # A mixed float/bool pandas frame materializes as an ``object`` NumPy
-        # array, which EconML rejects even though every column is numeric in
-        # meaning.  Normalize supported numeric/boolean dtypes once at the
-        # selector boundary so every wrapper and the energy-score calculator
-        # see the same float design.  Strings/categories must be explicitly
-        # encoded by the caller; accepting them here would make refutation use
-        # a potentially different design matrix.
-        def _numeric_design(frame: pd.DataFrame, label: str) -> pd.DataFrame:
-            unsupported = [
-                column
-                for column in frame.columns
-                if not (
-                    pd.api.types.is_numeric_dtype(frame[column].dtype)
-                    or pd.api.types.is_bool_dtype(frame[column].dtype)
-                )
-            ]
-            if unsupported:
-                raise TypeError(
-                    f"{label} must be numeric or boolean after encoding; "
-                    f"unsupported columns={unsupported}"
-                )
-            return frame.astype(float, copy=False)
-
-        covariates = _numeric_design(covariates, "covariates")
+        # Normalize numeric/boolean dtypes for EconML; reject unencoded categoricals.
+        covariates = numeric_design_frame(covariates, "covariates")
         if efficiency_controls is not None:
-            efficiency_controls = _numeric_design(efficiency_controls, "efficiency_controls")
+            efficiency_controls = numeric_design_frame(efficiency_controls, "efficiency_controls")
 
         # Empty backdoor (zero covariates) = the correct adjustment set for a
         # randomized / exogenous treatment. Covariate-requiring estimators cannot
