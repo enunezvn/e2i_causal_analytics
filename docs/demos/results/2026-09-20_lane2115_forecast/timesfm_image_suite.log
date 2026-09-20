@@ -1,0 +1,99 @@
+src.__file__: /work/src/__init__.py
+transformers 5.10.1
+  DEBUG _run_service_checks: REDIS_URL=redis://localhost:6382
+  DEBUG _check_redis_service(redis://localhost:6382): ConnectionError: Error Multiple exceptions: [Errno 111] Connect call failed ('::1', 6382, 0, 0), [Errno 111] Connect call failed ('127.0.0.1', 6382) connecting to localhost:6382.
+..........F.......................                                       [100%]
+=================================== FAILURES ===================================
+________ test_the_registered_timesfm_model_is_the_one_that_really_runs _________
+
+        name="timesfm_2_5",
+    )
+    naive = bt.score_model(
+        lambda a, h: [a[-1]] * h, y, horizon=6, origins=bt.DEFAULT_ORIGINS, name="naive"
+>   )
+      
+
+tests/unit/test_kpi/test_forecast_timesfm.py:181: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+src/kpi/forecast/models.py:72: in predict
+    return [float(v) for v in self._predict(values, horizon)]
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/kpi/forecast/models.py:121: in _timesfm_predict
+    return predict_via_worker(y, horizon)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/kpi/forecast/timesfm.py:151: in predict_via_worker
+    out = batched_predictor(dispatch_batch)([y], horizon)[0]
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+src/kpi/forecast/timesfm.py:74: in predict_many
+    raw = transport(trimmed, horizon)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+contexts = [[198419.37, 192887.55, 189452.28, 235255.64, 212229.09, 206147.95, ...]]
+horizon = 6
+
+    def dispatch_batch(
+        contexts: Sequence[Sequence[float]], horizon: int
+    ) -> List[Optional[List[float]]]:
+        """Send one batch to the forecast worker and wait for it.
+    
+        Every failure mode collapses to ``ForecastWorkerUnavailable`` on purpose: the
+        caller's only decision is whether TimesFM took part in this request.
+        """
+        ready, why = worker_available()
+        if not ready:
+>           raise ForecastWorkerUnavailable(f"the TimesFM forecast worker is not available: {why}")
+E           src.kpi.forecast.timesfm.ForecastWorkerUnavailable: the TimesFM forecast worker is not available: the broker did not answer in 2.0s: Error 111 connecting to localhost:6382. Connection refused.
+
+src/kpi/forecast/timesfm.py:134: ForecastWorkerUnavailable
+=============================== warnings summary ===============================
+../app/.venv/lib/python3.12/site-packages/_pytest/config/__init__.py:1434
+  /app/.venv/lib/python3.12/site-packages/_pytest/config/__init__.py:1434: PytestConfigWarning: Unknown config option: env
+  
+    self._warn_or_fail_if_strict(f"Unknown config option: {key}\n")
+
+../app/.venv/lib/python3.12/site-packages/_pytest/config/__init__.py:1434
+  /app/.venv/lib/python3.12/site-packages/_pytest/config/__init__.py:1434: PytestConfigWarning: Unknown config option: env_files
+  
+    self._warn_or_fail_if_strict(f"Unknown config option: {key}\n")
+
+../app/.venv/lib/python3.12/site-packages/_pytest/config/__init__.py:1434
+  /app/.venv/lib/python3.12/site-packages/_pytest/config/__init__.py:1434: PytestConfigWarning: Unknown config option: timeout
+  
+    self._warn_or_fail_if_strict(f"Unknown config option: {key}\n")
+
+../app/.venv/lib/python3.12/site-packages/_pytest/config/__init__.py:1434
+  /app/.venv/lib/python3.12/site-packages/_pytest/config/__init__.py:1434: PytestConfigWarning: Unknown config option: timeout_method
+  
+    self._warn_or_fail_if_strict(f"Unknown config option: {key}\n")
+
+tests/unit/test_kpi/test_forecast_timesfm.py:28
+    pytestmark = pytest.mark.timeout(600)
+
+tests/unit/test_kpi/test_forecast_timesfm.py:152
+    @pytest.mark.timeout(600)
+
+tests/unit/test_kpi/test_forecast_timesfm.py:177
+    @pytest.mark.timeout(600)
+
+tests/unit/test_kpi/test_forecast_timesfm.py::test_the_whole_backtest_is_one_worker_round_trip_not_one_per_origin
+
+tests/unit/test_kpi/test_forecast_timesfm.py::test_the_whole_backtest_is_one_worker_round_trip_not_one_per_origin
+
+tests/unit/test_kpi/test_forecast_timesfm.py::test_the_whole_backtest_is_one_worker_round_trip_not_one_per_origin
+
+tests/unit/test_kpi/test_forecast_timesfm.py::test_the_whole_backtest_is_one_worker_round_trip_not_one_per_origin
+
+tests/unit/test_kpi/test_forecast_timesfm.py::test_the_whole_backtest_is_one_worker_round_trip_not_one_per_origin
+
+tests/unit/test_kpi/test_forecast_timesfm.py::test_the_whole_backtest_is_one_worker_round_trip_not_one_per_origin
+
+tests/unit/test_kpi/test_forecast_timesfm.py::test_the_whole_backtest_is_one_worker_round_trip_not_one_per_origin
+
+tests/unit/test_kpi/test_forecast_timesfm.py::test_the_whole_backtest_is_one_worker_round_trip_not_one_per_origin
+
+tests/unit/test_kpi/test_forecast_timesfm.py::test_the_whole_backtest_is_one_worker_round_trip_not_one_per_origin
+
+tests/unit/test_kpi/test_forecast_timesfm.py::test_the_whole_backtest_is_one_worker_round_trip_not_one_per_origin
+
+1 failed, 33 passed, 17 warnings in 42.67s
