@@ -140,6 +140,18 @@ regexes = [
   # files record images as `image_sha: <sha>` so the tag never sits next to
   # `api:` again.
   '''f30e9e9df4fdd3b6350e3ecc47f891a72902c596''',
+
+  # Lane-B #2115 forecast cert (docs/demos/results/2026-09-20_lane2115_forecast/
+  # cert.md, commit c18e6f427's parent) recorded the container it ran in as
+  # `ghcr.io/enunezvn/e2i-api:<40-hex>`; the tag IS the public merge sha of main
+  # for PR #2192 (5d0d3c19a…), not a key. FOURTH instance of this same
+  # false-positive class — the convention noted above (`image_sha: <sha>`, never
+  # beside `api:`) exists precisely to stop it, and I broke it. The working tree
+  # was corrected forward in c18e6f427 (the doc now writes the tag short), but
+  # gitleaks scans the COMMIT RANGE, so the blob that introduced it still trips
+  # and only an allowlist entry or a history rewrite can clear it. Verified
+  # non-secret: `git show 5d0d3c19a` is a merge commit.
+  '''5d0d3c19ada8db08854f0cb1a9e4668a47c6d9b6''',
 ]
 
 # Stopwords — a finding whose captured secret CONTAINS any of these is
