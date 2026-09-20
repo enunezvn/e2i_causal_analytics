@@ -1139,6 +1139,10 @@ export interface EstimatorInfo {
   supports_confidence_intervals: boolean;
   /** Whether HTE is supported */
   supports_heterogeneous_effects: boolean;
+  /** Exact causal-impact agent override label, when forceable */
+  agent_override?: string | null;
+  /** Participates in the Auto estimator tournament */
+  default_enabled?: boolean;
 }
 
 /**

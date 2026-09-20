@@ -1002,6 +1002,8 @@ export const EstimatorInfoWireSchema = z.object({
   parameters: z.array(z.string()),
   supports_confidence_intervals: z.boolean(),
   supports_heterogeneous_effects: z.boolean(),
+  agent_override: z.string().nullable().optional(),
+  default_enabled: z.boolean().optional(),
 });
 
 /** Faithful mirror of `EstimatorListResponse` (types/causal.ts). */

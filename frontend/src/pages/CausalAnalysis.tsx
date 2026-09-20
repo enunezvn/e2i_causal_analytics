@@ -128,15 +128,6 @@ const ALL_BRANDS = '__all__';
 // energy-score routing — the DEFAULT. The override is an expert escape hatch;
 // values MUST be members of the backend's AGENT_FORCEABLE_ESTIMATORS allowlist.
 const AUTO_ESTIMATOR = 'auto';
-const ESTIMATOR_OPTIONS: Array<{ value: string; label: string }> = [
-  { value: AUTO_ESTIMATOR, label: 'Auto — agent decides (recommended)' },
-  { value: 'CausalForestDML', label: 'Causal Forest — EconML' },
-  { value: 'LinearDML', label: 'Linear DML — EconML' },
-  { value: 'drlearner', label: 'DR-Learner — EconML' },
-  { value: 'dml_learner', label: 'DML Learner (flexible final stage) — EconML' },
-  { value: 'ols', label: 'Linear Regression (OLS)' },
-  { value: 'propensity_score_weighting', label: 'Propensity Score Weighting — DoWhy' },
-];
 
 const LIBRARY_COLORS: Record<string, string> = {
   dowhy: '#3b82f6',
@@ -537,6 +528,20 @@ export default function CausalAnalysis() {
   const [selectedLibrary, setSelectedLibrary] = useState<string>('all');
   const health = healthData ?? DEFAULT_HEALTH;
   const estimators = estimatorsData?.estimators ?? [];
+  const estimatorOptions = useMemo(
+    () => [
+      { value: AUTO_ESTIMATOR, label: 'Auto — agent decides (recommended)' },
+      ...estimators
+        .filter((item) => Boolean(item.agent_override))
+        .map((item) => ({
+          value: item.agent_override as string,
+          label: `${item.name.replace(/_/g, ' ')} — ${item.library}${
+            item.default_enabled ? ' (Auto candidate)' : ' (expert override)'
+          }`,
+        })),
+    ],
+    [estimators]
+  );
   const visibleEstimators = estimators.filter(
     (e) => selectedLibrary === 'all' || e.library === selectedLibrary
   );
@@ -1091,7 +1096,7 @@ export default function CausalAnalysis() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {ESTIMATOR_OPTIONS.map((opt) => (
+                        {estimatorOptions.map((opt) => (
                           <SelectItem key={opt.value} value={opt.value}>
                             {opt.label}
                           </SelectItem>

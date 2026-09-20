@@ -199,11 +199,13 @@ class TestEstimationNode:
 
         est = result["estimation_result"]
 
-        # CausalForestDML should detect heterogeneity
+        # A CATE-capable estimator does not imply statistically detected
+        # heterogeneity.  This fixture plants a constant treatment effect.
         if est["method"] == "CausalForestDML":
-            assert est["heterogeneity_detected"] is True
-            assert "cate_segments" in est
-            assert len(est["cate_segments"]) > 0
+            assert est["cate_available"] is True
+            assert est["heterogeneity_detected"] is False
+            assert est["cate_segments"] == []
+            assert est["heterogeneity_test_method"] == "pointwise_effect_deviation_bonferroni"
 
     @pytest.mark.asyncio
     async def test_covariates_adjusted(self):

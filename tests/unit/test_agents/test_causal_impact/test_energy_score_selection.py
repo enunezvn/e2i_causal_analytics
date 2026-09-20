@@ -293,13 +293,14 @@ class TestBackwardCompatibility:
 
     @pytest.mark.asyncio
     async def test_cate_segments_with_causal_forest(self, estimation_node, base_state):
-        """CausalForest produces CATE segments."""
+        """CausalForest exposes CATE without fabricating heterogeneity."""
         base_state["parameters"] = {"method": "CausalForestDML"}
         result = await estimation_node.execute(base_state)
 
         est = result["estimation_result"]
-        assert "cate_segments" in est
-        assert len(est["cate_segments"]) > 0
+        assert est["cate_available"] is True
+        assert est["heterogeneity_detected"] is False
+        assert est["cate_segments"] == []
 
 
 class TestSubsampleDisclosure1392:

@@ -16,6 +16,10 @@ from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.causal_engine.estimator_registry import (
+    AGENT_FORCEABLE_ESTIMATORS as _REGISTRY_FORCEABLE_ESTIMATORS,
+)
+
 # =============================================================================
 # GATE VOCABULARY (#1991 debt 4)
 # =============================================================================
@@ -65,6 +69,7 @@ class EstimatorType(str, Enum):
     # EconML
     CAUSAL_FOREST = "causal_forest"
     LINEAR_DML = "linear_dml"
+    DML_LEARNER = "dml_learner"
     ORTHO_FOREST = "ortho_forest"
     DR_LEARNER = "dr_learner"
     X_LEARNER = "x_learner"
@@ -463,9 +468,9 @@ class EstimationDataResponse(BaseModel):
 # The forceable estimator overrides MUST stay in sync with
 # ``_VALID_EXPLICIT_METHODS`` in src/agents/causal_impact/nodes/estimation.py.
 # Leaving ``estimator`` unset runs the agent's data-driven energy-score routing
-# across the full registry (the recommended path); setting it forces one method.
-AGENT_FORCEABLE_ESTIMATORS = ("CausalForestDML", "LinearDML", "drlearner", "dml_learner", "ols")
-AGENT_FORCEABLE_ESTIMATORS += ("propensity_score_weighting",)
+# across the registry entries marked default-enabled; setting it forces one method.
+
+AGENT_FORCEABLE_ESTIMATORS = _REGISTRY_FORCEABLE_ESTIMATORS + ("propensity_score_weighting",)
 
 
 class AgentCausalAnalysisRequest(BaseModel):
@@ -488,7 +493,7 @@ class AgentCausalAnalysisRequest(BaseModel):
         default=None,
         description=(
             "Force a specific estimator (one of AGENT_FORCEABLE_ESTIMATORS); omit "
-            "for Auto (the agent's energy-score routing over the full registry)."
+            "for Auto (the agent's energy-score routing over default-enabled registry entries)."
         ),
     )
     brand: Optional[str] = Field(default=None, description="Optional brand context")
@@ -1881,6 +1886,13 @@ class EstimatorInfo(BaseModel):
     parameters: List[str] = Field(default_factory=list, description="Key parameters")
     supports_confidence_intervals: bool = Field(..., description="Whether CI is supported")
     supports_heterogeneous_effects: bool = Field(..., description="Whether HTE is supported")
+    agent_override: Optional[str] = Field(
+        default=None,
+        description="Exact causal-impact agent override label; null when not forceable there",
+    )
+    default_enabled: bool = Field(
+        default=False, description="Whether the estimator participates in the Auto tournament"
+    )
 
 
 class EstimatorListResponse(BaseModel):

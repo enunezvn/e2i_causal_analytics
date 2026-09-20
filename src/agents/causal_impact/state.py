@@ -105,7 +105,12 @@ class EstimationResult(TypedDict, total=False):
     # covariates_adjusted (which stays the backdoor set).
     adjustment_type: NotRequired[str]
     baseline_covariates_adjusted: NotRequired[List[str]]
-    heterogeneity_detected: bool  # Whether CATE varies significantly
+    cate_available: NotRequired[bool]  # Estimator produced finite row-level CATEs
+    heterogeneity_detected: bool  # Inference-backed test rejected constant effects
+    heterogeneity_test_method: NotRequired[str]
+    heterogeneity_p_value: NotRequired[Optional[float]]
+    heterogeneity_score: NotRequired[float]  # Descriptive spread; not a significance test
+    heterogeneity_reason: NotRequired[Optional[str]]
 
     # V4.2 Enhancement: Energy Score-based Selection
     selection_strategy: NotRequired[Literal["first_success", "best_energy", "ensemble"]]
