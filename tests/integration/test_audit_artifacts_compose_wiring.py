@@ -143,13 +143,20 @@ def test_audit_artifacts_mounted_on_every_common_env_service():
 
 
 def test_audit_artifacts_wiring_covers_expected_service_set():
-    """Pin the expected service set as of 2026-05-15: api + 3 worker
-    tiers. If a new service is added or one is removed, this test
-    fails so a human reviews whether the audit trail should follow.
+    """Pin the expected service set: api + 4 worker tiers. If a new service is added or
+    one is removed, this test fails so a human reviews whether the audit trail should
+    follow.
+
+    2026-05-15: api + 3 worker tiers.
+    2026-09-20 (#2115): + worker_forecast. It merges *common-env like every other
+    worker, so it inherits ADAPTIVE_VALIDITY_ARTIFACTS_DIR and must carry the mount —
+    the sibling test above caught it missing. The audit trail SHOULD follow: the
+    forecast worker runs a real model over the canonical Rx series, so its runs belong
+    in the same artifact trail as the other tiers'.
     """
     compose = _load_compose()
     services_with_mount = sorted(_services_with_audit_mount(compose))
-    expected = ["api", "worker_heavy", "worker_light", "worker_medium"]
+    expected = ["api", "worker_forecast", "worker_heavy", "worker_light", "worker_medium"]
     assert services_with_mount == expected, (
         f"Expected audit_artifacts mounted on exactly {expected}, "
         f"got {services_with_mount}. If a service was added or removed, "

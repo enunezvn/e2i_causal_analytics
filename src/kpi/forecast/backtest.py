@@ -157,7 +157,11 @@ def score_model(
         raise TypeError("score_model takes exactly one of predict= or predict_many=")
     if y is None:
         raise TypeError("score_model needs the series y")
-    run = predict_many if predict_many is not None else _as_batch_predictor(predict)
+    if predict_many is not None:
+        run: BatchPredictor = predict_many
+    else:
+        assert predict is not None  # the XOR above; mypy cannot see it through the tuple
+        run = _as_batch_predictor(predict)
 
     values = np.asarray(list(y), dtype=float)
     splits = rolling_origin_splits(len(values), horizon, origins, min_train=min_train)
@@ -165,7 +169,10 @@ def score_model(
     totals: List[float] = []
     failed = 0
     if splits:
-        contexts = [values[train.start : train.stop] for train, _ in splits]
+        # `.tolist()` and not the raw ndarray: a model's `predict` is typed over
+        # Sequence[float], and a batch transport has to serialise these anyway (the
+        # TimesFM one puts them on a Celery queue).
+        contexts = [values[train.start : train.stop].tolist() for train, _ in splits]
         results = list(run(contexts, horizon))
         if len(results) != len(splits):
             raise ModelUnscorable(

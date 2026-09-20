@@ -27,7 +27,7 @@ import logging
 import math
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple, cast
 
 from src.kpi.canonical_volume_series import (
     CanonicalVolumeSeries,
@@ -71,7 +71,7 @@ def _resolve_cache(cache: Any) -> Optional[ForecastCache]:
     """Build the shared client lazily: importing this module must open no socket."""
     global _DEFAULT_CACHE
     if cache is not _USE_DEFAULT_CACHE:
-        return cache
+        return cast(Optional[ForecastCache], cache)
     if _DEFAULT_CACHE is None:
         _DEFAULT_CACHE = ForecastCache()
     return _DEFAULT_CACHE

@@ -69,11 +69,14 @@ class ForecastModel:
             )
         if not np.all(np.isfinite(values)):
             raise ForecastModelError(f"{self.name}: the series carries a non-finite value")
-        return [float(v) for v in self._predict(values, horizon)]
+        # A list, not the ndarray: `_predict` is typed over Sequence[float] so that a
+        # model added later is not obliged to accept numpy, and the members convert
+        # back themselves where they need an array.
+        return [float(v) for v in self._predict(values.tolist(), horizon)]
 
 
 def _fit_holt_winters(
-    y: np.ndarray,
+    y: Sequence[float],
     horizon: int,
     *,
     seasonal: str | None,
@@ -87,21 +90,23 @@ def _fit_holt_winters(
     if seasonal is not None:
         kwargs["seasonal"] = seasonal
         kwargs["seasonal_periods"] = SEASONAL_PERIODS
+    values = np.asarray(y, dtype=float)
     with warnings.catch_warnings():
         # statsmodels warns about convergence on some origins; a genuinely bad fit
         # shows up as a non-finite forecast, which score_model counts as a FAILED
         # origin. Warning noise is not the signal, so it is not amplified here.
         warnings.simplefilter("ignore")
-        fitted = ExponentialSmoothing(y, **kwargs).fit(optimized=True)
-        return np.asarray(fitted.forecast(horizon), dtype=float)
+        fitted = ExponentialSmoothing(values, **kwargs).fit(optimized=True)
+        forecast: List[float] = [float(v) for v in fitted.forecast(horizon)]
+        return forecast
 
 
-def _holt_winters_seasonal_add(y: np.ndarray, horizon: int) -> Sequence[float]:
+def _holt_winters_seasonal_add(y: Sequence[float], horizon: int) -> Sequence[float]:
     return _fit_holt_winters(y, horizon, seasonal="add")
 
 
-def _holt_winters_seasonal_mul(y: np.ndarray, horizon: int) -> Sequence[float]:
-    if not np.all(y > 0):
+def _holt_winters_seasonal_mul(y: Sequence[float], horizon: int) -> Sequence[float]:
+    if not np.all(np.asarray(y, dtype=float) > 0):
         raise SeriesNotPositive(
             "holt_winters_seasonal_mul needs a strictly positive series; "
             "a multiplicative season is undefined at zero"
@@ -109,11 +114,11 @@ def _holt_winters_seasonal_mul(y: np.ndarray, horizon: int) -> Sequence[float]:
     return _fit_holt_winters(y, horizon, seasonal="mul")
 
 
-def _holt_winters_trend(y: np.ndarray, horizon: int) -> Sequence[float]:
+def _holt_winters_trend(y: Sequence[float], horizon: int) -> Sequence[float]:
     return _fit_holt_winters(y, horizon, seasonal=None)
 
 
-def _timesfm_predict(y: np.ndarray, horizon: int) -> Sequence[float]:
+def _timesfm_predict(y: Sequence[float], horizon: int) -> Sequence[float]:
     # Dispatch lives in timesfm.py so that importing the model catalogue never pulls
     # in Celery, torch or transformers. See that module for why the call is a task.
     from src.kpi.forecast.timesfm import predict_via_worker

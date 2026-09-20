@@ -1202,6 +1202,11 @@ services:
     volumes:
       - hf_cache:/hf
       - agent_outputs:/app/data/agent_outputs
+      # *common-env sets ADAPTIVE_VALIDITY_ARTIFACTS_DIR for EVERY service that merges
+      # it, so a service that merges the anchor without this mount fails mkdir'ing the
+      # sidecar dir. Guarded by tests/integration/test_audit_artifacts_compose_wiring.py,
+      # which is what caught its absence here.
+      - audit_artifacts:/app/data/audit_artifacts
     tmpfs:
       - /app/tmp:size=256M,uid=1000,gid=1000,mode=0700
     environment:
