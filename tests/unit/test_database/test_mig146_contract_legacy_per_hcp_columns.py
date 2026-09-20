@@ -11,20 +11,28 @@ the two apart today — but the intended end state moves this file into
 ``test_the_contract_number_collides_with_no_other_migration`` pins both halves of
 that.)
 
-THE WHOLE POINT OF THIS MODULE IS THAT 146 MUST NOT RUN IN THE SAME DEPLOY AS 144.
-``scripts/run_migrations.sh`` applies EVERY pending forward ``*.sql`` in each of its
-``MIGRATION_DIRS`` in one pass, so a ``database/migrations/146_*.sql`` committed
-beside 144 would be applied seconds after it — the legacy columns would be gone
-before a single container was replaced, and the deploy would be exactly as unsafe
-as the rename that codex HIGH-1 rejected. Expand/contract is only expand/contract
-if the two halves land in two different deploys.
+THE ORIGINAL POINT OF THIS MODULE WAS THAT 146 MUST NOT RUN IN THE SAME DEPLOY AS
+144. ``scripts/run_migrations.sh`` applies EVERY pending forward ``*.sql`` in each of
+its ``MIGRATION_DIRS`` in one pass, so a ``database/migrations/146_*.sql`` committed
+beside 144 would have been applied seconds after it — the legacy columns gone before
+a single container was replaced, and the deploy exactly as unsafe as the rename that
+codex HIGH-1 rejected. So 146 was written into ``database/deferred/``, a directory
+``MIGRATION_DIRS`` does not list: a STRUCTURAL separation no filename typo and no new
+skip-pattern could arm.
 
-The separation is STRUCTURAL rather than a naming convention: 146 lives in
-``database/deferred/``, a directory the runner's ``MIGRATION_DIRS`` does not list,
-so no filename typo and no new skip-pattern can arm it. These tests pin that
-directory out of the runner's scope, and pin the runner's scope as the ONE source
-of it (the runner's own header: "MIGRATION_DIRS is the only source of that scope
--- do not restate the dir count here, it has gone stale twice").
+AMENDED 2026-09-20 (issue #2167). That brake had a precondition and the precondition
+is discharged: 144 is applied and deployed, no deployable rollback target reads the
+legacy names, and 146 itself was applied to production by hand at 01:51:04Z. The file
+has moved into ``database/migrations/`` — because a file the runner never sees is not
+a safe migration, it is an UNAPPLIED one, and #2167 existed to stop it rotting there.
+
+The directory guard is therefore RETIRED, and replaced rather than deleted. What keeps
+the pair safe now is ORDER — the runner iterates a bare per-directory ``*.sql`` glob,
+which expands in collation order, so 144 still applies before 146 on a fresh database —
+and the file's own ``DO $precondition$`` block, which refuses outright on a schema where
+the expand never ran. Both are pinned below. The runner's scope is still parsed out of
+the runner rather than restated (its own header: "MIGRATION_DIRS is the only source of
+that scope -- do not restate the dir count here, it has gone stale twice").
 """
 
 import re
@@ -33,8 +41,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[3]
 RUNNER = REPO / "scripts" / "run_migrations.sh"
 DEFERRED_DIR = REPO / "database" / "deferred"
-CONTRACT = DEFERRED_DIR / "146_drop_legacy_per_hcp_count_columns.sql"
-EXPAND = REPO / "database" / "migrations" / "144_per_hcp_trigger_count_columns.sql"
+MIGRATIONS_DIR = REPO / "database" / "migrations"
+CONTRACT = MIGRATIONS_DIR / "146_drop_legacy_per_hcp_count_columns.sql"
+EXPAND = MIGRATIONS_DIR / "144_per_hcp_trigger_count_columns.sql"
 LEGACY = ("trx_count", "nrx_count", "total_rx_count")
 CANONICAL = ("triggers_delivered_count", "triggers_accepted_count", "triggers_total_count")
 #: split view -> the ``data_split`` value it must keep selecting. Read off the LIVE
@@ -69,23 +78,6 @@ def test_the_runner_scope_parser_is_not_vacuous():
     dirs = _runner_dirs()
     assert "database/migrations" in dirs, dirs
     assert len(dirs) >= 8, dirs
-
-
-def test_the_contract_migration_is_outside_every_directory_the_runner_applies():
-    """THE GUARD. If ``database/deferred`` ever joins MIGRATION_DIRS — or 146 is
-    moved into a directory already on it — the contract half starts shipping in
-    the same deploy as the expand half, and the deploy-safety property bought by
-    codex HIGH-1 is silently gone."""
-    assert CONTRACT.exists(), f"missing contract migration: {CONTRACT}"
-    applied = {(REPO / d).resolve() for d in _runner_dirs()}
-    assert CONTRACT.parent.resolve() not in applied, (
-        f"{CONTRACT.name} sits in a directory the migration runner applies — it "
-        "would run in the same deploy as 144 and drop the legacy columns while the "
-        "pre-lane containers still read them"
-    )
-    assert EXPAND.parent.resolve() in applied, (
-        "the EXPAND half must still be auto-applied; only the contract is deferred"
-    )
 
 
 def test_the_contract_number_collides_with_no_other_migration():
@@ -250,7 +242,7 @@ def test_the_contract_records_itself_in_the_migration_ledger_atomically():
     sql = CONTRACT.read_text()
     m = re.search(
         r"INSERT INTO public\.schema_migrations\(filename\)\s*\n?\s*"
-        r"VALUES \('deferred/146_drop_legacy_per_hcp_count_columns\.sql'\)",
+        r"VALUES \('146_drop_legacy_per_hcp_count_columns\.sql'\)",
         sql,
     )
     assert m, "the contract does not record itself in public.schema_migrations"
@@ -265,7 +257,7 @@ def test_the_contract_records_itself_in_the_migration_ledger_atomically():
     head = sql[: sql.index("DROP VIEW")]
     command_text = " ".join(re.sub(r"^--\s?", "", ln) for ln in head.splitlines())
     assert re.search(
-        r"docker exec.*?psql.*?--single-transaction.*?<\s*database/deferred/146", command_text
+        r"docker exec.*?psql.*?--single-transaction.*?<\s*database/migrations/146", command_text
     ), (
         "the documented apply COMMAND does not use --single-transaction, so nothing "
         "couples the ledger row to the schema change it records"
@@ -297,10 +289,11 @@ def test_the_contract_records_itself_in_the_migration_ledger_atomically():
     )
 
 
-def test_the_contract_carries_its_own_manual_apply_instructions():
-    """Nothing applies this file automatically, so the file itself has to say who
-    applies it and what must be true first — otherwise it rots in the tree and the
-    legacy columns live forever."""
+def test_the_contract_carries_its_own_apply_instructions_and_history():
+    """The runner applies this file now, but the header is what an operator reads in
+    an incident: it has to name the expand half it completes, say why the runner
+    skipped it for two days, and still carry a command for a deliberate manual
+    re-application or rehearsal."""
     sql = CONTRACT.read_text()
     head = sql[: sql.index("DROP VIEW")] if "DROP VIEW" in sql else sql
     assert "run_migrations.sh" in head, "the header does not say why the runner skips it"
@@ -426,8 +419,134 @@ def test_the_documented_apply_command_keeps_the_precondition_armed():
     head = CONTRACT.read_text()
     command_text = " ".join(re.sub(r"^--\s?", "", ln) for ln in head.splitlines())
     assert re.search(
-        r"docker exec.*?psql.*?ON_ERROR_STOP=1.*?<\s*database/deferred/146", command_text
+        r"docker exec.*?psql.*?ON_ERROR_STOP=1.*?<\s*database/migrations/146", command_text
     ), (
         "the documented apply COMMAND does not set ON_ERROR_STOP=1, so the precondition "
         "block would raise and psql would carry on into the DROPs"
+    )
+
+
+# ============================================================================
+# Issue #2167 -- the contract has been applied and moved into database/migrations/
+# ============================================================================
+# Everything above this line was written while 146 lived in ``database/deferred/``
+# and NOTHING caused it to run. #2167 discharged that: the file was applied by hand
+# against the live database, and then moved here so the tree carries no unapplied
+# migration. The tests below pin the END state; the ones that pinned the deferred
+# state are rewritten in place rather than left to pass vacuously.
+
+
+def test_the_contract_now_ships_in_the_directory_the_runner_applies():
+    """#2167. The deferred directory was a STRUCTURAL brake, and it was correct while
+    144 had not been deployed: the runner applies every pending forward ``*.sql`` in
+    one pass, so a 146 committed beside 144 would have dropped the legacy columns
+    seconds after adding their replacements, while pre-lane containers still served.
+
+    That brake's precondition is now discharged -- 144 is applied and deployed, the
+    rollback target carries no legacy reader, and 146 itself is applied live -- so the
+    brake has to come OFF, or the tree keeps an unapplied migration forever. A file
+    the runner never sees is not a safe migration; it is an unapplied one.
+    """
+    assert CONTRACT.exists(), f"the contract has not been moved to {CONTRACT.relative_to(REPO)}"
+    applied = {(REPO / d).resolve() for d in _runner_dirs()}
+    assert CONTRACT.parent.resolve() in applied, (
+        "the contract still sits outside every directory run_migrations.sh applies, so "
+        "nothing in the repository causes it to run"
+    )
+
+
+def test_no_second_copy_of_the_contract_survives_anywhere_under_database():
+    """A move that leaves the original behind is not a move: the runner would key the
+    two copies differently and apply the same DDL twice under two ledger names, and a
+    later edit to one would silently not reach the other."""
+    copies = sorted(
+        p.relative_to(REPO).as_posix()
+        for p in (REPO / "database").rglob("146_drop_legacy_per_hcp_count_columns.sql")
+    )
+    assert copies == ["database/migrations/146_drop_legacy_per_hcp_count_columns.sql"], copies
+    deferred_sql = (
+        sorted(p.name for p in DEFERRED_DIR.glob("*.sql")) if DEFERRED_DIR.exists() else []
+    )
+    assert not deferred_sql, (
+        f"database/deferred/ still holds {deferred_sql} -- an unapplied migration no "
+        "issue owns, which is the exact failure #2167 existed to close"
+    )
+
+
+def test_the_expand_is_applied_before_the_contract_within_the_single_pass():
+    """THE REPLACEMENT GUARD, and it asks what the directory brake never could.
+
+    Now that both halves live in one directory, a FRESH database (a new environment,
+    an ephemeral CI database) applies them in ONE pass -- which is safe only because
+    the expand runs FIRST. The runner iterates a plain shell glob per directory, and a
+    glob expands in collation order, so the ordering is bought by the filenames: 144
+    sorts before 146. If either were ever renumbered so the contract sorted first, the
+    contract would drop columns the expand had not yet created and the precondition
+    block would refuse the whole bootstrap.
+    """
+    body = RUNNER.read_text()
+    # Not vacuous: the alphabetical claim is only true because the runner really does
+    # iterate a bare glob. A runner that read a manifest, or sorted by mtime, would
+    # make the filename ordering below irrelevant.
+    assert re.search(r'for\s+migration_file\s+in\s+"\$dir"/\*\.sql\s*;\s*do', body), (
+        "run_migrations.sh no longer iterates a bare per-directory *.sql glob, so "
+        "filename order no longer decides apply order -- re-derive this guard"
+    )
+    assert EXPAND.parent.resolve() == CONTRACT.parent.resolve(), (
+        "the expand and the contract are no longer in the same runner directory; the "
+        "per-directory ordering argument below does not span directories"
+    )
+    names = sorted(p.name for p in MIGRATIONS_DIR.glob("*.sql"))
+    assert names.index(EXPAND.name) < names.index(CONTRACT.name), (
+        f"{CONTRACT.name} sorts before {EXPAND.name}: on a fresh database the contract "
+        "would run before the expand that creates the columns it preserves"
+    )
+
+
+def test_the_contract_records_itself_under_the_key_the_runner_now_uses():
+    """The self-INSERT named ``deferred/146_...`` -- a path that no longer exists. Left
+    alone it writes a row claiming a file that is not in the tree, beside the runner's
+    own row for the real key: two ledger rows, one migration, one of them a lie.
+
+    The runner keys ``database/migrations`` with an EMPTY prefix, so its key is the
+    bare basename. Parsed out of the runner, not restated.
+    """
+    block = re.search(r"^MIGRATION_DIRS=\((.*?)^\)", RUNNER.read_text(), re.M | re.S)
+    assert block
+    prefixes = dict(re.findall(r'"\$PROJECT_ROOT/([^":]+)::([^"]*)"', block.group(1)))
+    assert "database/migrations" in prefixes, prefixes
+    expected_key = f"{prefixes['database/migrations']}{CONTRACT.name}"
+    assert expected_key == CONTRACT.name, prefixes
+
+    sql = CONTRACT.read_text()
+    assert re.search(
+        r"INSERT INTO public\.schema_migrations\(filename\)\s*\n?\s*"
+        rf"VALUES \('{re.escape(expected_key)}'\)",
+        sql,
+    ), (
+        "the contract still records itself under a key the runner does not use -- "
+        f"expected {expected_key!r}"
+    )
+    # The header still NAMES the stale 'deferred/...' row on purpose -- that is how
+    # whoever tidies the ledger finds it. What must be gone is any COMMAND that reads
+    # the old path, because that path is no longer in the tree.
+    assert not re.search(r"<\s*database/deferred/", sql), (
+        "the file still documents a command reading its old deferred path; an operator "
+        "following the header would run psql against a file that is not there"
+    )
+
+
+def test_the_header_no_longer_forbids_the_move_it_has_undergone():
+    """The header opened with ``DO NOT MOVE IT THERE`` and explained that the runner
+    cannot see this file. Both are now false of the file they are printed in, and a
+    migration header is read by whoever is deciding what to do in an incident."""
+    head = CONTRACT.read_text()
+    head = head[: head.index("DO $precondition$")]
+    assert "DO NOT MOVE IT THERE" not in head, "the header still forbids the move it has undergone"
+    assert not re.search(r"the runner cannot see this file", head), (
+        "the header still claims the runner cannot see this file"
+    )
+    assert "#2167" in head, (
+        "the header no longer names the issue that applied and moved it -- that is the "
+        "only in-tree record of WHEN the legacy columns actually went"
     )

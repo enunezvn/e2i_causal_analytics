@@ -21,7 +21,7 @@ them — permanently, with no automated way back.
 So 144 now ADDs the canonical columns beside the legacy ones, backfills them, and
 installs a BIDIRECTIONAL row trigger so either name may be read or written by
 either code version for as long as both exist. The legacy columns are retired
-later, by hand, by ``database/deferred/146_*`` — see
+later by ``database/migrations/146_*`` (applied by hand 2026-09-20, issue #2167) — see
 ``test_mig146_contract_legacy_per_hcp_columns.py``, which pins that the runner
 cannot apply the contract half in the same deploy as this one.
 

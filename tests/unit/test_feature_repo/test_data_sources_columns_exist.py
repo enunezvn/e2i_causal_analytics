@@ -40,20 +40,23 @@ _DATA_SOURCES = _ROOT / "feature_repo" / "data_sources.py"
 # on the forward path are scanned; see _is_forward_migration.
 _DATABASE_DIR = _ROOT / "database"
 
-# Forward DDL that a HUMAN applies, after the runner's pass — the contract half of
-# an expand/contract pair (database/deferred/146, which retires the legacy
-# per_hcp_rollup count columns that migration 144 expanded away from). These files
-# are real forward DDL; they simply land in a LATER deploy than everything the
-# runner applies, so the model must apply them LAST rather than in the
-# alphabetical position their directory name happens to occupy.
+# RETIRED 2026-09-20 (issue #2167). This module used to carry a `_DEFERRED_DIR`
+# rule that forced `database/deferred/` files to sort LAST, because the contract
+# half of the per_hcp_rollup expand/contract lived there: plain sorted order put
+# "database/deferred/146" ahead of "database/migrations/033", 033 re-ADDs
+# trx_count, and the contract's DROP was silently undone.
 #
-# This is not cosmetic. Plain sorted order puts "database/deferred/146" ahead of
-# "database/migrations/033", and 033 re-ADDs trx_count — so 146's DROP would be
-# silently undone and the model would carry three columns the canonical schema
-# retires. TestSchemaModelFollowsTheExpandContractPair::
-# test_the_deferred_contract_is_applied_after_everything_the_runner_applies
-# measures exactly that flip.
-_DEFERRED_DIR = _DATABASE_DIR / "deferred"
+# #2167 applied that contract to production and moved it to
+# "database/migrations/146_drop_legacy_per_hcp_count_columns.sql". The trap did not
+# disappear — it MOVED, from the directory name to the migration number. Lexical
+# order now delivers the right answer on its own, because 146 > 033 inside one
+# directory, so the special rule has no subject left and is gone rather than kept
+# as a rule about a directory that does not exist. What replaced it is a
+# measurement, not a deletion:
+# TestSchemaModelFollowsTheExpandContractPair::
+# test_the_contract_drops_after_the_earlier_migration_that_re_adds_the_column
+# forces the contract's sort key ahead of 033 and shows the legacy columns come
+# back, so the ordering is still proven load-bearing.
 
 # SQL keywords / functions / cast-types that are never column references.
 _NON_COLUMN_TOKENS = {
@@ -226,12 +229,13 @@ def _runner_dir_order() -> list[str]:
 
 
 def _scan_order(paths: Iterable[Path]) -> list[Path]:
-    """Lexical, except that by-hand ``database/deferred/`` files come LAST.
+    """Lexical.
 
     The model applies statements in file order, so file order has to approximate the
-    order in which the statements reach the database. Exactly ONE rule is
-    implemented here, and it is the one that was measured to matter: deferred files
-    last (see ``_DEFERRED_DIR``).
+    order in which the statements reach the database. There used to be one exception
+    — by-hand ``database/deferred/`` files sorted last — and issue #2167 removed its
+    subject by moving the only such file into ``database/migrations/``, where its
+    number already orders it correctly. See the retirement note at ``_DATABASE_DIR``.
 
     What this is NOT, despite the temptation to say so: the runner's order. The
     runner walks ``MIGRATION_DIRS`` in its OWN sequence — migrations, memory, core,
@@ -243,7 +247,7 @@ def _scan_order(paths: Iterable[Path]) -> list[Path]:
     guard: if they ever diverge, it fails and the choice gets re-made with evidence
     instead of being assumed away here.
     """
-    return sorted(paths, key=lambda p: (_DEFERRED_DIR in p.parents, str(p)))
+    return sorted(paths, key=str)
 
 
 def _ddl_columns(paths: Iterable[Path] | None = None) -> dict[str, set[str]]:
@@ -337,11 +341,12 @@ class TestSchemaModelFollowsTheExpandContractPair:
     ever to make this model's two ordering rules matter on a table a Feast source
     actually reads.
 
-    144 (``database/migrations/``, applied by the runner) ADDs
-    ``business_metrics.triggers_{delivered,accepted,total}_count`` beside the
-    legacy ``{trx,nrx,total_rx}_count``. 146 (``database/deferred/``, applied by
-    hand in a LATER deploy) retires the legacy three. The canonical schema a Feast
-    source must target is the end state: canonical present, legacy gone.
+    144 (``database/migrations/``) ADDs
+    ``business_metrics.triggers_{delivered,accepted,total}_count`` beside the legacy
+    ``{trx,nrx,total_rx}_count``. 146 retires the legacy three; it was applied to
+    production by hand on 2026-09-20 and moved into ``database/migrations/`` by
+    issue #2167. The canonical schema a Feast source must target is the end state:
+    canonical present, legacy gone.
 
     Both halves are plain, statically-readable statements, which is the whole
     reason this parser can see them — and it is also what arms two failure modes
@@ -359,30 +364,58 @@ class TestSchemaModelFollowsTheExpandContractPair:
         ):
             assert canonical in available, f"{canonical} missing from the modelled schema"
 
-    def test_the_legacy_names_are_retired_by_the_deferred_contract(self):
+    def test_the_legacy_names_are_retired_by_the_contract(self):
         """Teeth in the FAIL direction: the canonical schema these source queries
         are checked against is the POST-contract one, so a source still naming a
         legacy column must be caught (the #556 class)."""
         available = _DDL.get("business_metrics", set())
         for legacy in ("trx_count", "nrx_count", "total_rx_count"):
-            assert legacy not in available, f"{legacy} is retired by database/deferred/146"
+            assert legacy not in available, f"{legacy} is retired by database/migrations/146"
 
-    def test_the_deferred_contract_is_applied_after_everything_the_runner_applies(self):
-        """THE ORDERING TEETH. ``database/deferred/146`` sorts BEFORE
-        ``database/migrations/033``, and 033 re-ADDs ``trx_count``. Under plain
-        sorted order the contract's DROP is therefore undone by a migration that
-        predates it by a hundred files, and the model silently carries three
-        retired columns. Measured here rather than asserted in prose.
+    def test_the_contract_drops_after_the_earlier_migration_that_re_adds_the_column(self):
+        """THE ORDERING TEETH, re-derived for #2167.
+
+        It used to read: ``database/deferred/146`` sorts BEFORE
+        ``database/migrations/033``, and 033 re-ADDs ``trx_count``, so plain sorted
+        order let a migration a hundred files older undo the contract's DROP. That
+        exact flip is gone — the contract now lives in ``database/migrations/`` and
+        146 > 033 inside one directory — and its own failure message said to
+        re-derive rather than relax it.
+
+        So this asks the same question of the thing that carries the ordering NOW:
+        the migration NUMBER. Force the contract's sort key ahead of 033 (what a
+        renumber would do) and the three legacy columns must come back. If they do
+        not, the parser is not reading one of the two statements and every assertion
+        in this class about the end state is passing for the wrong reason.
         """
         every = [p for p in _DATABASE_DIR.rglob("*.sql") if _is_forward_migration(p)]
-        naive = _ddl_columns(sorted(every))["business_metrics"]
-        ordered = _ddl_columns(_scan_order(every))["business_metrics"]
-        assert "trx_count" in naive, (
-            "plain sorted order no longer re-adds trx_count — the trap this rule "
-            "guards has moved; re-derive it before trusting _scan_order"
+        contract = next(
+            (p for p in every if p.name == "146_drop_legacy_per_hcp_count_columns.sql"), None
         )
+        assert contract is not None, (
+            "the per_hcp_rollup contract is not in the forward-migration scan at all — "
+            "the end state this class asserts is not being derived from it"
+        )
+        re_adder = next((p for p in every if p.name.startswith("033_")), None)
+        assert re_adder is not None, (
+            "no migration 033 in the scan — it is the file that re-ADDs trx_count and "
+            "the reason this ordering rule exists"
+        )
+        assert str(re_adder) < str(contract), (
+            "033 no longer sorts before the contract; the trap has moved again — "
+            "re-derive this guard before trusting _scan_order"
+        )
+
+        ordered = _ddl_columns(_scan_order(every))["business_metrics"]
+        # The inversion a renumber would cause: the contract read BEFORE 033.
+        inverted = _ddl_columns(sorted(every, key=lambda p: ("" if p == contract else str(p))))[
+            "business_metrics"
+        ]
         assert "trx_count" not in ordered
-        assert naive - ordered == {"trx_count", "nrx_count", "total_rx_count"}, naive - ordered
+        assert inverted - ordered == {"trx_count", "nrx_count", "total_rx_count"}, (
+            "putting the contract ahead of 033 did NOT bring the legacy columns back, so "
+            f"the ordering is not what retires them: {inverted - ordered}"
+        )
 
     def test_the_lexical_order_still_agrees_with_the_runners_directory_order(self):
         """codex iter2 LOW-1: ``_scan_order`` is lexical, but the runner applies its
@@ -470,9 +503,12 @@ class TestSchemaModelFollowsTheExpandContractPair:
         assert _is_forward_migration(
             _DATABASE_DIR / "migrations" / "033_feast_canonical_schema.sql"
         )
-        # The deferred contract is FORWARD DDL — it is deferred in ORDER, not
-        # excluded. Confusing the two rules would retire nothing.
-        assert _is_forward_migration(_DEFERRED_DIR / "146_drop_legacy_per_hcp_count_columns.sql")
+        # The contract is FORWARD DDL whose whole content is DROPs, and the filter
+        # exists to exclude files full of DROPs (rollbacks). Confusing the two would
+        # retire nothing — so pin that this one is kept, at the path it really has.
+        contract = _DATABASE_DIR / "migrations" / "146_drop_legacy_per_hcp_count_columns.sql"
+        assert contract.exists(), contract
+        assert _is_forward_migration(contract)
 
 
 @pytest.mark.parametrize("source_name", sorted(_QUERIES))

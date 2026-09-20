@@ -8,16 +8,24 @@ census proof: it fails with the file and line of every remaining reader.
 AMENDED 2026-09-18, and the amendment is why this guard matters MORE than when it was
 written. The change was an in-place rename; codex iter1 HIGH-1 replaced it with an
 expand/contract pair -- migration 144 ADDs the canonical columns beside the legacy ones
-and keeps both true with a bidirectional trigger, and ``database/deferred/146`` retires
-the legacy three by hand in a LATER deploy.
+and keeps both true with a bidirectional trigger, and 146 retires the legacy three in a
+LATER deploy.
 
 Under the rename, a missed reader announced itself the moment the migration landed, as a
 runtime ``column does not exist``. Under the expand it does NOT: the legacy columns are
 still there, still correct, and a missed reader keeps working -- silently depending on a
 deprecated column -- right up until someone applies the contract, which is a different
-deploy with a different author on a different day. **This static census is now the only
+deploy with a different author on a different day. **This static census was the only
 thing standing between a missed consumer and that far-away breakage.** Treat a name added
 to ALLOWED accordingly.
+
+AMENDED AGAIN 2026-09-20 (issue #2167). The contract WAS applied: the three legacy
+columns, the sync trigger and its function were dropped from production at 01:51:04Z, and
+``database/migrations/146_drop_legacy_per_hcp_count_columns.sql`` now ships like any other
+migration. The far-away breakage is therefore no longer far away -- a reader that slips
+past this census now fails at runtime on the next query it makes. That makes the census
+CHEAPER to violate safely and more valuable to keep: it is what turns a production
+``column does not exist`` into a red CI job.
 
 The allowlist is the load-bearing part, and it is deliberately tiny. Anything added to
 it is invisible to this guard FOREVER, which is the same rot shape as a permanently
