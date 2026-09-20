@@ -1,0 +1,42 @@
+Lane #2167 — teeth proof for the SCAN-vs-production-image drift guard
+(tests/unit/test_etl/test_per_hcp_legacy_column_names_absent.py, added 2026-09-20)
+
+The guard was RED ON ITS FIRST RUN, naming 'config' — a directory the production
+stage COPYs, holding config/gunicorn.conf.py, which gunicorn EXECUTES at boot, and
+which this census had never scanned. The gap had previously been called empty by
+grepping config/ for the legacy names and finding none; 'no offender in it today'
+and 'covered by the census' are different claims. SCAN now carries config at floor 1.
+
+Three plants, each aimed at one failure mode the guard claims to catch:
+
+=== PLANT A: SCAN narrowed, scripts/ dropped ===
+FAILED tests/unit/test_etl/test_per_hcp_legacy_column_names_absent.py::test_every_python_bearing_directory_in_the_production_image_is_scanned
+========================= 1 failed, 5 passed in 15.60s =========================
+
+=== PLANT B: a new python-bearing dir starts shipping ===
+COPY patches/ ./patches/
+E   AssertionError: ['patches'] ship(s) in the production image and contain(s) python, but is/are absent from SCAN ['config', 'feature_repo', 'scripts', 'src'] — a code path that reaches production without this census ever looking at it. Add it to SCAN with a measured floor, or stop shipping it.
+FAILED tests/unit/test_etl/test_per_hcp_legacy_column_names_absent.py::test_every_python_bearing_directory_in_the_production_image_is_scanned
+========================= 1 failed, 5 passed in 16.16s =========================
+
+=== PLANT C: parser aimed at the development stage ===
+E   AssertionError: parsed `tests/` out of the development stage — that is the development stage's COPY, so the parser is reading the wrong stage: ['patches', 'src', 'config', 'tests', 'data/kg_cache', 'scripts']
+FAILED tests/unit/test_etl/test_per_hcp_legacy_column_names_absent.py::test_the_dockerfile_parser_is_not_vacuous
+FAILED tests/unit/test_etl/test_per_hcp_legacy_column_names_absent.py::test_every_python_bearing_directory_in_the_production_image_is_scanned
+
+=== restored ===
+
+============================== 6 passed in 15.99s ==============================
+
+[exited with code 0]
+
+Plant A = the drift this guard exists for (SCAN narrows while the image does not).
+Plant B = the other direction (the image widens while SCAN does not).
+Plant C = the parser aimed at the wrong Dockerfile stage; note it fails the
+          not-vacuous test too, which is what stops a mis-aimed parser from
+          passing the drift guard by reading a stage with different COPYs.
+
+Backups were taken with cp, NOT git checkout: these edits were uncommitted at the
+time of an earlier attempt and 'git checkout -- <path>' restored them from the index,
+silently deleting the new tests. Two plants then 'passed' by collecting 4 tests
+instead of 6. Commit first, back up with cp, and read the COLLECTED COUNT.
