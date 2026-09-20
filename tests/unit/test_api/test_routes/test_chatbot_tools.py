@@ -45,6 +45,7 @@ from src.api.routes.chatbot_tools import (
     document_retrieval_tool,
     # Tools
     e2i_data_query_tool,
+    forecast_kpi_tool,
     get_e2i_chatbot_tools,
     get_tool_by_name,
     orchestrator_tool,
@@ -1844,10 +1845,12 @@ class TestToolExports:
 
         NOTE (#1354): the pre-existing count here was a stale ``== 7`` — it was
         never bumped when kpi_calculate_tool + clinical_context_tool landed
-        (actual was 9). Corrected to 10 with this lane's addition; membership
-        below is a non-exhaustive "contains" set.
+        (actual was 9). Corrected to 10 with that lane's addition; 11 with
+        #2115's forecast_kpi_tool. Membership below is a non-exhaustive
+        "contains" set.
         """
-        assert len(E2I_CHATBOT_TOOLS) == 10
+        assert len(E2I_CHATBOT_TOOLS) == 11
+        assert forecast_kpi_tool in E2I_CHATBOT_TOOLS
         assert e2i_data_query_tool in E2I_CHATBOT_TOOLS
         assert causal_analysis_tool in E2I_CHATBOT_TOOLS
         assert agent_routing_tool in E2I_CHATBOT_TOOLS
@@ -1859,7 +1862,7 @@ class TestToolExports:
 
     def test_e2i_tool_map(self):
         """Test E2I_TOOL_MAP contains all tools."""
-        assert len(E2I_TOOL_MAP) == 10
+        assert len(E2I_TOOL_MAP) == 11
         assert E2I_TOOL_MAP["e2i_data_query_tool"] == e2i_data_query_tool
         assert E2I_TOOL_MAP["causal_analysis_tool"] == causal_analysis_tool
         assert E2I_TOOL_MAP["agent_routing_tool"] == agent_routing_tool
@@ -1871,12 +1874,13 @@ class TestToolExports:
             E2I_TOOL_MAP["predict_hcp_segment_likelihood_tool"]
             == predict_hcp_segment_likelihood_tool
         )
+        assert E2I_TOOL_MAP["forecast_kpi_tool"] == forecast_kpi_tool
 
     def test_get_e2i_chatbot_tools(self):
         """Test get_e2i_chatbot_tools function."""
         tools = get_e2i_chatbot_tools()
         assert tools == E2I_CHATBOT_TOOLS
-        assert len(tools) == 10
+        assert len(tools) == 11
 
     def test_get_tool_by_name_valid(self):
         """Test get_tool_by_name with valid names."""
