@@ -77,9 +77,14 @@ def test_a_malformed_iso_window_after_the_kpi_also_fails_closed(
 )
 def test_how_many_patient_panel_trx_reaches_the_panel_kpi(
     query: str,
+    calculator: _RecordingCalculator,
 ) -> None:
-    """The recognized compound reaches routing; its trailing prose remains for consumers."""
+    """The recognized compound reaches routing and binds the panel KPI."""
     assert KPI_VALUE_LOOKUP_RE.search(query)
+    evidence = _kpi_lookup_evidence({"query": query})
+    assert evidence
+    assert evidence[0]["kpi_id"] == "WS3-BI-011"
+    assert [call[0] for call in calculator.calls] == ["WS3-BI-011"]
 
 
 @pytest.mark.parametrize(

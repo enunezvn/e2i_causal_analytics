@@ -358,6 +358,7 @@ def _tail_changes_quantity(
     brand_resolved_or_clarified: bool,
     region_resolved_or_clarified: bool,
     warned_tail_nouns: frozenset[str],
+    allow_recorded_completion: bool = False,
 ) -> bool:
     """Whether the bare tail after one KPI occurrence changes what is asked."""
     tail = normalized_query[span_end:]
@@ -368,6 +369,8 @@ def _tail_changes_quantity(
     if ambiguous_window:
         return True
     index = 0
+    if allow_recorded_completion and tokens[:2] in (["was", "recorded"], ["were", "recorded"]):
+        index = 2
     bound_dimension: Optional[str] = None
     needs_object = False
     while index < len(matches):
@@ -562,6 +565,9 @@ def value_lookup_mentions_supported(
             brand_resolved_or_clarified=brand_resolved_or_clarified,
             region_resolved_or_clarified=region_resolved_or_clarified,
             warned_tail_nouns=_WARNED_TAIL_NOUNS.get(kpi_id, frozenset()),
+            allow_recorded_completion=(
+                re.search(r"\bhow\s+many\b", head_checked_query[:start]) is not None
+            ),
         ):
             return False
     return True

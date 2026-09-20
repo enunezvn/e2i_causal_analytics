@@ -259,6 +259,89 @@ def test_empty_current_trend_does_not_explain_stale_prior_turn_results(
 @pytest.mark.parametrize(
     "query",
     [
+        "By pharmacy, show me TRx.",
+        "What is 2026-05-01 to 2026-01-01 TRx?",
+    ],
+)
+def test_refused_current_scalar_ask_does_not_explain_stale_prior_results(
+    monkeypatch: pytest.MonkeyPatch, query: str
+) -> None:
+    """A recognized current ask owns the turn even when its scope is refused."""
+    stale = [
+        {
+            "agent_name": "gap_analyzer",
+            "success": True,
+            "result": {"key_findings": ["STALE PRIOR"]},
+        }
+    ]
+    monkeypatch.setattr(
+        "src.api.routes.kpi.get_kpi_calculator", lambda: _ScalarCalculatorMustNotRun()
+    )
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input(query, agent_results=stale), _dispatch()
+    )
+
+    assert isinstance(resolved, NeedsStructuredInput), resolved
+
+
+def test_multi_region_trend_clarifies_without_reading_national_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _HistoryClient(_rows("WS3-BI-005"))
+    monkeypatch.setattr("src.api.dependencies.supabase_client.get_supabase", lambda: client)
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("In west and south, what is the TRx trend?"), _dispatch()
+    )
+
+    assert isinstance(resolved, dict), resolved
+    evidence = resolved["analysis_results"]
+    assert [item["analysis_type"] for item in evidence] == ["kpi_lookup_clarification"]
+    assert all(call[0] != "table" for call in client.calls)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Show me the trend for TRx.",
+        "Show me TRx over time.",
+        "What is the TRx time series?",
+    ],
+)
+def test_common_trend_shapes_bind_history_not_a_scalar(
+    monkeypatch: pytest.MonkeyPatch, query: str
+) -> None:
+    client = _HistoryClient(_rows("WS3-BI-005"))
+    monkeypatch.setattr("src.api.dependencies.supabase_client.get_supabase", lambda: client)
+    monkeypatch.setattr(
+        "src.api.routes.kpi.get_kpi_calculator", lambda: _ScalarCalculatorMustNotRun()
+    )
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](_agent_input(query), _dispatch())
+
+    assert isinstance(resolved, dict), resolved
+    assert resolved["analysis_results"][0]["analysis_type"] == "kpi_trend"
+    assert ("table", "kpi_history") in client.calls
+
+
+def test_invalid_explicit_trend_window_fails_closed_without_raising(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _HistoryClient(_rows("WS3-BI-005"))
+    monkeypatch.setattr("src.api.dependencies.supabase_client.get_supabase", lambda: client)
+
+    resolved = disp.INPUT_RESOLVERS["explainer"](
+        _agent_input("What is the 2026-05-01 to 2026-01-01 TRx trend?"), _dispatch()
+    )
+
+    assert isinstance(resolved, NeedsStructuredInput), resolved
+    assert all(call[0] != "table" for call in client.calls)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
         "What is TRx cost?",
         "By pharmacy, show me the TRx trend.",
         "Show me the trend of TRx and NRx.",

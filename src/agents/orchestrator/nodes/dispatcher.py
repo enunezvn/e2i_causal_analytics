@@ -2549,13 +2549,18 @@ def _resolve_explainer_input(
         # keeps serving it. A causal-fallback turn skips ask-directed KPI evidence.
         ask_directed = False
         if not analysis_results and not _is_causal_fallback(agent_input):
+            from .intent_classifier import KPI_VALUE_LOOKUP_RE
             from .kpi_trend_evidence import resolve_kpi_trend_evidence
 
             trend_evidence = resolve_kpi_trend_evidence(agent_input)
-            ask_directed = trend_evidence is not None
-            analysis_results = (
-                trend_evidence if ask_directed else (_kpi_lookup_evidence(agent_input) or [])
-            )
+            query = agent_input.get("query")
+            scalar_ask = isinstance(query, str) and KPI_VALUE_LOOKUP_RE.search(query) is not None
+            if trend_evidence is not None:
+                ask_directed = True
+                analysis_results = trend_evidence
+            else:
+                ask_directed = scalar_ask
+                analysis_results = _kpi_lookup_evidence(agent_input) or []
         if not analysis_results and not ask_directed:
             # (2c) carried upstream results (#883 §3 anaphora).
             analysis_results = _successful_upstream_results(agent_input)

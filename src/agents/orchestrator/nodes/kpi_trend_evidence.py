@@ -23,6 +23,13 @@ logger = logging.getLogger(__name__)
 _TREND_HEADS = frozenset({"trend", "trends", "trajectory", "evolution", "history"})
 _TREND_HEAD_RE = re.compile(r"\b(?:trends?|trajectory|evolution|history)\b", re.I)
 _CHANGE_RE = re.compile(r"\b(?:evolv(?:e|es|ed|ing)|chang(?:e|es|ed|ing))\b", re.I)
+_TREND_FOR_RE = re.compile(
+    r"\b(?:trends?|trajectory|evolution|history)\s+for\s+"
+    r"(?:(?:the|this|our)\s+)?(?:[\w'-]+\s+){0,2}$",
+    re.I,
+)
+_OVER_TIME_RE = re.compile(r"^\s*over\s+time\b", re.I)
+_TIME_SERIES_RE = re.compile(r"^\s*time[\s-]+series\b", re.I)
 _CUE_RE = re.compile(
     r"\b(?:what(?:'?s| is| are| was| were)|show me|tell me about|give me|how many|can you)\b",
     re.I,
@@ -48,13 +55,19 @@ def _has_direct_trend_relation(normalized: str, start: int, end: int) -> bool:
 
     if _kpi_governing_of_head(normalized, start) in _TREND_HEADS:
         return True
+    if _TREND_FOR_RE.search(normalized[:start]):
+        return True
     if _kpi_right_head(normalized, end) in _TREND_HEADS:
         return True
     tail = normalized[end:]
-    return _CHANGE_RE.match(tail.lstrip()) is not None
+    return (
+        _CHANGE_RE.match(tail.lstrip()) is not None
+        or _OVER_TIME_RE.match(tail) is not None
+        or _TIME_SERIES_RE.match(tail) is not None
+    )
 
 
-def _as_value_shape(normalized: str) -> str:
+def _as_value_shape(normalized: str, metric_end: int) -> str:
     """Replace only the trend operator while preserving string coordinates.
 
     The established scalar guard already validates all representable
@@ -71,6 +84,11 @@ def _as_value_shape(normalized: str) -> str:
         chars[match.start() : match.end()] = replacement
     for match in _CHANGE_RE.finditer(normalized):
         chars[match.start() : match.end()] = " " * (match.end() - match.start())
+    for pattern in (_OVER_TIME_RE, _TIME_SERIES_RE):
+        match = pattern.match(normalized[metric_end:])
+        if match is not None:
+            start_at, end_at = metric_end + match.start(), metric_end + match.end()
+            chars[start_at:end_at] = " " * (end_at - start_at)
     return "".join(chars)
 
 
@@ -138,7 +156,7 @@ def resolve_kpi_trend_evidence(
     from .kpi_value_guard import value_lookup_mentions_supported
 
     if not value_lookup_mentions_supported(
-        _as_value_shape(normalized),
+        _as_value_shape(normalized, end),
         kpi.id,
         start,
         end,
@@ -156,14 +174,24 @@ def resolve_kpi_trend_evidence(
     if region is None:
         from src.services.query_entities import region_scan
 
-        ambiguous = region_scan(query).ambiguous_phrase
-        if ambiguous is not None:
-            return [region_clarify_evidence(kpi, ambiguous)]
+        scan = region_scan(query)
+        if scan.needs_clarification:
+            phrase = scan.ambiguous_phrase or " and ".join(scan.grounded_regions)
+            return [region_clarify_evidence(kpi, phrase)]
     brand_clarify = brand_clarify_for_ask(kpi, query, decided_brand)
     if brand_clarify is not None:
         return [brand_clarify]
 
-    window = _window_from_query(query)
+    from src.services.time_window import WindowParseError
+
+    try:
+        window = _window_from_query(query)
+    except WindowParseError as exc:
+        logger.info(
+            "explainer trend resolver: explicit KPI window is invalid (%s) -> failing closed",
+            exc,
+        )
+        return []
     try:
         from src.repositories.kpi_history import get_kpi_history_sync
 
