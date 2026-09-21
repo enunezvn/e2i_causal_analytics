@@ -667,8 +667,8 @@ async def digital_twin_health() -> DigitalTwinHealthResponse:
         logger.warning("Digital Twin health: failed to list active models: %s", e)
         return DigitalTwinHealthResponse(
             status="degraded",
-            service="digital-twin",
             models_available=0,
+            brands_simulable=0,
             simulations_pending=0,
             last_simulation_at=None,
         )
@@ -691,8 +691,8 @@ async def digital_twin_health() -> DigitalTwinHealthResponse:
         logger.warning("Digital Twin health: failed to list simulations: %s", e)
         return DigitalTwinHealthResponse(
             status="degraded",
-            service="digital-twin",
             models_available=models_available,
+            brands_simulable=0,
             simulations_pending=0,
             last_simulation_at=None,
         )
