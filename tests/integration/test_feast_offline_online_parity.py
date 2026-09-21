@@ -57,6 +57,7 @@ Phase 3 Task 3.2 (shard #4: 9/9 coverage + clock-skew).
 from __future__ import annotations
 
 import math
+import re
 import sys as _sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -555,7 +556,7 @@ def _floats_close(a: float, b: float) -> bool:
 #   * ``test_feature_view_probe_count_invariant`` — count of probes built
 #     by ``_build_feature_view_probes()`` (catches BOTH registry shrink
 #     AND probe-build regressions).
-#   * ``test_feature_view_map_registers_exactly_9_fvs`` — count of FVs in
+#   * ``test_feature_view_map_registers_exactly_9_fvs`` — the FVs defined vs
 #     the source-of-truth ``FEATURE_VIEW_MAP`` registry (isolates registry
 #     shrink from probe-build regressions; if only the probe-count check
 #     fails, the issue is in entity resolution or source.get_table_query_string).
@@ -566,41 +567,8 @@ def _floats_close(a: float, b: float) -> bool:
 # ``pytest.importorskip("feast")`` already gates the file on feast SDK.
 
 
-EXPECTED_FEATURE_VIEW_COUNT = 9
-
-
-def test_feature_view_probe_count_invariant() -> None:
-    """Hard floor: ``FEATURE_VIEW_PROBES`` must have exactly 9 entries.
-
-    Catches both registry shrink (an FV dropped from FEATURE_VIEW_MAP) and
-    probe-build regressions (entity resolution failed, source-subquery
-    extraction raised). Either failure mode silently reduces parity
-    coverage without this guard.
-    """
-    actual = len(FEATURE_VIEW_PROBES)
-    actual_names = sorted(p[0] for p in FEATURE_VIEW_PROBES)
-    assert actual == EXPECTED_FEATURE_VIEW_COUNT, (
-        f"FEATURE_VIEW_PROBES has {actual} entries, expected "
-        f"{EXPECTED_FEATURE_VIEW_COUNT}. Phase 3 Task 3.2 promised "
-        f"9/9 FV coverage; partial coverage silently masks parity violations "
-        f"on missing FVs. Probe names: {actual_names!r}. "
-        f"Investigate feature_repo/features/__init__.py FEATURE_VIEW_MAP "
-        f"and _build_feature_view_probes() entity resolution."
-    )
-
-
-def test_feature_view_map_registers_exactly_9_fvs() -> None:
-    """Upstream registry invariant — isolates registry shrink from probe-build bugs.
-
-    Companion to ``test_feature_view_probe_count_invariant``. Reads
-    ``FEATURE_VIEW_MAP`` directly. Failure-mode triage:
-
-    * Both this AND ``test_feature_view_probe_count_invariant`` fail →
-      the source registry shrank; fix ``feature_repo/features/__init__.py``.
-    * Only the probe-count fails → probe-build logic regressed
-      (entity resolution or source.get_table_query_string raised);
-      fix ``_build_feature_view_probes()`` in this module.
-    """
+def _registered_feature_views() -> dict[str, object]:
+    """``{feast name: FeatureView}`` from the source-of-truth ``FEATURE_VIEW_MAP``."""
     feature_repo_path = str(FEATURE_REPO)
     if feature_repo_path not in _sys.path:
         _sys.path.insert(0, feature_repo_path)
@@ -608,35 +576,76 @@ def test_feature_view_map_registers_exactly_9_fvs() -> None:
         from features import FEATURE_VIEW_MAP  # type: ignore[import-not-found]
     except ImportError as exc:
         pytest.fail(
-            f"feature_repo/features/__init__.py not importable from "
-            f"{FEATURE_REPO!r}: {exc!s:.300}. The 9-FV registry invariant "
-            f"cannot be verified — the parity coverage commitment is broken."
+            f"feature_repo/features/__init__.py not importable from {FEATURE_REPO!r}: "
+            f"{exc!s:.300}. The parity coverage commitment cannot be verified."
         )
-    actual = len(FEATURE_VIEW_MAP)
-    registered = sorted(FEATURE_VIEW_MAP.keys())
-    assert actual == EXPECTED_FEATURE_VIEW_COUNT, (
-        f"FEATURE_VIEW_MAP has {actual} entries, expected "
-        f"{EXPECTED_FEATURE_VIEW_COUNT}. Registered FVs: {registered!r}. "
-        f"Check feature_repo/features/__init__.py for adds/drops."
+    return {fv.name: fv for fv in FEATURE_VIEW_MAP.values()}
+
+
+def _defined_feature_view_names() -> set[str]:
+    """Every ``FeatureView`` object defined anywhere under ``feature_repo/features``."""
+    import importlib
+    import pkgutil
+
+    from feast import FeatureView
+
+    _registered_feature_views()  # puts feature_repo on sys.path, fails loudly if it cannot
+    package = importlib.import_module("features")
+    names: set[str] = set()
+    for info in pkgutil.iter_modules(package.__path__):
+        module = importlib.import_module(f"features.{info.name}")
+        names |= {v.name for v in vars(module).values() if isinstance(v, FeatureView)}
+    return names
+
+
+def _assert_probes_cover(probe_names: set[str], registered: set[str]) -> None:
+    """Parity coverage is complete only when every registered view has a probe, and no more."""
+    assert probe_names == registered, (
+        f"parity probes do not cover the registry. Missing a probe (parity violations on these "
+        f"views would go unseen): {sorted(registered - probe_names)!r}; probes for unregistered "
+        f"views: {sorted(probe_names - registered)!r}. A missing probe means "
+        f"_build_feature_view_probes() dropped it (entity resolution or the source query raised)."
+    )
+
+
+def test_feature_view_probe_count_invariant() -> None:
+    """Every registered feature view has a parity probe.
+
+    This used to pin ``== 9``. The registry grew to 11 on 2026-06-15 (the two ``goldstd_*``
+    cohort views) and the pin went red in a file no CI workflow runs, so it stayed red for three
+    months and blocked a live certification. The commitment was never "nine": it is that NO
+    registered view lacks a probe, so that is what is asserted.
+    """
+    _assert_probes_cover({p[0] for p in FEATURE_VIEW_PROBES}, set(_registered_feature_views()))
+
+
+def test_feature_view_map_registers_exactly_9_fvs() -> None:
+    """Registry shrink: every FeatureView defined under ``feature_repo/features`` is registered.
+
+    (Name kept so the live-certification command and its history stay comparable.) Isolates a
+    view dropped from ``FEATURE_VIEW_MAP`` from a probe-build regression: if only the probe test
+    fails, the defect is in ``_build_feature_view_probes()``.
+    """
+    defined, registered = _defined_feature_view_names(), set(_registered_feature_views())
+    assert defined, "found no FeatureView under feature_repo/features — the check would be vacuous"
+    assert defined == registered, (
+        f"defined but not registered: {sorted(defined - registered)!r}; registered but not "
+        f"defined in features/*: {sorted(registered - defined)!r}"
     )
 
 
 def test_feature_view_probe_count_invariant_discriminates() -> None:
-    """Vacuous-pass guard for the 9-FV invariant.
+    """The coverage assertion fires when ONE probe goes missing, and only then.
 
-    Per ``feedback_pr_merge_workflow.md`` §7, the invariant test must fail
-    when the count drifts. Confirms the assertion machinery would actually
-    fire under a synthetic 8-element regression scenario (one FV dropped).
+    The earlier version asserted ``len(shrunk) == 9`` raises. With 11 views that raises whether
+    or not anything regressed (10 != 9), so it proved nothing. This one runs the real helper on
+    the real sets: intact passes, one dropped fails, naming the dropped view.
     """
-    shrunk_probes: list[tuple[str, tuple[str, ...], str]] = list(FEATURE_VIEW_PROBES)[:-1]
-    if len(FEATURE_VIEW_PROBES) == 0:
-        pytest.fail(
-            "FEATURE_VIEW_PROBES is empty; the discrimination check is moot. "
-            "Investigate _build_feature_view_probes() before relying on the "
-            "9-FV invariant."
-        )
-    with pytest.raises(AssertionError, match=r"expected 9"):
-        actual = len(shrunk_probes)
-        assert actual == EXPECTED_FEATURE_VIEW_COUNT, (
-            f"FEATURE_VIEW_PROBES has {actual} entries, expected {EXPECTED_FEATURE_VIEW_COUNT}."
-        )
+    probe_names = {p[0] for p in FEATURE_VIEW_PROBES}
+    registered = set(_registered_feature_views())
+    if not probe_names:
+        pytest.fail("FEATURE_VIEW_PROBES is empty; investigate _build_feature_view_probes().")
+    _assert_probes_cover(probe_names, registered)
+    dropped = sorted(probe_names)[-1]
+    with pytest.raises(AssertionError, match=re.escape(dropped)):
+        _assert_probes_cover(probe_names - {dropped}, registered)
