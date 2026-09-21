@@ -306,7 +306,8 @@ class TestSimulationExecution:
                     "email_campaign_count": float(
                         rng.uniform(8.0, 11.0) if treated else rng.uniform(0.0, 3.0)
                     ),
-                    "cohort_conversion_outcome": (1.3 if treated else 1.0) + float(rng.normal(0.0, 0.15)),
+                    "cohort_conversion_outcome": (1.3 if treated else 1.0)
+                    + float(rng.normal(0.0, 0.15)),
                     "market_share": float(rng.uniform(0.1, 0.9)),
                     "triggers_total_count": float(rng.integers(30, 90)),
                 }
