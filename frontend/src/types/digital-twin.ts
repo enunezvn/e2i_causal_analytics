@@ -147,6 +147,12 @@ export interface InterventionTypeItem {
 /** Brand-aware list of canonical intervention types for the dropdown. */
 export interface InterventionTypesResponse {
   interventions: InterventionTypeItem[];
+  /**
+   * 'measured': every cohort probe ran, so `available_for_effect: false` means too few usable
+   * rows. 'unmeasured': the probes errored and nothing usable was found — the flags are unknown,
+   * not a finding (retry; do not restore data). Absent on older backends = measured.
+   */
+  effect_availability_status?: 'measured' | 'unmeasured';
   /** Brand the availability was resolved for (null when no brand was passed). */
   brand: string | null;
   /** Twin type the availability was resolved for. */

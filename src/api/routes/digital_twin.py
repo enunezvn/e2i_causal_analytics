@@ -42,11 +42,17 @@ from src.api.dependencies.auth import (
     resolve_brand_for_read,
 )
 from src.api.routes.digital_twin_capability import (
+    effect_data_unmeasured,
     simulable_brands,
     warn_model_without_effect_data,
 )
 from src.api.routes.digital_twin_rejections import Decile, rejected_request
-from src.api.schemas.digital_twin import DigitalTwinHealthResponse, EffectHeterogeneityResponse
+from src.api.schemas.digital_twin import (
+    DigitalTwinHealthResponse,
+    EffectHeterogeneityResponse,
+    InterventionTypeItem,
+    InterventionTypesResponse,
+)
 from src.api.schemas.digital_twin import heterogeneity_response as _heterogeneity_response
 from src.api.schemas.digital_twin import live_subgroups_basis as _live_subgroups_basis
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
@@ -709,46 +715,6 @@ async def digital_twin_health() -> DigitalTwinHealthResponse:
 # =============================================================================
 
 
-class InterventionTypeItem(BaseModel):
-    """A canonical, selectable intervention type for the simulation dropdown."""
-
-    value: str = Field(..., description="Canonical intervention_type value")
-    label: str = Field(..., description="Human-readable label")
-    effect_basis: str = Field(
-        ...,
-        description=(
-            "'cohort_causal' (effect is IDENTIFIED in the connected cohort and estimated "
-            "by direct DML causal estimation) or 'unavailable' (not identified in the "
-            "data — no fabricated effect is produced)"
-        ),
-    )
-    available: bool = Field(
-        ...,
-        description=(
-            "True if a trained twin model exists for the requested brand/twin_type "
-            "(else /simulate would 503)."
-        ),
-    )
-    available_for_effect: bool = Field(
-        ...,
-        description=(
-            "True only if the intervention's effect is IDENTIFIED in the connected cohort "
-            "(a causal estimate is possible). The frontend should expose only "
-            "effect-available interventions; the rest are an honest 'no effect data' "
-            "state rather than a fabricated uplift (and /simulate returns 422 for them)."
-        ),
-    )
-
-
-class InterventionTypesResponse(BaseModel):
-    """Brand-aware list of canonical intervention types for the dropdown."""
-
-    interventions: List[InterventionTypeItem] = Field(default_factory=list)
-    brand: Optional[str] = Field(None, description="Brand the availability was resolved for")
-    twin_type: str = Field(..., description="Twin type the availability was resolved for")
-    timestamp: datetime = Field(..., description="Response timestamp")
-
-
 @router.get(
     "/intervention-types",
     response_model=InterventionTypesResponse,
@@ -779,6 +745,7 @@ async def list_intervention_types(
 
     available = False
     effect_available: Dict[str, bool] = {}
+    effect_status: Literal["measured", "unmeasured"] = "measured"
     if brand is not None:
         try:
             repo = await _get_twin_repo()
@@ -792,6 +759,8 @@ async def list_intervention_types(
             effect_available = await cohort_treatment_availability(repo.client, brand.value)
             if available and not any(effect_available.values()):
                 warn_model_without_effect_data(brand.value, effect_available)
+                if effect_data_unmeasured(effect_available):
+                    effect_status = "unmeasured"
         except Exception as e:  # repo/DB unreachable — degrade, never fabricate
             logger.warning("intervention-types: availability/cohort check failed: %s", e)
             available = False
@@ -809,6 +778,7 @@ async def list_intervention_types(
     ]
     return InterventionTypesResponse(
         interventions=items,
+        effect_availability_status=effect_status,
         brand=brand.value if brand else None,
         twin_type=twin_type.value,
         timestamp=datetime.now(timezone.utc),

@@ -109,15 +109,27 @@ def build_grounding(
     labels = dict(catalog)
     identified = [labels.get(v, v) for v, ok in effect_available.items() if ok]
     missing = [labels.get(v, v) for v, _label in catalog if not effect_available.get(v)]
-    intervention_coverage = (
-        f"{len(identified)} of {len(catalog)} catalog interventions carry an identified "
-        f"causal effect (cohort-estimated from the synthetic-gold cohort): "
-        + (", ".join(sorted(identified)) or "none")
-        + (f". Not yet identified: {', '.join(sorted(missing))}." if missing else ".")
-    )
+    # A probe map whose probes ERRORED reads all-False. Reporting that as "0 of 8 identified"
+    # is a fabricated finding that the insight cache would then keep for an hour (codex r2).
+    n_probe_errors = int(getattr(effect_available, "n_probe_errors", 0))
+    grounding_incomplete = not identified and n_probe_errors > 0
+    if grounding_incomplete:
+        intervention_coverage = (
+            f"Intervention coverage could not be measured for {brand}: {n_probe_errors} cohort "
+            "availability probe(s) errored. No statement about identified effects is possible "
+            "from this request."
+        )
+    else:
+        intervention_coverage = (
+            f"{len(identified)} of {len(catalog)} catalog interventions carry an identified "
+            f"causal effect (cohort-estimated from the synthetic-gold cohort): "
+            + (", ".join(sorted(identified)) or "none")
+            + (f". Not yet identified: {', '.join(sorted(missing))}." if missing else ".")
+        )
 
     return {
         "scope": brand,
+        "grounding_incomplete": grounding_incomplete,
         "model_summary": model_summary,
         "simulation_summary": simulation_summary,
         "latest_result": latest_result,

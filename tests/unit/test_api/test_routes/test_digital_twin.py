@@ -446,6 +446,44 @@ async def test_a_failed_probe_is_not_remembered_and_does_not_recommend_a_replant
 
 
 @pytest.mark.asyncio
+async def test_intervention_types_payload_says_unmeasured_not_missing_when_the_probe_failed(
+    mock_twin_repository, monkeypatch
+):
+    """codex r2 MEDIUM: fixing the log was not enough. The payload still read as a MEASURED empty
+    cohort, so the page told the reader to restore the cohort data, and React Query kept that
+    answer fresh. The payload now carries the measurement state."""
+    from src.api.routes.digital_twin import BrandEnum, TwinTypeEnum, list_intervention_types
+
+    mock_twin_repository.list_active_models = AsyncMock(return_value=[{"model_id": "m1"}])
+    monkeypatch.setattr(
+        "src.digital_twin.effect.cohort_loader.cohort_treatment_availability",
+        AsyncMock(return_value=_Unmeasured({"email_campaign": False})),
+    )
+    result = await list_intervention_types(
+        brand=BrandEnum.KISQALI, twin_type=TwinTypeEnum.HCP, user=_ADMIN_USER
+    )
+    assert result.effect_availability_status == "unmeasured"
+    assert all(not i.available_for_effect for i in result.interventions)
+
+
+@pytest.mark.asyncio
+async def test_intervention_types_payload_says_measured_when_the_probes_ran(
+    mock_twin_repository, monkeypatch
+):
+    from src.api.routes.digital_twin import BrandEnum, TwinTypeEnum, list_intervention_types
+
+    mock_twin_repository.list_active_models = AsyncMock(return_value=[{"model_id": "m1"}])
+    monkeypatch.setattr(
+        "src.digital_twin.effect.cohort_loader.cohort_treatment_availability",
+        AsyncMock(return_value={"email_campaign": False}),
+    )
+    result = await list_intervention_types(
+        brand=BrandEnum.KISQALI, twin_type=TwinTypeEnum.HCP, user=_ADMIN_USER
+    )
+    assert result.effect_availability_status == "measured"
+
+
+@pytest.mark.asyncio
 async def test_intervention_types_does_not_recommend_a_replant_when_the_probe_failed(
     mock_twin_repository, monkeypatch, caplog
 ):

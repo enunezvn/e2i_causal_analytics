@@ -12285,6 +12285,13 @@ export interface components {
             /** Interventions */
             interventions?: components["schemas"]["InterventionTypeItem"][];
             /**
+             * Effect Availability Status
+             * @description 'measured' when every cohort probe ran, so available_for_effect=False means the cohort holds too few usable rows for that channel. 'unmeasured' when the probes errored and nothing usable was found: the flags are then unknown, not a finding — retry, do not restore data.
+             * @default measured
+             * @enum {string}
+             */
+            effect_availability_status: "measured" | "unmeasured";
+            /**
              * Brand
              * @description Brand the availability was resolved for
              */

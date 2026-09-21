@@ -22,9 +22,12 @@ _SIMULABLE_TTL_S = 300.0
 _simulable_cache: Dict[str, Tuple[float, bool]] = {}
 
 
-def _unmeasured(availability: Mapping[str, bool]) -> bool:
-    """Nothing usable AND at least one probe errored: unknown, not empty (codex r1)."""
+def effect_data_unmeasured(availability: Mapping[str, bool]) -> bool:
+    """Nothing usable AND at least one probe errored: unknown, not empty (codex r1/r2)."""
     return not any(availability.values()) and getattr(availability, "n_probe_errors", 0) > 0
+
+
+_unmeasured = effect_data_unmeasured
 
 
 async def brand_is_simulable(client: Any, brand: str) -> Optional[bool]:

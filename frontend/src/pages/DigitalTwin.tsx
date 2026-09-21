@@ -226,8 +226,12 @@ function SimulationForm({
   // model (train one) vs a model whose cohort identifies no intervention effect
   // (restore the cohort's treatment data). Naming the wrong one sends the reader
   // looking for a model that already exists.
-  const modelExistsWithoutEffectData =
-    noneAvailable && (typesData?.interventions ?? []).some((i) => i.available);
+  const modelExists = (typesData?.interventions ?? []).some((i) => i.available);
+  // The backend says whether the empty set was MEASURED or the cohort probes errored. A blip
+  // must not read as "your cohort data is gone" (that message recommends a production restore).
+  const effectDataUnmeasured =
+    noneAvailable && modelExists && typesData?.effect_availability_status === 'unmeasured';
+  const modelExistsWithoutEffectData = noneAvailable && modelExists && !effectDataUnmeasured;
 
   // Phase 2: surface HOW the selected intervention's effect is computed —
   // "cohort_estimated" (brand/intervention-specific, estimated from the
@@ -278,9 +282,16 @@ function SimulationForm({
             Could not verify availability — showing all interventions.
           </p>
         )}
-        {noneAvailable && !modelExistsWithoutEffectData && (
+        {noneAvailable && !modelExists && (
           <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
             No trained twin model for {brand} yet — simulations are unavailable for this brand.
+          </p>
+        )}
+        {effectDataUnmeasured && (
+          <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+            Intervention availability for {brand} could not be verified just now — the cohort
+            check did not complete. It is retried automatically; simulations stay disabled until
+            it succeeds.
           </p>
         )}
         {modelExistsWithoutEffectData && (

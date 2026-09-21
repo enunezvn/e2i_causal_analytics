@@ -96,3 +96,52 @@ class DigitalTwinHealthResponse(BaseModel):
     )
     simulations_pending: int = Field(..., description="Number of pending simulations")
     last_simulation_at: Optional[datetime] = Field(None, description="Timestamp of last simulation")
+
+
+class InterventionTypeItem(BaseModel):
+    """A canonical, selectable intervention type for the simulation dropdown."""
+
+    value: str = Field(..., description="Canonical intervention_type value")
+    label: str = Field(..., description="Human-readable label")
+    effect_basis: str = Field(
+        ...,
+        description=(
+            "'cohort_causal' (effect is IDENTIFIED in the connected cohort and estimated "
+            "by direct DML causal estimation) or 'unavailable' (not identified in the "
+            "data — no fabricated effect is produced)"
+        ),
+    )
+    available: bool = Field(
+        ...,
+        description=(
+            "True if a trained twin model exists for the requested brand/twin_type "
+            "(else /simulate would 503)."
+        ),
+    )
+    available_for_effect: bool = Field(
+        ...,
+        description=(
+            "True only if the intervention's effect is IDENTIFIED in the connected cohort "
+            "(a causal estimate is possible). The frontend should expose only "
+            "effect-available interventions; the rest are an honest 'no effect data' "
+            "state rather than a fabricated uplift (and /simulate returns 422 for them)."
+        ),
+    )
+
+
+class InterventionTypesResponse(BaseModel):
+    """Brand-aware list of canonical intervention types for the dropdown."""
+
+    interventions: List[InterventionTypeItem] = Field(default_factory=list)
+    effect_availability_status: Literal["measured", "unmeasured"] = Field(
+        "measured",
+        description=(
+            "'measured' when every cohort probe ran, so available_for_effect=False means the "
+            "cohort holds too few usable rows for that channel. 'unmeasured' when the probes "
+            "errored and nothing usable was found: the flags are then unknown, not a finding — "
+            "retry, do not restore data."
+        ),
+    )
+    brand: Optional[str] = Field(None, description="Brand the availability was resolved for")
+    twin_type: str = Field(..., description="Twin type the availability was resolved for")
+    timestamp: datetime = Field(..., description="Response timestamp")
