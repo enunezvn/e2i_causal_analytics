@@ -9129,6 +9129,12 @@ export interface components {
              */
             models_available: number;
             /**
+             * Brands Simulable
+             * @description Brands with an active twin model AND at least one intervention whose effect is identified in the connected cohort, i.e. brands /simulate can actually serve. models_available > 0 with brands_simulable == 0 means the models are present but the cohort's treatment data is not (status is then 'degraded').
+             * @default 0
+             */
+            brands_simulable: number;
+            /**
              * Simulations Pending
              * @description Number of pending simulations
              */

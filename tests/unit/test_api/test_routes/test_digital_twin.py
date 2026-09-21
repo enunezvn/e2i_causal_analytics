@@ -325,19 +325,116 @@ def mock_fidelity_tracker():
 
 
 @pytest.mark.asyncio
-async def test_digital_twin_health_reports_real_stats(mock_twin_repository):
+async def test_digital_twin_health_reports_real_stats(mock_twin_repository, monkeypatch):
     """Health must report REAL model/simulation counts from the repository,
     not hardcoded operational stats (was: models_available=3, pending=0)."""
     from src.api.routes.digital_twin import digital_twin_health
 
     # Repository fixture returns one active model and one (completed) simulation.
+    # "healthy" now has to MEAN simulable, so the brand's cohort must identify an effect.
+    monkeypatch.setattr(
+        "src.digital_twin.effect.cohort_loader.cohort_treatment_availability",
+        AsyncMock(return_value={"email_campaign": True, "digital_engagement": False}),
+    )
     result = await digital_twin_health()
+    assert result.brands_simulable == 1
 
     assert result.service == "digital-twin"
     assert result.models_available == 1  # from mock_twin_repository.list_active_models
     assert result.status == "healthy"
     # No pending simulations in the fixture (status == completed).
     assert result.simulations_pending == 0
+
+
+@pytest.fixture(autouse=True)
+def _fresh_simulable_cache():
+    """The health readout remembers per-brand simulability briefly; tests must not share it."""
+    from src.api.routes import digital_twin_capability as capability
+
+    capability._simulable_cache.clear()
+    yield
+    capability._simulable_cache.clear()
+
+
+@pytest.mark.asyncio
+async def test_digital_twin_health_is_degraded_when_models_exist_but_nothing_is_simulable(
+    mock_twin_repository, monkeypatch
+):
+    """The 2026-09-21 outage: an active, loadable model for every brand while the cohort's planted
+    treatment channels were gone. Health said ``healthy, models_available=3`` — a count of models is
+    a proxy; the capability is "can /simulate serve a brand"."""
+    from src.api.routes.digital_twin import digital_twin_health
+
+    monkeypatch.setattr(
+        "src.digital_twin.effect.cohort_loader.cohort_treatment_availability",
+        AsyncMock(return_value={"email_campaign": False, "digital_engagement": False}),
+    )
+    result = await digital_twin_health()
+
+    assert result.models_available == 1
+    assert result.brands_simulable == 0
+    assert result.status == "degraded"
+
+
+@pytest.mark.asyncio
+async def test_digital_twin_health_with_no_models_is_not_a_cohort_problem(
+    mock_twin_repository, monkeypatch
+):
+    """No trained model is the OTHER gate; it must not be reported as missing cohort data, and the
+    cohort must not even be queried for brands that have no model."""
+    from src.api.routes.digital_twin import digital_twin_health
+
+    availability = AsyncMock(return_value={})
+    monkeypatch.setattr(
+        "src.digital_twin.effect.cohort_loader.cohort_treatment_availability", availability
+    )
+    mock_twin_repository.list_active_models.return_value = []
+    result = await digital_twin_health()
+
+    assert (result.models_available, result.brands_simulable) == (0, 0)
+    assert result.status == "healthy"
+    availability.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_digital_twin_health_remembers_simulability_between_polls(
+    mock_twin_repository, monkeypatch
+):
+    """The page polls /health every 60 s per viewer and one answer costs eight exact counts."""
+    from src.api.routes.digital_twin import digital_twin_health
+
+    availability = AsyncMock(return_value={"email_campaign": True})
+    monkeypatch.setattr(
+        "src.digital_twin.effect.cohort_loader.cohort_treatment_availability", availability
+    )
+    await digital_twin_health()
+    await digital_twin_health()
+
+    assert availability.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_intervention_types_warns_when_a_model_exists_but_the_cohort_has_no_effect_data(
+    mock_twin_repository, monkeypatch, caplog
+):
+    """On 2026-09-21 this state produced NO log line at all: the check ran cleanly and found
+    nothing. It must name the brand and the remedy."""
+    import logging
+
+    from src.api.routes.digital_twin import BrandEnum, TwinTypeEnum, list_intervention_types
+
+    mock_twin_repository.list_active_models = AsyncMock(return_value=[{"model_id": "m1"}])
+    monkeypatch.setattr(
+        "src.digital_twin.effect.cohort_loader.cohort_treatment_availability",
+        AsyncMock(return_value={"email_campaign": False, "digital_engagement": False}),
+    )
+    with caplog.at_level(logging.WARNING, logger="src.api.routes.digital_twin"):
+        await list_intervention_types(
+            brand=BrandEnum.KISQALI, twin_type=TwinTypeEnum.HCP, user=_ADMIN_USER
+        )
+
+    text = " ".join(r.getMessage() for r in caplog.records)
+    assert "Kisqali" in text and "backfill_segment_engagement" in text
 
 
 @pytest.mark.asyncio

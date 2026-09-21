@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -76,3 +77,22 @@ def live_subgroups_basis(
     if data_provenance in {PROVENANCE_SYNTHETIC, PROVENANCE_RWD}:
         return "per_twin"
     return "unknown"
+
+
+class DigitalTwinHealthResponse(BaseModel):
+    """Health status for Digital Twin service."""
+
+    status: str = Field(..., description="Service health status")
+    service: str = Field(default="digital-twin", description="Service name")
+    models_available: int = Field(..., description="Number of twin models available")
+    brands_simulable: int = Field(
+        0,
+        description=(
+            "Brands with an active twin model AND at least one intervention whose effect is "
+            "identified in the connected cohort, i.e. brands /simulate can actually serve. "
+            "models_available > 0 with brands_simulable == 0 means the models are present but the "
+            "cohort's treatment data is not (status is then 'degraded')."
+        ),
+    )
+    simulations_pending: int = Field(..., description="Number of pending simulations")
+    last_simulation_at: Optional[datetime] = Field(None, description="Timestamp of last simulation")

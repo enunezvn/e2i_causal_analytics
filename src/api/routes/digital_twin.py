@@ -41,8 +41,12 @@ from src.api.dependencies.auth import (
     require_viewer,
     resolve_brand_for_read,
 )
+from src.api.routes.digital_twin_capability import (
+    simulable_brands,
+    warn_model_without_effect_data,
+)
 from src.api.routes.digital_twin_rejections import Decile, rejected_request
-from src.api.schemas.digital_twin import EffectHeterogeneityResponse
+from src.api.schemas.digital_twin import DigitalTwinHealthResponse, EffectHeterogeneityResponse
 from src.api.schemas.digital_twin import heterogeneity_response as _heterogeneity_response
 from src.api.schemas.digital_twin import live_subgroups_basis as _live_subgroups_basis
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
@@ -629,16 +633,6 @@ class FidelityReportResponse(BaseModel):
 # =============================================================================
 
 
-class DigitalTwinHealthResponse(BaseModel):
-    """Health status for Digital Twin service."""
-
-    status: str = Field(..., description="Service health status")
-    service: str = Field(default="digital-twin", description="Service name")
-    models_available: int = Field(..., description="Number of twin models available")
-    simulations_pending: int = Field(..., description="Number of pending simulations")
-    last_simulation_at: Optional[datetime] = Field(None, description="Timestamp of last simulation")
-
-
 @router.get(
     "/health",
     response_model=DigitalTwinHealthResponse,
@@ -697,10 +691,14 @@ async def digital_twin_health() -> DigitalTwinHealthResponse:
             last_simulation_at=None,
         )
 
+    model_brands, brands_simulable = await simulable_brands(repo.client, models)
+    dark = bool(model_brands) and brands_simulable == 0
+
     return DigitalTwinHealthResponse(
-        status="healthy",
+        status="degraded" if dark else "healthy",
         service="digital-twin",
         models_available=models_available,
+        brands_simulable=brands_simulable,
         simulations_pending=pending,
         last_simulation_at=last_simulation_at,
     )
@@ -792,6 +790,8 @@ async def list_intervention_types(
             # planted treatment channel has enough usable synthetic-gold cohort
             # rows to estimate from (never a collective all-or-nothing flag).
             effect_available = await cohort_treatment_availability(repo.client, brand.value)
+            if available and not any(effect_available.values()):
+                warn_model_without_effect_data(brand.value)
         except Exception as e:  # repo/DB unreachable — degrade, never fabricate
             logger.warning("intervention-types: availability/cohort check failed: %s", e)
             available = False

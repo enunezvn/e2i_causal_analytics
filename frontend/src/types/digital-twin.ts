@@ -611,6 +611,11 @@ export interface DigitalTwinHealthResponse {
   service: string;
   /** Number of models available */
   models_available: number;
+  /**
+   * Brands with an active model AND at least one intervention identified in the cohort — the
+   * brands `/simulate` can actually serve. `models_available > 0` with this at 0 is `degraded`.
+   */
+  brands_simulable?: number;
   /** Number of pending simulations */
   simulations_pending: number;
   /** Timestamp of last simulation */
