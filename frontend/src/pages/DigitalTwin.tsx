@@ -222,6 +222,12 @@ function SimulationForm({
 
   const noneAvailable =
     !typesLoading && !typesError && availableInterventions.length === 0;
+  // Two different gates empty the menu, and they need different remedies: no trained
+  // model (train one) vs a model whose cohort identifies no intervention effect
+  // (restore the cohort's treatment data). Naming the wrong one sends the reader
+  // looking for a model that already exists.
+  const modelExistsWithoutEffectData =
+    noneAvailable && (typesData?.interventions ?? []).some((i) => i.available);
 
   // Phase 2: surface HOW the selected intervention's effect is computed —
   // "cohort_estimated" (brand/intervention-specific, estimated from the
@@ -272,9 +278,16 @@ function SimulationForm({
             Could not verify availability — showing all interventions.
           </p>
         )}
-        {noneAvailable && (
+        {noneAvailable && !modelExistsWithoutEffectData && (
           <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
             No trained twin model for {brand} yet — simulations are unavailable for this brand.
+          </p>
+        )}
+        {modelExistsWithoutEffectData && (
+          <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+            A trained twin model exists for {brand}, but its cohort has no usable treatment data
+            to estimate an intervention effect from — simulations are unavailable until the
+            cohort data is restored.
           </p>
         )}
         {!typesLoading && !noneAvailable && selectedBasis === 'cohort_estimated' && (
