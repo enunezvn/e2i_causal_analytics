@@ -172,7 +172,7 @@ def _region_heterogeneous_cohort(n_per_region: int = 250, seed: int = 7):
         )
     df = pd.concat(frames, ignore_index=True)
     treated = (df["email_campaign_count"] > df["email_campaign_count"].median()).astype(float)
-    df["conversion_rate"] = (
+    df["cohort_conversion_outcome"] = (
         0.5 + 0.8 * df["market_share"] + df["_tau"] * treated + rng.normal(0.0, 0.25, len(df))
     ).clip(lower=0.0)
     return df.drop(columns="_tau")

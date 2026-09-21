@@ -37,6 +37,7 @@ from src.digital_twin.effect.estimate import (
     AxisProvenance,
     EffectEstimate,
 )
+from src.digital_twin.effect.provider import COHORT_OUTCOME_COLUMN
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ DEFAULT_CONFOUNDERS: tuple[str, ...] = ("market_share", "triggers_total_count")
 _LOG_CONFOUNDERS = frozenset({"triggers_total_count"})
 
 _MIN_ROWS = 200  # DML needs a stable nuisance fit; the loader gates cohorts at >= 500.
-_OUTCOME_COL = "conversion_rate"
+_OUTCOME_COL = COHORT_OUTCOME_COLUMN
 _REGION_COL = "region"
 _SPECIALTY_COL = "specialty"
 _MISSING_SPECIALTY = "__missing_specialty__"

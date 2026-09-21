@@ -3592,7 +3592,7 @@ def power_calculator(
     description=(
         "Simulate a commercial intervention for a brand with the digital-twin engine (the "
         "engine behind /digital-twin/simulate): a causal-forest estimate of the "
-        "intervention's effect on HCP conversion_rate in the brand's synthetic-gold per-HCP "
+        "intervention's effect on the HCP conversion outcome in the brand's synthetic-gold per-HCP "
         "cohort, with its 95% interval, per-region effects and a DEPLOY / REFINE / SKIP "
         "recommendation. Estimates the effect itself, so it takes no upstream effect and needs no "
         "prior step unless target_entities come from one."

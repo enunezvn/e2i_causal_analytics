@@ -23,6 +23,7 @@ from src.digital_twin.effect.provider import (
     COHORT_CONFOUNDERS,
     COHORT_ESTIMABLE_INTERVENTIONS,
     COHORT_MIN_ROWS,
+    COHORT_OUTCOME_COLUMN,
     INTERVENTION_TREATMENT_MAP,
     CohortEffectDataProvider,
 )
@@ -42,14 +43,14 @@ _COHORT_COLUMNS = ",".join(
         "hcp_id",
         "region",
         "hcp_profiles(specialty)",
-        "conversion_rate",
+        COHORT_OUTCOME_COLUMN,
         "market_share",
         "triggers_total_count",
         *_TREATMENT_COLUMNS,
     ]
 )
 _NUMERIC_COLUMNS: tuple[str, ...] = (
-    "conversion_rate",
+    COHORT_OUTCOME_COLUMN,
     "market_share",
     "triggers_total_count",
     *_TREATMENT_COLUMNS,
@@ -193,7 +194,7 @@ def assess_cohort_frame(df: pd.DataFrame, intervention_type: str) -> CohortUsabi
     # non-null — aligned with what the direct estimator needs (it fails closed otherwise),
     # so we never build a provider that /simulate would then reject.
     has_treatment = treatment_col in df.columns
-    has_outcome = "conversion_rate" in df.columns
+    has_outcome = COHORT_OUTCOME_COLUMN in df.columns
     has_region = "region" in df.columns
     n_missing_confounders = sum(1 for c in COHORT_CONFOUNDERS if c not in df.columns)
     if not (has_treatment and has_outcome and has_region) or n_missing_confounders:
@@ -208,7 +209,7 @@ def assess_cohort_frame(df: pd.DataFrame, intervention_type: str) -> CohortUsabi
                 "n_missing_confounder_columns": n_missing_confounders,
             },
         )
-    required = [treatment_col, "conversion_rate", "region", *COHORT_CONFOUNDERS]
+    required = [treatment_col, COHORT_OUTCOME_COLUMN, "region", *COHORT_CONFOUNDERS]
     usable = df.dropna(subset=required)
     if len(usable) < COHORT_MIN_ROWS:
         logger.info(
@@ -226,7 +227,7 @@ def assess_cohort_frame(df: pd.DataFrame, intervention_type: str) -> CohortUsabi
                 "n_usable_rows": int(len(usable)),
                 "n_min_usable_rows": COHORT_MIN_ROWS,
                 "n_null_treatment_rows": int(df[treatment_col].isna().sum()),
-                "n_null_outcome_rows": int(df["conversion_rate"].isna().sum()),
+                "n_null_outcome_rows": int(df[COHORT_OUTCOME_COLUMN].isna().sum()),
                 "n_null_region_rows": int(df["region"].isna().sum()),
                 "n_null_confounder_rows": int(
                     df[list(COHORT_CONFOUNDERS)].isna().any(axis=1).sum()
@@ -248,7 +249,7 @@ async def _treatment_column_usable(client: Any, brand: str, treatment_col: str) 
         .eq("metric_type", COHORT_METRIC_TYPE)
         .eq("brand", brand)
         .not_.is_(treatment_col, "null")
-        .not_.is_("conversion_rate", "null")
+        .not_.is_(COHORT_OUTCOME_COLUMN, "null")
         .not_.is_("region", "null")
     )
     for col in COHORT_CONFOUNDERS:

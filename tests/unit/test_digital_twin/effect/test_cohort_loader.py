@@ -97,7 +97,7 @@ def _cohort_rows(n: int = 600, seed: int = 0, *, with_all_channels: bool = False
             "region": str(regions[i]),
             "engagement_score": float(eng[i]),
             "call_frequency": float(rng.uniform(0, 14)),
-            "conversion_rate": float(conv[i]),
+            "cohort_conversion_outcome": float(conv[i]),
             # Pre-treatment confounders the direct estimator/gate now require.
             "market_share": float(market[i]),
             "triggers_total_count": float(total_rx[i]),
@@ -234,7 +234,7 @@ def _rows(n_rows, n_usable, *, null_treatment=0):
         ),
         # Before #2021 9b this raised KeyError from dropna: the outcome was never checked.
         pytest.param(
-            lambda: _frame().drop(columns="conversion_rate"),
+            lambda: _frame().drop(columns="cohort_conversion_outcome"),
             "digital_engagement",
             EffectCause.REQUIRED_COLUMN_MISSING,
             _columns(outcome=False),
@@ -288,7 +288,7 @@ def test_a_usable_cohort_gets_a_provider_and_no_cause():
 
 
 def test_the_optional_wrapper_refuses_a_cohort_without_its_outcome_column():
-    frame = _frame().drop(columns="conversion_rate")
+    frame = _frame().drop(columns="cohort_conversion_outcome")
     assert cohort_loader.cohort_provider_from_frame(frame, "digital_engagement") is None
 
 

@@ -54,7 +54,7 @@ def _make_cohort(n_per_region: int = 200, seed: int = 42) -> pd.DataFrame:
         )
     df = pd.concat(frames, ignore_index=True)
     t_bin = (df["engagement_score"] > df["engagement_score"].median()).astype(float)
-    df["conversion_rate"] = (
+    df["cohort_conversion_outcome"] = (
         0.5 + 0.8 * df["market_share"] + df["_tau"] * t_bin + rng.normal(0.0, 0.25, len(df))
     ).clip(lower=0.0)
     return df.drop(columns="_tau")
@@ -209,7 +209,7 @@ def test_a_non_string_region_column_still_yields_a_declared_region_axis():
     cohort = pd.concat(frames, ignore_index=True)
     assert cohort["region"].dtype == "int64"
     t_bin = (cohort["engagement_score"] > cohort["engagement_score"].median()).astype(float)
-    cohort["conversion_rate"] = (
+    cohort["cohort_conversion_outcome"] = (
         0.2
         + 0.8 * cohort["market_share"]
         + cohort["_tau"] * t_bin

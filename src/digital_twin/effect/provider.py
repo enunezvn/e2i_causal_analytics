@@ -75,7 +75,15 @@ COHORT_ESTIMABLE_INTERVENTIONS = frozenset(INTERVENTION_TREATMENT_MAP)
 # Pre-treatment confounder controls for the direct cohort estimate (present subset used).
 COHORT_CONFOUNDERS: tuple[str, ...] = ("market_share", "triggers_total_count")
 
-_COHORT_OUTCOME = "conversion_rate"
+# The cohort OUTCOME has its own column. It used to live in ``conversion_rate``, which the per-HCP
+# ETL also recomputes on every upsert (accepted / delivered triggers, a ratio <= 1): two writers, one
+# column. The ETL silently replaced the planted outcome on each row it touched, re-planting made the
+# ETL's own recompute preview report ``rows_changed`` on rows it had just written, and on
+# 2026-09-19 a full-window backfill replaced the rows wholesale and the twin went dark for every
+# brand. ``tests/unit/test_digital_twin/effect/test_cohort_columns_single_writer.py`` pins the
+# separation: no column the plant writes may appear in the ETL's upsert SET arm.
+COHORT_OUTCOME_COLUMN = "cohort_conversion_outcome"
+_COHORT_OUTCOME = COHORT_OUTCOME_COLUMN
 _COHORT_REGION = "region"
 # Minimum usable cohort rows for a stable region-standardized estimate.
 COHORT_MIN_ROWS = 500

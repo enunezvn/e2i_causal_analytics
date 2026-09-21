@@ -51,7 +51,7 @@ def _make_confounded_cohort(n_per_region: int = 1500, seed: int = 42) -> pd.Data
         )
     df = pd.concat(frames, ignore_index=True)
     t_bin = (df["engagement_score"] > df["engagement_score"].median()).astype(float)
-    df["conversion_rate"] = (
+    df["cohort_conversion_outcome"] = (
         0.5
         + 0.8 * df["market_share"]  # the strong confounder on the outcome
         + df["_tau"] * t_bin  # the planted causal effect
@@ -162,12 +162,12 @@ def test_control_outcome_sd_is_the_outcome_spread_of_the_low_intensity_rows():
     control = cohort[cohort["engagement_score"] <= cohort["engagement_score"].median()]
     sd, n = control_outcome_sd(cohort, "engagement_score")
     assert n == len(control)
-    assert sd == pytest.approx(control["conversion_rate"].std(ddof=1))
+    assert sd == pytest.approx(control["cohort_conversion_outcome"].std(ddof=1))
 
     in_target = control[control["region"].isin(["northeast", "west"])]
     sd_t, n_t = control_outcome_sd(cohort, "engagement_score", regions=["northeast", "west"])
     assert n_t == len(in_target)
-    assert sd_t == pytest.approx(in_target["conversion_rate"].std(ddof=1))
+    assert sd_t == pytest.approx(in_target["cohort_conversion_outcome"].std(ddof=1))
 
     with pytest.raises(EffectDataUnavailable, match="atlantis") as caught:
         control_outcome_sd(cohort, "engagement_score", regions=["atlantis"])
@@ -248,14 +248,14 @@ def test_estimator_refuses_a_target_region_the_cohort_cannot_estimate():
             id="treatment",
         ),
         pytest.param(
-            "conversion_rate",
+            "cohort_conversion_outcome",
             {
                 "n_rows": 240,
                 "has_treatment_column": True,
                 "has_outcome_column": False,
                 "has_region_column": True,
             },
-            "cohort missing required column(s): need 'conversion_rate' and 'region'.",
+            "cohort missing required column(s): need 'cohort_conversion_outcome' and 'region'.",
             id="outcome",
         ),
         pytest.param(
@@ -266,7 +266,7 @@ def test_estimator_refuses_a_target_region_the_cohort_cannot_estimate():
                 "has_outcome_column": True,
                 "has_region_column": False,
             },
-            "cohort missing required column(s): need 'conversion_rate' and 'region'.",
+            "cohort missing required column(s): need 'cohort_conversion_outcome' and 'region'.",
             id="region",
         ),
         pytest.param(

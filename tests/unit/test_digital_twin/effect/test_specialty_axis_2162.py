@@ -47,7 +47,7 @@ def _cohort(seed: int = 2162) -> pd.DataFrame:
         )
     df = pd.concat(frames, ignore_index=True)
     high = (df["engagement_score"] > df["engagement_score"].median()).astype(float)
-    df["conversion_rate"] = (
+    df["cohort_conversion_outcome"] = (
         0.25 + 0.7 * df["market_share"] + df["_tau"] * high + rng.normal(0, 0.16, len(df))
     )
     return df.drop(columns="_tau")
