@@ -148,11 +148,17 @@ export interface InterventionTypeItem {
 export interface InterventionTypesResponse {
   interventions: InterventionTypeItem[];
   /**
-   * 'measured': every cohort probe ran, so `available_for_effect: false` means too few usable
-   * rows. 'unmeasured': the probes errored and nothing usable was found — the flags are unknown,
-   * not a finding (retry; do not restore data). Absent on older backends = measured.
+   * 'resolved': the brand's models were looked up, so `available: false` means no trained model.
+   * 'unavailable': the lookup itself failed — every flag is unknown, not an absence (retry).
+   * 'not_requested': no brand was given. Absent on older backends = resolved.
    */
-  effect_availability_status?: 'measured' | 'unmeasured';
+  model_resolution?: 'resolved' | 'unavailable' | 'not_requested';
+  /**
+   * Set only when resolved. 'measured': every cohort probe ran, so `available_for_effect: false`
+   * means too few usable rows. 'unmeasured': the probes errored and nothing usable was found —
+   * the flags are unknown, not a finding (retry; do not restore data).
+   */
+  effect_availability_status?: 'measured' | 'unmeasured' | null;
   /** Brand the availability was resolved for (null when no brand was passed). */
   brand: string | null;
   /** Twin type the availability was resolved for. */

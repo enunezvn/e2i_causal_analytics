@@ -467,6 +467,34 @@ async def test_intervention_types_payload_says_unmeasured_not_missing_when_the_p
 
 
 @pytest.mark.asyncio
+async def test_intervention_types_says_the_model_could_not_be_resolved_when_the_repo_fails(
+    mock_twin_repository,
+):
+    """codex r3 MEDIUM: a repository outage returned available=False under a 'measured' status, so
+    the page reported an ESTABLISHED absence ("No trained twin model") for a transient blip and
+    kept it fresh for five minutes."""
+    from src.api.routes.digital_twin import BrandEnum, TwinTypeEnum, list_intervention_types
+
+    mock_twin_repository.list_active_models = AsyncMock(side_effect=RuntimeError("db down"))
+    result = await list_intervention_types(
+        brand=BrandEnum.KISQALI, twin_type=TwinTypeEnum.HCP, user=_ADMIN_USER
+    )
+    assert result.model_resolution == "unavailable"
+    assert result.effect_availability_status is None
+    assert all(not i.available and not i.available_for_effect for i in result.interventions)
+
+
+@pytest.mark.asyncio
+async def test_intervention_types_without_a_brand_resolves_nothing(mock_twin_repository):
+    from src.api.routes.digital_twin import TwinTypeEnum, list_intervention_types
+
+    result = await list_intervention_types(brand=None, twin_type=TwinTypeEnum.HCP, user=_ADMIN_USER)
+    assert result.model_resolution == "not_requested"
+    assert result.effect_availability_status is None
+    mock_twin_repository.list_active_models.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_intervention_types_payload_says_measured_when_the_probes_ran(
     mock_twin_repository, monkeypatch
 ):

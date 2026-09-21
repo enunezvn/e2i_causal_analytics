@@ -133,13 +133,22 @@ class InterventionTypesResponse(BaseModel):
     """Brand-aware list of canonical intervention types for the dropdown."""
 
     interventions: List[InterventionTypeItem] = Field(default_factory=list)
-    effect_availability_status: Literal["measured", "unmeasured"] = Field(
-        "measured",
+    model_resolution: Literal["resolved", "unavailable", "not_requested"] = Field(
+        "not_requested",
         description=(
-            "'measured' when every cohort probe ran, so available_for_effect=False means the "
-            "cohort holds too few usable rows for that channel. 'unmeasured' when the probes "
-            "errored and nothing usable was found: the flags are then unknown, not a finding — "
-            "retry, do not restore data."
+            "'resolved': the brand's active models were looked up, so available=False means no "
+            "trained model exists. 'unavailable': the lookup itself failed (repository or DB "
+            "unreachable) — every flag is unknown, not an absence; retry. 'not_requested': no "
+            "brand was given, the catalog alone was served."
+        ),
+    )
+    effect_availability_status: Optional[Literal["measured", "unmeasured"]] = Field(
+        None,
+        description=(
+            "Set only when model_resolution is 'resolved'. 'measured': every cohort probe ran, so "
+            "available_for_effect=False means the cohort holds too few usable rows for that "
+            "channel. 'unmeasured': the probes errored and nothing usable was found — the flags "
+            "are unknown, not a finding; retry, do not restore data."
         ),
     )
     brand: Optional[str] = Field(None, description="Brand the availability was resolved for")

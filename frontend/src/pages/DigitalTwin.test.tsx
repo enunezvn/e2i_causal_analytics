@@ -434,6 +434,23 @@ describe('DigitalTwin', () => {
     expect(screen.getByRole('button', { name: /Run Simulation/i })).toBeDisabled();
   });
 
+  it('says availability could not be verified, never "no model", when the model lookup failed', () => {
+    // codex r3: a repository outage rendered as an ESTABLISHED absence of a model.
+    (useInterventionTypes as ReturnType<typeof vi.fn>).mockReturnValue({
+      ...interventionTypesResult([]),
+      data: {
+        ...interventionTypesResult([]).data,
+        model_resolution: 'unavailable',
+        effect_availability_status: null,
+      },
+    });
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+
+    expect(screen.getByText(/could not be verified/i)).toBeInTheDocument();
+    expect(screen.queryByText(/No trained twin model/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Run Simulation/i })).toBeDisabled();
+  });
+
   it('says availability could not be verified, never "restore the cohort", when the probe failed', () => {
     // codex r2: a connection blip used to render as measured-missing data.
     (useInterventionTypes as ReturnType<typeof vi.fn>).mockReturnValue({

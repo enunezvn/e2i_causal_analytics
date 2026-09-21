@@ -12285,12 +12285,17 @@ export interface components {
             /** Interventions */
             interventions?: components["schemas"]["InterventionTypeItem"][];
             /**
-             * Effect Availability Status
-             * @description 'measured' when every cohort probe ran, so available_for_effect=False means the cohort holds too few usable rows for that channel. 'unmeasured' when the probes errored and nothing usable was found: the flags are then unknown, not a finding — retry, do not restore data.
-             * @default measured
+             * Model Resolution
+             * @description 'resolved': the brand's active models were looked up, so available=False means no trained model exists. 'unavailable': the lookup itself failed (repository or DB unreachable) — every flag is unknown, not an absence; retry. 'not_requested': no brand was given, the catalog alone was served.
+             * @default not_requested
              * @enum {string}
              */
-            effect_availability_status: "measured" | "unmeasured";
+            model_resolution: "resolved" | "unavailable" | "not_requested";
+            /**
+             * Effect Availability Status
+             * @description Set only when model_resolution is 'resolved'. 'measured': every cohort probe ran, so available_for_effect=False means the cohort holds too few usable rows for that channel. 'unmeasured': the probes errored and nothing usable was found — the flags are unknown, not a finding; retry, do not restore data.
+             */
+            effect_availability_status?: ("measured" | "unmeasured") | null;
             /**
              * Brand
              * @description Brand the availability was resolved for

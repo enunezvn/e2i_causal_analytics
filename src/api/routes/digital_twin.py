@@ -743,19 +743,19 @@ async def list_intervention_types(
     from src.digital_twin.effect.provider import INTERVENTION_CATALOG
     from src.digital_twin.models.twin_models import TwinType
 
-    available = False
-    effect_available: Dict[str, bool] = {}
-    effect_status: Literal["measured", "unmeasured"] = "measured"
+    available, effect_available = False, cast(Dict[str, bool], {})
+    # An empty answer must say whether it is a FINDING or a lookup that did not complete (r3).
+    resolution: Literal["resolved", "unavailable", "not_requested"] = "not_requested"
+    effect_status: Optional[Literal["measured", "unmeasured"]] = None
     if brand is not None:
         try:
             repo = await _get_twin_repo()
             actives = await repo.list_active_models(
                 twin_type=TwinType(twin_type.value), brand=brand.value
             )
-            available = len(actives) > 0
-            # Per-intervention: an intervention is effect-available only when ITS
-            # planted treatment channel has enough usable synthetic-gold cohort
-            # rows to estimate from (never a collective all-or-nothing flag).
+            available, resolution, effect_status = len(actives) > 0, "resolved", "measured"
+            # Per-intervention: an intervention is effect-available only when ITS planted
+            # treatment channel has enough usable cohort rows (never all-or-nothing).
             effect_available = await cohort_treatment_availability(repo.client, brand.value)
             if available and not any(effect_available.values()):
                 warn_model_without_effect_data(brand.value, effect_available)
@@ -763,8 +763,7 @@ async def list_intervention_types(
                     effect_status = "unmeasured"
         except Exception as e:  # repo/DB unreachable — degrade, never fabricate
             logger.warning("intervention-types: availability/cohort check failed: %s", e)
-            available = False
-            effect_available = {}
+            available, effect_available, resolution, effect_status = False, {}, "unavailable", None
 
     items = [
         InterventionTypeItem(
@@ -778,6 +777,7 @@ async def list_intervention_types(
     ]
     return InterventionTypesResponse(
         interventions=items,
+        model_resolution=resolution,
         effect_availability_status=effect_status,
         brand=brand.value if brand else None,
         twin_type=twin_type.value,

@@ -122,6 +122,12 @@ def test_the_plant_refuses_a_frame_that_holds_a_row_not_marked_synthetic():
 
     script = _plant_script()
     live = pd.DataFrame([{"is_synthetic": True}, {"is_synthetic": False}, {"is_synthetic": None}])
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as exc:
         script.require_synthetic_only(live)
+    assert exc.value.code == 3
+    # codex r2/r3 LOW: with pandas' nullable boolean dtype `flags != True` yields <NA> for a
+    # missing flag and sum() skips it, so the missing row was not counted.
+    nullable = pd.DataFrame({"is_synthetic": pd.array([True, pd.NA], dtype="boolean")})
+    with pytest.raises(SystemExit):
+        script.require_synthetic_only(nullable)
     script.require_synthetic_only(pd.DataFrame([{"is_synthetic": True}]))

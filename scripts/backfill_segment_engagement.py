@@ -749,7 +749,10 @@ def require_synthetic_only(live: pd.DataFrame) -> None:
     flags = (
         live["is_synthetic"] if "is_synthetic" in live.columns else pd.Series([None] * len(live))
     )
-    not_synthetic = int((flags != True).sum())  # noqa: E712 — None and False must both count
+    # `flags != True` would give <NA> for a missing flag under pandas' nullable boolean dtype and
+    # sum() skips <NA>, so a missing flag went uncounted (codex r2 LOW). Count explicit True only.
+    explicitly_synthetic = flags.eq(True).fillna(False).astype(bool)
+    not_synthetic = int((~explicitly_synthetic).sum())
     if not_synthetic:
         logger.error(
             "REFUSING: %d of %d fetched rows are not marked is_synthetic = true. This script "
