@@ -791,7 +791,7 @@ async def list_intervention_types(
             # rows to estimate from (never a collective all-or-nothing flag).
             effect_available = await cohort_treatment_availability(repo.client, brand.value)
             if available and not any(effect_available.values()):
-                warn_model_without_effect_data(brand.value)
+                warn_model_without_effect_data(brand.value, effect_available)
         except Exception as e:  # repo/DB unreachable — degrade, never fabricate
             logger.warning("intervention-types: availability/cohort check failed: %s", e)
             available = False

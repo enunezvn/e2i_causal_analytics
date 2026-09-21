@@ -259,7 +259,19 @@ async def _treatment_column_usable(client: Any, brand: str, treatment_col: str) 
     return bool(count is not None and count >= COHORT_MIN_ROWS)
 
 
-async def cohort_treatment_availability(client: Any, brand: str) -> dict[str, bool]:
+class ChannelAvailability(dict[str, bool]):
+    """``{intervention: usable}``, plus how many column probes ERRORED.
+
+    All-False has two very different causes: every probe MEASURED too few usable rows (the
+    cohort's treatment data is gone — the remedy is a re-plant, a production write), or the probes
+    could not run (a connection blip — the remedy is to ask again). A plain dict cannot say which,
+    and the difference decides whether an operator is told to write to production (codex r1).
+    """
+
+    n_probe_errors: int = 0
+
+
+async def cohort_treatment_availability(client: Any, brand: str) -> ChannelAvailability:
     """Per-intervention effect availability for a brand: ``{intervention: usable}``.
 
     An intervention is usable when its planted treatment column has enough usable
@@ -267,20 +279,23 @@ async def cohort_treatment_availability(client: Any, brand: str) -> dict[str, bo
     ``GET /digital-twin/intervention-types`` — HONEST per channel, so a substrate
     holding only some channels (pre-backfill, or future RWD with partial coverage)
     advertises exactly what ``/simulate`` can estimate. Degrades to ``False`` per
-    column on any error (advisory only); never raises.
+    column on any error (advisory only); never raises. ``n_probe_errors`` on the result
+    counts the columns whose probe errored, so "could not measure" is not read as "empty".
     """
 
-    async def _safe(col: str) -> bool:
+    async def _safe(col: str) -> bool | None:
         try:
             return await _treatment_column_usable(client, brand, col)
         except Exception as e:
             logger.warning("cohort availability check failed for %s/%s: %s", brand, col, e)
-            return False
+            return None
 
     columns = list(_TREATMENT_COLUMNS)
     results = await asyncio.gather(*(_safe(c) for c in columns))
-    usable_by_column = dict(zip(columns, results, strict=True))
-    return {
-        intervention: usable_by_column.get(column, False)
+    usable_by_column = {c: bool(r) for c, r in zip(columns, results, strict=True)}
+    availability = ChannelAvailability(
+        (intervention, usable_by_column.get(column, False))
         for intervention, column in INTERVENTION_TREATMENT_MAP.items()
-    }
+    )
+    availability.n_probe_errors = sum(1 for r in results if r is None)
+    return availability

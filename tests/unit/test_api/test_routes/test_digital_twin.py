@@ -413,6 +413,61 @@ async def test_digital_twin_health_remembers_simulability_between_polls(
     assert availability.await_count == 1
 
 
+class _Unmeasured(dict):
+    """What the loader returns when every column probe ERRORED: all False, n_probe_errors > 0."""
+
+    n_probe_errors = 8
+
+
+@pytest.mark.asyncio
+async def test_a_failed_probe_is_not_remembered_and_does_not_recommend_a_replant(
+    mock_twin_repository, monkeypatch, caplog
+):
+    """codex r1 MEDIUM: a transient DB error read as "no cohort data", was cached for five minutes,
+    and logged "re-run backfill_segment_engagement.py --execute" — a production write recommended
+    for a connection blip. Unknown is not empty: degrade, say so, ask again next poll."""
+    import logging
+
+    from src.api.routes.digital_twin import digital_twin_health
+
+    availability = AsyncMock(return_value=_Unmeasured({"email_campaign": False}))
+    monkeypatch.setattr(
+        "src.digital_twin.effect.cohort_loader.cohort_treatment_availability", availability
+    )
+    with caplog.at_level(logging.WARNING, logger="src.api.routes.digital_twin"):
+        first = await digital_twin_health()
+        await digital_twin_health()
+
+    assert (first.status, first.brands_simulable) == ("degraded", 0)
+    assert availability.await_count == 2  # not remembered
+    text = " ".join(r.getMessage() for r in caplog.records)
+    assert "could not be measured" in text
+    assert "backfill_segment_engagement" not in text
+
+
+@pytest.mark.asyncio
+async def test_intervention_types_does_not_recommend_a_replant_when_the_probe_failed(
+    mock_twin_repository, monkeypatch, caplog
+):
+    import logging
+
+    from src.api.routes.digital_twin import BrandEnum, TwinTypeEnum, list_intervention_types
+
+    mock_twin_repository.list_active_models = AsyncMock(return_value=[{"model_id": "m1"}])
+    monkeypatch.setattr(
+        "src.digital_twin.effect.cohort_loader.cohort_treatment_availability",
+        AsyncMock(return_value=_Unmeasured({"email_campaign": False})),
+    )
+    with caplog.at_level(logging.WARNING, logger="src.api.routes.digital_twin"):
+        await list_intervention_types(
+            brand=BrandEnum.KISQALI, twin_type=TwinTypeEnum.HCP, user=_ADMIN_USER
+        )
+
+    text = " ".join(r.getMessage() for r in caplog.records)
+    assert "Kisqali" in text and "could not be measured" in text
+    assert "backfill_segment_engagement" not in text
+
+
 @pytest.mark.asyncio
 async def test_intervention_types_warns_when_a_model_exists_but_the_cohort_has_no_effect_data(
     mock_twin_repository, monkeypatch, caplog

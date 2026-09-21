@@ -23,6 +23,7 @@ from src.digital_twin.effect.provider import (
     COHORT_CONFOUNDERS,
     COHORT_ESTIMABLE_INTERVENTIONS,
     COHORT_MIN_ROWS,
+    INTERVENTION_TREATMENT_MAP,
     CohortEffectDataProvider,
 )
 
@@ -308,6 +309,19 @@ async def test_availability_false_below_threshold_and_on_error():
         _FakeClient(_FakeResult(count=None), raise_on_execute=True), "X"
     )
     assert not any(erroring.values())
+
+
+@pytest.mark.asyncio
+async def test_availability_tells_a_failed_probe_from_a_measured_shortfall():
+    """codex r1 MEDIUM: both read all-False. Only one of them means the cohort data is gone; the
+    other is a connection blip, and treating it as data loss recommends a production write."""
+    measured = await cohort_treatment_availability(_FakeClient(_FakeResult(count=10)), "X")
+    errored = await cohort_treatment_availability(
+        _FakeClient(_FakeResult(count=None), raise_on_execute=True), "X"
+    )
+    assert not any(measured.values()) and not any(errored.values())
+    assert measured.n_probe_errors == 0
+    assert errored.n_probe_errors == len(set(INTERVENTION_TREATMENT_MAP.values()))
 
 
 def test_blocking_build_opens_and_closes_its_own_client_on_each_call(monkeypatch):

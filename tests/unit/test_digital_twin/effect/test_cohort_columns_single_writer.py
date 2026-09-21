@@ -62,3 +62,66 @@ def test_the_plant_writes_the_cohort_outcome_and_leaves_the_etl_columns_alone():
     assert provider.COHORT_OUTCOME_COLUMN in written
     assert set(provider.INTERVENTION_TREATMENT_MAP.values()) <= written
     assert written.isdisjoint(_etl_upsert_set_columns())
+
+
+class _RecordingQuery:
+    def __init__(self, log, rows):
+        self._log, self._rows, self._preds = log, rows, []
+
+    def select(self, *_a, **_k):
+        return self
+
+    def update(self, payload):
+        self._preds.append(("update", tuple(sorted(payload))))
+        return self
+
+    def eq(self, column, value):
+        self._preds.append(("eq", column, value))
+        return self
+
+    def order(self, *_a, **_k):
+        return self
+
+    def range(self, *_a, **_k):
+        return self
+
+    def execute(self):
+        self._log.append(self._preds)
+        return type("R", (), {"data": self._rows})()
+
+
+class _RecordingClient:
+    def __init__(self, rows=()):
+        self.log, self._rows = [], list(rows)
+
+    def table(self, _name):
+        return _RecordingQuery(self.log, self._rows)
+
+
+def test_the_plant_reads_and_writes_synthetic_rows_only():
+    """codex r1 MEDIUM: the DGP is synthetic-gold. The fetch filtered on metric_type alone, so the
+    day real per-HCP rows land, --execute would plant fabricated treatments and outcomes into them
+    and leave is_synthetic = false."""
+    import pandas as pd
+
+    script = _plant_script()
+    client = _RecordingClient()
+    script.fetch_rows(client)
+    assert ("eq", "is_synthetic", True) in client.log[0]
+
+    regen = pd.DataFrame([{script.KEY: "m1", **dict.fromkeys(script.PLANTED_WRITE_COLUMNS, 1.0)}])
+    writer = _RecordingClient()
+    script.update_rows(writer, regen)
+    assert ("eq", "is_synthetic", True) in writer.log[0]
+    assert ("eq", script.KEY, "m1") in writer.log[0]
+
+
+def test_the_plant_refuses_a_frame_that_holds_a_row_not_marked_synthetic():
+    import pandas as pd
+    import pytest
+
+    script = _plant_script()
+    live = pd.DataFrame([{"is_synthetic": True}, {"is_synthetic": False}, {"is_synthetic": None}])
+    with pytest.raises(SystemExit):
+        script.require_synthetic_only(live)
+    script.require_synthetic_only(pd.DataFrame([{"is_synthetic": True}]))

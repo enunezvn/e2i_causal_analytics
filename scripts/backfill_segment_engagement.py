@@ -362,6 +362,7 @@ def fetch_rows(client: Any) -> Optional[pd.DataFrame]:
                 client.table(TABLE)
                 .select(",".join(_COLS))
                 .eq("metric_type", METRIC_TYPE)
+                .eq("is_synthetic", True)
                 .order(KEY)
                 .range(page * page_size, (page + 1) * page_size - 1)
                 .execute()
@@ -738,6 +739,27 @@ def write_backup(live: pd.DataFrame, out_dir: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 
+def require_synthetic_only(live: pd.DataFrame) -> None:
+    """Refuse to go on unless EVERY fetched row is explicitly ``is_synthetic is True``.
+
+    This DGP is synthetic-gold. Planting it into a real per-HCP row would put fabricated
+    treatments and a fabricated outcome under ``is_synthetic = false`` — plausible-looking values
+    in a real row, which is the one thing this platform must never do (codex r1).
+    """
+    flags = (
+        live["is_synthetic"] if "is_synthetic" in live.columns else pd.Series([None] * len(live))
+    )
+    not_synthetic = int((flags != True).sum())  # noqa: E712 — None and False must both count
+    if not_synthetic:
+        logger.error(
+            "REFUSING: %d of %d fetched rows are not marked is_synthetic = true. This script "
+            "plants a synthetic DGP and must never touch a real row.",
+            not_synthetic,
+            len(live),
+        )
+        raise SystemExit(3)
+
+
 def update_rows(client: Any, regen: pd.DataFrame, *, batch_size: int = BATCH_SIZE) -> int:
     """Idempotent per-row UPDATE of every planted column keyed on metric_id.
     Only the planted columns change; every other column (triggers_delivered_count,
@@ -748,8 +770,10 @@ def update_rows(client: Any, regen: pd.DataFrame, *, batch_size: int = BATCH_SIZ
     write_cols = list(PLANTED_WRITE_COLUMNS)
     records = regen[[KEY, *write_cols]].to_dict(orient="records")
     for rec in records:
-        client.table(TABLE).update({c: float(rec[c]) for c in write_cols}).eq(
-            KEY, rec[KEY]
+        # is_synthetic in the WRITE predicate too: a row re-tagged real between the read and this
+        # update is left alone rather than planted (codex r1).
+        client.table(TABLE).update({c: float(rec[c]) for c in write_cols}).eq(KEY, rec[KEY]).eq(
+            "is_synthetic", True
         ).execute()
         written += 1
         if written % batch_size == 0:
@@ -842,6 +866,7 @@ def main() -> int:
     # Always write a backup of the CURRENT live values (cheap, safe, even in dry-run).
     write_backup(live, Path(args.backup_dir))
 
+    require_synthetic_only(live)
     regen = generate_dgp(live, seed=args.seed)
     probe_ok = verify(
         regen, live, run_probe=not args.no_recovery_probe, probe_channels=probe_channels
