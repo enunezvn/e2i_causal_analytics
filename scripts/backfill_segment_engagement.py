@@ -111,8 +111,12 @@ re-checked 2026-07-08)
     these hcp_ids (zero overlap, verified rev 1); the new columns are read only
     by the digital-twin cohort loader (the whole point).
   cohort_conversion_outcome (per_hcp_rollup): read only by the digital-twin cohort loader
-    and estimator. Nothing else selects it: Feast's hcp_conversion_features reads
-    conversion_rate, which this script no longer touches, so a plant needs no re-materialize.
+    and estimator. Feast's business_metrics_source reads conversion_rate, which this script no
+    longer touches.
+  engagement_score / call_frequency ARE served by Feast (feature_repo/data_sources.py selects
+    both from these rows). A plant moves them NULL -> value, so online and offline disagree on
+    rows inside the 7-day TTL until the next scheduled materializer cycle (6-hourly). Do not
+    run --execute in the middle of anything that asserts Feast online == offline.
   /segments/analyze NO LONGER reads this substrate (re-checked 2026-09-21): it moved to the
     patient_journeys gold standard (treatment_arm). The rev-1 engagement_score stream is kept
     identical anyway, for reproducibility of earlier estimates.
