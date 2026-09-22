@@ -31,9 +31,10 @@ TABLE = "optum_biologic_persistence_causal"
 # Server-defaulted bookkeeping the loader never writes.
 _SERVER_COLUMNS = {"created_at", "updated_at"}
 # The types this table is allowed to use. The regex below deliberately matches
-# ANY bare word (so it never silently skips a column whose type it doesn't
-# recognise, e.g. DOUBLE PRECISION / BIGINT / JSONB / TIMESTAMP) — that parsed
-# type is then checked against this allow-list in ``_sql_columns``.
+# ANY bare identifier-shaped word — including one with digits or underscores,
+# e.g. INT8 / MY_TYPE — (so it never silently skips a column whose type it
+# doesn't recognise, e.g. DOUBLE PRECISION / BIGINT / JSONB / TIMESTAMP) —
+# that parsed type is then checked against this allow-list in ``_sql_columns``.
 _KNOWN_TYPES = {
     "TEXT",
     "VARCHAR",
@@ -45,9 +46,14 @@ _KNOWN_TYPES = {
     "TIMESTAMPTZ",
 }
 _COLUMN_RE = re.compile(
-    r"^\s*([a-z_][a-z0-9_]*)\s+([A-Za-z]+(?:\s+PRECISION)?)\b",
+    r"^\s*([a-z_][a-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]*(?:\s+PRECISION)?)\b",
     re.IGNORECASE,
 )
+# Table-level declarations (not columns) that legitimately don't match
+# ``_COLUMN_RE`` as a (name, type) pair — checked BEFORE the regex so a
+# standalone ``PRIMARY KEY (...)`` line is never mistaken for a column named
+# "primary" of type "key".
+_TABLE_CONSTRAINT_PREFIXES = ("CONSTRAINT", "PRIMARY KEY", "UNIQUE", "CHECK", "FOREIGN KEY")
 
 
 def _sql_columns(sql: str) -> dict[str, str]:
@@ -62,12 +68,18 @@ def _sql_columns(sql: str) -> dict[str, str]:
             break
     columns: dict[str, str] = {}
     for line in body[:end].splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("--"):
+            continue
+        if stripped.upper().startswith(_TABLE_CONSTRAINT_PREFIXES):
+            continue
         m = _COLUMN_RE.match(line)
-        if m and m.group(1).upper() != "CONSTRAINT":
-            col_type = m.group(2).upper()
-            if col_type not in _KNOWN_TYPES:
-                raise AssertionError(f"unrecognised column type {col_type!r} on line {line!r}")
-            columns[m.group(1)] = col_type
+        if not m:
+            raise AssertionError(f"unparsed declaration line {line!r}")
+        col_type = m.group(2).upper()
+        if col_type not in _KNOWN_TYPES:
+            raise AssertionError(f"unrecognised column type {col_type!r} on line {line!r}")
+        columns[m.group(1)] = col_type
     return columns
 
 
@@ -155,4 +167,28 @@ def test_sql_columns_rejects_an_unrecognised_type():
     more" half of the contract test unnoticed."""
     sql = "CREATE TABLE IF NOT EXISTS public.t (\n    foo DOUBLE PRECISION,\n);\n"
     with pytest.raises(AssertionError, match="foo"):
+        _sql_columns(sql)
+
+
+def test_sql_columns_rejects_a_bare_type_with_digits():
+    """INT8 is a valid Postgres type spelling; it must still parse to a (name,
+    type) pair and then fail the ``_KNOWN_TYPES`` check, not be silently
+    skipped by the regex for containing a digit."""
+    sql = "CREATE TABLE IF NOT EXISTS public.t (\n    extra_col INT8,\n);\n"
+    with pytest.raises(AssertionError, match="extra_col"):
+        _sql_columns(sql)
+
+
+def test_sql_columns_rejects_a_bare_type_with_underscore():
+    """Same as above for an underscored type name (e.g. a custom domain)."""
+    sql = "CREATE TABLE IF NOT EXISTS public.t (\n    extra_col MY_TYPE,\n);\n"
+    with pytest.raises(AssertionError, match="extra_col"):
+        _sql_columns(sql)
+
+
+def test_sql_columns_rejects_an_unparsed_declaration_line():
+    """A line that is neither a (name, type) column nor a recognised
+    table-level constraint keyword must fail loud rather than vanish."""
+    sql = "CREATE TABLE IF NOT EXISTS public.t (\n    ???,\n);\n"
+    with pytest.raises(AssertionError, match="unparsed declaration line"):
         _sql_columns(sql)
