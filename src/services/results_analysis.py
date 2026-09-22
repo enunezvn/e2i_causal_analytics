@@ -560,8 +560,14 @@ class ResultsAnalysisService:
 
         actual_effect = actual_results.effect_estimate
         prediction_error = actual_effect - predicted_effect
+        # Symmetric percent error, |actual - predicted| / max(|predicted|, |actual|):
+        # a prediction of exactly 0.0 against a real effect is a 100% miss, not a
+        # perfect prediction as the old ``if predicted != 0 else 0.0`` scored it —
+        # that score now feeds digital_twin_models.fidelity_score (#2206). Both
+        # zero → 0% (exact).
+        denominator = max(abs(predicted_effect), abs(actual_effect))
         prediction_error_percent = (
-            abs(prediction_error / predicted_effect * 100) if predicted_effect != 0 else 0.0
+            abs(prediction_error) / denominator * 100 if denominator > 0 else 0.0
         )
 
         # Check CI coverage
@@ -616,6 +622,7 @@ class ResultsAnalysisService:
         self,
         experiment_id: UUID,
         twin_simulation_id: Optional[UUID] = None,
+        analysis_type: Optional[str] = None,
     ) -> FidelityComparison:
         """Fetch actual results + the twin's predicted effect/CI, then compare.
 
@@ -638,9 +645,16 @@ class ResultsAnalysisService:
         from src.memory.services.factories import get_async_supabase_client
         from src.repositories.ab_results import ABResultsRepository
 
-        results = await ABResultsRepository().get_results(experiment_id)
+        # ``analysis_type`` (#2206, codex r6): the FINAL-results producer passes
+        # "final" so an interim row that happens to be newest is never compared
+        # (and rolled into the model's fidelity) as if it were final. The general
+        # fidelity route keeps the unfiltered read.
+        results = await ABResultsRepository().get_results(
+            experiment_id, analysis_type=analysis_type
+        )
         if not results:
-            raise ValueError(f"No computed results for experiment {experiment_id}")
+            what = f"{analysis_type} results" if analysis_type else "computed results"
+            raise ValueError(f"No {what} for experiment {experiment_id}")
         actual_results = results[0]  # newest (get_results orders computed_at desc)
 
         client = await get_async_supabase_client()

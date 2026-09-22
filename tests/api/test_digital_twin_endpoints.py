@@ -114,6 +114,10 @@ def mock_simulation_result():
     result.fidelity_warning = False
     result.fidelity_warning_reason = None
     result.model_fidelity_score = 0.88
+    # A real domain value (#2206): the route maps result.fidelity_status.value.
+    from src.digital_twin.models.simulation_models import FidelityStatus
+
+    result.fidelity_status = FidelityStatus.VALIDATED
     result.status = MagicMock(value="completed")
     result.error_message = None
     result.execution_time_ms = 1500
@@ -532,6 +536,8 @@ class TestGetModel:
         """Should return model details."""
         mock_repo = MagicMock()
         mock_repo.get_model = AsyncMock(return_value=mock_model_data)
+        # The detail runs the shared-fit census over the active models (#2206).
+        mock_repo.list_active_models = AsyncMock(return_value=[mock_model_data])
 
         with patch("src.digital_twin.twin_repository.TwinRepository", return_value=mock_repo):
             response = client.get("/api/digital-twin/models/770e8400-e29b-41d4-a716-446655440000")

@@ -70,9 +70,15 @@ class TwinModelRepository(BaseRepository):
         mlflow_run_id: Optional[str] = None,
         mlflow_model_uri: Optional[str] = None,
         data_provenance: Optional[str] = None,
+        training_frame: Optional[Dict[str, Any]] = None,
     ) -> UUID:
         """
         Save a trained twin model's metadata row.
+
+        ``training_frame`` (#2206): the identity of the frame that produced the fit
+        (``source`` / ``seed`` / ``n_rows`` …), recorded under
+        ``training_config.training_frame`` so the /models fit fingerprint tells
+        fits from different frames apart. Omitted → not recorded (never fabricated).
 
         MLflow artifact persistence is owned by
         :mod:`src.digital_twin.twin_persistence` (``save_twin_artifacts``), which
@@ -115,6 +121,7 @@ class TwinModelRepository(BaseRepository):
                 # Structured provenance so a synthetic-trained model is never
                 # mistaken for an RWD-trained one (#705 H4 anti-mock).
                 "data_provenance": data_provenance,
+                **({"training_frame": dict(training_frame)} if training_frame else {}),
             },
             "feature_columns": config.feature_columns,
             "target_columns": [config.target_column],
@@ -224,6 +231,21 @@ class TwinModelRepository(BaseRepository):
         except Exception as e:
             logger.error(f"Failed to list active models: {e}")
             return []
+
+    async def require_model(self, model_id: UUID) -> Optional[Dict[str, Any]]:
+        """The model row from the database (no cache), or None ONLY when no such row
+        exists; a query failure propagates (codex r2 #2). ``get_model`` swallows
+        failures into None, which a fidelity derivation would label 'unvalidated'."""
+        if not self.client:
+            return None
+        result = await (
+            self.client.table(self.table_name)
+            .select("*")
+            .eq("model_id", str(model_id))
+            .limit(1)
+            .execute()
+        )
+        return result.data[0] if result.data else None
 
     async def deactivate_model(
         self,
@@ -594,6 +616,114 @@ class SimulationRepository(BaseRepository):
         except Exception as e:
             logger.error(f"Failed to list simulations: {e}")
             return []
+
+    # A proposed experiment (#2206, owner item C): a COMPLETED simulation whose
+    # recommendation is deploy or refine and which no experiment has claimed yet.
+    PROPOSAL_RECOMMENDATIONS = ("deploy", "refine")
+
+    async def list_proposed(
+        self,
+        *,
+        brand: Optional[str] = None,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """Completed deploy/refine simulations not yet linked to an experiment.
+
+        Brand scoping is the caller's (the route applies the H11 grant); ``None``
+        lists every brand so an admin's envelope counts are whole. Ordered IN the
+        database in presentation order — deploy before refine, then the largest
+        predicted effect — so a bounded window is the top of the whole population
+        (codex r4); ``count_proposed`` gives the population size.
+        """
+        # A query failure PROPAGATES (codex r1 #3): swallowed into [] it would read as
+        # a truthful-looking empty portfolio (200, total_proposed=0) on the page.
+        if not self.client:
+            return []
+        query = (
+            self.client.table(self.table_name)
+            .select("*")
+            .eq("simulation_status", "completed")
+            .in_("recommendation", list(self.PROPOSAL_RECOMMENDATIONS))
+            .is_("experiment_design_id", "null")
+            .order("recommendation")  # 'deploy' < 'refine'
+            .order("simulated_ate", desc=True)
+            .limit(limit)
+        )
+        if brand:
+            query = query.eq("brand", brand)
+        result = await query.execute()
+        return result.data or []
+
+    async def count_proposed(self, *, brand: Optional[str] = None) -> int:
+        """Size of the proposal population (``list_proposed`` returns a window of it)."""
+        if not self.client:
+            return 0
+        query = (
+            self.client.table(self.table_name)
+            .select("simulation_id", count="exact")
+            .eq("simulation_status", "completed")
+            .in_("recommendation", list(self.PROPOSAL_RECOMMENDATIONS))
+            .is_("experiment_design_id", "null")
+        )
+        if brand:
+            query = query.eq("brand", brand)
+        result = await query.execute()
+        return int(result.count or 0)
+
+    async def count_linked(self, *, brand: Optional[str] = None) -> int:
+        """Completed simulations that already have an experiment (the linked half).
+        A query failure propagates (codex r1 #3)."""
+        if not self.client:
+            return 0
+        # The linked half of the PROPOSAL population (deploy/refine) — so "N linked"
+        # and "0 proposed" describe one set (codex r2 #4); a linked 'skip' run is not
+        # a proposal that got its experiment.
+        query = (
+            self.client.table(self.table_name)
+            .select("simulation_id", count="exact")
+            .eq("simulation_status", "completed")
+            .in_("recommendation", list(self.PROPOSAL_RECOMMENDATIONS))
+            .not_.is_("experiment_design_id", "null")
+        )
+        if brand:
+            query = query.eq("brand", brand)
+        result = await query.execute()
+        return int(result.count or 0)
+
+    async def require_simulation(self, simulation_id: UUID) -> Optional[Dict[str, Any]]:
+        """The raw row, or None ONLY when no such row exists; a query failure
+        propagates (codex r2 #2). ``get_simulation`` swallows failures into None,
+        which a route would misreport as 404."""
+        if not self.client:
+            return None
+        result = await (
+            self.client.table(self.table_name)
+            .select("*")
+            .eq("simulation_id", str(simulation_id))
+            .limit(1)
+            .execute()
+        )
+        return result.data[0] if result.data else None
+
+    async def claim_experiment_link(self, simulation_id: UUID, experiment_design_id: UUID) -> bool:
+        """Link a simulation to an experiment ONLY if it is still unlinked (codex r1 #2).
+
+        ``UPDATE … WHERE simulation_id = ? AND experiment_design_id IS NULL`` is the
+        atomic claim two concurrent draft creations race on: exactly one row update
+        succeeds. Returns True only when a row was actually updated — a zero-row
+        update (already linked, or no such simulation) is False, unlike
+        ``link_experiment``, which reports True unconditionally. Failures propagate.
+        """
+        if not self.client:
+            return False
+        result = await (
+            self.client.table(self.table_name)
+            .update({"experiment_design_id": str(experiment_design_id)})
+            .eq("simulation_id", str(simulation_id))
+            .is_("experiment_design_id", "null")
+            .execute()
+        )
+        return bool(result.data)
 
     async def get_latest_for_experiment(
         self,
@@ -1017,15 +1147,17 @@ class TwinRepository:
         mlflow_run_id: Optional[str] = None,
         mlflow_model_uri: Optional[str] = None,
         data_provenance: Optional[str] = None,
+        training_frame: Optional[Dict[str, Any]] = None,
     ) -> UUID:
-        """Save a trained twin model."""
+        """Save a trained twin model (forwards every field, incl. training_frame)."""
         return await self.models.save_model(  # type: ignore[no-any-return]
             config,
             metrics,
             model_artifact,
             mlflow_run_id,
             mlflow_model_uri,
-            data_provenance,
+            data_provenance=data_provenance,
+            training_frame=training_frame,
         )
 
     async def get_model(self, model_id: UUID) -> Optional[Dict[str, Any]]:
@@ -1036,11 +1168,63 @@ class TwinRepository:
         self,
         twin_type: Optional[TwinType] = None,
         brand: Optional[str] = None,
+        limit: int = 100,
     ) -> List[Dict[str, Any]]:
-        """List active twin models."""
+        """List active twin models (``limit`` forwarded; the census asks for all)."""
         return await self.models.list_active_models(  # type: ignore[no-any-return]
-            twin_type, brand
+            twin_type, brand, limit=limit
         )
+
+    async def refresh_model_fidelity_from_comparisons(
+        self, model_id: UUID
+    ) -> Optional[Dict[str, Any]]:
+        """Set the model's fidelity to the mean of its simulations' A/B comparisons (#2206).
+
+        ``ab_fidelity_comparisons`` is what the post-experiment producer writes; the
+        model columns (``digital_twin_models.fidelity_score`` / ``fidelity_sample_count``)
+        are what the resolver orders by and the engine's gate reads. Nothing wrote
+        those columns before this (``update_fidelity_score`` had no caller). A
+        comparison without a score is not a sample. Returns the written values, or
+        ``None`` when there is nothing to write. Manual ``/digital-twin/validate``
+        records (``twin_fidelity_tracking``) are not folded in — that operator flow
+        is a separate, still-open decision.
+        """
+        client = self.models.client
+        if not client:
+            return None
+        sims = await (
+            client.table("twin_simulations")
+            .select("simulation_id")
+            .eq("model_id", str(model_id))
+            .execute()
+        )
+        sim_ids = [str(r["simulation_id"]) for r in (sims.data or []) if r.get("simulation_id")]
+        if not sim_ids:
+            return None
+        comps = await (
+            client.table("ab_fidelity_comparisons")
+            .select("fidelity_score")
+            .in_("twin_simulation_id", sim_ids)
+            .execute()
+        )
+        scores = [
+            float(c["fidelity_score"])
+            for c in (comps.data or [])
+            if c.get("fidelity_score") is not None
+        ]
+        if not scores:
+            return None
+        fidelity_score = float(sum(scores) / len(scores))
+        written = await self.models.update_fidelity_score(
+            model_id, fidelity_score=fidelity_score, sample_count=len(scores)
+        )
+        if not written:
+            return None
+        return {
+            "model_id": str(model_id),
+            "fidelity_score": fidelity_score,
+            "sample_count": len(scores),
+        }
 
     async def save_simulation(self, result: SimulationResult, brand: str) -> UUID:
         """Save simulation result."""
@@ -1053,6 +1237,38 @@ class TwinRepository:
         return await self.simulations.get_simulation(  # type: ignore[no-any-return]
             simulation_id
         )
+
+    async def list_proposed_experiments(
+        self, *, brand: Optional[str] = None, limit: int = 500
+    ) -> List[Dict[str, Any]]:
+        """Proposed experiments (#2206 item C); every kwarg forwarded to the store."""
+        return await self.simulations.list_proposed(  # type: ignore[no-any-return]
+            brand=brand, limit=limit
+        )
+
+    async def count_linked_simulations(self, *, brand: Optional[str] = None) -> int:
+        """Completed simulations already linked to an experiment (#2206 item C)."""
+        return await self.simulations.count_linked(brand=brand)  # type: ignore[no-any-return]
+
+    async def count_proposed_experiments(self, *, brand: Optional[str] = None) -> int:
+        """Size of the proposal population (#2206 item C, codex r4)."""
+        return await self.simulations.count_proposed(brand=brand)  # type: ignore[no-any-return]
+
+    async def claim_experiment_link(self, simulation_id: UUID, experiment_design_id: UUID) -> bool:
+        """Conditional (unlinked-only) link; True only when a row was updated (#2206 item C)."""
+        return await self.simulations.claim_experiment_link(  # type: ignore[no-any-return]
+            simulation_id, experiment_design_id
+        )
+
+    async def require_simulation(self, simulation_id: UUID) -> Optional[Dict[str, Any]]:
+        """Strict read: None only for no row; failures propagate (#2206 item C)."""
+        return await self.simulations.require_simulation(  # type: ignore[no-any-return]
+            simulation_id
+        )
+
+    async def require_model(self, model_id: UUID) -> Optional[Dict[str, Any]]:
+        """Strict read: None only for no row; failures propagate (#2206 item C)."""
+        return await self.models.require_model(model_id)  # type: ignore[no-any-return]
 
     async def save_fidelity_record(self, record: FidelityRecord) -> UUID:
         """Save fidelity tracking record."""

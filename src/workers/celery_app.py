@@ -229,8 +229,14 @@ celery_app.conf.task_routes = {
     "src.tasks.enrollment_health_check": {"queue": "quick"},
     "src.tasks.srm_detection_sweep": {"queue": "quick"},
     "src.tasks.check_all_active_experiments": {"queue": "quick"},
-    # Fidelity tracking (involves Digital Twin comparison)
-    "src.tasks.fidelity_tracking_update": {"queue": "twins"},
+    # Fidelity tracking (#2206): compares a FINAL A/B result with the twin's stored
+    # prediction and rolls it up into digital_twin_models.fidelity_score. It is DB
+    # reads + one update (no model fit; its lazy src.digital_twin import measured
+    # 27 s / 547 MB maxrss in the prod image), so it runs on worker_medium's
+    # `analytics` queue next to its producer, compute_experiment_results. It used
+    # to route to `twins`, which only worker_heavy consumes — and worker_heavy
+    # ships at replicas: 0 (#705 owner decision), so the loop never closed.
+    "src.tasks.fidelity_tracking_update": {"queue": "analytics"},
     # Cleanup
     "src.tasks.cleanup_old_ab_results": {"queue": "quick"},
     # -------------------------------------------------------------------------

@@ -598,7 +598,7 @@ and the simulation returns a FAILED result — a fabricated ATE is never emitted
 both are injectable for tests; `min_effect_threshold` defaults to 0.05 and
 `confidence_threshold` to 0.70.
 
-**Fidelity tracking**: If the generator model's fidelity score < 0.70, results include a warning. Simulation confidence is a weighted composite of sample size (30%), precision (30%), and model fidelity (40%).
+**Fidelity tracking**: A NULL fidelity score (no experiment outcome ever compared against the model) reads as `unvalidated` and warns; a measured score < 0.70 reads as `below_threshold` and warns (`classify_fidelity`, #2206). Simulation confidence is a weighted composite of the evidence behind the estimate (30%), precision (30%), and model fidelity (40%) — but the fidelity term enters only once it has been measured: an unvalidated model contributes no term and the other two weights renormalise to 50/50 (`CONFIDENCE_WEIGHTS` in `simulation_engine.py`). It is never imputed; stored confidences are not backfilled.
 
 **Caching**: `SimulationCache` (optional) stores results keyed by intervention config + population filter + model ID to avoid redundant simulations.
 

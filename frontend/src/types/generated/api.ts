@@ -3238,6 +3238,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/digital-twin/proposed-experiments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List proposed experiments
+         * @description Completed twin simulations recommending deploy/refine, not yet linked to an
+         *     experiment — ordered deploy first, then predicted effect — with the honest
+         *     counts around them (linked simulations; real experiments running, 0 today).
+         */
+        get: operations["list_proposed_experiments"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/digital-twin/proposed-experiments/{simulation_id}/draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a draft experiment from a proposal
+         * @description Create ONE ``ml_experiments`` row with ``status='draft'`` from the twin's
+         *     recommended parameters and link the simulation to it. The draft stays a draft
+         *     until promoted; a failed link is a 500 naming both ids, never a 200 hiding an
+         *     orphan (the ``/simulate`` rule).
+         */
+        post: operations["create_draft_experiment_from_proposal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/models/predict/{model_name}": {
         parameters: {
             query?: never;
@@ -9372,6 +9417,56 @@ export interface components {
             clinical_context?: components["schemas"]["ClinicalContext"] | null;
         };
         /**
+         * DraftExperimentResponse
+         * @description The ``ml_experiments`` draft created from a proposal, and what stays manual.
+         */
+        DraftExperimentResponse: {
+            /** Experiment Id */
+            experiment_id: string;
+            /** Simulation Id */
+            simulation_id: string;
+            /** Experiment Name */
+            experiment_name: string;
+            /**
+             * Status
+             * @default draft
+             * @constant
+             */
+            status: "draft";
+            /** Brand */
+            brand: string;
+            /** Intervention Channel */
+            intervention_channel: string;
+            /** Prediction Target */
+            prediction_target: string;
+            /** Target Enrollment */
+            target_enrollment?: number | null;
+            /** Planned Duration Days */
+            planned_duration_days?: number | null;
+            /** Created By */
+            created_by?: string | null;
+            /**
+             * Outcome Column
+             * @description prediction_target: the outcome the twin predicted on.
+             */
+            outcome_column: string;
+            /**
+             * Outcome Measurable In Real Mode
+             * @description Whether real per-HCP rows record the outcome column today (see the list envelope). False means the final analysis of this draft will report insufficient_data until a real endpoint is recorded.
+             */
+            outcome_measurable_in_real_mode: boolean;
+            /**
+             * Linked
+             * @description twin_simulations.experiment_design_id now names this experiment.
+             */
+            linked: boolean;
+            /**
+             * Next Step
+             * @description What is still manual: promote the draft to 'running' and enroll units; the daily sweep, final analysis and fidelity roll-up then close the loop.
+             */
+            next_step: string;
+        };
+        /**
          * DriftDetectionResponse
          * @description Response from drift detection.
          * @example {
@@ -11009,6 +11104,17 @@ export interface components {
              */
             generated_at: string;
         };
+        /**
+         * FidelityStatusEnum
+         * @description Whether the model's fidelity has ever been measured (#2206).
+         *
+         *     'unvalidated': digital_twin_models.fidelity_score is NULL — no experiment outcome
+         *     has been compared against the model; a NULL never reads as "passed".
+         *     'below_threshold': measured and below the engine's 0.70 gate.
+         *     'validated': measured, at or above the gate.
+         * @enum {string}
+         */
+        FidelityStatusEnum: "unvalidated" | "below_threshold" | "validated";
         /**
          * GapAnalysisResponse
          * @description Response from gap analysis.
@@ -15889,6 +15995,114 @@ export interface components {
             note: string;
         };
         /**
+         * ProposedExperimentItem
+         * @description A twin simulation that proposes an experiment: completed, recommendation
+         *     deploy or refine, not yet linked to an ``ml_experiments`` row.
+         */
+        ProposedExperimentItem: {
+            /** Simulation Id */
+            simulation_id: string;
+            /** Model Id */
+            model_id: string;
+            /** Brand */
+            brand: string;
+            /** Intervention Type */
+            intervention_type: string;
+            /** Intervention Config */
+            intervention_config?: {
+                [key: string]: unknown;
+            };
+            /** Simulated Ate */
+            simulated_ate: number;
+            /** Simulated Ci Lower */
+            simulated_ci_lower?: number | null;
+            /** Simulated Ci Upper */
+            simulated_ci_upper?: number | null;
+            /**
+             * Recommendation
+             * @enum {string}
+             */
+            recommendation: "deploy" | "refine";
+            /**
+             * Recommendation Rationale
+             * @default
+             */
+            recommendation_rationale: string;
+            /** Recommended Sample Size */
+            recommended_sample_size?: number | null;
+            /** Recommended Duration Weeks */
+            recommended_duration_weeks?: number | null;
+            /** Simulation Confidence */
+            simulation_confidence?: number | null;
+            /** Data Provenance */
+            data_provenance?: string | null;
+            /** @description The model's fidelity state as it stands NOW (derived from the model row): 'unvalidated' until an experiment outcome has been compared against it. */
+            fidelity_status: components["schemas"]["FidelityStatusEnum"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Proposal Basis
+             * @description What proposed this: a completed digital-twin simulation (the only source today).
+             * @default twin_simulation
+             * @constant
+             */
+            proposal_basis: "twin_simulation";
+            /**
+             * Outcome Column
+             * @description The per-HCP business_metrics column the twin predicted an effect ON (cohort_conversion_outcome today). simulated_ate and its interval are an ABSOLUTE difference in this column's units, not a percentage lift.
+             */
+            outcome_column: string;
+            /**
+             * Effect Scale
+             * @description simulated_ate is an absolute outcome-unit difference (never relative lift).
+             * @default absolute
+             * @constant
+             */
+            effect_scale: "absolute";
+        };
+        /**
+         * ProposedExperimentsResponse
+         * @description Proposals plus the honest counts around them.
+         */
+        ProposedExperimentsResponse: {
+            /** Proposals */
+            proposals: components["schemas"]["ProposedExperimentItem"][];
+            /**
+             * Outcome Column
+             * @description The outcome column every proposal's effect is stated on (see items).
+             */
+            outcome_column: string;
+            /**
+             * Outcome Measurable In Real Mode
+             * @description Whether any REAL (is_synthetic=false) per-HCP business_metrics row records the outcome column. False today (measured): the column is populated only on the synthetic-gold cohort rows, and the real-mode final-results feed excludes them, so a real experiment drafted from a proposal cannot yet be compared against the twin — an owner decision on the real endpoint is needed.
+             */
+            outcome_measurable_in_real_mode: boolean;
+            /**
+             * Total Proposed
+             * @description Exact size of the proposal population the caller may see (unlinked deploy/refine simulations). proposals holds the top of it in presentation order (deploy first, then predicted effect); see truncated.
+             */
+            total_proposed: number;
+            /**
+             * Truncated
+             * @description True when proposals holds fewer rows than total_proposed (the window is capped).
+             * @default false
+             */
+            truncated: boolean;
+            /**
+             * Total Linked
+             * @description Completed deploy/refine simulations that already have an experiment — the linked half of the same population total_proposed counts the unlinked half of.
+             */
+            total_linked: number;
+            /**
+             * Real Experiments Running
+             * @description ml_experiments rows with is_synthetic=false, status='running' and an intervention_channel — the real A/B portfolio. 0 today: every real row is pipeline lineage and the 360 running A/B rows are synthetic.
+             */
+            real_experiments_running: number;
+        };
+        /**
          * ProposedQuestion
          * @description An agent-proposed treatment->outcome question, ranked by a data-driven
          *     screening signal (the adjusted association strength). This is a SCREENING
@@ -15978,6 +16192,17 @@ export interface components {
          * @enum {string}
          */
         QuestionType: "causal_effect" | "effect_heterogeneity" | "targeting" | "system_dependencies" | "comprehensive";
+        /**
+         * R2ScoreBasisEnum
+         * @description What the model's r2_score was scored against (#2206).
+         *
+         *     'synthetic_target': the fit's target is self-generated by
+         *     synthetic_training_frame (data_provenance 'synthetic') — the R² says how well the
+         *     model reproduces its own synthetic generator, not real-world outcomes.
+         *     'rwd_target': trained on a real-world data file.
+         * @enum {string}
+         */
+        R2ScoreBasisEnum: "synthetic_target" | "rwd_target" | "unknown";
         /**
          * ROIEstimate
          * @description ROI estimate for closing a performance gap.
@@ -18729,7 +18954,10 @@ export interface components {
             recommended_sample_size?: number | null;
             /** Recommended Duration Weeks */
             recommended_duration_weeks?: number | null;
-            /** Simulation Confidence */
+            /**
+             * Simulation Confidence
+             * @description Heuristic confidence in [0, 1]: a weighted blend of the evidence behind the estimate (rows the estimator fit on, saturating at 1000), the precision of the 95% interval, and — only once measured — the model's fidelity score (0.3 / 0.3 / 0.4). For an unvalidated model (model_fidelity_score NULL) the fidelity term is dropped and the other two renormalised to 0.5 / 0.5; it is never imputed (#2206). Nothing gates on this number; the fidelity state travels separately in fidelity_status / fidelity_warning.
+             */
             simulation_confidence: number;
             /** Fidelity Warning */
             fidelity_warning: boolean;
@@ -18737,6 +18965,13 @@ export interface components {
             fidelity_warning_reason?: string | null;
             /** Model Fidelity Score */
             model_fidelity_score?: number | null;
+            /** @description Explicit fidelity state of the model behind this run (#2206): 'unvalidated' when its fidelity_score is NULL (no experiment outcome has been compared against it — fidelity_warning is True and this is NOT a pass), 'below_threshold' or 'validated' when measured. A stored simulation derives it from the model row at read time. */
+            fidelity_status: components["schemas"]["FidelityStatusEnum"];
+            /**
+             * Experiment Design Id
+             * @description The ml_experiments id this simulation is linked to, or null when it is not linked. (An unlinked simulation is a PROPOSAL only when it is completed with a deploy/refine recommendation — see /proposed-experiments; a completed 'skip' run stays unlinked and proposes nothing.) Written by /simulate when given experiment_design_id, or by POST /proposed-experiments/{simulation_id}/draft. The post-experiment fidelity producer resolves the simulation through this link.
+             */
+            experiment_design_id?: string | null;
             status: components["schemas"]["SimulationStatusEnum"];
             /** Error Message */
             error_message?: string | null;
@@ -18810,6 +19045,11 @@ export interface components {
             /** Simulation Id */
             simulation_id: string;
             /**
+             * Experiment Design Id
+             * @description The ml_experiments id this simulation is linked to, or null when it is not linked. (An unlinked simulation is a PROPOSAL only when it is completed with a deploy/refine recommendation — see /proposed-experiments; a completed 'skip' run stays unlinked and proposes nothing.) Written by /simulate when given experiment_design_id, or by POST /proposed-experiments/{simulation_id}/draft. The post-experiment fidelity producer resolves the simulation through this link.
+             */
+            experiment_design_id?: string | null;
+            /**
              * Created At
              * Format: date-time
              */
@@ -18857,6 +19097,11 @@ export interface components {
         SimulationListItem: {
             /** Simulation Id */
             simulation_id: string;
+            /**
+             * Experiment Design Id
+             * @description The ml_experiments id this simulation is linked to, or null when it is not linked. (An unlinked simulation is a PROPOSAL only when it is completed with a deploy/refine recommendation — see /proposed-experiments; a completed 'skip' run stays unlinked and proposes nothing.) Written by /simulate when given experiment_design_id, or by POST /proposed-experiments/{simulation_id}/draft. The post-experiment fidelity producer resolves the simulation through this link.
+             */
+            experiment_design_id?: string | null;
             /** Intervention Type */
             intervention_type: string;
             /** Brand */
@@ -18935,7 +19180,10 @@ export interface components {
             recommended_sample_size?: number | null;
             /** Recommended Duration Weeks */
             recommended_duration_weeks?: number | null;
-            /** Simulation Confidence */
+            /**
+             * Simulation Confidence
+             * @description Heuristic confidence in [0, 1]: a weighted blend of the evidence behind the estimate (rows the estimator fit on, saturating at 1000), the precision of the 95% interval, and — only once measured — the model's fidelity score (0.3 / 0.3 / 0.4). For an unvalidated model (model_fidelity_score NULL) the fidelity term is dropped and the other two renormalised to 0.5 / 0.5; it is never imputed (#2206). Nothing gates on this number; the fidelity state travels separately in fidelity_status / fidelity_warning.
+             */
             simulation_confidence: number;
             /** Fidelity Warning */
             fidelity_warning: boolean;
@@ -18943,6 +19191,13 @@ export interface components {
             fidelity_warning_reason?: string | null;
             /** Model Fidelity Score */
             model_fidelity_score?: number | null;
+            /** @description Explicit fidelity state of the model behind this run (#2206): 'unvalidated' when its fidelity_score is NULL (no experiment outcome has been compared against it — fidelity_warning is True and this is NOT a pass), 'below_threshold' or 'validated' when measured. A stored simulation derives it from the model row at read time. */
+            fidelity_status: components["schemas"]["FidelityStatusEnum"];
+            /**
+             * Experiment Design Id
+             * @description The ml_experiments id this simulation is linked to, or null when it is not linked. (An unlinked simulation is a PROPOSAL only when it is completed with a deploy/refine recommendation — see /proposed-experiments; a completed 'skip' run stays unlinked and proposes nothing.) Written by /simulate when given experiment_design_id, or by POST /proposed-experiments/{simulation_id}/draft. The post-experiment fidelity producer resolves the simulation through this link.
+             */
+            experiment_design_id?: string | null;
             status: components["schemas"]["SimulationStatusEnum"];
             /** Error Message */
             error_message?: string | null;
@@ -19932,6 +20187,51 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** @description 'unvalidated' while fidelity_score is NULL / fidelity_sample_count is 0 — no experiment outcome has been compared against this model; not a pass. */
+            fidelity_status: components["schemas"]["FidelityStatusEnum"];
+            /**
+             * Fidelity Score
+             * @description Mean fidelity over the model's A/B comparisons; NULL = none.
+             */
+            fidelity_score?: number | null;
+            /**
+             * Fidelity Sample Count
+             * @description Number of experiment comparisons behind fidelity_score.
+             * @default 0
+             */
+            fidelity_sample_count: number;
+            /**
+             * Data Provenance
+             * @description Training-frame provenance as recorded: 'synthetic' or 'rwd_file'.
+             */
+            data_provenance?: string | null;
+            /** @description What r2_score was scored against. 'synthetic_target': the target is self-generated by the synthetic training frame, so R² measures how well the model reproduces its own generator — not real-world outcomes. */
+            r2_score_basis: components["schemas"]["R2ScoreBasisEnum"];
+            /**
+             * Brand Is Feature
+             * @description Whether 'brand' is one of the model's feature_columns (False: brand is routing metadata).
+             */
+            brand_is_feature: boolean;
+            /**
+             * Training Fingerprint
+             * @description Content hash of the RECORDED fit: training_config (with the training_frame source/seed/rows when the trainer recorded it), feature/target columns, and every reported metric except wall-clock. Equal fingerprints = the same recorded fit under several labels; the artifact itself is not hashed.
+             */
+            training_fingerprint: string;
+            /**
+             * Shared Fit Model Count
+             * @description Distinct BRANDS whose active model of this twin_type has the same training_fingerprint, including this one (two active rows of one brand count once). >1 means brand is a label over ONE recorded fit.
+             */
+            shared_fit_model_count: number;
+            /**
+             * Shared Fit With
+             * @description Other brands sharing this exact fit that the caller may read (brand-scoped).
+             */
+            shared_fit_with?: string[];
+            /**
+             * Training Frame Recorded
+             * @description Whether a CONTENT digest of the training frame (training_config.training_frame.content_sha256) was recorded for this row. False for rows trained before it was recorded: their fingerprint compares configuration, columns and metrics only — training-frame and artifact identity were not recorded.
+             */
+            training_frame_recorded: boolean;
             /** Model Description */
             model_description?: string | null;
             /** Feature Columns */
@@ -19983,6 +20283,51 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** @description 'unvalidated' while fidelity_score is NULL / fidelity_sample_count is 0 — no experiment outcome has been compared against this model; not a pass. */
+            fidelity_status: components["schemas"]["FidelityStatusEnum"];
+            /**
+             * Fidelity Score
+             * @description Mean fidelity over the model's A/B comparisons; NULL = none.
+             */
+            fidelity_score?: number | null;
+            /**
+             * Fidelity Sample Count
+             * @description Number of experiment comparisons behind fidelity_score.
+             * @default 0
+             */
+            fidelity_sample_count: number;
+            /**
+             * Data Provenance
+             * @description Training-frame provenance as recorded: 'synthetic' or 'rwd_file'.
+             */
+            data_provenance?: string | null;
+            /** @description What r2_score was scored against. 'synthetic_target': the target is self-generated by the synthetic training frame, so R² measures how well the model reproduces its own generator — not real-world outcomes. */
+            r2_score_basis: components["schemas"]["R2ScoreBasisEnum"];
+            /**
+             * Brand Is Feature
+             * @description Whether 'brand' is one of the model's feature_columns (False: brand is routing metadata).
+             */
+            brand_is_feature: boolean;
+            /**
+             * Training Fingerprint
+             * @description Content hash of the RECORDED fit: training_config (with the training_frame source/seed/rows when the trainer recorded it), feature/target columns, and every reported metric except wall-clock. Equal fingerprints = the same recorded fit under several labels; the artifact itself is not hashed.
+             */
+            training_fingerprint: string;
+            /**
+             * Shared Fit Model Count
+             * @description Distinct BRANDS whose active model of this twin_type has the same training_fingerprint, including this one (two active rows of one brand count once). >1 means brand is a label over ONE recorded fit.
+             */
+            shared_fit_model_count: number;
+            /**
+             * Shared Fit With
+             * @description Other brands sharing this exact fit that the caller may read (brand-scoped).
+             */
+            shared_fit_with?: string[];
+            /**
+             * Training Frame Recorded
+             * @description Whether a CONTENT digest of the training frame (training_config.training_frame.content_sha256) was recorded for this row. False for rows trained before it was recorded: their fingerprint compares configuration, columns and metrics only — training-frame and artifact identity were not recorded.
+             */
+            training_frame_recorded: boolean;
         };
         /**
          * TwinTypeEnum
@@ -26840,6 +27185,123 @@ export interface operations {
             };
             /** @description Authentication required */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationErrorResponse"];
+                };
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_proposed_experiments: {
+        parameters: {
+            query?: {
+                /** @description Filter by brand (omit for all you may see) */
+                brand?: components["schemas"]["BrandEnum"] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProposedExperimentsResponse"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationErrorResponse"];
+                };
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    create_draft_experiment_from_proposal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                simulation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DraftExperimentResponse"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Simulation not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Simulation already linked to an experiment */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

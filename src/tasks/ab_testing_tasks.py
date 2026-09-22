@@ -31,6 +31,16 @@ from uuid import UUID
 import yaml  # type: ignore[import-untyped]
 
 from src.digital_twin.twin_generator import TwinGenerator
+
+# The post-stop fidelity loop (#2206) lives in its own module (module-size ratchet);
+# the names are re-exported here for the task registry and existing importers.
+from src.tasks.ab_fidelity_loop import (  # noqa: E402,F401 — re-exported
+    _STOPPING_DECISIONS,
+    _enqueue_final_analysis_on_stop,
+    _reconcile_final_analysis,
+    _roll_up_model_fidelity,
+    fidelity_tracking_update,
+)
 from src.workers.celery_app import celery_app
 
 if TYPE_CHECKING:
@@ -214,6 +224,16 @@ def scheduled_interim_analysis(
             previous_analyses = await exp_repo.get_interim_analyses(exp_uuid)
             analysis_number = len(previous_analyses) + 1
 
+            # Reconcile BEFORE the milestone gate (#2206, codex r7): a persisted
+            # stopping decision whose final enqueue failed (broker outage) would
+            # otherwise never be retried — later sweeps stop at "No new milestone
+            # reached". The persisted decision is the durable record; every sweep
+            # checks it against the final-results table (idempotent: skips when
+            # a final row exists).
+            reconciled = await _reconcile_final_analysis(exp_uuid, previous_analyses)
+            fidelity_reconciled = reconciled["fidelity_tracking_enqueued"]
+            reconciled_final = reconciled["final_analysis_enqueued"]
+
             # Check if we should perform analysis at this milestone
             if not force:
                 next_milestone = None
@@ -235,6 +255,8 @@ def scheduled_interim_analysis(
                         "reason": "No new milestone reached",
                         "information_fraction": information_fraction,
                         "previous_analyses": len(previous_analyses),
+                        "final_analysis_enqueued": reconciled_final,
+                        "fidelity_tracking_enqueued": fidelity_reconciled,
                     }
 
             # REAL per-unit outcome feed (#705 R5): same assignments ⋈
@@ -309,6 +331,15 @@ def scheduled_interim_analysis(
             )
             duration_ms = int((time.time() - start_time) * 1000)
 
+            # A stopping decision is the product moment that makes an analysis
+            # FINAL. compute_experiment_results(final) — the fidelity loop's root
+            # producer — had no producer at all (no beat entry, no send_task), so
+            # the whole post-experiment fidelity chain was dark (#2206). Enqueue
+            # it once per experiment: skip when a final result row already exists.
+            final_enqueued = reconciled_final or await _enqueue_final_analysis_on_stop(
+                exp_uuid, interim_result.decision
+            )
+
             return {
                 "status": "completed",
                 "experiment_id": experiment_id,
@@ -317,6 +348,8 @@ def scheduled_interim_analysis(
                 "effect_estimate": interim_result.effect_estimate,
                 "p_value": interim_result.p_value,
                 "decision": interim_result.decision.value,
+                "final_analysis_enqueued": final_enqueued,
+                "fidelity_tracking_enqueued": fidelity_reconciled,
                 "n_control": int(len(control_data)),
                 "n_treatment": int(len(treatment_data)),
                 "duration_ms": duration_ms,
@@ -689,6 +722,7 @@ def compute_experiment_results(
 
     async def execute_computation():
         from src.repositories import get_supabase_client
+        from src.repositories.ab_results import FinalResultAlreadyPersisted
         from src.repositories.experiment_outcome import ExperimentOutcomeRepository
         from src.services.results_analysis import AnalysisType, ResultsAnalysisService
 
@@ -700,10 +734,13 @@ def compute_experiment_results(
             if analysis_type != "final":
                 return
             try:
+                # No explicit queue: the routing table sends it to `analytics`
+                # (consumed by worker_medium). The old queue="twins" override
+                # pinned it to a queue only the replicas-0 worker_heavy consumes,
+                # so the enqueued task never ran (#2206).
                 celery_app.send_task(
                     "src.tasks.fidelity_tracking_update",
                     args=[experiment_id],
-                    queue="twins",
                 )
             except Exception as enqueue_err:
                 logger.warning(
@@ -741,6 +778,26 @@ def compute_experiment_results(
                 }
             brand = exp_rows[0].get("brand")
             primary_metric = exp_rows[0].get("prediction_target") or ""
+
+            # Idempotency under Celery late-ack redelivery (codex r2 #4): a worker
+            # lost after persisting the final row gets this task again. The interim
+            # producer's existence check cannot see that; check here too and skip
+            # the recompute. The fidelity enqueue still fires — the comparison is
+            # an upsert on (experiment, simulation, type). Two deliveries racing
+            # within one round-trip both pass this check; ml/046's partial unique
+            # index then arbitrates at the INSERT and the loser lands in the
+            # FinalResultAlreadyPersisted branch below (owner fix, #2206).
+            if analysis_type == "final":
+                from src.repositories.ab_results import ABResultsRepository
+
+                if await ABResultsRepository().get_results(exp_uuid, analysis_type="final"):
+                    _enqueue_fidelity_tracking()
+                    return {
+                        "status": "skipped",
+                        "experiment_id": experiment_id,
+                        "analysis_type": analysis_type,
+                        "reason": "final results already computed for this experiment",
+                    }
 
             # REAL per-unit outcome feed (#705 R5): assignments ⋈ business_metrics
             # per-HCP rollup. Replaces the #422 `control_data = []` placeholder.
@@ -805,6 +862,22 @@ def compute_experiment_results(
                 "duration_ms": duration_ms,
             }
 
+        except FinalResultAlreadyPersisted as raced:
+            # The other delivery won the INSERT (ml/046). Same skip as the
+            # pre-check branch: nothing to persist, but the fidelity hop must
+            # still fire so the loop closes whichever delivery got here last.
+            logger.info(
+                "Final results for %s persisted by a concurrent delivery; skipping recompute",
+                experiment_id,
+            )
+            _enqueue_fidelity_tracking()
+            return {
+                "status": "skipped",
+                "experiment_id": experiment_id,
+                "analysis_type": analysis_type,
+                "reason": "final results persisted by a concurrent delivery",
+                "results_id": str(raced.existing.id) if raced.existing else None,
+            }
         except Exception as e:
             logger.error(f"Results computation failed for {experiment_id}: {e}")
             return {
@@ -814,101 +887,6 @@ def compute_experiment_results(
             }
 
     return cast(Dict[str, Any], run_async(execute_computation()))
-
-
-@celery_app.task(bind=True, name="src.tasks.fidelity_tracking_update")
-def fidelity_tracking_update(
-    self,
-    experiment_id: str,
-    twin_simulation_id: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Update fidelity comparison with Digital Twin predictions.
-
-    Compares actual experiment results with Digital Twin predictions
-    to track simulation accuracy and identify calibration needs.
-
-    Args:
-        experiment_id: UUID of the experiment
-        twin_simulation_id: Optional specific simulation to compare against
-
-    Returns:
-        Fidelity comparison results
-    """
-    logger.info(
-        f"Updating fidelity tracking for experiment {experiment_id}: task {self.request.id}"
-    )
-
-    config = load_config()
-    fidelity_config = config.get("fidelity", {})
-    start_time = time.time()
-
-    async def execute_update():
-        from src.services.results_analysis import ResultsAnalysisService
-
-        try:
-            results_service = ResultsAnalysisService()
-            exp_uuid = UUID(experiment_id)
-
-            # On-demand calibration: compare actual results with the twin's
-            # predicted effect/CI. compare_experiment_to_twin (R1) does the fetch
-            # from the REAL twin columns (simulated_ate / _ci_*) and raises
-            # ValueError when results or a twin simulation are absent. The prior
-            # inline query hit non-existent columns (id/predicted_effect/
-            # confidence_interval), left predicted_effect/predicted_ci UNBOUND on
-            # the explicit-id branch, and passed predicted_ci= (wrong arg name) —
-            # all eliminated by routing through the convenience method (#705 H9).
-            sim_uuid = UUID(twin_simulation_id) if twin_simulation_id else None
-            try:
-                comparison = await results_service.compare_experiment_to_twin(
-                    experiment_id=exp_uuid,
-                    twin_simulation_id=sim_uuid,  # None → resolves the latest sim
-                )
-            except ValueError as ve:
-                return {
-                    "status": "skipped",
-                    "experiment_id": experiment_id,
-                    "reason": str(ve),
-                }
-
-            # Check if calibration is needed
-            fidelity_config.get("acceptable_error", 0.2)
-            calibration_trigger = fidelity_config.get("calibration_trigger_error", 0.3)
-
-            calibration_needed = abs(comparison.prediction_error) > calibration_trigger
-
-            if calibration_needed:
-                logger.warning(
-                    f"Digital Twin calibration needed for experiment {experiment_id}: "
-                    f"prediction error = {comparison.prediction_error:.2%}"
-                )
-
-            duration_ms = int((time.time() - start_time) * 1000)
-
-            return {
-                "status": "completed",
-                "experiment_id": experiment_id,
-                "twin_simulation_id": str(comparison.twin_simulation_id),
-                "predicted_effect": comparison.predicted_effect,
-                "actual_effect": comparison.actual_effect,
-                "prediction_error": comparison.prediction_error,
-                # Real FidelityComparison field is ci_coverage (not the non-existent
-                # confidence_interval_coverage, which AttributeError'd) (#705 H9).
-                "ci_coverage": comparison.ci_coverage,
-                "fidelity_score": comparison.fidelity_score,
-                "calibration_needed": calibration_needed,
-                "calibration_adjustment": comparison.calibration_adjustment,
-                "duration_ms": duration_ms,
-            }
-
-        except Exception as e:
-            logger.error(f"Fidelity tracking update failed for {experiment_id}: {e}")
-            return {
-                "status": "failed",
-                "experiment_id": experiment_id,
-                "error": str(e),
-            }
-
-    return cast(Dict[str, Any], run_async(execute_update()))
 
 
 @celery_app.task(bind=True, name="src.tasks.check_all_active_experiments")

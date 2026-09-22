@@ -15,6 +15,8 @@
  * - GET /digital-twin/models/{id}/fidelity: Get fidelity history
  * - GET /digital-twin/models/{id}/fidelity/report: Get fidelity report
  * - GET /digital-twin/health: Health check
+ * - GET /digital-twin/proposed-experiments: Twin simulations proposing an experiment (#2206)
+ * - POST /digital-twin/proposed-experiments/{id}/draft: Create a linked draft experiment (#2206)
  *
  * @module api/digital-twin
  */
@@ -23,6 +25,8 @@ import { get, post } from '@/lib/api-client';
 import type {
   Brand,
   DigitalTwinHealthResponse,
+  DraftExperimentResponse,
+  ProposedExperimentsResponse,
   FidelityHistoryResponse,
   FidelityRecordResponse,
   FidelityReportResponse,
@@ -303,6 +307,41 @@ export async function getModelFidelityReport(
   return get<FidelityReportResponse>(
     `${DIGITAL_TWIN_BASE}/models/${encodeURIComponent(modelId)}/fidelity/report`,
     { lookback_days: lookbackDays }
+  );
+}
+
+// =============================================================================
+// PROPOSED EXPERIMENTS (#2206, owner item C)
+// =============================================================================
+
+/**
+ * List the twin simulations that propose an experiment: completed, recommendation
+ * deploy or refine, not yet linked to an experiment — ordered deploy first, then
+ * predicted effect — with the honest counts around them.
+ *
+ * @param params - Optional brand filter (omit for every brand the caller may see)
+ */
+export async function listProposedExperiments(params?: {
+  brand?: Brand | string;
+}): Promise<ProposedExperimentsResponse> {
+  return get<ProposedExperimentsResponse>(
+    `${DIGITAL_TWIN_BASE}/proposed-experiments`,
+    params
+  );
+}
+
+/**
+ * Create ONE ml_experiments row with status 'draft' from a proposal's twin
+ * parameters and link the simulation to it. The draft stays a draft until promoted.
+ *
+ * @param simulationId - The proposing simulation (UUID)
+ */
+export async function createDraftExperiment(
+  simulationId: string
+): Promise<DraftExperimentResponse> {
+  return post<DraftExperimentResponse, Record<string, never>>(
+    `${DIGITAL_TWIN_BASE}/proposed-experiments/${encodeURIComponent(simulationId)}/draft`,
+    {}
   );
 }
 

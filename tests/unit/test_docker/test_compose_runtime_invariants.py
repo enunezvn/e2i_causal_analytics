@@ -1164,3 +1164,37 @@ def test_mlflow_cors_allows_public_ui_origin(compose_name):
         f"'{PUBLIC_MLFLOW_ORIGIN}' on every /ajax-api POST — not matched by "
         f"--cors-allowed-origins {_allowed.origins}"
     )
+
+
+def _queues_of(svc: dict) -> set[str]:
+    cmd = svc.get("command", "")
+    if isinstance(cmd, list):
+        cmd = " ".join(str(c) for c in cmd)
+    m = re.search(r"--queues[= ](\S+)", cmd)
+    return set(m.group(1).split(",")) if m else set()
+
+
+def _replicas_of(svc: dict) -> int:
+    return int((svc.get("deploy") or {}).get("replicas", 1))
+
+
+def test_fidelity_tracking_update_is_consumed_by_a_running_worker():
+    """#2206: the post-experiment fidelity producer was routed to `twins`, which only
+    worker_heavy consumes — and worker_heavy ships at replicas: 0 (#705). A task on
+    a queue no running service consumes is dark. Pin: its routed queue must be
+    consumed by a service the base compose actually runs (replicas >= 1)."""
+    from src.workers.celery_app import celery_app
+
+    queue = celery_app.conf.task_routes["src.tasks.fidelity_tracking_update"]["queue"]
+    services = _services(_load(BASE_COMPOSE))
+    consumers = {
+        name
+        for name, svc in services.items()
+        if queue in _queues_of(svc) and _replicas_of(svc) >= 1
+    }
+    assert consumers, f"queue {queue!r} is consumed by no service with replicas >= 1"
+    # And the producer of that task runs on a consumed queue too (same tier).
+    producer_queue = celery_app.conf.task_routes["src.tasks.compute_experiment_results"]["queue"]
+    assert any(
+        producer_queue in _queues_of(svc) and _replicas_of(svc) >= 1 for svc in services.values()
+    )

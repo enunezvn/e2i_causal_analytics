@@ -310,6 +310,23 @@ class TestSimulateIntervention:
         assert "fidelity_warning" in result
         assert isinstance(result["fidelity_warning"], bool)
 
+    def test_fidelity_status_is_explicit(self, tool_module):
+        """#2206: the chat tool states the model's fidelity status, so a NULL model
+        fidelity reads as 'unvalidated' in the designer's output, not as passed."""
+        simulate_intervention = tool_module.simulate_intervention
+        result = simulate_intervention.invoke(
+            {
+                "intervention_type": "sample_distribution",
+                "brand": "Fabhalta",
+            }
+        )
+
+        assert "fidelity_status" in result
+        if result["simulation_id"] != "error":
+            assert result["fidelity_status"] in {"unvalidated", "validated", "below_threshold"}
+            if result["fidelity_status"] == "unvalidated":
+                assert result["fidelity_warning"] is True
+
 
 @pytest.mark.xdist_group(name="experiment_designer_tools")
 class TestSimulateInterventionFailsClosed:
@@ -437,6 +454,54 @@ class TestSimulateInterventionEstimatesOnTheCohort:
         # The northeast effect, not the synthetic default (0.15) and not the whole-cohort
         # average (~0.34): the target regions reach the estimator.
         assert out["simulated_ate"] == pytest.approx(PLANTED_EFFECT["northeast"], abs=0.04)
+
+    @pytest.mark.timeout(180)
+    def test_model_fidelity_is_read_fresh_per_call_not_pinned_to_the_population_cache(
+        self, monkeypatch, tool_module
+    ):
+        """codex r1 #4: the population cache is indefinite, but a model's fidelity
+        changes without retraining (the live loop rolls it up). The tool reads the
+        model row's fidelity on every call; a NULL still states 'unvalidated'."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        monkeypatch.setattr(
+            "src.digital_twin.effect.cohort_loader.load_cohort_frame",
+            AsyncMock(return_value=_planted_cohort()),
+        )
+        monkeypatch.setattr(
+            "src.memory.services.factories.loop_scoped_async_supabase_client",
+            _scoped_client(MagicMock()),
+        )
+        from uuid import uuid4
+
+        population = _region_population()
+        population.model_id = uuid4()  # the DB model this population was generated from
+        monkeypatch.setattr(tool_module, "_get_or_create_twins", lambda *a, **k: population)
+        reads: list = []
+        fidelity = {"value": None}
+        monkeypatch.setattr(
+            tool_module,
+            "_read_model_fidelity",
+            lambda model_id: reads.append(model_id) or fidelity["value"],
+        )
+        ask = {"intervention_type": "email_campaign", "brand": "Kisqali"}
+
+        first = tool_module.simulate_intervention.invoke(ask)
+        assert first["simulation_id"] != "error", first["recommendation_rationale"]
+        assert first["fidelity_status"] == "unvalidated"
+        assert first["fidelity_warning"] is True
+
+        fidelity["value"] = 0.55
+        second = tool_module.simulate_intervention.invoke(ask)
+        assert second["fidelity_status"] == "below_threshold"
+
+        fidelity["value"] = 0.9
+        third = tool_module.simulate_intervention.invoke(ask)
+        assert third["fidelity_status"] == "validated"
+        assert third["fidelity_warning"] is False
+        # One fresh read per call, and always for the model that PRODUCED the cached
+        # population — never "whichever model is active now" (codex r3 #1).
+        assert reads == [population.model_id] * 3
 
     def test_refuses_without_generating_twins_when_the_cohort_is_unusable(
         self, monkeypatch, tool_module

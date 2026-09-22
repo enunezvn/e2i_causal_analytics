@@ -43,6 +43,20 @@ class TestResolveColumn:
         with pytest.raises(ValueError):
             repo.resolve_column("adoption_propensity")
 
+    def test_the_twin_cohort_outcome_resolves_to_its_own_column_and_means(self):
+        """#2206 item C: a draft experiment created from a twin proposal carries
+        prediction_target = the outcome the twin predicted an effect ON
+        (business_metrics.cohort_conversion_outcome, migration 147). The final
+        results feed must measure the SAME quantity, else the loop terminates in
+        an honest "Unsupported primary_metric" skip. It is a per-HCP numeric
+        outcome (NOT a count), so the per-HCP window collapses by MEAN."""
+        from src.data.per_hcp_cohort_columns import COHORT_OUTCOME_COLUMN
+
+        repo = _repo()
+        column, reducer = repo.resolve_column(COHORT_OUTCOME_COLUMN)
+        assert column == COHORT_OUTCOME_COLUMN == "cohort_conversion_outcome"
+        assert reducer == "mean"
+
 
 class TestAggregateToArrays:
     def test_sums_count_values_per_hcp_then_splits_by_variant(self):

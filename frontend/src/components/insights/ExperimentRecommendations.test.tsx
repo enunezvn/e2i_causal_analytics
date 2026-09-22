@@ -1,18 +1,30 @@
 /**
- * ExperimentRecommendations Tests — live experiment health monitor wiring.
+ * ExperimentRecommendations Tests — live experiment health monitor wiring plus the
+ * proposed-experiments feed (#2206).
  *
- * The card is a MONITORING feed (health, enrollment, information fraction,
- * SRM, open alerts) ranked worst-first: no fabricated Digital-Twin scores,
- * no invented Recommended/Simulated/Approved pipeline states.
+ * The monitor half is a MONITORING feed (health, enrollment, information fraction,
+ * SRM, open alerts) ranked worst-first: no fabricated Digital-Twin scores for a
+ * monitoring row. The proposals half is a second real feed: completed twin
+ * simulations recommending deploy/refine, not yet linked to an experiment, each
+ * with the twin's own numbers; an admin can create a linked `draft` experiment.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 vi.mock('@/hooks/api', () => ({ useTriggerMonitoring: vi.fn() }));
+vi.mock('@/hooks/api/use-digital-twin', () => ({
+  useProposedExperiments: vi.fn(),
+  useCreateDraftExperiment: vi.fn(),
+}));
+const mockUseAuth = vi.fn();
+vi.mock('@/hooks/use-auth', () => ({ useAuth: () => mockUseAuth() }));
+const mockToast = vi.fn();
+vi.mock('@/hooks/use-toast', () => ({ toast: (...args: unknown[]) => mockToast(...args) }));
 
 import { useTriggerMonitoring } from '@/hooks/api';
+import { useCreateDraftExperiment, useProposedExperiments } from '@/hooks/api/use-digital-twin';
 import { ExperimentRecommendations } from './ExperimentRecommendations';
 
 function createWrapper() {
@@ -66,9 +78,73 @@ function mockMonitoring(data: unknown, mutate = vi.fn()) {
   return mutate;
 }
 
+function proposal(overrides: Record<string, unknown> = {}) {
+  return {
+    simulation_id: 'sim-prop-1',
+    model_id: 'model-1',
+    brand: 'Remibrutinib',
+    intervention_type: 'digital_engagement',
+    intervention_config: { duration_weeks: 12 },
+    simulated_ate: 0.3999,
+    // 0.3104 (not 0.3105): a half-way float rounds either way in toFixed; keep the fixture unambiguous.
+    simulated_ci_lower: 0.3104,
+    simulated_ci_upper: 0.4893,
+    recommendation: 'deploy',
+    recommendation_rationale: 'Effect is positive and the 95% CI excludes zero.',
+    recommended_sample_size: 13,
+    recommended_duration_weeks: 13,
+    simulation_confidence: 0.72,
+    data_provenance: 'cohort_estimated_synthetic_gold_v1',
+    fidelity_status: 'unvalidated',
+    created_at: '2026-09-22T10:00:00Z',
+    proposal_basis: 'twin_simulation',
+    outcome_column: 'cohort_conversion_outcome',
+    effect_scale: 'absolute',
+    ...overrides,
+  };
+}
+
+/** The list envelope as the backend states it today: outcome recorded only on synthetic-gold rows. */
+function proposalsResponse(proposals: unknown[], overrides: Record<string, unknown> = {}) {
+  return {
+    proposals,
+    outcome_column: 'cohort_conversion_outcome',
+    outcome_measurable_in_real_mode: false,
+    total_proposed: proposals.length,
+    truncated: false,
+    total_linked: 0,
+    real_experiments_running: 0,
+    ...overrides,
+  };
+}
+
+function mockProposals(
+  data: unknown,
+  state: { isPending?: boolean; isError?: boolean; error?: { message: string } } = {}
+) {
+  (useProposedExperiments as ReturnType<typeof vi.fn>).mockReturnValue({
+    data,
+    isPending: state.isPending ?? false,
+    isError: state.isError ?? false,
+    error: state.error,
+  });
+}
+
+function mockDraft(mutate = vi.fn(), state: { isPending?: boolean; variables?: string } = {}) {
+  (useCreateDraftExperiment as ReturnType<typeof vi.fn>).mockReturnValue({
+    mutate,
+    isPending: state.isPending ?? false,
+    variables: state.variables,
+  });
+  return mutate;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mockMonitoring(undefined);
+  mockProposals(proposalsResponse([]));
+  mockDraft();
+  mockUseAuth.mockReturnValue({ isAdmin: false });
 });
 
 describe('ExperimentRecommendations (Experiment Health Monitor)', () => {
@@ -96,7 +172,7 @@ describe('ExperimentRecommendations (Experiment Health Monitor)', () => {
     expect(screen.queryByRole('button', { name: /approve/i })).not.toBeInTheDocument();
   });
 
-  it('shows REAL health fields and never fabricates a Digital-Twin score or lift', () => {
+  it('shows REAL health fields and never fabricates a Digital-Twin score or lift for a monitored row', () => {
     mockMonitoring(
       monitorData({
         healthy_count: 0,
@@ -117,11 +193,12 @@ describe('ExperimentRecommendations (Experiment Health Monitor)', () => {
     expect(screen.getByText('Open Alerts')).toBeInTheDocument();
     expect(screen.getByText('Warning')).toBeInTheDocument();
 
-    // Fabricated Digital-Twin metrics / claims must NOT render.
+    // Fabricated Digital-Twin metrics / claims must NOT render on a monitored row.
     expect(screen.queryByText('Digital Twin Score')).not.toBeInTheDocument();
     expect(screen.queryByText('Expected Lift')).not.toBeInTheDocument();
-    // The honest disclosure that twin pre-screening is not wired IS present.
-    expect(screen.getByText(/not yet wired/i)).toBeInTheDocument();
+    // The old "not yet wired" disclaimer is retired: proposals are a real feed now (#2206).
+    expect(screen.queryByText(/not yet wired/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/nothing runs until a draft is promoted/i)).toBeInTheDocument();
   });
 
   it('ranks worst-first, caps the list, and links to /experiments for the rest', () => {
@@ -193,5 +270,205 @@ describe('ExperimentRecommendations (Experiment Health Monitor)', () => {
     render(<ExperimentRecommendations />, { wrapper: createWrapper() });
     expect(screen.getByText(/Couldn’t load experiments/i)).toBeInTheDocument();
     expect(screen.queryByText(/No running experiments/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('ExperimentRecommendations (Proposed experiments, #2206)', () => {
+  it('lists each proposal with the twin’s own numbers, fidelity state and provenance', () => {
+    mockProposals(
+      proposalsResponse([
+        proposal(),
+        proposal({
+          simulation_id: 'sim-prop-2',
+          brand: 'Kisqali',
+          intervention_type: 'email_campaign',
+          recommendation: 'refine',
+          recommendation_rationale: 'The interval straddles the minimum effect.',
+          simulated_ate: 0.021,
+          simulated_ci_lower: -0.004,
+          simulated_ci_upper: 0.046,
+          recommended_sample_size: 4200,
+          recommended_duration_weeks: 10,
+        }),
+      ])
+    );
+    render(<ExperimentRecommendations />, { wrapper: createWrapper() });
+
+    expect(screen.getByText('Proposed experiments')).toBeInTheDocument();
+    expect(screen.getByText('2 proposed')).toBeInTheDocument();
+    expect(screen.getByText('Remibrutinib · Digital engagement')).toBeInTheDocument();
+    expect(screen.getByText('Kisqali · Email campaign')).toBeInTheDocument();
+    expect(screen.getByText('Twin says deploy')).toBeInTheDocument();
+    expect(screen.getByText('Twin says refine')).toBeInTheDocument();
+    // The effect is an ABSOLUTE difference in outcome units — never a % lift (codex r1 #5)
+    // — and the provenance says synthetic-gold, not real-world (codex r1 #4).
+    expect(screen.getByText('+0.400 [+0.310, +0.489]')).toBeInTheDocument();
+    expect(screen.getByText('+0.021 [-0.004, +0.046]')).toBeInTheDocument();
+    // No percentage form of the effect anywhere (the rationale's own "95% CI" is the twin's text).
+    expect(screen.queryByText(/[+-]\d+\.\d%/)).not.toBeInTheDocument();
+    expect(
+      screen.getAllByText(/on cohort_conversion_outcome \(absolute, outcome units\)/)
+    ).toHaveLength(2);
+    expect(
+      screen.getByText(
+        /n=13 · 13 weeks · brand cohort–estimated \(synthetic-gold; not real-world data\)/
+      )
+    ).toBeInTheDocument();
+    expect(screen.getByText(/n=4,200 · 10 weeks/)).toBeInTheDocument();
+    expect(screen.queryByText(/estimated on the brand cohort/)).not.toBeInTheDocument();
+    expect(screen.getAllByText('Model unvalidated')).toHaveLength(2);
+    expect(screen.getByText('Effect is positive and the 95% CI excludes zero.')).toBeInTheDocument();
+    expect(screen.getByText('The interval straddles the minimum effect.')).toBeInTheDocument();
+  });
+
+  it('states the honest envelope: proposals, linked, real running, model state', () => {
+    mockProposals(proposalsResponse([proposal()], { total_linked: 3 }));
+    render(<ExperimentRecommendations />, { wrapper: createWrapper() });
+    expect(screen.getByTestId('proposals-envelope')).toHaveTextContent(
+      '1 proposal from twin simulations · 3 linked · 0 real experiments running · models unvalidated'
+    );
+  });
+
+  it('says when the twin outcome is not measurable in real mode, and stays quiet when it is (codex r1 #1)', () => {
+    mockProposals(proposalsResponse([proposal()], { outcome_measurable_in_real_mode: false }));
+    const { unmount } = render(<ExperimentRecommendations />, { wrapper: createWrapper() });
+    expect(screen.getByTestId('proposals-outcome-note')).toHaveTextContent(
+      /cohort_conversion_outcome.*recorded only on the synthetic-gold cohort rows today/
+    );
+    expect(screen.getByTestId('proposals-outcome-note')).toHaveTextContent(/owner decision/);
+    unmount();
+
+    mockProposals(proposalsResponse([proposal()], { outcome_measurable_in_real_mode: true }));
+    render(<ExperimentRecommendations />, { wrapper: createWrapper() });
+    expect(screen.queryByTestId('proposals-outcome-note')).not.toBeInTheDocument();
+  });
+
+  it('expands the list in place instead of linking to a page that has no proposals (codex r1 #8)', () => {
+    const many = Array.from({ length: 8 }, (_, i) =>
+      proposal({ simulation_id: `sim-many-${i}`, brand: 'Kisqali', intervention_type: `channel_${i}` })
+    );
+    mockProposals(proposalsResponse(many));
+    render(<ExperimentRecommendations />, { wrapper: createWrapper() });
+    expect(screen.getAllByTestId(/^proposal-sim-many-/)).toHaveLength(6);
+    expect(screen.queryByRole('link', { name: /view all .*proposals/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /show all 8 proposals/i }));
+    expect(screen.getAllByTestId(/^proposal-sim-many-/)).toHaveLength(8);
+    fireEvent.click(screen.getByRole('button', { name: /show the top 6 only/i }));
+    expect(screen.getAllByTestId(/^proposal-sim-many-/)).toHaveLength(6);
+  });
+
+  it('says when the window is smaller than the population, with the exact total (codex r4)', () => {
+    mockProposals(proposalsResponse([proposal()], { total_proposed: 731, truncated: true }));
+    render(<ExperimentRecommendations />, { wrapper: createWrapper() });
+    expect(screen.getByText('731 proposed')).toBeInTheDocument();
+    expect(screen.getByTestId('proposals-envelope')).toHaveTextContent(
+      /731 proposals from twin simulations .* showing the top 1 of 731 \(deploy first, then predicted effect\)/
+    );
+  });
+
+  it('explains an empty list: nothing proposed yet, or everything already linked', () => {
+    mockProposals(proposalsResponse([]));
+    const { unmount } = render(<ExperimentRecommendations />, { wrapper: createWrapper() });
+    expect(screen.getByText('No proposed experiments')).toBeInTheDocument();
+    expect(screen.getByText(/recommends deploy or refine yet/i)).toBeInTheDocument();
+    unmount();
+
+    mockProposals(proposalsResponse([], { total_linked: 4 }));
+    render(<ExperimentRecommendations />, { wrapper: createWrapper() });
+    // codex r2 #4: total_linked counts the linked half of the PROPOSAL population only.
+    expect(
+      screen.getByText(/All 4 deploy\/refine simulations are already linked to an experiment/i)
+    ).toBeInTheDocument();
+  });
+
+  it('shows a labeled error state when the proposals request failed', () => {
+    mockProposals(undefined, { isError: true, error: { message: 'boom' } });
+    render(<ExperimentRecommendations />, { wrapper: createWrapper() });
+    expect(screen.getByText(/Couldn’t load proposed experiments/i)).toBeInTheDocument();
+    expect(screen.getByText('boom')).toBeInTheDocument();
+  });
+
+  it('offers "Create draft experiment" to an admin only', () => {
+    mockProposals(proposalsResponse([proposal()]));
+    const { unmount } = render(<ExperimentRecommendations />, { wrapper: createWrapper() });
+    expect(screen.queryByRole('button', { name: /create draft experiment/i })).not.toBeInTheDocument();
+    unmount();
+
+    mockUseAuth.mockReturnValue({ isAdmin: true });
+    render(<ExperimentRecommendations />, { wrapper: createWrapper() });
+    expect(screen.getByRole('button', { name: /create draft experiment/i })).toBeInTheDocument();
+  });
+
+  it('confirms, creates the draft for that simulation, and shows the experiment id as a draft', () => {
+    mockUseAuth.mockReturnValue({ isAdmin: true });
+    mockProposals(proposalsResponse([proposal()]));
+    const mutate = mockDraft(
+      vi.fn((simulationId: string, opts?: { onSuccess?: (d: unknown) => void }) => {
+        opts?.onSuccess?.({
+          experiment_id: 'exp-draft-001',
+          simulation_id: simulationId,
+          experiment_name: 'twin_proposal_Remibrutinib_digital_engagement_sim-prop',
+          status: 'draft',
+          brand: 'Remibrutinib',
+          intervention_channel: 'digital_engagement',
+          prediction_target: 'cohort_conversion_outcome',
+          target_enrollment: 13,
+          planned_duration_days: 91,
+          outcome_column: 'cohort_conversion_outcome',
+          outcome_measurable_in_real_mode: false,
+          linked: true,
+          next_step: 'promote',
+        });
+      })
+    );
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    render(<ExperimentRecommendations />, { wrapper: createWrapper() });
+    fireEvent.click(screen.getByRole('button', { name: /create draft experiment/i }));
+
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(confirmSpy.mock.calls[0][0]).toMatch(/status "draft"/);
+    expect(mutate).toHaveBeenCalledTimes(1);
+    expect(mutate.mock.calls[0][0]).toBe('sim-prop-1');
+    expect(screen.getByText('exp-draft-001')).toBeInTheDocument();
+    expect(screen.getByText(/stays a draft until promoted/i)).toBeInTheDocument();
+    expect(mockToast).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Draft experiment created' })
+    );
+    // The action is spent for this row.
+    expect(screen.queryByRole('button', { name: /create draft experiment/i })).not.toBeInTheDocument();
+    confirmSpy.mockRestore();
+  });
+
+  it('does nothing when the confirmation is declined', () => {
+    mockUseAuth.mockReturnValue({ isAdmin: true });
+    mockProposals(proposalsResponse([proposal()]));
+    const mutate = mockDraft();
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+    render(<ExperimentRecommendations />, { wrapper: createWrapper() });
+    fireEvent.click(screen.getByRole('button', { name: /create draft experiment/i }));
+
+    expect(mutate).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it('reports a failed draft creation as a destructive toast, not a silent no-op', () => {
+    mockUseAuth.mockReturnValue({ isAdmin: true });
+    mockProposals(proposalsResponse([proposal()]));
+    mockDraft(
+      vi.fn((_id: string, opts?: { onError?: (e: { message: string }) => void }) => {
+        opts?.onError?.({ message: 'Simulation sim-prop-1 is already linked to experiment X.' });
+      })
+    );
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    render(<ExperimentRecommendations />, { wrapper: createWrapper() });
+    fireEvent.click(screen.getByRole('button', { name: /create draft experiment/i }));
+
+    expect(mockToast).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Could not create the draft experiment', variant: 'destructive' })
+    );
+    confirmSpy.mockRestore();
   });
 });

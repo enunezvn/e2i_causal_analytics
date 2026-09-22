@@ -53,7 +53,7 @@ ALLOWLIST: dict[str, int] = {
     # refutation-evidence shaping into src/api/routes/chat_causal_evidence.py.
     "src/api/routes/chatbot_tools.py": 2907,
     "src/api/routes/copilotkit.py": 6140,
-    "src/api/routes/digital_twin.py": 1933,
+    "src/api/routes/digital_twin.py": 1840,
     "src/api/routes/experiments.py": 1595,
     "src/api/routes/explain.py": 2822,
     "src/api/routes/feedback.py": 2041,

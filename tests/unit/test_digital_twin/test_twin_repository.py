@@ -157,6 +157,35 @@ class TestTwinModelRepository:
         assert "/latest" not in (row["mlflow_model_uri"] or "")
 
     @pytest.mark.asyncio
+    async def test_save_model_persists_the_training_frame_identity(
+        self, mock_supabase, twin_model_config, twin_model_metrics
+    ):
+        """#2206: training_config carries the frame that produced the fit so the
+        /models fit fingerprint distinguishes fits from different frames."""
+        repo = TwinModelRepository(mock_supabase)
+        mock_supabase.execute.return_value = MagicMock(
+            data=[{"model_id": str(twin_model_metrics.model_id)}]
+        )
+
+        await repo.save_model(
+            twin_model_config,
+            twin_model_metrics,
+            data_provenance="synthetic",
+            training_frame={"source": "synthetic_training_frame", "seed": 0, "n_rows": 2000},
+        )
+
+        row = mock_supabase.insert.call_args.args[0]
+        assert row["training_config"]["training_frame"] == {
+            "source": "synthetic_training_frame",
+            "seed": 0,
+            "n_rows": 2000,
+        }
+        # Legacy callers that pass nothing record nothing (no fabricated frame identity).
+        mock_supabase.insert.reset_mock()
+        await repo.save_model(twin_model_config, twin_model_metrics)
+        assert "training_frame" not in mock_supabase.insert.call_args.args[0]["training_config"]
+
+    @pytest.mark.asyncio
     async def test_save_model_no_mlflow_refs_stores_null_not_fabricated(
         self, mock_supabase, twin_model_config, twin_model_metrics
     ):
@@ -506,7 +535,13 @@ class TestTwinRepository:
             result = await repo.save_model(twin_model_config, twin_model_metrics)
 
             mock_save.assert_called_once_with(
-                twin_model_config, twin_model_metrics, None, None, None, None
+                twin_model_config,
+                twin_model_metrics,
+                None,
+                None,
+                None,
+                data_provenance=None,
+                training_frame=None,
             )
             assert result == twin_model_metrics.model_id
 
@@ -532,7 +567,7 @@ class TestTwinRepository:
             mock_list.return_value = [{"model_id": str(uuid4())}]
             result = await repo.list_active_models(twin_type=TwinType.HCP, brand="Kisqali")
 
-            mock_list.assert_called_once_with(TwinType.HCP, "Kisqali")
+            mock_list.assert_called_once_with(TwinType.HCP, "Kisqali", limit=100)
             assert len(result) == 1
 
 
@@ -645,3 +680,95 @@ class TestStoredSubgroupsBasis:
         from src.digital_twin.twin_repository import LEGACY_TWIN_WEIGHTED_AXES
 
         assert set(LEGACY_TWIN_WEIGHTED_AXES) == set(SUBGROUP_AXES) - {"region"}
+
+
+# =============================================================================
+# #2206 — model fidelity is the mean of its simulations' A/B comparisons
+# =============================================================================
+
+
+class _FakeQuery:
+    """A minimal PostgREST-shaped chain: table().select().eq()/in_().execute()."""
+
+    def __init__(self, tables):
+        self._tables = tables
+        self._table = None
+        self._filters = []
+
+    def table(self, name):
+        q = _FakeQuery(self._tables)
+        q._table = name
+        return q
+
+    def select(self, *_a, **_k):
+        return self
+
+    def eq(self, col, val):
+        self._filters.append(lambda r: str(r.get(col)) == str(val))
+        return self
+
+    def in_(self, col, vals):
+        allowed = {str(v) for v in vals}
+        self._filters.append(lambda r: str(r.get(col)) in allowed)
+        return self
+
+    def update(self, payload):
+        self._update = payload
+        return self
+
+    async def execute(self):
+        rows = [r for r in self._tables.get(self._table, []) if all(f(r) for f in self._filters)]
+        if getattr(self, "_update", None) is not None:
+            for r in rows:
+                r.update(self._update)
+        return MagicMock(data=rows)
+
+
+@pytest.mark.asyncio
+async def test_refresh_model_fidelity_from_comparisons_averages_that_models_comparisons():
+    from src.digital_twin.twin_repository import TwinRepository
+
+    model_id = uuid4()
+    other_model = uuid4()
+    s1, s2, s3 = uuid4(), uuid4(), uuid4()
+    tables = {
+        "twin_simulations": [
+            {"simulation_id": str(s1), "model_id": str(model_id)},
+            {"simulation_id": str(s2), "model_id": str(model_id)},
+            {"simulation_id": str(s3), "model_id": str(other_model)},
+        ],
+        "ab_fidelity_comparisons": [
+            {"twin_simulation_id": str(s1), "fidelity_score": 0.9},
+            {"twin_simulation_id": str(s2), "fidelity_score": 0.5},
+            {"twin_simulation_id": str(s2), "fidelity_score": None},  # not a score
+            {"twin_simulation_id": str(s3), "fidelity_score": 0.1},  # other model
+        ],
+        "digital_twin_models": [
+            {"model_id": str(model_id), "fidelity_score": None, "fidelity_sample_count": 0}
+        ],
+    }
+    repo = TwinRepository(supabase_client=_FakeQuery(tables))
+
+    out = await repo.refresh_model_fidelity_from_comparisons(model_id)
+
+    assert out == {"model_id": str(model_id), "fidelity_score": 0.7, "sample_count": 2}
+    row = tables["digital_twin_models"][0]
+    assert row["fidelity_score"] == 0.7
+    assert row["fidelity_sample_count"] == 2
+    assert row["last_fidelity_update"]
+
+
+@pytest.mark.asyncio
+async def test_refresh_model_fidelity_with_no_comparisons_writes_nothing():
+    from src.digital_twin.twin_repository import TwinRepository
+
+    model_id = uuid4()
+    tables = {
+        "twin_simulations": [{"simulation_id": str(uuid4()), "model_id": str(model_id)}],
+        "ab_fidelity_comparisons": [],
+        "digital_twin_models": [{"model_id": str(model_id), "fidelity_score": None}],
+    }
+    repo = TwinRepository(supabase_client=_FakeQuery(tables))
+
+    assert await repo.refresh_model_fidelity_from_comparisons(model_id) is None
+    assert tables["digital_twin_models"][0]["fidelity_score"] is None

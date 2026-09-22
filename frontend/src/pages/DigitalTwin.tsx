@@ -39,10 +39,12 @@ import {
   useRunSimulation,
   useSimulation,
   useInterventionTypes,
+  useTwinModels,
 } from '@/hooks/api/use-digital-twin';
 import { useDigitalTwinInsight } from '@/hooks/api';
 import { StrategicInsightCard } from '@/components/insights';
 import { toast } from '@/hooks/use-toast';
+import { provenanceLabel } from '@/lib/digital-twin-provenance';
 import { useDataFreshness } from '@/hooks/use-data-freshness';
 import { DataFreshnessIndicator } from '@/components/ui/data-freshness-indicator';
 import {
@@ -54,6 +56,12 @@ import {
   type SimulationDetailResponse,
 } from '@/types/digital-twin';
 import { groupSimulationsByInterventionBrand } from '@/lib/digital-twin-history';
+import {
+  allModelsUnvalidated,
+  describeModelCensus,
+  explainModelCensus,
+  fidelityStatusLabel,
+} from '@/lib/digital-twin-models';
 
 /** Title-case an intervention_type ("digital_engagement" → "Digital Engagement"). */
 function formatIntervention(interventionType: string): string {
@@ -71,6 +79,8 @@ interface StatCardProps {
   title: string;
   value: string | number;
   subtext?: string;
+  /** Fuller explanation, shown as the card's native tooltip. */
+  tooltip?: string;
   icon: React.ReactNode;
   trend?: 'up' | 'down' | 'neutral';
 }
@@ -102,6 +112,23 @@ function StatusBadge({ status }: { status: string }) {
  * (`deploy` | `skip` | `refine`) — also tolerates `analyze` for legacy
  * history rows — and never throws on an unknown value.
  */
+/**
+ * The experiment a stored simulation is linked to (#2206): written by /simulate when
+ * given experiment_design_id, or by the proposed-experiments draft action. Absent
+ * when the run is still a proposal — nothing is shown rather than a placeholder.
+ */
+function LinkedExperimentChip({ experimentId }: { experimentId?: string | null }) {
+  if (!experimentId) return null;
+  return (
+    <span
+      className="ml-2 inline-flex items-center rounded-full bg-purple-500/10 px-2 py-0.5 text-[10px] font-medium text-purple-600"
+      title={`Linked to experiment ${experimentId}`}
+    >
+      linked · {experimentId.slice(0, 8)}
+    </span>
+  );
+}
+
 function RecommendationBadge({ recommendation }: { recommendation: string }) {
   const config: Record<string, { icon: typeof CheckCircle; className: string }> = {
     deploy: { icon: CheckCircle, className: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400' },
@@ -124,7 +151,7 @@ function RecommendationBadge({ recommendation }: { recommendation: string }) {
   );
 }
 
-function StatCard({ title, value, subtext, icon, trend }: StatCardProps) {
+function StatCard({ title, value, subtext, tooltip, icon, trend }: StatCardProps) {
   const trendColors = {
     up: 'text-green-600 dark:text-green-400',
     down: 'text-red-600 dark:text-red-400',
@@ -132,7 +159,10 @@ function StatCard({ title, value, subtext, icon, trend }: StatCardProps) {
   };
 
   return (
-    <div className="bg-[var(--color-card)] rounded-lg border border-[var(--color-border)] p-4">
+    <div
+      className="bg-[var(--color-card)] rounded-lg border border-[var(--color-border)] p-4"
+      title={tooltip}
+    >
       <div className="flex items-center justify-between mb-2">
         <span className="text-sm text-[var(--color-text-secondary)]">{title}</span>
         <div className="p-1.5 rounded bg-[var(--color-primary)]/10 text-[var(--color-primary)]">
@@ -379,22 +409,6 @@ function SimulationForm({
 }
 
 /**
- * Friendly label for the backend `data_provenance` marker — honest about the
- * effect basis. Both values are synthetic data (the SYNTHETIC badge stays); the
- * cohort one is a brand/intervention-ESTIMATED effect, the other a flat uniform.
- */
-function provenanceLabel(provenance: string): string {
-  switch (provenance) {
-    case 'synthetic_uplift_v1':
-      return 'synthetic uplift model (v1 — uniform, not brand-specific)';
-    case 'cohort_estimated_synthetic_gold_v1':
-      return 'brand cohort–estimated (synthetic-gold; not real-world data)';
-    default:
-      return provenance;
-  }
-}
-
-/**
  * Title for the confidence badge (#2104). Confidence blends the rows the estimator fit on,
  * the interval's precision and model fidelity.
  *
@@ -409,12 +423,12 @@ function provenanceLabel(provenance: string): string {
  */
 function confidenceTitle(simulation: AnySimulation): string {
   const base =
-    'Confidence blends the evidence behind this estimate: the rows the estimator fit on, the precision of the 95% interval, and model fidelity.';
+    'Confidence blends the evidence behind this estimate: the rows the estimator fit on and the precision of the 95% interval, plus model fidelity only once it has been measured. An unvalidated model is scored on its evidence alone.';
   if ('population_filters' in simulation) {
     // Its own opening: a legacy row's evidence term WAS the generated twin count, so the
     // shared "rows the estimator fit on" sentence would be false before the qualification.
     const stored =
-      'Confidence is the score stored when this simulation ran, computed by the confidence heuristic in force at that time: its evidence, the precision of the 95% interval, and model fidelity.';
+      'Confidence is the score stored when this simulation ran, computed by the confidence heuristic in force at that time: its evidence, the precision of the 95% interval, and model fidelity (earlier heuristics imputed 0.7 for an unvalidated model; the current one scores such a run on its evidence alone).';
     return simulation.subgroups_basis === 'twin_weighted_legacy'
       ? `${stored} That heuristic scored the evidence on the generated twin count.`
       : stored;
@@ -711,15 +725,27 @@ function SimulationResultPanel({ simulation }: { simulation: AnySimulation }) {
         </div>
       </div>
 
-      {/* Model fidelity (single backend score — no fabricated breakdown) */}
-      {simulation.model_fidelity_score != null && (
-        <div>
-          <h4 className="text-sm font-medium text-[var(--color-text-secondary)] mb-3">Model Fidelity</h4>
-          <div className="max-w-xs">
+      {/* Model fidelity (#2206): the explicit backend state. A NULL score is
+          'unvalidated' — shown as such, never as a blank that reads like a pass. */}
+      <div>
+        <h4 className="text-sm font-medium text-[var(--color-text-secondary)] mb-3">Model Fidelity</h4>
+        <div className="max-w-xs space-y-2">
+          <p className="text-xs text-[var(--color-text-secondary)]" data-testid="fidelity-status">
+            Status:{' '}
+            <span className="font-medium text-[var(--color-text-primary)]">
+              {fidelityStatusLabel(simulation.fidelity_status)}
+            </span>
+          </p>
+          {simulation.model_fidelity_score != null ? (
             <FidelityGauge score={simulation.model_fidelity_score} label="Overall fidelity score" />
-          </div>
+          ) : (
+            <p className="text-xs text-[var(--color-text-tertiary)]">
+              No experiment outcome has been compared against this model yet, so its
+              prediction accuracy is unknown.
+            </p>
+          )}
         </div>
-      )}
+      </div>
 
       {/* Recommended parameters, when present */}
       {(simulation.recommended_sample_size != null || simulation.recommended_duration_weeks != null) && (
@@ -762,6 +788,8 @@ export default function DigitalTwin() {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
   const { data: healthData } = useDigitalTwinHealth();
+  // Trained-model census (#2206): shared-fit + fidelity honesty fields per brand row.
+  const { data: modelsData } = useTwinModels();
   const {
     data: historyData,
     refetch: refetchHistory,
@@ -873,6 +901,14 @@ export default function DigitalTwin() {
   const deployRate = historyItems.length > 0 ? Math.round((deployCount / historyItems.length) * 100) : null;
   const fidelityPct =
     displayed?.model_fidelity_score != null ? Math.round(displayed.model_fidelity_score * 100) : null;
+  const modelRows = useMemo(() => modelsData?.models ?? [], [modelsData]);
+  // With no run displayed yet, the card still must not read as a blank pass: when
+  // every trained model is unvalidated, say so (codex r1 #2).
+  const lastRunUnvalidated = displayed
+    ? displayed.fidelity_status === 'unvalidated'
+    : allModelsUnvalidated(modelRows);
+  const modelCensusText = useMemo(() => describeModelCensus(modelRows), [modelRows]);
+  const modelCensusWhy = useMemo(() => explainModelCensus(modelRows), [modelRows]);
 
   const handleRunSimulation = (formData: { interventionType: InterventionType; brand: string; sampleSize: number; durationDays: number }) => {
     runSim({
@@ -924,13 +960,20 @@ export default function DigitalTwin() {
         <StatCard
           title="Models Available"
           value={health.models_available}
-          subtext="Trained twin models"
+          subtext={modelCensusText ?? 'Trained twin models'}
+          tooltip={modelCensusWhy ?? undefined}
           icon={<Gauge className="h-4 w-4" />}
         />
         <StatCard
           title="Last Run Fidelity"
-          value={fidelityPct != null ? `${fidelityPct}%` : '—'}
-          subtext="Model fidelity score"
+          value={fidelityPct != null ? `${fidelityPct}%` : lastRunUnvalidated ? 'Unvalidated' : '—'}
+          subtext={
+            lastRunUnvalidated
+              ? displayed
+                ? 'No experiment outcome compared against this model yet'
+                : 'No experiment outcome compared against any twin model yet'
+              : 'Model fidelity score'
+          }
           icon={<TrendingUp className="h-4 w-4" />}
         />
       </div>
@@ -1126,6 +1169,7 @@ export default function DigitalTwin() {
                             <p className="text-xs text-[var(--color-text-tertiary)]">
                               {sim.brand} - {new Date(sim.created_at).toLocaleString()}
                               {group.count > 1 ? ' · latest' : ''}
+                              <LinkedExperimentChip experimentId={sim.experiment_design_id} />
                             </p>
                           </div>
                         </div>
@@ -1154,6 +1198,7 @@ export default function DigitalTwin() {
                             >
                               <span className="text-xs text-[var(--color-text-tertiary)]">
                                 {new Date(run.created_at).toLocaleString()}
+                                <LinkedExperimentChip experimentId={run.experiment_design_id} />
                               </span>
                               <div className="flex items-center gap-3">
                                 <span className="text-xs font-medium text-[var(--color-text-primary)]">
