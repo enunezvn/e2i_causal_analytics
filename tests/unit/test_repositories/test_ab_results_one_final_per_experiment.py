@@ -194,3 +194,38 @@ async def test_a_final_insert_that_wins_returns_the_created_record():
     assert str(record.id) == winner["id"]
     chain.insert.assert_called_once()
     assert not chain.upsert.called
+
+
+@pytest.mark.asyncio
+async def test_a_final_23505_on_another_constraint_is_not_a_lost_race():
+    """codex r1 #7: only a violation of uq_ab_results_one_final_per_experiment is the
+    redelivery race; a pkey (or any other unique) collision on a FINAL insert propagates."""
+    experiment_id = uuid4()
+    pkey_error = APIError(
+        {
+            "message": 'duplicate key value violates unique constraint "ab_experiment_results_pkey"',
+            "code": "23505",
+            "hint": None,
+            "details": "Key (id)=(…) already exists.",
+        }
+    )
+    client, chain = _client(pkey_error, [_winner_row(experiment_id)])
+    repo = ABResultsRepository(supabase_client=client)
+
+    with pytest.raises(APIError) as raised:
+        await repo.save_results(_results(AnalysisType.FINAL, experiment_id))
+    assert raised.value.code == "23505"
+    chain.select.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_matching_23505_whose_reread_finds_no_winner_propagates():
+    """A committed winner is always visible to the re-read (PostgREST commits per
+    request); finding none means this was not the race — surface the original error."""
+    experiment_id = uuid4()
+    client, _chain = _client(_unique_violation(experiment_id), [])
+    repo = ABResultsRepository(supabase_client=client)
+
+    with pytest.raises(APIError) as raised:
+        await repo.save_results(_results(AnalysisType.FINAL, experiment_id))
+    assert raised.value.code == "23505"

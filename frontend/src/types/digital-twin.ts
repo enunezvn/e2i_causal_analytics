@@ -988,11 +988,26 @@ export interface ProposedExperimentItem {
   created_at: string;
   /** What proposed this: a completed digital-twin simulation (the only source today). */
   proposal_basis: 'twin_simulation';
+  /**
+   * The per-HCP business_metrics column the twin predicted an effect ON. simulated_ate
+   * and its interval are an ABSOLUTE difference in this column's units, never a % lift.
+   */
+  outcome_column: string;
+  /** simulated_ate is an absolute outcome-unit difference (never relative lift). */
+  effect_scale: 'absolute';
 }
 
 /** Proposals plus the honest counts around them. */
 export interface ProposedExperimentsResponse {
   proposals: ProposedExperimentItem[];
+  /** The outcome column every proposal's effect is stated on. */
+  outcome_column: string;
+  /**
+   * Whether any REAL per-HCP row records the outcome column. False today (measured):
+   * it is populated only on the synthetic-gold cohort rows, so a real experiment drafted
+   * from a proposal cannot yet be compared against the twin.
+   */
+  outcome_measurable_in_real_mode: boolean;
   /** Unlinked deploy/refine simulations the caller may see. */
   total_proposed: number;
   /** Completed simulations that already have an experiment. */
@@ -1013,6 +1028,10 @@ export interface DraftExperimentResponse {
   target_enrollment?: number | null;
   planned_duration_days?: number | null;
   created_by?: string | null;
+  /** prediction_target: the outcome the twin predicted on. */
+  outcome_column: string;
+  /** Whether real per-HCP rows record the outcome column today (see the list envelope). */
+  outcome_measurable_in_real_mode: boolean;
   /** twin_simulations.experiment_design_id now names this experiment. */
   linked: boolean;
   /** What is still manual: promote the draft to running and enroll units. */

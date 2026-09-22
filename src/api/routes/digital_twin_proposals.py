@@ -75,6 +75,11 @@ NEXT_STEP = (
     "sweep, the final analysis and the fidelity roll-up then close the loop against "
     "the linked simulation."
 )
+OUTCOME_NOT_MEASURABLE = (
+    " Note: {column} is recorded only on the synthetic-gold cohort rows today, so the "
+    "real-mode final analysis of this draft will report insufficient_data until a real "
+    "per-HCP endpoint is recorded (owner decision)."
+)
 
 
 def _proposal_sort_key(row: Dict[str, Any]) -> tuple:
@@ -93,8 +98,9 @@ async def _twin_repo() -> Any:
     return await _dt._get_twin_repo()
 
 
-async def _count_real_running_experiments(client: Any) -> int:
-    """The real A/B portfolio: the Home tile's own predicate, real mode."""
+async def _count_real_running_experiments(client: Any, brand: Optional[str]) -> int:
+    """The real A/B portfolio: the Home tile's own predicate, real mode, scoped to the
+    caller's brand grant like the other counts (codex r1 #6)."""
     from src.repositories.provenance import apply_provenance_filter
 
     query = (
@@ -103,8 +109,31 @@ async def _count_real_running_experiments(client: Any) -> int:
         .eq("status", "running")
         .not_.is_("intervention_channel", "null")
     )
+    if brand:
+        query = query.eq("brand", brand)
     result = await apply_provenance_filter(query).execute()
     return int(result.count or 0)
+
+
+async def _outcome_measurable_in_real_mode(client: Any) -> bool:
+    """Whether any REAL per-HCP row records the twin's outcome column (codex r1 #1).
+
+    Measured live 2026-09-22: every per_hcp_rollup row carrying
+    cohort_conversion_outcome is is_synthetic=true (13,797 rows), and the real-mode
+    outcome feed (ExperimentOutcomeRepository.load_arrays) excludes synthetic rows —
+    so a real draft's final analysis cannot measure it today. Counted, never assumed.
+    """
+    from src.repositories.provenance import apply_provenance_filter
+
+    query = (
+        client.table("business_metrics")
+        .select("hcp_id", count="exact")
+        .eq("metric_type", "per_hcp_rollup")
+        .not_.is_(COHORT_OUTCOME_COLUMN, "null")
+        .limit(1)
+    )
+    result = await apply_provenance_filter(query).execute()
+    return int(result.count or 0) > 0
 
 
 def _caller_identity(user: Dict[str, Any]) -> Optional[str]:
@@ -134,7 +163,8 @@ async def list_proposed_experiments(
         repo = await _twin_repo()
         rows = await repo.list_proposed_experiments(brand=effective_brand)
         linked = await repo.count_linked_simulations(brand=effective_brand)
-        running = await _count_real_running_experiments(repo.client)
+        running = await _count_real_running_experiments(repo.client, effective_brand)
+        measurable = await _outcome_measurable_in_real_mode(repo.client)
 
         # One model lookup per distinct model; a missing row validates nothing.
         model_rows: Dict[str, Optional[Dict[str, Any]]] = {}
@@ -168,11 +198,14 @@ async def list_proposed_experiments(
                     data_provenance=row.get("data_provenance"),
                     fidelity_status=FidelityStatusEnum(fidelity["fidelity_status"].value),
                     created_at=row.get("created_at"),
+                    outcome_column=COHORT_OUTCOME_COLUMN,
                 )
             )
 
         return ProposedExperimentsResponse(
             proposals=items,
+            outcome_column=COHORT_OUTCOME_COLUMN,
+            outcome_measurable_in_real_mode=measurable,
             total_proposed=len(items),
             total_linked=linked,
             real_experiments_running=running,
@@ -286,8 +319,14 @@ async def create_draft_experiment(
         )
     experiment_id = UUID(str(rows[0]["id"]))
 
-    linked = await repo.simulations.link_experiment(sim_uuid, experiment_id)
-    if not linked:
+    # The link is a CLAIM (codex r1 #2): UPDATE … WHERE experiment_design_id IS NULL.
+    # Two concurrent drafts both pass the pre-check and both insert; exactly one
+    # claim succeeds. The loser removes the draft it just inserted and answers 409
+    # naming the winner. A claim that RAISES leaves a draft the caller is told about.
+    try:
+        claimed = await repo.claim_experiment_link(sim_uuid, experiment_id)
+    except Exception as e:
+        logger.error(f"Claiming simulation {simulation_id} for draft {experiment_id} failed: {e}")
         raise HTTPException(
             status_code=500,
             detail=(
@@ -296,7 +335,19 @@ async def create_draft_experiment(
                 "fidelity tracking."
             ),
         )
+    if not claimed:
+        await _delete_orphan_draft(repo.client, experiment_id)
+        current = await repo.get_simulation(sim_uuid)
+        winner = (current or {}).get("experiment_design_id")
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Simulation {simulation_id} was linked to experiment {winner} by a concurrent "
+                f"request; the draft {experiment_id} created here was removed."
+            ),
+        )
 
+    measurable = await _outcome_measurable_in_real_mode(repo.client)
     return DraftExperimentResponse(
         experiment_id=str(experiment_id),
         simulation_id=str(sim_uuid),
@@ -307,9 +358,27 @@ async def create_draft_experiment(
         target_enrollment=data["target_enrollment"],
         planned_duration_days=data["planned_duration_days"],
         created_by=data["created_by"],
+        outcome_column=COHORT_OUTCOME_COLUMN,
+        outcome_measurable_in_real_mode=measurable,
         linked=True,
-        next_step=NEXT_STEP,
+        next_step=NEXT_STEP
+        + ("" if measurable else OUTCOME_NOT_MEASURABLE.format(column=COHORT_OUTCOME_COLUMN)),
     )
+
+
+async def _delete_orphan_draft(client: Any, experiment_id: UUID) -> None:
+    """Best effort: remove the draft a lost claim just inserted. A draft is never
+    counted as running anywhere, so a failure here is logged, not raised."""
+    try:
+        await (
+            client.table("ml_experiments")
+            .delete()
+            .eq("id", str(experiment_id))
+            .eq("status", DRAFT_STATUS)
+            .execute()
+        )
+    except Exception as e:  # pragma: no cover - defensive
+        logger.warning("Could not remove orphan draft %s after a lost claim: %s", experiment_id, e)
 
 
 def _round4(value: Any) -> Optional[float]:

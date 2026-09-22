@@ -618,44 +618,59 @@ class SimulationRepository(BaseRepository):
         lists every brand so an admin's envelope counts are whole. Newest first;
         the route re-orders for presentation.
         """
+        # A query failure PROPAGATES (codex r1 #3): swallowed into [] it would read as
+        # a truthful-looking empty portfolio (200, total_proposed=0) on the page.
         if not self.client:
             return []
-        try:
-            query = (
-                self.client.table(self.table_name)
-                .select("*")
-                .eq("simulation_status", "completed")
-                .in_("recommendation", list(self.PROPOSAL_RECOMMENDATIONS))
-                .is_("experiment_design_id", "null")
-                .order("created_at", desc=True)
-                .limit(limit)
-            )
-            if brand:
-                query = query.eq("brand", brand)
-            result = await query.execute()
-            return result.data or []
-        except Exception as e:
-            logger.error(f"Failed to list proposed experiments: {e}")
-            return []
+        query = (
+            self.client.table(self.table_name)
+            .select("*")
+            .eq("simulation_status", "completed")
+            .in_("recommendation", list(self.PROPOSAL_RECOMMENDATIONS))
+            .is_("experiment_design_id", "null")
+            .order("created_at", desc=True)
+            .limit(limit)
+        )
+        if brand:
+            query = query.eq("brand", brand)
+        result = await query.execute()
+        return result.data or []
 
     async def count_linked(self, *, brand: Optional[str] = None) -> int:
-        """Completed simulations that already have an experiment (the linked half)."""
+        """Completed simulations that already have an experiment (the linked half).
+        A query failure propagates (codex r1 #3)."""
         if not self.client:
             return 0
-        try:
-            query = (
-                self.client.table(self.table_name)
-                .select("simulation_id", count="exact")
-                .eq("simulation_status", "completed")
-                .not_.is_("experiment_design_id", "null")
-            )
-            if brand:
-                query = query.eq("brand", brand)
-            result = await query.execute()
-            return int(result.count or 0)
-        except Exception as e:
-            logger.error(f"Failed to count linked simulations: {e}")
-            return 0
+        query = (
+            self.client.table(self.table_name)
+            .select("simulation_id", count="exact")
+            .eq("simulation_status", "completed")
+            .not_.is_("experiment_design_id", "null")
+        )
+        if brand:
+            query = query.eq("brand", brand)
+        result = await query.execute()
+        return int(result.count or 0)
+
+    async def claim_experiment_link(self, simulation_id: UUID, experiment_design_id: UUID) -> bool:
+        """Link a simulation to an experiment ONLY if it is still unlinked (codex r1 #2).
+
+        ``UPDATE … WHERE simulation_id = ? AND experiment_design_id IS NULL`` is the
+        atomic claim two concurrent draft creations race on: exactly one row update
+        succeeds. Returns True only when a row was actually updated — a zero-row
+        update (already linked, or no such simulation) is False, unlike
+        ``link_experiment``, which reports True unconditionally. Failures propagate.
+        """
+        if not self.client:
+            return False
+        result = await (
+            self.client.table(self.table_name)
+            .update({"experiment_design_id": str(experiment_design_id)})
+            .eq("simulation_id", str(simulation_id))
+            .is_("experiment_design_id", "null")
+            .execute()
+        )
+        return bool(result.data)
 
     async def get_latest_for_experiment(
         self,
@@ -1181,6 +1196,12 @@ class TwinRepository:
     async def count_linked_simulations(self, *, brand: Optional[str] = None) -> int:
         """Completed simulations already linked to an experiment (#2206 item C)."""
         return await self.simulations.count_linked(brand=brand)  # type: ignore[no-any-return]
+
+    async def claim_experiment_link(self, simulation_id: UUID, experiment_design_id: UUID) -> bool:
+        """Conditional (unlinked-only) link; True only when a row was updated (#2206 item C)."""
+        return await self.simulations.claim_experiment_link(  # type: ignore[no-any-return]
+            simulation_id, experiment_design_id
+        )
 
     async def save_fidelity_record(self, record: FidelityRecord) -> UUID:
         """Save fidelity tracking record."""

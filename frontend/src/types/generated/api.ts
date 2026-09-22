@@ -9439,6 +9439,16 @@ export interface components {
             /** Created By */
             created_by?: string | null;
             /**
+             * Outcome Column
+             * @description prediction_target: the outcome the twin predicted on.
+             */
+            outcome_column: string;
+            /**
+             * Outcome Measurable In Real Mode
+             * @description Whether real per-HCP rows record the outcome column today (see the list envelope). False means the final analysis of this draft will report insufficient_data until a real endpoint is recorded.
+             */
+            outcome_measurable_in_real_mode: boolean;
+            /**
              * Linked
              * @description twin_simulations.experiment_design_id now names this experiment.
              */
@@ -16023,6 +16033,18 @@ export interface components {
              * @constant
              */
             proposal_basis: "twin_simulation";
+            /**
+             * Outcome Column
+             * @description The per-HCP business_metrics column the twin predicted an effect ON (cohort_conversion_outcome today). simulated_ate and its interval are an ABSOLUTE difference in this column's units, not a percentage lift.
+             */
+            outcome_column: string;
+            /**
+             * Effect Scale
+             * @description simulated_ate is an absolute outcome-unit difference (never relative lift).
+             * @default absolute
+             * @constant
+             */
+            effect_scale: "absolute";
         };
         /**
          * ProposedExperimentsResponse
@@ -16031,6 +16053,16 @@ export interface components {
         ProposedExperimentsResponse: {
             /** Proposals */
             proposals: components["schemas"]["ProposedExperimentItem"][];
+            /**
+             * Outcome Column
+             * @description The outcome column every proposal's effect is stated on (see items).
+             */
+            outcome_column: string;
+            /**
+             * Outcome Measurable In Real Mode
+             * @description Whether any REAL (is_synthetic=false) per-HCP business_metrics row records the outcome column. False today (measured): the column is populated only on the synthetic-gold cohort rows, and the real-mode final-results feed excludes them, so a real experiment drafted from a proposal cannot yet be compared against the twin — an owner decision on the real endpoint is needed.
+             */
+            outcome_measurable_in_real_mode: boolean;
             /**
              * Total Proposed
              * @description Unlinked deploy/refine simulations the caller may see.

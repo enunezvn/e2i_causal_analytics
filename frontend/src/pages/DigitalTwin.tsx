@@ -44,6 +44,7 @@ import {
 import { useDigitalTwinInsight } from '@/hooks/api';
 import { StrategicInsightCard } from '@/components/insights';
 import { toast } from '@/hooks/use-toast';
+import { provenanceLabel } from '@/lib/digital-twin-provenance';
 import { useDataFreshness } from '@/hooks/use-data-freshness';
 import { DataFreshnessIndicator } from '@/components/ui/data-freshness-indicator';
 import {
@@ -405,22 +406,6 @@ function SimulationForm({
       </button>
     </form>
   );
-}
-
-/**
- * Friendly label for the backend `data_provenance` marker — honest about the
- * effect basis. Both values are synthetic data (the SYNTHETIC badge stays); the
- * cohort one is a brand/intervention-ESTIMATED effect, the other a flat uniform.
- */
-function provenanceLabel(provenance: string): string {
-  switch (provenance) {
-    case 'synthetic_uplift_v1':
-      return 'synthetic uplift model (v1 — uniform, not brand-specific)';
-    case 'cohort_estimated_synthetic_gold_v1':
-      return 'brand cohort–estimated (synthetic-gold; not real-world data)';
-    default:
-      return provenance;
-  }
 }
 
 /**

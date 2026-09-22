@@ -28,6 +28,9 @@ UNIQUE_VIOLATION = "23505"
 # Mirrors ``services.results_analysis.AnalysisType.FINAL.value`` (the migration
 # test pins the two literals equal) without importing the service layer here.
 FINAL_ANALYSIS_TYPE = "final"
+# The index whose violation IS the redelivery race. Any other 23505 on a final
+# insert (the pkey, a future constraint) is an error, not a lost race.
+ONE_FINAL_PER_EXPERIMENT_INDEX = "uq_ab_results_one_final_per_experiment"
 
 
 class FinalResultAlreadyPersisted(Exception):
@@ -37,13 +40,13 @@ class FinalResultAlreadyPersisted(Exception):
     Its pre-check ("a final row exists → skip") cannot see a sibling delivery
     that passed the same check moments earlier, so the partial unique index
     ``uq_ab_results_one_final_per_experiment`` arbitrates at the INSERT. The
-    loser gets this, carrying the winner's row (``existing``; ``None`` only if
-    the re-read found nothing, which a committed winner cannot produce), and the
-    caller reports the delivery as skipped rather than failed — its recompute was
-    identical work on the same feed, not an error.
+    loser gets this, carrying the winner's row (``existing`` — always present: a
+    23505 with no visible winner is re-raised as the database error it is), and
+    the caller reports the delivery as skipped rather than failed — its recompute
+    was identical work on the same feed, not an error.
     """
 
-    def __init__(self, experiment_id: UUID, existing: Optional["ExperimentResultRecord"]):
+    def __init__(self, experiment_id: UUID, existing: "ExperimentResultRecord"):
         self.experiment_id = experiment_id
         self.existing = existing
         super().__init__(
@@ -233,21 +236,26 @@ class ABResultsRepository(BaseRepository):
         try:
             result = self.client.table(self.table_name).insert(data).execute()
         except APIError as exc:
-            if exc.code == UNIQUE_VIOLATION and results.analysis_type.value == FINAL_ANALYSIS_TYPE:
+            if (
+                exc.code == UNIQUE_VIOLATION
+                and results.analysis_type.value == FINAL_ANALYSIS_TYPE
+                and ONE_FINAL_PER_EXPERIMENT_INDEX in (exc.message or "")
+            ):
+                # The winner committed before Postgres raised, and PostgREST commits
+                # per request, so the re-read sees it. No winner → not the race.
                 existing = await self.get_results(
                     results.experiment_id,
                     analysis_type=FINAL_ANALYSIS_TYPE,
                     include_synthetic=True,
                 )
-                logger.info(
-                    "Final results for experiment %s were persisted by a concurrent "
-                    "delivery (ml/046 unique violation); winner row %s",
-                    results.experiment_id,
-                    existing[0].id if existing else None,
-                )
-                raise FinalResultAlreadyPersisted(
-                    results.experiment_id, existing[0] if existing else None
-                ) from exc
+                if existing:
+                    logger.info(
+                        "Final results for experiment %s were persisted by a concurrent "
+                        "delivery (ml/046 unique violation); winner row %s",
+                        results.experiment_id,
+                        existing[0].id,
+                    )
+                    raise FinalResultAlreadyPersisted(results.experiment_id, existing[0]) from exc
             raise
 
         if result.data:

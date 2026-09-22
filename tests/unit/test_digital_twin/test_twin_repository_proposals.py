@@ -98,3 +98,49 @@ async def test_facade_forwards_list_proposed_and_count_linked_to_the_store():
     assert linked == 3
     store.list_proposed.assert_awaited_once_with(brand="Kisqali", limit=25)
     store.count_linked.assert_awaited_once_with(brand="Kisqali")
+
+
+@pytest.mark.asyncio
+async def test_list_proposed_and_count_linked_propagate_a_query_failure():
+    """codex r1 #3: a swallowed query failure reads as a truthful-looking empty
+    portfolio (200, total_proposed=0). The failure must reach the route's 500."""
+    client, chain = _chain([])
+    chain.execute = AsyncMock(side_effect=RuntimeError("42703 column does not exist"))
+    repo = SimulationRepository(supabase_client=client)
+    with pytest.raises(RuntimeError):
+        await repo.list_proposed(brand=None)
+    with pytest.raises(RuntimeError):
+        await repo.count_linked(brand=None)
+
+
+@pytest.mark.asyncio
+async def test_claim_experiment_link_is_conditional_on_an_unlinked_row():
+    """codex r1 #2: the link is a CLAIM — UPDATE … WHERE experiment_design_id IS NULL —
+    so two concurrent drafts cannot both link, and a zero-row update is False, not True."""
+    from uuid import uuid4
+
+    sim_id, exp_id = uuid4(), uuid4()
+    client, chain = _chain([{"simulation_id": str(sim_id), "experiment_design_id": str(exp_id)}])
+    chain.update.return_value = chain
+    repo = SimulationRepository(supabase_client=client)
+
+    assert await repo.claim_experiment_link(sim_id, exp_id) is True
+    chain.update.assert_called_once_with({"experiment_design_id": str(exp_id)})
+    chain.eq.assert_any_call("simulation_id", str(sim_id))
+    chain.is_.assert_called_once_with("experiment_design_id", "null")
+
+    chain.execute = AsyncMock(return_value=MagicMock(data=[]))
+    assert await repo.claim_experiment_link(sim_id, exp_id) is False
+
+
+@pytest.mark.asyncio
+async def test_facade_forwards_claim_experiment_link():
+    from uuid import uuid4
+
+    repo = TwinRepository(supabase_client=MagicMock())
+    store = create_autospec(SimulationRepository, instance=True)
+    store.claim_experiment_link = AsyncMock(return_value=True)
+    repo.simulations = store
+    sim_id, exp_id = uuid4(), uuid4()
+    assert await repo.claim_experiment_link(sim_id, exp_id) is True
+    store.claim_experiment_link.assert_awaited_once_with(sim_id, exp_id)

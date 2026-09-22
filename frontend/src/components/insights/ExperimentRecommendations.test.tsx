@@ -86,7 +86,8 @@ function proposal(overrides: Record<string, unknown> = {}) {
     intervention_type: 'digital_engagement',
     intervention_config: { duration_weeks: 12 },
     simulated_ate: 0.3999,
-    simulated_ci_lower: 0.3105,
+    // 0.3104 (not 0.3105): a half-way float rounds either way in toFixed; keep the fixture unambiguous.
+    simulated_ci_lower: 0.3104,
     simulated_ci_upper: 0.4893,
     recommendation: 'deploy',
     recommendation_rationale: 'Effect is positive and the 95% CI excludes zero.',
@@ -97,6 +98,21 @@ function proposal(overrides: Record<string, unknown> = {}) {
     fidelity_status: 'unvalidated',
     created_at: '2026-09-22T10:00:00Z',
     proposal_basis: 'twin_simulation',
+    outcome_column: 'cohort_conversion_outcome',
+    effect_scale: 'absolute',
+    ...overrides,
+  };
+}
+
+/** The list envelope as the backend states it today: outcome recorded only on synthetic-gold rows. */
+function proposalsResponse(proposals: unknown[], overrides: Record<string, unknown> = {}) {
+  return {
+    proposals,
+    outcome_column: 'cohort_conversion_outcome',
+    outcome_measurable_in_real_mode: false,
+    total_proposed: proposals.length,
+    total_linked: 0,
+    real_experiments_running: 0,
     ...overrides,
   };
 }
@@ -125,7 +141,7 @@ function mockDraft(mutate = vi.fn(), state: { isPending?: boolean; variables?: s
 beforeEach(() => {
   vi.clearAllMocks();
   mockMonitoring(undefined);
-  mockProposals({ proposals: [], total_proposed: 0, total_linked: 0, real_experiments_running: 0 });
+  mockProposals(proposalsResponse([]));
   mockDraft();
   mockUseAuth.mockReturnValue({ isAdmin: false });
 });
@@ -258,12 +274,23 @@ describe('ExperimentRecommendations (Experiment Health Monitor)', () => {
 
 describe('ExperimentRecommendations (Proposed experiments, #2206)', () => {
   it('lists each proposal with the twin’s own numbers, fidelity state and provenance', () => {
-    mockProposals({
-      proposals: [proposal(), proposal({ simulation_id: 'sim-prop-2', brand: 'Kisqali', intervention_type: 'email_campaign', recommendation: 'refine', recommendation_rationale: 'The interval straddles the minimum effect.', simulated_ate: 0.021, simulated_ci_lower: -0.004, simulated_ci_upper: 0.046, recommended_sample_size: 4200, recommended_duration_weeks: 10 })],
-      total_proposed: 2,
-      total_linked: 0,
-      real_experiments_running: 0,
-    });
+    mockProposals(
+      proposalsResponse([
+        proposal(),
+        proposal({
+          simulation_id: 'sim-prop-2',
+          brand: 'Kisqali',
+          intervention_type: 'email_campaign',
+          recommendation: 'refine',
+          recommendation_rationale: 'The interval straddles the minimum effect.',
+          simulated_ate: 0.021,
+          simulated_ci_lower: -0.004,
+          simulated_ci_upper: 0.046,
+          recommended_sample_size: 4200,
+          recommended_duration_weeks: 10,
+        }),
+      ])
+    );
     render(<ExperimentRecommendations />, { wrapper: createWrapper() });
 
     expect(screen.getByText('Proposed experiments')).toBeInTheDocument();
@@ -272,37 +299,71 @@ describe('ExperimentRecommendations (Proposed experiments, #2206)', () => {
     expect(screen.getByText('Kisqali · Email campaign')).toBeInTheDocument();
     expect(screen.getByText('Twin says deploy')).toBeInTheDocument();
     expect(screen.getByText('Twin says refine')).toBeInTheDocument();
-    // Predicted lift with its interval, exactly the twin's numbers (no invented score).
-    expect(screen.getByText('+40.0% [+31.1%, +48.9%]')).toBeInTheDocument();
-    expect(screen.getByText('+2.1% [-0.4%, +4.6%]')).toBeInTheDocument();
-    expect(screen.getByText(/n=13 · 13 weeks · estimated on the brand cohort/)).toBeInTheDocument();
+    // The effect is an ABSOLUTE difference in outcome units — never a % lift (codex r1 #5)
+    // — and the provenance says synthetic-gold, not real-world (codex r1 #4).
+    expect(screen.getByText('+0.400 [+0.310, +0.489]')).toBeInTheDocument();
+    expect(screen.getByText('+0.021 [-0.004, +0.046]')).toBeInTheDocument();
+    // No percentage form of the effect anywhere (the rationale's own "95% CI" is the twin's text).
+    expect(screen.queryByText(/[+-]\d+\.\d%/)).not.toBeInTheDocument();
+    expect(
+      screen.getAllByText(/on cohort_conversion_outcome \(absolute, outcome units\)/)
+    ).toHaveLength(2);
+    expect(
+      screen.getByText(
+        /n=13 · 13 weeks · brand cohort–estimated \(synthetic-gold; not real-world data\)/
+      )
+    ).toBeInTheDocument();
     expect(screen.getByText(/n=4,200 · 10 weeks/)).toBeInTheDocument();
+    expect(screen.queryByText(/estimated on the brand cohort/)).not.toBeInTheDocument();
     expect(screen.getAllByText('Model unvalidated')).toHaveLength(2);
     expect(screen.getByText('Effect is positive and the 95% CI excludes zero.')).toBeInTheDocument();
     expect(screen.getByText('The interval straddles the minimum effect.')).toBeInTheDocument();
   });
 
   it('states the honest envelope: proposals, linked, real running, model state', () => {
-    mockProposals({
-      proposals: [proposal()],
-      total_proposed: 1,
-      total_linked: 3,
-      real_experiments_running: 0,
-    });
+    mockProposals(proposalsResponse([proposal()], { total_linked: 3 }));
     render(<ExperimentRecommendations />, { wrapper: createWrapper() });
     expect(screen.getByTestId('proposals-envelope')).toHaveTextContent(
       '1 proposal from twin simulations · 3 linked · 0 real experiments running · models unvalidated'
     );
   });
 
+  it('says when the twin outcome is not measurable in real mode, and stays quiet when it is (codex r1 #1)', () => {
+    mockProposals(proposalsResponse([proposal()], { outcome_measurable_in_real_mode: false }));
+    const { unmount } = render(<ExperimentRecommendations />, { wrapper: createWrapper() });
+    expect(screen.getByTestId('proposals-outcome-note')).toHaveTextContent(
+      /cohort_conversion_outcome.*recorded only on the synthetic-gold cohort rows today/
+    );
+    expect(screen.getByTestId('proposals-outcome-note')).toHaveTextContent(/owner decision/);
+    unmount();
+
+    mockProposals(proposalsResponse([proposal()], { outcome_measurable_in_real_mode: true }));
+    render(<ExperimentRecommendations />, { wrapper: createWrapper() });
+    expect(screen.queryByTestId('proposals-outcome-note')).not.toBeInTheDocument();
+  });
+
+  it('expands the list in place instead of linking to a page that has no proposals (codex r1 #8)', () => {
+    const many = Array.from({ length: 8 }, (_, i) =>
+      proposal({ simulation_id: `sim-many-${i}`, brand: 'Kisqali', intervention_type: `channel_${i}` })
+    );
+    mockProposals(proposalsResponse(many));
+    render(<ExperimentRecommendations />, { wrapper: createWrapper() });
+    expect(screen.getAllByTestId(/^proposal-sim-many-/)).toHaveLength(6);
+    expect(screen.queryByRole('link', { name: /view all .*proposals/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /show all 8 proposals/i }));
+    expect(screen.getAllByTestId(/^proposal-sim-many-/)).toHaveLength(8);
+    fireEvent.click(screen.getByRole('button', { name: /show the top 6 only/i }));
+    expect(screen.getAllByTestId(/^proposal-sim-many-/)).toHaveLength(6);
+  });
+
   it('explains an empty list: nothing proposed yet, or everything already linked', () => {
-    mockProposals({ proposals: [], total_proposed: 0, total_linked: 0, real_experiments_running: 0 });
+    mockProposals(proposalsResponse([]));
     const { unmount } = render(<ExperimentRecommendations />, { wrapper: createWrapper() });
     expect(screen.getByText('No proposed experiments')).toBeInTheDocument();
     expect(screen.getByText(/recommends deploy or refine yet/i)).toBeInTheDocument();
     unmount();
 
-    mockProposals({ proposals: [], total_proposed: 0, total_linked: 4, real_experiments_running: 0 });
+    mockProposals(proposalsResponse([], { total_linked: 4 }));
     render(<ExperimentRecommendations />, { wrapper: createWrapper() });
     expect(screen.getByText(/already linked to an experiment \(4 linked\)/i)).toBeInTheDocument();
   });
@@ -315,7 +376,7 @@ describe('ExperimentRecommendations (Proposed experiments, #2206)', () => {
   });
 
   it('offers "Create draft experiment" to an admin only', () => {
-    mockProposals({ proposals: [proposal()], total_proposed: 1, total_linked: 0, real_experiments_running: 0 });
+    mockProposals(proposalsResponse([proposal()]));
     const { unmount } = render(<ExperimentRecommendations />, { wrapper: createWrapper() });
     expect(screen.queryByRole('button', { name: /create draft experiment/i })).not.toBeInTheDocument();
     unmount();
@@ -327,7 +388,7 @@ describe('ExperimentRecommendations (Proposed experiments, #2206)', () => {
 
   it('confirms, creates the draft for that simulation, and shows the experiment id as a draft', () => {
     mockUseAuth.mockReturnValue({ isAdmin: true });
-    mockProposals({ proposals: [proposal()], total_proposed: 1, total_linked: 0, real_experiments_running: 0 });
+    mockProposals(proposalsResponse([proposal()]));
     const mutate = mockDraft(
       vi.fn((simulationId: string, opts?: { onSuccess?: (d: unknown) => void }) => {
         opts?.onSuccess?.({
@@ -340,6 +401,8 @@ describe('ExperimentRecommendations (Proposed experiments, #2206)', () => {
           prediction_target: 'cohort_conversion_outcome',
           target_enrollment: 13,
           planned_duration_days: 91,
+          outcome_column: 'cohort_conversion_outcome',
+          outcome_measurable_in_real_mode: false,
           linked: true,
           next_step: 'promote',
         });
@@ -366,7 +429,7 @@ describe('ExperimentRecommendations (Proposed experiments, #2206)', () => {
 
   it('does nothing when the confirmation is declined', () => {
     mockUseAuth.mockReturnValue({ isAdmin: true });
-    mockProposals({ proposals: [proposal()], total_proposed: 1, total_linked: 0, real_experiments_running: 0 });
+    mockProposals(proposalsResponse([proposal()]));
     const mutate = mockDraft();
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
 
@@ -379,7 +442,7 @@ describe('ExperimentRecommendations (Proposed experiments, #2206)', () => {
 
   it('reports a failed draft creation as a destructive toast, not a silent no-op', () => {
     mockUseAuth.mockReturnValue({ isAdmin: true });
-    mockProposals({ proposals: [proposal()], total_proposed: 1, total_linked: 0, real_experiments_running: 0 });
+    mockProposals(proposalsResponse([proposal()]));
     mockDraft(
       vi.fn((_id: string, opts?: { onError?: (e: { message: string }) => void }) => {
         opts?.onError?.({ message: 'Simulation sim-prop-1 is already linked to experiment X.' });

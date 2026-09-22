@@ -62,13 +62,16 @@ def _model_row(model_id, fidelity_score=None):
     }
 
 
-def _client(running_count=0, insert_rows=None, insert_error=None):
-    """repo.client: ml_experiments count chain + insert chain, both async."""
+def _client(running_count=0, insert_rows=None, insert_error=None, measurable_count=0):
+    """repo.client: the count chains (running experiments, then real rows carrying the
+    twin outcome — in the order the route issues them), the insert chain and the
+    delete chain, all async."""
     chain = MagicMock()
-    for name in ("select", "eq", "limit", "order"):
+    for name in ("select", "eq", "limit", "order", "delete"):
         getattr(chain, name).return_value = chain
     chain.not_.is_.return_value = chain
-    chain.execute = AsyncMock(return_value=MagicMock(data=[], count=running_count))
+    counts = iter([running_count, measurable_count] + [0] * 10)
+    chain.execute = AsyncMock(side_effect=lambda: MagicMock(data=[], count=next(counts)))
     insert_chain = MagicMock()
     if insert_error is not None:
         insert_chain.execute = AsyncMock(side_effect=insert_error)
@@ -88,7 +91,10 @@ def _repo(proposed, *, linked=0, models=None, sim=None, link_ok=True, client=Non
         count_linked_simulations=AsyncMock(return_value=linked),
         get_model=AsyncMock(side_effect=lambda mid: models.get(str(mid))),
         get_simulation=AsyncMock(return_value=sim),
-        simulations=SimpleNamespace(link_experiment=AsyncMock(return_value=link_ok)),
+        claim_experiment_link=AsyncMock(
+            side_effect=link_ok if isinstance(link_ok, Exception) else None,
+            return_value=None if isinstance(link_ok, Exception) else link_ok,
+        ),
     )
 
 
@@ -151,6 +157,11 @@ class TestListProposedExperiments:
         assert item.data_provenance == "cohort_estimated_synthetic_gold_v1"
         assert item.fidelity_status.value == "unvalidated"
         assert item.proposal_basis == "twin_simulation"
+        # codex r1 #5: the ATE is an ABSOLUTE difference on the twin's outcome column,
+        # never a percentage lift; the item names both.
+        assert item.outcome_column == "cohort_conversion_outcome"
+        assert item.effect_scale == "absolute"
+        assert resp.outcome_column == "cohort_conversion_outcome"
 
     def test_a_measured_model_reads_validated(self):
         from src.api.routes.digital_twin_proposals import list_proposed_experiments
@@ -208,6 +219,49 @@ class TestListProposedExperiments:
         chain.not_.is_.assert_any_call("intervention_channel", "null")
         # Real mode: the synthetic substrate is excluded from the count.
         chain.eq.assert_any_call("is_synthetic", False)
+
+    def test_envelope_says_whether_the_twin_outcome_is_measurable_in_real_mode(self):
+        """codex r1 #1 (measured live): cohort_conversion_outcome is recorded ONLY on the
+        synthetic-gold per-HCP rows (13,797 rows, all is_synthetic=true); the real-mode
+        outcome feed excludes them. A real draft's final analysis therefore cannot
+        measure it today. The envelope states that from a real count, never assumes."""
+        from src.api.routes.digital_twin_proposals import list_proposed_experiments
+
+        client, chain = _client(running_count=0, measurable_count=0)
+        repo = _repo([_sim()], client=client)
+        with _patched(repo):
+            resp = asyncio.run(list_proposed_experiments(brand=None, user=ADMIN))
+        assert resp.outcome_measurable_in_real_mode is False
+        client.table.assert_any_call("business_metrics")
+        chain.eq.assert_any_call("metric_type", "per_hcp_rollup")
+        chain.not_.is_.assert_any_call("cohort_conversion_outcome", "null")
+
+        client2, _ = _client(running_count=0, measurable_count=42)
+        repo2 = _repo([_sim()], client=client2)
+        with _patched(repo2):
+            resp2 = asyncio.run(list_proposed_experiments(brand=None, user=ADMIN))
+        assert resp2.outcome_measurable_in_real_mode is True
+
+    def test_real_running_count_is_scoped_to_the_callers_brand(self):
+        """codex r1 #6: a Kisqali-only viewer must not receive the all-brand running count
+        next to Kisqali-only proposal counts."""
+        from src.api.routes.digital_twin_proposals import list_proposed_experiments
+
+        client, chain = _client(running_count=0)
+        repo = _repo([], client=client)
+        with _patched(repo):
+            asyncio.run(list_proposed_experiments(brand=None, user=VIEWER_KISQALI))
+        assert ("brand", "Kisqali") in [c.args for c in chain.eq.call_args_list]
+
+    def test_a_store_failure_is_a_500_not_an_empty_portfolio(self):
+        """codex r1 #3: a query failure must never read as "no proposals"."""
+        from src.api.routes.digital_twin_proposals import list_proposed_experiments
+
+        repo = _repo([])
+        repo.list_proposed_experiments = AsyncMock(side_effect=RuntimeError("42703"))
+        with _patched(repo), pytest.raises(HTTPException) as ei:
+            asyncio.run(list_proposed_experiments(brand=None, user=ADMIN))
+        assert ei.value.status_code == 500
 
     def test_one_model_lookup_per_distinct_model(self):
         from src.api.routes.digital_twin_proposals import list_proposed_experiments
@@ -307,22 +361,47 @@ class TestCreateDraftExperiment:
         # row real-mode visible, which is what the fidelity loop needs.
         assert "is_synthetic" not in data
 
-        repo.simulations.link_experiment.assert_awaited_once_with(
+        repo.claim_experiment_link.assert_awaited_once_with(
             UUID(sim["simulation_id"]), UUID(exp_id)
         )
         assert resp.experiment_id == exp_id
         assert resp.simulation_id == sim["simulation_id"]
         assert resp.status == "draft"
         assert resp.linked is True
+        assert resp.outcome_column == COHORT_OUTCOME_COLUMN
+        # Measured live: the outcome is recorded only on synthetic-gold rows today.
+        assert resp.outcome_measurable_in_real_mode is False
         assert "promot" in resp.next_step.lower()
+        assert "synthetic-gold" in resp.next_step
 
-    def test_a_failed_link_is_a_500_naming_both_ids_never_a_200(self):
+    def test_a_lost_claim_deletes_the_orphan_draft_and_is_a_409(self):
+        """codex r1 #2: two concurrent POSTs both pass the pre-check and both insert a
+        draft; the link is a conditional CLAIM (experiment_design_id IS NULL), so exactly
+        one wins. The loser removes the draft it just inserted and answers 409 naming
+        the winner — never a second 201 hiding an orphan."""
+        from src.api.routes.digital_twin_proposals import create_draft_experiment
+
+        sim = _sim()
+        exp_id = str(uuid4())
+        winner = str(uuid4())
+        client, chain = _client(insert_rows=[{"id": exp_id}])
+        repo = _repo([], sim=sim, client=client, link_ok=False)
+        # After the lost claim the route re-reads the simulation: it is linked now.
+        repo.get_simulation = AsyncMock(side_effect=[sim, {**sim, "experiment_design_id": winner}])
+        with _patched(repo), pytest.raises(HTTPException) as ei:
+            asyncio.run(create_draft_experiment(sim["simulation_id"], user=ADMIN))
+        assert ei.value.status_code == 409
+        assert winner in str(ei.value.detail)
+        chain.delete.assert_called_once()
+        chain.eq.assert_any_call("id", exp_id)
+
+    def test_a_claim_that_raises_is_a_500_naming_both_ids_never_a_200(self):
         from src.api.routes.digital_twin_proposals import create_draft_experiment
 
         sim = _sim()
         exp_id = str(uuid4())
         client, _chain = _client(insert_rows=[{"id": exp_id}])
-        repo = _repo([], sim=sim, client=client, link_ok=False)
+        repo = _repo([], sim=sim, client=client, link_ok=RuntimeError("connection reset"))
         with _patched(repo), pytest.raises(HTTPException) as ei:
             asyncio.run(create_draft_experiment(sim["simulation_id"], user=ADMIN))
         assert ei.value.status_code == 500
@@ -338,7 +417,7 @@ class TestCreateDraftExperiment:
         with _patched(repo), pytest.raises(HTTPException) as ei:
             asyncio.run(create_draft_experiment(sim["simulation_id"], user=ADMIN))
         assert ei.value.status_code == 500
-        repo.simulations.link_experiment.assert_not_awaited()
+        repo.claim_experiment_link.assert_not_awaited()
 
     def test_malformed_simulation_id_is_422(self):
         from src.api.routes.digital_twin_proposals import create_draft_experiment

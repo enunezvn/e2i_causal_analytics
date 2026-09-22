@@ -517,12 +517,35 @@ class ProposedExperimentItem(BaseModel):
         default="twin_simulation",
         description="What proposed this: a completed digital-twin simulation (the only source today).",
     )
+    outcome_column: str = Field(
+        description=(
+            "The per-HCP business_metrics column the twin predicted an effect ON "
+            "(cohort_conversion_outcome today). simulated_ate and its interval are an "
+            "ABSOLUTE difference in this column's units, not a percentage lift."
+        ),
+    )
+    effect_scale: Literal["absolute"] = Field(
+        default="absolute",
+        description="simulated_ate is an absolute outcome-unit difference (never relative lift).",
+    )
 
 
 class ProposedExperimentsResponse(BaseModel):
     """Proposals plus the honest counts around them."""
 
     proposals: List[ProposedExperimentItem]
+    outcome_column: str = Field(
+        description="The outcome column every proposal's effect is stated on (see items)."
+    )
+    outcome_measurable_in_real_mode: bool = Field(
+        description=(
+            "Whether any REAL (is_synthetic=false) per-HCP business_metrics row records "
+            "the outcome column. False today (measured): the column is populated only on "
+            "the synthetic-gold cohort rows, and the real-mode final-results feed excludes "
+            "them, so a real experiment drafted from a proposal cannot yet be compared "
+            "against the twin — an owner decision on the real endpoint is needed."
+        ),
+    )
     total_proposed: int = Field(
         description="Unlinked deploy/refine simulations the caller may see."
     )
@@ -551,6 +574,14 @@ class DraftExperimentResponse(BaseModel):
     target_enrollment: Optional[int] = None
     planned_duration_days: Optional[int] = None
     created_by: Optional[str] = None
+    outcome_column: str = Field(description="prediction_target: the outcome the twin predicted on.")
+    outcome_measurable_in_real_mode: bool = Field(
+        description=(
+            "Whether real per-HCP rows record the outcome column today (see the list "
+            "envelope). False means the final analysis of this draft will report "
+            "insufficient_data until a real endpoint is recorded."
+        ),
+    )
     linked: bool = Field(
         description="twin_simulations.experiment_design_id now names this experiment."
     )

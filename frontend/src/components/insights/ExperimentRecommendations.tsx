@@ -44,6 +44,7 @@ import { toast } from '@/hooks/use-toast';
 import { EmptyState } from '@/components/ui/EmptyState';
 import type { ExperimentHealthSummary } from '@/types/experiments';
 import { FidelityStatus } from '@/types/digital-twin';
+import { provenanceLabel } from '@/lib/digital-twin-provenance';
 import type { ProposedExperimentItem } from '@/types/digital-twin';
 
 // =============================================================================
@@ -140,19 +141,15 @@ function humanize(value: string): string {
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
-function formatLift(ate: number, lower?: number | null, upper?: number | null): string {
-  const pct = (v: number) => `${v >= 0 ? '+' : ''}${(v * 100).toFixed(1)}%`;
-  if (lower == null || upper == null) return pct(ate);
-  return `${pct(ate)} [${pct(lower)}, ${pct(upper)}]`;
-}
-
-/** The estimate's provenance, said plainly (the backend's recorded label). */
-function provenanceLabel(provenance?: string | null): string {
-  if (!provenance) return 'provenance not recorded';
-  if (provenance.startsWith('cohort_estimated')) return 'estimated on the brand cohort';
-  if (provenance.startsWith('synthetic')) return 'synthetic training frame';
-  if (provenance.startsWith('rwd')) return 'real-world data';
-  return provenance;
+/**
+ * The twin's effect is an ABSOLUTE difference in the outcome column's units
+ * (effect_scale 'absolute'); the outcome is unbounded and not a rate, so it is never
+ * shown as a percentage (codex r1 #5).
+ */
+function formatEffect(ate: number, lower?: number | null, upper?: number | null): string {
+  const abs = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(3)}`;
+  if (lower == null || upper == null) return abs(ate);
+  return `${abs(ate)} [${abs(lower)}, ${abs(upper)}]`;
 }
 
 function fidelityConfig(status: ProposedExperimentItem['fidelity_status']) {
@@ -288,14 +285,15 @@ function ProposalRow({
             </Badge>
           </div>
           <p className="mt-1 text-xs text-[var(--color-muted-foreground)]">
-            Predicted lift{' '}
+            Predicted effect{' '}
             <span className="font-medium text-[var(--color-foreground)]">
-              {formatLift(
+              {formatEffect(
                 proposal.simulated_ate,
                 proposal.simulated_ci_lower,
                 proposal.simulated_ci_upper
               )}
-            </span>
+            </span>{' '}
+            on {proposal.outcome_column} (absolute, outcome units)
             {' · '}
             {proposal.recommended_sample_size != null
               ? `n=${proposal.recommended_sample_size.toLocaleString()}`
@@ -347,6 +345,9 @@ export function ExperimentRecommendations({ className }: ExperimentRecommendatio
   // simulation_id -> experiment_id created in this session (the row leaves the
   // list on refetch; until then the row says what happened).
   const [drafted, setDrafted] = useState<Record<string, string>>({});
+  // The feed shows a short list; "Show all" expands in place (there is no other page
+  // that renders proposals, so a link elsewhere would lead nowhere — codex r1 #8).
+  const [showAllProposals, setShowAllProposals] = useState(false);
 
   // Trigger a one-shot monitoring sweep on mount — there is no GET-list
   // endpoint; the monitor endpoint returns the live experiment summaries.
@@ -374,7 +375,9 @@ export function ExperimentRecommendations({ className }: ExperimentRecommendatio
     (data?.synthetic_data_forced ?? false) || (data?.synthetic_data_included ?? false);
 
   const proposals = proposalsQuery.data?.proposals ?? [];
-  const shownProposals = proposals.slice(0, MAX_PROPOSALS);
+  const shownProposals = showAllProposals ? proposals : proposals.slice(0, MAX_PROPOSALS);
+  const outcomeMeasurable = proposalsQuery.data?.outcome_measurable_in_real_mode ?? false;
+  const outcomeColumn = proposalsQuery.data?.outcome_column;
   const totalProposed = proposalsQuery.data?.total_proposed ?? 0;
   const totalLinked = proposalsQuery.data?.total_linked ?? 0;
   const realRunning = proposalsQuery.data?.real_experiments_running ?? 0;
@@ -545,13 +548,30 @@ export function ExperimentRecommendations({ className }: ExperimentRecommendatio
                 />
               ))}
               {proposals.length > MAX_PROPOSALS && (
-                <Link
-                  to="/digital-twin"
-                  className="flex items-center justify-center gap-1 p-2 rounded-lg border border-[var(--color-border)] text-xs font-medium text-purple-600 hover:bg-purple-500/5"
+                <button
+                  type="button"
+                  onClick={() => setShowAllProposals((v) => !v)}
+                  className="flex w-full items-center justify-center gap-1 p-2 rounded-lg border border-[var(--color-border)] text-xs font-medium text-purple-600 hover:bg-purple-500/5"
                 >
-                  View all {proposals.length} proposals on the Digital Twin page
+                  {showAllProposals
+                    ? `Show the top ${MAX_PROPOSALS} only`
+                    : `Show all ${proposals.length} proposals`}
                   <ArrowRight className="h-3 w-3" />
-                </Link>
+                </button>
+              )}
+              {!outcomeMeasurable && (
+                <div
+                  className="flex items-start gap-2 p-2 rounded-lg bg-amber-500/5 border border-amber-500/20 text-xs text-[var(--color-muted-foreground)]"
+                  data-testid="proposals-outcome-note"
+                >
+                  <AlertCircle className="h-3.5 w-3.5 mt-0.5 text-amber-600" />
+                  <span>
+                    The outcome these effects are stated on ({outcomeColumn ?? 'the twin outcome'}) is
+                    recorded only on the synthetic-gold cohort rows today, so a real experiment drafted
+                    from a proposal cannot yet be measured against the twin — the real endpoint is an
+                    owner decision.
+                  </span>
+                </div>
               )}
               <div className="flex items-start gap-2 text-xs text-[var(--color-muted-foreground)]">
                 <Clock className="h-3.5 w-3.5 mt-0.5 text-purple-500" />
