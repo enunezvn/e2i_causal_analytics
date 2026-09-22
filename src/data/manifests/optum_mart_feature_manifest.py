@@ -50,6 +50,83 @@ from src.data.feature_contract import FeatureContract, KnowableAt
 
 _ENROLLMENT = KnowableAt(reference="enrollment")
 _INDEX = KnowableAt(reference="index_date")
+
+# KG entity codes for the comorbidity flags (Lane E, 2026-09-22). Each Charlson /
+# Elixhauser bucket IS a disease concept, so the Layer-2 knowledge graph can be
+# asked whether a treatment drug is approved for it (the ``leak_drug_treats_
+# disease`` pass in ``scripts/build_kg_cache.py``). In the causal setting a
+# ``treats`` edge between the treatment drug and a PRE-index comorbidity is
+# indication evidence (a confounder of the escalation-therapy choice), and the
+# voter's prediction-era vocabulary still labels it a "leak" signal; the panel
+# records the edges and the human decides. Every (system, code) below was
+# resolved live against UMLS UTS / the ICD10CM crosswalk before it was written
+# here (``docs/demos/results/2026-09-22_lane_e_feature_role_voters/
+# umls_code_verification.txt``): one candidate CUI was a UTS 404 (C0042990) and
+# two mapped to the wrong concept (C0522224 "Paralysed", a Finding; I38 ->
+# "Valvular regurgitation"); those are deliberately absent. Scores, counts,
+# risk bands and demographics are not disease concepts and carry no codes.
+MART_COMORBIDITY_KG_CODES: dict[str, tuple[tuple[str, str], ...]] = {
+    "cci_mi": (("ICD10CM", "I21.9"), ("UMLS", "C0027051")),
+    "cci_chf": (("ICD10CM", "I50.9"), ("UMLS", "C0018802")),
+    "cci_pvd": (("ICD10CM", "I73.9"), ("UMLS", "C0085096")),
+    "cci_cerebrovascular": (("ICD10CM", "I67.9"), ("UMLS", "C0007820")),
+    "cci_dementia": (("ICD10CM", "F03.90"), ("UMLS", "C0497327")),
+    # Both Lane A drugs are approved for asthma and dupilumab for COPD; the
+    # "chronic pulmonary" bucket spans both, so both concepts are named.
+    "cci_chronic_pulmonary": (
+        ("ICD10CM", "J44.9"),
+        ("UMLS", "C0024117"),
+        ("ICD10CM", "J45.909"),
+        ("UMLS", "C0004096"),
+    ),
+    "cci_rheumatic": (("ICD10CM", "M06.9"), ("UMLS", "C0003873")),
+    "cci_peptic_ulcer": (("ICD10CM", "K27.9"), ("UMLS", "C0030920")),
+    "cci_mild_liver": (("ICD10CM", "K76.9"), ("UMLS", "C0023895")),
+    "cci_diabetes_no_complication": (("ICD10CM", "E11.9"), ("UMLS", "C0011849")),
+    "cci_diabetes_complication": (("ICD10CM", "E11.8"), ("UMLS", "C0011849")),
+    "cci_paraplegia": (("ICD10CM", "G82.20"), ("UMLS", "C0030486")),
+    "cci_renal": (("ICD10CM", "N18.9"), ("UMLS", "C0022661")),
+    "cci_malignancy": (("ICD10CM", "C80.1"), ("UMLS", "C0006826")),
+    "cci_severe_liver": (("ICD10CM", "K74.60"), ("UMLS", "C0023890")),
+    "cci_metastatic_cancer": (("ICD10CM", "C79.9"), ("UMLS", "C0027627")),
+    "cci_hiv": (("ICD10CM", "B20"), ("UMLS", "C0019693")),
+    "elx_chf": (("ICD10CM", "I50.9"), ("UMLS", "C0018802")),
+    "elx_cardiac_arrhythmia": (("ICD10CM", "I49.9"), ("UMLS", "C0003811")),
+    "elx_valvular_disease": (("UMLS", "C0018824"),),
+    "elx_pulmonary_circulation": (("ICD10CM", "I27.20"), ("UMLS", "C0020542")),
+    "elx_pvd": (("ICD10CM", "I73.9"), ("UMLS", "C0085096")),
+    "elx_hypertension_uncomplicated": (("ICD10CM", "I10"), ("UMLS", "C0020538")),
+    "elx_hypertension_complicated": (("ICD10CM", "I11.9"), ("UMLS", "C0020538")),
+    "elx_paralysis": (("ICD10CM", "G83.9"),),
+    "elx_other_neurological": (("ICD10CM", "G96.9"), ("UMLS", "C0027765")),
+    "elx_chronic_pulmonary": (
+        ("ICD10CM", "J44.9"),
+        ("UMLS", "C0024117"),
+        ("ICD10CM", "J45.909"),
+        ("UMLS", "C0004096"),
+    ),
+    "elx_diabetes_uncomplicated": (("ICD10CM", "E11.9"), ("UMLS", "C0011849")),
+    "elx_diabetes_complicated": (("ICD10CM", "E11.8"), ("UMLS", "C0011849")),
+    "elx_hypothyroidism": (("ICD10CM", "E03.9"), ("UMLS", "C0020676")),
+    "elx_renal_failure": (("ICD10CM", "N18.9"), ("UMLS", "C0022661")),
+    "elx_liver_disease": (("ICD10CM", "K76.9"), ("UMLS", "C0023895")),
+    "elx_peptic_ulcer": (("ICD10CM", "K27.9"), ("UMLS", "C0030920")),
+    "elx_aids_hiv": (("ICD10CM", "B20"), ("UMLS", "C0019693")),
+    "elx_lymphoma": (("ICD10CM", "C85.90"), ("UMLS", "C0024299")),
+    "elx_metastatic_cancer": (("ICD10CM", "C79.9"), ("UMLS", "C0027627")),
+    "elx_solid_tumor_no_metastasis": (("ICD10CM", "C80.1"), ("UMLS", "C0006826")),
+    "elx_rheumatoid_collagen": (("ICD10CM", "M06.9"), ("UMLS", "C0003873")),
+    "elx_coagulopathy": (("ICD10CM", "D68.9"), ("UMLS", "C0005779")),
+    "elx_obesity": (("ICD10CM", "E66.9"), ("UMLS", "C0028754")),
+    "elx_weight_loss": (("ICD10CM", "R63.4"), ("UMLS", "C1262477")),
+    "elx_fluid_electrolyte": (("ICD10CM", "E87.8"),),
+    "elx_blood_loss_anemia": (("ICD10CM", "D50.0"), ("UMLS", "C0002871")),
+    "elx_deficiency_anemia": (("ICD10CM", "D50.9"), ("UMLS", "C0162316")),
+    "elx_alcohol_abuse": (("ICD10CM", "F10.10"), ("UMLS", "C0001973")),
+    "elx_drug_abuse": (("ICD10CM", "F19.10"), ("UMLS", "C0038586")),
+    "elx_psychoses": (("ICD10CM", "F29"), ("UMLS", "C0033975")),
+    "elx_depression": (("ICD10CM", "F33.9"), ("UMLS", "C0011581")),
+}
 _POST = KnowableAt(reference="post_index")
 
 # Statically-declared literal registry (AST-traceable; do NOT rebuild via comprehension).
@@ -88,69 +165,295 @@ OPTUM_MART_FEATURES: list[FeatureContract] = [
         name="high_comorbidity_burden_flag", knowable_at=_INDEX, source="mart_comorbidity"
     ),
     # Charlson component one-hots (17)
-    FeatureContract(name="cci_mi", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="cci_chf", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="cci_pvd", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="cci_cerebrovascular", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="cci_dementia", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="cci_chronic_pulmonary", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="cci_rheumatic", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="cci_peptic_ulcer", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="cci_mild_liver", knowable_at=_INDEX, source="mart_comorbidity"),
     FeatureContract(
-        name="cci_diabetes_no_complication", knowable_at=_INDEX, source="mart_comorbidity"
+        name="cci_mi",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["cci_mi"],
     ),
     FeatureContract(
-        name="cci_diabetes_complication", knowable_at=_INDEX, source="mart_comorbidity"
+        name="cci_chf",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["cci_chf"],
     ),
-    FeatureContract(name="cci_paraplegia", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="cci_renal", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="cci_malignancy", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="cci_severe_liver", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="cci_metastatic_cancer", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="cci_hiv", knowable_at=_INDEX, source="mart_comorbidity"),
+    FeatureContract(
+        name="cci_pvd",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["cci_pvd"],
+    ),
+    FeatureContract(
+        name="cci_cerebrovascular",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["cci_cerebrovascular"],
+    ),
+    FeatureContract(
+        name="cci_dementia",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["cci_dementia"],
+    ),
+    FeatureContract(
+        name="cci_chronic_pulmonary",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["cci_chronic_pulmonary"],
+    ),
+    FeatureContract(
+        name="cci_rheumatic",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["cci_rheumatic"],
+    ),
+    FeatureContract(
+        name="cci_peptic_ulcer",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["cci_peptic_ulcer"],
+    ),
+    FeatureContract(
+        name="cci_mild_liver",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["cci_mild_liver"],
+    ),
+    FeatureContract(
+        name="cci_diabetes_no_complication",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["cci_diabetes_no_complication"],
+    ),
+    FeatureContract(
+        name="cci_diabetes_complication",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["cci_diabetes_complication"],
+    ),
+    FeatureContract(
+        name="cci_paraplegia",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["cci_paraplegia"],
+    ),
+    FeatureContract(
+        name="cci_renal",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["cci_renal"],
+    ),
+    FeatureContract(
+        name="cci_malignancy",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["cci_malignancy"],
+    ),
+    FeatureContract(
+        name="cci_severe_liver",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["cci_severe_liver"],
+    ),
+    FeatureContract(
+        name="cci_metastatic_cancer",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["cci_metastatic_cancer"],
+    ),
+    FeatureContract(
+        name="cci_hiv",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["cci_hiv"],
+    ),
     # Elixhauser component one-hots (31)
-    FeatureContract(name="elx_chf", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="elx_cardiac_arrhythmia", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="elx_valvular_disease", knowable_at=_INDEX, source="mart_comorbidity"),
     FeatureContract(
-        name="elx_pulmonary_circulation", knowable_at=_INDEX, source="mart_comorbidity"
-    ),
-    FeatureContract(name="elx_pvd", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(
-        name="elx_hypertension_uncomplicated", knowable_at=_INDEX, source="mart_comorbidity"
+        name="elx_chf",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_chf"],
     ),
     FeatureContract(
-        name="elx_hypertension_complicated", knowable_at=_INDEX, source="mart_comorbidity"
+        name="elx_cardiac_arrhythmia",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_cardiac_arrhythmia"],
     ),
-    FeatureContract(name="elx_paralysis", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="elx_other_neurological", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="elx_chronic_pulmonary", knowable_at=_INDEX, source="mart_comorbidity"),
     FeatureContract(
-        name="elx_diabetes_uncomplicated", knowable_at=_INDEX, source="mart_comorbidity"
+        name="elx_valvular_disease",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_valvular_disease"],
     ),
-    FeatureContract(name="elx_diabetes_complicated", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="elx_hypothyroidism", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="elx_renal_failure", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="elx_liver_disease", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="elx_peptic_ulcer", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="elx_aids_hiv", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="elx_lymphoma", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="elx_metastatic_cancer", knowable_at=_INDEX, source="mart_comorbidity"),
     FeatureContract(
-        name="elx_solid_tumor_no_metastasis", knowable_at=_INDEX, source="mart_comorbidity"
+        name="elx_pulmonary_circulation",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_pulmonary_circulation"],
     ),
-    FeatureContract(name="elx_rheumatoid_collagen", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="elx_coagulopathy", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="elx_obesity", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="elx_weight_loss", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="elx_fluid_electrolyte", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="elx_blood_loss_anemia", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="elx_deficiency_anemia", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="elx_alcohol_abuse", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="elx_drug_abuse", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="elx_psychoses", knowable_at=_INDEX, source="mart_comorbidity"),
-    FeatureContract(name="elx_depression", knowable_at=_INDEX, source="mart_comorbidity"),
+    FeatureContract(
+        name="elx_pvd",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_pvd"],
+    ),
+    FeatureContract(
+        name="elx_hypertension_uncomplicated",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_hypertension_uncomplicated"],
+    ),
+    FeatureContract(
+        name="elx_hypertension_complicated",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_hypertension_complicated"],
+    ),
+    FeatureContract(
+        name="elx_paralysis",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_paralysis"],
+    ),
+    FeatureContract(
+        name="elx_other_neurological",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_other_neurological"],
+    ),
+    FeatureContract(
+        name="elx_chronic_pulmonary",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_chronic_pulmonary"],
+    ),
+    FeatureContract(
+        name="elx_diabetes_uncomplicated",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_diabetes_uncomplicated"],
+    ),
+    FeatureContract(
+        name="elx_diabetes_complicated",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_diabetes_complicated"],
+    ),
+    FeatureContract(
+        name="elx_hypothyroidism",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_hypothyroidism"],
+    ),
+    FeatureContract(
+        name="elx_renal_failure",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_renal_failure"],
+    ),
+    FeatureContract(
+        name="elx_liver_disease",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_liver_disease"],
+    ),
+    FeatureContract(
+        name="elx_peptic_ulcer",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_peptic_ulcer"],
+    ),
+    FeatureContract(
+        name="elx_aids_hiv",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_aids_hiv"],
+    ),
+    FeatureContract(
+        name="elx_lymphoma",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_lymphoma"],
+    ),
+    FeatureContract(
+        name="elx_metastatic_cancer",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_metastatic_cancer"],
+    ),
+    FeatureContract(
+        name="elx_solid_tumor_no_metastasis",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_solid_tumor_no_metastasis"],
+    ),
+    FeatureContract(
+        name="elx_rheumatoid_collagen",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_rheumatoid_collagen"],
+    ),
+    FeatureContract(
+        name="elx_coagulopathy",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_coagulopathy"],
+    ),
+    FeatureContract(
+        name="elx_obesity",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_obesity"],
+    ),
+    FeatureContract(
+        name="elx_weight_loss",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_weight_loss"],
+    ),
+    FeatureContract(
+        name="elx_fluid_electrolyte",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_fluid_electrolyte"],
+    ),
+    FeatureContract(
+        name="elx_blood_loss_anemia",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_blood_loss_anemia"],
+    ),
+    FeatureContract(
+        name="elx_deficiency_anemia",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_deficiency_anemia"],
+    ),
+    FeatureContract(
+        name="elx_alcohol_abuse",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_alcohol_abuse"],
+    ),
+    FeatureContract(
+        name="elx_drug_abuse",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_drug_abuse"],
+    ),
+    FeatureContract(
+        name="elx_psychoses",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_psychoses"],
+    ),
+    FeatureContract(
+        name="elx_depression",
+        knowable_at=_INDEX,
+        source="mart_comorbidity",
+        kg_entity_codes=MART_COMORBIDITY_KG_CODES["elx_depression"],
+    ),
     # ===== POST-INDEX supervised target (forbidden-as-feature, preserved at build) =====
     FeatureContract(name="initiated_biologic_180d", knowable_at=_POST, source="mart_target"),
     # ===== POST-INDEX proven target-aliases (declared forbidden for defense-in-depth) =====
