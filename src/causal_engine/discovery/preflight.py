@@ -215,7 +215,7 @@ def _abs_association(X: np.ndarray, target: np.ndarray) -> np.ndarray:
     denom = np.linalg.norm(xc, axis=0) * np.linalg.norm(tc)
     with np.errstate(divide="ignore", invalid="ignore"):
         r = np.where(denom > 0, (xc.T @ tc) / denom, 0.0)
-    return np.round(np.abs(r), _ASSOCIATION_TIE_DECIMALS)
+    return np.asarray(np.round(np.abs(r), _ASSOCIATION_TIE_DECIMALS), dtype=float)
 
 
 def preflight_discovery_frame(
