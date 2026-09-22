@@ -32,27 +32,31 @@ after #2207, per table (details in each section):
 
 | Table | Producer after #2207 | Runs where |
 |-------|----------------------|------------|
-| `ml_feast_feature_views`, `ml_feast_materialization_jobs`, `ml_feast_feature_freshness` | `src/tasks/feast_tracking.py` from the three Feast beat tasks | live — worker_medium `analytics` (6 h / 4 h / weekly) |
-| `ml_hpo_studies`, `ml_hpo_trials` | `OptunaOptimizer.save_to_database` from the HPO tuner node | wired on the tuner; the exact typed payload verified against the live schema in a rolled-back rehearsal (no row has landed yet — needs migration ml/045 deployed, then a host-run tier-0 harness run); on worker_medium the hosting pipeline is routed but **blocked at the data-prep Feast gate** (see §1.5) |
+| `ml_feast_feature_views`, `ml_feast_materialization_jobs`, `ml_feast_feature_freshness` | `src/tasks/feast_tracking.py` from the three Feast beat tasks | live — worker_medium `analytics` (6 h / 4 h / weekly); since the 2026-09-22 owner decision the beats drive the e2i_feast sidecar over HTTP (`FEAST_URL`, `src/feature_store/feast_remote_materialize.py`) and the freshness beat records the real #559 source-table recency; a run that did nothing is RED in Celery (see §12) |
+| `ml_hpo_studies`, `ml_hpo_trials` | `OptunaOptimizer.save_to_database` from the HPO tuner node | wired on the tuner; the exact typed payload verified against the live schema in a rolled-back rehearsal (no row has landed yet — needs migration ml/045 deployed, then a host-run tier-0 harness run or a worker-run retraining, which the reshaped data-prep Feast gate no longer blocks, see §1.5) |
 | `estimator_evaluations` | `EnergyScoreMLflowTracker.record_evaluations` from the causal_impact estimation node | live — every energy-score selection (chat, `/api/causal`) |
-| `ml_data_quality_reports` | `DataQualityReportRepository` from data_preparer inside `MLFoundationPipeline` | routed — `execute_model_retraining` on worker_medium `analytics` after measurement; **blocked on the worker image at the data-prep Feast gate** (see §1.5) |
-| `ml_retraining_history` | `RetrainingHistoryRepository` via retraining_trigger / drift tasks | routes only — the daily `retraining-evaluation-daily` sweep (quick) evaluates and never enqueues (no persisted cohort contract); execution on `analytics` |
+| `ml_data_quality_reports` | `DataQualityReportRepository` from data_preparer inside `MLFoundationPipeline` | routed — `execute_model_retraining` on worker_medium `analytics` after measurement; the data-prep Feast gate is advisory for table/file-sourced runs since 2026-09-22 (see §1.5) |
+| `ml_retraining_history` | `RetrainingHistoryRepository` via retraining_trigger / drift tasks | live routes — the daily `retraining-evaluation-daily` sweep (quick) evaluates every real model and enqueues a retrain for a model whose registry row carries its cohort contract (migration 150, §1.2 / §7.5); execution on `analytics` |
 | `ml_training_runs` | `MLTrainingRunRepository` from model_trainer (real); today's rows are synthetic seed | same as the pipeline; **no real run recorded yet** |
 | `ml_feature_store` | none | roadmap stake, kept (owner decision (c)) |
 | `driver_rankings`, `feature_rankings` | none | roadmap stake, kept (owner decision (c)) |
 
 Memory was not the binding constraint: the retraining pipeline measured inside worker_medium
 at ~0.85 GB peak (n=4000, 2 HPO trials; +~75 MB at the prod cohort shape 15,209×77) — see
-the routing comment in `src/workers/celery_app.py` — so it is routed there. It still does
-not run end to end on this box: two blockers the dark queue had hidden remain, and both
-are owner decisions rather than lane fixes: (1) the scheduled
-evaluation path has no committed cohort contract to trigger with — no persisted model
-record carries `data_source` + `target_outcome`, so it evaluates and logs instead of
-enqueueing a job that would fail closed; (2) the data-prep Feast gate (#556) fails closed
-on the app/worker image, where Feast cannot be imported (#307), so a table-sourced retrain
-on the worker stops at data-prep unless `ALLOW_STALE_FEAST=1` is set (the measurement set
-it) — the alternatives are extending the `file_dir` advisory carve-out to committed-table
-cohorts (no pipeline data source is Feast-served) or resolving #307.
+the routing comment in `src/workers/celery_app.py` — so it is routed there. Two blockers the
+dark queue had hidden were then decided by the owner (2026-09-22) and fixed: (1) the
+scheduled evaluation path had no committed cohort contract to trigger with — migration 150
+persists one per model on `ml_model_registry` (§1.2), written at training time by the
+deployer's registry writer and healed by the manual trigger route, and the sweep reads it
+(§7.5); the 12 pre-existing goldstd models carry only the target (their training is not
+expressible as a loadable (table, target column) contract — see the migration's comment),
+so the sweep stays honestly blocked for them until an operator triggers once with a
+loadable `data_source`; (2) the data-prep Feast gate (#556) was unpassable by construction
+(it probed a `feature_analyzer_<experiment_id>` view that exists nowhere) and fails closed
+on the worker image (#307) — it now measures the freshness of the Feast views sourced from
+the run's table through the feast-free #559 probe and blocks only a run that trains on
+Feast-served features (`features_served_by_feast`, which no pipeline path sets today);
+for table/file-sourced runs the result is advisory (§1.5).
 
 ---
 
@@ -137,8 +141,22 @@ Model versioning with performance metrics and lifecycle stage tracking. A trigge
 | `fairness_metrics` | JSONB | Fairness assessment results |
 | `stage` | model_stage_enum | Current lifecycle stage |
 | `is_champion` | BOOLEAN | Whether this is the active champion model |
+| `cohort_data_source` | TEXT | Cohort contract (migration 150, #2207): the table name or JSON file-source dict the model was trained on — what a retrain loads. NULL = unknown (sweep blocked for this model) |
+| `cohort_target_outcome` | TEXT | Cohort contract: the prediction target the model was trained on; backfilled from `ml_experiments.prediction_target` for the 14 pre-existing real models |
+| `cohort_feature_manifest_source` | TEXT | Cohort contract: the resolved Layer-5 manifest source (csu/optum/synthetic), optional |
 
 **Key constraints**: `UNIQUE(model_name, model_version)`, single-champion trigger per experiment
+
+**Cohort contract (migration 150, owner decision 2026-09-22).** The daily retraining sweep
+may enqueue a retrain only for a model whose row carries BOTH `cohort_data_source` and
+`cohort_target_outcome` (`has_cohort_contract`). Writers: `registry_manager
+._persist_model_registry_row` at training time (threaded from `MLFoundationPipeline.run`'s
+`input_data` through the deployer state; a reused row's NULL columns are healed) and
+`RetrainingTriggerService.trigger_retraining` (an explicit, complete manual trigger heals
+NULL columns once; explicit request values win over the row; nothing is ever overwritten).
+Reader: the drift-monitor connector projection (`src/agents/drift_monitor/connectors/
+supabase_connector.py`, with a narrow-projection fallback for a pre-150 schema). Encoding /
+decoding lives in `src/services/cohort_contract.py`.
 
 ### 1.3 `ml_training_runs`
 
@@ -215,11 +233,13 @@ scheduled executor is `execute_model_retraining`, which #2207 moved from the dar
 worker_medium's `analytics` queue after measuring the pipeline inside that worker (routing
 comment in `src/workers/celery_app.py`). Rows land when a retraining job passes data-prep:
 today that is the tier-0 harness run by hand on the host, or a trigger via
-`/monitoring/retraining/trigger/{model_id}` (with its cohort contract) once the worker image
-can pass the data-prep Feast gate — on the current image Feast is not importable (#307), the
-#556 gate fails closed, and the job is recorded as `failed` at data-prep unless
-`ALLOW_STALE_FEAST=1` is set on the worker (owner decision, see the producer census). The
-daily sweep never triggers (no cohort contract). 0 rows on 2026-09-22.
+`/monitoring/retraining/trigger/{model_id}` (with its cohort contract), or the daily sweep
+for a model whose registry row carries one (§1.2). The data-prep Feast gate (#556) no longer
+blocks such a run on the worker image: since 2026-09-22 it measures the freshness of the
+Feast views sourced from the run's table (feast-free #559 probe) and records the result;
+it hard-blocks only a run that trains on Feast-served features (`features_served_by_feast`,
+unset by every pipeline path today), where `ALLOW_STALE_FEAST=1` keeps its meaning. 0 rows
+on 2026-09-22.
 
 ### 1.6 `ml_shap_analyses`
 
@@ -736,8 +756,8 @@ tuner does not produce. The first rows come from the tier-0 harness run
 by hand on the host (the path that produced the 943 `ml_hpo_patterns`) once ml/045 is
 deployed — prove it with `SELECT study_name, n_trials FROM ml_hpo_studies`. The other
 host of the tuner, `execute_model_retraining`, is routed to worker_medium's `analytics`
-queue but on the current worker image stops at the data-prep Feast gate before the tuner
-runs (see §1.5) — no HPO rows from the worker until that owner decision lands.
+queue; since the 2026-09-22 gate reshape (§1.5) a worker-run retraining reaches the tuner,
+so HPO rows also land from the sweep / manual trigger once ml/045 is deployed.
 
 ### 6.1 `ml_hpo_studies`
 
@@ -881,19 +901,21 @@ Automated retraining events triggered by monitoring alerts with before/after per
 `completed` / `failed`, real metric only). Reachable through
 `/monitoring/retraining/{evaluate,trigger}/{model_id}` and, since #2207, the daily beat
 `retraining-evaluation-daily` (01:45 UTC, `quick`), which runs `check_retraining_for_all_models`
-— evaluation only. A row is written by a trigger. A job can only run with the committed
-cohort contract (`data_source` + `target_outcome`) — `execute_model_retraining` fails closed
-without it — and no persisted model record carries one, so the daily sweep logs its decision
-and never enqueues (it used to write a `pending` row for a job that could only fail). The API
-trigger route enforces nothing here: Phase D deliberately kept both fields optional on
-`TriggerRetrainingRequest`, so `POST /monitoring/retraining/trigger/{model_id}` accepts an
-incomplete contract, writes the `pending` row, and the job then fails closed at execution
-(`failed`, reason in `notes`); with a complete contract the job reaches the pipeline. The
-execution half runs on worker_medium's `analytics` queue (on the dark `ml` queue a triggered
-job never ran and its row stayed `pending`); on the current worker image it stops at the
-data-prep Feast gate and the row goes `failed` with that reason (see §1.5). Net: rows land only
-from the API trigger route today, and every one of them ends `failed` on this worker image
-until the Feast-gate decision. 0 rows on 2026-09-22.
+. A row is written by a trigger. A job can only run with the committed cohort contract
+(`data_source` + `target_outcome`) — `execute_model_retraining` fails closed without it.
+Since the 2026-09-22 owner decision the contract of record is the model's `ml_model_registry`
+row (migration 150, §1.2): the sweep passes it to `evaluate_retraining_need` and enqueues
+for a contracted model; a model whose row lacks it is evaluated and blocked with
+`retraining_blocked_reason="no_cohort_contract"` (the 12 pre-existing goldstd models carry
+only the backfilled target, so they stay blocked until healed). The API trigger route keeps
+both fields optional on `TriggerRetrainingRequest` (Phase D): a request that omits them falls
+back to the row's contract, explicit values win, a complete contract heals the row's NULL
+columns once, and the row's id is written to `model_id` (never populated before); a request
+with no contract anywhere still writes the `pending` row and the job fails closed at
+execution (`failed`, reason in `notes`). The execution half runs on worker_medium's
+`analytics` queue (on the dark `ml` queue a triggered job never ran and its row stayed
+`pending`); the data-prep Feast gate no longer blocks a table/file-sourced run there
+(§1.5). 0 rows on 2026-09-22.
 
 ### 7.6 `health_check_history` (migration 096)
 
@@ -1340,15 +1362,23 @@ Tracks Feast feature view configurations, materialization jobs, and feature fres
 tasks in `src/tasks/feast_tasks.py` — `feast-materialize-incremental` (6 h),
 `feast-check-freshness` (4 h) and `feast-materialize-full-weekly` — all on worker_medium's
 `analytics` queue (the weekly entry had been pinned to the unconsumed `ml` queue: 15 undelivered
-weekly messages were found in Redis). What lands is the **real outcome on this box**: the
-app/worker image cannot `import feast` (#307), so every scheduled materialize returns
-`Failed to initialize Feast client` and is recorded as a `failed` job row per targeted view,
-and every scheduled freshness run records each view as `unknown` (#556: unverifiable is not
-fresh). The e2i_feast_materializer sidecar (`docker/feast/materializer-entrypoint.sh`) does the
-actual materialize and has no database client, so its runs are not in these tables.
-`ml_feast_feature_views` rows are created on first use from `FEAST_FEATURE_VIEW_SOURCE_TABLES`
-(`src/feature_store/feast_client.py` — the nine real Feast views and their source tables). All
-three tables were at 0 rows on 2026-09-22.
+weekly messages were found on the broker's db 1). What lands is the **real outcome**. Until
+the 2026-09-22 owner decision every scheduled run on the worker failed at
+`Failed to initialize Feast client` (the app/worker image cannot `import feast`, #307, and
+`MaterializationJob` built an embedded-mode client that ignored `FEAST_URL`) and Celery
+reported it as SUCCESS. Now: the job obtains its client through `get_feast_client()` (remote
+mode, `FEAST_URL=http://feast:6566`), `FeastClient.materialize` / `materialize_incremental`
+POST the window to the e2i_feast sidecar's `/materialize` and `/materialize-incremental`
+(`src/feature_store/feast_remote_materialize.py`; the request schema mirrors the sidecar's
+openapi), the freshness beat records the real per-view recency through the #559
+source-table probe, and a run that materialized or probed nothing is RED in Celery after its
+rows are recorded (`failed` job rows / `unknown` freshness rows; an init failure is no longer
+doubled by the auto-recovery branch). The e2i_feast_materializer sidecar shell loop
+(`docker/feast/materializer-entrypoint.sh`) still runs the same materialize every 6 h
+(belt and braces; retire it only once the beat is proven live) and has no database client,
+so its runs are not in these tables. `ml_feast_feature_views` rows are created on first use
+from `FEAST_FEATURE_VIEW_SOURCE_TABLES` (`src/feature_store/feast_views.py` — the nine real
+Feast views and their source tables). All three tables were at 0 rows on 2026-09-22.
 
 ### 12.1 `ml_feast_feature_views`
 
