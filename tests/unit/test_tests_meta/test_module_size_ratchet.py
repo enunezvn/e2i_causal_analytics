@@ -23,12 +23,11 @@ LIMIT = 1500
 
 # path (relative to repo) -> pinned line count. Measured, not guessed. Only shrinks.
 ALLOWLIST: dict[str, int] = {
-    # 1560: MEASURED from the Lane B merge with origin/main e3fb21186. The file
-    # crossed LIMIT on main itself: Lane D (#2227) took it to 1478 and Lane E
-    # (#2226) to 1566 — two PRs each under the limit alone, over it together.
-    # Lane B's delegation of the backdoor criterion to
-    # src/ml/causal_role_dgp/backdoor.py saves 6 of those lines. Pinned so the
-    # ratchet still forbids growth; the split by concern is an owner decision.
+    # 1560: MEASURED on the Lane B merge with origin/main 44d310f0f. The file
+    # crossed LIMIT on main itself at e3fb21186 (Lane D #2227 1478 -> Lane E
+    # #2226 1566) and main pinned it at 1566 in #2229; Lane B's delegation of
+    # the backdoor criterion to src/ml/causal_role_dgp/backdoor.py saves 6 of
+    # those lines, so the pin shrinks. The split by concern is an owner decision.
     "src/agents/causal_impact/nodes/graph_builder.py": 1560,
     "src/agents/causal_impact/nodes/refutation.py": 2519,
     "src/agents/feedback_learner/dspy_integration.py": 1836,
