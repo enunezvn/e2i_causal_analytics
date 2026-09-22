@@ -54,6 +54,13 @@ BRAND = "Kisqali"
 # starts where the FIRST run's lookback starts (codex r3 on #2212: starting it at
 # EARLY_BATCH left the week before uncensused), derived in the fixture from the ETL's own
 # constant so the two cannot drift.
+#
+# KNOWN RESIDUAL (#2213): the territory census is by metric_date range only. The territory
+# ARRIVAL run selects its dates with territory_metrics_etl._TERRITORY_METRIC_DATES_BY_ARRIVAL
+# (any per-HCP date within 30 days of a trigger that arrived in its window), which can reach
+# a foreign per-HCP date outside [TUESDAY, GUARD_DATE_END) that neither the census nor the
+# teardown covers. No such row exists live (earliest per-HCP date is years later); the
+# arrival-aware territory census and a selected-date teardown are #2213's work.
 FIRST_ARRIVAL_RUN = "2019-01-02T03:15:00+00:00"
 GUARD_ARRIVAL_END = datetime(2019, 1, 21, tzinfo=UTC)
 GUARD_DATE_END = date(2019, 1, 21)
