@@ -74,8 +74,9 @@ Standalone attribution of the pre-fix budget on this frame (`timing_probe*.py/js
   warned "Co-variance matrix is underdetermined. Inference will be invalid!" and the round-1 run
   served that CI. Measured: the pruned 61-column fit gives ATE 0.03353 (was 0.03353) and SE 0.00858
   (was 0.00855) with no warning — the redundant columns carry no information. The loader now prunes
-  once, on the full frame, in registry order (earlier wins; Gram–Schmidt vs the intercept, rel tol
-  1e-8; skipped at n ≤ k+1), so estimation and the refutation rebuild see the same design; every
+  once, on the full frame, in the RESOLVED order (numerics, then dummies; earlier wins; Gram–Schmidt vs
+  the intercept, residual ≤ 1e-8 of the CENTERED norm; skipped at n < k+1 — see Round 3 below), so
+  estimation and the refutation rebuild see the same design; every
   synthetic served pair is full rank so it is a no-op there. `_resolve_agent_estimation_frame` is the
   loader's whole post-fetch path and `preflight_agent.py` now calls it — its own copy of that path had
   silently skipped the prune (a run through a re-implementation is not a run through the served path).
@@ -92,6 +93,23 @@ Standalone attribution of the pre-fix budget on this frame (`timing_probe*.py/js
   `value=None` silently (the negative-control suite caught it); `optimize_backdoor` is now gated on
   a non-empty set and the identifier test pins both identifiers to the same set and the same estimate
   on empty / numeric / categorical-expanded / continuous-treatment shapes.
+- **Round 3 (codex r3 → REVISE: 1 HIGH + 3 MED, all fixed in `fabbec0c9`).** (1) HIGH — the prune
+  criterion compared the residual with the RAW column norm, so a genuinely varying large-offset column
+  was dropped (`1e10 + arange(100)`: residual / raw norm 2.9e-9 < 1e-8). The residual is now compared
+  with the CENTERED norm (translation- and unit-invariant); a column counts as constant only at machine
+  rounding (centered / raw ≤ 1e-12); the skip is `n < k+1` (was `≤`, off by one); and the documented
+  order is the resolved one (numerics first, then dummies in their categoricals' registry order) — the
+  design is NOT reordered, because every forest fit subsamples features by column index. Re-run on the
+  real frame: the SAME 16 columns are dropped (k = 61), so the numbers in the table stand unchanged.
+  Tests added: large-offset kept, unit-invariant decision, near-collinear (1e-4 noise) kept, `n == k+1`
+  runs / `n < k+1` skips, constant dropped, dummy-after-numeric order. (2) MED — after a subsampled
+  tournament, a winner whose SERVED full-frame refit was refused ended the selection; Auto now refits
+  the next ranked successful candidate until a served fit succeeds (refused candidates stay visible as
+  failed results; a forced estimator never subsamples and still fails closed). (3) MED — the identifier
+  test now asserts the rebuilt model's treatment IS the median split, and a LinearDML rebuild asserts
+  its effect modifiers are the encoded common causes. (4) MED — `load_optum_causal_cohort.load_frame`
+  refuses an empty export or one without both arms BEFORE any write (VERIFIED must not be printable on
+  such a table); the real-DB gate asserts both arms live.
 
 Final-code node timeline of the primary run (from the run's own INFO log; the graph itself started
 at ~09:22:30 after imports):
@@ -155,3 +173,8 @@ at ~09:22:30 after imports):
 - **Run from the worktree root.** From the evidence dir the script imports `src` from the main checkout
   (editable `.pth`); its own assert catches it.
 - The `.log` files are gitignored; the status lines are the table above and the timeline is pasted in.
+- **Pre-existing on this box, not from this lane**: the wide run of
+  `tests/unit/test_agents/test_causal_impact/` aborts at
+  `test_refutation.py::TestRefutationNode::test_run_all_refutation_tests` (pytest-timeout 30 s, also
+  90 s, inside an econml GRF fit). Reproduced at the pre-session commit `4ba8372b8` in a throwaway
+  worktree; CI's sharded `test_agents` lane is the arbiter for that directory.

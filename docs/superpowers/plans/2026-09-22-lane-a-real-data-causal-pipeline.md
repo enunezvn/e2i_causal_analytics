@@ -2574,6 +2574,20 @@ path is now one function, `_resolve_agent_estimation_frame`, and the pre-flight 
 257.6 s / 221.3 s / 185.3 s, LinearDML, k=61, refutation 4/5 proceed on all three (`preflight.md`).
 (4) The 6 + 1 incident rows were deleted after the owner's explicit approval; the MLflow run was left.
 
+**Amendment 3 (codex r3 → REVISE: 1 HIGH + 3 MED, resolved in `fabbec0c9`):** (1) the prune criterion
+compared the residual with the RAW norm and dropped a genuinely varying large-offset column (`1e10 +
+arange`, residual/raw 2.9e-9); it now compares with the CENTERED norm (translation- and unit-invariant),
+treats a column as constant only at machine rounding (1e-12), skips only at `n < k+1`, and documents the
+resolved order (numerics, then dummies) without reordering the design (forest fits subsample by column
+index). The real frame drops the SAME 16 columns, so the Amendment 2 numbers stand. (2) Auto refits the
+next ranked successful tournament candidate when the winner's SERVED full-frame refit is refused (a forced
+estimator still fails closed). (3) The identifier test asserts the median-split treatment and, on a
+LinearDML rebuild, the effect modifiers. (4) `load_frame` refuses an empty / one-arm export before any
+write; the real-DB gate asserts both arms. Pre-existing and NOT chased here: the wide
+`tests/unit/test_agents/test_causal_impact/` run aborts at `test_refutation.py::test_run_all_refutation_tests`
+(pytest-timeout inside an econml GRF fit) — reproduced at the pre-session commit `4ba8372b8`; CI's sharded
+`test_agents` lane is the arbiter.
+
 ---
 
 ### Task 10: Codex review rounds to ACCEPT
