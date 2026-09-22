@@ -418,6 +418,46 @@ def forecast_guidance_block() -> str:
     )
 
 
+def twin_simulation_guidance_block() -> str:
+    """Tell the model that the platform simulates interventions, and where (#2211).
+
+    On 2026-09-22, with three brands simulable, the chat answered "use the digital twin to
+    simulate an email campaign for Kisqali" with *"the platform doesn't include a digital
+    twin simulation capability"* and called causal_analysis_tool — reproduced 4/4 offline
+    through the real chat leg, because neither prompt nor any bound tool named a twin, a
+    simulation or a counterfactual. Naming the tool is half the fix; the other half is the
+    boundary: causal_analysis_tool reports drivers OBSERVED in the registry ("what drives
+    Kisqali conversion" stays there), the twin simulates an intervention FORWARD. The
+    intervention list is read from the side-effect-free contract module: importing any
+    ``src.digital_twin`` module costs 17 s and +548 MB (measured), and this renders at
+    import of both route modules.
+    """
+    from src.data.per_hcp_cohort_columns import INTERVENTION_TREATMENT_MAP
+
+    catalog = ", ".join(INTERVENTION_TREATMENT_MAP)
+    return (
+        "- DIGITAL TWIN SIMULATION: use `digital_twin_simulate_tool` for any SIMULATION / "
+        "COUNTERFACTUAL / WHAT-IF-INTERVENTION ask — 'use the digital twin', 'simulate an "
+        "email campaign for Kisqali', 'run a counterfactual', 'what would happen to <brand> "
+        "conversion if we increased call frequency'. It runs the Digital Twin engine behind "
+        "the Digital Twin page's POST /api/digital-twin/simulate on the brand's per-HCP twin "
+        f"cohort (interventions: {catalog}; brands with an active twin model) and returns the "
+        "simulated effect on HCP conversion with its 95% interval, per-region effects, a "
+        "DEPLOY / REFINE / SKIP recommendation and the per-arm experiment size — present them "
+        "as a simulation on a synthetic-gold cohort (the payload says so), never as an "
+        "observed result. The platform HAS this capability: never say it has no digital twin, "
+        "no simulation or no counterfactual tool; if the tool refuses, report its stated "
+        "reason (its `intervention_catalog` is the engine's vocabulary, not what the brand "
+        "can run right now). `causal_analysis_tool` reports modeled "
+        "DRIVERS from the causal-path registry (what drives / caused / impacts a KPI) and never "
+        "simulates an intervention — do not substitute it for a simulation ask. Do not send a "
+        "simulation ask to `orchestrator_tool` (experiment_designer's twin simulation is "
+        "disabled by design) and use `tool_composer_tool` only when the ask also needs other "
+        "steps (a comparison, a gap, a forecast) — its `counterfactual_simulator` is the same "
+        "engine."
+    )
+
+
 def render_blocks(prompt: str) -> str:
     """Substitute every capability-derived block into a system prompt.
 
@@ -431,6 +471,7 @@ def render_blocks(prompt: str) -> str:
         [
             f"- BREAKDOWN GUIDANCE: {breakdown_guidance_block()}",
             forecast_guidance_block(),
+            twin_simulation_guidance_block(),
         ]
     )
     return prompt.replace("{capability_guidance}", guidance).replace(

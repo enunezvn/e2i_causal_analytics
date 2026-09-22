@@ -1139,6 +1139,22 @@ class ToolPlanner:
                     reasoning="Auto-mapped: a PREDICTIVE ask about a KPI's future level",
                 )
 
+        # #2211: the decomposer's EXPERIMENTAL intent is "test design OR simulation", and the
+        # map below answers both with power_calculator. Measured 2026-09-22: both #2211 asks
+        # decomposed with their simulation step labelled EXPERIMENTAL ("Simulate the email
+        # campaign intervention on Kisqali HCPs using the digital twin model"), so a planner
+        # LLM miss would have sized an experiment instead of running one. A simulation-shaped
+        # ask goes to the twin simulator; unregistered, it falls through exactly as before.
+        if intent == "EXPERIMENTAL" and is_simulation_question(question_lower):
+            if self.registry.validate_tool_exists("counterfactual_simulator"):
+                return ToolMapping(
+                    sub_question_id=sq.id,
+                    tool_name="counterfactual_simulator",
+                    source_agent="experiment_designer",
+                    confidence=0.6,
+                    reasoning="Auto-mapped: an EXPERIMENTAL ask to simulate an intervention",
+                )
+
         # Keyword-based fallbacks (when intent doesn't match well)
         keyword_mappings = [
             # Forecast cues come FIRST: "forecast TRx risk" contains 'risk', and the
@@ -1251,6 +1267,43 @@ _FORECAST_RISK_RE = re.compile(
     r"(forecast|projection|outlook|trajectory|number|numbers|estimate)\b",
     re.IGNORECASE,
 )
+
+
+#: A sub-question is a SIMULATION question when it asks to simulate an intervention forward
+#: (a twin, a counterfactual, a what-if ABOUT an intervention), not to size or design a test
+#: (#2211). Both #2211 asks decomposed into a step of this shape under the EXPERIMENTAL
+#: intent. A design question wearing simulation words ("simulate statistical power for this
+#: A/B test", "what would happen to power if the sample size increased") stays with the
+#: power calculator (codex r1 #4): the twin has no notion of power or sample size as inputs.
+_TWIN_CUE_RE = re.compile(r"\b(?:counterfactual\w*|digital[\s-]?twin)\b", re.IGNORECASE)
+_SIMULATION_CUE_RE = re.compile(r"\b(?:simulat\w*|what[\s-]if|what would happen)\b", re.IGNORECASE)
+_INTERVENTION_CUE_RE = re.compile(
+    r"\b(?:intervention|campaign|call frequency|calls?|speaker|sample distribution|samples?"
+    r"|peer|engagement|patient support|rep training|treatment|lever|program|conversion"
+    r"|prescri\w*|hcps?)\b",
+    re.IGNORECASE,
+)
+_DESIGN_CUE_RE = re.compile(
+    r"\b(?:power|sample[\s-]size|per[\s-]arm|a/?b test|alpha|statistical|design|mde"
+    r"|minimum detectable|experiments?|pilots?|trials?|tests?)\b",
+    re.IGNORECASE,
+)
+
+
+def is_simulation_question(text: str) -> bool:
+    """True when ``text`` asks to run the twin.
+
+    An explicit twin / counterfactual cue decides on its own. Otherwise a simulate / what-if
+    cue counts only when it is about an intervention AND the question carries no design cue
+    ("what would happen if we ran the pilot with more HCPs" is a design question, not a
+    simulation — codex r2 probe).
+    """
+    text = text or ""
+    if _TWIN_CUE_RE.search(text):
+        return True
+    if _DESIGN_CUE_RE.search(text):
+        return False
+    return bool(_SIMULATION_CUE_RE.search(text) and _INTERVENTION_CUE_RE.search(text))
 
 
 def is_forecast_question(text: str) -> bool:
