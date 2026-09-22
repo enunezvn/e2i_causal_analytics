@@ -327,19 +327,25 @@ def test_a_late_weekly_batch_rolls_up_under_each_triggers_own_date(
     # 4 triggers in their lookbacks), so a green verdict is a measurement, not a census
     # that reached nothing.
     assert (census.source_rows_total, census.source_rows_planted) == (7, 7), census
-    with db_conn:
-        with db_conn.cursor() as cur:
-            cur.execute(
-                selected_metric_dates_sql(metric_dates_cte),
-                {
-                    "start_date": arrival_start,
-                    "end_date": arrival_end,
-                    "per_hcp_metric_type": territory_metrics_etl.PER_HCP_METRIC_TYPE,
-                },
-            )
-            selected = {row[0] for row in cur.fetchall()}
-    planted["territory_selected_dates"].update(selected)
+
+    def _selected_dates() -> set[date]:
+        with db_conn:
+            with db_conn.cursor() as cur:
+                cur.execute(
+                    selected_metric_dates_sql(metric_dates_cte),
+                    {
+                        "start_date": arrival_start,
+                        "end_date": arrival_end,
+                        "per_hcp_metric_type": territory_metrics_etl.PER_HCP_METRIC_TYPE,
+                    },
+                )
+                return {row[0] for row in cur.fetchall()}
+
+    # Pinned BEFORE it is recorded (codex r1-2): a date that is not one of ours fails here
+    # and is never handed to the wholesale teardown.
+    selected = _selected_dates()
     assert selected == {TUESDAY, MONDAY}, selected
+    planted["territory_selected_dates"].update(selected)
 
     territory = _run_territory_rollup_impl(
         arrived_before=TERRITORY_ARRIVAL_RUN, request_id="late-arrival-territory"
@@ -348,8 +354,12 @@ def test_a_late_weekly_batch_rolls_up_under_each_triggers_own_date(
     # (total_trx, active_hcp_count). Tuesday 01-01: a 2 + b 1 delivered. Monday 01-14: a3 delivered;
     # its 30-day lookback still holds a's and b's 01-01 triggers, so both HCPs are active.
     assert _territory(db_conn, rid) == {TUESDAY: (3, 2), MONDAY: (1, 2)}
-    # Every date the run wrote for our territory is one the teardown will sweep.
+    # Every date the run wrote for our territory is one the teardown will sweep -- and the
+    # selection re-read after the run is still the recorded set, so no date appeared
+    # between the recording and the run's own evaluation of the same CTE. One that did
+    # would be reported here, not swept.
     assert set(_territory(db_conn, rid)) <= planted["territory_selected_dates"]
+    assert _selected_dates() == planted["territory_selected_dates"]
     rebuilt = preview_territory_rollup("2019-01-01", "2019-01-15")
     assert (rebuilt["metric_dates"], rebuilt["rows_new"], rebuilt["rows_changed"]) == (2, 0, 0)
 

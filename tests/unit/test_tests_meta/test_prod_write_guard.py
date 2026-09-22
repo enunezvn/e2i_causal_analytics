@@ -559,11 +559,37 @@ def test_the_arrival_census_waives_the_key_space_leg_and_keeps_the_teardown_leg(
     assert "m.metric_date >=" not in teardown
 
 
-def test_the_arrival_census_refuses_a_cte_that_does_not_define_metric_dates() -> None:
-    """The legs read ``FROM metric_dates``; a CTE defining anything else composes into SQL
-    that only Postgres can reject, inside the live half. Refuse at construction instead."""
-    with pytest.raises(ValueError, match="metric_dates AS"):
-        _arrival_spec("affected_dates AS (SELECT 1)")
+@pytest.mark.parametrize(
+    ("cte", "why"),
+    [
+        ("affected_dates AS (SELECT 1)", "metric_dates AS"),
+        (_FAKE_METRIC_DATES_CTE + "; DELETE FROM territory_metrics", "semicolon"),
+        (_FAKE_METRIC_DATES_CTE + ", extra AS (SELECT 1)", "single CTE"),
+        (_FAKE_METRIC_DATES_CTE.replace("%(end_date)s", "now()"), "end_date"),
+        (_FAKE_METRIC_DATES_CTE.replace("%(per_hcp_metric_type)s", "'x'"), "per_hcp_metric_type"),
+    ],
+    ids=["other-name", "second-statement", "second-cte", "missing-bound", "missing-type"],
+)
+def test_the_arrival_census_refuses_a_cte_that_is_not_one_metric_dates_selection(
+    cte: str, why: str
+) -> None:
+    """The legs read ``FROM metric_dates`` and bind the run's three params (codex r1-5:
+    the parameter is raw SQL, so its shape is checked at construction rather than left
+    for Postgres inside the live half). One CTE named metric_dates, no second statement
+    or clause, every run param present."""
+    with pytest.raises(ValueError, match=why):
+        _arrival_spec(cte)
+
+
+def test_the_arrival_census_shape_check_reads_the_sql_not_its_comments() -> None:
+    """The first version of the check read the raw text and refused the ETL's REAL
+    constant, whose comments carry a ';' and parentheses. The check must look at the SQL
+    proper; the real constant is the positive control."""
+    from src.etl.territory_metrics_etl import _TERRITORY_METRIC_DATES_BY_ARRIVAL
+
+    assert "; and" in _TERRITORY_METRIC_DATES_BY_ARRIVAL  # the comment that bit
+    _arrival_spec(_TERRITORY_METRIC_DATES_BY_ARRIVAL)
+    _arrival_spec(_FAKE_METRIC_DATES_CTE.replace("-- a comment", "-- a (comment); with '('"))
 
 
 def test_the_disproof_counts_are_read_as_measured() -> None:
@@ -588,6 +614,39 @@ def test_census_sql_strips_line_comments_before_collapsing_to_one_line() -> None
     for statement in statements:
         assert "--" not in statement, statement[:80]
         assert "FROM metric_dates" in statement or statement.endswith("WHERE false;")
+
+
+def test_census_sql_keeps_a_double_dash_inside_a_string_literal() -> None:
+    """codex r1-4: the comment stripper must not treat ``--`` inside a quoted literal as
+    a comment, or the rest of that statement (placeholders included) would go with it."""
+    spec = WriteWindowSpec(
+        test_file="q.py",
+        window_description="w",
+        queries=(
+            CensusQuery(
+                "source_rows_total",
+                "l",
+                "SELECT count(*) FROM triggers t -- a real comment\n"
+                " WHERE t.trigger_id LIKE '--%' AND t.created_at >= %(start)s",
+                {"start": "2019-01-01"},
+            ),
+            *(
+                CensusQuery(leg, "l", "SELECT count(*) FROM triggers WHERE false", {})
+                for leg in (
+                    "source_rows_planted",
+                    "target_entities_total",
+                    "target_entities_planted",
+                    "teardown_reach_preexisting",
+                )
+            ),
+        ),
+    )
+    rendered = census_sql(spec)
+    statement = next(line for line in rendered.splitlines() if line.startswith("SELECT "))
+    assert statement == (
+        "SELECT count(*) FROM triggers t WHERE t.trigger_id LIKE '--%' "
+        "AND t.created_at >= %(start)s;"
+    )
 
 
 def test_census_sql_renders_a_read_only_transaction_for_hand_off() -> None:

@@ -218,6 +218,15 @@ class WriteWindowSpec:
             raise ValueError(f"{self.test_file}: queries must be {expected}, got {legs}")
 
 
+def _strip_line_comments(sql: str) -> str:
+    """Drop ``--`` line comments. A ``--`` inside a quoted literal is not a comment
+    (codex r1-4): the alternation consumes literals first, so the comment branch never
+    sees their contents."""
+    return re.sub(
+        r"'[^']*'|--[^\n]*", lambda m: m.group(0) if m.group(0).startswith("'") else "", sql
+    )
+
+
 def census_sql(spec: WriteWindowSpec) -> str:
     """Render a spec as a copy-pasteable read-only script, for review and hand-off.
 
@@ -235,7 +244,7 @@ def census_sql(spec: WriteWindowSpec) -> str:
         lines.append(f"--   params: {dict(q.params)!r}")
         # The arrival census embeds the ETL's CTE, which carries ``--`` comments; on one
         # line the first of them would comment out the rest of the statement.
-        lines.append(" ".join(re.sub(r"--[^\n]*", "", q.sql).split()) + ";")
+        lines.append(" ".join(_strip_line_comments(q.sql).split()) + ";")
     lines.append("ROLLBACK;")
     return "\n".join(lines)
 
@@ -445,11 +454,35 @@ def territory_rollup_spec(
 def _selected_metric_dates_subquery(metric_dates_cte: str) -> str:
     """The dates an ARRIVAL run would rebuild, as a parenthesised subquery over the run's
     own ``metric_dates`` CTE (``WITH`` is legal inside a subquery in PostgreSQL)."""
+    # The parameter is raw SQL (codex r1-5), so its shape is checked here rather than left
+    # to Postgres inside the live half: exactly one CTE named metric_dates, whose body is
+    # one parenthesised block, no second statement, and every run param it must bind.
     if not re.search(r"^\s*metric_dates\s+AS\s*\(", metric_dates_cte):
         raise ValueError(
             "territory arrival census: the CTE must define 'metric_dates AS (...)' -- pass "
             "territory_metrics_etl._TERRITORY_METRIC_DATES_BY_ARRIVAL"
         )
+    # Checked on the SQL proper: the ETL's constant carries a ';' and parentheses inside
+    # its comments, and a check that read them refused the real constant.
+    body = _strip_line_comments(metric_dates_cte).strip()
+    if ";" in body:
+        raise ValueError("territory arrival census: the CTE must not contain a semicolon")
+    depth = 0
+    close_at = -1
+    for i, ch in enumerate(body):
+        depth += ch == "("
+        depth -= ch == ")"
+        if depth == 0 and ch == ")":
+            close_at = i
+            break
+    if close_at != len(body) - 1:
+        raise ValueError(
+            "territory arrival census: the CTE must be a single CTE 'metric_dates AS ( ... )' "
+            "with nothing after its closing parenthesis"
+        )
+    for name in ("start_date", "end_date", "per_hcp_metric_type"):
+        if f"%({name})s" not in metric_dates_cte:
+            raise ValueError(f"territory arrival census: the CTE must bind %({name})s")
     return f"(WITH {metric_dates_cte}\nSELECT md.metric_date FROM metric_dates md)"
 
 
@@ -507,9 +540,25 @@ def territory_arrival_spec(
     2. **Key space** is waived, as for a window-sweeping teardown: the file deletes
        ``territory_metrics`` for every selected date (recorded via
        :func:`selected_metric_dates_sql`), so the cross join's foreign rows do not
-       survive.
+       survive. The run's reads of ``hcp_profiles`` (the ``territories`` CTE, and
+       ``covered_lives`` from every real territory's ``total_patient_volume``) are
+       this hazard, not leg 1's: they produce a row per real territory whose values are
+       the profile table's, and that row is what the per-date teardown removes. This is
+       the same pairing, and the same measured decision, as
+       ``territory_rollup_spec(teardown_deletes_window=True)`` (codex r1-1 on #2213
+       asked for leg 1 to count them; the guard's rule is "foreign rows must not
+       SURVIVE", and scoping the ETL itself to planted territories would change
+       production SQL).
     3. **Teardown reach** counts the foreign ``territory_metrics`` rows already on the
        selected dates -- the rows that per-date DELETE would destroy.
+
+    The census, the recording of the selected set and the run are separate
+    transactions (codex r1-2). What closes the gap between them is the caller's
+    protocol, not this spec: pin the recorded set BEFORE recording it (a foreign date
+    cannot be recorded and swept), and re-read the selection AFTER the run (a date that
+    appeared in between is reported by a failing assertion, not swept). A writer landing
+    2019-dated rows inside that gap is the file's standing premise, measured: the
+    earliest live ``triggers.created_at`` is 2026-06-10.
     """
     selected = _selected_metric_dates_subquery(metric_dates_cte)
     in_lookback = (
