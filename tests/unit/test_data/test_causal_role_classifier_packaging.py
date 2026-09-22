@@ -25,7 +25,7 @@ from pathlib import Path
 from src.data.causal_role_classifier_loader import DEFAULT_ARTIFACT_PATH, PROJECT_ROOT
 from tests.unit.test_docker.dockerignore_semantics import dockerignore_excludes, matches
 from tests.unit.test_docker.test_deploy_trigger_covers_image_inputs_1783 import (
-    _image_input_paths,
+    _parse_stages,
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -78,20 +78,49 @@ def test_matcher_models_docker_root_only_semantics_for_slashless_patterns() -> N
     assert matches("**/*.json", "root.json")
 
 
+def _own_copy_sources(dockerfile_text: str, stage_name: str) -> set[str]:
+    """Repo paths COPYed DIRECTLY in `stage_name` — its own COPY lines only, never its
+    reachable-stage CLOSURE.
+
+    The closure (the #1783 guard's `_image_input_paths`) is the right question for "does
+    a change here need a deploy trigger", because `production`'s `COPY --from=dependencies
+    /app/.venv /app/.venv` means dependencies' inputs (requirements.lock, patches/) do
+    feed what ends up in the image, indirectly, via the venv build. It is the WRONG
+    question for "does THIS repo path land in THIS stage's filesystem": that same
+    `COPY --from=dependencies` only pulls the one container path `/app/.venv`, not
+    dependencies' whole tree — so a file COPYed only into `dependencies` never reaches
+    `/app/artifacts/...` in production, even though the closure check would score it as
+    covered. Mirrors `_image_input_paths`'s own normalisation (a `./` prefix stripped,
+    `COPY --from=` sources skipped) but scoped to one stage's own `_Stage.copies`.
+    """
+    stages = _parse_stages(dockerfile_text)
+    assert stage_name in stages, f"no `AS {stage_name}` stage found; parsed={sorted(stages)}"
+    sources: set[str] = set()
+    for cp in stages[stage_name].copies:
+        if cp.from_stage is not None:
+            continue
+        for src in cp.sources:
+            sources.add(src[2:] if src.startswith("./") else src)
+    return sources
+
+
 def test_dockerfile_copies_the_artifact_into_every_app_stage() -> None:
-    """Both `development` and `production` are separate FROMs; each needs a COPY that is
-    an image input of ITS OWN reachable stage closure — not merely >=2 COPY lines
-    anywhere in the file, which a planted-failure review proved passes even when both
-    lines sit in the same stage (see the PR description for the planted-failure output).
-    Reuses the #1783 guard's stage-closure parser rather than a second, weaker one."""
+    """Both `development` and `production` are separate FROMs; each needs the artifact in
+    its OWN COPY sources — not merely >=2 COPY lines anywhere in the file (a
+    planted-failure review proved that proxy passes even when both lines sit in the same
+    stage), and not the reachable-stage CLOSURE either (a second planted-failure review
+    proved THAT proxy passes when both lines sit only in the upstream `dependencies`
+    stage, which production's `COPY --from=dependencies /app/.venv` would never actually
+    pull in). See the PR description for both planted-failure outputs."""
     text = _DOCKERFILE.read_text()
     for stage in ("production", "development"):
-        inputs = _image_input_paths(text, root=stage)
-        assert _ARTIFACT_REL in inputs, (
-            f"{_ARTIFACT_REL} is not an image input reachable from the {stage!r} stage "
-            f"(found: {sorted(inputs)}); it must be COPYed directly in that stage (or a "
-            "stage its closure pulls the file from), not merely somewhere else in the "
-            "Dockerfile."
+        own = _own_copy_sources(text, stage)
+        assert _ARTIFACT_REL in own, (
+            f"{_ARTIFACT_REL} is not COPYed directly in the {stage!r} stage itself "
+            f"(found: {sorted(own)}); a COPY in an upstream stage such as `dependencies` "
+            "does not count — production only pulls the specific container path "
+            "/app/.venv from dependencies via `COPY --from=dependencies`, not its whole "
+            "filesystem, so the artifact would never reach /app/artifacts/… that way."
         )
 
 
