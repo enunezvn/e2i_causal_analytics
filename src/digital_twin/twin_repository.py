@@ -1042,6 +1042,57 @@ class TwinRepository:
             twin_type, brand
         )
 
+    async def refresh_model_fidelity_from_comparisons(
+        self, model_id: UUID
+    ) -> Optional[Dict[str, Any]]:
+        """Set the model's fidelity to the mean of its simulations' A/B comparisons (#2206).
+
+        ``ab_fidelity_comparisons`` is what the post-experiment producer writes; the
+        model columns (``digital_twin_models.fidelity_score`` / ``fidelity_sample_count``)
+        are what the resolver orders by and the engine's gate reads. Nothing wrote
+        those columns before this (``update_fidelity_score`` had no caller). A
+        comparison without a score is not a sample. Returns the written values, or
+        ``None`` when there is nothing to write. Manual ``/digital-twin/validate``
+        records (``twin_fidelity_tracking``) are not folded in — that operator flow
+        is a separate, still-open decision.
+        """
+        client = self.models.client
+        if not client:
+            return None
+        sims = await (
+            client.table("twin_simulations")
+            .select("simulation_id")
+            .eq("model_id", str(model_id))
+            .execute()
+        )
+        sim_ids = [str(r["simulation_id"]) for r in (sims.data or []) if r.get("simulation_id")]
+        if not sim_ids:
+            return None
+        comps = await (
+            client.table("ab_fidelity_comparisons")
+            .select("fidelity_score")
+            .in_("twin_simulation_id", sim_ids)
+            .execute()
+        )
+        scores = [
+            float(c["fidelity_score"])
+            for c in (comps.data or [])
+            if c.get("fidelity_score") is not None
+        ]
+        if not scores:
+            return None
+        fidelity_score = float(sum(scores) / len(scores))
+        written = await self.models.update_fidelity_score(
+            model_id, fidelity_score=fidelity_score, sample_count=len(scores)
+        )
+        if not written:
+            return None
+        return {
+            "model_id": str(model_id),
+            "fidelity_score": fidelity_score,
+            "sample_count": len(scores),
+        }
+
     async def save_simulation(self, result: SimulationResult, brand: str) -> UUID:
         """Save simulation result."""
         return await self.simulations.save_simulation(  # type: ignore[no-any-return]

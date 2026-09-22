@@ -310,6 +310,23 @@ class TestSimulateIntervention:
         assert "fidelity_warning" in result
         assert isinstance(result["fidelity_warning"], bool)
 
+    def test_fidelity_status_is_explicit(self, tool_module):
+        """#2206: the chat tool states the model's fidelity status, so a NULL model
+        fidelity reads as 'unvalidated' in the designer's output, not as passed."""
+        simulate_intervention = tool_module.simulate_intervention
+        result = simulate_intervention.invoke(
+            {
+                "intervention_type": "sample_distribution",
+                "brand": "Fabhalta",
+            }
+        )
+
+        assert "fidelity_status" in result
+        if result["simulation_id"] != "error":
+            assert result["fidelity_status"] in {"unvalidated", "validated", "below_threshold"}
+            if result["fidelity_status"] == "unvalidated":
+                assert result["fidelity_warning"] is True
+
 
 @pytest.mark.xdist_group(name="experiment_designer_tools")
 class TestSimulateInterventionFailsClosed:

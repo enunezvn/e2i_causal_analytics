@@ -45,6 +45,7 @@ from .models.simulation_models import (
     SimulationResult,
     SimulationStatus,
     SubgroupAxisProvenance,
+    classify_fidelity,
 )
 from .models.twin_models import DigitalTwin, TwinPopulation
 
@@ -287,15 +288,12 @@ class SimulationEngine:
             rationale = f"{rationale} {size_note}"
         recommendation = SimulationRecommendation(rec.value)
 
-        # Check fidelity warnings
-        fidelity_warning = False
-        fidelity_warning_reason = None
-        if self.model_fidelity_score and self.model_fidelity_score < 0.7:
-            fidelity_warning = True
-            fidelity_warning_reason = (
-                f"Model fidelity ({self.model_fidelity_score:.2f}) "
-                "below threshold (0.70). Results may be unreliable."
-            )
+        # Fidelity gate (#2206): one rule, three explicit states. A NULL model score
+        # (no experiment outcome ever compared against the model) is UNVALIDATED and
+        # warns — the old ``if score and score < 0.7`` let NULL (and a real 0.0) pass.
+        fidelity_status, fidelity_warning, fidelity_warning_reason = classify_fidelity(
+            self.model_fidelity_score
+        )
 
         # Confidence follows the estimate's own evidence, not the twin count as such
         # (#2104; see CONFIDENCE_N_SATURATION for what each path's evidence is).
@@ -327,6 +325,7 @@ class SimulationEngine:
             fidelity_warning=fidelity_warning,
             fidelity_warning_reason=fidelity_warning_reason,
             model_fidelity_score=self.model_fidelity_score,
+            fidelity_status=fidelity_status,
             data_provenance=estimate.data_provenance,
             status=SimulationStatus.COMPLETED,
             execution_time_ms=execution_time_ms,
@@ -506,8 +505,10 @@ class SimulationEngine:
         # 2. Precision (lower std error = better)
         precision_score = max(0, 1 - std_error / (abs(ate) + 0.001))
 
-        # 3. Model fidelity
-        fidelity_score = self.model_fidelity_score or 0.7
+        # 3. Model fidelity. An UNVALIDATED model (NULL score) is blended in at the
+        #    0.7 threshold as a prior — the gate above already flags it explicitly
+        #    (#2206); the blend is unchanged so stored confidences stay comparable.
+        fidelity_score = 0.7 if self.model_fidelity_score is None else self.model_fidelity_score
 
         # Weighted average
         confidence = 0.3 * size_score + 0.3 * precision_score + 0.4 * fidelity_score
@@ -528,10 +529,17 @@ class SimulationEngine:
         ``error_cause`` / ``error_details`` are the effect engine's cause and counts, when it
         named one; ``error_message`` is unchanged by them.
         """
+        fidelity_status, fidelity_warning, fidelity_warning_reason = classify_fidelity(
+            self.model_fidelity_score
+        )
         return SimulationResult(
             model_id=self.model_id or uuid4(),
             intervention_config=config,
             population_filters=filters,
+            fidelity_status=fidelity_status,
+            fidelity_warning=fidelity_warning,
+            fidelity_warning_reason=fidelity_warning_reason,
+            model_fidelity_score=self.model_fidelity_score,
             twin_count=0,
             simulated_ate=0.0,
             simulated_ci_lower=0.0,

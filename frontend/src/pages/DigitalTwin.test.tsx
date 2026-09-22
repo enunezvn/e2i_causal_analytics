@@ -22,8 +22,10 @@ import {
   RecommendationType,
   Recommendation,
   SimulationStatus,
+  FidelityStatus,
   type SimulationResponse,
   type SimulationDetailResponse,
+  type TwinModelSummary,
 } from '@/types/digital-twin';
 import type { components } from '@/types/generated/api';
 
@@ -34,6 +36,7 @@ vi.mock('@/hooks/api/use-digital-twin', () => ({
   useRunSimulation: vi.fn(),
   useSimulation: vi.fn(),
   useInterventionTypes: vi.fn(),
+  useTwinModels: vi.fn(),
 }));
 
 // Strategic Interpretation hook (barrel import in the page).
@@ -47,6 +50,7 @@ import {
   useRunSimulation,
   useSimulation,
   useInterventionTypes,
+  useTwinModels,
 } from '@/hooks/api/use-digital-twin';
 import { useDigitalTwinInsight } from '@/hooks/api';
 
@@ -123,6 +127,7 @@ const mockRunResult: SimulationResponse = {
   simulation_confidence: 0.83,
   fidelity_warning: false,
   model_fidelity_score: 0.79,
+  fidelity_status: FidelityStatus.VALIDATED,
   status: SimulationStatus.COMPLETED,
   execution_time_ms: 1840,
   is_significant: true,
@@ -159,6 +164,37 @@ const mockDetail: SimulationDetailResponse = {
   intervention_config: {},
   subgroups_basis: 'per_twin',
   completed_at: '2026-06-04T10:05:00Z',
+};
+
+// The real /digital-twin/models rows as prod holds them (#2206): three brand
+// labels over ONE seed-0 synthetic fit — identical fingerprint, brand not a
+// feature, R² scored on the synthetic target, fidelity never measured.
+function sharedFitModel(brand: string, over: Partial<TwinModelSummary> = {}): TwinModelSummary {
+  return {
+    model_id: `model-${brand}`,
+    model_name: `hcp_twin_${brand}`,
+    twin_type: 'hcp',
+    brand,
+    algorithm: 'random_forest',
+    r2_score: 0.8104269688784731,
+    training_samples: 2000,
+    is_active: true,
+    created_at: '2026-06-16T00:00:00Z',
+    fidelity_status: FidelityStatus.UNVALIDATED,
+    fidelity_score: null,
+    fidelity_sample_count: 0,
+    data_provenance: 'synthetic',
+    r2_score_basis: 'synthetic_target',
+    brand_is_feature: false,
+    training_fingerprint: 'a1b2c3d4e5f60718',
+    shared_fit_model_count: 3,
+    shared_fit_with: ['Remibrutinib', 'Fabhalta', 'Kisqali'].filter((b) => b !== brand),
+    ...over,
+  };
+}
+const mockModels = {
+  total_count: 3,
+  models: [sharedFitModel('Remibrutinib'), sharedFitModel('Fabhalta'), sharedFitModel('Kisqali')],
 };
 
 // Canonical intervention catalog (mirrors backend INTERVENTION_CATALOG) for
@@ -230,6 +266,10 @@ describe('DigitalTwin', () => {
       data: mockHistory,
       isLoading: false,
       isFetching: false,
+    });
+    (useTwinModels as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: mockModels,
+      isLoading: false,
     });
     (useRunSimulation as ReturnType<typeof vi.fn>).mockReturnValue({
       mutate: mockMutate,
@@ -967,6 +1007,85 @@ describe('DigitalTwin', () => {
     render(<DigitalTwin />, { wrapper: createWrapper() });
 
     expect(screen.queryByText('Specialty Effects')).not.toBeInTheDocument();
+  });
+
+  // ---------------------------------------------------------------------------
+  // #2206 — honest model surfacing: one shared synthetic fit, unvalidated fidelity
+  // ---------------------------------------------------------------------------
+
+  it('states that the brand models are one shared synthetic fit and unvalidated (#2206)', () => {
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+    expect(
+      screen.getByText('3 brand labels over 1 shared synthetic fit · unvalidated')
+    ).toBeInTheDocument();
+    const card = screen.getByText('Models Available').closest('[title]');
+    expect(card?.getAttribute('title')).toMatch(/Brand is routing metadata/);
+    expect(card?.getAttribute('title')).toMatch(/self-generated target/);
+  });
+
+  it('does not call distinct fits shared (#2206)', () => {
+    (useTwinModels as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        total_count: 2,
+        models: [
+          sharedFitModel('Remibrutinib', { shared_fit_model_count: 1, shared_fit_with: [] }),
+          sharedFitModel('Kisqali', {
+            training_fingerprint: 'ffff000011112222',
+            shared_fit_model_count: 1,
+            shared_fit_with: [],
+            r2_score_basis: 'rwd_target',
+            fidelity_status: FidelityStatus.VALIDATED,
+            fidelity_score: 0.9,
+            fidelity_sample_count: 3,
+          }),
+        ],
+      },
+      isLoading: false,
+    });
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+    expect(screen.getByText('2 brand labels over 2 fits · 1/2 validated')).toBeInTheDocument();
+    expect(screen.queryByText(/shared synthetic fit/)).not.toBeInTheDocument();
+  });
+
+  it('reports an unvalidated model fidelity explicitly, never as a blank pass (#2206)', () => {
+    (useRunSimulation as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      isPending: false,
+      data: {
+        ...mockRunResult,
+        model_fidelity_score: undefined,
+        fidelity_status: FidelityStatus.UNVALIDATED,
+        fidelity_warning: true,
+        fidelity_warning_reason:
+          'Model fidelity is unvalidated: no experiment outcome has been compared against this model yet (fidelity_score is NULL), so its prediction accuracy is unknown. Interpret with caution.',
+      },
+      isSuccess: true,
+      isError: false,
+    });
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+    // Stat card value AND the results-panel status line both say the state, not a dash.
+    expect(screen.getAllByText('Unvalidated')).toHaveLength(2);
+    expect(
+      screen.getByText('No experiment outcome compared against this model yet')
+    ).toBeInTheDocument();
+    // Results panel: explicit status line + the backend's reason in the warning box.
+    expect(screen.getByTestId('fidelity-status')).toHaveTextContent('Status: Unvalidated');
+    expect(screen.getByText(/Model fidelity is unvalidated/)).toBeInTheDocument();
+    expect(screen.queryByText('79%')).not.toBeInTheDocument();
+  });
+
+  it('shows the gauge and a Validated status for a measured model (#2206)', () => {
+    (useRunSimulation as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      isPending: false,
+      data: mockRunResult,
+      isSuccess: true,
+      isError: false,
+    });
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+    expect(screen.getByTestId('fidelity-status')).toHaveTextContent('Status: Validated');
+    expect(screen.getAllByText('79%').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Unvalidated')).not.toBeInTheDocument();
   });
 
   it('shows a SYNTHETIC badge when the result data_provenance is synthetic', () => {

@@ -38,6 +38,57 @@ class EstimateScope(str, Enum):
     UNKNOWN = "unknown"  # A stored row written before the scope was recorded (migration 042)
 
 
+class FidelityStatus(str, Enum):
+    """Whether a model's fidelity has ever been measured, and how it reads (#2206).
+
+    UNVALIDATED: ``digital_twin_models.fidelity_score`` is NULL — no experiment outcome
+    has ever been compared against this model. A NULL must not read as "passed".
+    BELOW_THRESHOLD: measured, and below ``FIDELITY_WARNING_THRESHOLD``.
+    VALIDATED: measured, at or above the threshold.
+    """
+
+    UNVALIDATED = "unvalidated"
+    BELOW_THRESHOLD = "below_threshold"
+    VALIDATED = "validated"
+
+
+# The engine's fidelity gate: a measured score below this warns.
+FIDELITY_WARNING_THRESHOLD = 0.7
+
+
+def classify_fidelity(
+    model_fidelity_score: Optional[float],
+    *,
+    threshold: float = FIDELITY_WARNING_THRESHOLD,
+) -> tuple["FidelityStatus", bool, Optional[str]]:
+    """The one rule every surface derives its fidelity state from (#2206).
+
+    Returns ``(status, fidelity_warning, fidelity_warning_reason)``. The previous gate
+    was ``if score and score < 0.7`` — a NULL score (never validated) AND a real 0.0
+    both fell through as "no warning". Here a NULL is UNVALIDATED and warns, and a
+    0.0 is a measured score below threshold.
+    """
+    if model_fidelity_score is None:
+        return (
+            FidelityStatus.UNVALIDATED,
+            True,
+            (
+                "Model fidelity is unvalidated: no experiment outcome has been compared "
+                "against this model yet (fidelity_score is NULL), so its prediction "
+                "accuracy is unknown. Interpret with caution."
+            ),
+        )
+    score = float(model_fidelity_score)
+    if score < threshold:
+        return (
+            FidelityStatus.BELOW_THRESHOLD,
+            True,
+            f"Model fidelity ({score:.2f}) below threshold ({threshold:.2f}). "
+            "Results may be unreliable.",
+        )
+    return FidelityStatus.VALIDATED, False, None
+
+
 class FidelityGrade(str, Enum):
     """Grade assessing twin prediction accuracy."""
 
@@ -218,6 +269,8 @@ class SimulationResult(BaseModel):
     fidelity_warning: bool = False
     fidelity_warning_reason: Optional[str] = None
     model_fidelity_score: Optional[float] = None
+    # Explicit fidelity state (#2206): a NULL model score is UNVALIDATED, never "passed".
+    fidelity_status: FidelityStatus = FidelityStatus.UNVALIDATED
 
     # Provenance of the effect estimate (e.g. "synthetic_uplift_v1", "rwd_uplift").
     # None for error/legacy results. Surfaces whether the ATE came from real or
@@ -307,6 +360,7 @@ class SimulationResult(BaseModel):
             "recommended_sample_size": self.recommended_sample_size,
             "simulation_confidence": round(self.simulation_confidence, 3),
             "fidelity_warning": self.fidelity_warning,
+            "fidelity_status": self.fidelity_status.value,
             "execution_time_ms": self.execution_time_ms,
             "is_significant": self.is_significant(),
             "effect_direction": self.effect_direction(),

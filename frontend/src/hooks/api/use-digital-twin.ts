@@ -25,6 +25,7 @@ import {
   getSimulationHistory,
   getDigitalTwinHealth,
   listInterventionTypes,
+  listModels,
 } from '@/api/digital-twin';
 import type {
   SimulateRequest,
@@ -35,6 +36,7 @@ import type {
   SimulationHistoryResponse,
   DigitalTwinHealthResponse,
   InterventionTypesResponse,
+  ModelListResponse,
 } from '@/types/digital-twin';
 import type { ApiError } from '@/lib/api-client';
 
@@ -124,6 +126,29 @@ export function useDigitalTwinHealth(
     queryFn: getDigitalTwinHealth,
     staleTime: 30 * 1000, // 30 seconds
     refetchInterval: 60 * 1000, // Refetch every minute
+    ...options,
+  });
+}
+
+/**
+ * Hook to fetch the trained twin models with their honesty fields (#2206):
+ * fidelity status (a NULL score is `unvalidated`, not a pass), what the R² was
+ * scored against, and whether the brand rows are one shared fit.
+ *
+ * @example
+ * ```tsx
+ * const { data } = useTwinModels();
+ * const shared = data?.models.filter((m) => m.shared_fit_model_count > 1) ?? [];
+ * ```
+ */
+export function useTwinModels(
+  params?: { brand?: string; twin_type?: string },
+  options?: Omit<UseQueryOptions<ModelListResponse, ApiError>, 'queryKey' | 'queryFn'>
+) {
+  return useQuery<ModelListResponse, ApiError>({
+    queryKey: queryKeys.digitalTwin.models(params),
+    queryFn: () => listModels(params),
+    staleTime: 5 * 60 * 1000, // models change only on (re)training
     ...options,
   });
 }

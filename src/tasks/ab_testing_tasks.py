@@ -309,6 +309,15 @@ def scheduled_interim_analysis(
             )
             duration_ms = int((time.time() - start_time) * 1000)
 
+            # A stopping decision is the product moment that makes an analysis
+            # FINAL. compute_experiment_results(final) — the fidelity loop's root
+            # producer — had no producer at all (no beat entry, no send_task), so
+            # the whole post-experiment fidelity chain was dark (#2206). Enqueue
+            # it once per experiment: skip when a final result row already exists.
+            final_enqueued = await _enqueue_final_analysis_on_stop(
+                exp_uuid, interim_result.decision
+            )
+
             return {
                 "status": "completed",
                 "experiment_id": experiment_id,
@@ -317,6 +326,7 @@ def scheduled_interim_analysis(
                 "effect_estimate": interim_result.effect_estimate,
                 "p_value": interim_result.p_value,
                 "decision": interim_result.decision.value,
+                "final_analysis_enqueued": final_enqueued,
                 "n_control": int(len(control_data)),
                 "n_treatment": int(len(treatment_data)),
                 "duration_ms": duration_ms,
@@ -665,6 +675,41 @@ async def _send_srm_alerts(srm_issues: List[Dict], config: Dict) -> None:
         logger.info("Would send SRM Slack alert")
 
 
+# Decisions that end enrollment: the sequential test says the experiment is over.
+_STOPPING_DECISIONS = frozenset({"stop_efficacy", "stop_futility", "stop_safety"})
+
+
+async def _enqueue_final_analysis_on_stop(experiment_id: UUID, decision: Any) -> bool:
+    """Producer for ``compute_experiment_results(final)`` (#2206).
+
+    Fires only on a stopping decision and only when no FINAL result row exists yet
+    (idempotent across the daily sweep). Best-effort: a broker failure must not
+    fail the interim analysis that produced the decision.
+    """
+    value = getattr(decision, "value", decision)
+    if value not in _STOPPING_DECISIONS:
+        return False
+    from src.repositories.ab_results import ABResultsRepository
+
+    existing = await ABResultsRepository().get_results(experiment_id, analysis_type="final")
+    if existing:
+        return False
+    try:
+        celery_app.send_task(
+            "src.tasks.compute_experiment_results",
+            args=[str(experiment_id), "final"],
+        )
+    except Exception as enqueue_err:
+        logger.warning(
+            "Could not enqueue final analysis for %s after %s: %s",
+            experiment_id,
+            value,
+            enqueue_err,
+        )
+        return False
+    return True
+
+
 @celery_app.task(bind=True, name="src.tasks.compute_experiment_results")
 def compute_experiment_results(
     self,
@@ -700,10 +745,13 @@ def compute_experiment_results(
             if analysis_type != "final":
                 return
             try:
+                # No explicit queue: the routing table sends it to `analytics`
+                # (consumed by worker_medium). The old queue="twins" override
+                # pinned it to a queue only the replicas-0 worker_heavy consumes,
+                # so the enqueued task never ran (#2206).
                 celery_app.send_task(
                     "src.tasks.fidelity_tracking_update",
                     args=[experiment_id],
-                    queue="twins",
                 )
             except Exception as enqueue_err:
                 logger.warning(
@@ -816,6 +864,31 @@ def compute_experiment_results(
     return cast(Dict[str, Any], run_async(execute_computation()))
 
 
+async def _roll_up_model_fidelity(twin_simulation_id: UUID) -> Optional[Dict[str, Any]]:
+    """Refresh the model behind ``twin_simulation_id`` from its A/B comparisons (#2206).
+
+    Returns the written ``{model_id, fidelity_score, sample_count}``, or ``None`` when
+    the simulation/model could not be resolved or no comparison carries a score. A
+    failure here is logged, never raised: the comparison itself is already persisted.
+    """
+    try:
+        from src.digital_twin.twin_repository import TwinRepository
+        from src.memory.services.factories import get_async_supabase_client
+
+        repo = TwinRepository(supabase_client=await get_async_supabase_client())
+        sim = await repo.get_simulation(twin_simulation_id)
+        model_id = (sim or {}).get("model_id")
+        if not model_id:
+            logger.warning(
+                "No model behind twin simulation %s; fidelity not rolled up", twin_simulation_id
+            )
+            return None
+        return await repo.refresh_model_fidelity_from_comparisons(UUID(str(model_id)))
+    except Exception as exc:
+        logger.error("Model fidelity roll-up failed for simulation %s: %s", twin_simulation_id, exc)
+        return None
+
+
 @celery_app.task(bind=True, name="src.tasks.fidelity_tracking_update")
 def fidelity_tracking_update(
     self,
@@ -882,6 +955,12 @@ def fidelity_tracking_update(
                     f"prediction error = {comparison.prediction_error:.2%}"
                 )
 
+            # Close the loop (#2206): the comparison row alone never changed
+            # digital_twin_models.fidelity_score (update_fidelity_score had no
+            # caller), so the engine's gate read NULL forever. Refresh the model's
+            # score from every comparison of that model's simulations.
+            model_fidelity = await _roll_up_model_fidelity(comparison.twin_simulation_id)
+
             duration_ms = int((time.time() - start_time) * 1000)
 
             return {
@@ -897,6 +976,7 @@ def fidelity_tracking_update(
                 "fidelity_score": comparison.fidelity_score,
                 "calibration_needed": calibration_needed,
                 "calibration_adjustment": comparison.calibration_adjustment,
+                "model_fidelity": model_fidelity,
                 "duration_ms": duration_ms,
             }
 

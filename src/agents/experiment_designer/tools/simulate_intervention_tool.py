@@ -110,6 +110,9 @@ class SimulateInterventionOutput(BaseModel):
     simulation_confidence: float
     fidelity_warning: bool
     fidelity_warning_reason: Optional[str]
+    # 'unvalidated' | 'below_threshold' | 'validated' (#2206); None only when no
+    # model was simulated at all (the unavailable output).
+    fidelity_status: Optional[str]
 
     # Top performing segments
     top_segments: list[Dict[str, Any]]
@@ -121,6 +124,13 @@ class SimulateInterventionOutput(BaseModel):
 
 # Module-level cache for twin populations
 _twin_cache: Dict[str, Any] = {}
+# The resolved model's measured fidelity per population cache key (#2206). Absent
+# (e.g. the loader was replaced in a test) reads as None → 'unvalidated', never as a pass.
+_model_fidelity_cache: Dict[str, Optional[float]] = {}
+
+
+def _model_fidelity_for(twin_type: "TwinType", brand: "Brand", n: int) -> Optional[float]:
+    return _model_fidelity_cache.get(f"{twin_type.value}_{brand.value}_{n}")
 
 
 def _get_or_create_twins(
@@ -163,10 +173,12 @@ def _get_or_create_twins(
             raise RuntimeError(
                 f"Trained twin model for {brand.value}/{twin_type.value} could not be loaded."
             )
-        return generator.generate(n=n)
+        score = row.get("fidelity_score")
+        return generator.generate(n=n), (None if score is None else float(score))
 
-    population = asyncio.run(_resolve_and_hydrate())
+    population, model_fidelity = asyncio.run(_resolve_and_hydrate())
     _twin_cache[cache_key] = population
+    _model_fidelity_cache[cache_key] = model_fidelity
     return population
 
 
@@ -293,6 +305,9 @@ def simulate_intervention(
             confidence_threshold=0.70,
             effect_provider=cohort_provider,
             effect_estimator=CohortCausalEstimator(target_regions=target_regions or []),
+            # The resolved model's measured fidelity; NULL → the result states
+            # 'unvalidated' explicitly instead of passing the gate (#2206).
+            model_fidelity_score=_model_fidelity_for(twin_type, brand_enum, twin_count),
         )
 
         result = engine.simulate(
@@ -337,6 +352,7 @@ def _unavailable_output(*, rationale: str, reason: str, duration_weeks: int) -> 
         "simulation_confidence": 0.0,
         "fidelity_warning": True,
         "fidelity_warning_reason": reason,
+        "fidelity_status": None,  # no model was simulated (#2206)
         "top_segments": [],
     }
 
@@ -357,6 +373,7 @@ def _format_output(result: SimulationResult) -> Dict[str, Any]:
         "simulation_confidence": round(result.simulation_confidence, 3),
         "fidelity_warning": result.fidelity_warning,
         "fidelity_warning_reason": result.fidelity_warning_reason,
+        "fidelity_status": result.fidelity_status.value,
         "top_segments": result.effect_heterogeneity.get_top_segments(5),
     }
 

@@ -26,6 +26,8 @@ Version: 4.2.0
 """
 
 import asyncio
+import hashlib
+import json
 import logging
 from datetime import datetime, timezone
 from enum import Enum
@@ -228,6 +230,160 @@ def _round4(value: Optional[float]) -> Optional[float]:
     return None if value is None else round(float(value), 4)
 
 
+# ---------------------------------------------------------------------------
+# #2206 — honest model surfacing. Every statement below is DERIVED from the rows
+# (fit fingerprints, feature columns, provenance, fidelity columns), never hardcoded.
+# ---------------------------------------------------------------------------
+
+# Wall-clock is not part of the fit: two runs of one deterministic training
+# (same frame, seed, config, features) differ only here.
+_FIT_FINGERPRINT_EXCLUDED_METRICS = frozenset({"training_duration_seconds"})
+
+
+def _fit_fingerprint(row: Dict[str, Any]) -> str:
+    """A content hash of what defines the fit: config, features, target, metrics.
+
+    Two models with the same fingerprint are the same fit under different labels
+    (prod: three brand rows, one seed-0 synthetic frame, identical R²/CV/importances).
+    """
+    pm = dict(row.get("performance_metrics") or {})
+    for key in _FIT_FINGERPRINT_EXCLUDED_METRICS:
+        pm.pop(key, None)
+    payload = {
+        "training_config": row.get("training_config") or {},
+        "feature_columns": list(row.get("feature_columns") or []),
+        "target_columns": list(row.get("target_columns") or []),
+        "performance_metrics": pm,
+    }
+    canonical = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def _model_fidelity_state(
+    row: Dict[str, Any],
+) -> "tuple[FidelityStatusEnum, Optional[float], int]":
+    """(status, fidelity_score, fidelity_sample_count) from the model row's columns.
+
+    Defined ahead of the enum classes below; the annotation is a forward reference.
+    """
+    from src.digital_twin.models.simulation_models import classify_fidelity
+
+    score = row.get("fidelity_score")
+    score_f = None if score is None else float(score)
+    status, _warn, _reason = classify_fidelity(score_f)
+    return FidelityStatusEnum(status.value), score_f, int(row.get("fidelity_sample_count") or 0)
+
+
+def _stored_fidelity_fields(model_row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Fidelity fields for a STORED simulation, derived from its model row now (#2206).
+
+    twin_simulations persists only the gate's verdict of its time — and that gate
+    let a NULL score pass as ``fidelity_warning=False``. Reading the model row
+    through the same rule the engine now uses keeps the stored history honest:
+    an unvalidated model warns, a validated one does not.
+    """
+    from src.digital_twin.models.simulation_models import classify_fidelity
+
+    score = (model_row or {}).get("fidelity_score")
+    score_f = None if score is None else float(score)
+    status, warning, reason = classify_fidelity(score_f)
+    return {
+        "fidelity_status": FidelityStatusEnum(status.value),
+        "model_fidelity_score": score_f,
+        "fidelity_warning": warning,
+        "fidelity_warning_reason": reason,
+    }
+
+
+def _r2_score_basis(data_provenance: Optional[str]) -> "R2ScoreBasisEnum":
+    if not data_provenance:
+        return R2ScoreBasisEnum.UNKNOWN
+    prov = str(data_provenance).lower()
+    if prov.startswith("synthetic"):
+        return R2ScoreBasisEnum.SYNTHETIC_TARGET
+    if prov.startswith("rwd"):
+        return R2ScoreBasisEnum.RWD_TARGET
+    return R2ScoreBasisEnum.UNKNOWN
+
+
+def _model_honesty_fields(
+    row: Dict[str, Any],
+    census: List[Dict[str, Any]],
+    user: Dict[str, Any],
+) -> Dict[str, Any]:
+    """The #2206 fields for one model row, given the census of ALL active rows of
+    its twin_type. ``shared_fit_model_count`` is the data-derived fact; the other
+    brands' names are given only when the caller may read those brands (H11)."""
+    tc = row.get("training_config") or {}
+    provenance = tc.get("data_provenance", row.get("data_provenance"))
+    fingerprint = _fit_fingerprint(row)
+    same_fit = [
+        r
+        for r in census
+        if _fit_fingerprint(r) == fingerprint
+        and str(r.get("twin_type", "")) == str(row.get("twin_type", ""))
+    ]
+    others = sorted(
+        {
+            str(r.get("brand"))
+            for r in same_fit
+            if str(r.get("model_id")) != str(row.get("model_id")) and r.get("brand")
+        }
+    )
+    visible_others = [b for b in others if resolve_brand_for_read(user, b)[0]]
+    status, score, n = _model_fidelity_state(row)
+    features = [str(c) for c in (row.get("feature_columns") or [])]
+    return {
+        "fidelity_status": status,
+        "fidelity_score": score,
+        "fidelity_sample_count": n,
+        "data_provenance": provenance,
+        "r2_score_basis": _r2_score_basis(provenance),
+        "brand_is_feature": "brand" in {f.lower() for f in features},
+        "training_fingerprint": fingerprint,
+        "shared_fit_model_count": max(1, len(same_fit) if same_fit else 1),
+        "shared_fit_with": visible_others,
+    }
+
+
+async def _active_model_census(repo: Any, twin_type_enum: Any) -> List[Dict[str, Any]]:
+    """Every active model of the twin_type, across brands — the shared-fit census.
+
+    Brand scoping is applied to the LISTING afterwards; the census must see all
+    brands or a single-brand caller could never learn that their fit is shared.
+    """
+    rows = await repo.list_active_models(twin_type=twin_type_enum, brand=None)
+    return list(rows or [])
+
+
+class FidelityStatusEnum(str, Enum):
+    """Whether the model's fidelity has ever been measured (#2206).
+
+    'unvalidated': digital_twin_models.fidelity_score is NULL — no experiment outcome
+    has been compared against the model; a NULL never reads as "passed".
+    'below_threshold': measured and below the engine's 0.70 gate.
+    'validated': measured, at or above the gate.
+    """
+
+    UNVALIDATED = "unvalidated"
+    BELOW_THRESHOLD = "below_threshold"
+    VALIDATED = "validated"
+
+
+class R2ScoreBasisEnum(str, Enum):
+    """What the model's r2_score was scored against (#2206).
+
+    'synthetic_target': the fit's target is self-generated by
+    synthetic_training_frame (data_provenance 'synthetic') — the R² says how well the
+    model reproduces its own synthetic generator, not real-world outcomes.
+    'rwd_target': trained on a real-world data file.
+    """
+
+    SYNTHETIC_TARGET = "synthetic_target"
+    RWD_TARGET = "rwd_target"
+    UNKNOWN = "unknown"
+
+
 class FidelityGradeEnum(str, Enum):
     """Fidelity grade values."""
 
@@ -388,6 +544,15 @@ class SimulationResponse(BaseModel):
     fidelity_warning: bool
     fidelity_warning_reason: Optional[str] = None
     model_fidelity_score: Optional[float] = None
+    fidelity_status: FidelityStatusEnum = Field(
+        description=(
+            "Explicit fidelity state of the model behind this run (#2206): "
+            "'unvalidated' when its fidelity_score is NULL (no experiment outcome has "
+            "been compared against it — fidelity_warning is True and this is NOT a "
+            "pass), 'below_threshold' or 'validated' when measured. A stored "
+            "simulation derives it from the model row at read time."
+        ),
+    )
     status: SimulationStatusEnum
     error_message: Optional[str] = None
     execution_time_ms: int
@@ -586,6 +751,49 @@ class TwinModelSummary(BaseModel):
     training_samples: int
     is_active: bool
     created_at: datetime
+    # --- #2206 honest surfacing (all derived from the stored rows) ---
+    fidelity_status: FidelityStatusEnum = Field(
+        description=(
+            "'unvalidated' while fidelity_score is NULL / fidelity_sample_count is 0 — "
+            "no experiment outcome has been compared against this model; not a pass."
+        ),
+    )
+    fidelity_score: Optional[float] = Field(
+        default=None, description="Mean fidelity over the model's A/B comparisons; NULL = none."
+    )
+    fidelity_sample_count: int = Field(
+        default=0, description="Number of experiment comparisons behind fidelity_score."
+    )
+    data_provenance: Optional[str] = Field(
+        default=None,
+        description="Training-frame provenance as recorded: 'synthetic' or 'rwd_file'.",
+    )
+    r2_score_basis: R2ScoreBasisEnum = Field(
+        description=(
+            "What r2_score was scored against. 'synthetic_target': the target is "
+            "self-generated by the synthetic training frame, so R² measures how well the "
+            "model reproduces its own generator — not real-world outcomes."
+        ),
+    )
+    brand_is_feature: bool = Field(
+        description="Whether 'brand' is one of the model's feature_columns (False: brand is routing metadata).",
+    )
+    training_fingerprint: str = Field(
+        description=(
+            "Content hash of the fit (training_config, feature/target columns, metrics "
+            "minus wall-clock). Equal fingerprints = one shared fit under several labels."
+        ),
+    )
+    shared_fit_model_count: int = Field(
+        description=(
+            "Active models of this twin_type (all brands) with the same training_fingerprint, "
+            "including this one. >1 means brand is a label over ONE shared fit."
+        ),
+    )
+    shared_fit_with: List[str] = Field(
+        default_factory=list,
+        description="Other brands sharing this exact fit that the caller may read (brand-scoped).",
+    )
 
 
 class TwinModelDetailResponse(TwinModelSummary):
@@ -930,6 +1138,10 @@ async def run_simulation(
                     population=population,
                     effect_provider=cohort_provider,
                     effect_estimator=CohortCausalEstimator(target_regions=target_regions),
+                    # The model's measured fidelity (NULL until an experiment outcome
+                    # has been compared against it). Never passed before, so the
+                    # engine's gate could not fire even with a real score (#2206).
+                    model_fidelity_score=model_row.get("fidelity_score"),
                 )
                 # Pin the resolved DB model id so twin_simulations.model_id FK holds
                 # (engine derives self.model_id from population otherwise) (#705 H4).
@@ -976,6 +1188,7 @@ async def run_simulation(
             fidelity_warning=result.fidelity_warning,
             fidelity_warning_reason=result.fidelity_warning_reason,
             model_fidelity_score=result.model_fidelity_score,
+            fidelity_status=FidelityStatusEnum(result.fidelity_status.value),
             status=SimulationStatusEnum(result.status.value),
             error_message=result.error_message,
             execution_time_ms=result.execution_time_ms,
@@ -1275,6 +1488,7 @@ async def compare_scenarios(
             population=population,
             effect_provider=cohort_provider,
             effect_estimator=CohortCausalEstimator(),
+            model_fidelity_score=model_row.get("fidelity_score"),  # #2206
         )
         engine.model_id = model_id
         result = engine.simulate(intervention_config=intervention)
@@ -1309,6 +1523,7 @@ async def compare_scenarios(
             fidelity_warning=result.fidelity_warning,
             fidelity_warning_reason=result.fidelity_warning_reason,
             model_fidelity_score=result.model_fidelity_score,
+            fidelity_status=FidelityStatusEnum(result.fidelity_status.value),
             status=SimulationStatusEnum(result.status.value),
             error_message=result.error_message,
             execution_time_ms=result.execution_time_ms,
@@ -1422,6 +1637,17 @@ async def get_simulation(
         eh = result.get("effect_heterogeneity") or {}
         heterogeneity = _heterogeneity_response(eh)
 
+        # twin_simulations does not persist the model's fidelity; derive the explicit
+        # state (and the warning) from the model row this run points at, as it
+        # stands now (#2206). A missing model row validates nothing → unvalidated.
+        model_row = None
+        if result.get("model_id"):
+            try:
+                model_row = await repo.get_model(UUID(str(result["model_id"])))
+            except Exception as model_err:  # pragma: no cover - defensive
+                logger.warning("Model lookup failed for stored simulation: %s", model_err)
+        fidelity_fields = _stored_fidelity_fields(model_row)
+
         return SimulationDetailResponse(
             simulation_id=str(result.get("simulation_id", "")),
             model_id=str(result.get("model_id", "")),
@@ -1441,9 +1667,7 @@ async def get_simulation(
             recommended_sample_size=result.get("recommended_sample_size"),
             recommended_duration_weeks=result.get("recommended_duration_weeks"),
             simulation_confidence=round(float(result.get("simulation_confidence", 0.0) or 0.0), 3),
-            fidelity_warning=bool(result.get("fidelity_warning", False)),
-            fidelity_warning_reason=result.get("fidelity_warning_reason"),
-            model_fidelity_score=result.get("model_fidelity_score"),
+            **fidelity_fields,  # fidelity_status/_warning/_reason + model_fidelity_score
             status=SimulationStatusEnum(result.get("simulation_status", "completed")),
             error_message=result.get("error_message"),
             execution_time_ms=result.get("execution_time_ms", 0),
@@ -1634,10 +1858,12 @@ async def list_models(
         # Convert twin_type to TwinType enum if provided
         twin_type_enum = TwinType(twin_type.value) if twin_type else None
 
-        models = await repo.list_active_models(
-            twin_type=twin_type_enum,
-            brand=effective_brand,
-        )
+        # Census over ALL brands first (shared-fit fingerprints, #2206), then the
+        # brand-scoped listing is a filter over it.
+        census = await _active_model_census(repo, twin_type_enum)
+        models = [
+            m for m in census if effective_brand is None or str(m.get("brand")) == effective_brand
+        ]
 
         # save_model stores metrics nested under performance_metrics (JSONB) and
         # tuning under training_config (JSONB) — NOT as flat columns. Read from
@@ -1662,6 +1888,7 @@ async def list_models(
                     ),
                     is_active=m.get("is_active", True),
                     created_at=m.get("created_at", datetime.now(timezone.utc)),
+                    **_model_honesty_fields(m, census, user),
                 )
             )
 
@@ -1717,6 +1944,11 @@ async def get_model(
         pm = model.get("performance_metrics") or {}
         tc = model.get("training_config") or {}
         target_cols = model.get("target_columns") or []
+        from src.digital_twin.models.twin_models import TwinType
+
+        census = await _active_model_census(
+            repo, TwinType(model["twin_type"]) if model.get("twin_type") else None
+        )
         return TwinModelDetailResponse(
             model_id=str(model.get("model_id")),
             model_name=model.get("model_name", ""),
@@ -1740,6 +1972,7 @@ async def get_model(
             is_active=model.get("is_active", True),
             created_at=model.get("created_at", datetime.now(timezone.utc)),
             config=tc or model.get("config", {}),
+            **_model_honesty_fields(model, census, user),
         )
 
     except HTTPException:

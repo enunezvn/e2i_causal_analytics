@@ -561,13 +561,36 @@ class TestFidelityWarnings:
         assert result.fidelity_warning is False
         assert result.fidelity_warning_reason is None
 
-    def test_no_fidelity_warning_no_score(self, sample_population, email_campaign_config):
-        """Test no fidelity warning when score is not set."""
+    def test_null_fidelity_is_reported_unvalidated_not_passed(
+        self, sample_population, email_campaign_config
+    ):
+        """#2206: no score means no experiment outcome was ever compared against the
+        model. That is UNVALIDATED and must warn — it must not read as "passed"."""
+        from src.digital_twin.models.simulation_models import FidelityStatus
+
         engine = _fast_engine(sample_population)  # No fidelity score
 
         result = engine.simulate(email_campaign_config)
 
-        assert result.fidelity_warning is False
+        assert result.fidelity_status is FidelityStatus.UNVALIDATED
+        assert result.fidelity_warning is True
+        assert "unvalidated" in (result.fidelity_warning_reason or "").lower()
+        assert result.model_fidelity_score is None
+
+    def test_fidelity_status_is_explicit_on_both_sides_of_the_gate(
+        self, sample_population, email_campaign_config
+    ):
+        from src.digital_twin.models.simulation_models import FidelityStatus
+
+        low = _fast_engine(sample_population, model_fidelity_score=0.55).simulate(
+            email_campaign_config
+        )
+        assert low.fidelity_status is FidelityStatus.BELOW_THRESHOLD
+        good = _fast_engine(sample_population, model_fidelity_score=0.85).simulate(
+            email_campaign_config
+        )
+        assert good.fidelity_status is FidelityStatus.VALIDATED
+        assert good.fidelity_warning is False
 
 
 # =============================================================================

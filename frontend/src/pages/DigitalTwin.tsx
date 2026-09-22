@@ -39,6 +39,7 @@ import {
   useRunSimulation,
   useSimulation,
   useInterventionTypes,
+  useTwinModels,
 } from '@/hooks/api/use-digital-twin';
 import { useDigitalTwinInsight } from '@/hooks/api';
 import { StrategicInsightCard } from '@/components/insights';
@@ -54,6 +55,11 @@ import {
   type SimulationDetailResponse,
 } from '@/types/digital-twin';
 import { groupSimulationsByInterventionBrand } from '@/lib/digital-twin-history';
+import {
+  describeModelCensus,
+  explainModelCensus,
+  fidelityStatusLabel,
+} from '@/lib/digital-twin-models';
 
 /** Title-case an intervention_type ("digital_engagement" → "Digital Engagement"). */
 function formatIntervention(interventionType: string): string {
@@ -71,6 +77,8 @@ interface StatCardProps {
   title: string;
   value: string | number;
   subtext?: string;
+  /** Fuller explanation, shown as the card's native tooltip. */
+  tooltip?: string;
   icon: React.ReactNode;
   trend?: 'up' | 'down' | 'neutral';
 }
@@ -124,7 +132,7 @@ function RecommendationBadge({ recommendation }: { recommendation: string }) {
   );
 }
 
-function StatCard({ title, value, subtext, icon, trend }: StatCardProps) {
+function StatCard({ title, value, subtext, tooltip, icon, trend }: StatCardProps) {
   const trendColors = {
     up: 'text-green-600 dark:text-green-400',
     down: 'text-red-600 dark:text-red-400',
@@ -132,7 +140,10 @@ function StatCard({ title, value, subtext, icon, trend }: StatCardProps) {
   };
 
   return (
-    <div className="bg-[var(--color-card)] rounded-lg border border-[var(--color-border)] p-4">
+    <div
+      className="bg-[var(--color-card)] rounded-lg border border-[var(--color-border)] p-4"
+      title={tooltip}
+    >
       <div className="flex items-center justify-between mb-2">
         <span className="text-sm text-[var(--color-text-secondary)]">{title}</span>
         <div className="p-1.5 rounded bg-[var(--color-primary)]/10 text-[var(--color-primary)]">
@@ -711,15 +722,27 @@ function SimulationResultPanel({ simulation }: { simulation: AnySimulation }) {
         </div>
       </div>
 
-      {/* Model fidelity (single backend score — no fabricated breakdown) */}
-      {simulation.model_fidelity_score != null && (
-        <div>
-          <h4 className="text-sm font-medium text-[var(--color-text-secondary)] mb-3">Model Fidelity</h4>
-          <div className="max-w-xs">
+      {/* Model fidelity (#2206): the explicit backend state. A NULL score is
+          'unvalidated' — shown as such, never as a blank that reads like a pass. */}
+      <div>
+        <h4 className="text-sm font-medium text-[var(--color-text-secondary)] mb-3">Model Fidelity</h4>
+        <div className="max-w-xs space-y-2">
+          <p className="text-xs text-[var(--color-text-secondary)]" data-testid="fidelity-status">
+            Status:{' '}
+            <span className="font-medium text-[var(--color-text-primary)]">
+              {fidelityStatusLabel(simulation.fidelity_status)}
+            </span>
+          </p>
+          {simulation.model_fidelity_score != null ? (
             <FidelityGauge score={simulation.model_fidelity_score} label="Overall fidelity score" />
-          </div>
+          ) : (
+            <p className="text-xs text-[var(--color-text-tertiary)]">
+              No experiment outcome has been compared against this model yet, so its
+              prediction accuracy is unknown.
+            </p>
+          )}
         </div>
-      )}
+      </div>
 
       {/* Recommended parameters, when present */}
       {(simulation.recommended_sample_size != null || simulation.recommended_duration_weeks != null) && (
@@ -762,6 +785,8 @@ export default function DigitalTwin() {
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
   const { data: healthData } = useDigitalTwinHealth();
+  // Trained-model census (#2206): shared-fit + fidelity honesty fields per brand row.
+  const { data: modelsData } = useTwinModels();
   const {
     data: historyData,
     refetch: refetchHistory,
@@ -873,6 +898,10 @@ export default function DigitalTwin() {
   const deployRate = historyItems.length > 0 ? Math.round((deployCount / historyItems.length) * 100) : null;
   const fidelityPct =
     displayed?.model_fidelity_score != null ? Math.round(displayed.model_fidelity_score * 100) : null;
+  const lastRunUnvalidated = displayed?.fidelity_status === 'unvalidated';
+  const modelRows = useMemo(() => modelsData?.models ?? [], [modelsData]);
+  const modelCensusText = useMemo(() => describeModelCensus(modelRows), [modelRows]);
+  const modelCensusWhy = useMemo(() => explainModelCensus(modelRows), [modelRows]);
 
   const handleRunSimulation = (formData: { interventionType: InterventionType; brand: string; sampleSize: number; durationDays: number }) => {
     runSim({
@@ -924,13 +953,18 @@ export default function DigitalTwin() {
         <StatCard
           title="Models Available"
           value={health.models_available}
-          subtext="Trained twin models"
+          subtext={modelCensusText ?? 'Trained twin models'}
+          tooltip={modelCensusWhy ?? undefined}
           icon={<Gauge className="h-4 w-4" />}
         />
         <StatCard
           title="Last Run Fidelity"
-          value={fidelityPct != null ? `${fidelityPct}%` : '—'}
-          subtext="Model fidelity score"
+          value={fidelityPct != null ? `${fidelityPct}%` : lastRunUnvalidated ? 'Unvalidated' : '—'}
+          subtext={
+            lastRunUnvalidated
+              ? 'No experiment outcome compared against this model yet'
+              : 'Model fidelity score'
+          }
           icon={<TrendingUp className="h-4 w-4" />}
         />
       </div>
