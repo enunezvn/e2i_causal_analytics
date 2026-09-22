@@ -507,33 +507,13 @@ class AgentCausalAnalysisRequest(BaseModel):
     limit: int = Field(1500, ge=100, le=20000, description="Max rows to load")
     auto_discover: bool = Field(
         True,
-        description=(
-            "Learn the DAG from the data via GUIDED structure discovery "
-            "(PC + background-knowledge tiers anchoring treatment as cause / "
-            "outcome as effect). The data selects which covariates are "
-            "confounders. False = use the agent's domain-knowledge DAG."
-        ),
+        description="Learn the DAG from the data via GUIDED structure discovery (PC + background-knowledge tiers anchoring treatment as cause / outcome as effect). The data selects which covariates are confounders. False = use the agent's domain-knowledge DAG.",
     )
-    # Lane E (real-data causal estimation, item 3(d)): the feature-role panel
-    # for this dataset's covariates, as ``FeatureRolePanel.to_dict()`` (built
-    # by scripts/measure_feature_role_panel.py and recorded as evidence — it is
-    # NOT built inside the request: Layer 3 runs minutes on a real frame and
-    # Layer 4 is a paid LLM). When present, graph_builder removes leak-verdict
-    # covariates from the adjustment set with a named warning in ``warnings``.
+    # Lane E item 3(d): a serialised FeatureRolePanel (built offline by scripts/measure_feature_role_panel.py, never in-request); no public "approved roles" field — approval is resolved server-side (Lane B).
     feature_role_panel: Optional[Dict[str, Any]] = Field(
         None,
-        description=(
-            "Serialised feature-role panel (src.causal_engine.feature_role_panel."
-            "FeatureRolePanel.to_dict()) for this dataset's covariates. When set, "
-            "covariates the panel marks as leak verdicts are removed from the "
-            "adjustment set and named in warnings."
-        ),
+        description="Serialised feature-role panel (src.causal_engine.feature_role_panel.FeatureRolePanel.to_dict()) for this dataset's covariates. When set, covariates the panel marks as leak verdicts are removed from the adjustment set and named in warnings.",
     )
-    # NOTE (codex r2): there is deliberately NO public ``approved_structure_roles``
-    # field. Approval is a server-side boundary — Lane B's loader resolves an
-    # APPROVED expert review by id into the agent's ``approved_structure_roles``
-    # state channel; a caller-authored role list would be labelled "approved"
-    # without anyone having approved it.
 
 
 class EdgeProvenanceModel(BaseModel):

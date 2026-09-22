@@ -105,6 +105,8 @@ from src.data.adversarial_leakage import (
     min_permutations_for_fdr,
 )
 from src.data.feature_contract import FeatureContract
+from src.data.layer4_inputs import build_layer_4_inputs as _build_layer_4_inputs
+from src.data.layer4_inputs import citation_verdict_to_dict as _citation_verdict_to_dict
 from src.data.manifests import (
     CSU_FEATURES,
     CSU_FORBIDDEN_AS_FEATURES,
@@ -1054,59 +1056,6 @@ def _layer_1_verdict(feature: str, contract: FeatureContract) -> dict[str, Any]:
     )
 
 
-def _build_layer_4_inputs(
-    feature: str,
-    contract: Optional[FeatureContract],
-    target: str,
-    manifest_source: Optional[str],
-    treatment: Optional[str] = None,
-) -> tuple[str, str]:
-    """Build the (derivation_pseudocode, dataset_context) pair for Layer 4.
-
-    ``treatment`` (Lane E, real-data causal estimation): the causal treatment
-    column when the node runs over a CAUSAL frame via
-    ``src.causal_engine.feature_role_panel`` (read from
-    ``scope_spec["causal_treatment"]``). The classifier's roles (confounder /
-    instrument / mediator / collider) are defined relative to a treatment, so
-    the dataset_context names T and the causal question. ``None`` — the
-    prediction path — leaves the context byte-identical to before.
-
-    The compiled :class:`src.data.causal_role_classifier.CausalRoleClassifier`
-    expects three input fields: ``feature_name`` (provided by caller),
-    ``derivation_pseudocode``, and ``dataset_context``. This helper assembles
-    the latter two from the feature's manifest contract (when available) and
-    the scope_spec target metadata.
-
-    When ``contract`` is None (feature has no manifest entry — e.g. a numeric
-    column the runner pre-cleaned), the derivation pseudocode falls back to a
-    "no manifest contract on file" sentinel string. The LLM is still able to
-    classify based on the feature name alone, but with reduced confidence;
-    the audit trail records the absence so an operator can extend the
-    manifest later.
-    """
-    if contract is not None:
-        derivation = (
-            f"source={contract.source}; "
-            f"derivation_inputs={list(contract.derivation_inputs)}; "
-            f"aggregation={contract.aggregation}; "
-            f"window_days={contract.window_days}; "
-            f"knowable_at={contract.knowable_at}"
-        )
-    else:
-        derivation = (
-            f"No manifest contract on file for {feature!r} "
-            "(LLM is classifying from feature name + dataset context only)"
-        )
-
-    cohort = manifest_source or "unspecified"
-    dataset_context = f"cohort={cohort}; target={target}; prediction_anchor=index_date"
-    if treatment:
-        dataset_context += (
-            f"; treatment={treatment}; causal_question=effect of {treatment} on {target}"
-        )
-    return derivation, dataset_context
-
-
 def _adversarial_input(
     score: dict[str, Any],
     *,
@@ -1585,20 +1534,6 @@ _DECIDED_BY_TO_LAYER: dict[str, str] = {
 }
 
 
-def _citation_verdict_to_dict(verdict: "CitationVerdict", *, verified: bool) -> dict[str, Any]:
-    """Serialise one ``CitationVerdict`` for the legacy dict / sidecar (JSON-safe)."""
-    return {
-        "identifier": verdict.identifier,
-        "identifier_kind": verdict.identifier_kind,
-        "verified": bool(verified),
-        "abstract_resolved": bool(verdict.abstract_resolved),
-        "entities_found": list(verdict.entities_found or ()),
-        "causal_cue_found": verdict.causal_cue_found,
-        "overall_confidence": float(verdict.overall_confidence),
-        "error": verdict.error,
-    }
-
-
 def _ensemble_to_legacy_dict(
     verdict: EnsembleVerdict,
     *,
@@ -1737,17 +1672,11 @@ def _ensemble_to_legacy_dict(
         # supplied for this feature.
         "llm_role": llm_role,
         "llm_remediation": llm_remediation,
-        # Lane E (real-data causal estimation, sidecar schema 1.9): the
-        # ensemble's role and confidence, and the LLM's mechanism text. The
-        # feature-role panel (``src/causal_engine/feature_role_panel.py``)
-        # reads these instead of re-deriving the voter's precedence; before
-        # this they existed only on the ``EnsembleVerdict`` the node discards.
-        # Additive and nullable on every producer path.
+        # Lane E (sidecar 1.9): role, confidence, mechanism and per-citation
+        # records for the causal feature-role panel; nullable on every path.
         "final_role": verdict.final_role,
         "confidence": verdict.confidence,
         "llm_mechanism": (getattr(llm_in, "mechanism", None) if llm_in is not None else None),
-        # Lane E (sidecar 1.9): the per-citation records behind the counts, so a
-        # reviewer can see WHY a cited PMID passed or failed (codex r1 MED).
         "citation_verdicts": [
             _citation_verdict_to_dict(c, verified=True) for c in verdict.verified_citations
         ]
@@ -1891,7 +1820,6 @@ def _legacy_adversarial_alone_verdict(
         # are ``None``.
         "llm_role": None,
         "llm_remediation": None,
-        # Lane E (sidecar 1.9): additive, None on the bypass paths.
         "final_role": None,
         "confidence": None,
         "llm_mechanism": None,
@@ -2004,7 +1932,6 @@ def _legacy_info_verdict(
         # _ensemble_to_legacy_dict.
         "llm_role": None,
         "llm_remediation": None,
-        # Lane E (sidecar 1.9): additive, None on the bypass paths.
         "final_role": None,
         "confidence": None,
         "llm_mechanism": None,
@@ -2106,7 +2033,6 @@ def _legacy_short_circuit_verdict(feature: str, *, evidence: str) -> dict[str, A
         # _ensemble_to_legacy_dict.
         "llm_role": None,
         "llm_remediation": None,
-        # Lane E (sidecar 1.9): additive, None on the bypass paths.
         "final_role": None,
         "confidence": None,
         "llm_mechanism": None,
