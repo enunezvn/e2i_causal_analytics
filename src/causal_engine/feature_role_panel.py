@@ -623,20 +623,23 @@ async def build_feature_role_panel(
             "target_entity_ids": list(target_ids),
         }
 
-        ran = bool(v is not None and v.get("z_score") is not None)
-        severity = v.get("severity") if v else None
+        # ``vd`` is the verdict dict narrowed once (empty when the node emitted no
+        # verdict) so the Layer-3 reads below type-check without per-line guards.
+        vd: Dict[str, Any] = v if v is not None else {}
+        ran = bool(vd.get("z_score") is not None)
+        severity = vd.get("severity")
         layer_3 = {
             "ran": ran,
-            "z_score": v.get("z_score") if ran else None,
-            "actual_auc": v.get("actual_auc") if ran else None,
-            "null_mean": v.get("null_mean") if ran else None,
-            "null_std": v.get("null_std") if ran else None,
-            "p_value": v.get("p_value") if ran else None,
-            "n_permutations": v.get("n_permutations") if ran else None,
-            "delta_auc": v.get("delta_auc") if ran else None,
-            "delta_auc_below_floor": bool(v.get("delta_auc_below_floor")) if ran else None,
-            "severity_pre_joint_check": v.get("severity_pre_joint_check") if ran else None,
-            "ablation_severity": v.get("ablation_severity") if ran else None,
+            "z_score": vd.get("z_score") if ran else None,
+            "actual_auc": vd.get("actual_auc") if ran else None,
+            "null_mean": vd.get("null_mean") if ran else None,
+            "null_std": vd.get("null_std") if ran else None,
+            "p_value": vd.get("p_value") if ran else None,
+            "n_permutations": vd.get("n_permutations") if ran else None,
+            "delta_auc": vd.get("delta_auc") if ran else None,
+            "delta_auc_below_floor": bool(vd.get("delta_auc_below_floor")) if ran else None,
+            "severity_pre_joint_check": vd.get("severity_pre_joint_check") if ran else None,
+            "ablation_severity": vd.get("ablation_severity") if ran else None,
             "fdr_confident": feat in confident,
             # The node's declared-safe immunity stripped a high finding: recorded
             # so the evidence shows Layer 3 fired and the contract overruled it.

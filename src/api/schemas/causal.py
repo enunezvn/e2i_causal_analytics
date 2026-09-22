@@ -511,7 +511,7 @@ class AgentCausalAnalysisRequest(BaseModel):
     )
     # Lane E item 3(d): a serialised FeatureRolePanel (built offline by scripts/measure_feature_role_panel.py, never in-request); no public "approved roles" field — approval is resolved server-side (Lane B).
     feature_role_panel: Optional[Dict[str, Any]] = Field(
-        None,
+        default=None,
         description="Serialised feature-role panel (src.causal_engine.feature_role_panel.FeatureRolePanel.to_dict()) for this dataset's covariates. When set, covariates the panel marks as leak verdicts are removed from the adjustment set and named in warnings.",
     )
 

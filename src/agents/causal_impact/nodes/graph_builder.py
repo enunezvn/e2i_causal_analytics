@@ -171,7 +171,9 @@ class GraphBuilderNode:
                     if present:
                         _cache["estimation_data"] = _frame.drop(columns=present)
                         narrowed["data_cache"] = _cache
-                state = cast(CausalImpactState, {**state, **narrowed})
+                # spread_safe: the accumulator channels stay out of the rebound
+                # state (the node returns only NEW warnings; see the return).
+                state = cast(CausalImpactState, {**spread_safe(state), **narrowed})
                 _pp = panel_payload if isinstance(panel_payload, dict) else {}
                 panel_warnings = [
                     "feature_role_panel applied (caller-supplied; submit established only: "

@@ -43,9 +43,16 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Optional
 
+from dotenv import load_dotenv
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+# Issue #470 discipline: a DSPy-touching CLI script loads .env at import time so
+# a `--layer4 real` invocation sees the provider key without a manual export.
+# `--layer4 fake` / `off` blank the provider keys in-process afterwards.
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
