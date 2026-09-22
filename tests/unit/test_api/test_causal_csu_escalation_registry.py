@@ -264,8 +264,14 @@ def test_dataset_provenance_guard_ignores_the_deployment_flag_for_the_backing(mo
     deployment-wide behaviour of apply_provenance_filter."""
     _deployed_flag_only(monkeypatch)
     assert apply_dataset_provenance_filter(_GuardQuery(), DATASET).eqs == [("is_synthetic", False)]
-    assert apply_dataset_provenance_filter(_GuardQuery(), "optum_biologic_persistence").eqs == []
-    assert serves_synthetic_rows("optum_biologic_persistence") is True
+    # The real-backed Optum dataset is pinned real-only too (live verify
+    # 2026-09-22): the deployment rule applies to datasets in neither set.
+    assert apply_dataset_provenance_filter(_GuardQuery(), "optum_biologic_persistence").eqs == [
+        ("is_synthetic", False)
+    ]
+    assert serves_synthetic_rows("optum_biologic_persistence") is False
+    assert apply_dataset_provenance_filter(_GuardQuery(), "patient_journeys").eqs == []
+    assert serves_synthetic_rows("patient_journeys") is True
     _planted_truth_run(monkeypatch)
     # Planted mode reads ONLY the planted rows -- never an unfiltered mixture.
     assert apply_dataset_provenance_filter(_GuardQuery(), DATASET).eqs == [("is_synthetic", True)]

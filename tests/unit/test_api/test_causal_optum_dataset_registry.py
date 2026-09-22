@@ -27,6 +27,8 @@ from src.api.routes.causal.datasets import (
     _brand_scoped_covariates,
     _default_auto_discover,
     _negative_control_outcome,
+    apply_dataset_provenance_filter,
+    serves_synthetic_rows,
 )
 from src.api.routes.causal.loaders import _load_agent_estimation_frame
 from src.api.schemas.causal import AgentCausalAnalysisRequest
@@ -54,6 +56,36 @@ CATEGORICALS = {
     "geographic_region",
 }
 _CLIENT_FACTORY = "src.memory.services.factories.get_async_supabase_client"
+
+
+class _GuardQuery:
+    def __init__(self):
+        self.eqs = []
+
+    def eq(self, col, value):
+        self.eqs.append((col, value))
+        return self
+
+
+def test_real_backed_dataset_ignores_the_deployment_flag(monkeypatch):
+    """Live verify 2026-09-22 (docs/demos/results/2026-09-22_lane_c_live_verify):
+    the deployed e2i_api sets E2I_INCLUDE_SYNTHETIC=true, under which the Optum
+    dataset followed the deployment rule -- no provenance predicate on its read
+    and ``serves_synthetic_rows`` True, so /causal/agent-analyze would have
+    labelled the real 15,209-row cohort ``data_source="synthetic"``. The
+    program defines this dataset as real-only (spec §5: is_synthetic=false on
+    every row; the real-mode filter applies), so its read predicate and its
+    label must not depend on the showcase flag."""
+    monkeypatch.setenv("E2I_INCLUDE_SYNTHETIC", "true")
+    assert apply_dataset_provenance_filter(_GuardQuery(), DATASET).eqs == [("is_synthetic", False)]
+    assert serves_synthetic_rows(DATASET) is False
+    monkeypatch.delenv("E2I_INCLUDE_SYNTHETIC", raising=False)
+    assert apply_dataset_provenance_filter(_GuardQuery(), DATASET).eqs == [("is_synthetic", False)]
+    assert serves_synthetic_rows(DATASET) is False
+    # A dataset outside both sets keeps the deployment-wide behaviour.
+    monkeypatch.setenv("E2I_INCLUDE_SYNTHETIC", "true")
+    assert apply_dataset_provenance_filter(_GuardQuery(), "patient_journeys").eqs == []
+    assert serves_synthetic_rows("patient_journeys") is True
 
 
 # ---------------------------------------------------------------------------
