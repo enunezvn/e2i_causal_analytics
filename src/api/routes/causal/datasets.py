@@ -10,6 +10,8 @@ Import rule: may import ``_common`` and non-package modules only; never
 import logging
 from typing import Any, Callable, Dict, List, Optional
 
+from src.data.manifests import MART_SAFE_FEATURES
+
 # Re-exported under the historical names (segments.py + six test modules import
 # them from this route) — see the pointer comment where the dicts used to live.
 from src.insights.column_labels import (  # noqa: F401 — re-export
@@ -21,7 +23,6 @@ from src.insights.column_labels import (  # noqa: F401 — re-export
 from src.insights.column_labels import (  # noqa: F401 — re-export
     column_label as _column_label,
 )
-from src.data.manifests import MART_SAFE_FEATURES
 from src.repositories.provenance import apply_provenance_filter
 
 logger = logging.getLogger(__name__)
@@ -264,6 +265,7 @@ _CAUSAL_DISCOVERY_DEFAULT_OFF: frozenset = frozenset({"optum_biologic_persistenc
 def _default_auto_discover(dataset: Optional[str]) -> bool:
     """The ``auto_discover`` value a request gets when the caller did not set it."""
     return (dataset or _DEFAULT_CAUSAL_DATASET) not in _CAUSAL_DISCOVERY_DEFAULT_OFF
+
 
 # #1872: every nba_triggers covariate is JOINED from patient_journeys via
 # triggers.patient_id (the triggers table itself carries NO covariate columns).
