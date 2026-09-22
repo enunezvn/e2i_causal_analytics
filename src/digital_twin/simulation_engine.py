@@ -75,6 +75,17 @@ _NUMERIC_AXES = frozenset({"decile"})
 # per-twin predictions, so the precision term varies with the twin sample.
 CONFIDENCE_N_SATURATION = 1000.0
 
+# Confidence blend weights. Fidelity enters ONLY once it has been measured (#2206, owner
+# fix): for an UNVALIDATED model (NULL score) the fidelity term is dropped and the
+# remaining weights are renormalised (0.5 evidence / 0.5 precision). The previous blend
+# imputed 0.7 — exactly FIDELITY_WARNING_THRESHOLD — for a NULL score, so an unvalidated
+# model scored the same confidence as one that had just passed validation while its
+# status said "unknown". The missing measurement travels on its own channel
+# (fidelity_status / fidelity_warning / the reason string); the number carries the
+# evidence that exists. Stored rows are not backfilled — the UI states that a stored
+# confidence is the heuristic in force at the time (precedent: twin_weighted_legacy).
+CONFIDENCE_WEIGHTS: Dict[str, float] = {"evidence": 0.3, "precision": 0.3, "fidelity": 0.4}
+
 
 class SimulationEngine:
     """
@@ -505,13 +516,20 @@ class SimulationEngine:
         # 2. Precision (lower std error = better)
         precision_score = max(0, 1 - std_error / (abs(ate) + 0.001))
 
-        # 3. Model fidelity. An UNVALIDATED model (NULL score) is blended in at the
-        #    0.7 threshold as a prior — the gate above already flags it explicitly
-        #    (#2206); the blend is unchanged so stored confidences stay comparable.
-        fidelity_score = 0.7 if self.model_fidelity_score is None else self.model_fidelity_score
+        # 3. Model fidelity — only when measured. An UNVALIDATED model (NULL score)
+        #    contributes no term: it is neither imputed at the threshold (which read as
+        #    "passing") nor scored 0.0 (which would assert it is known-bad and cap the
+        #    run at 0.6 regardless of evidence). The gate above already reports the
+        #    state explicitly (#2206).
+        terms = {"evidence": size_score, "precision": precision_score}
+        if self.model_fidelity_score is not None:
+            terms["fidelity"] = float(self.model_fidelity_score)
 
-        # Weighted average
-        confidence = 0.3 * size_score + 0.3 * precision_score + 0.4 * fidelity_score
+        # Weighted average over the terms that exist, weights renormalised to sum to 1
+        # (3-term: 0.3 / 0.3 / 0.4; unvalidated: 0.5 / 0.5).
+        total_weight = sum(CONFIDENCE_WEIGHTS[name] for name in terms)
+        confidence = sum(CONFIDENCE_WEIGHTS[name] * value for name, value in terms.items())
+        confidence /= total_weight
 
         return min(1.0, max(0.0, confidence))
 

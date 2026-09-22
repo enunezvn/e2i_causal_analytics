@@ -59,6 +59,8 @@ from src.api.routes.digital_twin_honesty import (  # noqa: F401 — re-exported
 )
 from src.api.routes.digital_twin_rejections import Decile, rejected_request
 from src.api.schemas.digital_twin import (  # noqa: F401 — re-exported
+    FIDELITY_STATUS_DESCRIPTION,
+    SIMULATION_CONFIDENCE_DESCRIPTION,
     DigitalTwinHealthResponse,
     EffectHeterogeneityResponse,
     FidelityGradeEnum,
@@ -394,19 +396,11 @@ class SimulationResponse(BaseModel):
     recommendation_rationale: str
     recommended_sample_size: Optional[int] = None
     recommended_duration_weeks: Optional[int] = None
-    simulation_confidence: float
+    simulation_confidence: float = Field(description=SIMULATION_CONFIDENCE_DESCRIPTION)
     fidelity_warning: bool
     fidelity_warning_reason: Optional[str] = None
     model_fidelity_score: Optional[float] = None
-    fidelity_status: FidelityStatusEnum = Field(
-        description=(
-            "Explicit fidelity state of the model behind this run (#2206): "
-            "'unvalidated' when its fidelity_score is NULL (no experiment outcome has "
-            "been compared against it — fidelity_warning is True and this is NOT a "
-            "pass), 'below_threshold' or 'validated' when measured. A stored "
-            "simulation derives it from the model row at read time."
-        ),
-    )
+    fidelity_status: FidelityStatusEnum = Field(description=FIDELITY_STATUS_DESCRIPTION)
     status: SimulationStatusEnum
     error_message: Optional[str] = None
     execution_time_ms: int

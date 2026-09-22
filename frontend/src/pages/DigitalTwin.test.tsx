@@ -1174,6 +1174,24 @@ describe('DigitalTwin', () => {
     expect(title).not.toMatch(/more twins does not raise|follows the twin sample/i);
   });
 
+  // #2206 owner fix: the blend no longer imputes 0.7 for an unvalidated model — the
+  // fidelity term enters only once measured. The explanation must say so, and must
+  // not claim model fidelity as an unconditional ingredient.
+  it('says model fidelity enters the confidence blend only once measured (#2206)', () => {
+    (useRunSimulation as ReturnType<typeof vi.fn>).mockReturnValue({
+      mutate: mockMutate,
+      isPending: false,
+      data: { ...mockRunResult, model_fidelity_score: null, fidelity_status: 'unvalidated' },
+      isSuccess: true,
+      isError: false,
+    });
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+    const title = screen.getByText(/Confidence: 83%/).getAttribute('title') ?? '';
+    expect(title).toMatch(/model fidelity only once it has been measured/i);
+    expect(title).toMatch(/unvalidated model is scored on its evidence alone/i);
+    expect(title).not.toMatch(/interval, and model fidelity\./i);
+  });
+
   // A STORED simulation (identified by detail-only `population_filters`) shows the score
   // persisted when it ran, computed by the heuristic in force at that time — the current
   // heuristic wording above would be false for it (#2104, codex r2).

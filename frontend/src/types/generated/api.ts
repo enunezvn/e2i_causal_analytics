@@ -18734,7 +18734,10 @@ export interface components {
             recommended_sample_size?: number | null;
             /** Recommended Duration Weeks */
             recommended_duration_weeks?: number | null;
-            /** Simulation Confidence */
+            /**
+             * Simulation Confidence
+             * @description Heuristic confidence in [0, 1]: a weighted blend of the evidence behind the estimate (rows the estimator fit on, saturating at 1000), the precision of the 95% interval, and — only once measured — the model's fidelity score (0.3 / 0.3 / 0.4). For an unvalidated model (model_fidelity_score NULL) the fidelity term is dropped and the other two renormalised to 0.5 / 0.5; it is never imputed (#2206). Nothing gates on this number; the fidelity state travels separately in fidelity_status / fidelity_warning.
+             */
             simulation_confidence: number;
             /** Fidelity Warning */
             fidelity_warning: boolean;
@@ -18942,7 +18945,10 @@ export interface components {
             recommended_sample_size?: number | null;
             /** Recommended Duration Weeks */
             recommended_duration_weeks?: number | null;
-            /** Simulation Confidence */
+            /**
+             * Simulation Confidence
+             * @description Heuristic confidence in [0, 1]: a weighted blend of the evidence behind the estimate (rows the estimator fit on, saturating at 1000), the precision of the 95% interval, and — only once measured — the model's fidelity score (0.3 / 0.3 / 0.4). For an unvalidated model (model_fidelity_score NULL) the fidelity term is dropped and the other two renormalised to 0.5 / 0.5; it is never imputed (#2206). Nothing gates on this number; the fidelity state travels separately in fidelity_status / fidelity_warning.
+             */
             simulation_confidence: number;
             /** Fidelity Warning */
             fidelity_warning: boolean;

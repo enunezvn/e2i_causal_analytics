@@ -177,6 +177,26 @@ class FidelityStatusEnum(str, Enum):
     VALIDATED = "validated"
 
 
+# OpenAPI descriptions for SimulationResponse (routes/digital_twin.py is size-pinned by
+# the module ratchet; the prose lives here).
+FIDELITY_STATUS_DESCRIPTION = (
+    "Explicit fidelity state of the model behind this run (#2206): "
+    "'unvalidated' when its fidelity_score is NULL (no experiment outcome has "
+    "been compared against it — fidelity_warning is True and this is NOT a "
+    "pass), 'below_threshold' or 'validated' when measured. A stored "
+    "simulation derives it from the model row at read time."
+)
+SIMULATION_CONFIDENCE_DESCRIPTION = (
+    "Heuristic confidence in [0, 1]: a weighted blend of the evidence behind the "
+    "estimate (rows the estimator fit on, saturating at 1000), the precision of "
+    "the 95% interval, and — only once measured — the model's fidelity score "
+    "(0.3 / 0.3 / 0.4). For an unvalidated model (model_fidelity_score NULL) the "
+    "fidelity term is dropped and the other two renormalised to 0.5 / 0.5; it is "
+    "never imputed (#2206). Nothing gates on this number; the fidelity state "
+    "travels separately in fidelity_status / fidelity_warning."
+)
+
+
 class R2ScoreBasisEnum(str, Enum):
     """What the model's r2_score was scored against (#2206).
 
