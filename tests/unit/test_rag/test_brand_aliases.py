@@ -21,26 +21,32 @@ _KNOWN = {
 
 
 class _FakeRxNav:
-    def __init__(self, *, known=None, boom_on=None):
+    def __init__(self, *, known=None, boom_on=None, approximate_for=()):
         self._known = known if known is not None else _KNOWN
         self._boom_on = boom_on
+        self._approximate_for = set(approximate_for)
         self.calls: list[str] = []
+        self.related_calls: list[str] = []
+        self.closed = False
 
     def rxcui_for_name(self, name):
         self.calls.append(name)
         if self._boom_on == name:
             raise RxNavError("simulated outage")
         hit = self._known.get(name)
-        return RxCUIMatch(rxcui=hit[0], approximate=False) if hit else None
+        if not hit:
+            return None
+        return RxCUIMatch(rxcui=hit[0], approximate=name in self._approximate_for)
 
     def related_names(self, rxcui, *, ttys=("IN", "BN", "PIN")):
+        self.related_calls.append(rxcui)
         for _brand, (cui, names) in self._known.items():
             if cui == rxcui:
                 return list(names)
         return []
 
     def close(self):
-        pass
+        self.closed = True
 
 
 @pytest.fixture(autouse=True)
@@ -107,3 +113,31 @@ def test_the_cache_key_is_the_brand_set_not_the_client(monkeypatch):
     b = _FakeRxNav()
     assert rxnav_brand_aliases(["Fabhalta", "Kisqali"], client=b)["Fabhalta"] == ["iptacopan"]
     assert b.calls == []
+
+
+def test_an_approximate_match_contributes_nothing_and_is_not_expanded():
+    # RxNav's typo-corrected fallback (search=2) can land on a DIFFERENT drug;
+    # importing that drug's names as our aliases would mislabel chat queries.
+    fake = _FakeRxNav(approximate_for={"Fabhalta"})
+    out = rxnav_brand_aliases(["Kisqali", "Fabhalta"], client=fake)
+    assert out == {"Kisqali": ["ribociclib"]}
+    assert fake.related_calls == [_KNOWN["Kisqali"][0]]
+
+
+def test_a_stale_negative_never_overwrites_a_fresh_positive(monkeypatch):
+    now = {"t": 1000.0}
+    monkeypatch.setattr(brand_aliases, "_now", lambda: now["t"])
+    good = _FakeRxNav()
+    assert rxnav_brand_aliases(["Kisqali"], client=good) == {"Kisqali": ["ribociclib"]}
+    # A late-arriving failed round (e.g. a concurrent builder whose RxNav call
+    # timed out) must not replace the unexpired positive entry.
+    brand_aliases._remember(("Kisqali",), {}, complete=False)
+    late = _FakeRxNav(boom_on="Kisqali")
+    assert rxnav_brand_aliases(["Kisqali"], client=late) == {"Kisqali": ["ribociclib"]}
+    assert late.calls == []
+    # Once the positive entry has expired, a failed round IS remembered.
+    now["t"] += brand_aliases.TTL_S + 1
+    assert rxnav_brand_aliases(["Kisqali"], client=late) == {}
+    assert late.calls == ["Kisqali"]
+    assert rxnav_brand_aliases(["Kisqali"], client=late) == {}
+    assert late.calls == ["Kisqali"]  # negative TTL now in force
