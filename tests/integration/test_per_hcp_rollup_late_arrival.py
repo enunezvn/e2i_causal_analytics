@@ -62,9 +62,9 @@ BRAND = "Kisqali"
 # (every per-HCP date written in its window, or within 30 days of a trigger that ARRIVED in
 # it), so the selection depends on the triggers and per-HCP rows the earlier phases plant
 # and can reach a foreign per-HCP date well outside [TUESDAY, GUARD_DATE_END). The census
-# composes that CTE verbatim (territory_arrival_spec) right before the run, the test records
-# the selected set from the same CTE, and the teardown deletes territory_metrics for every
-# recorded date -- not just the two planted ones. The range census below still covers the
+# imports that CTE (territory_arrival_spec) and runs right before the run, the test records
+# the selected set from the same CTE and the run's transaction id, and the teardown deletes
+# the run's territory_metrics rows on every recorded date -- not just the two planted ones. The range census below still covers the
 # explicit 2019-01-20 reconcile and the per-date teardown floor.
 FIRST_ARRIVAL_RUN = "2019-01-02T03:15:00+00:00"
 TERRITORY_ARRIVAL_RUN = "2019-01-14T03:45:00+00:00"
@@ -184,30 +184,37 @@ def planted(db_conn: Any) -> Any:
                 )
     # The territory ARRIVAL run writes a row for EVERY territory on EVERY date it selects;
     # the test records that set (from the run's own CTE, right before the run) here, and
-    # the teardown deletes those dates. The two planted dates are the floor. Only rows
-    # created after this fixture started are deleted (the run's INSERT leaves created_at
-    # to its now() default and the ON CONFLICT arm never sets it): a row on those dates
-    # that pre-dates the file is not ours, and the teardown REPORTS it rather than
-    # destroying it (codex r2-1). The clock is the database's, not this host's.
+    # the run's transaction id (codex r3-1: ownership by elapsed time was a proxy -- any
+    # concurrent writer on a recorded date satisfied it). The run inserts and reconciles
+    # in ONE transaction, so every row it wrote carries that xid as its xmin; the teardown
+    # deletes exactly those rows plus our own keyed territory, and REPORTS anything else
+    # on the recorded dates rather than deleting it. The two planted dates are the floor.
     territory_selected_dates: set[date] = set()
-    with db_conn:
-        with db_conn.cursor() as cur:
-            cur.execute("SELECT now()")
-            (started_at,) = cur.fetchone()
-    yield {"rid": rid, "territory_selected_dates": territory_selected_dates, **hcps}
+    state = {
+        "rid": rid,
+        "territory_selected_dates": territory_selected_dates,
+        "territory_run_xid": None,
+        **hcps,
+    }
+    yield state
     dates = sorted({TUESDAY, MONDAY} | territory_selected_dates)
+    run_xid = state["territory_run_xid"]
     with db_conn:
         with db_conn.cursor() as cur:
             cur.execute(
-                "SELECT territory_id, metric_date FROM territory_metrics "
-                " WHERE metric_date = ANY(%s) AND created_at < %s ORDER BY 2, 1",
-                (dates, started_at),
+                "DELETE FROM territory_metrics WHERE territory_id LIKE %s", (f"T_LATE_{rid}%",)
+            )
+            if run_xid is not None:
+                cur.execute(
+                    "DELETE FROM territory_metrics WHERE metric_date = ANY(%s) AND xmin::text = %s",
+                    (dates, run_xid),
+                )
+            cur.execute(
+                "SELECT territory_id, metric_date, xmin::text FROM territory_metrics "
+                " WHERE metric_date = ANY(%s) ORDER BY 2, 1",
+                (dates,),
             )
             not_ours = cur.fetchall()
-            cur.execute(
-                "DELETE FROM territory_metrics WHERE metric_date = ANY(%s) AND created_at >= %s",
-                (dates, started_at),
-            )
             cur.execute("DELETE FROM business_metrics WHERE hcp_id LIKE %s", (f"hl_{rid}_%",))
             cur.execute("DELETE FROM triggers WHERE trigger_id LIKE %s", (f"trlate_{rid}_%",))
             cur.execute(
@@ -216,8 +223,8 @@ def planted(db_conn: Any) -> Any:
             )
             cur.execute("DELETE FROM hcp_profiles WHERE hcp_id LIKE %s", (f"hl_{rid}_%",))
     assert not not_ours, (
-        f"territory_metrics rows on {dates} pre-date this file and were left in place, "
-        f"not deleted: {not_ours}"
+        f"territory_metrics rows on {dates} were not written by the territory run "
+        f"(xid {run_xid}) and were left in place, not deleted: {not_ours}"
     )
 
 
@@ -329,12 +336,10 @@ def test_a_late_weekly_batch_rolls_up_under_each_triggers_own_date(
     # every selected date is fully ours, and ours are exactly the two planted dates.
     arrival_end = datetime.fromisoformat(TERRITORY_ARRIVAL_RUN)
     arrival_start = arrival_end - timedelta(hours=territory_metrics_etl.ARRIVAL_WINDOW_HOURS)
-    metric_dates_cte = territory_metrics_etl._TERRITORY_METRIC_DATES_BY_ARRIVAL
     (census,) = require_isolated_windows(
         db_conn,
         territory_arrival_spec(
             test_file=__file__,
-            metric_dates_cte=metric_dates_cte,
             start=arrival_start,
             end=arrival_end,
             hcp_like=f"hl_{rid}_%",
@@ -351,7 +356,6 @@ def test_a_late_weekly_batch_rolls_up_under_each_triggers_own_date(
         # READ ONLY by construction (codex r2-2): the selection is the ETL's raw CTE.
         return selected_metric_dates(
             db_conn,
-            metric_dates_cte,
             {
                 "start_date": arrival_start,
                 "end_date": arrival_end,
@@ -368,7 +372,27 @@ def test_a_late_weekly_batch_rolls_up_under_each_triggers_own_date(
     territory = _run_territory_rollup_impl(
         arrived_before=TERRITORY_ARRIVAL_RUN, request_id="late-arrival-territory"
     )
+    # The run's transaction id, read off our own keyed row it just wrote: the teardown
+    # deletes by it, and every row on the recorded dates must carry it -- a row that does
+    # not was written by someone else and is reported, not swept.
+    with db_conn:
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "SELECT xmin::text FROM territory_metrics WHERE territory_id = %s AND metric_date = %s",
+                (f"T_LATE_{rid}", TUESDAY),
+            )
+            row = cur.fetchone()
+            planted["territory_run_xid"] = row[0] if row else None
     assert territory["status"] == "completed" and territory["selected_by"] == "arrival", territory
+    assert planted["territory_run_xid"] is not None
+    with db_conn:
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "SELECT territory_id, metric_date, xmin::text FROM territory_metrics "
+                " WHERE metric_date = ANY(%s) AND xmin::text <> %s",
+                (sorted(planted["territory_selected_dates"]), planted["territory_run_xid"]),
+            )
+            assert cur.fetchall() == [], "a row on a selected date was not written by the run"
     # (total_trx, active_hcp_count). Tuesday 01-01: a 2 + b 1 delivered. Monday 01-14: a3 delivered;
     # its 30-day lookback still holds a's and b's 01-01 triggers, so both HCPs are active.
     assert _territory(db_conn, rid) == {TUESDAY: (3, 2), MONDAY: (1, 2)}

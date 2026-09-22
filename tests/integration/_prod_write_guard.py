@@ -452,75 +452,50 @@ def territory_rollup_spec(
     )
 
 
-def _selected_metric_dates_subquery(metric_dates_cte: str) -> str:
+def _territory_metric_dates_by_arrival() -> str:
+    """The ARRIVAL run's own ``metric_dates`` CTE, imported from the ETL.
+
+    The guard's standing rule is to import nothing from the ETLs it guards, redeclaring
+    constants and pinning them by unit test. This is its one deliberate departure: the
+    arrival census must equal the run's selection, and the only text that IS the run's
+    selection is the ETL's constant. A redeclared copy would be the drift the rule's own
+    pin tests exist to catch, and a raw-SQL parameter validated by a text-shape check was
+    walked past three rounds running (codex r1-5 a ';' in a comment, r2-2 ``DELETE …
+    RETURNING``, r3-2 a ``--`` inside a quoted identifier): a shape check is a proxy for
+    "this is the run's selection". Lazy, so importing the guard stays light.
+    """
+    from src.etl.territory_metrics_etl import _TERRITORY_METRIC_DATES_BY_ARRIVAL
+
+    return _TERRITORY_METRIC_DATES_BY_ARRIVAL
+
+
+def _selected_metric_dates_subquery() -> str:
     """The dates an ARRIVAL run would rebuild, as a parenthesised subquery over the run's
     own ``metric_dates`` CTE (``WITH`` is legal inside a subquery in PostgreSQL)."""
-    # The parameter is raw SQL (codex r1-5), so its shape is checked here rather than left
-    # to Postgres inside the live half: exactly one CTE named metric_dates, whose body is
-    # one parenthesised block, no second statement, and every run param it must bind.
-    if not re.search(r"^\s*metric_dates\s+AS\s*\(", metric_dates_cte):
-        raise ValueError(
-            "territory arrival census: the CTE must define 'metric_dates AS (...)' -- pass "
-            "territory_metrics_etl._TERRITORY_METRIC_DATES_BY_ARRIVAL"
-        )
-    # Checked on the SQL proper: the ETL's constant carries a ';' and parentheses inside
-    # its comments, and a check that read them refused the real constant; a literal may
-    # carry them too (codex r2-2), so literals are blanked as well before the scan.
-    body = re.sub(r"'[^']*'", "''", _strip_line_comments(metric_dates_cte)).strip()
-    if ";" in body:
-        raise ValueError("territory arrival census: the CTE must not contain a semicolon")
-    depth = 0
-    close_at = -1
-    for i, ch in enumerate(body):
-        depth += ch == "("
-        depth -= ch == ")"
-        if depth == 0 and ch == ")":
-            close_at = i
-            break
-    if close_at != len(body) - 1:
-        raise ValueError(
-            "territory arrival census: the CTE must be a single CTE 'metric_dates AS ( ... )' "
-            "with nothing after its closing parenthesis"
-        )
-    # A selection, not a data-modifying CTE (codex r2-2: `metric_dates AS (DELETE ...
-    # RETURNING metric_date)` is valid PostgreSQL and would otherwise pass). The body must
-    # be a SELECT and carry no write verb anywhere, nested included.
-    inner = body[body.index("(") + 1 : close_at].strip()
-    if not re.match(r"SELECT\b", inner, re.I):
-        raise ValueError("territory arrival census: the CTE body must be a SELECT")
-    verb = re.search(
-        r"\b(INSERT|UPDATE|DELETE|TRUNCATE|ALTER|DROP|CREATE|GRANT|MERGE|CALL|DO)\b", body, re.I
+    return (
+        f"(WITH {_territory_metric_dates_by_arrival()}\nSELECT md.metric_date FROM metric_dates md)"
     )
-    if verb:
-        raise ValueError(
-            f"territory arrival census: the CTE must not contain {verb.group(1).upper()}"
-        )
-    for name in ("start_date", "end_date", "per_hcp_metric_type"):
-        if f"%({name})s" not in metric_dates_cte:
-            raise ValueError(f"territory arrival census: the CTE must bind %({name})s")
-    return f"(WITH {metric_dates_cte}\nSELECT md.metric_date FROM metric_dates md)"
 
 
-def selected_metric_dates_sql(metric_dates_cte: str) -> str:
+def selected_metric_dates_sql() -> str:
     """A read-only statement listing the dates the arrival run would select, ordered.
 
-    The test records this set right before the run and its teardown deletes
-    ``territory_metrics`` for every date in it: the run writes a row for EVERY territory
-    on each selected date, and the two planted dates are not the whole selection when a
-    foreign per-HCP date sits within reach. Binds the run's own params
+    The test records this set right before the run and its teardown deletes the run's
+    ``territory_metrics`` rows on every date in it: the run writes a row for EVERY
+    territory on each selected date, and the two planted dates are not the whole
+    selection when a foreign per-HCP date sits within reach. Binds the run's own params
     (``start_date``, ``end_date``, ``per_hcp_metric_type``).
     """
-    return f"SELECT sel.metric_date FROM {_selected_metric_dates_subquery(metric_dates_cte)} sel ORDER BY 1"
+    return f"SELECT sel.metric_date FROM {_selected_metric_dates_subquery()} sel ORDER BY 1"
 
 
-def selected_metric_dates(conn: Any, metric_dates_cte: str, params: Mapping[str, Any]) -> set:
+def selected_metric_dates(conn: Any, params: Mapping[str, Any]) -> set:
     """Run :func:`selected_metric_dates_sql` inside a READ ONLY transaction and return the
-    dates as a set. The selection is raw SQL executed by a test on its writable connection
-    (codex r2-2); the READ ONLY boundary is the backstop behind the shape check."""
+    dates as a set -- the same boundary the census itself runs under (codex r2-2)."""
     with conn.cursor() as cur:
         cur.execute("BEGIN TRANSACTION READ ONLY")
         try:
-            cur.execute(selected_metric_dates_sql(metric_dates_cte), dict(params))
+            cur.execute(selected_metric_dates_sql(), dict(params))
             return {row[0] for row in cur.fetchall()}
         finally:
             cur.execute("ROLLBACK")
@@ -529,7 +504,6 @@ def selected_metric_dates(conn: Any, metric_dates_cte: str, params: Mapping[str,
 def territory_arrival_spec(
     *,
     test_file: str,
-    metric_dates_cte: str,
     start: Any,
     end: Any,
     hcp_like: str,
@@ -548,14 +522,13 @@ def territory_arrival_spec(
     plant: ``territory_rollup_spec`` over ``[2019-01-01, 2019-01-21)`` read 0/0/0/0/0 and
     permitted while the run would have selected 2019-01-30 and 2019-03-15.
 
-    So this census does not restate the selection -- it embeds the CTE the caller hands
-    it, which is the ETL's own constant, so the census cannot drift from the run. The
-    guard itself still imports nothing from the ETL (the module's standing rule); the
-    caller passes the constant, exactly as the late-arrival fixture derives its window
-    from the ETL's ``ARRIVAL_WINDOW_HOURS``. ``start``/``end`` are the RUN's window
-    (``arrived_before`` less ``ARRIVAL_WINDOW_HOURS``, and ``arrived_before``), not a
-    date range, and the selection depends on the rows the file has already planted, so
-    the census must run right before the territory run, not at fixture time.
+    So this census does not restate the selection -- it embeds the ETL's own constant
+    (see :func:`_territory_metric_dates_by_arrival` for why it is imported rather than
+    redeclared or passed in), so the census cannot drift from the run. ``start``/``end``
+    are the RUN's window (``arrived_before`` less ``ARRIVAL_WINDOW_HOURS``, and
+    ``arrived_before``), not a date range, and the selection depends on the rows the file
+    has already planted, so the census must run right before the territory run, not at
+    fixture time.
 
     Legs:
 
@@ -588,7 +561,7 @@ def territory_arrival_spec(
     2019-dated rows inside that gap is the file's standing premise, measured: the
     earliest live ``triggers.created_at`` is 2026-06-10.
     """
-    selected = _selected_metric_dates_subquery(metric_dates_cte)
+    selected = _selected_metric_dates_subquery()
     in_lookback = (
         f"EXISTS (SELECT 1 FROM {selected} sd "
         f" WHERE t.trigger_timestamp >= sd.metric_date"

@@ -35,21 +35,10 @@ from tests.integration._prod_write_guard import (
     territory_rollup_spec,
 )
 
-#: A stand-in for the ETL's ``metric_dates`` CTE, so the shape tests stay hermetic. The
-#: pin tests below use the ETL's REAL constant.
-_FAKE_METRIC_DATES_CTE = """
-metric_dates AS (
-    -- a comment, like the real one carries
-    SELECT DISTINCT bm.metric_date FROM business_metrics bm
-     WHERE bm.metric_type = %(per_hcp_metric_type)s AND bm.hcp_id IS NOT NULL
-       AND bm.created_at >= %(start_date)s AND bm.created_at < %(end_date)s
-)"""
 
-
-def _arrival_spec(cte: str = _FAKE_METRIC_DATES_CTE, **overrides: object) -> WriteWindowSpec:
+def _arrival_spec(**overrides: object) -> WriteWindowSpec:
     kwargs: dict = {
         "test_file": "arr.py",
-        "metric_dates_cte": cte,
         "start": "2019-01-06 21:45:00+00",
         "end": "2019-01-14 03:45:00+00",
         "hcp_like": "hl_abc_%",
@@ -478,12 +467,12 @@ def test_the_arrival_census_composes_the_runs_own_selection_verbatim() -> None:
     """The gap #2213 closed: the ARRIVAL run selects dates with
     ``_TERRITORY_METRIC_DATES_BY_ARRIVAL`` (a per-HCP date written in the window, or within
     30 days of a trigger that ARRIVED in it), which a ``metric_date`` range cannot mirror.
-    The census therefore embeds the CTE the caller hands it -- the ETL's own constant, so
-    the two cannot drift -- in every live leg, with the run's own bounds and its
-    ``hcp_id IS NOT NULL``."""
+    The census therefore embeds the ETL's own constant -- imported, so the two cannot
+    drift and no text-shape check stands in for the real thing (codex r3-2) -- in every
+    live leg, with the run's own bounds and its ``hcp_id IS NOT NULL``."""
     from src.etl.territory_metrics_etl import _TERRITORY_METRIC_DATES_BY_ARRIVAL
 
-    spec = _arrival_spec(_TERRITORY_METRIC_DATES_BY_ARRIVAL)
+    spec = _arrival_spec()
     cte = _normalised(_TERRITORY_METRIC_DATES_BY_ARRIVAL)
     for leg in ("source_rows_total", "source_rows_planted", "teardown_reach_preexisting"):
         sql = _normalised(_leg(spec, leg).sql)
@@ -497,11 +486,28 @@ def test_the_arrival_census_composes_the_runs_own_selection_verbatim() -> None:
         assert outer.count("bm.hcp_id IS NOT NULL") == 1, leg
         assert outer.count("t.hcp_id IS NOT NULL") == 1, leg
     # The selection the test records for its teardown is the SAME subquery the legs use.
-    selection = _normalised(selected_metric_dates_sql(_TERRITORY_METRIC_DATES_BY_ARRIVAL))
+    selection = _normalised(selected_metric_dates_sql())
     assert cte in selection
     inner = selection[selection.index("(WITH") : selection.rindex(")") + 1]
     for leg in ("source_rows_total", "source_rows_planted", "teardown_reach_preexisting"):
         assert inner in _normalised(_leg(spec, leg).sql), leg
+
+
+def test_the_arrival_selection_cannot_be_supplied_from_outside() -> None:
+    """codex r1-5, r2-2, r3-2: three rounds each found a way past a text-shape check on a
+    raw-SQL ``metric_dates_cte`` parameter (a ';' in a comment, ``DELETE … RETURNING``, a
+    ``--`` inside a quoted identifier). A shape check on SQL text is a proxy for "this is
+    the run's selection"; the only thing that IS the run's selection is the ETL's
+    constant. So the spec and the selection helpers take no CTE at all -- the guard
+    imports it, its one deliberate departure from "import nothing from the ETL", made
+    because here the census must equal the ETL's SQL and a redeclared copy would be the
+    drift the rule's pin tests exist to catch."""
+    import inspect
+
+    for fn in (territory_arrival_spec, selected_metric_dates_sql, selected_metric_dates):
+        params = inspect.signature(fn).parameters
+        assert "metric_dates_cte" not in params, fn.__name__
+        assert not any("cte" in p or "sql" in p for p in params), (fn.__name__, list(params))
 
 
 def test_the_arrival_census_lookback_is_the_etls_active_hcp_window() -> None:
@@ -565,69 +571,10 @@ def test_the_arrival_census_waives_the_key_space_leg_and_keeps_the_teardown_leg(
     assert "m.metric_date >=" not in teardown
 
 
-@pytest.mark.parametrize(
-    ("cte", "why"),
-    [
-        ("affected_dates AS (SELECT 1)", "metric_dates AS"),
-        (_FAKE_METRIC_DATES_CTE + "; DELETE FROM territory_metrics", "semicolon"),
-        (_FAKE_METRIC_DATES_CTE + ", extra AS (SELECT 1)", "single CTE"),
-        (_FAKE_METRIC_DATES_CTE.replace("%(end_date)s", "now()"), "end_date"),
-        (_FAKE_METRIC_DATES_CTE.replace("%(per_hcp_metric_type)s", "'x'"), "per_hcp_metric_type"),
-        (
-            _FAKE_METRIC_DATES_CTE.replace(
-                "SELECT DISTINCT bm.metric_date FROM business_metrics bm",
-                "DELETE FROM business_metrics bm RETURNING bm.metric_date",
-            ),
-            "SELECT",
-        ),
-        (
-            _FAKE_METRIC_DATES_CTE.replace(
-                "bm.hcp_id IS NOT NULL",
-                "bm.hcp_id IN (SELECT hcp_id FROM hcp_profiles WHERE (UPDATE x SET y = 1) IS NULL)",
-            ),
-            "UPDATE",
-        ),
-    ],
-    ids=[
-        "other-name",
-        "second-statement",
-        "second-cte",
-        "missing-bound",
-        "missing-type",
-        "delete-returning",
-        "nested-write-verb",
-    ],
-)
-def test_the_arrival_census_refuses_a_cte_that_is_not_one_metric_dates_selection(
-    cte: str, why: str
-) -> None:
-    """The legs read ``FROM metric_dates`` and bind the run's three params (codex r1-5:
-    the parameter is raw SQL, so its shape is checked at construction rather than left
-    for Postgres inside the live half). One CTE named metric_dates, no second statement
-    or clause, every run param present."""
-    with pytest.raises(ValueError, match=why):
-        _arrival_spec(cte)
-
-
-def test_the_arrival_census_shape_check_reads_the_sql_not_its_comments() -> None:
-    """The first version of the check read the raw text and refused the ETL's REAL
-    constant, whose comments carry a ';' and parentheses. The check must look at the SQL
-    proper; the real constant is the positive control."""
-    from src.etl.territory_metrics_etl import _TERRITORY_METRIC_DATES_BY_ARRIVAL
-
-    assert "; and" in _TERRITORY_METRIC_DATES_BY_ARRIVAL  # the comment that bit
-    _arrival_spec(_TERRITORY_METRIC_DATES_BY_ARRIVAL)
-    _arrival_spec(_FAKE_METRIC_DATES_CTE.replace("-- a comment", "-- a (comment); with '('"))
-    # codex r2-2: nor its string literals -- a ';' or an unmatched '(' inside one is data.
-    _arrival_spec(
-        _FAKE_METRIC_DATES_CTE.replace("bm.hcp_id IS NOT NULL", "bm.hcp_id NOT LIKE 'x;(%'")
-    )
-
-
 def test_selected_metric_dates_reads_inside_a_read_only_transaction() -> None:
-    """codex r2-2: the selection is raw SQL run by the test on its writable connection.
-    The helper wraps it in ``BEGIN TRANSACTION READ ONLY`` … ``ROLLBACK`` so a CTE that
-    slipped past the shape check still cannot write."""
+    """codex r2-2: the selection is the ETL's raw CTE run by the test on its writable
+    connection. The helper wraps it in ``BEGIN TRANSACTION READ ONLY`` … ``ROLLBACK``,
+    the same boundary the census itself runs under."""
     from datetime import date
 
     class _Cursor:
@@ -654,11 +601,11 @@ def test_selected_metric_dates_reads_inside_a_read_only_transaction() -> None:
             return _Cursor(self.log)
 
     conn = _Conn()
-    got = selected_metric_dates(conn, _FAKE_METRIC_DATES_CTE, {"start_date": 1, "end_date": 2})
+    got = selected_metric_dates(conn, {"start_date": 1, "end_date": 2, "per_hcp_metric_type": "x"})
     assert got == {date(2019, 1, 1), date(2019, 1, 14)}
     assert conn.log[0] == "BEGIN TRANSACTION READ ONLY"
     assert conn.log[-1] == "ROLLBACK"
-    assert conn.log[1] == selected_metric_dates_sql(_FAKE_METRIC_DATES_CTE)
+    assert conn.log[1] == selected_metric_dates_sql()
 
 
 def test_the_disproof_counts_are_read_as_measured() -> None:
