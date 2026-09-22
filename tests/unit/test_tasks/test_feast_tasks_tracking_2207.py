@@ -160,9 +160,12 @@ def test_failed_incremental_materialize_lands_one_failed_job_row_per_view(fake_d
     """The live outcome on the worker image — recorded, not dropped."""
     fake_job.outcomes = {"incremental": FAILED_INIT, "full": FAILED_INIT}
 
-    result = feast_tasks.materialize_incremental_features()
+    # Amended 2026-09-22 (#2207 follow-up): a failed run is RED in Celery (fail loud) and an
+    # init failure is not doubled by the auto-recovery branch — see
+    # test_feast_tasks_fail_loud_2207.py. The rows still land first.
+    with pytest.raises(RuntimeError, match="Failed to initialize Feast client"):
+        feast_tasks.materialize_incremental_features()
 
-    assert result["status"] == "failed"  # task contract unchanged
     jobs = fake_db.store.get("ml_feast_materialization_jobs", [])
     incremental = [j for j in jobs if j["job_type"] == "incremental"]
     recovery = [j for j in jobs if j["job_type"] == "full"]
@@ -171,8 +174,7 @@ def test_failed_incremental_materialize_lands_one_failed_job_row_per_view(fake_d
     )
     assert all(j["status"] == "failed" for j in incremental)
     assert all(j["error_message"] == "Failed to initialize Feast client" for j in incremental)
-    # the auto-recovery attempt is a second, distinct job (full mode), also recorded
-    assert {j["feature_view_name"] for j in recovery} == set(FEAST_FEATURE_VIEW_SOURCE_TABLES)
+    assert recovery == []  # no recovery attempt for an init failure
     # every job row links to a registry row for its view
     views = {v["name"]: v for v in fake_db.store.get("ml_feast_feature_views", [])}
     assert set(views) == set(FEAST_FEATURE_VIEW_SOURCE_TABLES)
@@ -283,7 +285,10 @@ def test_freshness_check_that_cannot_run_records_every_targeted_view_as_unknown(
     probed. #556 says unverifiable is not fresh — the table must say so too."""
     fake_job.outcomes = {"freshness": FAILED_INIT}
 
-    feast_tasks.check_feature_freshness(feature_views=None, alert_on_stale=False)
+    # Amended 2026-09-22 (#2207 follow-up): the beat is RED when it probed nothing; the
+    # unknown rows land before it raises.
+    with pytest.raises(RuntimeError, match="Failed to initialize Feast client"):
+        feast_tasks.check_feature_freshness(feature_views=None, alert_on_stale=False)
 
     rows = fake_db.store["ml_feast_feature_freshness"]
     assert {r["feature_view_name"] for r in rows} == set(FEAST_FEATURE_VIEW_SOURCE_TABLES)
@@ -297,20 +302,34 @@ def test_freshness_check_that_cannot_run_records_every_targeted_view_as_unknown(
 
 @pytest.mark.unit
 def test_tracking_backend_failure_does_not_fail_the_beat_task(fake_job, caplog):
-    fake_job.outcomes = {"incremental": FAILED_INIT, "full": FAILED_INIT, "freshness": FAILED_INIT}
+    # Amended 2026-09-22 (#2207 follow-up): a FAILED run now raises on its own merits
+    # (fail loud), so the "never fail the parent" contract is asserted on runs that
+    # succeeded: a broken tracking backend must not turn them into failed tasks.
+    fake_job.outcomes = {
+        "incremental": {"status": "completed", "feature_views": ["hcp_profile_features"]},
+        "freshness": {
+            "status": "completed",
+            "fresh": True,
+            "fresh_features": [],
+            "stale_features": [],
+            "errors": [],
+        },
+    }
     with patch.object(feast_tasks, "_tracking_client", return_value=_ExplodingSupabase()):
         r1 = feast_tasks.materialize_incremental_features()
         r2 = feast_tasks.check_feature_freshness(alert_on_stale=False)
-    assert r1["status"] == "failed" and r2["status"] == "failed"
+    assert r1["status"] == "completed" and r2["status"] == "completed"
 
 
 @pytest.mark.unit
 def test_unconfigured_tracking_client_does_not_fail_the_beat_task(fake_job):
-    fake_job.outcomes = {"incremental": FAILED_INIT, "full": FAILED_INIT}
+    # Amended 2026-09-22 (#2207 follow-up): asserted on a successful run (a failed run
+    # raises on its own merits now).
+    fake_job.outcomes = {"incremental": {"status": "completed", "feature_views": ["x"]}}
     with patch.object(
         feast_tasks, "_tracking_client", side_effect=RuntimeError("SUPABASE_URL unset")
     ):
-        assert feast_tasks.materialize_incremental_features()["status"] == "failed"
+        assert feast_tasks.materialize_incremental_features()["status"] == "completed"
 
 
 # ---------------------------------------------------------------------------
@@ -391,9 +410,11 @@ def test_a_job_row_that_did_not_land_is_not_counted(fake_job, caplog):
 def test_job_rows_land_with_their_terminal_status_in_one_insert(fake_db, fake_job):
     """No create-then-update pair: the single inserted row already carries the outcome."""
     fake_job.outcomes = {"incremental": FAILED_INIT, "full": FAILED_INIT}
-    feast_tasks.materialize_incremental_features(feature_views=["hcp_profile_features"])
+    # Amended 2026-09-22 (#2207 follow-up): fail loud + no recovery on an init failure.
+    with pytest.raises(RuntimeError):
+        feast_tasks.materialize_incremental_features(feature_views=["hcp_profile_features"])
     rows = fake_db.store["ml_feast_materialization_jobs"]
-    assert len(rows) == 2  # incremental + the recovery attempt
+    assert len(rows) == 1  # the incremental run only (no recovery for an init failure)
     for r in rows:
         assert r["status"] == "failed"
         assert r["error_message"] == "Failed to initialize Feast client"

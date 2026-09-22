@@ -39,7 +39,14 @@ if TYPE_CHECKING:
 import yaml  # type: ignore[import-untyped]
 from pydantic import BaseModel, Field
 
-from src.feature_store.feast_views import FEAST_FEATURE_VIEW_SOURCE_TABLES
+from src.feature_store.feast_remote_materialize import (
+    post_materialize,
+    post_materialize_incremental,
+)
+from src.feature_store.feast_views import (
+    FEAST_FEATURE_VIEW_SOURCE_TABLES,
+    FEAST_SOURCE_TABLE_TIMESTAMP_COLUMNS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -138,19 +145,9 @@ FEATURE_REPO_PATH = Path(__file__).parent.parent.parent / "feature_repo"
 # Config path
 FEAST_CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "feast_materialization.yaml"
 
-# #559: per-source-table RAW timestamp column to MAX() for genuine recency. Keyed by the
-# source table name (the unit that resolves in the statistics path). Feast's
-# ``timestamp_field`` is ``event_timestamp`` for every source, but several of those are
-# GENERATED columns derived from a raw base column (migration 033); we MAX() the raw base
-# column so recency reflects the freshest underlying data point. Column + type verified
-# live against the prod-equivalent Supabase. See FeastClient._infer_timestamp_column.
-_TABLE_TIMESTAMP_COLUMNS: Dict[str, str] = {
-    "business_metrics": "metric_date",  # DATE
-    "patient_journeys": "journey_start_date",  # DATE
-    "triggers": "trigger_timestamp",  # TIMESTAMPTZ (finer than derived trigger_date)
-    "hcp_profiles": "updated_at",  # TIMESTAMPTZ (real, not generated)
-    "territory_metrics": "metric_date",  # DATE
-}
+# #559 per-source-table RAW timestamp column to MAX() for genuine recency — the one copy
+# lives in feast_views (stdlib-only, shared with the data-prep freshness gate).
+_TABLE_TIMESTAMP_COLUMNS: Dict[str, str] = FEAST_SOURCE_TABLE_TIMESTAMP_COLUMNS
 
 
 class FeastError(Exception):
@@ -697,25 +694,23 @@ class FeastClient:
         end_date: datetime,
         feature_views: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        """Materialize features to online store.
-
-        Syncs feature values from offline store (Supabase) to online store (Redis)
-        for the specified time range.
-
-        Args:
-            start_date: Start of materialization window.
-            end_date: End of materialization window.
-            feature_views: Optional list of feature views to materialize.
-                If None, materializes all feature views.
-
-        Returns:
-            Dictionary with materialization results:
-            - feature_views: List of materialized views
-            - rows_materialized: Estimated row count
-            - duration_seconds: Time taken
-        """
+        """Materialize ``feature_views`` (None = all) for ``[start_date, end_date]`` from the
+        offline store into the online store. Remote mode (#532/#2207) POSTs the window to
+        the e2i_feast sidecar (``feast_remote_materialize``); embedded mode drives the
+        local FeatureStore. Returns ``{status, feature_views, duration_seconds, ...}``."""
         await self.initialize()
         self._ensure_initialized()
+
+        if self._remote_base_url:
+            result = await post_materialize(
+                self._remote_base_url,
+                start_date=start_date,
+                end_date=end_date,
+                feature_views=feature_views,
+                timeout=self.config.timeout_seconds,
+                default_feature_views=self._enabled_feature_view_names(),
+            )
+            return self._record_remote_materialization(result)
 
         if not self._store:
             logger.warning("Feast store not available. Skipping materialization.")
@@ -768,19 +763,20 @@ class FeastClient:
         end_date: datetime,
         feature_views: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
-        """Incrementally materialize features from last materialization.
-
-        More efficient than full materialization for regular updates.
-
-        Args:
-            end_date: End date for incremental materialization.
-            feature_views: Optional list of feature views to materialize.
-
-        Returns:
-            Materialization results dictionary.
-        """
+        """Incrementally materialize ``feature_views`` (None = all) up to ``end_date``.
+        Remote mode POSTs to the sidecar's ``/materialize-incremental`` (#2207)."""
         await self.initialize()
         self._ensure_initialized()
+
+        if self._remote_base_url:
+            result = await post_materialize_incremental(
+                self._remote_base_url,
+                end_date=end_date,
+                feature_views=feature_views,
+                timeout=self.config.timeout_seconds,
+                default_feature_views=self._enabled_feature_view_names(),
+            )
+            return self._record_remote_materialization(result)
 
         if not self._store:
             logger.warning("Feast store not available. Skipping materialization.")
@@ -815,6 +811,18 @@ class FeastClient:
         except Exception as e:
             logger.error(f"Incremental materialization failed: {e}")
             return {"status": "failed", "error": str(e)}
+
+    def _enabled_feature_view_names(self) -> List[str]:
+        """Config views not marked ``enabled: false`` — what a ``feature_views=None``
+        remote materialize covers (the sidecar skips non-online views, #556)."""
+        views = self._materialization_config.get("feature_views", {}) or {}
+        return [name for name, cfg in views.items() if (cfg or {}).get("enabled", True)]
+
+    def _record_remote_materialization(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        if result.get("status") == "completed":
+            for view_name in result.get("feature_views", []):
+                self._materialization_timestamps[view_name] = datetime.now(timezone.utc)
+        return result
 
     def _get_all_feature_view_names(self) -> List[str]:
         """Get all registered feature view names from config or store."""
@@ -1477,38 +1485,12 @@ class FeastClient:
         self,
         feature_view: str,
     ) -> FeatureFreshness:
-        """Check feature freshness for a feature view.
-
-        Determines freshness based on:
-        1. Time since last materialization
-        2. Configured staleness thresholds
-
-        Status levels:
-        - FRESH: Within warning threshold.
-        - WARNING: Between warning and max staleness.
-        - STALE: Beyond max staleness but within 2x.
-        - EXPIRED: Beyond 2x max staleness.
-        - UNKNOWN: Either (a) no materialization record exists for this
-          feature view, or (b) the freshness check itself raised an
-          unexpected exception. The two are conflated into UNKNOWN
-          because the *consequence* — block-by-default unless
-          ``ALLOW_STALE_FEAST=1`` overrides it — is the same. The
-          warning log line distinguishes the two for ops.
-
-        On any unexpected exception the method defaults to treating features
-        as **stale** (``is_fresh=False``, ``freshness_status=UNKNOWN``) so
-        that callers block by default rather than silently proceeding with
-        potentially outdated data.
-
-        Emergency opt-out: set ``ALLOW_STALE_FEAST=1`` in the environment to
-        override this behaviour during a known Feast outage. This env-var is
-        an ops escape hatch — do NOT set it in normal config or tests.
-
-        Args:
-            feature_view: Name of the feature view.
-
-        Returns:
-            FeatureFreshness object with status and timing info.
+        """Freshness of ``feature_view`` from the IN-PROCESS materialization timestamps
+        vs the configured thresholds: FRESH (within warning) / WARNING (within max) /
+        STALE (within 2x max) / EXPIRED (beyond) / UNKNOWN — no record for the view, or
+        the check itself raised; both block by default (``is_fresh=False``) unless the
+        ops escape hatch ``ALLOW_STALE_FEAST=1`` is set (never in normal config/tests).
+        Cross-process recency is the #559 source-table probe, not this method.
         """
         try:
             await self.initialize()
