@@ -56,6 +56,7 @@ import {
 } from '@/types/digital-twin';
 import { groupSimulationsByInterventionBrand } from '@/lib/digital-twin-history';
 import {
+  allModelsUnvalidated,
   describeModelCensus,
   explainModelCensus,
   fidelityStatusLabel,
@@ -898,8 +899,12 @@ export default function DigitalTwin() {
   const deployRate = historyItems.length > 0 ? Math.round((deployCount / historyItems.length) * 100) : null;
   const fidelityPct =
     displayed?.model_fidelity_score != null ? Math.round(displayed.model_fidelity_score * 100) : null;
-  const lastRunUnvalidated = displayed?.fidelity_status === 'unvalidated';
   const modelRows = useMemo(() => modelsData?.models ?? [], [modelsData]);
+  // With no run displayed yet, the card still must not read as a blank pass: when
+  // every trained model is unvalidated, say so (codex r1 #2).
+  const lastRunUnvalidated = displayed
+    ? displayed.fidelity_status === 'unvalidated'
+    : allModelsUnvalidated(modelRows);
   const modelCensusText = useMemo(() => describeModelCensus(modelRows), [modelRows]);
   const modelCensusWhy = useMemo(() => explainModelCensus(modelRows), [modelRows]);
 
@@ -962,7 +967,9 @@ export default function DigitalTwin() {
           value={fidelityPct != null ? `${fidelityPct}%` : lastRunUnvalidated ? 'Unvalidated' : '—'}
           subtext={
             lastRunUnvalidated
-              ? 'No experiment outcome compared against this model yet'
+              ? displayed
+                ? 'No experiment outcome compared against this model yet'
+                : 'No experiment outcome compared against any twin model yet'
               : 'Model fidelity score'
           }
           icon={<TrendingUp className="h-4 w-4" />}

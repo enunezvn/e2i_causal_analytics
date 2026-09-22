@@ -2189,3 +2189,76 @@ async def test_get_simulation_stored_row_derives_fidelity_status_from_its_model(
     assert detail2.fidelity_status.value == "validated"
     assert detail2.model_fidelity_score == 0.91
     assert detail2.fidelity_warning is False
+
+
+@pytest.mark.asyncio
+async def test_run_simulation_persists_the_experiment_link_it_was_given(
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository, mock_twin_hydrate
+):
+    """codex r1 #1: SimulateRequest accepted experiment_design_id and dropped it on
+    save, so no twin_simulations row was ever linked and the fidelity producer
+    (experiment-scoped resolution) could only skip. The link is now written."""
+    from uuid import UUID
+
+    from src.api.routes.digital_twin import (
+        BrandEnum,
+        InterventionConfigRequest,
+        SimulateRequest,
+        TwinTypeEnum,
+        run_simulation,
+    )
+
+    exp_id = uuid4()
+    saved_id = uuid4()
+    mock_twin_repository.save_simulation = AsyncMock(return_value=saved_id)
+    mock_twin_repository.simulations.link_experiment = AsyncMock(return_value=True)
+
+    request = SimulateRequest(
+        intervention=InterventionConfigRequest(
+            intervention_type="email_campaign",
+            channel="email",
+            frequency="weekly",
+            duration_weeks=8,
+        ),
+        brand=BrandEnum.REMIBRUTINIB,
+        twin_type=TwinTypeEnum.HCP,
+        twin_count=1000,
+        experiment_design_id=str(exp_id),
+    )
+    await run_simulation(request, {"user_id": "test_user", "role": "operator"})
+
+    mock_twin_repository.simulations.link_experiment.assert_awaited_once_with(
+        saved_id, UUID(str(exp_id))
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_simulation_rejects_a_malformed_experiment_link_before_simulating(
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository, mock_twin_hydrate
+):
+    from src.api.routes.digital_twin import (
+        BrandEnum,
+        InterventionConfigRequest,
+        SimulateRequest,
+        TwinTypeEnum,
+        run_simulation,
+    )
+
+    request = SimulateRequest(
+        intervention=InterventionConfigRequest(
+            intervention_type="email_campaign",
+            channel="email",
+            frequency="weekly",
+            duration_weeks=8,
+        ),
+        brand=BrandEnum.REMIBRUTINIB,
+        twin_type=TwinTypeEnum.HCP,
+        twin_count=1000,
+        experiment_design_id="not-a-uuid",
+    )
+    with pytest.raises(HTTPException) as exc:
+        await run_simulation(request, {"user_id": "test_user", "role": "operator"})
+    assert exc.value.status_code == 422
+    assert "experiment_design_id" in str(exc.value.detail)
+    mock_simulation_engine.simulate.assert_not_called()
+    mock_twin_repository.save_simulation.assert_not_called()

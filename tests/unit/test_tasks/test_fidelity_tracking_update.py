@@ -309,3 +309,37 @@ class TestFidelityLoopIsLive:
             "fidelity_score": 0.9,
             "sample_count": 1,
         }
+
+
+class TestProducerPathResolvesTheLinkedSimulation:
+    def test_no_explicit_simulation_id_resolves_experiment_scoped(self):
+        """The producer enqueues only the experiment id (codex r1 #1): the task must
+        hand None through so compare_experiment_to_twin resolves the simulation via
+        twin_simulations.experiment_design_id — the link /simulate now writes."""
+        from src.tasks.ab_testing_tasks import fidelity_tracking_update
+
+        exp_id = uuid4()
+        sim_id = uuid4()
+        fc = _real_fidelity_comparison(exp_id, sim_id)
+        svc = MagicMock()
+        svc.compare_experiment_to_twin = AsyncMock(return_value=fc)
+        repo = MagicMock()
+        repo.get_simulation = AsyncMock(
+            return_value={"simulation_id": str(sim_id), "model_id": str(uuid4())}
+        )
+        repo.refresh_model_fidelity_from_comparisons = AsyncMock(return_value=None)
+        with (
+            patch("src.services.results_analysis.ResultsAnalysisService", return_value=svc),
+            patch("src.digital_twin.twin_repository.TwinRepository", return_value=repo),
+            patch(
+                "src.memory.services.factories.get_async_supabase_client",
+                new=AsyncMock(return_value=MagicMock()),
+            ),
+        ):
+            result = fidelity_tracking_update.run(experiment_id=str(exp_id))
+
+        assert result["status"] == "completed"
+        svc.compare_experiment_to_twin.assert_awaited_once_with(
+            experiment_id=exp_id, twin_simulation_id=None
+        )
+        assert result["twin_simulation_id"] == str(sim_id)

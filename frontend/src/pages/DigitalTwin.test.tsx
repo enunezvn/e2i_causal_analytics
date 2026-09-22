@@ -1023,6 +1023,30 @@ describe('DigitalTwin', () => {
     expect(card?.getAttribute('title')).toMatch(/self-generated target/);
   });
 
+  it('tells a brand-scoped viewer the shared fit from the census count, not from row counting (codex r1 #3)', () => {
+    (useTwinModels as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { total_count: 1, models: [sharedFitModel('Kisqali', { shared_fit_with: [] })] },
+      isLoading: false,
+    });
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+    expect(
+      screen.getByText('3 brand labels over 1 shared synthetic fit · Kisqali unvalidated')
+    ).toBeInTheDocument();
+    const card = screen.getByText('Models Available').closest('[title]');
+    expect(card?.getAttribute('title')).toMatch(/2 other brand models outside your brand grant/);
+    expect(card?.getAttribute('title')).not.toMatch(/Remibrutinib|Fabhalta/);
+  });
+
+  it('shows Unvalidated on initial load when every trained model is unvalidated (codex r1 #2)', () => {
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+    // No run displayed yet (useRunSimulation data undefined, nothing selected).
+    expect(screen.getByText('Unvalidated')).toBeInTheDocument();
+    expect(
+      screen.getByText('No experiment outcome compared against any twin model yet')
+    ).toBeInTheDocument();
+    expect(screen.queryByText('—')).not.toBeInTheDocument();
+  });
+
   it('does not call distinct fits shared (#2206)', () => {
     (useTwinModels as ReturnType<typeof vi.fn>).mockReturnValue({
       data: {

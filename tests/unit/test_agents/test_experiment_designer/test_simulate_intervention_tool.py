@@ -455,6 +455,50 @@ class TestSimulateInterventionEstimatesOnTheCohort:
         # average (~0.34): the target regions reach the estimator.
         assert out["simulated_ate"] == pytest.approx(PLANTED_EFFECT["northeast"], abs=0.04)
 
+    @pytest.mark.timeout(180)
+    def test_model_fidelity_is_read_fresh_per_call_not_pinned_to_the_population_cache(
+        self, monkeypatch, tool_module
+    ):
+        """codex r1 #4: the population cache is indefinite, but a model's fidelity
+        changes without retraining (the live loop rolls it up). The tool reads the
+        model row's fidelity on every call; a NULL still states 'unvalidated'."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        monkeypatch.setattr(
+            "src.digital_twin.effect.cohort_loader.load_cohort_frame",
+            AsyncMock(return_value=_planted_cohort()),
+        )
+        monkeypatch.setattr(
+            "src.memory.services.factories.loop_scoped_async_supabase_client",
+            _scoped_client(MagicMock()),
+        )
+        monkeypatch.setattr(
+            tool_module, "_get_or_create_twins", lambda *a, **k: _region_population()
+        )
+        reads: list = []
+        fidelity = {"value": None}
+        monkeypatch.setattr(
+            tool_module,
+            "_read_active_model_fidelity",
+            lambda *a, **k: reads.append(a) or fidelity["value"],
+        )
+        ask = {"intervention_type": "email_campaign", "brand": "Kisqali"}
+
+        first = tool_module.simulate_intervention.invoke(ask)
+        assert first["simulation_id"] != "error", first["recommendation_rationale"]
+        assert first["fidelity_status"] == "unvalidated"
+        assert first["fidelity_warning"] is True
+
+        fidelity["value"] = 0.55
+        second = tool_module.simulate_intervention.invoke(ask)
+        assert second["fidelity_status"] == "below_threshold"
+
+        fidelity["value"] = 0.9
+        third = tool_module.simulate_intervention.invoke(ask)
+        assert third["fidelity_status"] == "validated"
+        assert third["fidelity_warning"] is False
+        assert len(reads) == 3, "one fresh fidelity read per call"
+
     def test_refuses_without_generating_twins_when_the_cohort_is_unusable(
         self, monkeypatch, tool_module
     ):

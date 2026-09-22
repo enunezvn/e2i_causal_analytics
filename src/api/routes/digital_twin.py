@@ -1069,6 +1069,21 @@ async def run_simulation(
         twin_type = TwinType(request.twin_type.value)
         brand = Brand(request.brand.value)
 
+        # The experiment link (#2206, codex r1 #1): the request always accepted
+        # experiment_design_id and the save dropped it, so no twin_simulations row
+        # was ever linked and the post-experiment fidelity producer — which resolves
+        # the simulation experiment-scoped — could only skip. Validate it up front
+        # (before the heavy work) and write it after the save.
+        experiment_link: Optional[UUID] = None
+        if request.experiment_design_id:
+            try:
+                experiment_link = UUID(str(request.experiment_design_id))
+            except ValueError as bad_link:
+                raise HTTPException(
+                    status_code=422,
+                    detail="experiment_design_id must be a UUID (the experiment this pre-screen is for).",
+                ) from bad_link
+
         # Resolve a REAL trained model BEFORE generating: an explicit model_id, or
         # the highest-fidelity active model for this brand/twin_type. No model →
         # honest 503 (not a fresh untrained generator → opaque 500, and not a
@@ -1164,8 +1179,19 @@ async def run_simulation(
                 detail=result.error_message or "Simulation could not be completed.",
             )
 
-        # Save simulation result (reuse the repo resolved above).
-        await repo.save_simulation(result, request.brand.value)
+        # Save simulation result (reuse the repo resolved above), then link it to
+        # its experiment so fidelity_tracking_update can find it (#2206).
+        saved_id = await repo.save_simulation(result, request.brand.value)
+        if experiment_link is not None:
+            linked = await repo.simulations.link_experiment(
+                saved_id or result.simulation_id, experiment_link
+            )
+            if not linked:
+                logger.warning(
+                    "Simulation %s saved but not linked to experiment %s",
+                    saved_id or result.simulation_id,
+                    experiment_link,
+                )
 
         return SimulationResponse(
             simulation_id=str(result.simulation_id),

@@ -124,13 +124,32 @@ class SimulateInterventionOutput(BaseModel):
 
 # Module-level cache for twin populations
 _twin_cache: Dict[str, Any] = {}
-# The resolved model's measured fidelity per population cache key (#2206). Absent
-# (e.g. the loader was replaced in a test) reads as None → 'unvalidated', never as a pass.
-_model_fidelity_cache: Dict[str, Optional[float]] = {}
 
 
-def _model_fidelity_for(twin_type: "TwinType", brand: "Brand", n: int) -> Optional[float]:
-    return _model_fidelity_cache.get(f"{twin_type.value}_{brand.value}_{n}")
+def _read_active_model_fidelity(twin_type: TwinType, brand: Brand) -> Optional[float]:
+    """The active model's measured fidelity, read fresh on every call (#2206).
+
+    The population cache above is indefinite, but a model's fidelity changes
+    without retraining (the post-experiment loop rolls comparisons up into it), so
+    the state must not be pinned to the cached population (codex r1 #4). Any
+    failure to read is ``None`` → 'unvalidated' with a warning, never a pass.
+    """
+    from src.memory.services.factories import loop_scoped_async_supabase_client
+
+    async def _read() -> Optional[float]:
+        async with loop_scoped_async_supabase_client() as client:
+            repo = TwinRepository(supabase_client=client)
+            actives = await repo.list_active_models(twin_type=twin_type, brand=brand.value)
+        if not actives:
+            return None
+        score = actives[0].get("fidelity_score")
+        return None if score is None else float(score)
+
+    try:
+        return asyncio.run(_read())
+    except Exception as exc:
+        logger.warning("Could not read the active twin model's fidelity: %s", exc)
+        return None
 
 
 def _get_or_create_twins(
@@ -173,12 +192,10 @@ def _get_or_create_twins(
             raise RuntimeError(
                 f"Trained twin model for {brand.value}/{twin_type.value} could not be loaded."
             )
-        score = row.get("fidelity_score")
-        return generator.generate(n=n), (None if score is None else float(score))
+        return generator.generate(n=n)
 
-    population, model_fidelity = asyncio.run(_resolve_and_hydrate())
+    population = asyncio.run(_resolve_and_hydrate())
     _twin_cache[cache_key] = population
-    _model_fidelity_cache[cache_key] = model_fidelity
     return population
 
 
@@ -305,9 +322,9 @@ def simulate_intervention(
             confidence_threshold=0.70,
             effect_provider=cohort_provider,
             effect_estimator=CohortCausalEstimator(target_regions=target_regions or []),
-            # The resolved model's measured fidelity; NULL → the result states
-            # 'unvalidated' explicitly instead of passing the gate (#2206).
-            model_fidelity_score=_model_fidelity_for(twin_type, brand_enum, twin_count),
+            # The active model's measured fidelity, read fresh per call; NULL → the
+            # result states 'unvalidated' explicitly instead of passing the gate (#2206).
+            model_fidelity_score=_read_active_model_fidelity(twin_type, brand_enum),
         )
 
         result = engine.simulate(
