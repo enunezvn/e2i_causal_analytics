@@ -75,7 +75,8 @@ Standalone attribution of the pre-fix budget on this frame (`timing_probe*.py/js
   served that CI. Measured: the pruned 61-column fit gives ATE 0.03353 (was 0.03353) and SE 0.00858
   (was 0.00855) with no warning — the redundant columns carry no information. The loader now prunes
   once, on the full frame, in the RESOLVED order (numerics, then dummies; earlier wins; Gram–Schmidt vs
-  the intercept, residual ≤ 1e-8 of the CENTERED norm; skipped at n < k+1 — see Round 3 below), so
+  the intercept on the reference-subtracted, power-of-two-scaled column, residual ≤ max(n,k)·eps of the
+  centered norm; skipped at n < k+1 — see Rounds 3–4 below), so
   estimation and the refutation rebuild see the same design; every
   synthetic served pair is full rank so it is a no-op there. `_resolve_agent_estimation_frame` is the
   loader's whole post-fetch path and `preflight_agent.py` now calls it — its own copy of that path had
@@ -110,6 +111,30 @@ Standalone attribution of the pre-fix budget on this frame (`timing_probe*.py/js
   its effect modifiers are the encoded common causes. (4) MED — `load_optum_causal_cohort.load_frame`
   refuses an empty export or one without both arms BEFORE any write (VERIFIED must not be printable on
   such a table); the real-DB gate asserts both arms live.
+- **Round 4 (codex r4 → REVISE: 1 HIGH + 1 MED, both fixed).** (1) HIGH — the Round 3 criterion was
+  still not translation- or scale-invariant in two branches: the "constant" test (centered/raw ≤ 1e-12)
+  dropped `1e14 + arange(100)` as constant, `np.linalg.norm` underflowed at a 1e-200 scale, and the
+  fixed 1e-8 tolerance dropped an independent component at 5e-9 relative — which econml's own rank
+  check (`np.linalg.lstsq(rcond=None)`, `rank < df`, i.e. max(n,k)·eps ≈ 3.4e-12 at this n) would
+  NOT call underdetermined, so the prune was ~3,000× looser than the check it exists to satisfy. Now:
+  constant = exact represented equality; the first value is subtracted before centering (exact for
+  close values, so an offset cannot leak rounding into the variation); the column is scaled by a power
+  of two (exact); tolerance = max(n,k)·eps (`_collinearity_rel_tol`). Measured on the real frame
+  (`prune_tolerance_probe.py/.json`): the SAME 16 columns in the same order (k = 61); the largest
+  dropped residual ratio is 2.6e-15 against a tolerance of 3.4e-12; the smallest kept ratio is 0.047
+  (`elx_liver_disease`). Codex's three probes pass, plus an exact duplicate with a 1e14 offset (the
+  old code dropped BOTH columns; now only the later one). Four tests added. (2) MED — after the
+  next-candidate fallback, the refused winner's failed entry carried no tournament score, so
+  `energy_scores` and the gap started at the served candidate and the reason claimed it had the lowest
+  score. Now the refused candidate keeps its tournament `energy_score_result` (`success=False` says it
+  was not served), `energy_scores` covers every scored candidate, the gap is the tournament's, and the
+  reason states which winner was refused, why, and what was served instead; `exceeded_max_energy_score`
+  / `requires_review` are judged on the SERVED estimator's score (asserted).
+  Found by this round's wider run, not by codex: the r3 fallback had silently broken the #1392 test
+  `test_winner_full_frame_refit_failure_fails_closed` (it pinned the OLD mechanism — fail closed even
+  with an honest candidate left; the energy-score directory had last been run BEFORE `fabbec0c9`).
+  Its intent (never serve a subsample fit) survives: the test now asserts the served fit is the next
+  candidate's FULL-FRAME refit, and a sibling asserts fail-closed when EVERY refit fails.
 
 Final-code node timeline of the primary run (from the run's own INFO log; the graph itself started
 at ~09:22:30 after imports):

@@ -162,3 +162,21 @@ def test_auto_falls_back_to_the_next_ranked_candidate_when_the_served_refit_refu
     # the refused winner stays visible as a failed candidate
     failed = [r for r in sel.all_results if not r.success]
     assert [r.estimator_type for r in failed] == [EstimatorType.LINEAR_DML]
+    # codex r4 MED: the tournament ranking is immutable metadata -- the refused
+    # winner keeps its tournament score, the comparison still starts at the
+    # actual winner, the gap is the tournament's, the reason names the fallback,
+    # and the review gate is judged on the SERVED estimator's score.
+    refused = failed[0]
+    assert refused.energy_score_result is not None
+    assert np.isfinite(refused.energy_score)
+    assert set(sel.energy_scores) == {"linear_dml", "ols"}
+    assert sel.energy_scores["linear_dml"] == refused.energy_score
+    lo, hi = sorted(sel.energy_scores.values())
+    assert sel.energy_score_gap == pytest.approx(hi - lo)
+    reason = sel.selection_reason
+    assert "linear_dml" in reason and "ols" in reason and "refused" in reason
+    assert "test plant" in reason
+    assert sel.requires_review == sel.exceeded_max_energy_score
+    assert sel.exceeded_max_energy_score == (
+        sel.selected.energy_score > EstimatorSelectorConfig().max_acceptable_energy_score
+    )

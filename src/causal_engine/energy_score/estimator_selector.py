@@ -1612,6 +1612,7 @@ class EstimatorSelector:
         # succeeds or none is left. Every refused candidate stays in
         # ``results`` as a failed entry, so the report shows what was tried.
         # A forced single estimator never subsamples and still fails closed.
+        fallback_notes: list[str] = []
         while subsampled and selection.success:
             refit = self._refit_winner_on_full_frame(
                 selection,
@@ -1638,9 +1639,20 @@ class EstimatorSelector:
                 refit.error_message,
             )
             selection = self._select_best_energy(remaining)
+            fallback_notes.append(
+                f"Tournament winner {refit.estimator_type.value} (energy score "
+                f"{refit.energy_score:.4f}) refused its served full-frame refit: "
+                f"{refit.error_message}; served the next ranked candidate "
+                f"{selection.estimator_type.value} (energy score {selection.energy_score:.4f})."
+            )
 
-        # Build energy score comparison
-        energy_scores = {r.estimator_type.value: r.energy_score for r in results if r.success}
+        # Build energy score comparison: every candidate the tournament SCORED,
+        # including a winner whose served refit was refused (codex r4 MED) --
+        # the ranking is immutable metadata; served status is a separate fact
+        # carried by ``success`` / ``error_message``.
+        energy_scores = {
+            r.estimator_type.value: r.energy_score for r in results if np.isfinite(r.energy_score)
+        }
 
         # Compute gap between best and second best
         sorted_scores = sorted([s for s in energy_scores.values() if np.isfinite(s)])
@@ -1660,6 +1672,7 @@ class EstimatorSelector:
             subsampled=subsampled,
             selection_n_rows=selection_n_rows,
             n_rows_total=n_rows_total,
+            fallback_notes=fallback_notes,
         )
 
     def _refit_winner_on_full_frame(
@@ -1731,6 +1744,10 @@ class EstimatorSelector:
                 f"(tournament winner={selection.estimator_type.value}): "
                 f"{full_result.error_message}"
             )
+            # The tournament score is the ranking artifact and survives the
+            # refusal (codex r4 MED): the comparison must still show WHERE the
+            # refused candidate ranked; ``success=False`` says it was not served.
+            full_result.energy_score_result = selection.energy_score_result
         # Preserve the invariant that the selected result is a member of
         # all_results: replace the winner's tournament (subsample) entry.
         for i, r in enumerate(results):
@@ -1750,6 +1767,7 @@ class EstimatorSelector:
         subsampled: bool = False,
         selection_n_rows: int = 0,
         n_rows_total: int = 0,
+        fallback_notes: Optional[list[str]] = None,
     ) -> SelectionResult:
         """Assemble a SelectionResult and compute the M-est3 reliability gate.
 
@@ -1774,6 +1792,10 @@ class EstimatorSelector:
                 f"{selection_n_rows:,}/{n_rows_total:,} rows; the reported "
                 f"ATE/CI come from the winner refit on the full frame."
             )
+        if fallback_notes:
+            # codex r4 MED: the served estimator is NOT the tournament winner;
+            # say which candidate was refused, why, and what was served instead.
+            selection_reason += " " + " ".join(fallback_notes)
         return SelectionResult(
             selected=selection,
             selection_strategy=self.config.strategy,

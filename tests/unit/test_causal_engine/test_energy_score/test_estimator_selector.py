@@ -1753,19 +1753,46 @@ class TestSubsampledSelection:
         # ...and the first-of-type instance was only ever fit in the tournament.
         assert first_of_type.fit_row_counts == [200]
 
-    def test_winner_full_frame_refit_failure_fails_closed(self):
-        """If the winner's full-frame refit fails, the selection FAILS CLOSED
-        (estimation.py raises EstimationError) — the subsample tournament fit
+    def test_winner_full_frame_refit_failure_serves_the_next_candidate_full_frame(self):
+        """If the winner's full-frame refit fails, the subsample tournament fit
         is NEVER promoted to the reported estimate (refutation reconstructs
-        from the full frame; a subsample-fit ATE would silently diverge)."""
+        from the full frame; a subsample-fit ATE would silently diverge).
+        Since codex r3 (Lane A) the selector does not fail closed while an
+        honest candidate exists: the next ranked tournament candidate is refit
+        on the FULL frame and served; the refused winner stays visible as a
+        failed entry that keeps its tournament score (codex r4)."""
         treatment, outcome, covariates = _subsample_frame(n=1_000)
-        selector, _, winner = _two_wrapper_selector(max_rows=200, winner_fail_above=200)
+        selector, loser, winner = _two_wrapper_selector(max_rows=200, winner_fail_above=200)
 
         sel = selector.select(treatment, outcome, covariates)
 
         assert winner.fit_row_counts == [200, 1_000]
+        assert loser.fit_row_counts == [200, 1_000]  # the served fit IS a full-frame refit
+        assert sel.selected.success is True
+        assert sel.selected.estimator_type == EstimatorType.CAUSAL_FOREST
+        assert sel.selected.ate == 50.0 and len(sel.selected.cate) == 1_000
+        refused = [r for r in sel.all_results if not r.success]
+        assert [r.estimator_type for r in refused] == [EstimatorType.LINEAR_DML]
+        assert "full-frame" in (refused[0].error_message or "").lower()
+        assert np.isfinite(refused[0].energy_score)
+        assert set(sel.energy_scores) == {"linear_dml", "causal_forest"}
+        assert "refused" in sel.selection_reason and "causal_forest" in sel.selection_reason
+
+    def test_every_full_frame_refit_failing_fails_closed(self):
+        """When NO candidate survives its full-frame refit the selection FAILS
+        CLOSED (estimation.py raises EstimationError): no subsample fit is
+        ever served."""
+        treatment, outcome, covariates = _subsample_frame(n=1_000)
+        selector, loser, winner = _two_wrapper_selector(max_rows=200, winner_fail_above=200)
+        loser._fail_above_rows = 200
+
+        sel = selector.select(treatment, outcome, covariates)
+
+        assert winner.fit_row_counts == [200, 1_000]
+        assert loser.fit_row_counts == [200, 1_000]
         assert sel.selected.success is False
         assert "full-frame" in (sel.selected.error_message or "").lower()
+        assert all(not r.success for r in sel.all_results)
 
     def test_real_wrappers_end_to_end_subsampled(self):
         """Real OLS + LinearDML wrappers on a >cap frame: the pipeline

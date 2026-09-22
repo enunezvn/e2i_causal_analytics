@@ -871,11 +871,16 @@ def _resolve_agent_estimation_frame(
     return frame, expanded_cols
 
 
-_COLLINEARITY_REL_TOL = 1e-8
-# A column is CONSTANT when its centered norm is at machine rounding of its raw
-# norm -- a far tighter bar than the collinearity tolerance, so a large-offset
-# column (1e10 + arange: centered/raw 2.9e-9) is never mistaken for a constant.
-_CONSTANT_REL_TOL = 1e-12
+def _collinearity_rel_tol(n_rows: int, n_cols: int) -> float:
+    """Machine-precision tolerance for an EXACT redundancy: ``max(n, k) * eps``,
+    the same convention ``numpy.linalg.lstsq(rcond=None)`` uses -- and econml's
+    final stage calls that ``lstsq`` and declares its inference invalid when the
+    returned rank is short. So the prune drops what that check would call
+    redundant and nothing looser: an independent component at 5e-9 relative
+    (far above ~3e-12 at n = 15,209) is kept for the estimators' own refusal."""
+    import numpy as np
+
+    return float(max(n_rows, n_cols) * np.finfo(float).eps)
 
 
 def _prune_exactly_collinear(
@@ -892,16 +897,16 @@ def _prune_exactly_collinear(
     design is NOT reordered -- every dataset's forest fits subsample features by
     column index, so a new order would be a new fit.
 
-    Criterion (translation- and unit-invariant): incremental Gram-Schmidt
-    against the intercept and the kept basis; a column is dropped when its
-    residual is below ``_COLLINEARITY_REL_TOL`` of its CENTERED norm (the norm
-    left after the intercept is removed). Comparing against the raw norm would
-    drop a genuinely varying column with a large offset (``1e10 + arange``:
-    residual / raw norm 2.9e-9 -- codex r3). Exact redundancy sits at the 1e-15
-    level and any informative near-collinear column (1e-4 relative noise) far
-    above 1e-8, so the tolerance separates the two and leaves near-collinearity
-    to the estimators' own invalid-inference refusal. A constant column has a
-    zero centered norm and is dropped (collinear with the intercept).
+    Criterion (translation- and scale-invariant by construction, codex r3/r4):
+    a column is CONSTANT iff every value is the same represented number (exact
+    equality, no tolerance). Otherwise its first value is subtracted (exact for
+    close values, so a 1e14 offset cannot leak rounding into the variation) and
+    it is scaled by a power of two (exact) before centering, so neither an
+    offset nor extreme units (1e-200) can underflow or dominate the norms.
+    Incremental Gram-Schmidt against the intercept and the kept basis; the
+    column is dropped when its residual is below ``max(n, k) * eps`` of its
+    centered norm (``_collinearity_rel_tol``). Exact redundancy measures
+    ~1e-15 on the real frame; the smallest kept ratio there is 0.047.
 
     Skipped (nothing dropped) when the frame cannot rank the columns
     (``n < k + 1``: fewer rows than intercept-plus-columns) or when a column
@@ -909,30 +914,34 @@ def _prune_exactly_collinear(
     """
     if not columns or len(frame) < len(columns) + 1:
         return list(columns), []
+    import math
+
     import numpy as np
 
     X = frame[columns].to_numpy(dtype=float)
     if not np.isfinite(X).all():
         return list(columns), []
     n = X.shape[0]
+    rel_tol = _collinearity_rel_tol(n, len(columns) + 1)
     intercept = np.full(n, 1.0 / np.sqrt(n))
     basis = [intercept]
     kept: List[str] = []
     dropped: List[str] = []
     for j, name in enumerate(columns):
         x = X[:, j]
-        x_norm = float(np.linalg.norm(x))
+        if x.min() == x.max():
+            dropped.append(name)  # constant: collinear with the intercept
+            continue
+        x = x - x[0]  # remove the offset exactly (Sterbenz) before any rounding-prone step
+        x = x / (2.0 ** math.floor(math.log2(float(np.abs(x).max()))))  # exact rescale
         centered = x - intercept * float(intercept @ x)
         c_norm = float(np.linalg.norm(centered))
-        if x_norm == 0.0 or c_norm <= _CONSTANT_REL_TOL * x_norm:
-            dropped.append(name)  # constant (to machine rounding): collinear with the intercept
-            continue
         resid = centered.copy()
         for _ in range(2):  # re-orthogonalise once for numerical stability
             for q in basis[1:]:
                 resid = resid - q * float(q @ resid)
         r_norm = float(np.linalg.norm(resid))
-        if r_norm <= _COLLINEARITY_REL_TOL * c_norm:
+        if r_norm <= rel_tol * c_norm:
             dropped.append(name)
             continue
         basis.append(resid / r_norm)

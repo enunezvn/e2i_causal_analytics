@@ -193,6 +193,39 @@ def test_prune_drops_a_constant_column_as_collinear_with_the_intercept():
     assert _prune(df, ["a", "k"]) == (["a"], ["k"])
 
 
+# codex r4 HIGH: the constant test and the fixed 1e-8 tolerance were not translation-
+# or scale-invariant. Constant = exact represented equality; the offset is removed
+# by subtracting a reference value BEFORE centering; the column is scaled by a power
+# of two (exact); the tolerance is the same machine-precision convention econml's
+# ``lstsq(rcond=None)`` uses to declare the final stage underdetermined.
+
+
+def test_prune_keeps_a_varying_column_with_a_1e14_offset():
+    df = pd.DataFrame({"x": 1e14 + np.arange(100, dtype=float)})
+    assert _prune(df, ["x"]) == (["x"], [])
+
+
+def test_prune_keeps_an_independent_component_below_1e8_relative():
+    # 5e-9 relative noise is far above machine precision: econml's own rank check
+    # would NOT call this design underdetermined, so the prune must not drop it.
+    rng = np.random.default_rng(5)
+    a = rng.normal(size=100)
+    df = pd.DataFrame({"a": a, "almost": a + 5e-9 * rng.normal(size=100)})
+    assert _prune(df, ["a", "almost"]) == (["a", "almost"], [])
+
+
+def test_prune_is_safe_under_extreme_unit_rescaling():
+    rng = np.random.default_rng(6)
+    df = pd.DataFrame({"a": rng.normal(size=100) * 1e-200, "b": rng.normal(size=100) * 1e-200})
+    assert _prune(df, ["a", "b"]) == (["a", "b"], [])
+
+
+def test_prune_drops_only_the_exact_duplicate_when_both_carry_a_large_offset():
+    a = 1e14 + np.arange(100, dtype=float)
+    df = pd.DataFrame({"a": a, "b": 2.0 * a + 3.0})
+    assert _prune(df, ["a", "b"]) == (["a"], ["b"])
+
+
 @pytest.mark.asyncio
 async def test_loader_evaluates_numeric_columns_before_one_hot_dummies(monkeypatch):
     """The resolved order is numeric registry columns first, then the one-hot

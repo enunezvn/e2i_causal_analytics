@@ -2588,6 +2588,18 @@ write; the real-DB gate asserts both arms. Pre-existing and NOT chased here: the
 (pytest-timeout inside an econml GRF fit) — reproduced at the pre-session commit `4ba8372b8`; CI's sharded
 `test_agents` lane is the arbiter.
 
+**Amendment 4 (codex r4 → REVISE: 1 HIGH + 1 MED, both fixed):** (1) the prune's constant test and fixed
+1e-8 tolerance were still not translation/scale-invariant (`1e14 + arange` dropped as constant; 1e-200
+scale underflowed; 5e-9 relative noise dropped although econml's `lstsq(rcond=None)` rank check —
+max(n,k)·eps ≈ 3.4e-12 — would keep it). Now: constant = exact equality; reference value subtracted and a
+power-of-two rescale before centering; tolerance = max(n,k)·eps. Real frame: same 16 columns, same order;
+dropped ratio max 2.6e-15, kept min 0.047 (`prune_tolerance_probe.json`). (2) The next-candidate fallback
+now preserves the refused winner's tournament score in `all_results`/`energy_scores`, keeps the tournament
+gap, and narrates the fallback in `selection_reason`; the review gate is judged on the served score.
+The #1392 test that pinned fail-closed-with-a-candidate-left (broken by the r3 fallback, unnoticed because
+the energy-score directory had not been re-run after `fabbec0c9`) now asserts the new contract plus a
+fail-closed sibling when every refit fails.
+
 ---
 
 ### Task 10: Codex review rounds to ACCEPT
