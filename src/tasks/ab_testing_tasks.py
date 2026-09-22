@@ -214,6 +214,14 @@ def scheduled_interim_analysis(
             previous_analyses = await exp_repo.get_interim_analyses(exp_uuid)
             analysis_number = len(previous_analyses) + 1
 
+            # Reconcile BEFORE the milestone gate (#2206, codex r7): a persisted
+            # stopping decision whose final enqueue failed (broker outage) would
+            # otherwise never be retried — later sweeps stop at "No new milestone
+            # reached". The persisted decision is the durable record; every sweep
+            # checks it against the final-results table (idempotent: skips when
+            # a final row exists).
+            reconciled = await _reconcile_final_analysis(exp_uuid, previous_analyses)
+
             # Check if we should perform analysis at this milestone
             if not force:
                 next_milestone = None
@@ -235,6 +243,7 @@ def scheduled_interim_analysis(
                         "reason": "No new milestone reached",
                         "information_fraction": information_fraction,
                         "previous_analyses": len(previous_analyses),
+                        "final_analysis_enqueued": reconciled,
                     }
 
             # REAL per-unit outcome feed (#705 R5): same assignments ⋈
@@ -314,7 +323,7 @@ def scheduled_interim_analysis(
             # producer — had no producer at all (no beat entry, no send_task), so
             # the whole post-experiment fidelity chain was dark (#2206). Enqueue
             # it once per experiment: skip when a final result row already exists.
-            final_enqueued = await _enqueue_final_analysis_on_stop(
+            final_enqueued = reconciled or await _enqueue_final_analysis_on_stop(
                 exp_uuid, interim_result.decision
             )
 
@@ -677,6 +686,20 @@ async def _send_srm_alerts(srm_issues: List[Dict], config: Dict) -> None:
 
 # Decisions that end enrollment: the sequential test says the experiment is over.
 _STOPPING_DECISIONS = frozenset({"stop_efficacy", "stop_futility", "stop_safety"})
+
+
+async def _reconcile_final_analysis(experiment_id: UUID, previous_analyses: Any) -> bool:
+    """Retry the final enqueue for an already-persisted stopping decision (#2206).
+
+    Returns True when a final analysis was enqueued now; False when there is no
+    stopping decision on record, a final row already exists, or the broker refused
+    again (logged; the next sweep retries).
+    """
+    for analysis in previous_analyses or []:
+        decision = getattr(analysis, "decision", None)
+        if getattr(decision, "value", decision) in _STOPPING_DECISIONS:
+            return await _enqueue_final_analysis_on_stop(experiment_id, decision)
+    return False
 
 
 async def _enqueue_final_analysis_on_stop(experiment_id: UUID, decision: Any) -> bool:

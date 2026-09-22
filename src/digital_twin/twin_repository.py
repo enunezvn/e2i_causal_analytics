@@ -1045,10 +1045,11 @@ class TwinRepository:
         self,
         twin_type: Optional[TwinType] = None,
         brand: Optional[str] = None,
+        limit: int = 100,
     ) -> List[Dict[str, Any]]:
-        """List active twin models."""
+        """List active twin models (``limit`` forwarded; the census asks for all)."""
         return await self.models.list_active_models(  # type: ignore[no-any-return]
-            twin_type, brand
+            twin_type, brand, limit=limit
         )
 
     async def refresh_model_fidelity_from_comparisons(

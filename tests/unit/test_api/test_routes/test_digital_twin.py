@@ -2457,3 +2457,49 @@ def test_training_frame_recorded_requires_a_content_digest():
     assert _model_honesty_fields(row, [row], _ADMIN)["training_frame_recorded"] is False
     row["training_config"]["training_frame"]["content_sha256"] = "ab" * 32
     assert _model_honesty_fields(row, [row], _ADMIN)["training_frame_recorded"] is True
+
+
+@pytest.mark.asyncio
+async def test_active_model_census_exhausts_the_repository_limit(mock_twin_repository, caplog):
+    """codex r7 #2: list_active_models defaults to 100 rows; the census must ask for
+    everything and say so when it still hits the ceiling."""
+    from src.api.routes import digital_twin as route_mod
+
+    rows = [_shared_fit_row("Kisqali", duration=1.0)]
+    mock_twin_repository.list_active_models = AsyncMock(return_value=rows)
+    census = await route_mod._active_model_census(mock_twin_repository, None)
+    assert census == rows
+    assert (
+        mock_twin_repository.list_active_models.await_args.kwargs["limit"]
+        == route_mod._CENSUS_LIMIT
+    )
+
+    full = [_shared_fit_row("Kisqali", duration=float(i)) for i in range(route_mod._CENSUS_LIMIT)]
+    mock_twin_repository.list_active_models = AsyncMock(return_value=full)
+    with caplog.at_level("WARNING"):
+        await route_mod._active_model_census(mock_twin_repository, None)
+    assert any(
+        "census" in r.message.lower() and "limit" in r.message.lower() for r in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_active_model_census_reaches_the_real_facade_with_its_limit():
+    """The route calls the REAL TwinRepository facade (not the fixture's MagicMock);
+    a limit the facade did not forward would TypeError in prod (the round-4 class
+    of bug). Only the model store is faked."""
+    from unittest.mock import create_autospec
+
+    from src.api.routes import digital_twin as route_mod
+    from src.digital_twin.twin_repository import TwinModelRepository, TwinRepository
+
+    repo = TwinRepository(supabase_client=None)
+    repo.models = create_autospec(TwinModelRepository, instance=True)
+    repo.models.list_active_models = AsyncMock(
+        return_value=[_shared_fit_row("Kisqali", duration=1.0)]
+    )
+
+    census = await route_mod._active_model_census(repo, None)
+
+    assert len(census) == 1
+    assert repo.models.list_active_models.await_args.kwargs["limit"] == route_mod._CENSUS_LIMIT

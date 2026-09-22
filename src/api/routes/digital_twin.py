@@ -405,14 +405,27 @@ def _model_honesty_fields(
     }
 
 
+# list_active_models defaults to 100 rows; a census that stopped there would
+# silently drop fits. Ask for far more than any real registry and say if it is hit.
+_CENSUS_LIMIT = 10_000
+
+
 async def _active_model_census(repo: Any, twin_type_enum: Any) -> List[Dict[str, Any]]:
     """Every active model of the twin_type, across brands — the shared-fit census.
 
     Brand scoping is applied to the LISTING afterwards; the census must see all
     brands or a single-brand caller could never learn that their fit is shared.
     """
-    rows = await repo.list_active_models(twin_type=twin_type_enum, brand=None)
-    return list(rows or [])
+    rows = list(
+        await repo.list_active_models(twin_type=twin_type_enum, brand=None, limit=_CENSUS_LIMIT)
+        or []
+    )
+    if len(rows) >= _CENSUS_LIMIT:
+        logger.warning(
+            "Active twin-model census hit its limit (%d rows); shared-fit counts may omit rows",
+            _CENSUS_LIMIT,
+        )
+    return rows
 
 
 class FidelityStatusEnum(str, Enum):

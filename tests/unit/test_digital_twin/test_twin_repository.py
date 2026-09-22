@@ -567,7 +567,7 @@ class TestTwinRepository:
             mock_list.return_value = [{"model_id": str(uuid4())}]
             result = await repo.list_active_models(twin_type=TwinType.HCP, brand="Kisqali")
 
-            mock_list.assert_called_once_with(TwinType.HCP, "Kisqali")
+            mock_list.assert_called_once_with(TwinType.HCP, "Kisqali", limit=100)
             assert len(result) == 1
 
 

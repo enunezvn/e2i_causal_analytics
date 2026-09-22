@@ -385,3 +385,100 @@ class TestFinalResultsAreIdempotent:
         outcome_repo.load_arrays.assert_not_called()
         names = [c.args[0] for c in mock_send.call_args_list if c.args]
         assert names.count("src.tasks.fidelity_tracking_update") == 1
+
+
+class TestFinalAnalysisIsReconciledIndependentlyOfMilestones:
+    """codex r7 #1: a broker failure while enqueueing compute_experiment_results(final)
+    must not leave the loop permanently dark — later sweeps return "No new milestone
+    reached" and would never retry. The persisted stopping decision is the durable
+    record; every sweep reconciles it against the final-results table."""
+
+    @staticmethod
+    def _patches(previous, *, enqueue_raises=False, force=True):
+        from src.services.interim_analysis import StoppingDecision
+
+        stats = MagicMock()
+        stats.total_enrolled = 500
+        stats.total_assigned = 1000
+        enrollment = MagicMock()
+        enrollment.get_enrollment_stats = AsyncMock(return_value=stats)
+        exp_repo = MagicMock()
+        exp_repo.get_interim_analyses = AsyncMock(return_value=previous)
+        (
+            exp_repo.client.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value
+        ).data = [{"brand": "Fabhalta", "prediction_target": "triggers_total_count"}]
+        outcome_repo = MagicMock()
+        outcome_repo.load_arrays = AsyncMock(
+            return_value=(np.array([1.0, 2.0, 3.0]), np.array([2.0, 3.0, 4.0]))
+        )
+        interim_result = MagicMock()
+        interim_result.analysis_number = len(previous) + 1
+        interim_result.information_fraction = 0.5
+        interim_result.effect_estimate = 1.0
+        interim_result.p_value = 0.01
+        interim_result.decision = StoppingDecision.STOP_EFFICACY
+        interim_service = MagicMock()
+        interim_service.perform_interim_analysis = AsyncMock(return_value=interim_result)
+        results_repo = MagicMock()
+        results_repo.get_results = AsyncMock(return_value=[])
+        send = MagicMock(side_effect=RuntimeError("broker down") if enqueue_raises else None)
+        return (
+            patch("src.repositories.ab_experiment.ABExperimentRepository", return_value=exp_repo),
+            patch("src.services.enrollment.EnrollmentService", return_value=enrollment),
+            patch(
+                "src.services.interim_analysis.InterimAnalysisService", return_value=interim_service
+            ),
+            patch(
+                "src.repositories.experiment_outcome.ExperimentOutcomeRepository",
+                return_value=outcome_repo,
+            ),
+            patch("src.repositories.ab_results.ABResultsRepository", return_value=results_repo),
+            patch("src.tasks.ab_testing_tasks.celery_app.send_task", send),
+        ), send
+
+    def test_a_broker_failure_is_reported_not_raised_and_the_next_sweep_retries(self):
+        from src.tasks.ab_testing_tasks import scheduled_interim_analysis
+
+        exp_id = str(uuid4())
+        patches, send = self._patches([], enqueue_raises=True)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+            first = scheduled_interim_analysis.run(experiment_id=exp_id, force=True)
+        assert first["status"] == "completed"
+        assert first["final_analysis_enqueued"] is False
+        assert send.call_count == 1
+
+        # Next daily sweep: the stopping decision is persisted, no new milestone is
+        # reached (force=False; 0.25 and 0.5 already analysed at fraction 0.5) — the
+        # final enqueue is retried.
+        earlier = MagicMock()
+        earlier.information_fraction = 0.25
+        earlier.decision = "continue"
+        stopped = MagicMock()
+        stopped.information_fraction = 0.5
+        stopped.decision = "stop_efficacy"
+        patches, send = self._patches([earlier, stopped], force=False)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+            second = scheduled_interim_analysis.run(experiment_id=exp_id, force=False)
+        assert second["status"] == "skipped"
+        assert second["reason"] == "No new milestone reached"
+        assert second["final_analysis_enqueued"] is True
+        finals = [
+            c for c in send.call_args_list if c.args[0] == "src.tasks.compute_experiment_results"
+        ]
+        assert len(finals) == 1
+
+    def test_reconciliation_does_nothing_without_a_stopping_decision(self):
+        from src.tasks.ab_testing_tasks import scheduled_interim_analysis
+
+        earlier = MagicMock()
+        earlier.information_fraction = 0.25
+        earlier.decision = "continue"
+        continuing = MagicMock()
+        continuing.information_fraction = 0.5
+        continuing.decision = "continue"
+        patches, send = self._patches([earlier, continuing], force=False)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5]:
+            result = scheduled_interim_analysis.run(experiment_id=str(uuid4()), force=False)
+        assert result["status"] == "skipped"
+        assert result["final_analysis_enqueued"] is False
+        assert send.call_count == 0
