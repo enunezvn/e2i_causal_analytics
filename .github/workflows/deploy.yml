@@ -79,6 +79,10 @@ on:
       # data/kg_cache/** and not data/**: the rest of data/ is .dockerignore'd and
       # never reaches any image, so triggering on it would be a pure false deploy.
       - 'data/kg_cache/**'
+      # Layer-4 classifier artifact is a production image input (lane 1, 2026-09-22; #1783 shape).
+      # Literal, not artifacts/**: ac3_verdict_n200.json and gitignored cr_*_n200.json
+      # compile intermediates are not image inputs and must not trigger deploys.
+      - 'artifacts/dspy/causal_role_classifier.json'
       # #2167: the #1783 family, one layer over. Every entry above is an IMAGE input;
       # this one is a path the deploy CONSUMES AT DEPLOY TIME out of the droplet
       # checkout. The rollout runs `bash scripts/run_migrations.sh` (below), which
@@ -131,7 +135,9 @@ jobs:
     # Bounded so a wedged buildx / stalled GHCR push cannot hold the now-serialized
     # deploy queue (concurrency: deploy-production, cancel-in-progress: false) hostage
     # for GitHub's 360-min job default — that would block even an emergency hotfix. (#1412 review)
-    timeout-minutes: 20
+    # 25, not 20 (lane 1, 2026-09-22): the post-push in-image assertion pulls the just-pushed
+    # digest from GHCR (~1-2 min). Measured 2026-09-20..22: the build itself takes 7.4-10.3 min.
+    timeout-minutes: 25
     needs: test
     permissions:
       contents: read
@@ -165,6 +171,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -180,6 +187,23 @@ jobs:
           # never paid for itself and is the variance that pushed the job over
           # timeout-minutes, skipping the deploy.
           cache-from: type=gha
+
+      - name: Assert baked image inputs are present in the pushed image (#1607 shape)
+        # The static packaging guards (tests/unit/test_data/test_causal_role_classifier_packaging.py,
+        # tests/unit/test_data/test_kg/test_kg_cache_packaging.py) prove the Dockerfile
+        # TEXT; this proves the IMAGE the droplet will actually pull. Pull the exact
+        # digest just pushed (no target: is set above, so build-push built the final
+        # `production` stage) and check every baked input the runtime loads. A failure
+        # here stops the job before deploy — the #1607 shape (committed + loader-
+        # resolvable + absent from the built image) caught structurally instead of
+        # discovered live.
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
+          docker run --rm --entrypoint sh "$IMAGE" -c '
+            set -e
+            test -f /app/artifacts/dspy/causal_role_classifier.json
+            test -n "$(ls /app/data/kg_cache/*.json 2>/dev/null)"
+          '
 
   # #528-B: build + push the frontend nginx production image so the droplet can pull
   # it instead of building Vite/nginx on the box. Mirrors build-and-push (api).

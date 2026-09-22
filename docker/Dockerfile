@@ -107,6 +107,12 @@ COPY tests/ ./tests/
 # image while the artifact sat committed in git (#600 shape: the failure
 # presents as "no signal", not as "missing file").
 COPY data/kg_cache/ ./data/kg_cache/
+# Compiled Layer-4 causal-role classifier (DSPy). The loader resolves
+# PROJECT_ROOT/artifacts/dspy/causal_role_classifier.json, i.e. /app/artifacts/…
+# here. Without this COPY the file never reaches the image (measured 2026-09-22:
+# .dockerignore was never the cause) and Layer 4 skips silently. Guarded by
+# tests/unit/test_data/test_causal_role_classifier_packaging.py.
+COPY artifacts/dspy/causal_role_classifier.json ./artifacts/dspy/
 # Ops/maintenance scripts (e.g. scripts/train_twin_model.py, the reachable
 # #705 H4 twin train/persist trigger run via `docker exec … python scripts/…`).
 COPY scripts/ ./scripts/
@@ -201,6 +207,8 @@ COPY config/ ./config/
 # image while the artifact sat committed in git (#600 shape: the failure
 # presents as "no signal", not as "missing file").
 COPY data/kg_cache/ ./data/kg_cache/
+# Compiled Layer-4 causal-role classifier (DSPy) — see the development stage.
+COPY artifacts/dspy/causal_role_classifier.json ./artifacts/dspy/
 
 # Ops/maintenance scripts run inside the container via `docker exec` (e.g.
 # scripts/train_twin_model.py, the reachable #705 H4 twin train/persist trigger
