@@ -39,8 +39,8 @@ def _ts(s: str) -> pd.Timestamp:
     return pd.Timestamp(s)
 
 
-def _converter(cohorts=("discontinuation",)) -> OptumDataConverter:
-    return OptumDataConverter(parquet_dir=Path("."), output_dir=Path("."), cohorts=cohorts)
+def _converter(cohorts=("discontinuation",), output_dir: Path = Path(".")) -> OptumDataConverter:
+    return OptumDataConverter(parquet_dir=Path("."), output_dir=output_dir, cohorts=cohorts)
 
 
 def _row(brand=None, generic=None, code=None) -> pd.Series:
@@ -256,8 +256,10 @@ def _med_for(brand: str, generic: str, code: str, dates: list[str], patid: int) 
 _SIX_MONTHLY = ["2022-07-01", "2022-08-01", "2022-09-01", "2022-10-01", "2022-11-01", "2022-12-01"]
 
 
-def _cohort_converter(patid: int, med: pd.DataFrame, cohort: str) -> OptumDataConverter:
-    conv = _converter((cohort,))
+def _cohort_converter(
+    patid: int, med: pd.DataFrame, cohort: str, output_dir: Path = Path(".")
+) -> OptumDataConverter:
+    conv = _converter((cohort,), output_dir=output_dir)
     conv.now_iso = "2026-01-01T00:00:00"
     conv.source_timestamp_iso = "2026-01-01T00:00:00"
     conv.ingestion_timestamp_iso = "2026-01-01T00:00:00"
@@ -339,3 +341,45 @@ class TestBrandMapping:
             "2022-08-01": "competitor",
             "2022-09-15": "Remibrutinib",
         }
+
+
+# ---------------------------------------------------------------------------
+# the WRITTEN artifact (codex r2): the journey-level brand must survive the
+# converter's write path WITHOUT entering the model frame
+# ---------------------------------------------------------------------------
+
+
+class TestWrittenArtifactBrand:
+    """``_build_and_write_cohort`` gates every OPTUM_FORBIDDEN_NON_TARGET
+    column (``brand`` included -- it is post-index, target-coupled) out of the
+    patient_journeys parquet the data_preparer reads as the model frame. The
+    per-drug journey brand therefore rides a SEPARATE metadata sidecar
+    (``e2i_ml_v3_patient_journey_brands``: patient_journey_id, patient_id,
+    brand) that no ingestor lists as a model input."""
+
+    @staticmethod
+    def _write(tmp_path: Path, patid: int, brand: str, generic: str, code: str):
+        conv = _cohort_converter(
+            patid, _med_for(brand, generic, code, _SIX_MONTHLY, patid), "persistence", tmp_path
+        )
+        counts = conv._build_and_write_cohort("persistence")
+        assert counts["patient_journeys"] == 1
+        cohort_dir = tmp_path / "persistence"
+        journeys = pd.read_parquet(cohort_dir / "e2i_ml_v3_patient_journeys.parquet")
+        sidecar = pd.read_parquet(cohort_dir / "e2i_ml_v3_patient_journey_brands.parquet")
+        return journeys, sidecar
+
+    def test_remibrutinib_brand_survives_in_the_sidecar_not_the_model_frame(
+        self, tmp_path: Path
+    ) -> None:
+        journeys, sidecar = self._write(tmp_path, 1, "RHAPSIDO", "remibrutinib", "00078110030")
+        assert "brand" not in journeys.columns  # the leakage gate still holds
+        assert list(sidecar.columns) == ["patient_journey_id", "patient_id", "brand"]
+        assert sidecar["brand"].tolist() == ["Remibrutinib"]
+        assert sidecar["patient_journey_id"].tolist() == journeys["patient_journey_id"].tolist()
+
+    def test_competitor_brand_survives_in_the_sidecar(self, tmp_path: Path) -> None:
+        journeys, sidecar = self._write(tmp_path, 2, "XOLAIR", "omalizumab", "50242021501")
+        assert "brand" not in journeys.columns
+        assert sidecar["brand"].tolist() == ["competitor"]
+        assert sidecar["patient_id"].tolist() == journeys["patient_id"].tolist()

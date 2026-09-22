@@ -1598,6 +1598,20 @@ class OptumDataConverter:
 
         gated_journeys = _drop_forbidden_columns(journeys, OPTUM_FORBIDDEN_NON_TARGET)
         rwdc.write_records(cohort_dir, "e2i_ml_v3_patient_journeys", gated_journeys, fmt="parquet")
+        # Lane C (codex r2): the per-drug journey ``brand`` (Remibrutinib vs
+        # competitor) is post-index and target-coupled, so the gate above keeps
+        # it OUT of the model frame — it rides a SEPARATE metadata sidecar
+        # instead. No ingestor lists this file as a model input (the
+        # data_preparer's file_ingestor and run_optum_tier0_test read
+        # e2i_ml_v3_patient_journeys by explicit name), so the leakage
+        # defence is unchanged while the brand label survives for the
+        # per-brand consumers (patient_journeys.brand at load time, BR-* KPIs).
+        rwdc.write_records(
+            cohort_dir,
+            JOURNEY_BRAND_SIDECAR,
+            _journey_brand_sidecar(journeys),
+            fmt="parquet",
+        )
         rwdc.write_records(cohort_dir, "e2i_ml_v3_treatment_events", events, fmt="parquet")
         rwdc.write_records(cohort_dir, "e2i_ml_v3_hcp_profiles", hcps, fmt="parquet")
         rwdc.write_records(cohort_dir, "e2i_ml_v3_split_registry", split_registry, fmt="json")
@@ -4487,6 +4501,18 @@ class OptumDataConverter:
 # --------------------------------------------------------------------------- #
 # Parquet-safe normalisation                                                  #
 # --------------------------------------------------------------------------- #
+
+
+# Lane C (codex r2): metadata sidecar carrying the journey-level brand the
+# forbidden-column gate strips from the model frame. Keyed to the journey.
+JOURNEY_BRAND_SIDECAR = "e2i_ml_v3_patient_journey_brands"
+_JOURNEY_BRAND_SIDECAR_COLUMNS = ("patient_journey_id", "patient_id", "brand")
+
+
+def _journey_brand_sidecar(journeys: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One (patient_journey_id, patient_id, brand) record per UNGATED journey —
+    the only three keys, so nothing else post-index can ride along."""
+    return [{k: j.get(k) for k in _JOURNEY_BRAND_SIDECAR_COLUMNS} for j in journeys]
 
 
 def _drop_forbidden_columns(
