@@ -72,3 +72,22 @@ def test_propensity_scores_are_invariant_to_covariate_units(design, estimator_ty
         atol=1e-6,
         err_msg=f"{estimator_type.value}: propensity scores moved with covariate units",
     )
+
+
+# --- The one wrapper whose ESTIMATE consumes the propensity (codex r2 MED) ------------
+
+
+def test_forced_xlearner_estimate_is_invariant_to_covariate_units(design):
+    """XLearner combines its two CATE surfaces with the propensity
+    (``ps * tau_0 + (1 - ps) * tau_1``), so a unit-dependent propensity made its
+    CATE/ATE unit-dependent too. Its base learners are gradient boosting
+    (unit-invariant), so with a unit-invariant propensity the whole estimate is."""
+    t, y, unit, rescaled = design
+    wrapper_cls = ESTIMATOR_WRAPPERS[EstimatorType.X_LEARNER]
+
+    a = wrapper_cls(EstimatorConfig(EstimatorType.X_LEARNER)).fit(t, y, unit)
+    b = wrapper_cls(EstimatorConfig(EstimatorType.X_LEARNER)).fit(t, y, rescaled)
+
+    assert a.success and b.success, (a.error_message, b.error_message)
+    np.testing.assert_allclose(a.cate, b.cate, atol=1e-6)
+    assert abs(a.ate - b.ate) < 1e-6
