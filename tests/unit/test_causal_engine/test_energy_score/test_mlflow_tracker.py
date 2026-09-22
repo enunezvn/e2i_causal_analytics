@@ -427,7 +427,14 @@ class TestLogSelectionResult:
 
         with patch.object(tracker, "_log_to_database") as mock_log:
             tracker.log_selection_result(sample_selection_result)
-            mock_log.assert_called_once_with(sample_selection_result, "exp-1")
+            mock_log.assert_called_once()
+        args, kwargs = mock_log.call_args
+        assert args[0] is sample_selection_result
+        # #2207: "exp-1" is an MLflow experiment id, not an ml_experiments(id) uuid —
+        # the FK column gets NULL; the run id travels in the context instead.
+        assert args[1] is None
+        assert kwargs["context"]["selection_run_id"]
+        assert kwargs["context"]["mlflow_run_id"] is None  # mlflow disabled in this test
 
     def test_log_selection_result_with_additional_params(self, sample_selection_result):
         """Test logging with additional parameters."""

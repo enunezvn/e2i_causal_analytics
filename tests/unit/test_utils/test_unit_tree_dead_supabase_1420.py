@@ -65,3 +65,19 @@ class TestUnitTreeDeadSupabase:
         # The only invariant that holds in BOTH environments: the pin's
         # sentinel was NOT applied.
         assert os.environ.get("SUPABASE_URL") != _DEAD_SUPABASE_ENV["SUPABASE_URL"]
+
+
+class TestDirectPostgresDsnIsDead:
+    """#2207: the psycopg2 writers (ETLs, risk-score task, the energy-score tracker) read
+    SUPABASE_DB_URL / DATABASE_URL, and the repo-root .env carries the PROD DSN. The
+    unit tree must never hold it."""
+
+    def test_direct_postgres_dsn_vars_are_the_dead_sentinel(self) -> None:
+        from tests.unit.conftest import _DEAD_SUPABASE_DSN_ENV
+
+        for var in ("SUPABASE_DB_URL", "DATABASE_URL"):
+            assert os.environ.get(var) == _DEAD_SUPABASE_DSN_ENV[var], (
+                f"{var} must be the dead sentinel in the unit tree; the real DSN here "
+                "means a real writer in a unit test would reach the production database"
+            )
+            assert "127.0.0.1:1/" in os.environ[var]

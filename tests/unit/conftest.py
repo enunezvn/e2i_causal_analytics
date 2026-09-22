@@ -70,6 +70,17 @@ _DEAD_SUPABASE_ENV = {
 }
 
 
+# #2207: the same class of leak for the DIRECT-postgres writers (psycopg2 via
+# SUPABASE_DB_URL / DATABASE_URL — the ETLs, the risk-score task, the energy-score
+# tracker). The repo-root .env carries the PROD DSN (127.0.0.1:5432), so a unit test
+# that runs a real writer would land rows in the production database. Port 1 refuses
+# instantly; every such writer logs-and-continues on a failed connect.
+_DEAD_SUPABASE_DSN_ENV = {
+    "SUPABASE_DB_URL": "postgresql://dead:dead@127.0.0.1:1/dead",
+    "DATABASE_URL": "postgresql://dead:dead@127.0.0.1:1/dead",
+}
+
+
 @pytest.fixture(autouse=True)
 def _pin_dead_supabase_env(
     request: pytest.FixtureRequest,
@@ -79,6 +90,8 @@ def _pin_dead_supabase_env(
     if request.node.get_closest_marker("real_supabase") is not None:
         return
     for var, value in _DEAD_SUPABASE_ENV.items():
+        monkeypatch.setenv(var, value)
+    for var, value in _DEAD_SUPABASE_DSN_ENV.items():
         monkeypatch.setenv(var, value)
 
 

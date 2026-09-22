@@ -176,6 +176,62 @@ class EstimationNode:
     def __init__(self):
         """Initialize estimation node."""
         self._estimator_selector: Optional[EstimatorSelector] = None
+        # #2207: lazily-built, DB-only tracker for estimator_evaluations.
+        self._evaluation_tracker: Optional[Any] = None
+
+    def _get_evaluation_tracker(self) -> Optional[Any]:
+        """The tracker that persists each energy-score selection (#2207).
+
+        Built once per node, DB-only: ``enable_mlflow=False`` so a chat request never
+        opens an MLflow run (``mlflow.start_run`` retries for minutes against an
+        unreachable server). The tracker reads its DSN from ``DATABASE_URL`` /
+        ``SUPABASE_DB_URL``; without one it records nothing and says so in the log.
+        """
+        if self._evaluation_tracker is None:
+            from src.causal_engine.energy_score.mlflow_tracker import EnergyScoreMLflowTracker
+
+            self._evaluation_tracker = EnergyScoreMLflowTracker(
+                enable_db_logging=True, enable_mlflow=False
+            )
+        return self._evaluation_tracker
+
+    def _record_estimator_evaluations(
+        self,
+        selection_result: SelectionResult,
+        treatment: str,
+        outcome: str,
+        context: Dict[str, Any],
+    ) -> None:
+        """Record one selection's per-estimator rows in estimator_evaluations (#2207).
+
+        Side channel of estimation: any failure is logged and swallowed so persistence
+        can never change the estimate or fail the turn.
+        """
+        try:
+            tracker = self._get_evaluation_tracker()
+            if tracker is None:
+                return
+            run_id = tracker.record_evaluations(
+                selection_result,
+                query_id=context.get("query_id"),
+                session_id=context.get("session_id"),
+                treatment=treatment,
+                outcome=outcome,
+                brand=context.get("brand"),
+                region=context.get("region"),
+                data_source=str(context["data_source"])
+                if context.get("data_source") is not None
+                else None,
+            )
+            if run_id:
+                logger.info(
+                    "Recorded %d estimator evaluations (selection_run_id=%s, query_id=%s)",
+                    len(selection_result.all_results),
+                    run_id,
+                    context.get("query_id"),
+                )
+        except Exception as e:  # noqa: BLE001 — never fail estimation over persistence
+            logger.warning(f"estimator_evaluations recording failed (non-fatal): {e}")
 
     def _get_quality_tier(self, energy_score: float) -> str:
         """Map energy score to quality tier.
@@ -226,6 +282,7 @@ class EstimationNode:
         strategy: str = "best_energy",
         explicit_method: Optional[str] = None,
         baseline_covariates: Optional[List[str]] = None,
+        persistence_context: Optional[Dict[str, Any]] = None,
     ) -> tuple[EstimationResult, Dict[str, Any], float]:
         """Select best estimator using energy score.
 
@@ -249,6 +306,9 @@ class EstimationNode:
                 EMPTY set (``[]``): the columns present in ``data`` are handed
                 to the selector as efficiency controls (variance reduction);
                 they never join the de-confounding adjustment set.
+            persistence_context: #2207 — the query's identity (query_id,
+                session_id, brand, region, data_source) recorded alongside the
+                per-estimator evaluations in ``estimator_evaluations``.
 
         Returns:
             Tuple of (EstimationResult, selection_result_dict, latency_ms)
@@ -347,6 +407,14 @@ class EstimationNode:
             logger.warning(f"Energy score selection failed: {e}, falling back to legacy")
             # Return fallback - will be handled by caller
             raise
+
+        # #2207: record every estimator's evaluation (successes AND failures) for this
+        # selection BEFORE the fail-closed check below — an all-failed selection is
+        # exactly the kind of run the table exists to surface. Side channel: never
+        # raises into estimation.
+        self._record_estimator_evaluations(
+            selection_result, treatment, outcome, persistence_context or {}
+        )
 
         latency_ms = (time.time() - start_time) * 1000
 
@@ -824,6 +892,15 @@ class EstimationNode:
                     # #1188: RCT baselines (efficiency controls); only consumed
                     # on a validated EMPTY backdoor.
                     baseline_covariates=list(state.get("baseline_covariates") or []),
+                    # #2207: the query's identity travels with the evaluations
+                    # recorded in estimator_evaluations.
+                    persistence_context={
+                        "query_id": state.get("query_id"),
+                        "session_id": state.get("session_id"),
+                        "brand": state.get("brand"),
+                        "region": state.get("region"),
+                        "data_source": state.get("data_source"),
+                    },
                 )
             except ComputeBudgetExpired as be:
                 # The fit never started — this is a budget refusal, NOT an
