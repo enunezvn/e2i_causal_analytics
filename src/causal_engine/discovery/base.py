@@ -175,7 +175,29 @@ class DiscoveryConfig:
     # Only the PC algorithm consumes these (causal-learn BackgroundKnowledge);
     # when set, prefer ``algorithms=[PC]`` so the ensemble is not polluted by
     # unconstrained orientations from algorithms that ignore the priors.
+    #
+    # ``required_edges`` is honoured by causal-learn at ORIENTATION only: the
+    # skeleton phase consults ``is_forbidden`` and never ``is_required``
+    # (``SkeletonDiscovery.skeleton_discovery``, causal-learn 0.1.4.3), so a
+    # required pair the data finds conditionally independent is removed and
+    # never returns (measured on the real Optum persistence frame: the
+    # estimand pair's marginal fisherz p = 0.21). The runner reports such
+    # edges as ``metadata["required_edges_missing"]``; the agent asserts the
+    # estimand edge on the SHIPPED DAG with provenance ``required_prior``.
     prior_knowledge: Optional[CausalPriorKnowledge] = None
+    # Lane D item 2: wall-clock budget (seconds) for the whole discovery run,
+    # charged from the first algorithm fit; the bootstrap resample loop stops
+    # before a resample that would overrun it and reports the ACHIEVED count.
+    # None = unbounded (legacy consumers).
+    time_budget_s: Optional[float] = None
+    # Fewer SUCCEEDED resamples than this leaves the run uncorroborated (no
+    # stability is written, so the gate scores it as a single unverified run).
+    # None = the legacy ``max(2, bootstrap_resamples // 2)`` rule.
+    min_resamples: Optional[int] = None
+    # Force a causal-learn conditional-independence test for PC (``fisherz``,
+    # ``gsq``, ``chisq``, ``kci``); None = the wrapper's measured auto-selection.
+    # Exists so the choice can be MEASURED per frame type (Lane D item 4).
+    indep_test: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "DiscoveryConfig":
@@ -214,6 +236,9 @@ class DiscoveryConfig:
             bootstrap_resamples=data.get("bootstrap_resamples", 0),
             latent_diagnostic=data.get("latent_diagnostic", False),
             prior_knowledge=prior_knowledge,
+            time_budget_s=data.get("time_budget_s"),
+            min_resamples=data.get("min_resamples"),
+            indep_test=data.get("indep_test"),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -232,6 +257,9 @@ class DiscoveryConfig:
             "max_workers": self.max_workers,
             "bootstrap_resamples": self.bootstrap_resamples,
             "latent_diagnostic": self.latent_diagnostic,
+            "time_budget_s": self.time_budget_s,
+            "min_resamples": self.min_resamples,
+            "indep_test": self.indep_test,
             "prior_knowledge": (
                 {
                     "tiers": self.prior_knowledge.tiers,

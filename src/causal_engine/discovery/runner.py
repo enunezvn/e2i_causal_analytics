@@ -720,29 +720,72 @@ class DiscoveryRunner:
         algorithm: BaseDiscoveryAlgorithm,
         edges: List[DiscoveredEdge],
         ensemble_dag: nx.DiGraph,
-    ) -> Optional[Dict[str, int]]:
+        elapsed_before_s: float = 0.0,
+    ) -> Dict[str, Any]:
         """Measure per-edge stability by re-running the single converged
-        algorithm on ``config.bootstrap_resamples`` bootstrap resamples.
+        algorithm on up to ``config.bootstrap_resamples`` bootstrap resamples.
 
-        Mutates ``edges`` in place: ``bootstrap_stability`` becomes the
-        directed-match resample frequency, and ``confidence`` — vacuously 1.0
-        for a single-algorithm run — is overwritten with it. Returns None when
-        fewer than max(2, B//2) resamples succeeded: the frequencies would be
-        noise, so the gate must treat the run as uncorroborated (failing
-        toward caution, not toward ACCEPT).
+        Mutates ``edges`` in place when the run is corroborated:
+        ``bootstrap_stability`` becomes the directed-match frequency over the
+        SUCCEEDED resamples, and ``confidence`` — vacuously 1.0 for a
+        single-algorithm run — is overwritten with it. The frequencies are
+        left unwritten (None) when fewer than ``min_resamples`` resamples
+        succeeded: they would be noise, so the gate must treat the run as
+        uncorroborated (failing toward caution, not toward ACCEPT).
+        ``min_resamples`` is ``config.min_resamples`` when set, else the legacy
+        ``max(2, B // 2)``.
+
+        Time budget (Lane D item 2): ``config.time_budget_s`` bounds the whole
+        discovery run, so the primary fits' wall (``elapsed_before_s``) is
+        charged first and the loop stops before a resample that would overrun
+        it, estimating the next resample's cost as the mean resample so far
+        (the primary fits' wall before any resample ran). Measured on the real Optum
+        persistence frame at 43 covariates, one PC fit is 230 s: under
+        production's 20 resamples that is ~81 min against a 900 s agent
+        timeout, which is why the loop must be bounded and the ACHIEVED count
+        reported rather than the requested one.
+
+        Always returns the summary — achieved counts are reported whether or
+        not the run was corroborated — with ``corroborated`` saying which.
         """
         n_resamples = config.bootstrap_resamples
+        if config.min_resamples is not None:
+            min_required = max(1, int(config.min_resamples))
+        else:
+            min_required = max(2, n_resamples // 2)
+        budget = config.time_budget_s
         rng = np.random.default_rng(config.random_state)
         counts: Dict[Tuple[str, str], int] = {(e.source, e.target): 0 for e in edges}
         succeeded = 0
+        attempted = 0
+        budget_exhausted = False
+        loop_start = time.monotonic()
+        resample_wall: List[float] = []
         for _ in range(n_resamples):
+            if budget is not None:
+                loop_elapsed = time.monotonic() - loop_start
+                spent = elapsed_before_s + loop_elapsed
+                # Next resample's cost: the mean resample so far, or — before
+                # any ran — the primary fits' wall (same algorithm, same frame
+                # size, so the first guess is the fit already measured).
+                if resample_wall:
+                    estimate = sum(resample_wall) / len(resample_wall)
+                else:
+                    estimate = elapsed_before_s
+                if spent + estimate > budget:
+                    budget_exhausted = True
+                    break
+            attempted += 1
             indices = rng.integers(0, len(data), len(data))
             resample = data.iloc[indices].reset_index(drop=True)
+            fit_start = time.monotonic()
             try:
                 result = algorithm.discover(resample, config)
             except Exception as exc:
                 logger.debug(f"Bootstrap resample failed: {exc}")
+                resample_wall.append(time.monotonic() - fit_start)
                 continue
+            resample_wall.append(time.monotonic() - fit_start)
             if not result.converged:
                 continue
             succeeded += 1
@@ -750,18 +793,36 @@ class DiscoveryRunner:
             for key in counts:
                 if key in found:
                     counts[key] += 1
-        if succeeded < max(2, n_resamples // 2):
+        loop_elapsed = time.monotonic() - loop_start
+        corroborated = succeeded >= min_required
+        summary: Dict[str, Any] = {
+            "n_resamples": n_resamples,
+            "n_attempted": attempted,
+            "n_succeeded": succeeded,
+            "min_resamples": min_required,
+            "corroborated": corroborated,
+            "time_budget_s": budget,
+            "elapsed_s": elapsed_before_s + loop_elapsed,
+            "budget_exhausted": budget_exhausted,
+        }
+        if budget_exhausted:
             logger.warning(
-                f"Bootstrap stability unknown: {succeeded}/{n_resamples} resamples succeeded"
+                f"Bootstrap stopped by the time budget ({budget:.0f}s): "
+                f"{attempted}/{n_resamples} resamples attempted, {succeeded} succeeded"
             )
-            return None
+        if not corroborated:
+            logger.warning(
+                f"Bootstrap stability unknown: {succeeded}/{n_resamples} resamples "
+                f"succeeded (fewer than {min_required})"
+            )
+            return summary
         for edge in edges:
             stability = counts[(edge.source, edge.target)] / succeeded
             edge.bootstrap_stability = stability
             edge.confidence = stability
             if ensemble_dag.has_edge(edge.source, edge.target):
                 ensemble_dag.edges[edge.source, edge.target]["confidence"] = stability
-        return {"n_resamples": n_resamples, "n_succeeded": succeeded}
+        return summary
 
     async def _maybe_bootstrap(
         self,
@@ -773,15 +834,19 @@ class DiscoveryRunner:
     ) -> Dict[str, Any]:
         """Run stability measurement when configured and exactly one
         algorithm converged (multi-algorithm runs already have agreement).
-        Returns extra metadata entries ({} when bootstrap did not apply)."""
+        Returns extra metadata entries ({} when bootstrap did not apply).
+        The primary fits' wall is charged against ``config.time_budget_s``."""
         converged = [r for r in algorithm_results if r.converged]
         if config.bootstrap_resamples <= 0 or len(converged) != 1 or not edges:
             return {}
         algorithm = self._get_algorithm(converged[0].algorithm)
+        elapsed_before = float(sum(r.runtime_seconds for r in algorithm_results))
         loop = asyncio.get_event_loop()
         summary = await loop.run_in_executor(
             None,
-            lambda: self._bootstrap_edge_stability(data, config, algorithm, edges, ensemble_dag),
+            lambda: self._bootstrap_edge_stability(
+                data, config, algorithm, edges, ensemble_dag, elapsed_before_s=elapsed_before
+            ),
         )
         return {"bootstrap": summary}
 
