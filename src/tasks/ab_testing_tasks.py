@@ -221,6 +221,8 @@ def scheduled_interim_analysis(
             # checks it against the final-results table (idempotent: skips when
             # a final row exists).
             reconciled = await _reconcile_final_analysis(exp_uuid, previous_analyses)
+            fidelity_reconciled = reconciled["fidelity_tracking_enqueued"]
+            reconciled_final = reconciled["final_analysis_enqueued"]
 
             # Check if we should perform analysis at this milestone
             if not force:
@@ -243,7 +245,8 @@ def scheduled_interim_analysis(
                         "reason": "No new milestone reached",
                         "information_fraction": information_fraction,
                         "previous_analyses": len(previous_analyses),
-                        "final_analysis_enqueued": reconciled,
+                        "final_analysis_enqueued": reconciled_final,
+                        "fidelity_tracking_enqueued": fidelity_reconciled,
                     }
 
             # REAL per-unit outcome feed (#705 R5): same assignments ⋈
@@ -323,7 +326,7 @@ def scheduled_interim_analysis(
             # producer — had no producer at all (no beat entry, no send_task), so
             # the whole post-experiment fidelity chain was dark (#2206). Enqueue
             # it once per experiment: skip when a final result row already exists.
-            final_enqueued = reconciled or await _enqueue_final_analysis_on_stop(
+            final_enqueued = reconciled_final or await _enqueue_final_analysis_on_stop(
                 exp_uuid, interim_result.decision
             )
 
@@ -336,6 +339,7 @@ def scheduled_interim_analysis(
                 "p_value": interim_result.p_value,
                 "decision": interim_result.decision.value,
                 "final_analysis_enqueued": final_enqueued,
+                "fidelity_tracking_enqueued": fidelity_reconciled,
                 "n_control": int(len(control_data)),
                 "n_treatment": int(len(treatment_data)),
                 "duration_ms": duration_ms,
@@ -688,18 +692,47 @@ async def _send_srm_alerts(srm_issues: List[Dict], config: Dict) -> None:
 _STOPPING_DECISIONS = frozenset({"stop_efficacy", "stop_futility", "stop_safety"})
 
 
-async def _reconcile_final_analysis(experiment_id: UUID, previous_analyses: Any) -> bool:
-    """Retry the final enqueue for an already-persisted stopping decision (#2206).
+async def _reconcile_final_analysis(experiment_id: UUID, previous_analyses: Any) -> Dict[str, bool]:
+    """Re-drive BOTH post-stop hops from their durable records (#2206, codex r7/r8).
 
-    Returns True when a final analysis was enqueued now; False when there is no
-    stopping decision on record, a final row already exists, or the broker refused
-    again (logged; the next sweep retries).
+    A persisted stopping decision with no FINAL result row → enqueue
+    compute_experiment_results(final). A FINAL row with no fidelity comparison
+    for the experiment → enqueue fidelity_tracking_update directly (it skips
+    until a simulation is linked; the next sweep tries again). Broker failures
+    are logged and reported False; nothing here is one-shot.
     """
-    for analysis in previous_analyses or []:
-        decision = getattr(analysis, "decision", None)
-        if getattr(decision, "value", decision) in _STOPPING_DECISIONS:
-            return await _enqueue_final_analysis_on_stop(experiment_id, decision)
-    return False
+    out = {"final_analysis_enqueued": False, "fidelity_tracking_enqueued": False}
+    decision = next(
+        (
+            getattr(a, "decision", None)
+            for a in (previous_analyses or [])
+            if getattr(getattr(a, "decision", None), "value", getattr(a, "decision", None))
+            in _STOPPING_DECISIONS
+        ),
+        None,
+    )
+    if decision is None:
+        return out
+    from src.repositories.ab_results import ABResultsRepository
+
+    repo = ABResultsRepository()
+    if not await repo.get_results(experiment_id, analysis_type="final"):
+        out["final_analysis_enqueued"] = await _enqueue_final_analysis_on_stop(
+            experiment_id, decision
+        )
+        return out
+    if await repo.get_fidelity_comparisons(experiment_id, limit=1):
+        return out
+    try:
+        celery_app.send_task("src.tasks.fidelity_tracking_update", args=[str(experiment_id)])
+        out["fidelity_tracking_enqueued"] = True
+    except Exception as enqueue_err:
+        logger.warning(
+            "Could not enqueue fidelity_tracking_update for %s during reconciliation: %s",
+            experiment_id,
+            enqueue_err,
+        )
+    return out
 
 
 async def _enqueue_final_analysis_on_stop(experiment_id: UUID, decision: Any) -> bool:

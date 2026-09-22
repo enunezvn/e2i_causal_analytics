@@ -482,3 +482,81 @@ class TestFinalAnalysisIsReconciledIndependentlyOfMilestones:
         assert result["status"] == "skipped"
         assert result["final_analysis_enqueued"] is False
         assert send.call_count == 0
+
+
+class TestFidelityHopIsReconciledToo:
+    """codex r8: the final-results → fidelity hop was one-shot. The sweep now also
+    detects a FINAL row with no fidelity comparison for the experiment and
+    enqueues fidelity_tracking_update directly (idempotent; it skips until a
+    simulation is linked, and the next sweep tries again)."""
+
+    @staticmethod
+    def _sweep(previous, *, final_rows, comparisons, fidelity_enqueue_raises=False):
+        stats = MagicMock()
+        stats.total_enrolled = 500
+        stats.total_assigned = 1000
+        enrollment = MagicMock()
+        enrollment.get_enrollment_stats = AsyncMock(return_value=stats)
+        exp_repo = MagicMock()
+        exp_repo.get_interim_analyses = AsyncMock(return_value=previous)
+        results_repo = MagicMock()
+        results_repo.get_results = AsyncMock(return_value=final_rows)
+        results_repo.get_fidelity_comparisons = AsyncMock(return_value=comparisons)
+
+        def _send(name, *a, **k):
+            if fidelity_enqueue_raises and name == "src.tasks.fidelity_tracking_update":
+                raise RuntimeError("broker down")
+
+        send = MagicMock(side_effect=_send)
+        from src.tasks.ab_testing_tasks import scheduled_interim_analysis
+
+        with (
+            patch("src.repositories.ab_experiment.ABExperimentRepository", return_value=exp_repo),
+            patch("src.services.enrollment.EnrollmentService", return_value=enrollment),
+            patch("src.repositories.ab_results.ABResultsRepository", return_value=results_repo),
+            patch("src.tasks.ab_testing_tasks.celery_app.send_task", send),
+        ):
+            result = scheduled_interim_analysis.run(experiment_id=str(uuid4()), force=False)
+        names = [c.args[0] for c in send.call_args_list if c.args]
+        return result, names
+
+    @staticmethod
+    def _stopped_history():
+        earlier = MagicMock()
+        earlier.information_fraction = 0.25
+        earlier.decision = "continue"
+        stopped = MagicMock()
+        stopped.information_fraction = 0.5
+        stopped.decision = "stop_futility"
+        return [earlier, stopped]
+
+    def test_a_final_row_without_a_comparison_enqueues_fidelity_directly(self):
+        result, names = self._sweep(
+            self._stopped_history(), final_rows=[MagicMock()], comparisons=[]
+        )
+        assert result["reason"] == "No new milestone reached"
+        assert names == ["src.tasks.fidelity_tracking_update"]
+        assert result["final_analysis_enqueued"] is False
+        assert result["fidelity_tracking_enqueued"] is True
+
+    def test_an_existing_comparison_means_the_loop_is_closed_for_that_experiment(self):
+        result, names = self._sweep(
+            self._stopped_history(), final_rows=[MagicMock()], comparisons=[MagicMock()]
+        )
+        assert names == []
+        assert result["fidelity_tracking_enqueued"] is False
+
+    def test_a_broker_failure_on_the_fidelity_hop_is_reported_and_retried_next_sweep(self):
+        result, names = self._sweep(
+            self._stopped_history(),
+            final_rows=[MagicMock()],
+            comparisons=[],
+            fidelity_enqueue_raises=True,
+        )
+        assert result["status"] == "skipped"
+        assert result["fidelity_tracking_enqueued"] is False
+        result2, names2 = self._sweep(
+            self._stopped_history(), final_rows=[MagicMock()], comparisons=[]
+        )
+        assert result2["fidelity_tracking_enqueued"] is True
+        assert names2 == ["src.tasks.fidelity_tracking_update"]
