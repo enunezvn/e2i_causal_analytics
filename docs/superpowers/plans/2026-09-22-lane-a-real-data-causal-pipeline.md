@@ -2541,6 +2541,27 @@ git commit -m "docs(evidence): in-process agent pre-flight on the real causal fr
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
 
+**Amendment (2026-09-22, after the first two pre-flights hit the 900 s cap — codex r1 finding 2):**
+Step 2's contingency ("force LinearDML") did not help: Auto AND forced LinearDML both died at the
+refutation node's DoWhy reconstruction (900.5 s / 900.4 s). The run shape was resolved by attribution,
+not by subsampling (the full cohort is the spec) and not by widening the cap:
+
+| piece (n = 15,209 × 77) | measured | mechanism (read in the dependency's source) | fix |
+|---|---|---|---|
+| `_build_dowhy_estimate` reconstruction 478 s | `identify_effect` 467 s, econml fit ~11 s (probe log timestamps) | dowhy 0.14 default identifier accepts the full common-cause set on its first candidate, then re-runs a minimal-set search from the smallest subset upward and burns its 100,000-iteration cap when the minimal set IS the full set (k=12: 0.65 s; k≥17: the cap; k=77: 467 s) | `identify_effect(..., optimize_backdoor=True)` — same adjustment set at k=8/12/17/77, byte-identical LinearDML ATE at k=8/12, 0.01 s. Red-first: `tests/unit/test_agents/test_causal_impact/test_refutation_identify_budget.py` |
+| `LinearDMLWrapper.fit` 605 s | `LogisticRegressionCV(cv=3, max_iter=500)` on the UNSCALED design 441.4 s vs 5.8 s standardised (`timing_probe2_*.json`); econml fit 12.7 s; `_honest_ate_ci` 0.4 s | lbfgs grinding to its iteration cap on mixed-unit columns (a non-converged fit that also moves with the units) | `nuisance_config.propensity_model()` = `StandardScaler → LogisticRegressionCV` at the 9 wrapper sites. Red-first: `tests/unit/test_causal_engine/test_energy_score/test_propensity_scale_invariance.py`. Served-output check on the live synthetic pairs (`tournament_*.json/.txt`): 0 winner flips, ATEs identical, max |Δ energy| 0.02 |
+
+Result: the same pre-flight (Auto, discovery off) completes in **266.9 s** (`preflight.md`). Two things the
+pre-flight taught that the plan had wrong: (1) "runs WITHOUT `.env` so it writes nothing to prod" was FALSE —
+`src/ml/data_loader.py` lazily `load_dotenv()`s and walks up to the main checkout's `.env`, so the first run
+that reached the refutation node persisted 6 `causal_validations` + 1 `validation_outcomes` rows and one
+MLflow run to prod (reported to the owner; the script now blanks the Supabase env before importing `src`);
+(2) the script must run from the worktree ROOT — from the evidence dir it imports `src` from main (its own
+assert caught it). Follow-ups NOT in this lane: the same default identifier in
+`src/causal_engine/pipeline/executors/dowhy.py:258`; `OrthoForestWrapper` cannot fit any frame
+(`max_depth=None` TypeError); `_load_agent_estimation_frame`'s `.limit()` has no ORDER BY (nba_triggers
+serves a different 5,000-row subset per run).
+
 ---
 
 ### Task 10: Codex review rounds to ACCEPT

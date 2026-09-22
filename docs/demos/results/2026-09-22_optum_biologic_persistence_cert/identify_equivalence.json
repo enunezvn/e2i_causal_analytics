@@ -1,0 +1,158 @@
+{
+ "8": {
+  "default_s": 0.05,
+  "opt_s": 0.01,
+  "default_backdoor": {
+   "backdoor1": [
+    "c0",
+    "c1",
+    "c2",
+    "c3",
+    "c4",
+    "c5",
+    "c6",
+    "c7"
+   ],
+   "backdoor2": [
+    "c0",
+    "c1",
+    "c2",
+    "c3",
+    "c4",
+    "c5",
+    "c6",
+    "c7"
+   ],
+   "backdoor": [
+    "c0",
+    "c1",
+    "c2",
+    "c3",
+    "c4",
+    "c5",
+    "c6",
+    "c7"
+   ]
+  },
+  "default_general": {
+   "general1": 8,
+   "general_adjustment": 8
+  },
+  "opt_backdoor": {
+   "backdoor1": 8,
+   "backdoor": 8
+  },
+  "default_bd_id": "backdoor1",
+  "opt_bd_id": "backdoor1",
+  "default_identifier_method": "backdoor",
+  "opt_identifier_method": "backdoor",
+  "ate_default": 0.7751891503971214,
+  "ate_opt": 0.7751891503971214,
+  "ate_identical": true,
+  "cols_identical": true,
+  "cols_default": [
+   "c0",
+   "c1",
+   "c2",
+   "c3",
+   "c4",
+   "c5",
+   "c6",
+   "c7"
+  ]
+ },
+ "12": {
+  "default_s": 0.65,
+  "opt_s": 0.01,
+  "default_backdoor": {
+   "backdoor1": [
+    "c0",
+    "c1",
+    "c10",
+    "c11",
+    "c2",
+    "c3",
+    "c4",
+    "c5",
+    "c6",
+    "c7",
+    "c8",
+    "c9"
+   ],
+   "backdoor2": [
+    "c0",
+    "c1",
+    "c10",
+    "c11",
+    "c2",
+    "c3",
+    "c4",
+    "c5",
+    "c6",
+    "c7",
+    "c8",
+    "c9"
+   ],
+   "backdoor": [
+    "c0",
+    "c1",
+    "c10",
+    "c11",
+    "c2",
+    "c3",
+    "c4",
+    "c5",
+    "c6",
+    "c7",
+    "c8",
+    "c9"
+   ]
+  },
+  "default_general": {
+   "general1": 12,
+   "general_adjustment": 12
+  },
+  "opt_backdoor": {
+   "backdoor1": 12,
+   "backdoor": 12
+  },
+  "default_bd_id": "backdoor1",
+  "opt_bd_id": "backdoor1",
+  "default_identifier_method": "backdoor",
+  "opt_identifier_method": "backdoor",
+  "ate_default": 0.7298124032960146,
+  "ate_opt": 0.7298124032960146,
+  "ate_identical": true,
+  "cols_identical": true,
+  "cols_default": [
+   "c0",
+   "c1",
+   "c2",
+   "c3",
+   "c4",
+   "c5",
+   "c6",
+   "c7",
+   "c8",
+   "c9",
+   "c10",
+   "c11"
+  ]
+ },
+ "17": {
+  "default_s": 16.8,
+  "opt_s": 0.01,
+  "default_backdoor_n": {
+   "backdoor1": 17,
+   "backdoor": 17
+  },
+  "default_general_n": {
+   "general1": 17,
+   "general_adjustment": 17
+  },
+  "opt_backdoor_n": {
+   "backdoor1": 17,
+   "backdoor": 17
+  }
+ }
+}

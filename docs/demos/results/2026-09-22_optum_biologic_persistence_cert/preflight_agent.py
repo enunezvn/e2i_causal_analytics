@@ -15,13 +15,43 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import os
 import resource
 import sys
 import time
 import uuid
 from pathlib import Path
 
+# WRITE-FREE GUARD -- set BEFORE any ``src`` import. This process is not the
+# production API, but the graph it runs IS production code: the refutation node
+# persists its suite to ``causal_validations`` / ``validation_outcomes`` and the
+# tracker logs a run to MLflow. The worktree sits inside the main checkout, so a
+# lazy ``load_dotenv()`` (``src/ml/data_loader.py``) walks up to the main
+# checkout's ``.env`` and finds the PROD Supabase URL + service-role key; on
+# 2026-09-22 07:24 the first pre-flight that reached the refutation node wrote
+# 6 + 1 rows to prod and one MLflow run (see preflight.md). ``load_dotenv``
+# never overrides a variable that already exists, so blanking these here keeps
+# the run on the fail-closed "persistence unavailable" path (a WARNING in the
+# log, no rows) and MLflow on a scratch file store.
+for _var in (
+    "SUPABASE_URL",
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "SUPABASE_SERVICE_KEY",
+    "SUPABASE_ANON_KEY",
+):
+    os.environ[_var] = ""
+os.environ["MLFLOW_TRACKING_URI"] = (
+    "file:///tmp/claude-1000/-home-enunez-Projects-e2i-causal-analytics/3c437b64-e40a-4bb9-ba13-d7b7674bd2ab/scratchpad/preflight_mlruns"
+)
+
 import pandas as pd
+
+# Node-level INFO logs carry the per-stage timings (graph_builder / estimation /
+# refutation) that a timed-out run's failed response discards.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+for _noisy in ("httpx", "httpcore", "urllib3", "opik", "sentry_sdk"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 sys.path.insert(0, str(Path.cwd()))
 import src  # noqa: E402
