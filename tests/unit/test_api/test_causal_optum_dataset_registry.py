@@ -189,6 +189,10 @@ async def test_loader_reads_the_physical_table_and_one_hots_the_categoricals(mon
     assert frame["age_at_index"].dtype.kind == "f"
     assert "payer_category" not in frame.columns and "payer_category=medicare" in frame.columns
     assert "gdr_cd=M" in cols and "geographic_region=west" in cols
+    # Row 0's geographic_region is NULL: it must NOT silently collapse into the
+    # drop_first reference level ("south") — it gets its own __missing__ dummy.
+    assert "geographic_region=__missing__" in cols
+    assert frame["geographic_region=__missing__"].tolist() == [1.0, 0.0, 0.0]
     assert set(cols) == {
         TREATMENT,
         "persistent_at_180d_g28",
@@ -197,6 +201,7 @@ async def test_loader_reads_the_physical_table_and_one_hots_the_categoricals(mon
         "payer_category=medicare_lis_dual",
         "gdr_cd=M",
         "geographic_region=west",
+        "geographic_region=__missing__",
     }
 
 
@@ -212,6 +217,42 @@ async def test_loader_rejects_an_outcome_in_the_covariate_slot(monkeypatch):
             limit=10,
         )
     assert exc.value.status_code == 400 and "discontinued_180d" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_loader_refuses_a_constant_treatment(monkeypatch):
+    """The brand dropdown offers index_biologic_brand because the table has it,
+    but scoping to one brand makes treatment_dupixent constant — refused at
+    load (400), never a silent finite-but-meaningless DoWhy estimate."""
+    rows = [dict(r, **{TREATMENT: 1}) for r in _rows()]
+    monkeypatch.setattr(_CLIENT_FACTORY, AsyncMock(return_value=_FakeClient(rows)))
+    with pytest.raises(HTTPException) as exc:
+        await _load_agent_estimation_frame(
+            dataset=DATASET,
+            treatment_var=TREATMENT,
+            outcome_var="persistent_at_180d_g28",
+            covariates=["age_at_index"],
+            limit=10,
+        )
+    assert exc.value.status_code == 400
+    assert TREATMENT in exc.value.detail
+    assert "constant" in exc.value.detail.lower()
+
+
+@pytest.mark.asyncio
+async def test_loader_still_loads_the_two_arm_cohort(monkeypatch):
+    """The existing two-arm fake (unchanged from _rows()) must still load fine
+    — the constant-treatment guard must not false-positive on a real contrast."""
+    monkeypatch.setattr(_CLIENT_FACTORY, AsyncMock(return_value=_FakeClient(_rows())))
+    frame, cols = await _load_agent_estimation_frame(
+        dataset=DATASET,
+        treatment_var=TREATMENT,
+        outcome_var="persistent_at_180d_g28",
+        covariates=["age_at_index"],
+        limit=10,
+    )
+    assert frame[TREATMENT].tolist() == [0.0, 1.0, 1.0]
+    assert TREATMENT in cols
 
 
 # ---------------------------------------------------------------------------

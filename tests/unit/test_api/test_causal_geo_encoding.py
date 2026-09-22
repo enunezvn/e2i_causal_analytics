@@ -140,3 +140,34 @@ def test_one_hot_noop_when_no_categoricals_present():
     out, dummy_names = _one_hot_categoricals(df, ["geographic_region"])
     assert dummy_names == []
     assert list(out.columns) == ["treatment_arm", "disease_severity"]
+
+
+def test_one_hot_adds_no_missing_dummy_when_no_nulls_present():
+    """A NULL-free frame must not gain a spurious __missing__ dummy."""
+    df = pd.DataFrame(
+        {
+            "treatment_arm": [1.0, 0.0, 1.0, 0.0],
+            "geographic_region": ["south", "west", "midwest", "northeast"],
+        }
+    )
+    out, dummy_names = _one_hot_categoricals(df, ["geographic_region"])
+    assert not any(name.endswith("=__missing__") for name in dummy_names)
+    assert "geographic_region=__missing__" not in out.columns
+
+
+def test_one_hot_gives_a_null_cell_its_own_missing_dummy():
+    """A NULL categorical must NOT silently collapse into the drop_first
+    reference level — it gets its own <col>=__missing__ dummy instead."""
+    df = pd.DataFrame(
+        {
+            "treatment_arm": [1.0, 0.0, 1.0],
+            "geographic_region": [None, "west", "midwest"],
+        }
+    )
+    out, dummy_names = _one_hot_categoricals(df, ["geographic_region"])
+    assert "geographic_region=__missing__" in dummy_names
+    assert out["geographic_region=__missing__"].tolist() == [1.0, 0.0, 0.0]
+    # midwest (row 2) is the drop_first reference level among the non-null
+    # levels {midwest, west} — it stays all-zero on every dummy, same as before.
+    assert out.loc[2, "geographic_region=__missing__"] == 0.0
+    assert out.loc[2, "geographic_region=west"] == 0.0

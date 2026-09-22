@@ -324,7 +324,12 @@ def _one_hot_categoricals(
     ``<col>=<level>`` 0/1 float dummies, dropping the original column. drop_first
     drops the first sorted level as the reference category (avoids the
     dummy-variable trap). Level order is sorted for deterministic dummy names.
-    Columns absent from ``df`` are skipped. Returns ``(expanded_df, dummy_names)``."""
+    Columns absent from ``df`` are skipped. A NULL cell gets its OWN
+    ``<col>=__missing__`` dummy (1.0 for that row, 0.0 elsewhere) rather than
+    silently collapsing into the drop_first reference level — a real cohort's
+    NULL (e.g. 8.1% of ``optum_biologic_persistence``'s geographic_region) is
+    not evidence the row belongs to the reference category. Returns
+    ``(expanded_df, dummy_names)``."""
     present = [c for c in categorical_cols if c in df.columns]
     if not present:
         return df, []
@@ -335,6 +340,10 @@ def _one_hot_categoricals(
         for level in levels[1:]:  # drop_first: first sorted level = reference
             name = f"{col}={level}"
             out[name] = (out[col].astype(str) == level).astype(float)
+            dummy_names.append(name)
+        if out[col].isna().any():
+            name = f"{col}=__missing__"
+            out[name] = out[col].isna().astype(float)
             dummy_names.append(name)
         out = out.drop(columns=[col])
     return out, dummy_names
@@ -734,6 +743,25 @@ async def _load_agent_estimation_frame(
     import pandas as pd
 
     frame = pd.DataFrame(records)
+
+    # A causal contrast needs both arms. On a dataset where the brand filter IS
+    # the treatment label (optum_biologic_persistence: index_biologic_brand ==
+    # treatment_dupixent), scoping to one brand makes the treatment column
+    # constant — NOT a loud failure downstream: DoWhy still returns a finite
+    # estimate on a constant treatment, and refutation.py's nunique()==2 check
+    # silently switches to the continuous-treatment path instead of refusing.
+    # Fail closed HERE, before that can happen.
+    if frame[treatment_var].nunique(dropna=True) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Treatment '{treatment_var}' is constant in the loaded rows "
+                f"(n={len(frame)}, value={frame[treatment_var].iloc[0]!r}) for "
+                f"dataset '{dataset}' brand={brand!r}; a causal contrast needs "
+                "both arms — widen the cohort (omit `brand` when the brand IS "
+                "the treatment)."
+            ),
+        )
 
     # Defensive net (Phase 2 brand-gating): after gating, an off-brand clinical
     # covariate can reach here 100% NULL (e.g. a stale/direct request that bypassed

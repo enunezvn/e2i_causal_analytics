@@ -550,8 +550,13 @@ _CAUSAL_NUMERIC_COLUMNS: Dict[str, set] = {
 _CAUSAL_BRAND_COLUMN: Dict[str, str] = {
     "nba_triggers": "brand_id",
     # Lane A: the brand filter IS the treatment label. Scoping to one brand makes
-    # the treatment constant and the run fails loudly at estimation — the
-    # dropdown offers it because the table has it; the analyst's all-brands
+    # the treatment constant — NOT a loud estimation-time failure (DoWhy still
+    # returns a finite estimate on a constant treatment, and refutation.py's
+    # nunique()==2 check silently switches to the continuous-treatment path
+    # instead of refusing). The loader's constant-treatment guard
+    # (_load_agent_estimation_frame, right after the frame is built) refuses
+    # a one-arm scope with a 400 before that can happen. The dropdown offers
+    # the brand filter because the table has it; the analyst's all-brands
     # default is the causal contrast.
     "optum_biologic_persistence": "index_biologic_brand",
 }
