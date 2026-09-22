@@ -133,6 +133,37 @@ async def _resolve_active_model_row(
     return cast(Dict[str, Any], row)
 
 
+async def _verify_experiment_link(repo: Any, experiment_id: UUID, brand: str) -> None:
+    """The experiment a pre-screen links to must exist and be this brand's (#2206).
+
+    ``twin_simulations.experiment_design_id`` has no FK, so nothing else would
+    catch a typo'd or foreign-brand id; the fidelity producer resolves the twin
+    simulation through this link and would only ever skip.
+    """
+    res = await (
+        repo.client.table("ml_experiments")
+        .select("id,brand")
+        .eq("id", str(experiment_id))
+        .limit(1)
+        .execute()
+    )
+    rows = res.data or []
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail=f"experiment_design_id {experiment_id} does not name an existing experiment.",
+        )
+    exp_brand = rows[0].get("brand")
+    if exp_brand and str(exp_brand) != str(brand):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"experiment_design_id {experiment_id} belongs to brand {exp_brand}, "
+                f"not {brand}; a pre-screen links only to its own brand's experiment."
+            ),
+        )
+
+
 async def _load_trained_generator(
     *,
     twin_type: Any,
@@ -1089,6 +1120,10 @@ async def run_simulation(
         # honest 503 (not a fresh untrained generator → opaque 500, and not a
         # UUID(int=0) sentinel → twin_simulations.model_id FK violation) (#705 H4).
         repo = await _get_twin_repo()
+        if experiment_link is not None:
+            # A well-formed id of a nonexistent or other-brand experiment would
+            # leave a permanently orphaned pre-screen (codex r2 #1): verify first.
+            await _verify_experiment_link(repo, experiment_link, request.brand.value)
         model_row = await _resolve_active_model_row(
             repo, twin_type=twin_type, brand=brand, model_id=request.model_id
         )
@@ -1183,14 +1218,18 @@ async def run_simulation(
         # its experiment so fidelity_tracking_update can find it (#2206).
         saved_id = await repo.save_simulation(result, request.brand.value)
         if experiment_link is not None:
-            linked = await repo.simulations.link_experiment(
-                saved_id or result.simulation_id, experiment_link
-            )
+            sim_id = saved_id or result.simulation_id
+            linked = await repo.simulations.link_experiment(sim_id, experiment_link)
             if not linked:
-                logger.warning(
-                    "Simulation %s saved but not linked to experiment %s",
-                    saved_id or result.simulation_id,
-                    experiment_link,
+                # The caller asked for a linked pre-screen and did not get one; a
+                # 200 here would hide an orphan the fidelity loop can never find.
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        f"Simulation {sim_id} was saved but could not be linked to "
+                        f"experiment {experiment_link}; link it before relying on "
+                        "post-experiment fidelity tracking."
+                    ),
                 )
 
         return SimulationResponse(

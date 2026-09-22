@@ -343,3 +343,45 @@ class TestProducerPathResolvesTheLinkedSimulation:
             experiment_id=exp_id, twin_simulation_id=None
         )
         assert result["twin_simulation_id"] == str(sim_id)
+
+
+class TestFinalResultsAreIdempotent:
+    def test_a_redelivered_final_task_does_not_recompute_but_still_fires_the_producer(self):
+        """codex r2 #4: Celery late-acks; a worker lost after persisting the final row
+        redelivers compute_experiment_results(final). The task checks for an existing
+        final row itself (the interim producer's check does not cover redelivery) and
+        skips the recompute. The fidelity enqueue is idempotent downstream (the
+        comparison is an upsert on experiment+simulation+type), so it still fires."""
+        from src.tasks.ab_testing_tasks import compute_experiment_results
+
+        exp_id = str(uuid4())
+        outcome_repo = MagicMock()
+        outcome_repo.load_arrays = AsyncMock(
+            return_value=(np.array([1.0, 2.0]), np.array([2.0, 3.0]))
+        )
+        client = MagicMock()
+        (
+            client.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value
+        ).data = [{"brand": "Fabhalta", "prediction_target": "triggers_total_count"}]
+        results_repo = MagicMock()
+        results_repo.get_results = AsyncMock(return_value=[MagicMock()])
+        svc = MagicMock()
+        svc.compute_itt_results = AsyncMock()
+        with (
+            patch("src.tasks.ab_testing_tasks.celery_app.send_task") as mock_send,
+            patch("src.repositories.get_supabase_client", return_value=client),
+            patch(
+                "src.repositories.experiment_outcome.ExperimentOutcomeRepository",
+                return_value=outcome_repo,
+            ),
+            patch("src.repositories.ab_results.ABResultsRepository", return_value=results_repo),
+            patch("src.services.results_analysis.ResultsAnalysisService", return_value=svc),
+        ):
+            result = compute_experiment_results.run(experiment_id=exp_id, analysis_type="final")
+
+        assert result["status"] == "skipped"
+        assert "already" in result["reason"]
+        svc.compute_itt_results.assert_not_called()
+        outcome_repo.load_arrays.assert_not_called()
+        names = [c.args[0] for c in mock_send.call_args_list if c.args]
+        assert names.count("src.tasks.fidelity_tracking_update") == 1

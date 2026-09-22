@@ -40,6 +40,10 @@ export interface ModelCensus {
   allSynthetic: boolean;
   /** Visible rows whose fidelity_score is NULL. */
   unvalidated: number;
+  /** Visible rows measured at or above the engine's gate. */
+  validated: number;
+  /** Visible rows measured below the engine's gate — a failed gate, never "validated". */
+  belowThreshold: number;
   /** Visible brands whose fit is shared with at least one other brand model. */
   sharedBrands: string[];
   /** Brand labels sharing a fit that the caller cannot see (scoped grant). */
@@ -77,6 +81,8 @@ export function summarizeModelCensus(models: readonly TwinModelSummary[]): Model
     fits: byFingerprint.size,
     allSynthetic: models.every((m) => m.r2_score_basis === 'synthetic_target'),
     unvalidated: models.filter((m) => m.fidelity_status === 'unvalidated').length,
+    validated: models.filter((m) => m.fidelity_status === 'validated').length,
+    belowThreshold: models.filter((m) => m.fidelity_status === 'below_threshold').length,
     sharedBrands,
     hiddenSharedLabels,
     brandIsFeature: models.some((m) => m.brand_is_feature),
@@ -91,14 +97,21 @@ export function describeModelCensus(models: readonly TwinModelSummary[]): string
   const shared = c.fits < c.labels ? 'shared ' : '';
   const synthetic = c.allSynthetic ? 'synthetic ' : '';
   const fits = `${c.fits} ${shared}${synthetic}fit${c.fits === 1 ? '' : 's'}`;
-  // The fidelity clause speaks only for the rows the caller can see.
+  // The fidelity clause speaks only for the rows the caller can see, and names
+  // all three states: a below-threshold model is a failed gate, never "validated".
   const who = c.visible < c.labels && c.visible === 1 ? `${models[0].brand} ` : '';
-  const fidelity =
-    c.unvalidated === c.visible
-      ? `${who}unvalidated`
-      : c.unvalidated === 0
-        ? `${who}validated`
-        : `${c.visible - c.unvalidated}/${c.visible} validated`;
+  let fidelity: string;
+  if (c.unvalidated === c.visible) fidelity = `${who}unvalidated`;
+  else if (c.validated === c.visible) fidelity = `${who}validated`;
+  else if (c.belowThreshold === c.visible) fidelity = `${who}below threshold`;
+  else
+    fidelity = [
+      c.validated > 0 ? `${c.validated} validated` : null,
+      c.belowThreshold > 0 ? `${c.belowThreshold} below threshold` : null,
+      c.unvalidated > 0 ? `${c.unvalidated} unvalidated` : null,
+    ]
+      .filter((part): part is string => part !== null)
+      .join(' · ');
   return `${labels} over ${fits} · ${fidelity}`;
 }
 
@@ -112,9 +125,12 @@ export function explainModelCensus(models: readonly TwinModelSummary[]): string 
       c.hiddenSharedLabels > 0
         ? ` (${c.hiddenSharedLabels} other brand model${c.hiddenSharedLabels === 1 ? '' : 's'} outside your brand grant)`
         : '';
+    // "Routing metadata" is a conclusion the backend's brand_is_feature supports
+    // only when brand is NOT a feature; otherwise state the shared fit alone.
+    const lead = c.brandIsFeature ? '' : 'Brand is routing metadata: ';
     const feature = c.brandIsFeature ? 'brand is a model feature.' : 'brand is not a model feature.';
     parts.push(
-      `Brand is routing metadata: ${c.sharedBrands.join(', ')}${hidden} share one identical fit ` +
+      `${lead}${c.sharedBrands.join(', ')}${hidden} share one identical fit ` +
         `(same training config, features and metrics); ${feature}`
     );
   }
@@ -129,6 +145,11 @@ export function explainModelCensus(models: readonly TwinModelSummary[]): string 
       c.unvalidated === c.visible
         ? 'Fidelity is unvalidated: no experiment outcome has been compared against these models yet.'
         : `${c.unvalidated} of ${c.visible} models have no experiment outcome compared against them yet.`
+    );
+  }
+  if (c.belowThreshold > 0) {
+    parts.push(
+      `${c.belowThreshold} of ${c.visible} model${c.visible === 1 ? ' is' : 's are'} below the fidelity threshold (measured prediction accuracy failed the 0.70 gate).`
     );
   }
   return parts.length > 0 ? parts.join(' ') : null;

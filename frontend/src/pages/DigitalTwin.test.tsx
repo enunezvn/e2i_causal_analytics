@@ -1067,7 +1067,9 @@ describe('DigitalTwin', () => {
       isLoading: false,
     });
     render(<DigitalTwin />, { wrapper: createWrapper() });
-    expect(screen.getByText('2 brand labels over 2 fits · 1/2 validated')).toBeInTheDocument();
+    expect(
+      screen.getByText('2 brand labels over 2 fits · 1 validated · 1 unvalidated')
+    ).toBeInTheDocument();
     expect(screen.queryByText(/shared synthetic fit/)).not.toBeInTheDocument();
   });
 

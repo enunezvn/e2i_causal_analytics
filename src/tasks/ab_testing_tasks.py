@@ -790,6 +790,25 @@ def compute_experiment_results(
             brand = exp_rows[0].get("brand")
             primary_metric = exp_rows[0].get("prediction_target") or ""
 
+            # Idempotency under Celery late-ack redelivery (codex r2 #4): a worker
+            # lost after persisting the final row gets this task again. The interim
+            # producer's existence check cannot see that; check here too and skip
+            # the recompute. The fidelity enqueue still fires — the comparison is
+            # an upsert on (experiment, simulation, type). Residual: two deliveries
+            # racing within one round-trip; ab_experiment_results has no unique key
+            # on (experiment_id, analysis_type) to make the claim atomic.
+            if analysis_type == "final":
+                from src.repositories.ab_results import ABResultsRepository
+
+                if await ABResultsRepository().get_results(exp_uuid, analysis_type="final"):
+                    _enqueue_fidelity_tracking()
+                    return {
+                        "status": "skipped",
+                        "experiment_id": experiment_id,
+                        "analysis_type": analysis_type,
+                        "reason": "final results already computed for this experiment",
+                    }
+
             # REAL per-unit outcome feed (#705 R5): assignments ⋈ business_metrics
             # per-HCP rollup. Replaces the #422 `control_data = []` placeholder.
             outcome_repo = ExperimentOutcomeRepository(supabase_client=client)

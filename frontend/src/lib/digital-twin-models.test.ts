@@ -57,7 +57,7 @@ describe('digital-twin model census (#2206)', () => {
         fidelity_sample_count: 4,
       }),
     ];
-    expect(describeModelCensus(rows)).toBe('2 brand labels over 2 fits · 1/2 validated');
+    expect(describeModelCensus(rows)).toBe('2 brand labels over 2 fits · 1 validated · 1 unvalidated');
     expect(summarizeModelCensus(rows)?.sharedBrands).toEqual([]);
     expect(explainModelCensus(rows) ?? '').not.toMatch(/routing metadata/);
   });
@@ -74,12 +74,49 @@ describe('digital-twin model census (#2206)', () => {
     expect(summarizeModelCensus(rows)).toMatchObject({ visible: 1, labels: 3, hiddenSharedLabels: 2 });
   });
 
-  it('says brand IS a feature when the backend says so', () => {
+  it('does not call brand routing metadata when the backend says brand IS a feature (codex r2 #3)', () => {
     const rows = [
       model('Remibrutinib', { brand_is_feature: true, shared_fit_model_count: 2 }),
       model('Kisqali', { brand_is_feature: true, shared_fit_model_count: 2 }),
     ];
-    expect(explainModelCensus(rows) ?? '').toMatch(/brand is a model feature\./);
+    const why = explainModelCensus(rows) ?? '';
+    expect(why).toMatch(/brand is a model feature\./);
+    expect(why).toMatch(/Remibrutinib, Kisqali share one identical fit/);
+    expect(why).not.toMatch(/routing metadata/);
+  });
+
+  it('never labels a below-threshold model as validated (codex r2 #2)', () => {
+    const low = [
+      model('Kisqali', {
+        shared_fit_model_count: 1,
+        fidelity_status: 'below_threshold',
+        fidelity_score: 0.4,
+        fidelity_sample_count: 2,
+      }),
+    ];
+    expect(describeModelCensus(low)).toBe('1 brand label over 1 synthetic fit · below threshold');
+    expect(explainModelCensus(low) ?? '').toMatch(/1 of 1 models? (is|are) below the fidelity threshold/);
+
+    const mixed = [
+      model('Remibrutinib', { shared_fit_model_count: 1, training_fingerprint: 'a' }),
+      model('Fabhalta', {
+        shared_fit_model_count: 1,
+        training_fingerprint: 'b',
+        fidelity_status: 'validated',
+        fidelity_score: 0.9,
+        fidelity_sample_count: 1,
+      }),
+      model('Kisqali', {
+        shared_fit_model_count: 1,
+        training_fingerprint: 'c',
+        fidelity_status: 'below_threshold',
+        fidelity_score: 0.4,
+        fidelity_sample_count: 2,
+      }),
+    ];
+    expect(describeModelCensus(mixed)).toBe(
+      '3 brand labels over 3 synthetic fits · 1 validated · 1 below threshold · 1 unvalidated'
+    );
   });
 
   it('is null with no models and labels unknown states as unknown', () => {

@@ -2210,6 +2210,7 @@ async def test_run_simulation_persists_the_experiment_link_it_was_given(
 
     exp_id = uuid4()
     saved_id = uuid4()
+    mock_twin_repository.client = _experiment_lookup([{"id": str(exp_id), "brand": "Remibrutinib"}])
     mock_twin_repository.save_simulation = AsyncMock(return_value=saved_id)
     mock_twin_repository.simulations.link_experiment = AsyncMock(return_value=True)
 
@@ -2262,3 +2263,82 @@ async def test_run_simulation_rejects_a_malformed_experiment_link_before_simulat
     assert "experiment_design_id" in str(exc.value.detail)
     mock_simulation_engine.simulate.assert_not_called()
     mock_twin_repository.save_simulation.assert_not_called()
+
+
+def _experiment_lookup(rows):
+    """repo.client.table('ml_experiments').select(...).eq(...).limit(1).execute() (async)."""
+    chain = MagicMock()
+    chain.table.return_value.select.return_value.eq.return_value.limit.return_value.execute = (
+        AsyncMock(return_value=MagicMock(data=rows))
+    )
+    return chain
+
+
+def _linked_request(exp_id, brand=None):
+    from src.api.routes.digital_twin import (
+        BrandEnum,
+        InterventionConfigRequest,
+        SimulateRequest,
+        TwinTypeEnum,
+    )
+
+    return SimulateRequest(
+        intervention=InterventionConfigRequest(
+            intervention_type="email_campaign",
+            channel="email",
+            frequency="weekly",
+            duration_weeks=8,
+        ),
+        brand=brand or BrandEnum.REMIBRUTINIB,
+        twin_type=TwinTypeEnum.HCP,
+        twin_count=1000,
+        experiment_design_id=str(exp_id),
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_simulation_verifies_the_experiment_exists_before_simulating(
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository, mock_twin_hydrate
+):
+    """codex r2 #1: a well-formed but nonexistent experiment id would have produced a
+    permanently orphaned pre-screen. It is now a 404 before any heavy work."""
+    from src.api.routes.digital_twin import run_simulation
+
+    mock_twin_repository.client = _experiment_lookup([])
+    with pytest.raises(HTTPException) as exc:
+        await run_simulation(_linked_request(uuid4()), {"user_id": "u", "role": "operator"})
+    assert exc.value.status_code == 404
+    mock_simulation_engine.simulate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_simulation_refuses_to_link_an_experiment_of_another_brand(
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository, mock_twin_hydrate
+):
+    from src.api.routes.digital_twin import run_simulation
+
+    exp_id = uuid4()
+    mock_twin_repository.client = _experiment_lookup([{"id": str(exp_id), "brand": "Kisqali"}])
+    with pytest.raises(HTTPException) as exc:
+        await run_simulation(_linked_request(exp_id), {"user_id": "u", "role": "operator"})
+    assert exc.value.status_code == 422
+    assert "Kisqali" in str(exc.value.detail)
+    mock_simulation_engine.simulate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_simulation_surfaces_a_failed_link_instead_of_returning_success(
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository, mock_twin_hydrate
+):
+    from src.api.routes.digital_twin import run_simulation
+
+    exp_id = uuid4()
+    saved_id = uuid4()
+    mock_twin_repository.client = _experiment_lookup([{"id": str(exp_id), "brand": "Remibrutinib"}])
+    mock_twin_repository.save_simulation = AsyncMock(return_value=saved_id)
+    mock_twin_repository.simulations.link_experiment = AsyncMock(return_value=False)
+    with pytest.raises(HTTPException) as exc:
+        await run_simulation(_linked_request(exp_id), {"user_id": "u", "role": "operator"})
+    assert exc.value.status_code == 500
+    assert str(saved_id) in str(exc.value.detail)
+    assert str(exp_id) in str(exc.value.detail)
