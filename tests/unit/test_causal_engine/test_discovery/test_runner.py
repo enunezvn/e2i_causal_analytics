@@ -503,6 +503,10 @@ class TestPerAlgorithmTimeout:
         failed = result.algorithm_results[0]
         assert failed.converged is False
         assert "timeout" in failed.metadata["error"]
+        # A timeout is a failure shape too: with no converged run the RESULT is
+        # not a success, and the top-level error names it.
+        assert result.success is False
+        assert "timeout" in result.metadata["error"]
         # No converged run -> no edges, never a silently empty converged DAG.
         assert result.n_edges == 0
         # Allow the abandoned worker thread to finish before the loop closes.
@@ -650,3 +654,55 @@ class TestAllAlgorithmsFailedIsNotSuccess:
         assert result.success is False
         assert "singular" in result.metadata["error"].lower()
         assert "pc" in result.metadata["algorithm_errors"]
+
+    @pytest.mark.asyncio
+    async def test_tracing_path_derives_success_the_same_way(self):
+        """The tracing path builds its own ``DiscoveryResult`` (codex r1 LOW:
+        a tracing-only reintroduction of the hard-coded ``success=True`` would
+        have passed the tests above). Drive that path with a recording tracer
+        and prove it was the path taken."""
+        from contextlib import asynccontextmanager
+
+        import pandas as pd
+
+        from src.causal_engine.discovery.observability import DiscoverySpan
+
+        class SingularAlgorithm:
+            def discover(self, data, config):
+                raise ValueError("Data correlation matrix is singular. Cannot run fisherz test.")
+
+        class RecordingTracer:
+            def __init__(self):
+                self.entered = False
+                self.logged = []
+
+            @asynccontextmanager
+            async def trace_discovery(self, **kwargs):
+                self.entered = True
+                yield DiscoverySpan(span_id="span-1", trace_id="trace-1", name="discovery")
+
+            async def log_algorithm_result(self, parent_span, result):
+                self.logged.append(result)
+
+            async def log_ensemble_result(self, **kwargs):
+                pass
+
+        original = self._swap_algorithm(DiscoveryAlgorithmType.LINGAM, SingularAlgorithm)
+        try:
+            tracer = RecordingTracer()
+            runner = DiscoveryRunner(enable_tracing=True, tracer=tracer)
+            data = pd.DataFrame({"a": [1.0, 2.0, 3.0, 4.0], "b": [2.0, 1.0, 4.0, 3.0]})
+            config = DiscoveryConfig(algorithms=[DiscoveryAlgorithmType.LINGAM])
+            result = await runner.discover_dag(data, config)
+        finally:
+            self._restore_algorithm(DiscoveryAlgorithmType.LINGAM, original)
+
+        # The TRACING path ran (not the plain one), and it logged the failure.
+        assert tracer.entered is True
+        assert result.metadata["trace_id"] == "trace-1"
+        assert [r.converged for r in tracer.logged] == [False]
+        assert result.success is False
+        assert "Data correlation matrix is singular" in result.metadata["error"]
+        assert result.metadata["algorithm_errors"] == {
+            "lingam": "Data correlation matrix is singular. Cannot run fisherz test."
+        }
