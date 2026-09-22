@@ -1,0 +1,13 @@
+before-control recorded 2026-09-22T07:02:53Z main HEAD 8d44d2f75
+e2i_api StartedAt: 2026-09-22T05:56:08.334733995Z
+image: image_sha: 8d44d2f7599d4521e29d9d55a01f9dccfe7dadfc
+RXNAV_BRAND_ALIASES = <unset>
+Failed to initialize disk cache, falling back to memory-only cache: [Errno 30] Cache directory "/home/e2i/.dspy_cache/000" does not exist and could not be created
+INFO:src.ontology.vocabulary_registry:Loading vocabulary from /app/config/domain_vocabulary.yaml
+INFO:src.ontology.vocabulary_registry:Loaded vocabulary vunknown with 90 sections
+'iptacopan TRx in the northeast'         -> []
+'Rhapsido NBRx last quarter'             -> []
+'ribociclib share trend'                 -> ['Kisqali']
+'Show overall market trends'             -> []
+Fabhalta aliases: ['fabhalta', 'factor b', 'factor b inhibitor']
+has brand_aliases module: False
