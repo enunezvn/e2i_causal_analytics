@@ -1,0 +1,28 @@
+{
+ "status": "failed",
+ "ate": 0.4107208653550076,
+ "naive_ate": 0.5046866719660837,
+ "ate_ci_lower": 0.3719726570833538,
+ "ate_ci_upper": 0.44946907362666144,
+ "selected_estimator": "LinearDML",
+ "n_rows": 2000,
+ "dag_source": "domain_knowledge",
+ "latency_ms": 671069,
+ "warnings": [
+  "Refutation did not run \u2014 the effect is unvalidated."
+ ],
+ "data_source": "synthetic",
+ "refutation": {
+  "passed": false,
+  "tests_passed": null
+ },
+ "_probe": {
+  "wall_s": 671.3,
+  "n_rows": 2000,
+  "k": 73,
+  "true_ate": 0.3619,
+  "max_rss_mb": 858.2,
+  "estimator_forced": null,
+  "width": "wide"
+ }
+}

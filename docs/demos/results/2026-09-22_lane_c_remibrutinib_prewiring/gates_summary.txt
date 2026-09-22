@@ -1,0 +1,19 @@
+# Gates run on the lane tree, prod droplet, 2026-09-22 (UTC). Every pytest: -n 0 -p no:cacheprovider, under flock /tmp/claude-1000/e2i_box_heavy.lock with a hard timeout.
+## ruff (CI's two commands, whole tree) — 14:2x
+ruff check --no-cache src/ tests/ (+ the three touched scripts + the two evidence .py): All checks passed!
+ruff format --check src/ tests/ (+ same): 3345 files already formatted (probe_graph_runtime.py reformatted once before commit)
+## pytest batch 1 — 52 files (the 4 non-E2E lane files + every test module importing a changed module: tests/unit/test_api/test_causal*.py, test_routes/test_causal.py, test_segments.py, test_brand_scoped_covariates.py, test_segment_hte_route.py, test_scripts/test_convert_optum_*.py, test_treatment_response_proxy.py, test_run_optum_tier0_mart_cohort.py, test_cohort_builder_forbidden_gate.py, test_repositories/test_has_provenance_family_894.py + test_provenance.py, test_kpi/test_causal_datasets_copay.py, test_clinical_context/test_brand_map.py, test_synthetic/test_arm_confounder_contract.py, test_data/test_optum_mart_feature_manifest.py, test_utils/test_unit_tree_real_mode_synthetic_1602.py, test_causal_impact/test_refutation_column_guard_2155.py, test_ml/test_synthetic/test_claims_events.py, test_causal_engine/test_pipeline/test_first_class_estimation_data.py) — 14:34-14:35
+================= 1 failed, 1018 passed, 17 warnings in 59.20s =================
+FAILED tests/unit/test_api/test_causal_brands.py::test_load_frame_without_brand_does_not_filter
+-> the one failure: test_causal_brands.py::test_load_frame_without_brand_does_not_filter loaded ONE row (constant treatment) and hit the mirrored Lane A constant-treatment 400; fixed by taking Lane A's version of that test byte-for-byte (two rows, both arms) so the two PRs merge without a conflict on it; test_causal_geo_encoding.py likewise gains Lane A's two __missing__-dummy tests.
+## pytest batch 2 — the E2E + registry + the two mirrored files + test_session_stall_watchdog_1655.py (the marker ceiling guard) + test_module_size_ratchet.py — 15:08-15:12
+================= 72 passed, 20 warnings in 230.05s (0:03:50) ==================
+13:tests/unit/test_api/test_causal_csu_escalation_planted_truth.py .        [  1%]
+## teeth proofs — one bug planted per new test file on the working tree (backup+restore by cp, sha256-checked), that file run alone — 15:12-15:15 (gates_teeth_results.json)
+PLANT rwd_journey_brand: rc=1 red=True wall=31.6s ['================== 1 failed, 1 passed, 12 warnings in 13.90s ==================='] named=[]
+PLANT mart_one_arm: rc=1 red=True wall=31.7s ['================== 1 failed, 4 passed, 12 warnings in 14.06s ==================='] named=['test_one_arm_frame_is_refused']
+PLANT migration_column: rc=1 red=True wall=31.0s ['======================= 1 failed, 12 warnings in 13.53s ========================'] named=['test_migration_149_columns_equal_the_contract']
+PLANT loader_missing_dummy: rc=1 red=True wall=35.0s ['================== 1 failed, 8 passed, 12 warnings in 16.37s ==================='] named=['test_synthetic_mode_loads_coerces_and_one_hots_the_backing']
+PLANT e2e_no_adjustment: rc=1 red=True wall=47.6s ['======================= 1 failed, 15 warnings in 27.97s ========================'] named=['test_planted_ate_is_recovered_through_the_production_path']
+e2e_no_adjustment detail: with confounders/modeled_confounders emptied in the task state the graph served the unadjusted estimate 0.4976 (== the generator's naive_diff 0.4976) and the tolerance assertion failed — the naive-bias plant landed:
+E   AssertionError: {'ate': 0.497561534641489, 'estimator': 'linear_regression', 'naive_diff': 0.4976, 'tolerance': 0.1, ...}
