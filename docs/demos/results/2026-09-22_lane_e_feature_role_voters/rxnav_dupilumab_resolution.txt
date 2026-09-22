@@ -1,0 +1,5 @@
+captured_at_utc 2026-09-22T11:33:44.950166+00:00
+rxcui_for_name('dupilumab') -> RxCUIMatch(rxcui='1876376', approximate=False)
+properties(1876376) -> {"rxcui": "1876376", "name": "dupilumab", "synonym": "", "tty": "IN", "language": "ENG", "suppress": "N", "umlscui": ""}
+properties('302379') -> {"rxcui": "302379", "name": "omalizumab", "synonym": "", "tty": "IN", "language": "ENG", "suppress": "N", "umlscui": ""}
+rxcui_for_name('omalizumab') -> RxCUIMatch(rxcui='302379', approximate=False)

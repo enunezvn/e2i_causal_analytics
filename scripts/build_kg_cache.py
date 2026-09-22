@@ -214,28 +214,42 @@ def _query_edges_for_cui(
     return edges, errors
 
 
-def _resolve_target_drug(
+def _resolve_target_drugs(
     target_entity_codes: list[tuple[str, str]],
     entity_linker: "EntityLinker",
-) -> tuple[Optional[str], Optional[str], list[str]]:
-    """Resolve the prediction target to a ChEMBL drug id, ONCE per build.
+) -> tuple[list[tuple[str, str]], list[str]]:
+    """Resolve EVERY target code to a ChEMBL drug id, ONCE per build.
 
-    Returns ``(chembl_id, target_code_used, errors)``.
+    Returns ``(drugs, errors)`` where ``drugs`` is ``[(chembl_id, target_code),
+    ...]`` in the order the codes were given, keeping only the codes that
+    resolved. Each resolved drug gets its own drug-disease pass in
+    ``_build_record_live``.
+
+    Lane E (2026-09-22): the causal cohorts' target is a treatment CONTRAST
+    (dupilumab vs omalizumab), so the cache must carry the approved-indication
+    edges of BOTH drugs, each rewritten onto its own target code so
+    ``classify_kg_signal._connects`` can match either. The single-drug
+    predecessor returned on the first code that resolved, which made a two-code
+    build silently a one-drug cache with nothing in the artifact to say so.
 
     This is the step that makes RxNav load-bearing at build time: a target
     expressed as an RXNORM code is turned into a drug NAME via RxNav, and the
     name is what Open Targets' ``search_drug`` can resolve to a ChEMBL id. A
     target already given as ``("CHEMBL", "CHEMBL1201589")`` is used directly.
 
-    Returning ``(None, None, errors)`` is a normal outcome — the target may not
-    be a drug at all — and simply means no drug-disease edges are attempted.
+    An empty ``drugs`` list is a normal outcome — the target may not be a drug
+    at all — and simply means no drug-disease edges are attempted. A code that
+    fails to resolve is reported in ``errors`` and does not hide the ones that
+    did.
     """
     errors: list[str] = []
+    drugs: list[tuple[str, str]] = []
     for system, code in target_entity_codes:
         system_upper = system.upper()
         name: Optional[str] = None
         if system_upper == "CHEMBL":
-            return code, code, errors
+            drugs.append((code, code))
+            continue
         if system_upper == "RXNORM":
             try:
                 props = entity_linker.rxnav.properties(code)
@@ -261,9 +275,27 @@ def _resolve_target_drug(
             errors.append(f"open_targets search_drug({name!r}) failed: {exc}")
             continue
         if chembl_id:
-            return chembl_id, code, errors
+            drugs.append((chembl_id, code))
+            continue
         errors.append(f"open_targets: no ChEMBL id for target drug {name!r}")
-    return None, None, errors
+    return drugs, errors
+
+
+def _resolve_target_drug(
+    target_entity_codes: list[tuple[str, str]],
+    entity_linker: "EntityLinker",
+) -> tuple[Optional[str], Optional[str], list[str]]:
+    """Single-drug view of :func:`_resolve_target_drugs`: the FIRST resolved drug.
+
+    Kept for callers that model one prediction target (the ``optum`` initiation
+    cache); the build itself uses every resolved drug. Returns
+    ``(chembl_id, target_code_used, errors)``.
+    """
+    drugs, errors = _resolve_target_drugs(target_entity_codes, entity_linker)
+    if not drugs:
+        return None, None, errors
+    chembl_id, code = drugs[0]
+    return chembl_id, code, errors
 
 
 def _drug_disease_edges_for_cui(
@@ -362,9 +394,15 @@ def _build_record_live(
     kg_querier: "KnowledgeGraphQuerier",
     target_chembl_id: Optional[str] = None,
     target_code: Optional[str] = None,
+    target_drugs: Iterable[tuple[str, str]] = (),
 ) -> CacheRecord:
     """Per-feature live-query path. Aggregates edges + errors across each
     of the feature's ``kg_entity_codes``.
+
+    ``target_drugs`` is the ``[(chembl_id, target_code), ...]`` list from
+    :func:`_resolve_target_drugs`; the drug-disease pass runs once per drug and
+    per resolved CUI. ``target_chembl_id`` / ``target_code`` remain as the
+    single-drug form and are folded into the same list.
 
     De-duplication contract (codex L4): a feature with multiple entity
     codes that all resolve to the same CUI (e.g., ``("ICD10CM", "L50.9")``
@@ -396,6 +434,9 @@ def _build_record_live(
     resolved_cuis: set[str] = set()
     queries_attempted = 0
     queries_failed = 0
+    drugs: list[tuple[str, str]] = list(target_drugs)
+    if target_chembl_id and target_code and (target_chembl_id, target_code) not in drugs:
+        drugs.append((target_chembl_id, target_code))
     for system, code in fc.kg_entity_codes:
         cui, err = _resolve_entity_to_cui(system, code, entity_linker)
         if err is not None or cui is None:
@@ -420,13 +461,13 @@ def _build_record_live(
         # prediction target, so on their own they always classify as
         # ``no_signal``. This pass asks the question the voter's
         # ``leak_drug_treats_disease`` rule was written for.
-        if target_chembl_id and target_code:
+        for drug_chembl_id, drug_code in drugs:
             dd_edges, dd_errors = _drug_disease_edges_for_cui(
                 cui,
                 entity_linker=entity_linker,
                 kg_querier=kg_querier,
-                target_chembl_id=target_chembl_id,
-                target_code=target_code,
+                target_chembl_id=drug_chembl_id,
+                target_code=drug_code,
             )
             aggregated_edges.extend(dd_edges)
             errors.extend(dd_errors)
@@ -481,18 +522,17 @@ def build_cache_for_manifest(
       to verify the manifest fingerprint plumbing without burning UMLS
       API calls.
 
-    - **Live path** (Item B of the engineering-actionable arc; both
-      ``entity_linker`` AND ``kg_querier`` non-None): per-entity dispatch
-      validates UMLS CUIs via ``UMLSClient.cui_lookup`` and resolves
-      source-vocab codes via ``EntityLinker.resolve``, then queries
-      ``KGQuerier.query_disease_hierarchy`` for taxonomic edges. Drug-
-      disease evidence via Open Targets is a v2 punt (requires
-      ChEMBL/EFO cross-walks not yet wired through the EntityLinker).
+    - **Live path** (both ``entity_linker`` AND ``kg_querier`` non-None):
+      per-entity dispatch validates UMLS CUIs via ``UMLSClient.cui_lookup``
+      and resolves source-vocab codes via ``EntityLinker.resolve``, then
+      queries ``KGQuerier.query_disease_hierarchy`` for taxonomic edges and,
+      for every target drug that resolves (``_resolve_target_drugs``), the
+      Open Targets approved-indication pass (#1607).
 
     ``sources_attempted`` reflects what was *actually* attempted: empty
-    tuple in smoke mode; ``("umls_uts",)`` in live mode (we don't yet
-    hit Open Targets so it's not in the attempted set — silent
-    inclusion would mislead downstream audit logic).
+    tuple in smoke mode; ``("umls_uts",)`` in live mode, plus
+    ``("rxnav", "open_targets")`` when at least one target drug resolved —
+    silent inclusion would mislead downstream audit logic.
 
     Returns the path of the written cache file.
 
@@ -516,20 +556,21 @@ def build_cache_for_manifest(
     # a KG signal the voter can act on. ``sources_attempted`` records exactly
     # which upstreams were consulted so a reader can tell a genuine
     # "no evidence" from "we never asked".
-    target_chembl_id: Optional[str] = None
-    target_code: Optional[str] = None
+    target_drugs: list[tuple[str, str]] = []
     target_resolution_errors: list[str] = []
     if live_mode:
         assert entity_linker is not None
-        target_chembl_id, target_code, target_resolution_errors = _resolve_target_drug(
+        target_drugs, target_resolution_errors = _resolve_target_drugs(
             target_entity_codes, entity_linker
         )
-        if target_chembl_id:
+        if target_drugs:
             sources_attempted = sources_attempted + ("rxnav", "open_targets")
             logger.info(
-                "KG cache: target resolved to ChEMBL %s (from %s); drug-disease pass ENABLED",
-                target_chembl_id,
-                target_code,
+                "KG cache: %d target drug(s) resolved to ChEMBL %s; drug-disease pass "
+                "ENABLED per drug. Resolution errors: %s",
+                len(target_drugs),
+                target_drugs,
+                target_resolution_errors,
             )
         else:
             logger.warning(
@@ -560,8 +601,7 @@ def build_cache_for_manifest(
                     sources_attempted=sources_attempted,
                     entity_linker=entity_linker,
                     kg_querier=kg_querier,
-                    target_chembl_id=target_chembl_id,
-                    target_code=target_code,
+                    target_drugs=target_drugs,
                 )
             )
         else:
@@ -655,15 +695,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         "--live",
         action="store_true",
         help=(
-            "Run live UMLS UTS KG querying (Item B). Requires "
-            "UMLS_UTS_API_KEY env var. The cache currently records edges "
-            "from query_disease_hierarchy(cui) only — drug-disease "
-            "evidence via Open Targets is wired through KGQuerier but "
-            "NOT yet queried at build time (requires ChEMBL/EFO cross-"
-            "walks not yet present in EntityLinker; v2 punt). "
-            "sources_attempted in the cache will show 'umls_uts' only. "
-            "Without this flag the build emits schema-and-IO smoke "
-            "records (status='queried_no_edges', empty edges)."
+            "Run live KG querying. Requires UMLS_UTS_API_KEY; RxNav and Open "
+            "Targets are zero-auth. Two passes per feature: UMLS taxonomic "
+            "edges (query_disease_hierarchy) and, for EVERY --target-entity-"
+            "codes drug that resolves through RxNav -> Open Targets, the "
+            "approved-indication drug-disease pass (#1607; per-drug since Lane "
+            "E). sources_attempted records which upstreams were consulted. "
+            "Without this flag the build emits schema-and-IO smoke records "
+            "(status='queried_no_edges', empty edges)."
         ),
     )
     args = parser.parse_args(argv)

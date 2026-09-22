@@ -23,9 +23,16 @@ LIMIT = 1500
 
 # path (relative to repo) -> pinned line count. Measured, not guessed. Only shrinks.
 ALLOWLIST: dict[str, int] = {
+    # 1560: MEASURED from the Lane B merge with origin/main e3fb21186. The file
+    # crossed LIMIT on main itself: Lane D (#2227) took it to 1478 and Lane E
+    # (#2226) to 1566 — two PRs each under the limit alone, over it together.
+    # Lane B's delegation of the backdoor criterion to
+    # src/ml/causal_role_dgp/backdoor.py saves 6 of those lines. Pinned so the
+    # ratchet still forbids growth; the split by concern is an owner decision.
+    "src/agents/causal_impact/nodes/graph_builder.py": 1560,
     "src/agents/causal_impact/nodes/refutation.py": 2519,
     "src/agents/feedback_learner/dspy_integration.py": 1836,
-    "src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py": 4237,
+    "src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py": 4224,
     "src/agents/ml_foundation/model_deployer/nodes/registry_manager.py": 1670,
     "src/agents/ml_foundation/model_trainer/nodes/evaluator.py": 4026,
     # 3710: MEASURED from the merged tree, not either side's pin. The lane's
@@ -55,8 +62,8 @@ ALLOWLIST: dict[str, int] = {
     "src/api/routes/predictions.py": 1519,
     "src/api/routes/resource_optimizer.py": 1549,
     "src/api/routes/segments.py": 2934,
-    "src/api/schemas/causal.py": 2142,
-    "src/causal_engine/energy_score/estimator_selector.py": 1916,
+    "src/api/schemas/causal.py": 2100,
+    "src/causal_engine/energy_score/estimator_selector.py": 1858,
     "src/causal_engine/refutation_runner.py": 3166,
     "src/data/causal_role_classifier.py": 6525,
     "src/feature_store/feast_client.py": 1711,

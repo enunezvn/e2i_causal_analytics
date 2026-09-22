@@ -311,23 +311,58 @@ class DiscoveryGate:
         Returns:
             Tuple of (corroboration score [0, 1], basis label)
         """
-        converged = [r for r in result.algorithm_results if r.converged]
+        # A voter is a DISTINCT converged algorithm, here as in the runner's
+        # census (codex r2): ``algorithms=["ges", "ges"]`` yields two converged
+        # results from one algorithm, which is a single-algorithm run and must
+        # take the bootstrap / uncorroborated path, not the agreement one.
+        converged = {r.algorithm for r in result.algorithm_results if r.converged}
         if not result.edges or not converged:
             return 0.0, "no_evidence"
 
         if len(converged) >= 2:
+            # The runner's vote census (agreed candidates / all candidates).
+            # Under the agreement quorum every SURVIVING edge is agreed on by
+            # construction -- with two voters every survivor is 2/2 -- so the
+            # survivors' votes would score 1.0 whatever the voters disagreed
+            # on; the census keeps the disagreement. Two voters at rate r give
+            # 0.4 * r + 0.4 * 1.0 + 0.2 * structure below, the same number the
+            # former union rule produced (mean union-edge confidence
+            # 0.5 + 0.5 * r, times 0.8), so the ACCEPT / REVIEW / REJECT bands
+            # keep their calibration for any r > 0; only the DAG loses the
+            # single-voter edges. At r == 0 (disjoint voters) there is no
+            # agreed structure at all: the min_edges check above REJECTs it,
+            # where the union used to grade a DAG nobody corroborated.
+            census = result.vote_census
+            if census and census.get("n_converged", 0) >= 2:
+                return float(census["agreement_rate"]), "algorithm_agreement"
             n_algorithms = len(converged)
-            # Average votes per edge normalized by number of algorithms
+            # No census (a result built outside the runner): average votes per
+            # edge normalized by number of algorithms.
             total = sum(e.algorithm_votes / n_algorithms for e in result.edges)
             return total / len(result.edges), "algorithm_agreement"
 
         required = self._required_edge_set(result)
         beyond_prior = [e for e in result.edges if (e.source, e.target) not in required]
+        # Lane D: a run that ASKED for corroboration (``min_resamples``
+        # configured) and did not achieve it is uncorroborated, prior-only
+        # graph or not. A required edge is honoured by causal-learn at
+        # orientation only — the skeleton phase can drop it from a resample
+        # (measured: d1_required_edge_mechanism.txt) — so its resample
+        # frequency is informative and a graph made only of required edges is
+        # not exempt. Checked BEFORE the prior-determined branch; the
+        # bootstrap-off legacy path (no ``min_resamples``, no summary) keeps
+        # the renormalisation below.
+        bootstrap = result.metadata.get("bootstrap")
+        if (
+            result.config.min_resamples is not None
+            and isinstance(bootstrap, dict)
+            and bootstrap.get("corroborated") is False
+        ):
+            return 0.0, "uncorroborated_single_run"
         if not beyond_prior:
-            # Every edge is prior-required: resampling can neither confirm nor
-            # refute the graph, so this axis is not applicable — whether or
-            # not bootstrap even ran — and the caller renormalizes over the
-            # remaining components.
+            # Every edge is prior-required and no corroboration was asked for
+            # (or it was achieved): this axis is not applicable and the
+            # caller renormalizes over the remaining components.
             return 1.0, "prior_determined"
 
         if all(e.bootstrap_stability is None for e in result.edges):

@@ -1,0 +1,20 @@
+src resolves to: /home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-d-guided-discovery-claims/src/__init__.py
+REAL frame n=15209 k=77 non-binary=['age_at_index', 'enrollment_duration_days', 'charlson_score', 'elixhauser_van_walraven_score', 'comorbidity_diag_distinct_count', 'comorbidity_diag_claim_count']
+Removing cycle edge charlson_score -> high_comorbidity_burden_flag (confidence: 1.00)
+Removing cycle edge age_at_index -> lis_dual_flag (confidence: 1.00)
+Removing cycle edge age_at_index -> payer_product=POS (confidence: 1.00)
+Removing cycle edge lis_dual_flag -> comorbidity_diag_claim_count (confidence: 1.00)
+Removing cycle edge lis_dual_flag -> cci_pvd (confidence: 1.00)
+Removing cycle edge lis_dual_flag -> payer_product=POS (confidence: 1.00)
+Removing cycle edge enrollment_duration_days -> gdr_cd=M (confidence: 1.00)
+Removing cycle edge charlson_risk_band=1 to 2 -> elixhauser_risk_band=1 to 5 (confidence: 1.00)
+Bootstrap stopped by the time budget (180s): 16/20 resamples attempted, 16 succeeded
+ARM {"arm": "real/fisherz", "indep_test": "fisherz", "converged": true, "error": null, "wall_s": 199.8, "primary_fit_s": 8.4, "n_edges": 63, "gate": "augment", "confidence": 0.797, "corroboration_basis": "bootstrap_stability", "n_attempted": 16, "n_succeeded": 16, "budget_exhausted": true, "mean_stability_beyond_prior": 0.746, "share_edges_stability_ge_0.9": 0.444, "preflight_kept": 20, "T_to_Y_in_ensemble": false, "parents_T": ["age_at_index", "cci_dementia", "comorbidity_diag_distinct_count", "enrollment_duration_days", "gdr_cd=M"], "parents_Y": ["comorbidity_diag_distinct_count", "enrollment_duration_days", "lis_dual_flag"]}
+Removing cycle edge age_at_index -> cci_chronic_pulmonary (confidence: 1.00)
+Removing cycle edge lis_dual_flag -> comorbidity_diag_distinct_count (confidence: 1.00)
+Removing cycle edge charlson_score -> charlson_risk_band=1 to 2 (confidence: 1.00)
+Removing cycle edge lis_dual_flag -> payer_product=OTH (confidence: 1.00)
+Removing cycle edge lis_dual_flag -> payer_product=POS (confidence: 1.00)
+Removing cycle edge comorbidity_diag_distinct_count -> payer_product=OTH (confidence: 1.00)
+Removing cycle edge payer_product=OTH -> payer_product=POS (confidence: 1.00)
+STOPPED BY HAND at 13:11:11Z: the real/gsq arm never returned from a bootstrap resample fit (3,224 s after its cycle-removal lines; python PID elapsed 3,484 s, 55 CPU-min) -- see d7_gsq_arm_stopped.txt. The chisq and synthetic arms were re-run one arm at a time under a hard timeout: indep_test_runs_r2.txt.

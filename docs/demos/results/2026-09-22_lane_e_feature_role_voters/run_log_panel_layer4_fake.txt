@@ -1,0 +1,192 @@
+Mem:              15           7           4           0           4           7
+INFO numexpr.utils: NumExpr defaulting to 8 threads.
+INFO src.repositories.query_logger: Database query metrics initialized
+INFO src.data.kg.activation: KG activation: optum_mart -> mode=shadow cache=0b4c5fdb__214e5b23.json (Optum mart causal cohorts vs the dupilumab/omalizumab contrast (RXNORM:302379, RXNORM:1876376); shadow until the Lane E measurement)
+INFO src.data.causal_role_classifier_loader: load_compiled_classifier: loaded /home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-e-feature-role-voters/artifacts/dspy/causal_role_classifier.json
+WARNING src.data.causal_role_classifier_loader: classify_feature(lis_dual_flag) raised: LM response cannot be serialized to a JSON object.
+
+Adapter JSONAdapter failed to parse the LM response. 
+
+LM Response: [[ ## answer ## ]]
+No more responses 
+
+Expected to find output fields in the LM response: [reasoning, causal_role, mechanism, recommended_remediation] 
+
+ — returning None (Layer 4 skipped).
+WARNING src.data.causal_role_classifier_loader: classify_feature(charlson_score) raised: LM response cannot be serialized to a JSON object.
+
+Adapter JSONAdapter failed to parse the LM response. 
+
+LM Response: [[ ## answer ## ]]
+No more responses 
+
+Expected to find output fields in the LM response: [reasoning, causal_role, mechanism, recommended_remediation] 
+
+ — returning None (Layer 4 skipped).
+WARNING src.data.causal_role_classifier_loader: classify_feature(elixhauser_van_walraven_score) raised: LM response cannot be serialized to a JSON object.
+
+Adapter JSONAdapter failed to parse the LM response. 
+
+LM Response: [[ ## answer ## ]]
+No more responses 
+
+Expected to find output fields in the LM response: [reasoning, causal_role, mechanism, recommended_remediation] 
+
+ — returning None (Layer 4 skipped).
+WARNING src.data.causal_role_classifier_loader: classify_feature(comorbidity_diag_distinct_count) raised: LM response cannot be serialized to a JSON object.
+
+Adapter JSONAdapter failed to parse the LM response. 
+
+LM Response: [[ ## answer ## ]]
+No more responses 
+
+Expected to find output fields in the LM response: [reasoning, causal_role, mechanism, recommended_remediation] 
+
+ — returning None (Layer 4 skipped).
+WARNING src.data.causal_role_classifier_loader: classify_feature(comorbidity_diag_claim_count) raised: LM response cannot be serialized to a JSON object.
+
+Adapter JSONAdapter failed to parse the LM response. 
+
+LM Response: [[ ## answer ## ]]
+No more responses 
+
+Expected to find output fields in the LM response: [reasoning, causal_role, mechanism, recommended_remediation] 
+
+ — returning None (Layer 4 skipped).
+WARNING src.data.causal_role_classifier_loader: classify_feature(high_comorbidity_burden_flag) raised: LM response cannot be serialized to a JSON object.
+
+Adapter JSONAdapter failed to parse the LM response. 
+
+LM Response: [[ ## answer ## ]]
+No more responses 
+
+Expected to find output fields in the LM response: [reasoning, causal_role, mechanism, recommended_remediation] 
+
+ — returning None (Layer 4 skipped).
+WARNING src.data.causal_role_classifier_loader: classify_feature(cci_chf) raised: LM response cannot be serialized to a JSON object.
+
+Adapter JSONAdapter failed to parse the LM response. 
+
+LM Response: [[ ## answer ## ]]
+No more responses 
+
+Expected to find output fields in the LM response: [reasoning, causal_role, mechanism, recommended_remediation] 
+
+ — returning None (Layer 4 skipped).
+WARNING src.data.causal_role_classifier_loader: classify_feature(cci_pvd) raised: LM response cannot be serialized to a JSON object.
+
+Adapter JSONAdapter failed to parse the LM response. 
+
+LM Response: [[ ## answer ## ]]
+No more responses 
+
+Expected to find output fields in the LM response: [reasoning, causal_role, mechanism, recommended_remediation] 
+
+ — returning None (Layer 4 skipped).
+WARNING src.data.causal_role_classifier_loader: classify_feature(cci_cerebrovascular) raised: LM response cannot be serialized to a JSON object.
+
+Adapter JSONAdapter failed to parse the LM response. 
+
+LM Response: [[ ## answer ## ]]
+No more responses 
+
+Expected to find output fields in the LM response: [reasoning, causal_role, mechanism, recommended_remediation] 
+
+ — returning None (Layer 4 skipped).
+WARNING src.data.causal_role_classifier_loader: classify_feature(cci_diabetes_complication) raised: LM response cannot be serialized to a JSON object.
+
+Adapter JSONAdapter failed to parse the LM response. 
+
+LM Response: [[ ## answer ## ]]
+No more responses 
+
+Expected to find output fields in the LM response: [reasoning, causal_role, mechanism, recommended_remediation] 
+
+ — returning None (Layer 4 skipped).
+WARNING src.data.causal_role_classifier_loader: classify_feature(elx_chf) raised: LM response cannot be serialized to a JSON object.
+
+Adapter JSONAdapter failed to parse the LM response. 
+
+LM Response: [[ ## answer ## ]]
+No more responses 
+
+Expected to find output fields in the LM response: [reasoning, causal_role, mechanism, recommended_remediation] 
+
+ — returning None (Layer 4 skipped).
+WARNING src.data.causal_role_classifier_loader: classify_feature(elx_cardiac_arrhythmia) raised: LM response cannot be serialized to a JSON object.
+
+Adapter JSONAdapter failed to parse the LM response. 
+
+LM Response: [[ ## answer ## ]]
+No more responses 
+
+Expected to find output fields in the LM response: [reasoning, causal_role, mechanism, recommended_remediation] 
+
+ — returning None (Layer 4 skipped).
+WARNING src.data.causal_role_classifier_loader: classify_feature(elx_valvular_disease) raised: LM response cannot be serialized to a JSON object.
+
+Adapter JSONAdapter failed to parse the LM response. 
+
+LM Response: [[ ## answer ## ]]
+No more responses 
+
+Expected to find output fields in the LM response: [reasoning, causal_role, mechanism, recommended_remediation] 
+
+ — returning None (Layer 4 skipped).
+WARNING src.data.causal_role_classifier_loader: classify_feature(elx_pvd) raised: LM response cannot be serialized to a JSON object.
+
+Adapter JSONAdapter failed to parse the LM response. 
+
+LM Response: [[ ## answer ## ]]
+No more responses 
+
+Expected to find output fields in the LM response: [reasoning, causal_role, mechanism, recommended_remediation] 
+
+ — returning None (Layer 4 skipped).
+WARNING src.data.causal_role_classifier_loader: classify_feature(elx_hypertension_uncomplicated) raised: LM response cannot be serialized to a JSON object.
+
+Adapter JSONAdapter failed to parse the LM response. 
+
+LM Response: [[ ## answer ## ]]
+No more responses 
+
+Expected to find output fields in the LM response: [reasoning, causal_role, mechanism, recommended_remediation] 
+
+ — returning None (Layer 4 skipped).
+WARNING src.data.causal_role_classifier_loader: classify_feature(elx_diabetes_complicated) raised: LM response cannot be serialized to a JSON object.
+
+Adapter JSONAdapter failed to parse the LM response. 
+
+LM Response: [[ ## answer ## ]]
+No more responses 
+
+Expected to find output fields in the LM response: [reasoning, causal_role, mechanism, recommended_remediation] 
+
+ — returning None (Layer 4 skipped).
+WARNING src.data.causal_role_classifier_loader: classify_feature(elx_fluid_electrolyte) raised: LM response cannot be serialized to a JSON object.
+
+Adapter JSONAdapter failed to parse the LM response. 
+
+LM Response: [[ ## answer ## ]]
+No more responses 
+
+Expected to find output fields in the LM response: [reasoning, causal_role, mechanism, recommended_remediation] 
+
+ — returning None (Layer 4 skipped).
+WARNING src.data.causal_role_classifier_loader: classify_feature(elx_depression) raised: LM response cannot be serialized to a JSON object.
+
+Adapter JSONAdapter failed to parse the LM response. 
+
+LM Response: [[ ## answer ## ]]
+No more responses 
+
+Expected to find output fields in the LM response: [reasoning, causal_role, mechanism, recommended_remediation] 
+
+ — returning None (Layer 4 skipped).
+WARNING src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check: Declared-safe immunity: exempted 57 manifest pre-index feature(s) from leakage (contract is authoritative); severity none -> none. Features: ['age_at_index', 'cci_cerebrovascular', 'cci_chf', 'cci_chronic_pulmonary', 'cci_dementia', 'cci_diabetes_complication', 'cci_diabetes_no_complication', 'cci_hiv', 'cci_malignancy', 'cci_metastatic_cancer', 'cci_mi', 'cci_mild_liver', 'cci_paraplegia', 'cci_peptic_ulcer', 'cci_pvd', 'cci_renal', 'cci_rheumatic', 'cci_severe_liver', 'charlson_score', 'comorbidity_diag_claim_count', 'comorbidity_diag_distinct_count', 'elixhauser_van_walraven_score', 'elx_aids_hiv', 'elx_alcohol_abuse', 'elx_blood_loss_anemia', 'elx_cardiac_arrhythmia', 'elx_chf', 'elx_chronic_pulmonary', 'elx_coagulopathy', 'elx_deficiency_anemia', 'elx_depression', 'elx_diabetes_complicated', 'elx_diabetes_uncomplicated', 'elx_drug_abuse', 'elx_fluid_electrolyte', 'elx_hypertension_complicated', 'elx_hypertension_uncomplicated', 'elx_hypothyroidism', 'elx_liver_disease', 'elx_lymphoma', 'elx_metastatic_cancer', 'elx_obesity', 'elx_other_neurological', 'elx_paralysis', 'elx_peptic_ulcer', 'elx_psychoses', 'elx_pulmonary_circulation', 'elx_pvd', 'elx_renal_failure', 'elx_rheumatoid_collagen', 'elx_solid_tumor_no_metastasis', 'elx_valvular_disease', 'elx_weight_loss', 'enrollment_duration_days', 'health_exchange_flag', 'high_comorbidity_burden_flag', 'lis_dual_flag']
+INFO src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check: adaptive_validity_check: scored=57 flagged=0 (high) prior_severity=none new_severity=none
+INFO src.data.causal_role_classifier_loader: load_compiled_classifier: loaded /home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-e-feature-role-voters/artifacts/dspy/causal_role_classifier.json
+panel: 64 covariates; L1 post-index 0; L2 signalled 2; L3 scored 57; L4 fired 1 (fake); decided_by Counter({'adversarial': 54, 'None': 7, 'kg': 2, 'abstain': 1}); abstain rate 0.125; leak verdicts 0
+Wrote docs/demos/results/2026-09-22_lane_e_feature_role_voters/panel_layer4_fake/panel.json and docs/demos/results/2026-09-22_lane_e_feature_role_voters/panel_layer4_fake/summary.md
+maxrss_kb=834060 elapsed_s=252.98
+rc=0

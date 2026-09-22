@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple, cast
 
 import numpy as np
 
-from src.agents.causal_impact.nodes import _dowhy_order, _reconstruction_columns
+from src.agents.causal_impact.nodes import _dowhy_order, _identify, _reconstruction_columns
 from src.agents.causal_impact.nodes._compute_budget import (
     ComputeBudgetExpired,
     run_bounded_with_budget,
@@ -615,7 +615,7 @@ def _build_dowhy_estimate(
             common_causes=effective_common_causes,
             effect_modifiers=effective_common_causes if effective_common_causes else None,
         )
-        identified_estimand = model.identify_effect(proceed_when_unidentifiable=True)
+        identified_estimand = _identify.identify_effect(model, effective_common_causes)
         _dowhy_order.pin_adjustment_order(identified_estimand, effective_common_causes)  # #2084
         # Build the estimate with the SAME method that produced the reported ATE (resolved above).
         # DoWhy 0.14 + EconML 0.16: for a string econml method_name, DoWhy's

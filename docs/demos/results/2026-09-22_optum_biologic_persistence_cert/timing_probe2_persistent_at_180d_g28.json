@@ -1,0 +1,16 @@
+{
+  "n": 15209,
+  "k": 77,
+  "rank_X": 61,
+  "rank_X_with_intercept": 62,
+  "fit_s": 12.7,
+  "honest_ate_ci_s": 0.4,
+  "honest_ci": [
+    0.01676288756051691,
+    0.050288380569152094,
+    0.008552578841519536
+  ],
+  "logregcv_unscaled_s": 441.4,
+  "logregcv_scaled_s": 5.8,
+  "max_rss_mb": 711.1
+}

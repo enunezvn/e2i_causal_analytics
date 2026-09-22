@@ -142,7 +142,7 @@ def test_reader_schema_version_is_1_8():
     # #501 (1.4 → 1.5 M-structure keys), #508 (1.3 → 1.4 leak-crosscheck key),
     # #240 Stage 3 (→ 1.3). MAJOR stays 1 (additive, nullable,
     # backward-compatible).
-    assert _READER_SCHEMA_VERSION == "1.8"
+    assert _READER_SCHEMA_VERSION == "1.9"
 
 
 def test_reader_surfaces_gate_keys_onto_verdict_record(tmp_path):

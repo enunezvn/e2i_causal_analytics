@@ -86,8 +86,10 @@ class PCAlgorithm(BaseDiscoveryAlgorithm):
             X = data.values
             node_names = list(data.columns)
 
-            # Select independence test based on data type
-            indep_test = self._select_independence_test(data, config)
+            # Select independence test based on data type — unless the caller
+            # forces one (Lane D item 4 measures fisherz vs gsq/chisq per
+            # frame type through this override; production leaves it None).
+            indep_test = config.indep_test or self._select_independence_test(data, config)
 
             # Run PC algorithm. When the caller supplies domain priors (GUIDED
             # discovery), translate them into a causal-learn BackgroundKnowledge
@@ -133,6 +135,7 @@ class PCAlgorithm(BaseDiscoveryAlgorithm):
                     "node_names": node_names,
                     "n_ci_tests": getattr(cg, "no_of_ci_tests", None),
                     "guided": guided,
+                    "indep_test_forced": config.indep_test is not None,
                 },
             )
 

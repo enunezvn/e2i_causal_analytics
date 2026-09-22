@@ -1,0 +1,18 @@
+WARNING:dowhy.causal_model:Causal Graph not provided. DoWhy will construct a graph based on data inputs.
+graph nodes 79 has U: []
+{
+ "identify_optimized_s": 0.0,
+ "backdoor_sets": {
+  "backdoor1": 77,
+  "backdoor": 77
+ },
+ "general_adjustment_sets": {
+  "general1": 77,
+  "general_adjustment": 77
+ },
+ "default_backdoor_id": "backdoor1",
+ "default_adjustment_set_id": "general1",
+ "estimand_type": "EstimandType.NONPARAMETRIC_ATE",
+ "identifier_method": null
+}
+adjustment set == all common causes: True

@@ -133,9 +133,14 @@ async def test_load_frame_with_brand_applies_eq_filter_and_excludes_brand_column
 
 @pytest.mark.unit
 async def test_load_frame_without_brand_does_not_filter(monkeypatch):
+    # Both arms: the loader refuses a constant treatment (400) since Lane A
+    # (d47a16525) -- this test is about the brand filter, not the contrast.
     log = _patch_client(
         monkeypatch,
-        [{"treatment_arm": 1.0, "persistent_180d": 1.0, "disease_severity": 0.3}],
+        [
+            {"treatment_arm": 1.0, "persistent_180d": 1.0, "disease_severity": 0.3},
+            {"treatment_arm": 0.0, "persistent_180d": 0.0, "disease_severity": 0.6},
+        ],
     )
     df, _select = await causal_loaders._load_agent_estimation_frame(
         dataset="patient_journeys",
@@ -146,4 +151,4 @@ async def test_load_frame_without_brand_does_not_filter(monkeypatch):
     )
     assert "eq" not in log  # no brand -> no .eq filter
     assert "brand" not in df.columns
-    assert len(df) == 1
+    assert len(df) == 2

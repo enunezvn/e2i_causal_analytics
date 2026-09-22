@@ -48,6 +48,8 @@ Author: E2I Causal Analytics Team
 """
 
 from .base import (
+    DEFAULT_DISCOVERY_ALGORITHM_NAMES,
+    DEFAULT_DISCOVERY_ALGORITHMS,
     AlgorithmResult,
     BaseDiscoveryAlgorithm,
     CausalPriorKnowledge,
@@ -106,6 +108,9 @@ __all__ = [
     "hash_config",
     "hash_discovery_request",
     "make_cache_key",
+    # Defaults (one source of truth for the default ensemble)
+    "DEFAULT_DISCOVERY_ALGORITHMS",
+    "DEFAULT_DISCOVERY_ALGORITHM_NAMES",
     # Enums
     "DiscoveryAlgorithmType",
     "DiscoveryGateDecision",

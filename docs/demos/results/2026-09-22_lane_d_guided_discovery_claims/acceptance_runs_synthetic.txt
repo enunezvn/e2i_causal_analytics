@@ -1,0 +1,10 @@
+=== ACCEPT_START synthetic 14:32:33Z hard timeout 600 s ===
+src resolves to: /home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-d-guided-discovery-claims/src/__init__.py
+defaults: cap=20 budget_s=180.0 min_resamples=10
+SYNTHETIC frame n=4000 k=10
+Discovered DAG NOT persisted (Supabase unavailable): [Supabase] SUPABASE_URL environment variable is not set [dag_version_hash=5a60609d8c887e146bf358aed48f506f1c7f1ab8d4b4c7f8c29eaa2abe476ac7 session_id=None query_id=None]
+RUN {"run": "synthetic/patient_journeys/defaults", "n": 4000, "k_declared": 10, "wall_s": 1.9, "discovery_latency_s": 1.9, "gate": "accept", "gate_confidence": 0.818, "dag_overridden": false, "n_edges_ensemble": 6, "shipped_edges": 6, "shipped_nodes": 12, "preflight": {"kept": 10, "constant": 0, "collinear": 0, "capped": 0, "protected": 0, "max_covariates": 20, "n_offered": 10, "n_kept": 10, "n_rows": 4000, "n_rows_used": 4000}, "preflight_k": null, "bootstrap": {"n_resamples": 20, "n_attempted": 20, "n_succeeded": 20, "min_resamples": 10, "corroborated": true, "time_budget_s": 180.0, "elapsed_s": 1.8445856850594282, "budget_exhausted": false}, "latent_diagnostic": {"ran": true, "converged": true, "runtime_seconds": 0.07154178619384766, "time_budget_s": 180.0, "elapsed_before_s": 1.8512537479400635, "treatment": "treatment_arm", "outcome": "treatment_initiated", "flag": false}, "required_edges_missing": [], "adjustment_set_size": 10, "declared_covariates_in_adjustment_set": 10, "declared_missing_from_adjustment_set": [], "estimand_edge_shipped": true, "estimand_provenance": "required_prior", "skip_reason": null, "planted_roles_shipped_dag": {"disease_severity": "confounder", "academic_hcp": "instrument"}}
+WARNINGS:
+  - Discovered DAG NOT persisted (Supabase unavailable): [Supabase] SUPABASE_URL environment variable is not set [dag_version_hash=5a60609d8c887e146bf358aed48f506f1c7f1ab8d4b4c7f8c29eaa2abe476ac7 session_id=None query_id=None]
+rc=0 (124 = did not complete in 600 s) synthetic 14:32:55Z
+ALLDONE

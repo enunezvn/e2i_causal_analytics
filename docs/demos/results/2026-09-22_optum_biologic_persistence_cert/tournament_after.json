@@ -1,0 +1,788 @@
+[
+ {
+  "dataset": "patient_journeys",
+  "brand": "Fabhalta",
+  "treatment": "treatment_arm",
+  "outcome": "treatment_initiated",
+  "n": 5000,
+  "k": 2,
+  "selected": "linear_dml",
+  "ate": 0.20685435688257045,
+  "ci": [
+   0.17154190362995164,
+   0.24216681013518926
+  ],
+  "energy_scores": {
+   "causal_forest": 0.3706476826263125,
+   "linear_dml": 0.3710375228554396,
+   "drlearner": 0.3712552687649422,
+   "ols": 0.370942574616478
+  },
+  "gap": 0.0002948919901655245,
+  "subsampled": false,
+  "wall_s": 28.0,
+  "per_estimator": {
+   "causal_forest": {
+    "success": true,
+    "ate": 0.2097987586549234,
+    "energy": 0.3706476826263125,
+    "ms": 3337,
+    "ps_mean": 0.16183063760033556,
+    "ps_sd": 0.00472416615300476
+   },
+   "linear_dml": {
+    "success": true,
+    "ate": 0.20685435688257045,
+    "energy": 0.3710375228554396,
+    "ms": 1485,
+    "ps_mean": 0.16183063760033556,
+    "ps_sd": 0.00472416615300476
+   },
+   "drlearner": {
+    "success": true,
+    "ate": 0.1834919836701045,
+    "energy": 0.3712552687649422,
+    "ms": 1343,
+    "ps_mean": 0.16183063760033556,
+    "ps_sd": 0.00472416615300476
+   },
+   "ols": {
+    "success": true,
+    "ate": 0.23401261894081157,
+    "energy": 0.370942574616478,
+    "ms": 482,
+    "ps_mean": 0.16183063760033556,
+    "ps_sd": 0.00472416615300476
+   }
+  }
+ },
+ {
+  "dataset": "patient_journeys",
+  "brand": "Fabhalta",
+  "treatment": "psp_enrolled",
+  "outcome": "persistent_180d",
+  "n": 5000,
+  "k": 3,
+  "selected": "linear_dml",
+  "ate": 0.06495341628651852,
+  "ci": [
+   0.03697424983985798,
+   0.09293258273317904
+  ],
+  "energy_scores": {
+   "causal_forest": 0.30868153535664833,
+   "linear_dml": 0.3098266737866035,
+   "drlearner": 0.30982405810221786,
+   "ols": 0.31007566904235095
+  },
+  "gap": 0.0011425227455695297,
+  "subsampled": false,
+  "wall_s": 33.9,
+  "per_estimator": {
+   "causal_forest": {
+    "success": true,
+    "ate": 0.0671706355023816,
+    "energy": 0.30868153535664833,
+    "ms": 6386,
+    "ps_mean": 0.38076972208931464,
+    "ps_sd": 0.1197124473675764
+   },
+   "linear_dml": {
+    "success": true,
+    "ate": 0.06495341628651852,
+    "energy": 0.3098266737866035,
+    "ms": 2566,
+    "ps_mean": 0.38076972208931464,
+    "ps_sd": 0.1197124473675764
+   },
+   "drlearner": {
+    "success": true,
+    "ate": 0.06802966672505649,
+    "energy": 0.30982405810221786,
+    "ms": 1144,
+    "ps_mean": 0.38076972208931464,
+    "ps_sd": 0.1197124473675764
+   },
+   "ols": {
+    "success": true,
+    "ate": 0.07643862127226625,
+    "energy": 0.31007566904235095,
+    "ms": 411,
+    "ps_mean": 0.38076972208931464,
+    "ps_sd": 0.1197124473675764
+   }
+  }
+ },
+ {
+  "dataset": "patient_journeys",
+  "brand": "Fabhalta",
+  "treatment": "rep_detailing_high",
+  "outcome": "treatment_initiated",
+  "n": 5000,
+  "k": 2,
+  "selected": "linear_dml",
+  "ate": 0.07281970069922639,
+  "ci": [
+   0.046886305260528685,
+   0.09875309613792409
+  ],
+  "energy_scores": {
+   "causal_forest": 0.3028088430384953,
+   "linear_dml": 0.30350142674746894,
+   "drlearner": 0.30350428692712167,
+   "ols": 0.3035149408680424
+  },
+  "gap": 0.0006925837089736264,
+  "subsampled": false,
+  "wall_s": 25.8,
+  "per_estimator": {
+   "causal_forest": {
+    "success": true,
+    "ate": 0.07145666117366684,
+    "energy": 0.3028088430384953,
+    "ms": 2328,
+    "ps_mean": 0.5047761356394496,
+    "ps_sd": 0.08010897726483616
+   },
+   "linear_dml": {
+    "success": true,
+    "ate": 0.07281970069922639,
+    "energy": 0.30350142674746894,
+    "ms": 1010,
+    "ps_mean": 0.5047761356394496,
+    "ps_sd": 0.08010897726483616
+   },
+   "drlearner": {
+    "success": true,
+    "ate": 0.07075740577705886,
+    "energy": 0.30350428692712167,
+    "ms": 889,
+    "ps_mean": 0.5047761356394496,
+    "ps_sd": 0.08010897726483616
+   },
+   "ols": {
+    "success": true,
+    "ate": 0.07741118247910676,
+    "energy": 0.3035149408680424,
+    "ms": 362,
+    "ps_mean": 0.5047761356394496,
+    "ps_sd": 0.08010897726483616
+   }
+  }
+ },
+ {
+  "dataset": "patient_journeys",
+  "brand": "Kisqali",
+  "treatment": "disease_stage",
+  "outcome": "persistent_180d",
+  "n": 5000,
+  "k": 1,
+  "selected": "linear_dml",
+  "ate": -0.11372082668461772,
+  "ci": [
+   -0.14003584757985432,
+   -0.08740580578938113
+  ],
+  "energy_scores": {
+   "causal_forest": 0.30226806579386956,
+   "linear_dml": 0.3030125256213814,
+   "drlearner": 0.3030114746796011,
+   "ols": 0.3030802340103523
+  },
+  "gap": 0.0007434088857315446,
+  "subsampled": false,
+  "wall_s": 26.2,
+  "per_estimator": {
+   "causal_forest": {
+    "success": true,
+    "ate": -0.11052136948596153,
+    "energy": 0.30226806579386956,
+    "ms": 2535,
+    "ps_mean": 0.4952255002069496,
+    "ps_sd": 0.009996007021030913
+   },
+   "linear_dml": {
+    "success": true,
+    "ate": -0.11372082668461772,
+    "energy": 0.3030125256213814,
+    "ms": 1122,
+    "ps_mean": 0.4952255002069496,
+    "ps_sd": 0.009996007021030913
+   },
+   "drlearner": {
+    "success": true,
+    "ate": -0.11548677509162608,
+    "energy": 0.3030114746796011,
+    "ms": 1005,
+    "ps_mean": 0.4952255002069496,
+    "ps_sd": 0.009996007021030913
+   },
+   "ols": {
+    "success": true,
+    "ate": -0.11809018179694125,
+    "energy": 0.3030802340103523,
+    "ms": 252,
+    "ps_mean": 0.4952255002069496,
+    "ps_sd": 0.009996007021030913
+   }
+  }
+ },
+ {
+  "dataset": "patient_journeys",
+  "brand": "Kisqali",
+  "treatment": "copay_support",
+  "outcome": "adherent_180d",
+  "n": 5000,
+  "k": 2,
+  "selected": "linear_dml",
+  "ate": 0.09371703572207453,
+  "ci": [
+   0.06495269510492371,
+   0.12248137633922535
+  ],
+  "energy_scores": {
+   "causal_forest": 0.31342610083281697,
+   "linear_dml": 0.31426685301515084,
+   "drlearner": 0.3142666585231596,
+   "ols": 0.31447060023099915
+  },
+  "gap": 0.0008405576903426359,
+  "subsampled": false,
+  "wall_s": 26.3,
+  "per_estimator": {
+   "causal_forest": {
+    "success": true,
+    "ate": 0.08435327331873615,
+    "energy": 0.31342610083281697,
+    "ms": 2261,
+    "ps_mean": 0.3464832969218204,
+    "ps_sd": 0.12448366654491598
+   },
+   "linear_dml": {
+    "success": true,
+    "ate": 0.09371703572207453,
+    "energy": 0.31426685301515084,
+    "ms": 1312,
+    "ps_mean": 0.3464832969218204,
+    "ps_sd": 0.12448366654491598
+   },
+   "drlearner": {
+    "success": true,
+    "ate": 0.09370955434193945,
+    "energy": 0.3142666585231596,
+    "ms": 1196,
+    "ps_mean": 0.3464832969218204,
+    "ps_sd": 0.12448366654491598
+   },
+   "ols": {
+    "success": true,
+    "ate": 0.11112379312016378,
+    "energy": 0.31447060023099915,
+    "ms": 406,
+    "ps_mean": 0.3464832969218204,
+    "ps_sd": 0.12448366654491598
+   }
+  }
+ },
+ {
+  "dataset": "patient_journeys",
+  "brand": "Kisqali",
+  "treatment": "copay_support",
+  "outcome": "low_gap_180d",
+  "n": 5000,
+  "k": 2,
+  "selected": "linear_dml",
+  "ate": 0.08129532865408239,
+  "ci": [
+   0.053720026805661084,
+   0.10887063050250367
+  ],
+  "energy_scores": {
+   "causal_forest": 0.31390878121183985,
+   "linear_dml": 0.31466966692047715,
+   "drlearner": 0.31466942154014116,
+   "ols": 0.3148717443366924
+  },
+  "gap": 0.0007606403283013097,
+  "subsampled": false,
+  "wall_s": 29.6,
+  "per_estimator": {
+   "causal_forest": {
+    "success": true,
+    "ate": 0.07697720407478835,
+    "energy": 0.31390878121183985,
+    "ms": 2812,
+    "ps_mean": 0.3464832969218204,
+    "ps_sd": 0.12448366654491598
+   },
+   "linear_dml": {
+    "success": true,
+    "ate": 0.08129532865408239,
+    "energy": 0.31466966692047715,
+    "ms": 1383,
+    "ps_mean": 0.3464832969218204,
+    "ps_sd": 0.12448366654491598
+   },
+   "drlearner": {
+    "success": true,
+    "ate": 0.08140331457332689,
+    "energy": 0.31466942154014116,
+    "ms": 2266,
+    "ps_mean": 0.3464832969218204,
+    "ps_sd": 0.12448366654491598
+   },
+   "ols": {
+    "success": true,
+    "ate": 0.09865603190426786,
+    "energy": 0.3148717443366924,
+    "ms": 771,
+    "ps_mean": 0.3464832969218204,
+    "ps_sd": 0.12448366654491598
+   }
+  }
+ },
+ {
+  "dataset": "hcp_adoption",
+  "brand": "Fabhalta",
+  "treatment": "treatment_arm",
+  "outcome": "adopted",
+  "n": 5000,
+  "k": 1,
+  "selected": "linear_dml",
+  "ate": 0.1683975409351659,
+  "ci": [
+   0.141765701958144,
+   0.1950293799121878
+  ],
+  "energy_scores": {
+   "causal_forest": 0.3129163483531952,
+   "linear_dml": 0.3132836257526728,
+   "drlearner": 0.31329452375872247,
+   "ols": 0.313539426638006
+  },
+  "gap": 0.00036727739947761684,
+  "subsampled": false,
+  "wall_s": 36.8,
+  "per_estimator": {
+   "causal_forest": {
+    "success": true,
+    "ate": 0.15838156552030785,
+    "energy": 0.3129163483531952,
+    "ms": 3810,
+    "ps_mean": 0.4957998610464427,
+    "ps_sd": 0.15376257652121764
+   },
+   "linear_dml": {
+    "success": true,
+    "ate": 0.1683975409351659,
+    "energy": 0.3132836257526728,
+    "ms": 1604,
+    "ps_mean": 0.4957998610464427,
+    "ps_sd": 0.15376257652121764
+   },
+   "drlearner": {
+    "success": true,
+    "ate": 0.1643441636539413,
+    "energy": 0.31329452375872247,
+    "ms": 1567,
+    "ps_mean": 0.4957998610464427,
+    "ps_sd": 0.15376257652121764
+   },
+   "ols": {
+    "success": true,
+    "ate": 0.17029049195360776,
+    "energy": 0.313539426638006,
+    "ms": 793,
+    "ps_mean": 0.4957998610464427,
+    "ps_sd": 0.15376257652121764
+   }
+  }
+ },
+ {
+  "dataset": "hcp_adoption",
+  "brand": "Fabhalta",
+  "treatment": "peer_influence_score",
+  "outcome": "adopted",
+  "n": 5000,
+  "k": 0,
+  "selected": "ols",
+  "ate": 0.4024000000000008,
+  "ci": [
+   0.3774346484686119,
+   0.4273653515313897
+  ],
+  "energy_scores": {
+   "ols": 0.2907633860196218
+  },
+  "gap": 0.0,
+  "subsampled": false,
+  "wall_s": 6.5,
+  "per_estimator": {
+   "causal_forest": {
+    "success": false,
+    "ate": null,
+    "energy": null,
+    "ms": 0,
+    "ps_mean": null,
+    "ps_sd": null
+   },
+   "linear_dml": {
+    "success": false,
+    "ate": null,
+    "energy": null,
+    "ms": 0,
+    "ps_mean": null,
+    "ps_sd": null
+   },
+   "drlearner": {
+    "success": false,
+    "ate": null,
+    "energy": null,
+    "ms": 0,
+    "ps_mean": null,
+    "ps_sd": null
+   },
+   "ols": {
+    "success": true,
+    "ate": 0.4024000000000008,
+    "energy": 0.2907633860196218,
+    "ms": 6,
+    "ps_mean": 0.5,
+    "ps_sd": 0.0
+   }
+  }
+ },
+ {
+  "dataset": "hcp_adoption",
+  "brand": "Kisqali",
+  "treatment": "peer_influence_score",
+  "outcome": "adopted",
+  "n": 5000,
+  "k": 0,
+  "selected": "ols",
+  "ate": 0.34680000000000033,
+  "ci": [
+   0.32134063991782813,
+   0.37225936008217253
+  ],
+  "energy_scores": {
+   "ols": 0.293261685754822
+  },
+  "gap": 0.0,
+  "subsampled": false,
+  "wall_s": 6.3,
+  "per_estimator": {
+   "causal_forest": {
+    "success": false,
+    "ate": null,
+    "energy": null,
+    "ms": 0,
+    "ps_mean": null,
+    "ps_sd": null
+   },
+   "linear_dml": {
+    "success": false,
+    "ate": null,
+    "energy": null,
+    "ms": 0,
+    "ps_mean": null,
+    "ps_sd": null
+   },
+   "drlearner": {
+    "success": false,
+    "ate": null,
+    "energy": null,
+    "ms": 0,
+    "ps_mean": null,
+    "ps_sd": null
+   },
+   "ols": {
+    "success": true,
+    "ate": 0.34680000000000033,
+    "energy": 0.293261685754822,
+    "ms": 3,
+    "ps_mean": 0.5,
+    "ps_sd": 0.0
+   }
+  }
+ },
+ {
+  "dataset": "hcp_adoption",
+  "brand": "Kisqali",
+  "treatment": "treatment_arm",
+  "outcome": "adopted",
+  "n": 5000,
+  "k": 1,
+  "selected": "linear_dml",
+  "ate": 0.11444682329755856,
+  "ci": [
+   0.08798141441496322,
+   0.1409122321801539
+  ],
+  "energy_scores": {
+   "causal_forest": 0.32249691505711237,
+   "linear_dml": 0.3228570379273979,
+   "drlearner": 0.32279124911098545,
+   "ols": 0.32299733241891493
+  },
+  "gap": 0.00029433405387307987,
+  "subsampled": false,
+  "wall_s": 27.0,
+  "per_estimator": {
+   "causal_forest": {
+    "success": true,
+    "ate": 0.10675669138967406,
+    "energy": 0.32249691505711237,
+    "ms": 2061,
+    "ps_mean": 0.5011652736572434,
+    "ps_sd": 0.07336854028390903
+   },
+   "linear_dml": {
+    "success": true,
+    "ate": 0.11444682329755856,
+    "energy": 0.3228570379273979,
+    "ms": 1063,
+    "ps_mean": 0.5011652736572434,
+    "ps_sd": 0.07336854028390903
+   },
+   "drlearner": {
+    "success": true,
+    "ate": 0.12122887061052029,
+    "energy": 0.32279124911098545,
+    "ms": 702,
+    "ps_mean": 0.5011652736572434,
+    "ps_sd": 0.07336854028390903
+   },
+   "ols": {
+    "success": true,
+    "ate": 0.12234910660780489,
+    "energy": 0.32299733241891493,
+    "ms": 470,
+    "ps_mean": 0.5011652736572434,
+    "ps_sd": 0.07336854028390903
+   }
+  }
+ },
+ {
+  "dataset": "nba_triggers",
+  "brand": "Fabhalta",
+  "treatment": "control_group_flag",
+  "outcome": "action_taken",
+  "n": 5000,
+  "k": 0,
+  "selected": "ols",
+  "ate": -0.08358148482137602,
+  "ci": [
+   -0.11232000351822706,
+   -0.05484296612452498
+  ],
+  "energy_scores": {
+   "ols": 0.3078205800450335
+  },
+  "gap": 0.0,
+  "subsampled": false,
+  "wall_s": 5.4,
+  "per_estimator": {
+   "causal_forest": {
+    "success": false,
+    "ate": null,
+    "energy": null,
+    "ms": 0,
+    "ps_mean": null,
+    "ps_sd": null
+   },
+   "linear_dml": {
+    "success": false,
+    "ate": null,
+    "energy": null,
+    "ms": 0,
+    "ps_mean": null,
+    "ps_sd": null
+   },
+   "drlearner": {
+    "success": false,
+    "ate": null,
+    "energy": null,
+    "ms": 0,
+    "ps_mean": null,
+    "ps_sd": null
+   },
+   "ols": {
+    "success": true,
+    "ate": -0.08358148482137602,
+    "energy": 0.3078205800450335,
+    "ms": 2,
+    "ps_mean": 0.2782,
+    "ps_sd": 0.0
+   }
+  }
+ },
+ {
+  "dataset": "nba_triggers",
+  "brand": "Fabhalta",
+  "treatment": "acceptance_status",
+  "outcome": "conversion_flag",
+  "n": 5000,
+  "k": 2,
+  "selected": "linear_dml",
+  "ate": 0.06755491583255953,
+  "ci": [
+   0.04590357447094384,
+   0.08920625719417521
+  ],
+  "energy_scores": {
+   "causal_forest": 0.3051837262130613,
+   "linear_dml": 0.306334787059225,
+   "drlearner": 0.3063340724991468,
+   "ols": 0.3063384893174872
+  },
+  "gap": 0.001150346286085513,
+  "subsampled": false,
+  "wall_s": 32.0,
+  "per_estimator": {
+   "causal_forest": {
+    "success": true,
+    "ate": 0.07073629367288095,
+    "energy": 0.3051837262130613,
+    "ms": 4719,
+    "ps_mean": 0.49239755182430384,
+    "ps_sd": 0.11177525175557888
+   },
+   "linear_dml": {
+    "success": true,
+    "ate": 0.06755491583255953,
+    "energy": 0.306334787059225,
+    "ms": 1800,
+    "ps_mean": 0.49239755182430384,
+    "ps_sd": 0.11177525175557888
+   },
+   "drlearner": {
+    "success": true,
+    "ate": 0.06625713854834969,
+    "energy": 0.3063340724991468,
+    "ms": 1643,
+    "ps_mean": 0.49239755182430384,
+    "ps_sd": 0.11177525175557888
+   },
+   "ols": {
+    "success": true,
+    "ate": 0.06527983712335618,
+    "energy": 0.3063384893174872,
+    "ms": 1029,
+    "ps_mean": 0.49239755182430384,
+    "ps_sd": 0.11177525175557888
+   }
+  }
+ },
+ {
+  "dataset": "nba_triggers",
+  "brand": "Kisqali",
+  "treatment": "control_group_flag",
+  "outcome": "action_taken",
+  "n": 5000,
+  "k": 0,
+  "selected": "ols",
+  "ate": -0.07808323605404999,
+  "ci": [
+   -0.107192666680609,
+   -0.04897380542749096
+  ],
+  "energy_scores": {
+   "ols": 0.3082591130329906
+  },
+  "gap": 0.0,
+  "subsampled": false,
+  "wall_s": 5.4,
+  "per_estimator": {
+   "causal_forest": {
+    "success": false,
+    "ate": null,
+    "energy": null,
+    "ms": 0,
+    "ps_mean": null,
+    "ps_sd": null
+   },
+   "linear_dml": {
+    "success": false,
+    "ate": null,
+    "energy": null,
+    "ms": 0,
+    "ps_mean": null,
+    "ps_sd": null
+   },
+   "drlearner": {
+    "success": false,
+    "ate": null,
+    "energy": null,
+    "ms": 0,
+    "ps_mean": null,
+    "ps_sd": null
+   },
+   "ols": {
+    "success": true,
+    "ate": -0.07808323605404999,
+    "energy": 0.3082591130329906,
+    "ms": 3,
+    "ps_mean": 0.2788,
+    "ps_sd": 0.0
+   }
+  }
+ },
+ {
+  "dataset": "nba_triggers",
+  "brand": "Kisqali",
+  "treatment": "acceptance_status",
+  "outcome": "conversion_flag",
+  "n": 5000,
+  "k": 2,
+  "selected": "linear_dml",
+  "ate": 0.06822082260477055,
+  "ci": [
+   0.04566516900326034,
+   0.09077647620628077
+  ],
+  "energy_scores": {
+   "causal_forest": 0.3085696056652316,
+   "linear_dml": 0.3099411267535437,
+   "drlearner": 0.30994113654740535,
+   "ols": 0.30994576677655566
+  },
+  "gap": 0.0013715210883120665,
+  "subsampled": false,
+  "wall_s": 33.2,
+  "per_estimator": {
+   "causal_forest": {
+    "success": true,
+    "ate": 0.0775897005014234,
+    "energy": 0.3085696056652316,
+    "ms": 5866,
+    "ps_mean": 0.47500546088904394,
+    "ps_sd": 0.09958533483048534
+   },
+   "linear_dml": {
+    "success": true,
+    "ate": 0.06822082260477055,
+    "energy": 0.3099411267535437,
+    "ms": 1666,
+    "ps_mean": 0.47500546088904394,
+    "ps_sd": 0.09958533483048534
+   },
+   "drlearner": {
+    "success": true,
+    "ate": 0.07269103039864461,
+    "energy": 0.30994113654740535,
+    "ms": 2620,
+    "ps_mean": 0.47500546088904394,
+    "ps_sd": 0.09958533483048534
+   },
+   "ols": {
+    "success": true,
+    "ate": 0.06998386935111503,
+    "energy": 0.30994576677655566,
+    "ms": 394,
+    "ps_mean": 0.47500546088904394,
+    "ps_sd": 0.09958533483048534
+   }
+  }
+ }
+]

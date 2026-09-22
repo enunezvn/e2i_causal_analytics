@@ -53,6 +53,7 @@ from .datasets import (
     _DISCOVERY_ROW_CAP,
     _brand_scoped_covariates,
     _column_label,
+    _default_auto_discover,
     _list_dataset_brands,
     _negative_control_outcome,
 )
@@ -509,7 +510,7 @@ async def _run_discover_effects_task(
                     outcome_var=o,
                     dataset=dataset,
                     limit=_DISCOVERY_ROW_CAP,
-                    auto_discover=True,
+                    auto_discover=_default_auto_discover(dataset),
                     brand=q_brand,
                 )
                 await _agent._agent_analysis_store.set(
