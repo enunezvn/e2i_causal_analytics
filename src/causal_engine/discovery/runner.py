@@ -15,8 +15,10 @@ Author: E2I Causal Analytics Team
 
 import asyncio
 import logging
+import math
 import time
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type, cast
 from uuid import UUID
 
@@ -275,7 +277,9 @@ class DiscoveryRunner:
             data, config, algorithm_results, edges, ensemble_dag
         )
 
-        latent_metadata = await self._maybe_latent_diagnostic(data, config)
+        latent_metadata = await self._maybe_latent_diagnostic(
+            data, config, elapsed_s=time.time() - start_time
+        )
 
         total_runtime = time.time() - start_time
         success, outcome_metadata = self._run_outcome(algorithm_results)
@@ -338,7 +342,9 @@ class DiscoveryRunner:
                 data, config, algorithm_results, edges, ensemble_dag
             )
 
-            latent_metadata = await self._maybe_latent_diagnostic(data, config)
+            latent_metadata = await self._maybe_latent_diagnostic(
+                data, config, elapsed_s=time.time() - start_time
+            )
 
             total_runtime = time.time() - start_time
 
@@ -639,12 +645,32 @@ class DiscoveryRunner:
         """Build ensemble DAG from algorithm results.
 
         Uses voting across algorithms to determine which edges to include.
-        Edges found by >= threshold fraction of algorithms are included.
+        An edge is included when at least ``threshold`` of the CONVERGED
+        algorithms agree on it, and agreement means at least two of them:
+        ``min_votes = max(2, ceil(n_converged * threshold))``, where a voter is
+        a distinct converged algorithm and each votes once per edge. Before
+        2026-09-22 the quorum was ``max(1, int(n_converged * threshold))``,
+        which with the two-voter default and threshold 0.5 resolved to ONE
+        vote -- an edge found by EITHER algorithm shipped at confidence 0.5,
+        so the "vote" was a union (measured on the planted synthetic frame:
+        docs/demos/results/2026-09-22_discovery_vote_rule/). ``ceil`` because
+        "at least a fraction t" is ``votes >= n * t``; the floor of 2 because
+        one voter cannot agree with anyone.
+
+        A single converged algorithm keeps every edge at one vote: it cannot
+        agree with anyone, and its corroboration is the bootstrap resample
+        path (``_maybe_bootstrap`` / ``DiscoveryGate``), unchanged here.
+
+        The DAG carries a ``vote_census`` graph attribute (converged voters,
+        quorum, candidate edges, agreed edges, agreement rate). Every edge
+        that survives an agreement filter is agreed on by construction, so
+        the gate scores corroboration from the census, not from the
+        survivors' confidences.
 
         Args:
             results: Results from individual algorithms
             node_names: Names of nodes
-            threshold: Minimum fraction of algorithms that must agree
+            threshold: Minimum fraction of converged algorithms that must agree
 
         Returns:
             Tuple of (edge list with confidence, networkx DiGraph)
@@ -659,11 +685,21 @@ class DiscoveryRunner:
         # edge's confidence whenever an algorithm failed (e.g. 2 of 2 converged
         # algorithms agreeing reported as 0.5 on a 4-algorithm run where 2
         # crashed).
-        n_converged = sum(1 for r in results if r.converged)
+        # A voter is a DISTINCT converged algorithm (codex r1): the tool
+        # registry passes caller-supplied names through unchanged, so
+        # ``algorithms=["ges", "ges"]`` would otherwise give every GES edge
+        # two votes and a fake agreement rate of 1.0; a duplicated edge inside
+        # one edge_list would do the same. Votes are counted once per
+        # (edge, algorithm).
+        voters = {r.algorithm for r in results if r.converged}
+        n_converged = len(voters)
         if n_converged == 0:
             return [], nx.DiGraph()
 
-        # Count votes for each edge
+        # Count votes for each edge, once per (edge, distinct algorithm): the
+        # membership check below also makes a duplicated edge inside one
+        # edge_list a single vote (a separate dedupe was planted out as
+        # redundant -- teeth_plant_d.txt in the evidence dir).
         edge_votes: Dict[Tuple[str, str], List[str]] = {}
 
         for result in results:
@@ -674,10 +710,15 @@ class DiscoveryRunner:
                 edge_key = (source, target)
                 if edge_key not in edge_votes:
                     edge_votes[edge_key] = []
-                edge_votes[edge_key].append(result.algorithm.value)
+                if result.algorithm.value not in edge_votes[edge_key]:
+                    edge_votes[edge_key].append(result.algorithm.value)
 
-        # Filter edges by threshold and create DiscoveredEdge objects
-        min_votes = max(1, int(n_converged * threshold))
+        # Filter edges by the agreement quorum and create DiscoveredEdge
+        # objects. ``threshold`` is validated to [0, 1] by DiscoveryConfig; with
+        # at most six distinct voters no product n * k/n overshoots its integer
+        # in floating point (checked for every n <= 6), so a plain ceil is exact.
+        quorum = math.ceil(n_converged * threshold)
+        min_votes = 1 if n_converged < 2 else max(2, quorum)
         edges = []
 
         for (source, target), algorithms in edge_votes.items():
@@ -698,6 +739,13 @@ class DiscoveryRunner:
         # Build networkx DiGraph
         dag = nx.DiGraph()
         dag.add_nodes_from(node_names)
+        dag.graph["vote_census"] = {
+            "n_converged": n_converged,
+            "min_votes": min_votes,
+            "n_candidate_edges": len(edge_votes),
+            "n_agreed_edges": len(edges),
+            "agreement_rate": (len(edges) / len(edge_votes)) if edge_votes else 0.0,
+        }
 
         for edge in edges:
             dag.add_edge(
@@ -720,48 +768,150 @@ class DiscoveryRunner:
         algorithm: BaseDiscoveryAlgorithm,
         edges: List[DiscoveredEdge],
         ensemble_dag: nx.DiGraph,
-    ) -> Optional[Dict[str, int]]:
+        elapsed_before_s: float = 0.0,
+    ) -> Dict[str, Any]:
         """Measure per-edge stability by re-running the single converged
-        algorithm on ``config.bootstrap_resamples`` bootstrap resamples.
+        algorithm on up to ``config.bootstrap_resamples`` bootstrap resamples.
 
-        Mutates ``edges`` in place: ``bootstrap_stability`` becomes the
-        directed-match resample frequency, and ``confidence`` — vacuously 1.0
-        for a single-algorithm run — is overwritten with it. Returns None when
-        fewer than max(2, B//2) resamples succeeded: the frequencies would be
-        noise, so the gate must treat the run as uncorroborated (failing
-        toward caution, not toward ACCEPT).
+        Mutates ``edges`` in place when the run is corroborated:
+        ``bootstrap_stability`` becomes the directed-match frequency over the
+        SUCCEEDED resamples, and ``confidence`` — vacuously 1.0 for a
+        single-algorithm run — is overwritten with it. The frequencies are
+        left unwritten (None) when fewer than ``min_resamples`` resamples
+        succeeded: they would be noise, so the gate must treat the run as
+        uncorroborated (failing toward caution, not toward ACCEPT).
+        ``min_resamples`` is ``config.min_resamples`` when set, else the legacy
+        ``max(2, B // 2)``.
+
+        Time budget (Lane D item 2): ``config.time_budget_s`` bounds the whole
+        discovery run, so the primary fits' wall (``elapsed_before_s``) is
+        charged first and the loop stops before a resample that would overrun
+        it, estimating the next resample's cost as the mean resample so far
+        (the primary fits' wall before any resample ran); a resample that is
+        still running when the budget ends is abandoned (``n_abandoned``). Measured on the real Optum
+        persistence frame at 43 covariates, one PC fit is 230 s: under
+        production's 20 resamples that is ~81 min against the agent's 900 s
+        hard timeout, which is why the loop must be bounded and the ACHIEVED count
+        reported rather than the requested one.
+
+        Always returns the summary — achieved counts are reported whether or
+        not the run was corroborated — with ``corroborated`` saying which.
         """
         n_resamples = config.bootstrap_resamples
+        if config.min_resamples is not None:
+            min_required = max(1, int(config.min_resamples))
+        else:
+            min_required = max(2, n_resamples // 2)
+        budget = config.time_budget_s
         rng = np.random.default_rng(config.random_state)
         counts: Dict[Tuple[str, str], int] = {(e.source, e.target): 0 for e in edges}
         succeeded = 0
-        for _ in range(n_resamples):
-            indices = rng.integers(0, len(data), len(data))
-            resample = data.iloc[indices].reset_index(drop=True)
-            try:
-                result = algorithm.discover(resample, config)
-            except Exception as exc:
-                logger.debug(f"Bootstrap resample failed: {exc}")
-                continue
-            if not result.converged:
-                continue
-            succeeded += 1
-            found = {(source, target) for source, target in result.edge_list}
-            for key in counts:
-                if key in found:
-                    counts[key] += 1
-        if succeeded < max(2, n_resamples // 2):
+        attempted = 0
+        abandoned = 0
+        budget_exhausted = False
+        loop_start = time.monotonic()
+        resample_wall: List[float] = []
+        # Under a budget each resample fit is WAITED FOR only as long as the
+        # budget has left: the estimate below cannot see a fit that is slower
+        # than its predecessors (measured on the real Optum persistence frame,
+        # one gsq resample fit ran > 53 min after an 8 s primary fit —
+        # docs/demos/results/2026-09-22_lane_d_guided_discovery_claims/
+        # d7_gsq_arm_stopped.txt). An overrun is abandoned: the worker thread
+        # cannot be cancelled and finishes on its own (the same contract as the
+        # per-algorithm timeout in ``_run_algorithms``); it is counted as
+        # attempted and abandoned, never as succeeded.
+        pool: Optional[ThreadPoolExecutor] = (
+            ThreadPoolExecutor(max_workers=1, thread_name_prefix="discovery-bootstrap")
+            if budget is not None
+            else None
+        )
+        try:
+            for _ in range(n_resamples):
+                if budget is not None:
+                    loop_elapsed = time.monotonic() - loop_start
+                    spent = elapsed_before_s + loop_elapsed
+                    # Next resample's cost: the mean resample so far, or — before
+                    # any ran — the primary fits' wall (same algorithm, same frame
+                    # size, so the first guess is the fit already measured).
+                    if resample_wall:
+                        estimate = sum(resample_wall) / len(resample_wall)
+                    else:
+                        estimate = elapsed_before_s
+                    if spent + estimate > budget:
+                        budget_exhausted = True
+                        break
+                attempted += 1
+                indices = rng.integers(0, len(data), len(data))
+                resample = data.iloc[indices].reset_index(drop=True)
+                fit_start = time.monotonic()
+                try:
+                    if pool is not None and budget is not None:
+                        remaining = budget - (elapsed_before_s + (fit_start - loop_start))
+                        future = pool.submit(algorithm.discover, resample, config)
+                        try:
+                            result = future.result(timeout=max(0.0, remaining))
+                        except FuturesTimeoutError:
+                            abandoned += 1
+                            budget_exhausted = True
+                            resample_wall.append(time.monotonic() - fit_start)
+                            logger.warning(
+                                f"Bootstrap resample abandoned: still running after the "
+                                f"{remaining:.1f}s the budget had left ({budget:.0f}s); "
+                                "its worker thread finishes on its own"
+                            )
+                            # The pool is single-threaded and its worker is busy
+                            # with the abandoned fit: release it without waiting.
+                            pool.shutdown(wait=False)
+                            pool = None
+                            break
+                    else:
+                        result = algorithm.discover(resample, config)
+                except Exception as exc:
+                    logger.debug(f"Bootstrap resample failed: {exc}")
+                    resample_wall.append(time.monotonic() - fit_start)
+                    continue
+                resample_wall.append(time.monotonic() - fit_start)
+                if not result.converged:
+                    continue
+                succeeded += 1
+                found = {(source, target) for source, target in result.edge_list}
+                for key in counts:
+                    if key in found:
+                        counts[key] += 1
+        finally:
+            if pool is not None:
+                pool.shutdown(wait=False)
+        loop_elapsed = time.monotonic() - loop_start
+        corroborated = succeeded >= min_required
+        summary: Dict[str, Any] = {
+            "n_resamples": n_resamples,
+            "n_attempted": attempted,
+            "n_succeeded": succeeded,
+            "n_abandoned": abandoned,
+            "min_resamples": min_required,
+            "corroborated": corroborated,
+            "time_budget_s": budget,
+            "elapsed_s": elapsed_before_s + loop_elapsed,
+            "budget_exhausted": budget_exhausted,
+        }
+        if budget_exhausted:
             logger.warning(
-                f"Bootstrap stability unknown: {succeeded}/{n_resamples} resamples succeeded"
+                f"Bootstrap stopped by the time budget ({budget:.0f}s): "
+                f"{attempted}/{n_resamples} resamples attempted, {succeeded} succeeded"
             )
-            return None
+        if not corroborated:
+            logger.warning(
+                f"Bootstrap stability unknown: {succeeded}/{n_resamples} resamples "
+                f"succeeded (fewer than {min_required})"
+            )
+            return summary
         for edge in edges:
             stability = counts[(edge.source, edge.target)] / succeeded
             edge.bootstrap_stability = stability
             edge.confidence = stability
             if ensemble_dag.has_edge(edge.source, edge.target):
                 ensemble_dag.edges[edge.source, edge.target]["confidence"] = stability
-        return {"n_resamples": n_resamples, "n_succeeded": succeeded}
+        return summary
 
     async def _maybe_bootstrap(
         self,
@@ -773,15 +923,19 @@ class DiscoveryRunner:
     ) -> Dict[str, Any]:
         """Run stability measurement when configured and exactly one
         algorithm converged (multi-algorithm runs already have agreement).
-        Returns extra metadata entries ({} when bootstrap did not apply)."""
+        Returns extra metadata entries ({} when bootstrap did not apply).
+        The primary fits' wall is charged against ``config.time_budget_s``."""
         converged = [r for r in algorithm_results if r.converged]
         if config.bootstrap_resamples <= 0 or len(converged) != 1 or not edges:
             return {}
         algorithm = self._get_algorithm(converged[0].algorithm)
+        elapsed_before = float(sum(r.runtime_seconds for r in algorithm_results))
         loop = asyncio.get_event_loop()
         summary = await loop.run_in_executor(
             None,
-            lambda: self._bootstrap_edge_stability(data, config, algorithm, edges, ensemble_dag),
+            lambda: self._bootstrap_edge_stability(
+                data, config, algorithm, edges, ensemble_dag, elapsed_before_s=elapsed_before
+            ),
         )
         return {"bootstrap": summary}
 
@@ -844,15 +998,67 @@ class DiscoveryRunner:
         self,
         data: pd.DataFrame,
         config: DiscoveryConfig,
+        elapsed_s: float = 0.0,
     ) -> Dict[str, Any]:
         """Run the FCI latent diagnostic when configured (off by default).
-        Returns extra metadata entries ({} when the diagnostic is off)."""
+        Returns extra metadata entries ({} when the diagnostic is off).
+
+        Lane D item 2: the diagnostic falls under ``config.time_budget_s``
+        like the bootstrap. Measured on the capped real Optum persistence
+        frame (22 columns, n = 15,209) one unguided FCI fit is 382.5 s —
+        more than twice the 180 s production budget — so with the budget
+        already spent it is not started (``ran=False``, the reason says
+        so), and otherwise it is bounded by the remaining budget: a timeout
+        is reported ``ran=True, converged=False`` with the reason. The
+        worker thread cannot be cancelled; its result is abandoned (the same
+        contract as the per-algorithm timeout in ``_run_algorithms``)."""
         if not config.latent_diagnostic:
             return {}
+        budget = config.time_budget_s
+        remaining: Optional[float] = None
+        if budget is not None:
+            remaining = float(budget) - float(elapsed_s)
+            if remaining <= 0.0:
+                logger.warning(
+                    f"Latent-confounding diagnostic (FCI) not started: discovery time "
+                    f"budget {budget:.0f}s exhausted after {elapsed_s:.1f}s"
+                )
+                return {
+                    "latent_diagnostic": {
+                        "ran": False,
+                        "error": (
+                            f"skipped: discovery time budget {budget:.0f}s exhausted "
+                            f"after {elapsed_s:.1f}s"
+                        ),
+                        "time_budget_s": budget,
+                        "elapsed_before_s": elapsed_s,
+                    }
+                }
         loop = asyncio.get_event_loop()
-        payload = await loop.run_in_executor(
-            None, lambda: self._run_latent_diagnostic(data, config)
-        )
+        future = loop.run_in_executor(None, lambda: self._run_latent_diagnostic(data, config))
+        try:
+            payload = await asyncio.wait_for(future, timeout=remaining)
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"Latent-confounding diagnostic (FCI) timed out after {remaining:.1f}s "
+                f"(discovery time budget {budget:.0f}s)"
+            )
+            return {
+                "latent_diagnostic": {
+                    "ran": True,
+                    "converged": False,
+                    "bidirected_edges": [],
+                    "error": (
+                        f"timeout after {remaining:.1f}s (discovery time budget "
+                        f"{budget:.0f}s, {elapsed_s:.1f}s already spent)"
+                    ),
+                    "time_budget_s": budget,
+                    "elapsed_before_s": elapsed_s,
+                }
+            }
+        if budget is not None:
+            payload["time_budget_s"] = budget
+            payload["elapsed_before_s"] = elapsed_s
         return {"latent_diagnostic": payload}
 
     def _remove_cycles(self, dag: nx.DiGraph) -> nx.DiGraph:

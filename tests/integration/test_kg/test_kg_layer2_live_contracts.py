@@ -214,3 +214,16 @@ def test_non_approved_indications_are_not_labelled_treats() -> None:
         "a PHASE_2 indication must NOT be labelled 'treats' — that would promote "
         "an exploratory pairing to leak_drug_treats_disease"
     )
+
+
+def test_rxnav_resolves_the_lane_a_contrast_drugs_to_the_pinned_rxcuis() -> None:
+    """Lane E pins both treatment concepts of the Lane A contrast; a drift here
+    means the committed causal-cohort caches were built against the wrong drug."""
+    from src.data.kg.activation import DUPILUMAB_RXCUI, OMALIZUMAB_RXCUI
+
+    client = RxNavClient()
+    for name, expected in (("dupilumab", DUPILUMAB_RXCUI), ("omalizumab", OMALIZUMAB_RXCUI)):
+        match = client.rxcui_for_name(name)
+        assert match is not None, f"RxNav returned no rxcui for {name}"
+        assert match.rxcui == expected, f"{name}'s RxCUI drifted: {match.rxcui} != {expected}"
+        assert match.approximate is False

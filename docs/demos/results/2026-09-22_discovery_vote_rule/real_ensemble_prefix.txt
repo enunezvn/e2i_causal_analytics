@@ -1,0 +1,304 @@
+main HEAD efaad6eeb
+Removing cycle edge treatment_dupixent -> enrollment_duration_days (confidence: 0.50)
+Removing cycle edge treatment_dupixent -> age_at_index (confidence: 0.50)
+Removing cycle edge treatment_dupixent -> cci_chronic_pulmonary (confidence: 0.50)
+Removing cycle edge age_at_index -> lis_dual_flag (confidence: 0.50)
+Removing cycle edge age_at_index -> enrollment_duration_days (confidence: 0.50)
+Removing cycle edge age_at_index -> charlson_score (confidence: 0.50)
+Removing cycle edge age_at_index -> comorbidity_diag_distinct_count (confidence: 0.50)
+Removing cycle edge age_at_index -> cci_dementia (confidence: 0.50)
+Removing cycle edge lis_dual_flag -> charlson_score (confidence: 0.50)
+Removing cycle edge enrollment_duration_days -> comorbidity_diag_claim_count (confidence: 0.50)
+Removing cycle edge enrollment_duration_days -> comorbidity_diag_distinct_count (confidence: 0.50)
+Removing cycle edge enrollment_duration_days -> cci_chronic_pulmonary (confidence: 0.50)
+Removing cycle edge elixhauser_van_walraven_score -> comorbidity_diag_distinct_count (confidence: 0.50)
+Removing cycle edge elixhauser_van_walraven_score -> comorbidity_diag_claim_count (confidence: 0.50)
+Removing cycle edge elixhauser_van_walraven_score -> high_comorbidity_burden_flag (confidence: 0.50)
+Removing cycle edge charlson_score -> elixhauser_van_walraven_score (confidence: 0.50)
+Removing cycle edge charlson_score -> comorbidity_diag_distinct_count (confidence: 0.50)
+Removing cycle edge charlson_score -> comorbidity_diag_claim_count (confidence: 0.50)
+Removing cycle edge charlson_score -> high_comorbidity_burden_flag (confidence: 0.50)
+Removing cycle edge elixhauser_van_walraven_score -> cci_chronic_pulmonary (confidence: 0.50)
+Removing cycle edge comorbidity_diag_distinct_count -> comorbidity_diag_claim_count (confidence: 0.50)
+Removing cycle edge comorbidity_diag_claim_count -> cci_dementia (confidence: 0.50)
+Removing cycle edge comorbidity_diag_claim_count -> cci_chronic_pulmonary (confidence: 0.50)
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/opik/error_tracking/shutdown_hooks.py:12: SentryHubDeprecationWarning: `sentry_sdk.Hub` is deprecated and will be removed in a future major release. Please consult our 1.x to 2.x migration guide for details on how to migrate `Hub` usage to the new API: https://docs.sentry.io/platforms/python/migration/1.x-to-2.x
+  client = sentry_sdk.Hub.current.client
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/httpx/_config.py:51: DeprecationWarning: `verify=<str>` is deprecated. Use `verify=ssl.create_default_context(cafile=...)` or `verify=ssl.create_default_context(capath=...)` instead.
+  warnings.warn(message, DeprecationWarning)
+Removing cycle edge treatment_dupixent -> enrollment_duration_days (confidence: 0.50)
+Removing cycle edge treatment_dupixent -> age_at_index (confidence: 0.50)
+Removing cycle edge treatment_dupixent -> cci_chronic_pulmonary (confidence: 0.50)
+Removing cycle edge age_at_index -> lis_dual_flag (confidence: 0.50)
+Removing cycle edge age_at_index -> enrollment_duration_days (confidence: 0.50)
+Removing cycle edge age_at_index -> charlson_score (confidence: 0.50)
+Removing cycle edge age_at_index -> comorbidity_diag_distinct_count (confidence: 0.50)
+Removing cycle edge age_at_index -> cci_dementia (confidence: 0.50)
+Removing cycle edge lis_dual_flag -> charlson_score (confidence: 0.50)
+Removing cycle edge enrollment_duration_days -> comorbidity_diag_claim_count (confidence: 0.50)
+Removing cycle edge enrollment_duration_days -> comorbidity_diag_distinct_count (confidence: 0.50)
+Removing cycle edge enrollment_duration_days -> cci_chronic_pulmonary (confidence: 0.50)
+Removing cycle edge elixhauser_van_walraven_score -> comorbidity_diag_distinct_count (confidence: 0.50)
+Removing cycle edge elixhauser_van_walraven_score -> comorbidity_diag_claim_count (confidence: 0.50)
+Removing cycle edge elixhauser_van_walraven_score -> high_comorbidity_burden_flag (confidence: 0.50)
+Removing cycle edge charlson_score -> elixhauser_van_walraven_score (confidence: 0.50)
+Removing cycle edge charlson_score -> comorbidity_diag_distinct_count (confidence: 0.50)
+Removing cycle edge charlson_score -> comorbidity_diag_claim_count (confidence: 0.50)
+Removing cycle edge charlson_score -> high_comorbidity_burden_flag (confidence: 0.50)
+Removing cycle edge elixhauser_van_walraven_score -> cci_chronic_pulmonary (confidence: 0.50)
+Removing cycle edge comorbidity_diag_distinct_count -> comorbidity_diag_claim_count (confidence: 0.50)
+Removing cycle edge comorbidity_diag_claim_count -> cci_dementia (confidence: 0.50)
+Removing cycle edge comorbidity_diag_claim_count -> cci_chronic_pulmonary (confidence: 0.50)
+Removing cycle edge persistent_at_180d_g28 -> lis_dual_flag (confidence: 0.33)
+Removing cycle edge persistent_at_180d_g28 -> comorbidity_diag_distinct_count (confidence: 0.33)
+Removing cycle edge enrollment_duration_days -> comorbidity_diag_claim_count (confidence: 0.33)
+Removing cycle edge treatment_dupixent -> enrollment_duration_days (confidence: 0.67)
+Removing cycle edge treatment_dupixent -> age_at_index (confidence: 0.33)
+Removing cycle edge treatment_dupixent -> cci_chronic_pulmonary (confidence: 0.33)
+Removing cycle edge treatment_dupixent -> comorbidity_diag_distinct_count (confidence: 0.33)
+Removing cycle edge treatment_dupixent -> cci_dementia (confidence: 0.33)
+Removing cycle edge lis_dual_flag -> age_at_index (confidence: 0.33)
+Removing cycle edge lis_dual_flag -> charlson_score (confidence: 0.33)
+Removing cycle edge lis_dual_flag -> enrollment_duration_days (confidence: 0.33)
+Removing cycle edge lis_dual_flag -> comorbidity_diag_claim_count (confidence: 0.33)
+Removing cycle edge age_at_index -> enrollment_duration_days (confidence: 0.33)
+Removing cycle edge age_at_index -> charlson_score (confidence: 0.67)
+Removing cycle edge age_at_index -> comorbidity_diag_distinct_count (confidence: 0.67)
+Removing cycle edge age_at_index -> cci_dementia (confidence: 0.67)
+Removing cycle edge enrollment_duration_days -> comorbidity_diag_distinct_count (confidence: 0.67)
+Removing cycle edge enrollment_duration_days -> cci_chronic_pulmonary (confidence: 0.67)
+Removing cycle edge elixhauser_van_walraven_score -> comorbidity_diag_distinct_count (confidence: 0.33)
+Removing cycle edge elixhauser_van_walraven_score -> comorbidity_diag_claim_count (confidence: 0.67)
+Removing cycle edge elixhauser_van_walraven_score -> high_comorbidity_burden_flag (confidence: 0.67)
+Removing cycle edge charlson_score -> elixhauser_van_walraven_score (confidence: 0.33)
+Removing cycle edge charlson_score -> comorbidity_diag_distinct_count (confidence: 0.33)
+Removing cycle edge charlson_score -> comorbidity_diag_claim_count (confidence: 0.33)
+Removing cycle edge charlson_score -> high_comorbidity_burden_flag (confidence: 0.67)
+Removing cycle edge charlson_score -> cci_dementia (confidence: 0.33)
+Removing cycle edge charlson_score -> cci_chronic_pulmonary (confidence: 0.33)
+Removing cycle edge elixhauser_van_walraven_score -> cci_chronic_pulmonary (confidence: 0.67)
+Removing cycle edge comorbidity_diag_claim_count -> comorbidity_diag_distinct_count (confidence: 0.33)
+Removing cycle edge cci_dementia -> comorbidity_diag_distinct_count (confidence: 0.33)
+Removing cycle edge comorbidity_diag_claim_count -> cci_dementia (confidence: 0.67)
+Removing cycle edge comorbidity_diag_claim_count -> cci_chronic_pulmonary (confidence: 0.33)
+Removing cycle edge comorbidity_diag_distinct_count -> cci_chronic_pulmonary (confidence: 0.33)
+Removing cycle edge persistent_at_180d_g28 -> lis_dual_flag (confidence: 0.33)
+Removing cycle edge persistent_at_180d_g28 -> comorbidity_diag_distinct_count (confidence: 0.33)
+Removing cycle edge enrollment_duration_days -> comorbidity_diag_claim_count (confidence: 0.33)
+Removing cycle edge treatment_dupixent -> enrollment_duration_days (confidence: 0.67)
+Removing cycle edge treatment_dupixent -> age_at_index (confidence: 0.33)
+Removing cycle edge treatment_dupixent -> cci_chronic_pulmonary (confidence: 0.33)
+Removing cycle edge treatment_dupixent -> comorbidity_diag_distinct_count (confidence: 0.33)
+Removing cycle edge treatment_dupixent -> cci_dementia (confidence: 0.33)
+Removing cycle edge lis_dual_flag -> age_at_index (confidence: 0.33)
+Removing cycle edge lis_dual_flag -> charlson_score (confidence: 0.33)
+Removing cycle edge lis_dual_flag -> enrollment_duration_days (confidence: 0.33)
+Removing cycle edge lis_dual_flag -> comorbidity_diag_claim_count (confidence: 0.33)
+Removing cycle edge age_at_index -> enrollment_duration_days (confidence: 0.33)
+Removing cycle edge age_at_index -> charlson_score (confidence: 0.67)
+Removing cycle edge age_at_index -> comorbidity_diag_distinct_count (confidence: 0.67)
+Removing cycle edge age_at_index -> cci_dementia (confidence: 0.67)
+Removing cycle edge enrollment_duration_days -> comorbidity_diag_distinct_count (confidence: 0.67)
+Removing cycle edge enrollment_duration_days -> cci_chronic_pulmonary (confidence: 0.67)
+Removing cycle edge elixhauser_van_walraven_score -> comorbidity_diag_distinct_count (confidence: 0.33)
+Removing cycle edge elixhauser_van_walraven_score -> comorbidity_diag_claim_count (confidence: 0.67)
+Removing cycle edge elixhauser_van_walraven_score -> high_comorbidity_burden_flag (confidence: 0.67)
+Removing cycle edge charlson_score -> elixhauser_van_walraven_score (confidence: 0.33)
+Removing cycle edge charlson_score -> comorbidity_diag_distinct_count (confidence: 0.33)
+Removing cycle edge charlson_score -> comorbidity_diag_claim_count (confidence: 0.33)
+Removing cycle edge charlson_score -> high_comorbidity_burden_flag (confidence: 0.67)
+Removing cycle edge charlson_score -> cci_dementia (confidence: 0.33)
+Removing cycle edge charlson_score -> cci_chronic_pulmonary (confidence: 0.33)
+Removing cycle edge elixhauser_van_walraven_score -> cci_chronic_pulmonary (confidence: 0.67)
+Removing cycle edge comorbidity_diag_claim_count -> comorbidity_diag_distinct_count (confidence: 0.33)
+Removing cycle edge cci_dementia -> comorbidity_diag_distinct_count (confidence: 0.33)
+Removing cycle edge comorbidity_diag_claim_count -> cci_dementia (confidence: 0.67)
+Removing cycle edge comorbidity_diag_claim_count -> cci_chronic_pulmonary (confidence: 0.33)
+Removing cycle edge comorbidity_diag_distinct_count -> cci_chronic_pulmonary (confidence: 0.33)
+Removing cycle edge treatment_dupixent -> enrollment_duration_days (confidence: 0.67)
+Removing cycle edge age_at_index -> charlson_score (confidence: 0.67)
+Removing cycle edge age_at_index -> comorbidity_diag_distinct_count (confidence: 0.67)
+Removing cycle edge age_at_index -> cci_dementia (confidence: 0.67)
+Removing cycle edge enrollment_duration_days -> comorbidity_diag_distinct_count (confidence: 0.67)
+Removing cycle edge enrollment_duration_days -> cci_chronic_pulmonary (confidence: 0.67)
+Removing cycle edge elixhauser_van_walraven_score -> comorbidity_diag_claim_count (confidence: 0.67)
+Removing cycle edge high_comorbidity_burden_flag -> elixhauser_van_walraven_score (confidence: 0.67)
+Removing cycle edge elixhauser_van_walraven_score -> cci_chronic_pulmonary (confidence: 0.67)
+Removing cycle edge comorbidity_diag_claim_count -> cci_dementia (confidence: 0.67)
+Removing cycle edge persistent_at_180d_g28 -> lis_dual_flag (confidence: 0.50)
+Removing cycle edge persistent_at_180d_g28 -> comorbidity_diag_distinct_count (confidence: 0.50)
+Removing cycle edge enrollment_duration_days -> comorbidity_diag_claim_count (confidence: 0.50)
+Removing cycle edge enrollment_duration_days -> treatment_dupixent (confidence: 0.50)
+Removing cycle edge enrollment_duration_days -> lis_dual_flag (confidence: 0.50)
+Removing cycle edge enrollment_duration_days -> comorbidity_diag_distinct_count (confidence: 0.50)
+Removing cycle edge enrollment_duration_days -> cci_chronic_pulmonary (confidence: 0.50)
+Removing cycle edge treatment_dupixent -> comorbidity_diag_distinct_count (confidence: 0.50)
+Removing cycle edge treatment_dupixent -> cci_dementia (confidence: 0.50)
+Removing cycle edge lis_dual_flag -> comorbidity_diag_claim_count (confidence: 0.50)
+Removing cycle edge age_at_index -> charlson_score (confidence: 0.50)
+Removing cycle edge age_at_index -> comorbidity_diag_distinct_count (confidence: 0.50)
+Removing cycle edge age_at_index -> cci_dementia (confidence: 0.50)
+Removing cycle edge elixhauser_van_walraven_score -> comorbidity_diag_distinct_count (confidence: 0.50)
+Removing cycle edge comorbidity_diag_claim_count -> elixhauser_van_walraven_score (confidence: 0.50)
+Removing cycle edge charlson_score -> elixhauser_van_walraven_score (confidence: 0.50)
+Removing cycle edge charlson_score -> comorbidity_diag_distinct_count (confidence: 0.50)
+Removing cycle edge charlson_score -> comorbidity_diag_claim_count (confidence: 0.50)
+Removing cycle edge high_comorbidity_burden_flag -> elixhauser_van_walraven_score (confidence: 0.50)
+Removing cycle edge charlson_score -> cci_dementia (confidence: 0.50)
+Removing cycle edge charlson_score -> cci_chronic_pulmonary (confidence: 0.50)
+Removing cycle edge comorbidity_diag_claim_count -> cci_dementia (confidence: 0.50)
+Removing cycle edge elixhauser_van_walraven_score -> cci_chronic_pulmonary (confidence: 0.50)
+Removing cycle edge comorbidity_diag_distinct_count -> cci_chronic_pulmonary (confidence: 0.50)
+Removing cycle edge persistent_at_180d_g28 -> lis_dual_flag (confidence: 0.50)
+Removing cycle edge persistent_at_180d_g28 -> comorbidity_diag_distinct_count (confidence: 0.50)
+Removing cycle edge enrollment_duration_days -> comorbidity_diag_claim_count (confidence: 0.50)
+Removing cycle edge enrollment_duration_days -> treatment_dupixent (confidence: 0.50)
+Removing cycle edge enrollment_duration_days -> lis_dual_flag (confidence: 0.50)
+Removing cycle edge enrollment_duration_days -> comorbidity_diag_distinct_count (confidence: 0.50)
+Removing cycle edge enrollment_duration_days -> cci_chronic_pulmonary (confidence: 0.50)
+Removing cycle edge treatment_dupixent -> comorbidity_diag_distinct_count (confidence: 0.50)
+Removing cycle edge treatment_dupixent -> cci_dementia (confidence: 0.50)
+Removing cycle edge lis_dual_flag -> comorbidity_diag_claim_count (confidence: 0.50)
+Removing cycle edge age_at_index -> charlson_score (confidence: 0.50)
+Removing cycle edge age_at_index -> comorbidity_diag_distinct_count (confidence: 0.50)
+Removing cycle edge age_at_index -> cci_dementia (confidence: 0.50)
+Removing cycle edge elixhauser_van_walraven_score -> comorbidity_diag_distinct_count (confidence: 0.50)
+Removing cycle edge comorbidity_diag_claim_count -> elixhauser_van_walraven_score (confidence: 0.50)
+Removing cycle edge charlson_score -> elixhauser_van_walraven_score (confidence: 0.50)
+Removing cycle edge charlson_score -> comorbidity_diag_distinct_count (confidence: 0.50)
+Removing cycle edge charlson_score -> comorbidity_diag_claim_count (confidence: 0.50)
+Removing cycle edge high_comorbidity_burden_flag -> elixhauser_van_walraven_score (confidence: 0.50)
+Removing cycle edge charlson_score -> cci_dementia (confidence: 0.50)
+Removing cycle edge charlson_score -> cci_chronic_pulmonary (confidence: 0.50)
+Removing cycle edge comorbidity_diag_claim_count -> cci_dementia (confidence: 0.50)
+Removing cycle edge elixhauser_van_walraven_score -> cci_chronic_pulmonary (confidence: 0.50)
+Removing cycle edge comorbidity_diag_distinct_count -> cci_chronic_pulmonary (confidence: 0.50)
+src resolves to: /home/enunez/Projects/e2i_causal_analytics/src/__init__.py
+ENSEMBLE real: loaded runs=['direct_lingam', 'fci', 'ges', 'ica_lingam', 'pc']
+ENSEMBLE ges+pc: converged=2/2 threshold=0.5
+VOTES ges+pc tree_build_ensemble: info={}
+VOTES ges+pc tree_build_ensemble voted_edges: {"n_edges": 55, "n_pairs": 37, "reciprocal_pairs": 18, "T->Y": false, "Y->T": false, "into_T": ["age_at_index", "cci_dementia", "comorbidity_diag_distinct_count", "enrollment_duration_days"], "into_Y": ["comorbidity_diag_distinct_count", "enrollment_duration_days", "lis_dual_flag"]}
+VOTES ges+pc tree_build_ensemble final_dag: {"n_edges": 32, "n_pairs": 32, "reciprocal_pairs": 0, "T->Y": false, "Y->T": false, "into_T": ["age_at_index", "cci_dementia", "comorbidity_diag_distinct_count", "enrollment_duration_days"], "into_Y": ["comorbidity_diag_distinct_count", "enrollment_duration_days", "lis_dual_flag"]}
+GATE ges+pc tree_build_ensemble: decision=augment confidence=0.673 n_edges=55 dag_edges=32 edge_confidences=[0.5, 1.0] {"corroboration_score": 0.5909, "corroboration_basis": "algorithm_agreement", "edge_confidence_score": 0.5909, "structure_score": 1.0}
+VOTES ges+pc ref_union: info={"min_votes": 1, "n_candidates": 55, "n_kept": 55}
+VOTES ges+pc ref_union voted_edges: {"n_edges": 55, "n_pairs": 37, "reciprocal_pairs": 18, "T->Y": false, "Y->T": false, "into_T": ["age_at_index", "cci_dementia", "comorbidity_diag_distinct_count", "enrollment_duration_days"], "into_Y": ["comorbidity_diag_distinct_count", "enrollment_duration_days", "lis_dual_flag"]}
+VOTES ges+pc ref_union final_dag: {"n_edges": 32, "n_pairs": 32, "reciprocal_pairs": 0, "T->Y": false, "Y->T": false, "into_T": ["age_at_index", "cci_dementia", "comorbidity_diag_distinct_count", "enrollment_duration_days"], "into_Y": ["comorbidity_diag_distinct_count", "enrollment_duration_days", "lis_dual_flag"]}
+GATE ges+pc ref_union: decision=augment confidence=0.673 n_edges=55 dag_edges=32 edge_confidences=[0.5, 1.0] {"corroboration_score": 0.5909, "corroboration_basis": "algorithm_agreement", "edge_confidence_score": 0.5909, "structure_score": 1.0}
+VOTES ges+pc ref_agreement: info={"min_votes": 2, "n_candidates": 55, "n_kept": 10}
+VOTES ges+pc ref_agreement voted_edges: {"n_edges": 10, "n_pairs": 10, "reciprocal_pairs": 0, "T->Y": false, "Y->T": false, "into_T": ["cci_dementia", "comorbidity_diag_distinct_count"], "into_Y": ["comorbidity_diag_distinct_count", "enrollment_duration_days", "lis_dual_flag"]}
+VOTES ges+pc ref_agreement final_dag: {"n_edges": 10, "n_pairs": 10, "reciprocal_pairs": 0, "T->Y": false, "Y->T": false, "into_T": ["cci_dementia", "comorbidity_diag_distinct_count"], "into_Y": ["comorbidity_diag_distinct_count", "enrollment_duration_days", "lis_dual_flag"]}
+GATE ges+pc ref_agreement: decision=accept confidence=0.935 n_edges=10 dag_edges=10 edge_confidences=[1.0] {"corroboration_score": 1.0, "corroboration_basis": "algorithm_agreement", "edge_confidence_score": 1.0, "structure_score": 0.6747}
+ENSEMBLE ges+pc+fci: converged=3/3 threshold=0.5
+VOTES ges+pc+fci tree_build_ensemble: info={}
+VOTES ges+pc+fci tree_build_ensemble voted_edges: {"n_edges": 64, "n_pairs": 37, "reciprocal_pairs": 27, "T->Y": false, "Y->T": false, "into_T": ["age_at_index", "cci_dementia", "comorbidity_diag_distinct_count", "enrollment_duration_days"], "into_Y": ["comorbidity_diag_distinct_count", "enrollment_duration_days", "lis_dual_flag"]}
+VOTES ges+pc+fci tree_build_ensemble final_dag: {"n_edges": 31, "n_pairs": 31, "reciprocal_pairs": 0, "T->Y": false, "Y->T": false, "into_T": ["age_at_index", "cci_dementia", "comorbidity_diag_distinct_count", "enrollment_duration_days"], "into_Y": ["comorbidity_diag_distinct_count", "enrollment_duration_days", "lis_dual_flag"]}
+GATE ges+pc+fci tree_build_ensemble: decision=augment confidence=0.650 n_edges=64 dag_edges=31 edge_confidences=[0.333, 0.667, 1.0] {"corroboration_score": 0.5625, "corroboration_basis": "algorithm_agreement", "edge_confidence_score": 0.5625, "structure_score": 1.0}
+VOTES ges+pc+fci ref_union: info={"min_votes": 1, "n_candidates": 64, "n_kept": 64}
+VOTES ges+pc+fci ref_union voted_edges: {"n_edges": 64, "n_pairs": 37, "reciprocal_pairs": 27, "T->Y": false, "Y->T": false, "into_T": ["age_at_index", "cci_dementia", "comorbidity_diag_distinct_count", "enrollment_duration_days"], "into_Y": ["comorbidity_diag_distinct_count", "enrollment_duration_days", "lis_dual_flag"]}
+VOTES ges+pc+fci ref_union final_dag: {"n_edges": 31, "n_pairs": 31, "reciprocal_pairs": 0, "T->Y": false, "Y->T": false, "into_T": ["age_at_index", "cci_dementia", "comorbidity_diag_distinct_count", "enrollment_duration_days"], "into_Y": ["comorbidity_diag_distinct_count", "enrollment_duration_days", "lis_dual_flag"]}
+GATE ges+pc+fci ref_union: decision=augment confidence=0.650 n_edges=64 dag_edges=31 edge_confidences=[0.333, 0.667, 1.0] {"corroboration_score": 0.5625, "corroboration_basis": "algorithm_agreement", "edge_confidence_score": 0.5625, "structure_score": 1.0}
+VOTES ges+pc+fci ref_agreement: info={"min_votes": 2, "n_candidates": 64, "n_kept": 36}
+VOTES ges+pc+fci ref_agreement voted_edges: {"n_edges": 36, "n_pairs": 26, "reciprocal_pairs": 10, "T->Y": false, "Y->T": false, "into_T": ["age_at_index", "cci_dementia", "comorbidity_diag_distinct_count", "enrollment_duration_days"], "into_Y": ["comorbidity_diag_distinct_count", "enrollment_duration_days", "lis_dual_flag"]}
+VOTES ges+pc+fci ref_agreement final_dag: {"n_edges": 26, "n_pairs": 26, "reciprocal_pairs": 0, "T->Y": false, "Y->T": false, "into_T": ["age_at_index", "cci_dementia", "comorbidity_diag_distinct_count", "enrollment_duration_days"], "into_Y": ["comorbidity_diag_distinct_count", "enrollment_duration_days", "lis_dual_flag"]}
+GATE ges+pc+fci ref_agreement: decision=augment confidence=0.793 n_edges=36 dag_edges=26 edge_confidences=[0.667, 1.0] {"corroboration_score": 0.7407, "corroboration_basis": "algorithm_agreement", "edge_confidence_score": 0.7407, "structure_score": 1.0}
+ENSEMBLE ges+fci: converged=2/2 threshold=0.5
+VOTES ges+fci tree_build_ensemble: info={}
+VOTES ges+fci tree_build_ensemble voted_edges: {"n_edges": 57, "n_pairs": 36, "reciprocal_pairs": 21, "T->Y": false, "Y->T": false, "into_T": ["age_at_index", "cci_dementia", "comorbidity_diag_distinct_count", "enrollment_duration_days"], "into_Y": ["comorbidity_diag_distinct_count", "enrollment_duration_days", "lis_dual_flag"]}
+VOTES ges+fci tree_build_ensemble final_dag: {"n_edges": 33, "n_pairs": 33, "reciprocal_pairs": 0, "T->Y": false, "Y->T": false, "into_T": ["age_at_index", "cci_dementia", "comorbidity_diag_distinct_count"], "into_Y": ["comorbidity_diag_distinct_count", "enrollment_duration_days", "lis_dual_flag"]}
+GATE ges+fci tree_build_ensemble: decision=augment confidence=0.754 n_edges=57 dag_edges=33 edge_confidences=[0.5, 1.0] {"corroboration_score": 0.693, "corroboration_basis": "algorithm_agreement", "edge_confidence_score": 0.693, "structure_score": 1.0}
+VOTES ges+fci ref_union: info={"min_votes": 1, "n_candidates": 57, "n_kept": 57}
+VOTES ges+fci ref_union voted_edges: {"n_edges": 57, "n_pairs": 36, "reciprocal_pairs": 21, "T->Y": false, "Y->T": false, "into_T": ["age_at_index", "cci_dementia", "comorbidity_diag_distinct_count", "enrollment_duration_days"], "into_Y": ["comorbidity_diag_distinct_count", "enrollment_duration_days", "lis_dual_flag"]}
+VOTES ges+fci ref_union final_dag: {"n_edges": 33, "n_pairs": 33, "reciprocal_pairs": 0, "T->Y": false, "Y->T": false, "into_T": ["age_at_index", "cci_dementia", "comorbidity_diag_distinct_count"], "into_Y": ["comorbidity_diag_distinct_count", "enrollment_duration_days", "lis_dual_flag"]}
+GATE ges+fci ref_union: decision=augment confidence=0.754 n_edges=57 dag_edges=33 edge_confidences=[0.5, 1.0] {"corroboration_score": 0.693, "corroboration_basis": "algorithm_agreement", "edge_confidence_score": 0.693, "structure_score": 1.0}
+VOTES ges+fci ref_agreement: info={"min_votes": 2, "n_candidates": 57, "n_kept": 22}
+VOTES ges+fci ref_agreement voted_edges: {"n_edges": 22, "n_pairs": 22, "reciprocal_pairs": 0, "T->Y": false, "Y->T": false, "into_T": ["age_at_index", "cci_dementia", "comorbidity_diag_distinct_count"], "into_Y": ["comorbidity_diag_distinct_count", "enrollment_duration_days", "lis_dual_flag"]}Removing cycle edge charlson_score -> age_at_index (confidence: 0.50)
+Removing cycle edge charlson_score -> high_comorbidity_burden_flag (confidence: 0.50)
+Removing cycle edge treatment_dupixent -> age_at_index (confidence: 0.50)
+Removing cycle edge treatment_dupixent -> cci_chronic_pulmonary (confidence: 0.50)
+Removing cycle edge treatment_dupixent -> enrollment_duration_days (confidence: 0.50)
+Removing cycle edge treatment_dupixent -> comorbidity_diag_distinct_count (confidence: 0.50)
+Removing cycle edge treatment_dupixent -> cci_dementia (confidence: 0.50)
+Removing cycle edge persistent_at_180d_g28 -> lis_dual_flag (confidence: 0.50)
+Removing cycle edge persistent_at_180d_g28 -> comorbidity_diag_distinct_count (confidence: 0.50)
+Removing cycle edge charlson_score -> cci_dementia (confidence: 0.50)
+Removing cycle edge charlson_score -> cci_chronic_pulmonary (confidence: 0.50)
+Removing cycle edge comorbidity_diag_distinct_count -> age_at_index (confidence: 0.50)
+Removing cycle edge comorbidity_diag_distinct_count -> enrollment_duration_days (confidence: 0.50)
+Removing cycle edge comorbidity_diag_distinct_count -> comorbidity_diag_claim_count (confidence: 0.50)
+Removing cycle edge comorbidity_diag_distinct_count -> cci_chronic_pulmonary (confidence: 0.50)
+Removing cycle edge cci_dementia -> age_at_index (confidence: 0.50)
+Removing cycle edge cci_dementia -> comorbidity_diag_claim_count (confidence: 0.50)
+Removing cycle edge age_at_index -> lis_dual_flag (confidence: 0.50)
+Removing cycle edge lis_dual_flag -> enrollment_duration_days (confidence: 0.50)
+Removing cycle edge lis_dual_flag -> comorbidity_diag_claim_count (confidence: 0.50)
+Removing cycle edge cci_chronic_pulmonary -> enrollment_duration_days (confidence: 0.50)
+Removing cycle edge cci_chronic_pulmonary -> elixhauser_van_walraven_score (confidence: 0.50)
+Removing cycle edge elixhauser_van_walraven_score -> comorbidity_diag_claim_count (confidence: 0.50)
+Removing cycle edge elixhauser_van_walraven_score -> high_comorbidity_burden_flag (confidence: 0.50)
+Removing cycle edge charlson_score -> age_at_index (confidence: 0.50)
+Removing cycle edge charlson_score -> high_comorbidity_burden_flag (confidence: 0.50)
+Removing cycle edge treatment_dupixent -> age_at_index (confidence: 0.50)
+Removing cycle edge treatment_dupixent -> cci_chronic_pulmonary (confidence: 0.50)
+Removing cycle edge treatment_dupixent -> enrollment_duration_days (confidence: 0.50)
+Removing cycle edge treatment_dupixent -> comorbidity_diag_distinct_count (confidence: 0.50)
+Removing cycle edge treatment_dupixent -> cci_dementia (confidence: 0.50)
+Removing cycle edge persistent_at_180d_g28 -> lis_dual_flag (confidence: 0.50)
+Removing cycle edge persistent_at_180d_g28 -> comorbidity_diag_distinct_count (confidence: 0.50)
+Removing cycle edge charlson_score -> cci_dementia (confidence: 0.50)
+Removing cycle edge charlson_score -> cci_chronic_pulmonary (confidence: 0.50)
+Removing cycle edge comorbidity_diag_distinct_count -> age_at_index (confidence: 0.50)
+Removing cycle edge comorbidity_diag_distinct_count -> enrollment_duration_days (confidence: 0.50)
+Removing cycle edge comorbidity_diag_distinct_count -> comorbidity_diag_claim_count (confidence: 0.50)
+Removing cycle edge comorbidity_diag_distinct_count -> cci_chronic_pulmonary (confidence: 0.50)
+Removing cycle edge cci_dementia -> age_at_index (confidence: 0.50)
+Removing cycle edge cci_dementia -> comorbidity_diag_claim_count (confidence: 0.50)
+Removing cycle edge age_at_index -> lis_dual_flag (confidence: 0.50)
+Removing cycle edge lis_dual_flag -> enrollment_duration_days (confidence: 0.50)
+Removing cycle edge lis_dual_flag -> comorbidity_diag_claim_count (confidence: 0.50)
+Removing cycle edge cci_chronic_pulmonary -> enrollment_duration_days (confidence: 0.50)
+Removing cycle edge cci_chronic_pulmonary -> elixhauser_van_walraven_score (confidence: 0.50)
+Removing cycle edge elixhauser_van_walraven_score -> comorbidity_diag_claim_count (confidence: 0.50)
+Removing cycle edge elixhauser_van_walraven_score -> high_comorbidity_burden_flag (confidence: 0.50)
+Removing cycle edge treatment_dupixent -> enrollment_duration_days (confidence: 1.00)
+Removing cycle edge treatment_dupixent -> comorbidity_diag_distinct_count (confidence: 1.00)
+Removing cycle edge treatment_dupixent -> cci_dementia (confidence: 1.00)
+Removing cycle edge persistent_at_180d_g28 -> lis_dual_flag (confidence: 1.00)
+Removing cycle edge persistent_at_180d_g28 -> comorbidity_diag_distinct_count (confidence: 1.00)
+Removing cycle edge lis_dual_flag -> enrollment_duration_days (confidence: 1.00)
+Removing cycle edge age_at_index -> lis_dual_flag (confidence: 1.00)
+Removing cycle edge age_at_index -> charlson_score (confidence: 1.00)
+Removing cycle edge age_at_index -> comorbidity_diag_distinct_count (confidence: 1.00)
+Removing cycle edge age_at_index -> cci_dementia (confidence: 1.00)
+Removing cycle edge charlson_score -> cci_dementia (confidence: 1.00)
+Removing cycle edge lis_dual_flag -> comorbidity_diag_claim_count (confidence: 1.00)
+Removing cycle edge enrollment_duration_days -> comorbidity_diag_distinct_count (confidence: 1.00)
+Removing cycle edge enrollment_duration_days -> cci_chronic_pulmonary (confidence: 1.00)
+Removing cycle edge charlson_score -> cci_chronic_pulmonary (confidence: 1.00)
+Removing cycle edge elixhauser_van_walraven_score -> comorbidity_diag_claim_count (confidence: 1.00)
+Removing cycle edge elixhauser_van_walraven_score -> cci_chronic_pulmonary (confidence: 1.00)
+Removing cycle edge comorbidity_diag_claim_count -> cci_dementia (confidence: 1.00)
+Removing cycle edge comorbidity_diag_distinct_count -> cci_chronic_pulmonary (confidence: 1.00)
+Removing cycle edge elixhauser_van_walraven_score -> high_comorbidity_burden_flag (confidence: 1.00)
+Removing cycle edge treatment_dupixent -> age_at_index (confidence: 1.00)
+Removing cycle edge treatment_dupixent -> cci_chronic_pulmonary (confidence: 1.00)
+
+VOTES ges+fci ref_agreement final_dag: {"n_edges": 22, "n_pairs": 22, "reciprocal_pairs": 0, "T->Y": false, "Y->T": false, "into_T": ["age_at_index", "cci_dementia", "comorbidity_diag_distinct_count"], "into_Y": ["comorbidity_diag_distinct_count", "enrollment_duration_days", "lis_dual_flag"]}
+GATE ges+fci ref_agreement: decision=accept confidence=1.000 n_edges=22 dag_edges=22 edge_confidences=[1.0] {"corroboration_score": 1.0, "corroboration_basis": "algorithm_agreement", "edge_confidence_score": 1.0, "structure_score": 1.0}
+ENSEMBLE pc+fci: converged=2/2 threshold=0.5
+VOTES pc+fci tree_build_ensemble: info={}
+VOTES pc+fci tree_build_ensemble voted_edges: {"n_edges": 52, "n_pairs": 29, "reciprocal_pairs": 23, "T->Y": false, "Y->T": false, "into_T": ["age_at_index", "cci_dementia", "comorbidity_diag_distinct_count", "enrollment_duration_days"], "into_Y": ["comorbidity_diag_distinct_count", "enrollment_duration_days", "lis_dual_flag"]}
+VOTES pc+fci tree_build_ensemble final_dag: {"n_edges": 28, "n_pairs": 28, "reciprocal_pairs": 0, "T->Y": false, "Y->T": false, "into_T": ["age_at_index", "cci_dementia", "comorbidity_diag_distinct_count", "enrollment_duration_days"], "into_Y": ["comorbidity_diag_distinct_count", "enrollment_duration_days", "lis_dual_flag"]}
+GATE pc+fci tree_build_ensemble: decision=augment confidence=0.754 n_edges=52 dag_edges=28 edge_confidences=[0.5, 1.0] {"corroboration_score": 0.6923, "corroboration_basis": "algorithm_agreement", "edge_confidence_score": 0.6923, "structure_score": 1.0}
+VOTES pc+fci ref_union: info={"min_votes": 1, "n_candidates": 52, "n_kept": 52}
+VOTES pc+fci ref_union voted_edges: {"n_edges": 52, "n_pairs": 29, "reciprocal_pairs": 23, "T->Y": false, "Y->T": false, "into_T": ["age_at_index", "cci_dementia", "comorbidity_diag_distinct_count", "enrollment_duration_days"], "into_Y": ["comorbidity_diag_distinct_count", "enrollment_duration_days", "lis_dual_flag"]}
+VOTES pc+fci ref_union final_dag: {"n_edges": 28, "n_pairs": 28, "reciprocal_pairs": 0, "T->Y": false, "Y->T": false, "into_T": ["age_at_index", "cci_dementia", "comorbidity_diag_distinct_count", "enrollment_duration_days"], "into_Y": ["comorbidity_diag_distinct_count", "enrollment_duration_days", "lis_dual_flag"]}
+GATE pc+fci ref_union: decision=augment confidence=0.754 n_edges=52 dag_edges=28 edge_confidences=[0.5, 1.0] {"corroboration_score": 0.6923, "corroboration_basis": "algorithm_agreement", "edge_confidence_score": 0.6923, "structure_score": 1.0}
+VOTES pc+fci ref_agreement: info={"min_votes": 2, "n_candidates": 52, "n_kept": 20}
+VOTES pc+fci ref_agreement voted_edges: {"n_edges": 20, "n_pairs": 20, "reciprocal_pairs": 0, "T->Y": false, "Y->T": false, "into_T": ["cci_dementia", "comorbidity_diag_distinct_count", "enrollment_duration_days"], "into_Y": ["comorbidity_diag_distinct_count", "enrollment_duration_days", "lis_dual_flag"]}
+VOTES pc+fci ref_agreement final_dag: {"n_edges": 20, "n_pairs": 20, "reciprocal_pairs": 0, "T->Y": false, "Y->T": false, "into_T": ["cci_dementia", "comorbidity_diag_distinct_count", "enrollment_duration_days"], "into_Y": ["comorbidity_diag_distinct_count", "enrollment_duration_days", "lis_dual_flag"]}
+GATE pc+fci ref_agreement: decision=accept confidence=0.969 n_edges=20 dag_edges=20 edge_confidences=[1.0] {"corroboration_score": 1.0, "corroboration_basis": "algorithm_agreement", "edge_confidence_score": 1.0, "structure_score": 0.8433}
+GATE direct_lingam alone: not converged ('direct_lingam refused: LiNGAM assumes non-Gaussian continuous variables, but 6 column(s) are binary (<= 2 distinct non-null values): treatment_dupixent, persistent_at_180d_g28, lis_dual_flag, high_comorbidity_burden_flag, cci_dementia, cci_chronic_pulmonary. Use a constraint-based algorithm (PC/FCI) for frames with binary treatment or outcome flags.')
+GATE fci alone (no bootstrap): decision=reject confidence=0.000 n_edges=43 dag_edges=24 edge_confidences=[1.0] {"corroboration_score": 0.0, "corroboration_basis": "uncorroborated_single_run", "edge_confidence_score": 1.0, "structure_score": 1.0}
+GATE ges alone (no bootstrap): decision=reject confidence=0.000 n_edges=36 dag_edges=35 edge_confidences=[1.0] {"corroboration_score": 0.0, "corroboration_basis": "uncorroborated_single_run", "edge_confidence_score": 1.0, "structure_score": 1.0}
+GATE ica_lingam alone: not converged ('ica_lingam refused: LiNGAM assumes non-Gaussian continuous variables, but 6 column(s) are binary (<= 2 distinct non-null values): treatment_dupixent, persistent_at_180d_g28, lis_dual_flag, high_comorbidity_burden_flag, cci_dementia, cci_chronic_pulmonary. Use a constraint-based algorithm (PC/FCI) for frames with binary treatment or outcome flags.')
+GATE pc alone (no bootstrap): decision=reject confidence=0.000 n_edges=29 dag_edges=27 edge_confidences=[1.0] {"corroboration_score": 0.0, "corroboration_basis": "uncorroborated_single_run", "edge_confidence_score": 1.0, "structure_score": 1.0}

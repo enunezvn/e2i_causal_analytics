@@ -1,0 +1,63 @@
+=== ACCEPT_START real 13:52:52Z hard timeout 600 s ===
+src resolves to: /home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-d-guided-discovery-claims/src/__init__.py
+defaults: cap=20 budget_s=180.0 min_resamples=10
+REAL frame n=15209 k=77
+Removing cycle edge charlson_score -> high_comorbidity_burden_flag (confidence: 1.00)
+Removing cycle edge age_at_index -> lis_dual_flag (confidence: 1.00)
+Removing cycle edge age_at_index -> payer_product=POS (confidence: 1.00)
+Removing cycle edge lis_dual_flag -> comorbidity_diag_claim_count (confidence: 1.00)
+Removing cycle edge lis_dual_flag -> cci_pvd (confidence: 1.00)
+Removing cycle edge lis_dual_flag -> payer_product=POS (confidence: 1.00)
+Removing cycle edge enrollment_duration_days -> gdr_cd=M (confidence: 1.00)
+Removing cycle edge charlson_risk_band=1 to 2 -> elixhauser_risk_band=1 to 5 (confidence: 1.00)
+Bootstrap stopped by the time budget (180s): 13/20 resamples attempted, 13 succeeded
+Latent-confounding diagnostic (FCI) timed out after 3.6s (discovery time budget 180s)
+Discovered DAG NOT persisted (Supabase unavailable): [Supabase] SUPABASE_URL environment variable is not set [dag_version_hash=100513149453a160b73746b3e63ace263e0539954913bf292be981f7c2ceddcc session_id=None query_id=None]
+RUN {"run": "real/persistence_g28/defaults", "n": 15209, "k_declared": 77, "wall_s": 504.6, "discovery_latency_s": 202.7, "gate": "augment", "gate_confidence": 0.793, "dag_overridden": false, "n_edges_ensemble": 63, "shipped_edges": 177, "shipped_nodes": 79, "preflight": {"kept": 20, "constant": 0, "collinear": 16, "capped": 41, "protected": 0, "max_covariates": 20, "n_offered": 77, "n_kept": 20, "n_rows": 15209, "n_rows_used": 15209}, "preflight_k": 14, "bootstrap": {"n_resamples": 20, "n_attempted": 13, "n_succeeded": 13, "min_resamples": 10, "corroborated": true, "time_budget_s": 180.0, "elapsed_s": 176.3553618658334, "budget_exhausted": true}, "latent_diagnostic": {"ran": true, "converged": false, "error": "timeout after 3.6s (discovery time budget 180s, 176.4s already spent)", "time_budget_s": 180.0, "elapsed_before_s": 176.37069272994995, "treatment": "treatment_dupixent", "outcome": "persistent_at_180d_g28", "flag": false}, "required_edges_missing": [["treatment_dupixent", "persistent_at_180d_g28"]], "adjustment_set_size": 77, "declared_covariates_in_adjustment_set": 77, "declared_missing_from_adjustment_set": [], "estimand_edge_shipped": true, "estimand_provenance": "required_prior", "skip_reason": null}
+WARNINGS:
+  - Discovery pre-flight: 77 covariates offered, 20 handed to structure learning (cap 20); dropped 0 constant [none], 16 exactly collinear [cci_hiv, elx_chf, elx_pvd, elx_paralysis, elx_chronic_pulmonary, elx_diabetes_uncomplicated, elx_diabetes_complicated, elx_peptic_ulcer, elx_aids_hiv, elx_metastatic_cancer, elx_rheumatoid_collagen, elx_depression, payer_category=commercial_exchange, payer_category=medicare_lis_dual, payer_bus=MCR, charlson_risk_band=5 plus], 41 capped by pre-treatment screening [health_exchange_flag, cci_mi, cci_cerebrovascular, cci_rheumatic, cci_peptic_ulcer, cci_mild_liver
+  - Discovery did not draw the estimand edge treatment_dupixent -> persistent_at_180d_g28 (removed in PC's skeleton phase: the data found the pair conditionally independent at alpha=0.05 (causal-learn applies required edges at orientation only, to edges that survived the skeleton)). The edge is asserted by the prior on the shipped DAG (provenance required_prior when the DAG shipped through discovery); the estimate still tests it.
+  - Discovered DAG NOT persisted (Supabase unavailable): [Supabase] SUPABASE_URL environment variable is not set [dag_version_hash=100513149453a160b73746b3e63ace263e0539954913bf292be981f7c2ceddcc session_id=None query_id=None]
+gdr_cd=M --> treatment_dupixent
+lis_dual_flag --> age_at_index
+age_at_index --> cci_dementia
+lis_dual_flag --> cci_pvd
+lis_dual_flag --> payer_product=OTH
+lis_dual_flag --> payer_product=POS
+charlson_score --> elixhauser_van_walraven_score
+cci_pvd --> charlson_score
+comorbidity_diag_claim_count --> comorbidity_diag_distinct_count
+elx_fluid_electrolyte --> comorbidity_diag_claim_count
+high_comorbidity_burden_flag --> charlson_risk_band=3 to 4
+elixhauser_risk_band=1 to 5 --> charlson_risk_band=1 to 2
+rc=0 (124 = did not complete in 600 s) real 14:03:19Z
+=== ACCEPT_START synthetic 14:03:19Z hard timeout 600 s ===
+src resolves to: /home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-d-guided-discovery-claims/src/__init__.py
+defaults: cap=20 budget_s=180.0 min_resamples=10
+Traceback (most recent call last):
+  File "<stdin>", line 129, in <module>
+  File "/usr/lib/python3.12/asyncio/runners.py", line 194, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/base_events.py", line 687, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "<stdin>", line 107, in main
+  File "/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/pandas/io/parquet.py", line 669, in read_parquet
+    return impl.read(
+           ^^^^^^^^^^
+  File "/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/pandas/io/parquet.py", line 258, in read
+    path_or_handle, handles, filesystem = _get_path_or_handle(
+                                          ^^^^^^^^^^^^^^^^^^^^
+  File "/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/pandas/io/parquet.py", line 141, in _get_path_or_handle
+    handles = get_handle(
+              ^^^^^^^^^^^
+  File "/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/pandas/io/common.py", line 882, in get_handle
+    handle = open(handle, ioargs.mode)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/enunez/Projects/e2i_causal_analytics/data/data/rwd/synthetic_CSU/patient_journeys.parquet'
+rc=1 (124 = did not complete in 600 s) synthetic 14:04:30Z
+ALLDONE

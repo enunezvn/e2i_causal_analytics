@@ -1,0 +1,4 @@
+lane A prune dropped: 16 ['cci_hiv', 'elx_chf', 'elx_pvd', 'elx_paralysis', 'elx_chronic_pulmonary', 'elx_diabetes_uncomplicated', 'elx_diabetes_complicated', 'elx_peptic_ulcer', 'elx_aids_hiv', 'elx_metastatic_cancer', 'elx_rheumatoid_collagen', 'elx_depression', 'payer_category=commercial_exchange', 'payer_category=medicare_lis_dual', 'payer_bus=MCR', 'charlson_risk_band=5 plus']
+pre-flight collinear: 16 ['cci_hiv', 'elx_chf', 'elx_pvd', 'elx_paralysis', 'elx_chronic_pulmonary', 'elx_diabetes_uncomplicated', 'elx_diabetes_complicated', 'elx_peptic_ulcer', 'elx_aids_hiv', 'elx_metastatic_cancer', 'elx_rheumatoid_collagen', 'elx_depression', 'payer_category=commercial_exchange', 'payer_category=medicare_lis_dual', 'payer_bus=MCR', 'charlson_risk_band=5 plus']
+identical sets: True | identical order: True
+lane A source: /home/enunez/Projects/e2i_causal_analytics/.worktrees/real-data-causal/src/api/routes/causal/loaders.py lines 874-968

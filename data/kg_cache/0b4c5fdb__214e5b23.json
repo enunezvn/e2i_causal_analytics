@@ -1,0 +1,2404 @@
+[
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "I67.9"
+      ],
+      [
+        "UMLS",
+        "C0007820"
+      ]
+    ],
+    "feature_name": "cci_cerebrovascular",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:18.190456+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "I50.9"
+      ],
+      [
+        "UMLS",
+        "C0018802"
+      ]
+    ],
+    "feature_name": "cci_chf",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:17.366597+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "chembl_indications",
+        "evidence": [],
+        "evidence_source": "open_targets",
+        "object_id": "C0024117",
+        "object_name": "chronic obstructive pulmonary disease",
+        "pmids": [],
+        "predicate": "associated_with",
+        "score": null,
+        "source_object_id": "MONDO_0005002",
+        "source_subject_id": "CHEMBL1201589",
+        "subject_id": "302379",
+        "subject_name": "OMALIZUMAB"
+      },
+      {
+        "datasource": "chembl_indications",
+        "evidence": [],
+        "evidence_source": "open_targets",
+        "object_id": "C0024117",
+        "object_name": "chronic obstructive pulmonary disease",
+        "pmids": [],
+        "predicate": "associated_with",
+        "score": null,
+        "source_object_id": "MONDO_0005002",
+        "source_subject_id": "CHEMBL2108675",
+        "subject_id": "1876376",
+        "subject_name": "DUPILUMAB"
+      },
+      {
+        "datasource": "chembl_indications",
+        "evidence": [],
+        "evidence_source": "open_targets",
+        "object_id": "C0004096",
+        "object_name": "asthma",
+        "pmids": [],
+        "predicate": "treats",
+        "score": null,
+        "source_object_id": "MONDO_0004979",
+        "source_subject_id": "CHEMBL1201589",
+        "subject_id": "302379",
+        "subject_name": "OMALIZUMAB"
+      },
+      {
+        "datasource": "chembl_indications",
+        "evidence": [],
+        "evidence_source": "open_targets",
+        "object_id": "C0004096",
+        "object_name": "asthma",
+        "pmids": [],
+        "predicate": "treats",
+        "score": null,
+        "source_object_id": "MONDO_0004979",
+        "source_subject_id": "CHEMBL2108675",
+        "subject_id": "1876376",
+        "subject_name": "DUPILUMAB"
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "J44.9"
+      ],
+      [
+        "UMLS",
+        "C0024117"
+      ],
+      [
+        "ICD10CM",
+        "J45.909"
+      ],
+      [
+        "UMLS",
+        "C0004096"
+      ]
+    ],
+    "feature_name": "cci_chronic_pulmonary",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:19.443566+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "F03.90"
+      ],
+      [
+        "UMLS",
+        "C0497327"
+      ]
+    ],
+    "feature_name": "cci_dementia",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:18.785309+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "E11.8"
+      ],
+      [
+        "UMLS",
+        "C0011849"
+      ]
+    ],
+    "feature_name": "cci_diabetes_complication",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:21.499905+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C0011860",
+        "object_name": "Diabetes Mellitus, Non-Insulin-Dependent",
+        "pmids": [],
+        "predicate": "rn",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0494290",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C192882",
+        "object_name": "mCode Non-Neoplastic Disease/Finding",
+        "pmids": [],
+        "predicate": "isa",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0494290",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "E11.9"
+      ],
+      [
+        "UMLS",
+        "C0011849"
+      ]
+    ],
+    "feature_name": "cci_diabetes_no_complication",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:21.301142+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C0853112",
+        "object_name": "Chronic infection with HIV",
+        "pmids": [],
+        "predicate": "rn",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0001857",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "B20"
+      ],
+      [
+        "UMLS",
+        "C0019693"
+      ]
+    ],
+    "feature_name": "cci_hiv",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:24.918096+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "C80.1"
+      ],
+      [
+        "UMLS",
+        "C0006826"
+      ]
+    ],
+    "feature_name": "cci_malignancy",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:23.184613+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C35933",
+        "object_name": "Distantly Metastatic Malignant Neoplasm",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C2939419",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C27292",
+        "object_name": "Metastatic Ewing Sarcoma/Peripheral Primitive Neuroectodermal Tumor",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C2939419",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C19987",
+        "object_name": "Cancer Progression",
+        "pmids": [],
+        "predicate": "isa",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0027627",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C37192",
+        "object_name": "Intravascular Metastasis",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0027627",
+        "subject_name": ""
+      },
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C1384494",
+        "object_name": "Metastatic Carcinoma",
+        "pmids": [],
+        "predicate": "rb",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0027627",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "C79.9"
+      ],
+      [
+        "UMLS",
+        "C0027627"
+      ]
+    ],
+    "feature_name": "cci_metastatic_cancer",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:24.270765+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "I21.9"
+      ],
+      [
+        "UMLS",
+        "C0027051"
+      ]
+    ],
+    "feature_name": "cci_mi",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:17.031681+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "K76.9"
+      ],
+      [
+        "UMLS",
+        "C0023895"
+      ]
+    ],
+    "feature_name": "cci_mild_liver",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:20.715198+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "G82.20"
+      ],
+      [
+        "UMLS",
+        "C0030486"
+      ]
+    ],
+    "feature_name": "cci_paraplegia",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:21.863728+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C192882",
+        "object_name": "mCode Non-Neoplastic Disease/Finding",
+        "pmids": [],
+        "predicate": "isa",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C2887651",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C7923",
+        "object_name": "Active Peptic Ulcer",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0030920",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "K27.9"
+      ],
+      [
+        "UMLS",
+        "C0030920"
+      ]
+    ],
+    "feature_name": "cci_peptic_ulcer",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:20.355763+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C84496",
+        "object_name": "Peripheral Artery Disease",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0085096",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C148074",
+        "object_name": "Peripheral Vascular Insufficiency",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0085096",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "I73.9"
+      ],
+      [
+        "UMLS",
+        "C0085096"
+      ]
+    ],
+    "feature_name": "cci_pvd",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:17.941944+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C2316810",
+        "object_name": "Chronic kidney disease stage 5",
+        "pmids": [],
+        "predicate": "rb",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0022661",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "N18.9"
+      ],
+      [
+        "UMLS",
+        "C0022661"
+      ]
+    ],
+    "feature_name": "cci_renal",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:22.510551+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "M06.9"
+      ],
+      [
+        "UMLS",
+        "C0003873"
+      ]
+    ],
+    "feature_name": "cci_rheumatic",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:19.822411+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "K74.60"
+      ],
+      [
+        "UMLS",
+        "C0023890"
+      ]
+    ],
+    "feature_name": "cci_severe_liver",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:23.531449+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C0853112",
+        "object_name": "Chronic infection with HIV",
+        "pmids": [],
+        "predicate": "rn",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0001857",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "B20"
+      ],
+      [
+        "UMLS",
+        "C0019693"
+      ]
+    ],
+    "feature_name": "elx_aids_hiv",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:28.596726+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C192882",
+        "object_name": "mCode Non-Neoplastic Disease/Finding",
+        "pmids": [],
+        "predicate": "isa",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C2874370",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "F10.10"
+      ],
+      [
+        "UMLS",
+        "C0001973"
+      ]
+    ],
+    "feature_name": "elx_alcohol_abuse",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:32.386777+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C0948824",
+        "object_name": "Anemia due to blood loss",
+        "pmids": [],
+        "predicate": "rn",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0154286",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "D50.0"
+      ],
+      [
+        "UMLS",
+        "C0002871"
+      ]
+    ],
+    "feature_name": "elx_blood_loss_anemia",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:31.570733+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "I49.9"
+      ],
+      [
+        "UMLS",
+        "C0003811"
+      ]
+    ],
+    "feature_name": "elx_cardiac_arrhythmia",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:25.310972+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "I50.9"
+      ],
+      [
+        "UMLS",
+        "C0018802"
+      ]
+    ],
+    "feature_name": "elx_chf",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:24.918356+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "chembl_indications",
+        "evidence": [],
+        "evidence_source": "open_targets",
+        "object_id": "C0024117",
+        "object_name": "chronic obstructive pulmonary disease",
+        "pmids": [],
+        "predicate": "associated_with",
+        "score": null,
+        "source_object_id": "MONDO_0005002",
+        "source_subject_id": "CHEMBL1201589",
+        "subject_id": "302379",
+        "subject_name": "OMALIZUMAB"
+      },
+      {
+        "datasource": "chembl_indications",
+        "evidence": [],
+        "evidence_source": "open_targets",
+        "object_id": "C0024117",
+        "object_name": "chronic obstructive pulmonary disease",
+        "pmids": [],
+        "predicate": "associated_with",
+        "score": null,
+        "source_object_id": "MONDO_0005002",
+        "source_subject_id": "CHEMBL2108675",
+        "subject_id": "1876376",
+        "subject_name": "DUPILUMAB"
+      },
+      {
+        "datasource": "chembl_indications",
+        "evidence": [],
+        "evidence_source": "open_targets",
+        "object_id": "C0004096",
+        "object_name": "asthma",
+        "pmids": [],
+        "predicate": "treats",
+        "score": null,
+        "source_object_id": "MONDO_0004979",
+        "source_subject_id": "CHEMBL1201589",
+        "subject_id": "302379",
+        "subject_name": "OMALIZUMAB"
+      },
+      {
+        "datasource": "chembl_indications",
+        "evidence": [],
+        "evidence_source": "open_targets",
+        "object_id": "C0004096",
+        "object_name": "asthma",
+        "pmids": [],
+        "predicate": "treats",
+        "score": null,
+        "source_object_id": "MONDO_0004979",
+        "source_subject_id": "CHEMBL2108675",
+        "subject_id": "1876376",
+        "subject_name": "DUPILUMAB"
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "J44.9"
+      ],
+      [
+        "UMLS",
+        "C0024117"
+      ],
+      [
+        "ICD10CM",
+        "J45.909"
+      ],
+      [
+        "UMLS",
+        "C0004096"
+      ]
+    ],
+    "feature_name": "elx_chronic_pulmonary",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:28.021803+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C2584774",
+        "object_name": "Congenital hypofibrinogenemia",
+        "pmids": [],
+        "predicate": "rb",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0005779",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "D68.9"
+      ],
+      [
+        "UMLS",
+        "C0005779"
+      ]
+    ],
+    "feature_name": "elx_coagulopathy",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:29.561608+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "D50.9"
+      ],
+      [
+        "UMLS",
+        "C0162316"
+      ]
+    ],
+    "feature_name": "elx_deficiency_anemia",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:31.979401+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "F33.9"
+      ],
+      [
+        "UMLS",
+        "C0011581"
+      ]
+    ],
+    "feature_name": "elx_depression",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:33.739488+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "E11.8"
+      ],
+      [
+        "UMLS",
+        "C0011849"
+      ]
+    ],
+    "feature_name": "elx_diabetes_complicated",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:28.024747+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C0011860",
+        "object_name": "Diabetes Mellitus, Non-Insulin-Dependent",
+        "pmids": [],
+        "predicate": "rn",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0494290",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C192882",
+        "object_name": "mCode Non-Neoplastic Disease/Finding",
+        "pmids": [],
+        "predicate": "isa",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0494290",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "E11.9"
+      ],
+      [
+        "UMLS",
+        "C0011849"
+      ]
+    ],
+    "feature_name": "elx_diabetes_uncomplicated",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:28.023873+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C192882",
+        "object_name": "mCode Non-Neoplastic Disease/Finding",
+        "pmids": [],
+        "predicate": "isa",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C2874790",
+        "subject_name": ""
+      },
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C1510472",
+        "object_name": "Drug Dependence",
+        "pmids": [],
+        "predicate": "rb",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0038586",
+        "subject_name": ""
+      },
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C0017782",
+        "object_name": "Glue Sniffing (inhalant abuse)",
+        "pmids": [],
+        "predicate": "rb",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0038586",
+        "subject_name": ""
+      },
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C0678254",
+        "object_name": "AOD misuse",
+        "pmids": [],
+        "predicate": "rn",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0038586",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "F19.10"
+      ],
+      [
+        "UMLS",
+        "C0038586"
+      ]
+    ],
+    "feature_name": "elx_drug_abuse",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:32.825751+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C0494355",
+        "object_name": "Other disorders of fluid, electrolyte and acid-base balance",
+        "pmids": [],
+        "predicate": "rn",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0869048",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "E87.8"
+      ]
+    ],
+    "feature_name": "elx_fluid_electrolyte",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:30.994167+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "I11.9"
+      ],
+      [
+        "UMLS",
+        "C0020538"
+      ]
+    ],
+    "feature_name": "elx_hypertension_complicated",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:27.056240+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "I10"
+      ],
+      [
+        "UMLS",
+        "C0020538"
+      ]
+    ],
+    "feature_name": "elx_hypertension_uncomplicated",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:26.796166+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "E03.9"
+      ],
+      [
+        "UMLS",
+        "C0020676"
+      ]
+    ],
+    "feature_name": "elx_hypothyroidism",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:28.595388+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "K76.9"
+      ],
+      [
+        "UMLS",
+        "C0023895"
+      ]
+    ],
+    "feature_name": "elx_liver_disease",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:28.596113+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "ICD10CM",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C85.9",
+        "object_name": "Non-Hodgkin lymphoma, unspecified",
+        "pmids": [],
+        "predicate": "chd",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C2854054",
+        "subject_name": ""
+      },
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C2367163",
+        "object_name": "malignant lymphoma of reticuloendothelial system",
+        "pmids": [],
+        "predicate": "rb",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0024299",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "C85.90"
+      ],
+      [
+        "UMLS",
+        "C0024299"
+      ]
+    ],
+    "feature_name": "elx_lymphoma",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:29.207717+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C35933",
+        "object_name": "Distantly Metastatic Malignant Neoplasm",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C2939419",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C27292",
+        "object_name": "Metastatic Ewing Sarcoma/Peripheral Primitive Neuroectodermal Tumor",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C2939419",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C19987",
+        "object_name": "Cancer Progression",
+        "pmids": [],
+        "predicate": "isa",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0027627",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C37192",
+        "object_name": "Intravascular Metastasis",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0027627",
+        "subject_name": ""
+      },
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C1384494",
+        "object_name": "Metastatic Carcinoma",
+        "pmids": [],
+        "predicate": "rb",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0027627",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "C79.9"
+      ],
+      [
+        "UMLS",
+        "C0027627"
+      ]
+    ],
+    "feature_name": "elx_metastatic_cancer",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:29.208284+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C84449",
+        "object_name": "Childhood Obesity",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0028754",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "E66.9"
+      ],
+      [
+        "UMLS",
+        "C0028754"
+      ]
+    ],
+    "feature_name": "elx_obesity",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:29.930036+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C0018681",
+        "object_name": "Headache",
+        "pmids": [],
+        "predicate": "rb",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0007682",
+        "subject_name": ""
+      },
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C0018991",
+        "object_name": "Hemiplegia",
+        "pmids": [],
+        "predicate": "rb",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0007682",
+        "subject_name": ""
+      },
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C1719932",
+        "object_name": "Central nervous disorder with AIDS (acquired immunodeficiency syndrome)",
+        "pmids": [],
+        "predicate": "rb",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0007682",
+        "subject_name": ""
+      },
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C0020255",
+        "object_name": "Hydrocephalus",
+        "pmids": [],
+        "predicate": "rb",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0007682",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "G96.9"
+      ],
+      [
+        "UMLS",
+        "C0027765"
+      ]
+    ],
+    "feature_name": "elx_other_neurological",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:28.021188+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C1263853",
+        "object_name": "Paralytic stroke",
+        "pmids": [],
+        "predicate": "rb",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0270788",
+        "subject_name": ""
+      },
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C0543850",
+        "object_name": "Neuromuscular paralytic disease or syndrome",
+        "pmids": [],
+        "predicate": "rn",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0270788",
+        "subject_name": ""
+      },
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C0543855",
+        "object_name": "Cerebellar diplegia",
+        "pmids": [],
+        "predicate": "rb",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0270788",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "G83.9"
+      ]
+    ],
+    "feature_name": "elx_paralysis",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:27.322329+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C192882",
+        "object_name": "mCode Non-Neoplastic Disease/Finding",
+        "pmids": [],
+        "predicate": "isa",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C2887651",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C7923",
+        "object_name": "Active Peptic Ulcer",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0030920",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "K27.9"
+      ],
+      [
+        "UMLS",
+        "C0030920"
+      ]
+    ],
+    "feature_name": "elx_peptic_ulcer",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:28.596370+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C192882",
+        "object_name": "mCode Non-Neoplastic Disease/Finding",
+        "pmids": [],
+        "predicate": "isa",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C2874861",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "F29"
+      ],
+      [
+        "UMLS",
+        "C0033975"
+      ]
+    ],
+    "feature_name": "elx_psychoses",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:33.270341+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "I27.20"
+      ],
+      [
+        "UMLS",
+        "C0020542"
+      ]
+    ],
+    "feature_name": "elx_pulmonary_circulation",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:26.208419+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C84496",
+        "object_name": "Peripheral Artery Disease",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0085096",
+        "subject_name": ""
+      },
+      {
+        "datasource": "NCI",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C148074",
+        "object_name": "Peripheral Vascular Insufficiency",
+        "pmids": [],
+        "predicate": "inverse_isa",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0085096",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "I73.9"
+      ],
+      [
+        "UMLS",
+        "C0085096"
+      ]
+    ],
+    "feature_name": "elx_pvd",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:26.208827+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [
+      {
+        "datasource": "MTH",
+        "evidence": [],
+        "evidence_source": "umls_relations",
+        "object_id": "C2316810",
+        "object_name": "Chronic kidney disease stage 5",
+        "pmids": [],
+        "predicate": "rb",
+        "score": null,
+        "source_object_id": null,
+        "source_subject_id": null,
+        "subject_id": "C0022661",
+        "subject_name": ""
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "N18.9"
+      ],
+      [
+        "UMLS",
+        "C0022661"
+      ]
+    ],
+    "feature_name": "elx_renal_failure",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:28.595846+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "M06.9"
+      ],
+      [
+        "UMLS",
+        "C0003873"
+      ]
+    ],
+    "feature_name": "elx_rheumatoid_collagen",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:29.208927+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "C80.1"
+      ],
+      [
+        "UMLS",
+        "C0006826"
+      ]
+    ],
+    "feature_name": "elx_solid_tumor_no_metastasis",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:29.208721+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "UMLS",
+        "C0018824"
+      ]
+    ],
+    "feature_name": "elx_valvular_disease",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:25.653872+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  },
+  {
+    "edges": [],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "R63.4"
+      ],
+      [
+        "UMLS",
+        "C1262477"
+      ]
+    ],
+    "feature_name": "elx_weight_loss",
+    "manifest_fingerprint_sha8": "0b4c5fdb",
+    "queried_at": "2026-09-22T11:53:30.608539+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "queried_no_edges",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  }
+]

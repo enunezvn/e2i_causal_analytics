@@ -1,0 +1,17 @@
+pair                                                                  n  k win_b/win_a ate_same |dE|max  gap_b   gap_a   psSD_b  psSD_a  wall_b wall_a
+patient_journeys/Fabhalta/treatment_arm->treatment_initiated      5000  2 linear/linear True     0.01965 0.00037 0.00029  0.0188  0.0047   30.3   28.0
+patient_journeys/Fabhalta/psp_enrolled->persistent_180d          5000  3 linear/linear True     0.00004 0.00114 0.00114  0.1195  0.1197   33.7   33.9
+patient_journeys/Fabhalta/rep_detailing_high->treatment_initiated      5000  2 linear/linear True     0.00008 0.00069 0.00069  0.0833  0.0801   29.8   25.8
+patient_journeys/Kisqali/disease_stage->persistent_180d          5000  1 linear/linear True     0.00009 0.00075 0.00074  0.0033  0.0100   29.0   26.2
+patient_journeys/Kisqali/copay_support->adherent_180d            5000  2 linear/linear True     0.00003 0.00084 0.00084  0.1245  0.1245   31.2   26.3
+patient_journeys/Kisqali/copay_support->low_gap_180d             5000  2 linear/linear True     0.00003 0.00076 0.00076  0.1245  0.1245   30.5   29.6
+hcp_adoption/Fabhalta/treatment_arm->adopted                  5000  1 linear/linear True     0.00000 0.00037 0.00037  0.1538  0.1538   26.3   36.8
+hcp_adoption/Fabhalta/peer_influence_score->adopted                  5000  0 ols/ols True     0.00000 0.00000 0.00000       -       -    6.0    6.5
+hcp_adoption/Kisqali/peer_influence_score->adopted                  5000  0 ols/ols True     0.00000 0.00000 0.00000       -       -    6.0    6.3
+hcp_adoption/Kisqali/treatment_arm->adopted                  5000  1 linear/linear True     0.00000 0.00029 0.00029  0.0734  0.0734   35.6   27.0
+nba_triggers/Fabhalta/control_group_flag->action_taken             5000  0 ols/ols False    0.00050 0.00000 0.00000       -       -    5.4    5.4
+nba_triggers/Fabhalta/acceptance_status->conversion_flag          5000  2 linear/linear False    0.00137 0.00097 0.00115  0.0795  0.1118   30.3   32.0
+nba_triggers/Kisqali/control_group_flag->action_taken             5000  0 ols/ols False    0.00003 0.00000 0.00000       -       -    5.2    5.4
+nba_triggers/Kisqali/acceptance_status->conversion_flag          5000  2 linear/linear False    0.00306 0.00107 0.00137  0.0978  0.0996   34.0   33.2
+pairs=14 winner_flips=0 full_ranking_changes=2 pairs_with_any_ATE_change=4
+estimators with a failed fit (before/after): [('causal_forest', 'a'), ('causal_forest', 'b'), ('drlearner', 'a'), ('drlearner', 'b'), ('linear_dml', 'a'), ('linear_dml', 'b')]

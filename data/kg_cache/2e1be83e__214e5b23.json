@@ -1,0 +1,65 @@
+[
+  {
+    "edges": [
+      {
+        "datasource": "chembl_indications",
+        "evidence": [],
+        "evidence_source": "open_targets",
+        "object_id": "C0042109",
+        "object_name": "urticaria",
+        "pmids": [],
+        "predicate": "treats",
+        "score": null,
+        "source_object_id": "MONDO_0005492",
+        "source_subject_id": "CHEMBL1201589",
+        "subject_id": "302379",
+        "subject_name": "OMALIZUMAB"
+      },
+      {
+        "datasource": "chembl_indications",
+        "evidence": [],
+        "evidence_source": "open_targets",
+        "object_id": "C0042109",
+        "object_name": "urticaria",
+        "pmids": [],
+        "predicate": "associated_with",
+        "score": null,
+        "source_object_id": "MONDO_0005492",
+        "source_subject_id": "CHEMBL2108675",
+        "subject_id": "1876376",
+        "subject_name": "DUPILUMAB"
+      }
+    ],
+    "errors": [],
+    "feature_entity_codes": [
+      [
+        "ICD10CM",
+        "L50.9"
+      ],
+      [
+        "UMLS",
+        "C0042109"
+      ]
+    ],
+    "feature_name": "primary_diagnosis_code",
+    "manifest_fingerprint_sha8": "2e1be83e",
+    "queried_at": "2026-09-22T11:53:36.737555+00:00",
+    "sources_attempted": [
+      "umls_uts",
+      "rxnav",
+      "open_targets"
+    ],
+    "status": "ok",
+    "target_codes_fingerprint_sha8": "214e5b23",
+    "target_entity_codes": [
+      [
+        "RXNORM",
+        "302379"
+      ],
+      [
+        "RXNORM",
+        "1876376"
+      ]
+    ]
+  }
+]

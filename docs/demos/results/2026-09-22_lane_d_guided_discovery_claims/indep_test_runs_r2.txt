@@ -1,0 +1,90 @@
+=== ARM_START real/chisq 13:11:54Z hard timeout 300 s ===
+src resolves to: /home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-d-guided-discovery-claims/src/__init__.py
+REAL frame n=15209 k=77 non-binary=['age_at_index', 'enrollment_duration_days', 'charlson_score', 'elixhauser_van_walraven_score', 'comorbidity_diag_distinct_count', 'comorbidity_diag_claim_count']
+Removing cycle edge high_comorbidity_burden_flag -> charlson_risk_band=1 to 2 (confidence: 1.00)
+Removing cycle edge elx_cardiac_arrhythmia -> elx_fluid_electrolyte (confidence: 1.00)
+rc=124 (124 = did not complete in 300 s) real/chisq 13:32:33Z
+=== ARM_START synthetic/fisherz 13:32:33Z hard timeout 300 s ===
+src resolves to: /home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-d-guided-discovery-claims/src/__init__.py
+Traceback (most recent call last):
+  File "<stdin>", line 141, in <module>
+  File "/usr/lib/python3.12/asyncio/runners.py", line 194, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/base_events.py", line 687, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "<stdin>", line 116, in main
+  File "/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/pandas/io/parquet.py", line 669, in read_parquet
+    return impl.read(
+           ^^^^^^^^^^
+  File "/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/pandas/io/parquet.py", line 258, in read
+    path_or_handle, handles, filesystem = _get_path_or_handle(
+                                          ^^^^^^^^^^^^^^^^^^^^
+  File "/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/pandas/io/parquet.py", line 141, in _get_path_or_handle
+    handles = get_handle(
+              ^^^^^^^^^^^
+  File "/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/pandas/io/common.py", line 882, in get_handle
+    handle = open(handle, ioargs.mode)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/enunez/Projects/e2i_causal_analytics/data/data/rwd/synthetic_CSU/patient_journeys.parquet'
+rc=1 (124 = did not complete in 300 s) synthetic/fisherz 13:47:34Z
+=== ARM_START synthetic/gsq 13:47:34Z hard timeout 300 s ===
+src resolves to: /home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-d-guided-discovery-claims/src/__init__.py
+Traceback (most recent call last):
+  File "<stdin>", line 141, in <module>
+  File "/usr/lib/python3.12/asyncio/runners.py", line 194, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/base_events.py", line 687, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "<stdin>", line 116, in main
+  File "/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/pandas/io/parquet.py", line 669, in read_parquet
+    return impl.read(
+           ^^^^^^^^^^
+  File "/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/pandas/io/parquet.py", line 258, in read
+    path_or_handle, handles, filesystem = _get_path_or_handle(
+                                          ^^^^^^^^^^^^^^^^^^^^
+  File "/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/pandas/io/parquet.py", line 141, in _get_path_or_handle
+    handles = get_handle(
+              ^^^^^^^^^^^
+  File "/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/pandas/io/common.py", line 882, in get_handle
+    handle = open(handle, ioargs.mode)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/enunez/Projects/e2i_causal_analytics/data/data/rwd/synthetic_CSU/patient_journeys.parquet'
+rc=1 (124 = did not complete in 300 s) synthetic/gsq 13:51:44Z
+=== ARM_START synthetic/chisq 13:51:44Z hard timeout 300 s ===
+src resolves to: /home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-d-guided-discovery-claims/src/__init__.py
+Traceback (most recent call last):
+  File "<stdin>", line 141, in <module>
+  File "/usr/lib/python3.12/asyncio/runners.py", line 194, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/base_events.py", line 687, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "<stdin>", line 116, in main
+  File "/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/pandas/io/parquet.py", line 669, in read_parquet
+    return impl.read(
+           ^^^^^^^^^^
+  File "/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/pandas/io/parquet.py", line 258, in read
+    path_or_handle, handles, filesystem = _get_path_or_handle(
+                                          ^^^^^^^^^^^^^^^^^^^^
+  File "/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/pandas/io/parquet.py", line 141, in _get_path_or_handle
+    handles = get_handle(
+              ^^^^^^^^^^^
+  File "/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/pandas/io/common.py", line 882, in get_handle
+    handle = open(handle, ioargs.mode)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/enunez/Projects/e2i_causal_analytics/data/data/rwd/synthetic_CSU/patient_journeys.parquet'
+rc=1 (124 = did not complete in 300 s) synthetic/chisq 13:52:52Z

@@ -241,7 +241,9 @@ class TestRunnerBootstrapStability:
         assert by_edge[("a", "b")].confidence == 1.0
         assert by_edge[("c", "d")].bootstrap_stability == 0.5
         assert by_edge[("c", "d")].confidence == 0.5
-        assert result.metadata["bootstrap"] == {"n_resamples": 10, "n_succeeded": 10}
+        summary = result.metadata["bootstrap"]
+        assert (summary["n_resamples"], summary["n_succeeded"]) == (10, 10)
+        assert summary["corroborated"] is True
         assert algo.calls == 11  # primary + B resamples
 
     @pytest.mark.asyncio
@@ -262,7 +264,12 @@ class TestRunnerBootstrapStability:
         result = await runner.discover_dag(_frame(), config)
         assert all(e.bootstrap_stability is None for e in result.edges)
         assert all(e.confidence == 1.0 for e in result.edges)
-        assert result.metadata["bootstrap"] is None
+        # Lane D: the achieved count is REPORTED even when the run is
+        # uncorroborated (the spec's "reported as uncorroborated, never as
+        # corroborated"), so the summary is a dict, not None.
+        summary = result.metadata["bootstrap"]
+        assert summary["n_succeeded"] == 0
+        assert summary["corroborated"] is False
 
     @pytest.mark.asyncio
     async def test_stability_denominator_is_succeeded_not_total_resamples(self) -> None:
@@ -280,7 +287,13 @@ class TestRunnerBootstrapStability:
         by_edge = {(e.source, e.target): e for e in result.edges}
         assert by_edge[("a", "b")].bootstrap_stability == pytest.approx(4 / 7)
         assert by_edge[("a", "b")].confidence == pytest.approx(4 / 7)
-        assert result.metadata["bootstrap"] == {"n_resamples": 10, "n_succeeded": 7}
+        summary = result.metadata["bootstrap"]
+        assert (summary["n_resamples"], summary["n_attempted"], summary["n_succeeded"]) == (
+            10,
+            10,
+            7,
+        )
+        assert summary["corroborated"] is True
 
     @pytest.mark.asyncio
     async def test_bootstrap_skipped_when_multiple_algorithms_converge(self) -> None:

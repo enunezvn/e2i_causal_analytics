@@ -714,6 +714,37 @@ async def _load_agent_estimation_frame(
     result = await query.limit(limit).execute()
     rows = result.data or []
 
+    return _resolve_agent_estimation_frame(
+        rows,
+        dataset=dataset,
+        treatment_var=treatment_var,
+        outcome_var=outcome_var,
+        select_cols=select_cols,
+        passthrough_only=passthrough_only,
+        brand=brand,
+    )
+
+
+def _resolve_agent_estimation_frame(
+    rows: List[Dict[str, Any]],
+    *,
+    dataset: str,
+    treatment_var: str,
+    outcome_var: str,
+    select_cols: List[str],
+    passthrough_only: List[str],
+    brand: Optional[str],
+) -> tuple["pd.DataFrame", List[str]]:  # type: ignore[name-defined] # noqa: F821
+    """Everything the agent loader does AFTER the rows are fetched: per-row
+    coercion, the constant-treatment refusal, the all-NULL covariate drop, the
+    one-hot expansion and the machine-precision collinearity prune -- returning
+    ``(frame, [treatment, outcome, *resolved covariates])``.
+
+    Split out of :func:`_load_agent_estimation_frame` so an offline run on the
+    same rows (the Lane A pre-flight reads the exported parquet) goes through
+    the IDENTICAL resolution; a re-implementation of this path in the
+    pre-flight script silently skipped the collinearity prune on 2026-09-22.
+    """
     numeric_cols = _CAUSAL_NUMERIC_COLUMNS.get(dataset, set())
     categorical_cols = _CAUSAL_CATEGORICAL_COLUMNS.get(dataset, set())
     records: List[Dict[str, Any]] = []
@@ -806,4 +837,133 @@ async def _load_agent_estimation_frame(
     expanded_cols = [
         c for c in select_cols if c not in categorical_cols and c not in passthrough_only
     ] + dummy_names
+
+    # Exactly collinear covariates carry no information and make econml's
+    # statsmodels final stage warn "Co-variance matrix is underdetermined.
+    # Inference will be invalid!" (the wrappers now REFUSE such a fit). Prune
+    # them ONCE here, on the full loaded frame, in the resolved column order
+    # (numerics first, then dummies; an earlier column wins), so the estimation
+    # node and the refutation rebuild -- which
+    # takes its ``common_causes`` from this same resolved list -- see the SAME
+    # design. Measured 2026-09-22 on optum_biologic_persistence (n=15,209):
+    # 16 of 77 resolved columns were exact linear combinations of earlier ones
+    # (Elixhauser flags duplicating Charlson flags, a risk band implied by its
+    # score, payer dummies implied by a coarser payer axis); dropping them left
+    # the ATE at 0.03353 (was 0.03353) and the SE at 0.00858 (was 0.00855),
+    # warning gone. A full-rank frame (every synthetic dataset) is untouched.
+    covariate_only = [c for c in expanded_cols if c not in (treatment_var, outcome_var)]
+    kept, dropped_collinear = _prune_numerically_collinear(frame, covariate_only)
+    if dropped_collinear:
+        logger.warning(
+            "causal loader: dropping numerically collinear covariate(s) %s for dataset "
+            "'%s' brand=%s (collinear at machine precision with the intercept and "
+            "earlier resolved columns; design rank %d of %d)",
+            dropped_collinear,
+            dataset,
+            brand,
+            len(kept),
+            len(covariate_only),
+        )
+        keep_set = set(kept)
+        expanded_cols = [
+            c for c in expanded_cols if c in (treatment_var, outcome_var) or c in keep_set
+        ]
     return frame, expanded_cols
+
+
+def _collinearity_rel_tol(n_rows: int, n_cols: int) -> float:
+    """Machine-precision tolerance for an EXACT redundancy: ``max(n, k) * eps``
+    (the ``rcond=None`` convention of ``numpy.linalg.lstsq``). It bounds the
+    Gram-Schmidt residual an exact linear combination can leave behind in
+    float64 (measured 2.6e-15 on the real frame); an independent component at
+    5e-9 relative sits far above it and is KEPT. This is NOT a replica of
+    econml's own rank check, which runs ``lstsq`` on the unscaled, residualised
+    final-stage matrix with a global tolerance: a design that check still calls
+    underdetermined (a pathological offset or scale the estimator sees raw) is
+    refused by the wrappers' fail-closed inference guard, never served."""
+    import numpy as np
+
+    return float(max(n_rows, n_cols) * np.finfo(float).eps)
+
+
+def _prune_numerically_collinear(
+    frame: "pd.DataFrame",  # type: ignore[name-defined] # noqa: F821
+    columns: List[str],
+) -> tuple[List[str], List[str]]:
+    """Return ``(kept, dropped)``: ``columns`` minus those that are NUMERICALLY
+    collinear -- at machine precision -- with the intercept and the EARLIER
+    kept columns (order preserved).
+
+    Order = the resolved covariate order the estimators fit on: the numeric
+    registry columns first, then the one-hot dummies in their categoricals'
+    registry order. So a dummy that exactly equals an earlier numeric column is
+    the one dropped, whatever the registry positions of the two names. The
+    design is NOT reordered -- every dataset's forest fits subsample features by
+    column index, so a new order would be a new fit.
+
+    Criterion (translation- and scale-invariant on the resolved frame, codex
+    r3/r4/r5): a column is CONSTANT iff every value is the same represented
+    number (exact equality, no tolerance). Otherwise it is scaled by a power
+    of two (exact; ``frexp`` of its largest magnitude, so a value near
+    ``float.max`` cannot overflow) and its first scaled value is subtracted
+    (exact for close values, so a 1e14 offset cannot leak rounding into the
+    variation) before centering; a column whose scaled differences are still
+    non-finite is kept (it cannot be tested). Incremental Gram-Schmidt against
+    the intercept and the kept basis; the column is dropped when its residual
+    is below ``max(n, k) * eps`` of its centered norm
+    (``_collinearity_rel_tol``). Exact redundancy measures ~1e-15 on the real
+    frame; the smallest kept ratio there is 0.047. What is guaranteed: a
+    column that is numerically collinear with the intercept and earlier
+    resolved columns AT MACHINE PRECISION is dropped -- an exact linear
+    combination, and also a column whose independent variation is at or
+    below ``max(n, k) * eps`` of its centered norm (one ULP in one element
+    of an otherwise identical column is dropped; codex r6). What is NOT
+    guaranteed: that econml's global-tolerance rank check on its own raw
+    final-stage matrix agrees on every pathological input -- where it does
+    not, the wrappers refuse the served fit.
+
+    Skipped (nothing dropped) when the frame cannot rank the columns
+    (``n < k + 1``: fewer rows than intercept-plus-columns) or when a column
+    is non-finite (the estimators' own guards own NaN).
+    """
+    if not columns or len(frame) < len(columns) + 1:
+        return list(columns), []
+    import math
+
+    import numpy as np
+
+    X = frame[columns].to_numpy(dtype=float)
+    if not np.isfinite(X).all():
+        return list(columns), []
+    n = X.shape[0]
+    rel_tol = _collinearity_rel_tol(n, len(columns) + 1)
+    intercept = np.full(n, 1.0 / np.sqrt(n))
+    basis = [intercept]
+    kept: List[str] = []
+    dropped: List[str] = []
+    for j, name in enumerate(columns):
+        x = X[:, j]
+        if x.min() == x.max():
+            dropped.append(name)  # constant: collinear with the intercept
+            continue
+        # exact power-of-two rescale FIRST (frexp: |x|max -> [0.5, 1)), so a
+        # value near float.max cannot overflow the reference subtraction
+        x = np.ldexp(x, -math.frexp(float(np.abs(x).max()))[1])
+        x = x - x[0]  # remove the offset (exact for close values, Sterbenz)
+        if not np.isfinite(x).all():
+            kept.append(name)  # cannot be tested; the estimators' guards own it
+            basis.append(np.zeros(n))
+            continue
+        centered = x - intercept * float(intercept @ x)
+        c_norm = float(np.linalg.norm(centered))
+        resid = centered.copy()
+        for _ in range(2):  # re-orthogonalise once for numerical stability
+            for q in basis[1:]:
+                resid = resid - q * float(q @ resid)
+        r_norm = float(np.linalg.norm(resid))
+        if r_norm <= rel_tol * c_norm:
+            dropped.append(name)
+            continue
+        basis.append(resid / r_norm)
+        kept.append(name)
+    return kept, dropped

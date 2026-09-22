@@ -1,0 +1,31 @@
+# run_sweep.py — 2026-09-22T02:19:01Z — raw drop data/rwd/Optum_Parquet/Optum_enriched.parquet (read-only)
+replicated cohort n= 15209 {'XOLAIR': 11009, 'DUPIXENT': 4200}
+
+-- persistence = cov_to_end>=180 & max_internal_gap<=G --
+G=     30: {'DUPIXENT': 0.268, 'XOLAIR': 0.399, 'gap_pp': 13.1}
+G=     45: {'DUPIXENT': 0.323, 'XOLAIR': 0.485, 'gap_pp': 16.2}
+G=     60: {'DUPIXENT': 0.347, 'XOLAIR': 0.523, 'gap_pp': 17.6}
+G=     90: {'DUPIXENT': 0.365, 'XOLAIR': 0.558, 'gap_pp': 19.3}
+G=    120: {'DUPIXENT': 0.371, 'XOLAIR': 0.568, 'gap_pp': 19.7}
+G=1000000: {'DUPIXENT': 0.374, 'XOLAIR': 0.574, 'gap_pp': 20.0}
+
+-- decomposition at G=60 --
+covered through day 180 (cov_to_end>=180): {'DUPIXENT': 0.374, 'XOLAIR': 0.574, 'gap_pp': 20.0}
+no internal gap >60: {'DUPIXENT': 0.937, 'XOLAIR': 0.91, 'gap_pp': -2.7}
+
+-- persistence with GRACE on coverage end: cov_to_end>=180-grace & gap<=60 --
+grace= 0: {'DUPIXENT': 0.347, 'XOLAIR': 0.523, 'gap_pp': 17.6}
+grace=14: {'DUPIXENT': 0.644, 'XOLAIR': 0.679, 'gap_pp': 3.5}
+grace=28: {'DUPIXENT': 0.744, 'XOLAIR': 0.734, 'gap_pp': -1.0}
+grace=45: {'DUPIXENT': 0.779, 'XOLAIR': 0.768, 'gap_pp': -1.1}
+grace=60: {'DUPIXENT': 0.8, 'XOLAIR': 0.787, 'gap_pp': -1.3}
+
+-- discontinuation = cov_to_end<180 & (gap>=D | term>=D) --
+D= 45: {'DUPIXENT': 0.232, 'XOLAIR': 0.209, 'gap_pp': -2.3}
+D= 60: {'DUPIXENT': 0.176, 'XOLAIR': 0.164, 'gap_pp': -1.2}
+D= 90: {'DUPIXENT': 0.122, 'XOLAIR': 0.106, 'gap_pp': -1.6}
+D=120: {'DUPIXENT': 0.087, 'XOLAIR': 0.068, 'gap_pp': -1.9}
+
+-- cov_to_end distribution by brand (days) --
+{'DUPIXENT': {0.1: 81.0, 0.25: 160.0, 0.5: 174.0, 0.75: 184.0, 0.9: 189.0}, 'XOLAIR': {0.1: 97.0, 0.25: 165.0, 0.5: 182.0, 0.75: 195.0, 0.9: 202.0}}
+share with cov_to_end in [150,180): {'DUPIXENT': 0.43, 'XOLAIR': 0.241, 'gap_pp': -18.9}

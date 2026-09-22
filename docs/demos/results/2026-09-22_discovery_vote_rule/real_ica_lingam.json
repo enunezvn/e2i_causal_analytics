@@ -1,0 +1,29 @@
+{
+ "frame": "real",
+ "algorithm": "ica_lingam",
+ "n": 15209,
+ "columns": [
+  "treatment_dupixent",
+  "persistent_at_180d_g28",
+  "age_at_index",
+  "lis_dual_flag",
+  "enrollment_duration_days",
+  "charlson_score",
+  "elixhauser_van_walraven_score",
+  "comorbidity_diag_distinct_count",
+  "comorbidity_diag_claim_count",
+  "high_comorbidity_burden_flag",
+  "cci_dementia",
+  "cci_chronic_pulmonary"
+ ],
+ "wall_seconds": 0.02,
+ "runtime_seconds": 0.0,
+ "converged": false,
+ "error": "ica_lingam refused: LiNGAM assumes non-Gaussian continuous variables, but 6 column(s) are binary (<= 2 distinct non-null values): treatment_dupixent, persistent_at_180d_g28, lis_dual_flag, high_comorbidity_burden_flag, cci_dementia, cci_chronic_pulmonary. Use a constraint-based algorithm (PC/FCI) for frames with binary treatment or outcome flags.",
+ "edge_list": [],
+ "edge_types": null,
+ "n_bidirected": null,
+ "n_undirected": null,
+ "indep_test": null,
+ "summary": null
+}

@@ -1,0 +1,25 @@
+{
+  "dataset": "optum_biologic_persistence",
+  "outcome": "persistent_at_180d_g28",
+  "n_rows": 15209,
+  "n_covariates": 77,
+  "econml_lineardml_fit_s": 13.1,
+  "econml_lineardml_ate": 0.0335256340648345,
+  "wrapper_fit_s": 605.3,
+  "wrapper": {
+    "success": true,
+    "ate": 0.0335256340648345,
+    "ate_ci": [
+      0.01676288756051691,
+      0.050288380569152094
+    ],
+    "ate_std": 0.008552578841519536,
+    "estimation_time_ms": 605272.419994697
+  },
+  "reconstruction_s": 478.2,
+  "reconstruction": {
+    "dowhy_method": "backdoor.econml.dml.LinearDML",
+    "ate": 0.033677220325547375
+  },
+  "max_rss_mb": 730.2
+}

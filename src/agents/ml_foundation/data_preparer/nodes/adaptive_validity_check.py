@@ -105,6 +105,8 @@ from src.data.adversarial_leakage import (
     min_permutations_for_fdr,
 )
 from src.data.feature_contract import FeatureContract
+from src.data.layer4_inputs import build_layer_4_inputs as _build_layer_4_inputs
+from src.data.layer4_inputs import citation_verdict_to_dict as _citation_verdict_to_dict
 from src.data.manifests import (
     CSU_FEATURES,
     CSU_FORBIDDEN_AS_FEATURES,
@@ -1054,46 +1056,6 @@ def _layer_1_verdict(feature: str, contract: FeatureContract) -> dict[str, Any]:
     )
 
 
-def _build_layer_4_inputs(
-    feature: str,
-    contract: Optional[FeatureContract],
-    target: str,
-    manifest_source: Optional[str],
-) -> tuple[str, str]:
-    """Build the (derivation_pseudocode, dataset_context) pair for Layer 4.
-
-    The compiled :class:`src.data.causal_role_classifier.CausalRoleClassifier`
-    expects three input fields: ``feature_name`` (provided by caller),
-    ``derivation_pseudocode``, and ``dataset_context``. This helper assembles
-    the latter two from the feature's manifest contract (when available) and
-    the scope_spec target metadata.
-
-    When ``contract`` is None (feature has no manifest entry — e.g. a numeric
-    column the runner pre-cleaned), the derivation pseudocode falls back to a
-    "no manifest contract on file" sentinel string. The LLM is still able to
-    classify based on the feature name alone, but with reduced confidence;
-    the audit trail records the absence so an operator can extend the
-    manifest later.
-    """
-    if contract is not None:
-        derivation = (
-            f"source={contract.source}; "
-            f"derivation_inputs={list(contract.derivation_inputs)}; "
-            f"aggregation={contract.aggregation}; "
-            f"window_days={contract.window_days}; "
-            f"knowable_at={contract.knowable_at}"
-        )
-    else:
-        derivation = (
-            f"No manifest contract on file for {feature!r} "
-            "(LLM is classifying from feature name + dataset context only)"
-        )
-
-    cohort = manifest_source or "unspecified"
-    dataset_context = f"cohort={cohort}; target={target}; prediction_anchor=index_date"
-    return derivation, dataset_context
-
-
 def _adversarial_input(
     score: dict[str, Any],
     *,
@@ -1710,6 +1672,15 @@ def _ensemble_to_legacy_dict(
         # supplied for this feature.
         "llm_role": llm_role,
         "llm_remediation": llm_remediation,
+        # Lane E (sidecar 1.9): role, confidence, mechanism and per-citation
+        # records for the causal feature-role panel; nullable on every path.
+        "final_role": verdict.final_role,
+        "confidence": verdict.confidence,
+        "llm_mechanism": (getattr(llm_in, "mechanism", None) if llm_in is not None else None),
+        "citation_verdicts": [
+            _citation_verdict_to_dict(c, verified=True) for c in verdict.verified_citations
+        ]
+        + [_citation_verdict_to_dict(c, verified=False) for c in verdict.unverified_citations],
         # Layer-4 evaluator audit-only fields (Plan
         # .claude/plans/layer4_evaluator_audit_signal.md). All five
         # keys are None when the evaluator is disabled, the evaluator
@@ -1849,6 +1820,10 @@ def _legacy_adversarial_alone_verdict(
         # are ``None``.
         "llm_role": None,
         "llm_remediation": None,
+        "final_role": None,
+        "confidence": None,
+        "llm_mechanism": None,
+        "citation_verdicts": [],
         # Layer-4 evaluator audit-only fields (Plan
         # .claude/plans/layer4_evaluator_audit_signal.md). Adversarial-only
         # bypass has no LLM verdict, so the evaluator never runs.
@@ -1957,6 +1932,10 @@ def _legacy_info_verdict(
         # _ensemble_to_legacy_dict.
         "llm_role": None,
         "llm_remediation": None,
+        "final_role": None,
+        "confidence": None,
+        "llm_mechanism": None,
+        "citation_verdicts": [],
         # Layer-4 evaluator audit-only fields (Plan
         # .claude/plans/layer4_evaluator_audit_signal.md). Info-only
         # bypass has no LLM verdict.
@@ -2054,6 +2033,10 @@ def _legacy_short_circuit_verdict(feature: str, *, evidence: str) -> dict[str, A
         # _ensemble_to_legacy_dict.
         "llm_role": None,
         "llm_remediation": None,
+        "final_role": None,
+        "confidence": None,
+        "llm_mechanism": None,
+        "citation_verdicts": [],
         # Layer-4 evaluator audit-only fields (Plan
         # .claude/plans/layer4_evaluator_audit_signal.md). Short-circuit
         # bypass (too-few-rows / scoring-error) has no LLM verdict.
@@ -4036,7 +4019,11 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
                 from src.data.causal_role_classifier_loader import classify_feature
 
                 derivation, ds_context = _build_layer_4_inputs(
-                    feat, contract, target, manifest_source
+                    feat,
+                    contract,
+                    target,
+                    manifest_source,
+                    treatment=scope_spec.get("causal_treatment"),
                 )
                 llm_verdict = classify_feature(
                     feature_name=feat,

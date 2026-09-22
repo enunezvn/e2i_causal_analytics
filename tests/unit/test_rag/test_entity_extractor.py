@@ -585,3 +585,102 @@ class TestParseConfigRegionAliases:
         assert "competitor" not in vocab.brands
         assert "other" not in vocab.brands
         assert "Kisqali" in vocab.brands
+
+
+# ============================================================================
+# RxNav-backed aliases (lane 2, 2026-09-22)
+# ============================================================================
+
+
+class TestRxNavAliases:
+    def test_rxnav_aliases_are_merged_after_curated_ones(self, monkeypatch):
+        monkeypatch.setattr(
+            "src.rag.entity_extractor.rxnav_brand_aliases",
+            lambda brands: {"Fabhalta": ["iptacopan"], "Remibrutinib": ["rhapsido"]},
+        )
+        extractor = EntityExtractor()
+        assert extractor.extract("iptacopan TRx in the northeast").brands == ["Fabhalta"]
+        assert extractor.extract("Rhapsido NBRx last quarter").brands == ["Remibrutinib"]
+        # curated entries are still first and intact
+        assert extractor.vocabulary.brands["Fabhalta"][:3] == [
+            "fabhalta",
+            "factor b",
+            "factor b inhibitor",
+        ]
+
+    def test_without_rxnav_the_vocabulary_is_identical_to_the_curated_table(self, monkeypatch):
+        monkeypatch.setattr("src.rag.entity_extractor.rxnav_brand_aliases", lambda brands: {})
+        with_none = EntityExtractor().vocabulary.brands
+        monkeypatch.setattr(
+            "src.rag.entity_extractor.rxnav_brand_aliases",
+            lambda brands: (_ for _ in ()).throw(RuntimeError("must not be raised by design")),
+        )
+        # The function contract is "never raises"; if it ever did, from_default must
+        # still build the curated table.
+        with_raise = EntityExtractor().vocabulary.brands
+        assert with_none == with_raise
+        assert "iptacopan" not in with_none["Fabhalta"]
+        # ... and equal to the curated table itself, not merely to another patched run.
+        assert with_none["Fabhalta"] == ["fabhalta", "factor b", "factor b inhibitor"]
+        assert with_none["Kisqali"] == ["kisqali", "ribociclib", "cdk4/6", "cdk4", "cdk6"]
+
+    def test_curated_wins_on_conflict(self, monkeypatch):
+        # RxNav (hypothetically) returning another brand's curated alias must not steal it.
+        monkeypatch.setattr(
+            "src.rag.entity_extractor.rxnav_brand_aliases",
+            lambda brands: {"Fabhalta": ["ribociclib", "iptacopan"]},
+        )
+        extractor = EntityExtractor()
+        assert extractor.extract("ribociclib share trend").brands == ["Kisqali"]
+        assert "ribociclib" not in extractor.vocabulary.brands["Fabhalta"]
+
+    def test_from_default_asks_for_exactly_the_canonical_brands(self, monkeypatch):
+        asked = {}
+        monkeypatch.setattr(
+            "src.rag.entity_extractor.rxnav_brand_aliases",
+            lambda brands: asked.setdefault("brands", sorted(brands)) and {},
+        )
+        vocab = EntityVocabulary.from_default()
+        assert asked["brands"] == sorted(vocab.brands)
+
+    def test_production_seam_builds_a_short_timeout_client_and_closes_it(self, monkeypatch):
+        """The only test through the real from_default -> rxnav_brand_aliases -> RxNavClient chain."""
+        from src.data.kg.rxnav import RxCUIMatch
+        from src.rag import brand_aliases
+
+        known = {"Fabhalta": ("2671075", ["iptacopan", "Fabhalta"])}
+        made = {}
+
+        class _FakeRxNav:
+            def __init__(self, **kwargs):
+                made["kwargs"] = kwargs
+                made["client"] = self
+                self.closed = False
+
+            def rxcui_for_name(self, name):
+                hit = known.get(name)
+                return RxCUIMatch(rxcui=hit[0], approximate=False) if hit else None
+
+            def related_names(self, rxcui, *, ttys=("IN", "BN", "PIN")):
+                return [names for cui, names in known.values() if cui == rxcui][0]
+
+            def close(self):
+                self.closed = True
+
+        monkeypatch.setattr("src.rag.brand_aliases.RxNavClient", _FakeRxNav)
+        monkeypatch.setenv("RXNAV_BRAND_ALIASES", "1")
+        brand_aliases.reset_cache()
+        try:
+            extractor = EntityExtractor()
+            assert extractor.extract("iptacopan TRx in the northeast").brands == ["Fabhalta"]
+        finally:
+            brand_aliases.reset_cache()  # do not leak a primed round into other tests
+        assert made["kwargs"] == {"timeout": 2.0}
+        assert made["client"].closed is True
+
+    def test_the_unit_suite_pins_the_rxnav_lookup_off(self):
+        # Guard on tests/conftest.py: the pin must survive both load_dotenv(override=True)
+        # passes and a shell that exported RXNAV_BRAND_ALIASES=1, or unit runs hit RxNav.
+        import os
+
+        assert os.environ.get("RXNAV_BRAND_ALIASES") == "0"

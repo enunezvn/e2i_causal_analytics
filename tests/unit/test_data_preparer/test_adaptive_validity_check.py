@@ -603,6 +603,13 @@ def test_verdict_schema_is_uniform_across_layer_1_and_layer_3():
         # observable per-feature.
         "llm_role",
         "llm_remediation",
+        # Lane E (sidecar 1.9): ensemble role/confidence, LLM mechanism and the
+        # per-citation records the causal feature-role panel reads. Additive;
+        # emitted on every producer path so the schema stays uniform.
+        "final_role",
+        "confidence",
+        "llm_mechanism",
+        "citation_verdicts",
         # Issue #194 joint-check audit fields (codex pass-1 LOW-1).
         "delta_auc",
         "delta_auc_floor",
@@ -1220,6 +1227,13 @@ def test_phase29_compose_legacy_verdict_all_none_signals_returns_abstain():
         # Phase 2.9 Stage 3 audit fields (issue #193 codex pass-3 LOW):
         "llm_role",
         "llm_remediation",
+        # Lane E (sidecar 1.9): ensemble role/confidence, LLM mechanism and the
+        # per-citation records the causal feature-role panel reads. Additive;
+        # emitted on every producer path so the schema stays uniform.
+        "final_role",
+        "confidence",
+        "llm_mechanism",
+        "citation_verdicts",
         # Issue #194 joint-check audit fields (codex pass-1 LOW-1):
         "delta_auc",
         "delta_auc_floor",
@@ -2330,6 +2344,13 @@ async def test_phase29_stage2_e2e_main_loop_with_populated_cache(tmp_path, monke
         # Phase 2.9 Stage 3 audit fields (issue #193 codex pass-3 LOW):
         "llm_role",
         "llm_remediation",
+        # Lane E (sidecar 1.9): ensemble role/confidence, LLM mechanism and the
+        # per-citation records the causal feature-role panel reads. Additive;
+        # emitted on every producer path so the schema stays uniform.
+        "final_role",
+        "confidence",
+        "llm_mechanism",
+        "citation_verdicts",
         # Issue #194 joint-check audit fields (codex pass-1 LOW-1):
         "delta_auc",
         "delta_auc_floor",

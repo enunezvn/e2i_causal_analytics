@@ -2,6 +2,7 @@
 import { StrictMode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderWithAllProviders, renderWithProviders, screen } from '@/test/utils';
+import { within } from '@testing-library/react';
 import { CausalAnalysisDetail } from './CausalAnalysisDetail';
 import { useClinicalContext, useClinicalNarrativeInsight } from '@/hooks/api';
 import type { AgentCausalAnalysisResponse, ClinicalContext } from '@/types/causal';
@@ -252,6 +253,39 @@ describe('CausalAnalysisDetail', () => {
     // sklearn "0 feature(s)" traceback text.
     expect(screen.getAllByText('Not applicable').length).toBe(2);
     expect(screen.queryByText(/0 feature/)).toBeNull();
+  });
+
+  it('ranks a refused tournament winner by its tournament score and says its served refit was refused (codex r6)', () => {
+    // Auto on a subsampled tournament: linear_dml ranked first (0.10) but its served
+    // full-frame refit was refused, so ols (0.30) was served. The panel must keep
+    // linear_dml FIRST (the ranking is immutable metadata), show 0.1000, and say
+    // "served refit refused" -- never "failed" with a dash.
+    const fallback: AgentCausalAnalysisResponse = {
+      ...RESULT,
+      selected_estimator: 'ols',
+      estimator_comparison: {
+        candidates: [
+          { estimator: 'ols', success: true, energy_score: 0.3, tournament_energy_score: 0.3, served_refit: true, ate: 0.2, error: null, is_selected: true },
+          { estimator: 'linear_dml', success: false, energy_score: null, tournament_energy_score: 0.1, served_refit: false, ate: null, error: 'full-frame winner refit failed after subsampled selection (tournament winner=linear_dml): final-stage inference is not identified', is_selected: false },
+        ],
+        selection_reason: 'Tournament winner linear_dml refused its served full-frame refit. Served the next ranked candidate ols after 1 refused.',
+        energy_score_gap: 0.2,
+        n_evaluated: 2,
+        n_succeeded: 1,
+        quality_tier: 'good',
+        requires_review: false,
+      },
+    };
+    renderWithProviders(<CausalAnalysisDetail result={fallback} />);
+    const rows = screen.getAllByRole('row').slice(1); // drop the header row
+    const cells = (row: HTMLElement) => within(row).getAllByRole('cell');
+    expect(cells(rows[0])[0]).toHaveTextContent(/linear dml/);
+    expect(cells(rows[0])[1]).toHaveTextContent('0.1000');
+    // the status cell LEADS with the refusal; the backend error text may itself
+    // contain the word "failed" ("winner refit failed after subsampled selection")
+    expect(cells(rows[0])[3]).toHaveTextContent(/^served refit refused/);
+    expect(cells(rows[1])[0]).toHaveTextContent(/ols/);
+    expect(cells(rows[1])[0]).toHaveTextContent('Selected');
   });
 
   it('renders interpretation: key insights + recommendations', () => {

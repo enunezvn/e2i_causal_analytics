@@ -30,9 +30,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import warnings
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from enum import Enum
 from typing import Any, Optional
 
 import numpy as np
@@ -42,18 +41,26 @@ from numpy.typing import NDArray
 from src.causal.stats import z_score_for_confidence
 from src.causal_engine.estimator_registry import (
     CONFOUNDING_BLIND_ESTIMATORS,
-    DEFAULT_ESTIMATOR_SPECS,
     EMPTY_BACKDOOR_CAPABLE,
     ESTIMATOR_SPECS,
     ESTIMATOR_SPEED_RANK,
     EstimatorType,
 )
+from src.causal_engine.nuisance_config import propensity_model
 
 from .design_matrix import numeric_design_frame
 from .score_calculator import (
     EnergyScoreCalculator,
-    EnergyScoreConfig,
-    EnergyScoreResult,
+)
+from .selection_types import (  # SELECTION_MAX_ROWS_DEFAULT is re-exported for its consumers
+    SELECTION_MAX_ROWS_DEFAULT as SELECTION_MAX_ROWS_DEFAULT,
+)
+from .selection_types import (
+    EstimatorConfig,
+    EstimatorResult,
+    EstimatorSelectorConfig,
+    SelectionResult,
+    SelectionStrategy,
 )
 
 logger = logging.getLogger(__name__)
@@ -107,25 +114,6 @@ _EMPTY_BACKDOOR_SKIP_REASON = (
     "correct estimator."
 )
 
-
-# #1392: row cap for the energy-score TOURNAMENT. Energy-score selection is a
-# RANKING, not the final estimate — yet the 4-way tournament fitted every
-# estimator on the full frame, which on the live 37,371-row conversion
-# substrate cost 116s warm / 144s cold and consumed the entire chat-turn
-# compute budget, so the mandatory refutation gate failed closed and every
-# chat-path causal turn failed honestly. Above this cap the tournament runs on
-# a DETERMINISTIC stratified subsample (treatment × outcome-bin strata, seed
-# derived from the frame content); the WINNER is then refit on the FULL frame
-# and only that full-frame fit is reported — the refutation node reconstructs
-# the estimator from the full estimation_data passthrough and enforces a
-# reconstructed-vs-reported ATE tolerance, so the reported ATE/CI must come
-# from a full-frame fit. 5,000 aligns with
-# ``EnergyScoreConfig.max_samples_for_exact``: beyond that the energy-distance
-# term itself falls back to internal random subsampling, so scoring more rows
-# adds sampling noise, not ranking signal (it is also the bottom of the
-# owner-approved 5-10k range — the largest latency win). Frames at or below
-# the cap keep today's full-frame selection unchanged.
-SELECTION_MAX_ROWS_DEFAULT = 5_000
 
 # Outcome stratification (#1392): a low-cardinality outcome (e.g. the live
 # substrate's rare-binary ``converted``) is stratified on its distinct values
@@ -238,6 +226,48 @@ def _stratified_subsample_indices(
     return np.sort(np.concatenate(chosen)).astype(np.intp)
 
 
+def _refuse_invalid_final_stage_inference(
+    estimator_label: str, fit_warnings: Any, *, served_fit: bool = True
+) -> bool:
+    """Refuse a SERVED fit whose statsmodels final stage declared its inference invalid.
+
+    Returns True when the inference is invalid but the fit is NOT served (a
+    subsampled tournament fit, #1392: it only ranks estimators and its CI is never
+    reported) -- the caller keeps the point estimate and carries NO interval.
+    Raises when the fit is served (the full-frame refit, a non-subsampled
+    selection, a direct caller: ``served_fit`` defaults to True).
+
+    On a rank-deficient design econml warns "Co-variance matrix is underdetermined.
+    Inference will be invalid!" (and "Using biased variance calculation!" when
+    n <= p) yet still returns a CI. Serving that CI is a plausible-but-fake number
+    (codex r2 HIGH, measured 2026-09-22 on the real Optum frame: rank 61 of 77,
+    p=8.4e-5 served with an empty warnings list). ``DMLLearnerWrapper`` already
+    refused; LinearDML and DRLearner share the same final stage, so they refuse
+    too -- the tournament skips the estimator, a forced run fails closed on the
+    missing CI. The agent loader prunes numerically collinear columns so a real
+    frame does not trip this (``_prune_numerically_collinear``).
+    """
+    invalid = [
+        str(w.message)
+        for w in fit_warnings
+        if "inference will be invalid" in str(w.message).lower()
+        or "biased variance calculation" in str(w.message).lower()
+    ]
+    if not invalid:
+        return False
+    if served_fit:
+        raise ValueError(
+            f"{estimator_label} final-stage inference is not identified: " + "; ".join(invalid)
+        )
+    logger.info(
+        "%s: final-stage inference not identified on an unserved (tournament) fit; "
+        "keeping the point estimate for ranking, no interval: %s",
+        estimator_label,
+        "; ".join(invalid),
+    )
+    return True
+
+
 def _honest_ate_ci(
     model: Any, X: Optional[NDArray[np.float64]]
 ) -> Optional[tuple[float, float, float]]:
@@ -266,202 +296,6 @@ def _honest_ate_ci(
     except Exception as e:  # noqa: BLE001 — absence of inference is a valid state
         logger.warning(f"ATE inference unavailable ({type(e).__name__}: {e}); CI omitted.")
         return None
-
-
-class SelectionStrategy(str, Enum):
-    """Strategy for selecting among estimators."""
-
-    FIRST_SUCCESS = "first_success"  # Legacy: use first that doesn't fail
-    BEST_ENERGY_SCORE = "best_energy"  # New: use lowest energy score
-    ENSEMBLE = "ensemble"  # Future: combine multiple estimators
-
-
-@dataclass
-class EstimatorResult:
-    """Result from a single estimator run."""
-
-    estimator_type: EstimatorType
-    success: bool
-
-    # Effect estimates
-    ate: Optional[float] = None
-    cate: Optional[NDArray[np.float64]] = None
-
-    # Uncertainty
-    ate_std: Optional[float] = None
-    ate_ci_lower: Optional[float] = None
-    ate_ci_upper: Optional[float] = None
-
-    # Energy score (computed post-estimation)
-    energy_score_result: Optional[EnergyScoreResult] = None
-
-    # Propensity scores (for energy score computation)
-    propensity_scores: Optional[NDArray[np.float64]] = None
-
-    # Error info if failed
-    error_message: Optional[str] = None
-    error_type: Optional[str] = None
-
-    # NOT-APPLICABLE (skipped, not failed): the estimator was deliberately not
-    # run because it cannot apply to this design — e.g. a covariate-requiring
-    # DML / forest / meta-learner on a ZERO-covariate (randomized / empty-backdoor)
-    # question, where the correct estimator is the unadjusted contrast (OLS).
-    # ``skipped`` distinguishes this from a genuine ``.fit()`` failure so the UI
-    # renders "not applicable" instead of a cryptic sklearn traceback.
-    skipped: bool = False
-
-    # Timing
-    estimation_time_ms: float = 0.0
-
-    # Raw estimator object (for refutation)
-    raw_estimate: Optional[Any] = None
-
-    @property
-    def energy_score(self) -> float:
-        """Get energy score value, or infinity if not computed."""
-        if self.energy_score_result is None:
-            return float("inf")
-        return self.energy_score_result.energy_score
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for logging."""
-        return {
-            "estimator_type": self.estimator_type.value,
-            "success": self.success,
-            "skipped": self.skipped,
-            "ate": self.ate,
-            "ate_std": self.ate_std,
-            "ate_ci_lower": self.ate_ci_lower,
-            "ate_ci_upper": self.ate_ci_upper,
-            "energy_score": self.energy_score if self.success else None,
-            "error_message": self.error_message,
-            "estimation_time_ms": self.estimation_time_ms,
-        }
-
-
-@dataclass
-class SelectionResult:
-    """Result of estimator selection process."""
-
-    # Selected estimator
-    selected: EstimatorResult
-    selection_strategy: SelectionStrategy
-
-    # All evaluated estimators (for logging/analysis)
-    all_results: list[EstimatorResult] = field(default_factory=list)
-
-    # Selection metadata
-    selection_reason: str = ""
-    total_time_ms: float = 0.0
-
-    # Energy score comparison
-    energy_scores: dict[str, float] = field(default_factory=dict)
-    energy_score_gap: float = 0.0  # Gap between best and second-best
-
-    # M-est3: reliability gate. ``exceeded_max_energy_score`` is True when the
-    # selected (best) estimator's energy score is above
-    # ``EstimatorSelectorConfig.max_acceptable_energy_score``. ``requires_review``
-    # is the consumer-facing signal that the selected ATE is NOT a clean valid
-    # result and must be surfaced for review rather than reported as reliable.
-    exceeded_max_energy_score: bool = False
-    requires_review: bool = False
-
-    # #1188: what the covariates MEAN for this run. "confounding" = a non-empty
-    # backdoor was adjusted (observational de-biasing); "efficiency" = a
-    # randomized/empty-backdoor design where curated pre-treatment baselines
-    # entered as variance-reduction controls (ANCOVA-style precision — the
-    # point estimate is unbiased either way); "none" = unadjusted contrast.
-    adjustment_type: str = "none"
-
-    # #1392: subsampled-tournament disclosure. When the frame exceeded
-    # ``EstimatorSelectorConfig.selection_max_rows`` the tournament RANKED the
-    # estimators on a deterministic stratified subsample of
-    # ``selection_n_rows`` rows (out of ``selection_n_rows_total``); the
-    # reported ``selected`` result is the winner REFIT on the full frame.
-    # Downstream honesty surfaces must disclose this — the per-estimator
-    # energy scores are ranking artifacts computed on the subsample.
-    selection_subsampled: bool = False
-    selection_n_rows: int = 0
-    selection_n_rows_total: int = 0
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for logging."""
-        return {
-            "selected_estimator": self.selected.estimator_type.value,
-            "selection_strategy": self.selection_strategy.value,
-            "selection_reason": self.selection_reason,
-            "ate": self.selected.ate,
-            "energy_score": self.selected.energy_score,
-            "energy_scores": self.energy_scores,
-            "energy_score_gap": self.energy_score_gap,
-            "total_time_ms": self.total_time_ms,
-            "n_estimators_evaluated": len(self.all_results),
-            "n_estimators_succeeded": sum(1 for r in self.all_results if r.success),
-            "exceeded_max_energy_score": self.exceeded_max_energy_score,
-            "requires_review": self.requires_review,
-            "adjustment_type": self.adjustment_type,
-            "selection_subsampled": self.selection_subsampled,
-            "selection_n_rows": self.selection_n_rows,
-            "selection_n_rows_total": self.selection_n_rows_total,
-        }
-
-
-@dataclass
-class EstimatorConfig:
-    """Configuration for a single estimator."""
-
-    estimator_type: EstimatorType
-    enabled: bool = True
-    priority: int = 1  # Lower = higher priority in fallback chain
-
-    # Estimator-specific parameters
-    params: dict[str, Any] = field(default_factory=dict)
-
-    # Timeout
-    timeout_seconds: float = 30.0
-
-
-@dataclass
-class EstimatorSelectorConfig:
-    """Configuration for the estimator selector."""
-
-    strategy: SelectionStrategy = SelectionStrategy.BEST_ENERGY_SCORE
-
-    # Estimator chain (ordered by priority)
-    estimators: list[EstimatorConfig] = field(
-        default_factory=lambda: [
-            EstimatorConfig(spec.estimator_type, priority=int(spec.default_priority or 0))
-            for spec in DEFAULT_ESTIMATOR_SPECS
-        ]
-    )
-
-    # Energy score configuration
-    energy_score_config: EnergyScoreConfig = field(default_factory=EnergyScoreConfig)
-
-    # Selection thresholds
-    min_energy_score_gap: float = 0.05  # Minimum gap to prefer one over another
-    max_acceptable_energy_score: float = 0.8  # Warn if best score is above this
-
-    # #1392: tournament row cap (see SELECTION_MAX_ROWS_DEFAULT for the full
-    # rationale). Frames larger than this run the multi-estimator tournament on
-    # a deterministic stratified subsample; the winner is refit on the full
-    # frame and only that full-frame fit is reported. Frames at or below the
-    # cap keep full-frame selection unchanged. Must be >= 1 (validated in
-    # ``__post_init__`` — codex iter-2 LOW).
-    selection_max_rows: int = SELECTION_MAX_ROWS_DEFAULT
-
-    # Fallback behavior
-    fallback_on_all_fail: bool = True
-    fallback_estimator: EstimatorType = EstimatorType.OLS
-
-    # Parallelization (future)
-    parallel_evaluation: bool = False
-    max_workers: int = 4
-
-    def __post_init__(self) -> None:
-        """Validate configuration (codex iter-2 LOW, #1392)."""
-        if self.selection_max_rows < 1:
-            raise ValueError(f"selection_max_rows must be >= 1, got {self.selection_max_rows}")
 
 
 class BaseEstimatorWrapper(ABC):
@@ -572,9 +406,7 @@ class CausalForestWrapper(BaseEstimatorWrapper):
                 ate_ci_lower = ate_ci_upper = ate_std = None  # type: ignore[assignment]
 
             # Estimate propensity scores for energy score
-            from sklearn.linear_model import LogisticRegressionCV
-
-            ps_model = LogisticRegressionCV(cv=3, max_iter=500)
+            ps_model = propensity_model()
             ps_model.fit(X, treatment)
             propensity_scores = ps_model.predict_proba(X)[:, 1]
 
@@ -643,23 +475,26 @@ class LinearDMLWrapper(BaseEstimatorWrapper):
                 random_state=42,
             )
             X = covariates.values
-            model.fit(outcome, treatment, X=X, W=X)
+            with warnings.catch_warnings(record=True) as fit_warnings:
+                warnings.simplefilter("always")
+                model.fit(outcome, treatment, X=X, W=X)
+            inference_invalid = _refuse_invalid_final_stage_inference(
+                "LinearDML", fit_warnings, served_fit=bool(kwargs.get("served_fit", True))
+            )
 
             # Get estimates
             cate = model.effect(X)
             ate = float(np.mean(cate))
 
             # Population ATE SAMPLING interval (honest; #1188).
-            inference = _honest_ate_ci(model, X)
+            inference = None if inference_invalid else _honest_ate_ci(model, X)
             if inference is not None:
                 ate_ci_lower, ate_ci_upper, ate_std = inference
             else:
                 ate_ci_lower = ate_ci_upper = ate_std = None  # type: ignore[assignment]
 
             # Propensity scores
-            from sklearn.linear_model import LogisticRegressionCV
-
-            ps_model = LogisticRegressionCV(cv=3, max_iter=500)
+            ps_model = propensity_model()
             ps_model.fit(X, treatment)
             propensity_scores = ps_model.predict_proba(X)[:, 1]
 
@@ -720,23 +555,26 @@ class DRLearnerWrapper(BaseEstimatorWrapper):
             # shared with the refutation rebuild via nuisance_config.
             model = DRLearner(**drlearner_init_params(), random_state=42)
             X = covariates.values
-            model.fit(outcome, treatment, X=X, W=X)
+            with warnings.catch_warnings(record=True) as fit_warnings:
+                warnings.simplefilter("always")
+                model.fit(outcome, treatment, X=X, W=X)
+            inference_invalid = _refuse_invalid_final_stage_inference(
+                "DRLearner", fit_warnings, served_fit=bool(kwargs.get("served_fit", True))
+            )
 
             cate = model.effect(X)
             ate = float(np.mean(cate))
 
             # Population ATE SAMPLING interval (honest; #1188). The previous
             # ate ± 1.96·std(cate)/sqrt(n) was a heterogeneity spread, not a CI.
-            inference = _honest_ate_ci(model, X)
+            inference = None if inference_invalid else _honest_ate_ci(model, X)
             if inference is not None:
                 ate_ci_lower, ate_ci_upper, ate_std = inference
             else:
                 ate_ci_lower = ate_ci_upper = ate_std = None  # type: ignore[assignment]
 
             # Propensity scores
-            from sklearn.linear_model import LogisticRegressionCV
-
-            ps_model = LogisticRegressionCV(cv=3, max_iter=500)
+            ps_model = propensity_model()
             ps_model.fit(X, treatment)
             propensity_scores = ps_model.predict_proba(X)[:, 1]
 
@@ -862,9 +700,7 @@ class OLSWrapper(BaseEstimatorWrapper):
             if empty_backdoor:
                 propensity_scores = np.full(len(treatment), float(np.mean(treatment)))
             else:
-                from sklearn.linear_model import LogisticRegressionCV
-
-                ps_model = LogisticRegressionCV(cv=3, max_iter=500)
+                ps_model = propensity_model()
                 ps_model.fit(X, treatment)
                 propensity_scores = ps_model.predict_proba(X)[:, 1]
 
@@ -954,9 +790,7 @@ class SLearnerWrapper(BaseEstimatorWrapper):
             ate_ci_upper = ate + 1.96 * ate_std
 
             # Propensity scores
-            from sklearn.linear_model import LogisticRegressionCV
-
-            ps_model = LogisticRegressionCV(cv=3, max_iter=500)
+            ps_model = propensity_model()
             ps_model.fit(X, treatment)
             propensity_scores = ps_model.predict_proba(X)[:, 1]
 
@@ -1049,9 +883,7 @@ class TLearnerWrapper(BaseEstimatorWrapper):
             ate_ci_upper = ate + 1.96 * ate_std
 
             # Propensity scores
-            from sklearn.linear_model import LogisticRegressionCV
-
-            ps_model = LogisticRegressionCV(cv=3, max_iter=500)
+            ps_model = propensity_model()
             ps_model.fit(X, treatment)
             propensity_scores = ps_model.predict_proba(X)[:, 1]
 
@@ -1118,7 +950,6 @@ class XLearnerWrapper(BaseEstimatorWrapper):
 
         try:
             from sklearn.ensemble import GradientBoostingRegressor
-            from sklearn.linear_model import LogisticRegressionCV
 
             X = covariates.values
 
@@ -1154,7 +985,7 @@ class XLearnerWrapper(BaseEstimatorWrapper):
             model_tau_0.fit(X_0, tau_0)
 
             # Propensity scores for weighting
-            ps_model = LogisticRegressionCV(cv=3, max_iter=500)
+            ps_model = propensity_model()
             ps_model.fit(X, treatment)
             propensity_scores = ps_model.predict_proba(X)[:, 1]
 
@@ -1263,9 +1094,7 @@ class OrthoForestWrapper(BaseEstimatorWrapper):
                 ate_ci_upper = ate + 1.96 * ate_std
 
             # Propensity scores
-            from sklearn.linear_model import LogisticRegressionCV
-
-            ps_model = LogisticRegressionCV(cv=3, max_iter=500)
+            ps_model = propensity_model()
             ps_model.fit(X, treatment)
             propensity_scores = ps_model.predict_proba(X)[:, 1]
 
@@ -1495,7 +1324,11 @@ class EstimatorSelector:
             if efficiency_mode and wrapper.estimator_type not in _EMPTY_BACKDOOR_CAPABLE:
                 fit_frame = sel_efficiency  # type: ignore[assignment]
 
-            result = wrapper.fit(sel_treatment, sel_outcome, fit_frame, **kwargs)
+            # A subsampled tournament fit only RANKS; its CI is never served, so
+            # the wrappers may keep an underdetermined point estimate there.
+            result = wrapper.fit(
+                sel_treatment, sel_outcome, fit_frame, **{**kwargs, "served_fit": not subsampled}
+            )
             # #1392 (codex iter-1 MED): the tournament ranks wrapper INSTANCES.
             # Record which instance produced each result so the full-frame
             # refit fits the EXACT winner — a first-match-by-type lookup would
@@ -1561,8 +1394,20 @@ class EstimatorSelector:
         # and enforces a reconstructed-vs-reported ATE tolerance). On refit
         # failure the failed result propagates so the consumer fail-closes;
         # the subsample fit is never promoted to the reported estimate.
-        if subsampled and selection.success:
-            selection = self._refit_winner_on_full_frame(
+        # A tournament fit may rank on an underdetermined subsample (its CI is
+        # not served -- ``served_fit=False``) and then REFUSE its served
+        # full-frame refit. Auto must not fail while an honest candidate
+        # exists (codex r3 MED): walk the remaining successful tournament
+        # results in ranking order and refit the next one, until a served fit
+        # succeeds or none is left. Every refused candidate stays in
+        # ``results`` as a failed entry, so the report shows what was tried.
+        # A forced single estimator never subsamples and still fails closed.
+        fallback_notes: list[str] = []
+        # codex r7: only the FIRST refused candidate was the tournament winner;
+        # every later one was the next-ranked candidate.
+        refused_label = "Tournament winner"
+        while subsampled and selection.success:
+            refit = self._refit_winner_on_full_frame(
                 selection,
                 results,
                 winner_wrapper=result_wrappers.get(id(selection)),
@@ -1573,9 +1418,63 @@ class EstimatorSelector:
                 efficiency_controls=efficiency_controls,
                 **kwargs,
             )
+            if refit.success:
+                selection = refit
+                break
+            # Record EVERY refusal, including the last one when no candidate is
+            # left (codex r6); whether the NEXT candidate is served is known
+            # only when its own refit returns (codex r5: never "served B"
+            # before B's refit ran).
+            fallback_notes.append(
+                f"{refused_label} {refit.estimator_type.value} (energy score "
+                f"{refit.energy_score:.4f}) refused its served full-frame refit: "
+                f"{refit.error_message}."
+            )
+            refused_label = "Next-ranked candidate"
+            # codex r8: only candidates with a FINITE tournament score are
+            # eligible -- a NaN-scored success would degenerate the tie-band
+            # ranking and slip past the review gate (NaN > threshold is False).
+            # Before the fallback existed a refused winner failed closed; the
+            # fallback must not open a less-reviewed path than that.
+            remaining = [r for r in results if r.success and np.isfinite(r.energy_score)]
+            unscored = [
+                r.estimator_type.value
+                for r in results
+                if r.success and not np.isfinite(r.energy_score)
+            ]
+            if unscored:
+                fallback_notes.append(
+                    f"Not eligible without a finite tournament energy score: {', '.join(unscored)}."
+                )
+            if not remaining:
+                selection = refit
+                break
+            logger.warning(
+                "Served refit of tournament winner %s refused (%s); trying the next "
+                "ranked candidate on the full frame.",
+                refit.estimator_type.value,
+                refit.error_message,
+            )
+            selection = self._select_best_energy(remaining)
+        if fallback_notes:
+            if selection.success:
+                fallback_notes.append(
+                    f"Served the next ranked candidate {selection.estimator_type.value} "
+                    f"(energy score {selection.energy_score:.4f}) after "
+                    f"{len(fallback_notes)} refused."
+                )
+            else:
+                fallback_notes.append(
+                    "Every eligible full-frame refit was refused; no estimate is served."
+                )
 
-        # Build energy score comparison
-        energy_scores = {r.estimator_type.value: r.energy_score for r in results if r.success}
+        # Build energy score comparison: every candidate the tournament SCORED,
+        # including a winner whose served refit was refused (codex r4 MED) --
+        # the ranking is immutable metadata; served status is a separate fact
+        # carried by ``success`` / ``error_message``.
+        energy_scores = {
+            r.estimator_type.value: r.energy_score for r in results if np.isfinite(r.energy_score)
+        }
 
         # Compute gap between best and second best
         sorted_scores = sorted([s for s in energy_scores.values() if np.isfinite(s)])
@@ -1595,6 +1494,7 @@ class EstimatorSelector:
             subsampled=subsampled,
             selection_n_rows=selection_n_rows,
             n_rows_total=n_rows_total,
+            fallback_notes=fallback_notes,
         )
 
     def _refit_winner_on_full_frame(
@@ -1657,7 +1557,25 @@ class EstimatorSelector:
             wrapper.estimator_type.value,
             len(treatment),
         )
-        full_result = wrapper.fit(treatment, outcome, fit_frame, **kwargs)
+        try:
+            full_result = wrapper.fit(
+                treatment, outcome, fit_frame, **{**kwargs, "served_fit": True}
+            )
+        except Exception as exc:  # noqa: BLE001 -- codex r7: a raising injected wrapper must not
+            # escape the fallback; it is a refused served refit like any other
+            logger.warning(
+                "Served refit of %s raised %s: %s",
+                wrapper.estimator_type.value,
+                type(exc).__name__,
+                exc,
+            )
+            full_result = EstimatorResult(
+                estimator_type=wrapper.estimator_type,
+                success=False,
+                error_message=str(exc),
+                error_type=type(exc).__name__,
+            )
+        full_result.served_refit = bool(full_result.success)
         if full_result.success:
             full_result.energy_score_result = selection.energy_score_result
         else:
@@ -1666,6 +1584,10 @@ class EstimatorSelector:
                 f"(tournament winner={selection.estimator_type.value}): "
                 f"{full_result.error_message}"
             )
+            # The tournament score is the ranking artifact and survives the
+            # refusal (codex r4 MED): the comparison must still show WHERE the
+            # refused candidate ranked; ``success=False`` says it was not served.
+            full_result.energy_score_result = selection.energy_score_result
         # Preserve the invariant that the selected result is a member of
         # all_results: replace the winner's tournament (subsample) entry.
         for i, r in enumerate(results):
@@ -1685,6 +1607,7 @@ class EstimatorSelector:
         subsampled: bool = False,
         selection_n_rows: int = 0,
         n_rows_total: int = 0,
+        fallback_notes: Optional[list[str]] = None,
     ) -> SelectionResult:
         """Assemble a SelectionResult and compute the M-est3 reliability gate.
 
@@ -1695,7 +1618,11 @@ class EstimatorSelector:
         as a clean valid estimate.
         """
         if energy_scores is None:
-            energy_scores = {r.estimator_type.value: r.energy_score for r in results if r.success}
+            energy_scores = {
+                r.estimator_type.value: r.energy_score
+                for r in results
+                if np.isfinite(r.energy_score)
+            }
         exceeded = bool(
             selection.success and selection.energy_score > self.config.max_acceptable_energy_score
         )
@@ -1706,9 +1633,24 @@ class EstimatorSelector:
             # the reported estimate is the full-frame winner fit.
             selection_reason += (
                 f" Tournament ranked on a deterministic stratified subsample of "
-                f"{selection_n_rows:,}/{n_rows_total:,} rows; the reported "
-                f"ATE/CI come from the winner refit on the full frame."
+                f"{selection_n_rows:,}/{n_rows_total:,} rows; "
+                + (
+                    "the reported ATE/CI come from the winner refit on the full frame."
+                    if selection.success
+                    # codex r6/r7: never claim a reported ATE/CI when no refit
+                    # succeeded, and say when none was even attempted
+                    else (
+                        "no full-frame refit succeeded, so no ATE/CI is reported."
+                        if fallback_notes
+                        else "no candidate succeeded in the tournament, so no full-frame "
+                        "refit was attempted and no ATE/CI is reported."
+                    )
+                )
             )
+        if fallback_notes:
+            # codex r4 MED: the served estimator is NOT the tournament winner;
+            # say which candidate was refused, why, and what was served instead.
+            selection_reason += " " + " ".join(fallback_notes)
         return SelectionResult(
             selected=selection,
             selection_strategy=self.config.strategy,

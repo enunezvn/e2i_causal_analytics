@@ -34,7 +34,9 @@ class CausalGraph(TypedDict, total=False):
     # V4.4: Causal Discovery Integration
     discovery_enabled: bool  # Whether auto-discovery was used
     discovery_gate_decision: Literal["accept", "review", "reject", "augment"]  # Gate outcome
-    discovery_algorithms_used: List[str]  # Algorithms run (e.g., ["ges", "pc"])
+    discovery_algorithms_used: List[
+        str
+    ]  # Algorithms run (default: DEFAULT_DISCOVERY_ALGORITHM_NAMES)
     discovery_confidence: float  # Discovery ensemble confidence (0-1)
     discovery_n_edges: int  # Number of edges from discovery
     augmented_edges: List[tuple[str, str]]  # High-confidence edges added to manual DAG
@@ -296,6 +298,17 @@ class CausalImpactState(TypedDict):
     # key is ABSENT, graph_builder falls back to anchoring
     # ``modeled_confounders`` so pre-split callers keep their exact prior shape.
     anchored_confounders: NotRequired[List[str]]
+    # Lane E (real-data causal estimation, item 3(d)): the feature-role panel
+    # (``FeatureRolePanel.to_dict()``) for this frame's covariates. When present,
+    # graph_builder removes leak-verdict covariates from ``confounders`` /
+    # ``modeled_confounders`` with a named warning and, with
+    # ``approved_structure_roles``, anchors the approved confounders. Declared
+    # so LangGraph's input filter does not drop it (wave-51 lesson).
+    feature_role_panel: NotRequired[Dict[str, Any]]
+    # Lane B's seam: feature -> role derived from an APPROVED structural review
+    # (``confounder`` / ``instrument`` / ...). Never populated from unapproved
+    # machine attestations. Read only by graph_builder together with the panel.
+    approved_structure_roles: NotRequired[Dict[str, str]]
     # #1188: pre-treatment baseline covariates for a randomized (empty-backdoor)
     # question — routed to the estimator selector's efficiency_controls channel
     # (ANCOVA-style variance reduction), NEVER merged into confounders /
@@ -368,7 +381,7 @@ class CausalImpactState(TypedDict):
     discovery_guided: NotRequired[bool]
     discovery_algorithms: NotRequired[
         List[str]
-    ]  # Algorithms to use: ["ges", "pc", "fci", "lingam"]
+    ]  # Algorithms to use (default DEFAULT_DISCOVERY_ALGORITHM_NAMES; also fci/lingam)
     discovery_ensemble_threshold: NotRequired[float]  # Min algorithm agreement (default: 0.5)
     discovery_alpha: NotRequired[float]  # Significance level for CI tests (default: 0.05)
     discovery_bootstrap_resamples: NotRequired[
@@ -384,6 +397,14 @@ class CausalImpactState(TypedDict):
     discovery_gate_evaluation: NotRequired[Dict[str, Any]]  # Full GateEvaluation from gate
     discovery_latency_ms: NotRequired[float]  # Discovery computation time
     discovery_skip_reason: NotRequired[str]  # M-gb1: surfaced reason auto-discovery was skipped
+    # Lane D (guided discovery on claims frames): the DAG-learning frame is
+    # pre-flighted (constant / exactly collinear columns dropped, then capped
+    # by a pre-treatment screen) and the run is bounded. Declared here so a
+    # caller's override survives LangGraph's input filter (wave-51 lesson).
+    discovery_max_covariates: NotRequired[int]  # cap on learned covariates (default 20)
+    discovery_time_budget_s: NotRequired[Optional[float]]  # wall budget (default 180 s)
+    discovery_min_resamples: NotRequired[int]  # corroboration needs this many (default 10)
+    discovery_indep_test: NotRequired[Optional[str]]  # force a CI test (measurement only)
     # #1974: durable record of the discovery run in public.discovered_dags
     # (DiscoveredDagRepository, written by graph_builder whenever discovery
     # actually ran). Exactly one of the two is set per discovery run:

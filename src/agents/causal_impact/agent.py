@@ -353,6 +353,13 @@ class CausalImpactAgent(SkillsMixin):
             "fallback_used": False,
             "retry_count": 0,
         }
+        # Lane E item 3(d): the feature-role panel and Lane B's approved roles
+        # travel with the input when a caller supplies them; absent keys stay
+        # absent (graph_builder keys off presence, and an absent
+        # ``anchored_confounders`` keeps pre-split callers' prior shape).
+        for _lane_e_key in ("feature_role_panel", "approved_structure_roles"):
+            if input_data.get(_lane_e_key) is not None:
+                state[_lane_e_key] = input_data[_lane_e_key]  # type: ignore[literal-required]
 
         # #1351/#1352 optional channels: the dispatcher's causal_impact input
         # resolver sets a cooperative ``compute_deadline`` (refutation

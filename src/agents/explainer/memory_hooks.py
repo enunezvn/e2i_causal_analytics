@@ -14,6 +14,7 @@ Author: E2I Causal Analytics Team
 Version: 1.0.0
 """
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
@@ -112,18 +113,23 @@ class ExplanationMemoryHooks:
                 self._semantic_memory = None
         return self._semantic_memory
 
+    def _build_entity_extractor(self):
+        """Construct the EntityExtractor (sync); None when it cannot be built."""
+        try:
+            from src.rag.entity_extractor import EntityExtractor
+
+            extractor = EntityExtractor()
+            logger.debug("Entity extractor initialized")
+            return extractor
+        except Exception as e:
+            logger.warning(f"Failed to initialize entity extractor: {e}")
+            return None
+
     @property
     def entity_extractor(self):
-        """Lazy-load EntityExtractor for query entity extraction."""
+        """Lazy-load EntityExtractor for query entity extraction (sync callers)."""
         if self._entity_extractor is None:
-            try:
-                from src.rag.entity_extractor import EntityExtractor
-
-                self._entity_extractor = EntityExtractor()
-                logger.debug("Entity extractor initialized")
-            except Exception as e:
-                logger.warning(f"Failed to initialize entity extractor: {e}")
-                self._entity_extractor = None
+            self._entity_extractor = self._build_entity_extractor()
         return self._entity_extractor
 
     # =========================================================================
@@ -253,8 +259,16 @@ class ExplanationMemoryHooks:
             extracted_entities = []
             relationships = []
 
-            if self.entity_extractor:
-                entities = self.entity_extractor.extract(query)
+            # Lane 2 (2026-09-22): from_default performs a bounded sync network
+            # round (RxNav) at first build; keep it off the event loop.
+            if self._entity_extractor is None:
+                self._entity_extractor = await asyncio.to_thread(self._build_entity_extractor)
+            # Bind once. Reading the lazy property again after a failed build
+            # would rebuild synchronously on the loop thread, once per read.
+            extractor = self._entity_extractor
+
+            if extractor:
+                entities = extractor.extract(query)
 
                 # Query semantic memory for each extracted entity type
                 # Brands map to general entity lookups
@@ -342,9 +356,9 @@ class ExplanationMemoryHooks:
                 "causal_paths": causal_paths[:10],  # Cap causal paths
                 "graph_stats": stats,
                 "extraction_summary": {
-                    "brands_found": len(entities.brands) if self.entity_extractor else 0,
-                    "kpis_found": len(entities.kpis) if self.entity_extractor else 0,
-                    "agents_found": len(entities.agents) if self.entity_extractor else 0,
+                    "brands_found": len(entities.brands) if extractor else 0,
+                    "kpis_found": len(entities.kpis) if extractor else 0,
+                    "agents_found": len(entities.agents) if extractor else 0,
                 },
             }
         except Exception as e:
