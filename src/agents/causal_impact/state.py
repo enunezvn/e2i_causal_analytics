@@ -287,6 +287,11 @@ class CausalImpactState(TypedDict):
     # ``anchored_confounders`` is present. Declared so LangGraph persists it
     # across nodes (undeclared channels are dropped).
     modeled_confounders: NotRequired[List[str]]
+    # Lane B (real-data causal estimation): feature -> role on the APPROVED
+    # structural-author DAG (src/data/kg/structural_prior_loader.py), the
+    # channel Lane E's derive_confounder_channels reads. Declared so LangGraph
+    # persists it (undeclared channels are dropped at the graph boundary).
+    approved_structure_roles: NotRequired[Dict[str, str]]
     # Fix 4: STRUCTURAL-PRIOR channel for guided discovery. When this key is
     # PRESENT, exactly these confounders (frame-present) are seeded as REQUIRED
     # conf->treatment / conf->outcome edges; an empty list means "no structural

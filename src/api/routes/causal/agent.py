@@ -247,10 +247,15 @@ async def _apply_approved_structural_prior(
         resolve_structural_prior_for_run,
     )
 
+    # The run's dataset must declare the feature manifest the review was
+    # authored for; (T, Y) names alone are not a dataset identity (codex r2).
+    spec = _CAUSAL_DATASET_SPECS.get(request.dataset or "") or {}
+    declared = spec.get("feature_manifest_source")
     prior, notes = await resolve_structural_prior_for_run(
         treatment=request.treatment_var,
         outcome=request.outcome_var,
         brand=request.brand,
+        manifest=declared if isinstance(declared, str) else None,
         repo_factory=repo_factory or _expert_review_repo_factory,
     )
     if prior is None:

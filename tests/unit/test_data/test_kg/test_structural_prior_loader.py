@@ -210,9 +210,17 @@ def test_json_string_columns_are_parsed():
         _row(status="rejected"),
         _row(valid_until="2020-01-01"),  # expired approval
         _row(review_type="quarterly_audit"),
+        _row(review_type=None),  # untyped rows are not structural-author reviews
         _row(evidence=False),  # an ordinary gate-minted initial_dag review
     ],
-    ids=["pending", "rejected", "expired", "other_review_type", "no_structural_evidence"],
+    ids=[
+        "pending",
+        "rejected",
+        "expired",
+        "other_review_type",
+        "untyped",
+        "no_structural_evidence",
+    ],
 )
 def test_unapproved_or_foreign_rows_are_never_a_prior(row):
     assert structural_prior_from_review_row(row, today=date(2026, 9, 22)) is None
@@ -334,7 +342,7 @@ async def test_resolve_for_run_returns_prior_and_never_raises():
         return repo
 
     prior, notes = await resolve_structural_prior_for_run(
-        treatment=T, outcome=Y, brand=None, repo_factory=factory
+        treatment=T, outcome=Y, brand=None, manifest="optum_mart", repo_factory=factory
     )
     assert prior is not None and notes == []
 
@@ -342,7 +350,7 @@ async def test_resolve_for_run_returns_prior_and_never_raises():
         raise ConnectionError("supabase down")
 
     prior, notes = await resolve_structural_prior_for_run(
-        treatment=T, outcome=Y, brand=None, repo_factory=boom
+        treatment=T, outcome=Y, brand=None, manifest="optum_mart", repo_factory=boom
     )
     assert prior is None
     assert notes == ["structural prior not consulted: ConnectionError: supabase down"]
@@ -351,7 +359,7 @@ async def test_resolve_for_run_returns_prior_and_never_raises():
         return _FakeRepo([_row(row_hash="b" * 64)])
 
     prior, notes = await resolve_structural_prior_for_run(
-        treatment=T, outcome=Y, brand=None, repo_factory=mismatched
+        treatment=T, outcome=Y, brand=None, manifest="optum_mart", repo_factory=mismatched
     )
     assert prior is None
     assert notes and notes[0].startswith("structural prior refused (fail closed)")
@@ -377,3 +385,56 @@ def test_apply_to_state_restricts_anchors_to_declared_covariates_and_records_pro
         "structural prior: approved confounder(s) not among this run's covariates, "
         "not anchored: charlson_score"
     )
+
+
+def test_missing_version_pair_halves_fail_closed():
+    """codex r2 HIGH 1: both adjustment hashes are REQUIRED, not merely
+    checked when present."""
+    row = _row()
+    row["adjustment_set_hash"] = None
+    with pytest.raises(StructuralPriorError, match="never bound"):
+        structural_prior_from_review_row(row)
+    row = _row()
+    del row["agent_assessment_json"]["structural_author"]["adjustment_set_hash"]
+    with pytest.raises(StructuralPriorError, match="graded adjustment sets None"):
+        structural_prior_from_review_row(row)
+    row = _row()
+    row["dag_version_hash"] = None
+    with pytest.raises(StructuralPriorError, match="not the hash of the stored snapshot"):
+        structural_prior_from_review_row(row)
+
+
+def test_manifest_scoping_refuses_a_review_authored_for_another_contract():
+    """codex r2 HIGH 3: (T, Y) names are not a dataset identity."""
+    assert structural_prior_from_review_row(_row(), manifest="optum_mart") is not None
+    with pytest.raises(StructuralPriorError, match="authored for manifest 'optum_mart'"):
+        structural_prior_from_review_row(_row(), manifest="csu")
+
+
+async def test_find_row_filters_on_manifest_and_resolver_refuses_undeclared_datasets():
+    repo = _FakeRepo([_row()])
+    assert (
+        await find_approved_structural_prior_row(repo, treatment=T, outcome=Y, manifest="csu")
+        is None
+    )
+    assert await find_approved_structural_prior_row(
+        repo, treatment=T, outcome=Y, manifest="optum_mart"
+    )
+
+    fresh = _FakeRepo([_row()])
+
+    async def factory():
+        return fresh
+
+    prior, notes = await resolve_structural_prior_for_run(
+        treatment=T, outcome=Y, brand=None, manifest=None, repo_factory=factory
+    )
+    assert prior is None and notes == [
+        "structural prior not applied: the dataset declares no feature_manifest_source, "
+        "so no authored structure can be matched to it"
+    ]
+    assert fresh.calls == []  # never consulted without a manifest
+    prior, notes = await resolve_structural_prior_for_run(
+        treatment=T, outcome=Y, brand=None, manifest="optum_mart", repo_factory=factory
+    )
+    assert prior is not None and notes == []

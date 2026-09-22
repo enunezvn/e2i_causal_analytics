@@ -130,19 +130,22 @@ def structural_prior_from_review_row(
     *,
     attestations_path: Optional[Path | str] = None,
     today: Optional[date] = None,
+    manifest: Optional[str] = None,
 ) -> Optional[ApprovedStructuralPrior]:
     """The prior an approved row yields, or ``None`` when the row is no prior.
 
     ``None``: not an active approval (pending / rejected / expired), not an
     ``initial_dag`` review, or no structural-author evidence on the row.
     Raises :class:`StructuralPriorError` on a fail-closed mismatch: the row's
-    hashes are not the stored snapshot's, the evidence graded another hash,
-    a claimed role is not what the approved edges derive, or the attestations
-    file (when reachable) disagrees with the row.
+    hashes are not the stored snapshot's (both halves of the version pair are
+    required), the evidence graded another hash, a claimed role is not what
+    the approved edges derive, the review was authored for another feature
+    manifest than ``manifest`` (when given), or the attestations file (when
+    reachable) disagrees with the row.
     """
     if not is_active_approval(row, today):
         return None
-    if row.get("review_type") not in (None, REVIEW_TYPE):
+    if row.get("review_type") != REVIEW_TYPE:
         return None
     evidence = _as_dict(row.get("agent_assessment_json"))
     if not evidence:
@@ -151,6 +154,11 @@ def structural_prior_from_review_row(
     if not sa:
         return None
     review_id = str(row.get("review_id") or "")
+    if manifest is not None and sa.get("manifest") != manifest:
+        raise StructuralPriorError(
+            f"review {review_id}: authored for manifest {sa.get('manifest')!r}, the run's dataset "
+            f"declares {manifest!r} — not the same feature contract"
+        )
 
     # The approved structure IS the stored snapshot; the hashes must prove it.
     from src.causal_engine.dag_hash import adjustment_hash_from_snapshot, compute_dag_hash
@@ -175,13 +183,16 @@ def structural_prior_from_review_row(
         raise StructuralPriorError(
             f"review {review_id}: the snapshot's adjustment sets are unprovable (malformed)"
         )
+    # Both halves of the version pair are REQUIRED (codex r2 HIGH 1): the CLI
+    # always writes them; a row or evidence without one is not bound to the
+    # complete version the human approved.
     row_adj = row.get("adjustment_set_hash")
-    if row_adj is not None and row_adj != snap_adj:
+    if row_adj != snap_adj:
         raise StructuralPriorError(
             f"review {review_id}: adjustment_set_hash {row_adj!r} is not what the snapshot "
-            f"proves ({snap_adj}) — the covariate set moved"
+            f"proves ({snap_adj}) — the covariate set moved or was never bound"
         )
-    if sa.get("adjustment_set_hash") not in (None, snap_adj):
+    if sa.get("adjustment_set_hash") != snap_adj:
         raise StructuralPriorError(
             f"review {review_id}: the structural author graded adjustment sets "
             f"{sa.get('adjustment_set_hash')!r}, the approved snapshot proves {snap_adj!r}"
@@ -299,10 +310,12 @@ async def find_approved_structural_prior_row(
     outcome: str,
     brand: Optional[str] = None,
     today: Optional[date] = None,
+    manifest: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
     """Newest ACTIVE ``initial_dag`` approval of this estimand that carries
-    structural-author evidence. The brand-scoped estimand key is tried first,
-    then the brand-less key the CLI writes when no ``--brand`` was given."""
+    structural-author evidence for ``manifest`` (when given). The brand-scoped
+    estimand key is tried first, then the brand-less key the CLI writes when
+    no ``--brand`` was given."""
     keys = [estimand_key_for(brand, treatment, outcome)]
     if brand:
         keys.append(estimand_key_for(None, treatment, outcome))
@@ -311,11 +324,15 @@ async def find_approved_structural_prior_row(
         for row in rows or []:
             if not is_active_approval(row, today):
                 continue
-            if row.get("review_type") not in (None, REVIEW_TYPE):
+            if row.get("review_type") != REVIEW_TYPE:
                 continue
             evidence = _as_dict(row.get("agent_assessment_json")) or {}
-            if _as_dict(evidence.get(EVIDENCE_KEY)):
-                return dict(row)
+            sa = _as_dict(evidence.get(EVIDENCE_KEY))
+            if not sa:
+                continue
+            if manifest is not None and sa.get("manifest") != manifest:
+                continue
+            return dict(row)
     return None
 
 
@@ -337,22 +354,34 @@ async def resolve_structural_prior_for_run(
     treatment: str,
     outcome: str,
     brand: Optional[str],
+    manifest: Optional[str],
     repo_factory: Callable[[], Awaitable[Any]],
 ) -> tuple[Optional[ApprovedStructuralPrior], list[str]]:
     """Look the prior up for a run; never raises.
+
+    ``manifest`` is the feature-manifest source the run's dataset declares
+    (``feature_manifest_source`` on its registry spec). A structural review is
+    authored FOR a manifest, and (treatment, outcome) names are not unique
+    across datasets (codex r2 HIGH 3), so a dataset that declares no manifest
+    gets no prior — reported, never guessed.
 
     Returns ``(prior, warnings)``: a store outage, a missing row or a
     fail-closed mismatch yields ``(None, [why])`` — the run proceeds without a
     prior and the reason reaches the response's ``warnings``.
     """
+    if not manifest:
+        return None, [
+            "structural prior not applied: the dataset declares no feature_manifest_source, "
+            "so no authored structure can be matched to it"
+        ]
     try:
         repo = await repo_factory()
         row = await find_approved_structural_prior_row(
-            repo, treatment=treatment, outcome=outcome, brand=brand
+            repo, treatment=treatment, outcome=outcome, brand=brand, manifest=manifest
         )
         if row is None:
             return None, []
-        prior = structural_prior_from_review_row(row)
+        prior = structural_prior_from_review_row(row, manifest=manifest)
         return prior, list(prior.warnings) if prior else []
     except StructuralPriorError as exc:
         logger.warning("structural prior refused: %s", exc)

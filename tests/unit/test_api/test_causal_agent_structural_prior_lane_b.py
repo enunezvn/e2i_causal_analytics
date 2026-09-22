@@ -61,6 +61,7 @@ def _row(status="approved"):
         "agent_assessment_json": {
             "structural_author": {
                 "dag_version_hash": dag_hash,
+                "adjustment_set_hash": compute_adjustment_set_hash(snap["adjustment_sets"]),
                 "adjustment_set": ["age_at_index"],
                 "features": feats,
                 "manifest": "optum_mart",
@@ -87,14 +88,34 @@ def _request():
     return AgentCausalAnalysisRequest(treatment_var=T, outcome_var=Y)
 
 
+@pytest.fixture
+def declared_manifest(monkeypatch):
+    """A dataset spec that declares the manifest the review was authored for
+    (Lane A/E register ``feature_manifest_source`` on the real dataset; on
+    this tree no spec declares one, so the hook is dark by construction)."""
+    from src.api.routes.causal import agent as agent_mod
+
+    specs = dict(agent_mod._CAUSAL_DATASET_SPECS)
+    specs["optum_biologic_persistence"] = {
+        "treatment": [T],
+        "outcome": [Y],
+        "covariates": ["age_at_index", "payer_category"],
+        "feature_manifest_source": "optum_mart",
+    }
+    monkeypatch.setattr(agent_mod, "_CAUSAL_DATASET_SPECS", specs)
+    return AgentCausalAnalysisRequest(
+        dataset="optum_biologic_persistence", treatment_var=T, outcome_var=Y
+    )
+
+
 @pytest.mark.unit
-async def test_approved_structural_review_anchors_confounders():
+async def test_approved_structural_review_anchors_confounders(declared_manifest):
     async def factory():
         return _FakeRepo([_row()])
 
     state = _state()
     await _apply_approved_structural_prior(
-        state, _request(), ["age_at_index", "payer_category"], repo_factory=factory
+        state, declared_manifest, ["age_at_index", "payer_category"], repo_factory=factory
     )
     assert state["anchored_confounders"] == ["age_at_index"]
     assert state["approved_structure_roles"] == {
@@ -105,13 +126,84 @@ async def test_approved_structural_review_anchors_confounders():
 
 
 @pytest.mark.unit
-async def test_pending_machine_review_is_never_a_prior():
+async def test_dataset_without_a_declared_manifest_never_takes_a_prior():
+    """codex r2 HIGH 3: the default (patient_journeys) request must NOT pick up
+    an optum_mart review that happens to share (T, Y) names."""
+    calls = []
+
+    async def factory():
+        calls.append(1)
+        return _FakeRepo([_row()])
+
+    state = _state()
+    await _apply_approved_structural_prior(
+        state, _request(), ["age_at_index", "payer_category"], repo_factory=factory
+    )
+    assert state["anchored_confounders"] == []
+    assert "approved_structure_roles" not in state
+    assert calls == []  # the store is not even consulted
+    assert state["warnings"] == [
+        "structural prior not applied: the dataset declares no feature_manifest_source, "
+        "so no authored structure can be matched to it"
+    ]
+
+
+@pytest.mark.unit
+async def test_review_for_another_manifest_is_refused(declared_manifest):
+    row = _row()
+    row["agent_assessment_json"]["structural_author"]["manifest"] = "csu"
+
+    async def factory():
+        return _FakeRepo([row])
+
+    state = _state()
+    await _apply_approved_structural_prior(
+        state, declared_manifest, ["age_at_index"], repo_factory=factory
+    )
+    assert state["anchored_confounders"] == []
+    assert state["warnings"] == []  # filtered out at lookup: no matching review
+
+
+@pytest.mark.unit
+def test_approved_structure_roles_survives_the_langgraph_boundary():
+    """codex r2 MED 2: the channel must be DECLARED on CausalImpactState, or
+    LangGraph drops it at the graph boundary. Proven through a compiled graph,
+    not by inspecting the helper's dict."""
+    from langgraph.graph import END, START, StateGraph
+
+    from src.agents.causal_impact.state import CausalImpactState
+
+    seen = {}
+
+    def _node(state):
+        seen["roles"] = state.get("approved_structure_roles")
+        seen["anchored"] = state.get("anchored_confounders")
+        return {}
+
+    g = StateGraph(CausalImpactState)
+    g.add_node("probe", _node)
+    g.add_edge(START, "probe")
+    g.add_edge("probe", END)
+    out = g.compile().invoke(
+        {
+            "approved_structure_roles": {"age_at_index": "confounder"},
+            "anchored_confounders": ["age_at_index"],
+            "warnings": [],
+        }
+    )
+    assert seen["roles"] == {"age_at_index": "confounder"}
+    assert seen["anchored"] == ["age_at_index"]
+    assert out["approved_structure_roles"] == {"age_at_index": "confounder"}
+
+
+@pytest.mark.unit
+async def test_pending_machine_review_is_never_a_prior(declared_manifest):
     async def factory():
         return _FakeRepo([_row(status="pending")])
 
     state = _state()
     await _apply_approved_structural_prior(
-        state, _request(), ["age_at_index"], repo_factory=factory
+        state, declared_manifest, ["age_at_index"], repo_factory=factory
     )
     assert state["anchored_confounders"] == []
     assert "approved_structure_roles" not in state
@@ -119,12 +211,12 @@ async def test_pending_machine_review_is_never_a_prior():
 
 
 @pytest.mark.unit
-async def test_dead_supabase_pin_leaves_the_run_prior_less_with_a_warning():
+async def test_dead_supabase_pin_leaves_the_run_prior_less_with_a_warning(declared_manifest):
     # The unit conftest pins SUPABASE_URL to a dead endpoint (#1420): the default
     # repo factory must fail inside the lookup, not propagate.
     assert os.environ.get("SUPABASE_URL", "").startswith("http://127.0.0.1:1")
     state = _state()
-    await _apply_approved_structural_prior(state, _request(), ["age_at_index"])
+    await _apply_approved_structural_prior(state, declared_manifest, ["age_at_index"])
     assert state["anchored_confounders"] == []
     assert "approved_structure_roles" not in state
     assert len(state["warnings"]) == 1
