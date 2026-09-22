@@ -131,3 +131,222 @@ def test_causal_selector_fails_loud_without_the_switch_flag():
     df = _initiators_two_arms().drop(columns=[SWITCH_FLAG])
     with pytest.raises(KeyError, match=SWITCH_FLAG):
         select_persistence_causal_cohort(df, window_days=180, min_claim_count=2)
+
+
+from scripts.convert_optum_mart import (  # noqa: E402
+    CAUSAL_COHORT,
+    CAUSAL_EXTRA_COLS,
+    CAUSAL_RECORDS_NAME,
+    COHORT_TARGETS,
+    PREDICTION_COHORTS,
+    TARGET_PERSISTENT,
+    build_journey_records,
+    convert,
+)
+from scripts.convert_optum_mart import main as convert_main  # noqa: E402
+
+
+def _entity_mart_rows_two_arms() -> list[dict]:
+    """A tiny entity-stacked mart with both arms + an untreated patient + an HCP row."""
+    idx = pd.Timestamp("2020-01-01")
+    day = pd.Timedelta(days=1)
+    safe = {"age_at_index": 50.0, "charlson_score": 2, "cci_hiv": 0, "payer_category": "commercial"}
+    return [
+        {
+            "entity_type": "patient",
+            "patid": 1,
+            "index_biologic_brand": "no_treatment",
+            "treatment_start_date": pd.NaT,
+            "index_date": idx,
+            "claim_record_count": 10,
+            "elig_start_date": idx - 300 * day,
+            "zipcode_5": "10001",
+            "last_observed_date": idx + 400 * day,
+            "last_coverage_end": pd.NaT,
+            "max_internal_gap_days": 0,
+            "terminal_gap_days": 0,
+            SWITCH_FLAG: 0,
+            **safe,
+        },
+        {
+            "entity_type": "patient",
+            "patid": 2,
+            "index_biologic_brand": "XOLAIR",
+            "treatment_start_date": idx + 10 * day,
+            "index_date": idx,
+            "claim_record_count": 8,
+            "elig_start_date": idx - 365 * day,
+            "zipcode_5": "90001",
+            "last_observed_date": idx + 410 * day,
+            "last_coverage_end": idx + 110 * day,
+            "max_internal_gap_days": 120,
+            "terminal_gap_days": 0,
+            SWITCH_FLAG: 1,
+            **safe,
+        },
+        {
+            "entity_type": "patient",
+            "patid": 3,
+            "index_biologic_brand": "DUPIXENT",
+            "treatment_start_date": idx + 20 * day,
+            "index_date": idx,
+            "claim_record_count": 12,
+            "elig_start_date": idx - 200 * day,
+            "zipcode_5": "60601",
+            "last_observed_date": idx + 420 * day,
+            "last_coverage_end": idx + 240 * day,
+            "max_internal_gap_days": 30,
+            "terminal_gap_days": 0,
+            SWITCH_FLAG: 0,
+            **safe,
+        },
+        {
+            "entity_type": "optum_hcp",
+            "patid": 999,
+            "index_biologic_brand": None,
+            "treatment_start_date": pd.NaT,
+            "index_date": pd.NaT,
+            "claim_record_count": None,
+            "elig_start_date": pd.NaT,
+            "zipcode_5": None,
+            "last_observed_date": pd.NaT,
+            "last_coverage_end": pd.NaT,
+            "max_internal_gap_days": None,
+            "terminal_gap_days": None,
+            SWITCH_FLAG: None,
+            "age_at_index": None,
+            "charlson_score": None,
+            "cci_hiv": None,
+            "payer_category": None,
+        },
+    ]
+
+
+def test_build_journey_records_extra_cols_are_emitted_and_default_is_unchanged():
+    tstart = pd.Timestamp("2020-03-01")
+    cohort = pd.DataFrame(
+        [
+            {
+                "patid": 77,
+                "index_date": pd.Timestamp("2020-01-01"),
+                "treatment_start_date": tstart,
+                "elig_start_date": pd.Timestamp("2019-09-01"),
+                "zipcode_5": "10001",
+                "age_at_index": 50.0,
+                "charlson_score": 2,
+                "cci_hiv": 0,
+                "index_biologic_brand": "DUPIXENT",
+                TREATMENT_COL: 1,
+                TARGET_PERSISTENT_G28: 1,
+                "discontinued_180d": 0,
+                SWITCH_FLAG: 0,
+                "persistent_at_180d": 0,
+            }
+        ]
+    )
+    rec = build_journey_records(
+        cohort,
+        target=TARGET_PERSISTENT_G28,
+        anchor_col="treatment_start_date",
+        extra_cols=CAUSAL_EXTRA_COLS,
+    )[0]
+    assert rec["index_biologic_brand"] == "DUPIXENT"
+    assert rec[TREATMENT_COL] == 1 and isinstance(rec[TREATMENT_COL], int)
+    assert rec["treatment_start_date"] == tstart
+    assert (
+        rec["persistent_at_180d"] == 0 and rec["discontinued_180d"] == 0 and rec[SWITCH_FLAG] == 0
+    )
+    assert rec[TARGET_PERSISTENT_G28] == 1
+    # default call (prediction cohorts) still drops every one of them
+    plain = build_journey_records(
+        cohort, target=TARGET_PERSISTENT_G28, anchor_col="treatment_start_date"
+    )[0]
+    for col in CAUSAL_EXTRA_COLS:
+        assert col not in plain, f"{col} leaked into a prediction record"
+
+
+def test_causal_registry_entries():
+    assert COHORT_TARGETS[CAUSAL_COHORT] == TARGET_PERSISTENT_G28
+    assert CAUSAL_COHORT == "persistence_causal"
+    assert CAUSAL_RECORDS_NAME == "e2i_causal_v1_biologic_persistence"
+    assert CAUSAL_EXTRA_COLS == (
+        "index_biologic_brand",
+        TREATMENT_COL,
+        "treatment_start_date",
+        "discontinued_180d",
+        SWITCH_FLAG,
+        "persistent_at_180d",
+    )
+    assert CAUSAL_COHORT not in PREDICTION_COHORTS
+    assert PREDICTION_COHORTS == ("initiation", "discontinuation", "persistence")
+
+
+def test_convert_persistence_causal_end_to_end(tmp_path):
+    mart = tmp_path / "mart.parquet"
+    pd.DataFrame(_entity_mart_rows_two_arms()).to_parquet(mart)
+    out = tmp_path / "causal"
+    summary = convert(
+        input_path=str(mart),
+        output_dir=str(out),
+        cohort=CAUSAL_COHORT,
+        window_days=180,
+        min_claim_count=2,
+    )
+    assert summary["cohort"] == CAUSAL_COHORT
+    assert summary["patients"] == 2
+    assert summary["positives"] == 1  # p3 g28-persistent
+    assert summary["arms"] == {"XOLAIR": 1, "DUPIXENT": 1}
+    frame = pd.read_parquet(out / f"{CAUSAL_RECORDS_NAME}.parquet")
+    assert not (out / "e2i_ml_v3_patient_journeys.parquet").exists()
+    for col in (*CAUSAL_EXTRA_COLS, TARGET_PERSISTENT_G28, "is_synthetic", "payer_category"):
+        assert col in frame.columns, col
+    assert frame["is_synthetic"].dtype == bool and not frame["is_synthetic"].any()
+    by = frame.set_index("patient_id")
+    assert by.loc["PAT_2", TREATMENT_COL] == 0 and by.loc["PAT_3", TREATMENT_COL] == 1
+    assert by.loc["PAT_2", "discontinued_180d"] == 1 and by.loc["PAT_3", TARGET_PERSISTENT_G28] == 1
+    # journeys anchor at the first biologic fill
+    assert pd.Timestamp(by.loc["PAT_3", "index_date"]) == pd.Timestamp("2020-01-21")
+    attrition = pd.read_csv(out / "attrition_report.csv")
+    assert "two_arm_contrast" in set(attrition["step"])
+    dictionary = pd.read_csv(out / "data_dictionary.csv")
+    assert set(CAUSAL_EXTRA_COLS) <= set(dictionary["feature"])
+    assert set(dictionary.loc[dictionary["feature"] == TREATMENT_COL, "type"]) == {"treatment"}
+    assert set(dictionary.loc[dictionary["feature"] == TARGET_PERSISTENT_G28, "type"]) == {"target"}
+
+
+def test_prediction_cohorts_still_drop_the_treatment(tmp_path):
+    """Spec §3A.1: the causal frame carries the treatment; the prediction frame does not."""
+    mart = tmp_path / "mart.parquet"
+    pd.DataFrame(_entity_mart_rows_two_arms()).to_parquet(mart)
+    out = tmp_path / "persistence"
+    convert(
+        input_path=str(mart),
+        output_dir=str(out),
+        cohort="persistence",
+        window_days=180,
+        min_claim_count=2,
+    )
+    frame = pd.read_parquet(out / "e2i_ml_v3_patient_journeys.parquet")
+    # TARGET_PERSISTENT ("persistent_at_180d") is a member of CAUSAL_EXTRA_COLS
+    # (the causal export carries it as a secondary/legacy outcome) AND is this
+    # PREDICTION cohort's own pre-existing supervised target -- it belongs in
+    # this frame for a reason unrelated to Lane A, so it is excluded from the
+    # leak-check and asserted present instead, just below.
+    for col in {*CAUSAL_EXTRA_COLS, TARGET_PERSISTENT_G28, "is_synthetic"} - {TARGET_PERSISTENT}:
+        assert col not in frame.columns, f"{col} leaked into the prediction persistence frame"
+    assert "persistent_at_180d" in frame.columns
+
+
+def test_main_all_builds_prediction_cohorts_only(tmp_path):
+    mart = tmp_path / "mart.parquet"
+    pd.DataFrame(_entity_mart_rows_two_arms()).to_parquet(mart)
+    base = tmp_path / "marts"
+    assert convert_main(["--cohort", "all", "--input", str(mart), "--output", str(base)]) == 0
+    assert {p.name for p in base.iterdir()} == set(PREDICTION_COHORTS)
+    assert (
+        convert_main(
+            ["--cohort", CAUSAL_COHORT, "--input", str(mart), "--output", str(base / CAUSAL_COHORT)]
+        )
+        == 0
+    )
+    assert (base / CAUSAL_COHORT / f"{CAUSAL_RECORDS_NAME}.parquet").exists()

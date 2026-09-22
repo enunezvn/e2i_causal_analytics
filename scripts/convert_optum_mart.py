@@ -25,6 +25,7 @@ Usage (smoke on a stratified sample):
     # then run tier-0 via the Optum wrapper (sets target + manifest + AUC bar):
     #   python scripts/run_optum_tier0_test.py --cohort initiation_mart \
     #     --feature-manifest-source optum_mart --single-model
+    python scripts/convert_optum_mart.py --cohort persistence_causal   # Lane A causal export (keeps the treatment)
 """
 
 from __future__ import annotations
@@ -269,7 +270,11 @@ def select_persistence_causal_cohort(
 
 
 def build_journey_records(
-    df: pd.DataFrame, *, target: str = TARGET, anchor_col: str = "index_date"
+    df: pd.DataFrame,
+    *,
+    target: str = TARGET,
+    anchor_col: str = "index_date",
+    extra_cols: tuple[str, ...] = (),
 ) -> list[dict[str, Any]]:
     """Map cohort rows to canonical journey record-dicts.
 
@@ -281,6 +286,12 @@ def build_journey_records(
     initiation cohort, ``treatment_start_date`` for the treatment-anchored
     discontinuation/persistence cohorts (the 64 baseline features are measured at
     the dx index, which is <= treatment-start, so they remain pre-index there).
+
+    ``extra_cols`` (Lane A) is the CAUSAL cohort's positive enumeration of the
+    columns the prediction cohorts must never carry: the treatment, its brand
+    label, the treatment start and the secondary outcomes. Dates are emitted as
+    Timestamps, text as-is, everything else as a plain int (0/1 flags). The
+    default (empty) keeps every prediction cohort byte-identical.
     """
     raw_features = [c for c in MART_SAFE_FEATURES if c not in _DERIVED and c in df.columns]
     records: list[dict[str, Any]] = []
@@ -321,11 +332,31 @@ def build_journey_records(
         model_inputs.append(rec["geographic_region"])
         present = sum(1 for v in model_inputs if pd.notna(v))
         rec["data_quality_score"] = round(present / len(model_inputs), 4) if model_inputs else 0.0
+        for col in extra_cols:
+            value = row[col]
+            if col.endswith("_date"):
+                rec[col] = pd.to_datetime(value)
+            elif isinstance(value, str):
+                rec[col] = value
+            else:
+                rec[col] = int(value)
         records.append(rec)
     return records
 
 
-def _data_dictionary_entries(target: str = TARGET) -> list[dict[str, Any]]:
+_CAUSAL_DICTIONARY_TYPE = {
+    "index_biologic_brand": "treatment",
+    TREATMENT_COL: "treatment",
+    "treatment_start_date": "anchor",
+    TARGET_DISCONTINUED: "outcome",
+    SWITCH_FLAG: "outcome",
+    TARGET_PERSISTENT: "outcome",
+}
+
+
+def _data_dictionary_entries(
+    target: str = TARGET, *, extra_cols: tuple[str, ...] = ()
+) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     for name in sorted(MART_SAFE_FEATURES) + [target]:
         contract = optum_mart_contract_for(name)
@@ -344,19 +375,49 @@ def _data_dictionary_entries(target: str = TARGET) -> list[dict[str, Any]]:
                 ),
             }
         )
+    for name in extra_cols:
+        entries.append(
+            {
+                "feature": name,
+                "type": _CAUSAL_DICTIONARY_TYPE[name],
+                "source_table": "optum_mart.patient",
+                "lookback_window": "post-index (mart_treatment)",
+                "null_rate": "",
+                "notes": (
+                    "CAUSAL export only — the treatment / its anchor / a secondary outcome; "
+                    "never a prediction feature (manifest forbids it as such)"
+                ),
+            }
+        )
     return entries
 
 
-# --- Cohort registry (initiation + the treatment-anchored disc/persistence) ---
+# --- Cohort registry (initiation + the treatment-anchored disc/persistence
+# prediction cohorts + the Lane A causal cohort) ---
+CAUSAL_COHORT = "persistence_causal"
+PREDICTION_COHORTS = ("initiation", "discontinuation", "persistence")
+# The causal export's positive enumeration of non-feature columns (order = the
+# parquet / table column order after the allow-list features).
+CAUSAL_EXTRA_COLS: tuple[str, ...] = (
+    "index_biologic_brand",
+    TREATMENT_COL,
+    "treatment_start_date",
+    TARGET_DISCONTINUED,
+    SWITCH_FLAG,
+    TARGET_PERSISTENT,
+)
+CAUSAL_RECORDS_NAME = "e2i_causal_v1_biologic_persistence"
 COHORT_TARGETS: dict[str, str] = {
     "initiation": TARGET,
     "discontinuation": TARGET_DISCONTINUED,
     "persistence": TARGET_PERSISTENT,
+    CAUSAL_COHORT: TARGET_PERSISTENT_G28,
 }
 _SELECTOR_BY_COHORT = {
     "initiation": select_initiation_cohort,
     "discontinuation": select_discontinuation_cohort,
     "persistence": select_persistence_cohort,
+    CAUSAL_COHORT: select_persistence_causal_cohort,
 }
 # Journey temporal anchor: dx-index for initiation; first biologic fill for the
 # treatment-anchored cohorts (the 64 baseline features are knowable at dx-index,
@@ -365,24 +426,32 @@ _ANCHOR_BY_COHORT = {
     "initiation": "index_date",
     "discontinuation": "treatment_start_date",
     "persistence": "treatment_start_date",
+    CAUSAL_COHORT: "treatment_start_date",
 }
 _SPLIT_CONFIG_BY_COHORT = {
     "initiation": ("optum_mart_initiation_v1", "optum_mart_initiation"),
     "discontinuation": ("optum_mart_discontinuation_v1", "optum_mart_discontinuation"),
     "persistence": ("optum_mart_persistence_v1", "optum_mart_persistence"),
+    CAUSAL_COHORT: ("optum_mart_persistence_causal_v1", "optum_mart_persistence_causal"),
 }
 _OUTPUT_BY_COHORT = {
     "initiation": DEFAULT_OUTPUT,
     "discontinuation": "data/rwd/mart/discontinuation",
     "persistence": "data/rwd/mart/persistence",
+    CAUSAL_COHORT: "data/rwd/mart/persistence_causal",
 }
-_TREATMENT_ANCHORED = ("discontinuation", "persistence")
-# Coverage/gap columns the treatment-anchored cohorts need beyond the allow-list.
+_TREATMENT_ANCHORED = ("discontinuation", "persistence", CAUSAL_COHORT)
+_EXTRA_COLS_BY_COHORT: dict[str, tuple[str, ...]] = {CAUSAL_COHORT: CAUSAL_EXTRA_COLS}
+_RECORDS_NAME_BY_COHORT: dict[str, str] = {CAUSAL_COHORT: CAUSAL_RECORDS_NAME}
+# Coverage/gap columns the treatment-anchored cohorts need beyond the allow-list
+# (the switch flag is projected for every treatment-anchored read; only the
+# causal selector consumes it).
 _OUTCOME_COLS = (
     "last_observed_date",
     "last_coverage_end",
     "max_internal_gap_days",
     "terminal_gap_days",
+    SWITCH_FLAG,
 )
 
 
@@ -464,11 +533,24 @@ def convert(
         # The read pushed down to initiators; record the full patient denominator
         # as the funnel top so the attrition report stays transparent.
         attrition = [("patient_panel", _count_patient_panel(input_path))] + attrition
-    records = build_journey_records(cohort_df, target=target, anchor_col=anchor)
+    extra_cols = _EXTRA_COLS_BY_COHORT.get(cohort, ())
+    records = build_journey_records(
+        cohort_df, target=target, anchor_col=anchor, extra_cols=extra_cols
+    )
+    if cohort == CAUSAL_COHORT:
+        # Real rows, tagged so the real-mode provenance filter keeps them and a
+        # synthetic-gold plant can never masquerade as claims data.
+        for rec in records:
+            rec["is_synthetic"] = False
     split = apply_chronological_split(records, date_key="journey_start_date", id_key="patient_id")
 
     out = Path(output_dir)
-    write_records(out, "e2i_ml_v3_patient_journeys", records, fmt="parquet")
+    write_records(
+        out,
+        _RECORDS_NAME_BY_COHORT.get(cohort, "e2i_ml_v3_patient_journeys"),
+        records,
+        fmt="parquet",
+    )
     cfg_id, cfg_name = _SPLIT_CONFIG_BY_COHORT[cohort]
     registry = build_split_registry(
         split_config_id=cfg_id,
@@ -478,10 +560,10 @@ def convert(
     )
     write_records(out, "e2i_ml_v3_split_registry", registry, fmt="json")
     write_attrition_report(out, attrition)
-    write_data_dictionary(out, _data_dictionary_entries(target))
+    write_data_dictionary(out, _data_dictionary_entries(target, extra_cols=extra_cols))
 
     positives = int(sum(r[target] for r in records))
-    summary = {
+    summary: dict[str, Any] = {
         "cohort": cohort,
         "patients": len(records),
         "positives": positives,
@@ -489,6 +571,11 @@ def convert(
         "splits": split["counts"],
         "output_dir": str(out),
     }
+    if cohort == CAUSAL_COHORT:
+        arms: dict[str, int] = {}
+        for rec in records:
+            arms[rec["index_biologic_brand"]] = arms.get(rec["index_biologic_brand"], 0) + 1
+        summary["arms"] = arms
     logger.info("Conversion summary: %s", summary)
     return summary
 
@@ -499,8 +586,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--cohort",
         default="initiation",
-        choices=("initiation", "discontinuation", "persistence", "all"),
-        help="Which cohort to build ('all' builds every cohort).",
+        choices=(*PREDICTION_COHORTS, CAUSAL_COHORT, "all"),
+        help=(
+            "Which cohort to build. 'all' builds the three PREDICTION cohorts; the "
+            f"causal cohort '{CAUSAL_COHORT}' (keeps the treatment) is always explicit."
+        ),
     )
     parser.add_argument(
         "--output",
@@ -523,9 +613,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING)
 
-    cohorts = (
-        ["initiation", "discontinuation", "persistence"] if args.cohort == "all" else [args.cohort]
-    )
+    cohorts = list(PREDICTION_COHORTS) if args.cohort == "all" else [args.cohort]
     for cohort in cohorts:
         if args.cohort == "all":
             output_dir = str(Path(args.output or "data/rwd/mart") / cohort)
