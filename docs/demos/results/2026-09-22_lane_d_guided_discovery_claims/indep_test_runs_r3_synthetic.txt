@@ -1,0 +1,19 @@
+=== ARM_START synthetic/fisherz 14:26:19Z hard timeout 300 s ===
+src resolves to: /home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-d-guided-discovery-claims/src/__init__.py
+SYNTHETIC frame n=4000 k=10 non-binary=8
+ARM {"arm": "synthetic/fisherz", "indep_test": "fisherz", "converged": true, "error": null, "wall_s": 1.9, "primary_fit_s": 0.1, "n_edges": 6, "gate": "accept", "confidence": 0.818, "corroboration_basis": "bootstrap_stability", "n_attempted": 20, "n_succeeded": 20, "budget_exhausted": false, "mean_stability_beyond_prior": 0.98, "share_edges_stability_ge_0.9": 1.0, "preflight_kept": 10, "T_to_Y_in_ensemble": true, "parents_T": ["academic_hcp", "disease_severity"], "parents_Y": ["disease_severity", "treatment_arm"], "planted_roles": {"disease_severity": "confounder", "academic_hcp": "instrument"}}
+rc=0 (124 = did not complete in 300 s) synthetic/fisherz 14:26:46Z
+=== ARM_START synthetic/gsq 14:26:46Z hard timeout 300 s ===
+src resolves to: /home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-d-guided-discovery-claims/src/__init__.py
+SYNTHETIC frame n=4000 k=10 non-binary=8
+Bootstrap stopped by the time budget (180s): 1/20 resamples attempted, 1 succeeded
+Bootstrap stability unknown: 1/20 resamples succeeded (fewer than 10)
+ARM {"arm": "synthetic/gsq", "indep_test": "gsq", "converged": true, "error": null, "wall_s": 152.4, "primary_fit_s": 0.1, "n_edges": 5, "gate": "reject", "confidence": 0.0, "corroboration_basis": "uncorroborated_single_run", "n_attempted": 1, "n_succeeded": 1, "budget_exhausted": true, "mean_stability_beyond_prior": null, "share_edges_stability_ge_0.9": null, "preflight_kept": 10, "T_to_Y_in_ensemble": true, "parents_T": ["disease_severity"], "parents_Y": ["disease_severity", "treatment_arm"], "planted_roles": {"disease_severity": "confounder", "academic_hcp": "unrelated"}}
+rc=0 (124 = did not complete in 300 s) synthetic/gsq 14:29:39Z
+=== ARM_START synthetic/chisq 14:29:39Z hard timeout 300 s ===
+src resolves to: /home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-d-guided-discovery-claims/src/__init__.py
+SYNTHETIC frame n=4000 k=10 non-binary=8
+Bootstrap stopped by the time budget (180s): 1/20 resamples attempted, 1 succeeded
+Bootstrap stability unknown: 1/20 resamples succeeded (fewer than 10)
+ARM {"arm": "synthetic/chisq", "indep_test": "chisq", "converged": true, "error": null, "wall_s": 110.0, "primary_fit_s": 0.1, "n_edges": 4, "gate": "reject", "confidence": 0.0, "corroboration_basis": "uncorroborated_single_run", "n_attempted": 1, "n_succeeded": 1, "budget_exhausted": true, "mean_stability_beyond_prior": null, "share_edges_stability_ge_0.9": null, "preflight_kept": 10, "T_to_Y_in_ensemble": true, "parents_T": [], "parents_Y": ["disease_severity", "treatment_arm"], "planted_roles": {"disease_severity": "ancestor", "academic_hcp": "unrelated"}}
+rc=0 (124 = did not complete in 300 s) synthetic/chisq 14:32:33Z

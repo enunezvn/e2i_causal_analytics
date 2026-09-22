@@ -386,6 +386,14 @@ class CausalImpactState(TypedDict):
     discovery_gate_evaluation: NotRequired[Dict[str, Any]]  # Full GateEvaluation from gate
     discovery_latency_ms: NotRequired[float]  # Discovery computation time
     discovery_skip_reason: NotRequired[str]  # M-gb1: surfaced reason auto-discovery was skipped
+    # Lane D (guided discovery on claims frames): the DAG-learning frame is
+    # pre-flighted (constant / exactly collinear columns dropped, then capped
+    # by a pre-treatment screen) and the run is bounded. Declared here so a
+    # caller's override survives LangGraph's input filter (wave-51 lesson).
+    discovery_max_covariates: NotRequired[int]  # cap on learned covariates (default 20)
+    discovery_time_budget_s: NotRequired[Optional[float]]  # wall budget (default 180 s)
+    discovery_min_resamples: NotRequired[int]  # corroboration needs this many (default 10)
+    discovery_indep_test: NotRequired[Optional[str]]  # force a CI test (measurement only)
     # #1974: durable record of the discovery run in public.discovered_dags
     # (DiscoveredDagRepository, written by graph_builder whenever discovery
     # actually ran). Exactly one of the two is set per discovery run:
