@@ -1,0 +1,11 @@
+commit: 4a43b2173cdfb7ce228e5dcd7614716b78797e64
+probe1 dummylm typed outputs: dspy=3.1.0 edges=[['f', 'T'], ['f', 'Y'], ['T', 'Y']] type=list ambiguous=False type=bool
+probe2 graph_builder import seconds: 13.1
+probe2 backdoor module import seconds (after the above): 0.000
+probe3 CitationResolver.__init__ signature: (self, *, europe_pmc: 'Optional[EuropePMCClient]' = None, crossref: 'Optional[CrossrefClient]' = None, umls: 'Optional[UMLSClient]' = None) -> 'None'
+probe4 dead pin: repo.client=None create_review->None in 0.0s
+probe5 .dockerignore:76 == 'docs/'
+probe6 instructions chars=16545 guide chars=16546 equal_stripped=True
+probe7 adaptive_validity_check.py lines: 4237
+probe8 fake run(b) disagreements=17 manifest instruments=17 equal=True
+probe9 cost: 91 briefs usd=1.72; run(a) 64 briefs ratio=0.70; run(b) 110 briefs ratio=1.21; prompt chars/brief=23357

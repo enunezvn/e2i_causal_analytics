@@ -88,7 +88,22 @@
         }
       },
       "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
-      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 59,
+            "text": "- Geography/residence \u2014 `zip5`, `zip3`, `zip_code`, `geographic_region`, `urban_rural_code`: specialist proximity & regional adoption shift omalizumab use (PMID 36481046 \u2014 use varied by patient ZIP, higher nearer the allergist practice; PMID 40169378 \u2014 BRIT registry, deprivation/distance affect access).",
+            "pmids": [
+              "36481046",
+              "40169378"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
     },
     {
       "feature": "zip3",
@@ -118,7 +133,22 @@
         }
       },
       "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
-      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 59,
+            "text": "- Geography/residence \u2014 `zip5`, `zip3`, `zip_code`, `geographic_region`, `urban_rural_code`: specialist proximity & regional adoption shift omalizumab use (PMID 36481046 \u2014 use varied by patient ZIP, higher nearer the allergist practice; PMID 40169378 \u2014 BRIT registry, deprivation/distance affect access).",
+            "pmids": [
+              "36481046",
+              "40169378"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
     },
     {
       "feature": "zip_code",
@@ -148,7 +178,22 @@
         }
       },
       "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
-      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 59,
+            "text": "- Geography/residence \u2014 `zip5`, `zip3`, `zip_code`, `geographic_region`, `urban_rural_code`: specialist proximity & regional adoption shift omalizumab use (PMID 36481046 \u2014 use varied by patient ZIP, higher nearer the allergist practice; PMID 40169378 \u2014 BRIT registry, deprivation/distance affect access).",
+            "pmids": [
+              "36481046",
+              "40169378"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
     },
     {
       "feature": "geographic_region",
@@ -178,7 +223,22 @@
         }
       },
       "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
-      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 59,
+            "text": "- Geography/residence \u2014 `zip5`, `zip3`, `zip_code`, `geographic_region`, `urban_rural_code`: specialist proximity & regional adoption shift omalizumab use (PMID 36481046 \u2014 use varied by patient ZIP, higher nearer the allergist practice; PMID 40169378 \u2014 BRIT registry, deprivation/distance affect access).",
+            "pmids": [
+              "36481046",
+              "40169378"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
     },
     {
       "feature": "insurance_product",
@@ -208,7 +268,21 @@
         }
       },
       "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
-      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 60,
+            "text": "- Coverage/payer \u2014 `insurance_product`, `plan_type`, `payer_category`: prior-auth / step-therapy / formulary gate initiation (Aetna CPB 0670; Cigna & UHC Xolair PA policies; PMID 40004611 cost/access disparities).",
+            "pmids": [
+              "40004611"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
     },
     {
       "feature": "plan_type",
@@ -238,7 +312,21 @@
         }
       },
       "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
-      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 60,
+            "text": "- Coverage/payer \u2014 `insurance_product`, `plan_type`, `payer_category`: prior-auth / step-therapy / formulary gate initiation (Aetna CPB 0670; Cigna & UHC Xolair PA policies; PMID 40004611 cost/access disparities).",
+            "pmids": [
+              "40004611"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
     },
     {
       "feature": "payer_category",
@@ -268,7 +356,21 @@
         }
       },
       "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
-      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 60,
+            "text": "- Coverage/payer \u2014 `insurance_product`, `plan_type`, `payer_category`: prior-auth / step-therapy / formulary gate initiation (Aetna CPB 0670; Cigna & UHC Xolair PA policies; PMID 40004611 cost/access disparities).",
+            "pmids": [
+              "40004611"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
     },
     {
       "feature": "urban_rural_code",
@@ -298,7 +400,22 @@
         }
       },
       "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
-      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 59,
+            "text": "- Geography/residence \u2014 `zip5`, `zip3`, `zip_code`, `geographic_region`, `urban_rural_code`: specialist proximity & regional adoption shift omalizumab use (PMID 36481046 \u2014 use varied by patient ZIP, higher nearer the allergist practice; PMID 40169378 \u2014 BRIT registry, deprivation/distance affect access).",
+            "pmids": [
+              "36481046",
+              "40169378"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
     },
     {
       "feature": "primary_diagnosis_code",
@@ -676,7 +793,22 @@
         }
       },
       "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
-      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 61,
+            "text": "- Specialist access \u2014 `office_visits_allergist`, `office_visits_dermatology`, `specialist_concentration`, `primary_specialist_type`, `saw_allergist_flag`, `saw_dermatologist_flag`, `specialist_visit_interaction`: allergist/derm contact is the biologic-prescribing channel (PMID 36481046; PMID 33528934).",
+            "pmids": [
+              "33528934",
+              "36481046"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
     },
     {
       "feature": "office_visits_dermatology",
@@ -706,7 +838,22 @@
         }
       },
       "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
-      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 61,
+            "text": "- Specialist access \u2014 `office_visits_allergist`, `office_visits_dermatology`, `specialist_concentration`, `primary_specialist_type`, `saw_allergist_flag`, `saw_dermatologist_flag`, `specialist_visit_interaction`: allergist/derm contact is the biologic-prescribing channel (PMID 36481046; PMID 33528934).",
+            "pmids": [
+              "33528934",
+              "36481046"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
     },
     {
       "feature": "office_visits_pcp",
@@ -1420,7 +1567,22 @@
         }
       },
       "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
-      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 61,
+            "text": "- Specialist access \u2014 `office_visits_allergist`, `office_visits_dermatology`, `specialist_concentration`, `primary_specialist_type`, `saw_allergist_flag`, `saw_dermatologist_flag`, `specialist_visit_interaction`: allergist/derm contact is the biologic-prescribing channel (PMID 36481046; PMID 33528934).",
+            "pmids": [
+              "33528934",
+              "36481046"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
     },
     {
       "feature": "primary_specialist_type",
@@ -1450,7 +1612,22 @@
         }
       },
       "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
-      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 61,
+            "text": "- Specialist access \u2014 `office_visits_allergist`, `office_visits_dermatology`, `specialist_concentration`, `primary_specialist_type`, `saw_allergist_flag`, `saw_dermatologist_flag`, `specialist_visit_interaction`: allergist/derm contact is the biologic-prescribing channel (PMID 36481046; PMID 33528934).",
+            "pmids": [
+              "33528934",
+              "36481046"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
     },
     {
       "feature": "saw_allergist_flag",
@@ -1480,7 +1657,22 @@
         }
       },
       "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
-      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 61,
+            "text": "- Specialist access \u2014 `office_visits_allergist`, `office_visits_dermatology`, `specialist_concentration`, `primary_specialist_type`, `saw_allergist_flag`, `saw_dermatologist_flag`, `specialist_visit_interaction`: allergist/derm contact is the biologic-prescribing channel (PMID 36481046; PMID 33528934).",
+            "pmids": [
+              "33528934",
+              "36481046"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
     },
     {
       "feature": "saw_dermatologist_flag",
@@ -1510,7 +1702,22 @@
         }
       },
       "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
-      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 61,
+            "text": "- Specialist access \u2014 `office_visits_allergist`, `office_visits_dermatology`, `specialist_concentration`, `primary_specialist_type`, `saw_allergist_flag`, `saw_dermatologist_flag`, `specialist_visit_interaction`: allergist/derm contact is the biologic-prescribing channel (PMID 36481046; PMID 33528934).",
+            "pmids": [
+              "33528934",
+              "36481046"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
     },
     {
       "feature": "index_date",
@@ -1540,7 +1747,22 @@
         }
       },
       "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
-      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 62,
+            "text": "- Calendar anchors \u2014 `index_date`, `lookback_start_date`: temporal adoption of biologics (PMID 32382379; PMID 40004611).",
+            "pmids": [
+              "32382379",
+              "40004611"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
     },
     {
       "feature": "lookback_start_date",
@@ -1570,7 +1792,22 @@
         }
       },
       "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
-      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 62,
+            "text": "- Calendar anchors \u2014 `index_date`, `lookback_start_date`: temporal adoption of biologics (PMID 32382379; PMID 40004611).",
+            "pmids": [
+              "32382379",
+              "40004611"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
     },
     {
       "feature": "comorbidity_load_total",
@@ -1648,7 +1885,22 @@
         }
       },
       "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
-      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 61,
+            "text": "- Specialist access \u2014 `office_visits_allergist`, `office_visits_dermatology`, `specialist_concentration`, `primary_specialist_type`, `saw_allergist_flag`, `saw_dermatologist_flag`, `specialist_visit_interaction`: allergist/derm contact is the biologic-prescribing channel (PMID 36481046; PMID 33528934).",
+            "pmids": [
+              "33528934",
+              "36481046"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
     }
   ],
   "note": "no threshold: the owner reads the diff and decides whether to relabel (spec \u00a73 Lane B item 1)"

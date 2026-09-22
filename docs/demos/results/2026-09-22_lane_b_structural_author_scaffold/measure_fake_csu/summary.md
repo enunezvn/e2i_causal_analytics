@@ -2,11 +2,11 @@
 
 - lm: `fake` (fake source: replay)
 - resolver: `offline`; cohort: `CSU_remibrutinib`; briefs: 31
-- measured_at: 2026-09-22T16:11:36.648779+00:00
+- measured_at: 2026-09-22T16:47:04.148107+00:00
 
 ## Score
 
-    PASS: gate missed_leaks == 0 — missed leaks 0 (rate 0.000 over 31 scored, 0 routed to review, n=31)
+    PASS: gate missed_leaks == 0 — missed leaks 0 (rate 0.000 over 14 scored golden-leak features; 31 scored, 0 routed to review, n=31)
     exact role agreement 28/31 (0.903); leak-decision agreement 31/31 (1.000); conservative errors 0
       ancestor    support=5   predicted=5   tp=5   precision=1.00 recall=1.00
       collider    support=5   predicted=8   tp=5   precision=0.62 recall=1.00

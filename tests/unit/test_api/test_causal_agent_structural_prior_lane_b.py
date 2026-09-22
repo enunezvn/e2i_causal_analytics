@@ -16,10 +16,19 @@ from src.api.schemas.causal import AgentCausalAnalysisRequest
 from src.repositories.expert_review import estimand_key_for
 
 T, Y = "treatment_dupixent", "persistent_at_180d_g28"
-HASH = "c" * 64
 
 
 def _row(status="approved"):
+    from src.causal_engine.dag_hash import compute_adjustment_set_hash, compute_dag_hash
+
+    snap = {
+        "nodes": [T, Y, "age_at_index", "payer_category"],
+        "edges": [["age_at_index", T], ["age_at_index", Y], ["payer_category", T], [T, Y]],
+        "treatment_nodes": [T],
+        "outcome_nodes": [Y],
+        "adjustment_sets": [["age_at_index"]],
+    }
+    dag_hash = compute_dag_hash(causal_graph=snap)
     feats = [
         {
             "feature": "age_at_index",
@@ -43,11 +52,15 @@ def _row(status="approved"):
         "review_type": "initial_dag",
         "approval_status": status,
         "valid_until": None,
-        "dag_version_hash": HASH,
+        "dag_version_hash": dag_hash,
+        "adjustment_set_hash": compute_adjustment_set_hash(snap["adjustment_sets"]),
+        "treatment_variable": T,
+        "outcome_variable": Y,
         "estimand_key": estimand_key_for(None, T, Y),
+        "dag_structure_json": dict(snap, dag_version_hash=dag_hash),
         "agent_assessment_json": {
             "structural_author": {
-                "dag_version_hash": HASH,
+                "dag_version_hash": dag_hash,
                 "adjustment_set": ["age_at_index"],
                 "features": feats,
                 "manifest": "optum_mart",

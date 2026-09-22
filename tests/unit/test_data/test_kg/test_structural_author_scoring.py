@@ -99,7 +99,10 @@ def test_planted_missed_leak_fails_the_gate():
     assert report.gate_passed is False
     assert [m["feature_name"] for m in report.missed_leaks] == [victim["feature_name"]]
     assert report.missed_leaks[0]["derived_role"] == "confounder"
-    assert report.missed_leak_rate == pytest.approx(1 / 31)
+    # The rate is over the golden LEAK features that were scored, not over all 31.
+    n_leak = sum(1 for e in entries if e["ground_truth_role"] in LEAK_ROLES)
+    assert report.n_leak_truth == n_leak == report.n_leak_scored == 14
+    assert report.missed_leak_rate == pytest.approx(1 / 14)
     assert report.summary_lines()[0].startswith("FAIL: gate missed_leaks == 0 — missed leaks 1")
 
 
@@ -110,6 +113,8 @@ def test_review_routed_feature_is_listed_not_scored():
     preds[f"{CSU}/{first}"] = None
     report = score_roles(preds, entries)
     assert report.n == 31 and report.n_scored == 30 and report.n_review == 1
+    assert report.n_leak_truth == 14
+    assert report.n_leak_scored == 14 - int(entries[0]["ground_truth_role"] in LEAK_ROLES)
     assert report.review == [
         {"cohort": CSU, "feature_name": first, "ground_truth_role": entries[0]["ground_truth_role"]}
     ]
@@ -149,3 +154,4 @@ def test_per_role_precision_recall_on_a_hand_set():
     ]
     assert report.confusion["mediator"]["confounder"] == 1
     assert report.gate_passed is False
+    assert report.n_leak_truth == 1 and report.missed_leak_rate == 1.0

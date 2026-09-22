@@ -120,7 +120,7 @@ from src.data.manifests import (
     SYNTHETIC_FORBIDDEN_AS_FEATURES,
     lookup_feature_contract,
 )
-from src.ml.causal_role_dgp.extractor import derive_structural_role
+from src.ml.causal_role_dgp.extractor import attestation_may_decide, derive_structural_role
 
 # ``EnsembleVoter`` and ``EnsembleVerdict`` are LAZY-imported below to
 # avoid triggering ``src.data.kg.__init__`` at module-import time. The
@@ -2103,19 +2103,6 @@ def _legacy_short_circuit_verdict(feature: str, *, evidence: str) -> dict[str, A
     }
 
 
-def _attestation_may_decide(contract: Optional[FeatureContract]) -> bool:
-    """True iff ``contract`` carries an attestation whose provenance may ACT.
-
-    Lane B (2026-09-22): ``CausalStructureAttestation.may_decide`` — reviewed or
-    human-signed edges decide; unreviewed ``machine`` edges are audit-only.
-    """
-    return (
-        contract is not None
-        and contract.causal_structure is not None
-        and contract.causal_structure.may_decide()
-    )
-
-
 def _apply_structural_attestation(
     verdict: dict[str, Any],
     contract: Optional[FeatureContract],
@@ -2179,14 +2166,8 @@ def _apply_structural_attestation(
     )
     verdict["structural_llm_disagreement"] = disagreement if llm_role is not None else None
 
-    if not structural_gate_enabled():
-        # Dark-launch: telemetry recorded, but no remediation override.
-        return
-    if not contract.causal_structure.may_decide():
-        # Lane B (2026-09-22): an unreviewed ``machine`` attestation is
-        # audit-only — its role and disagreement are recorded above, but it
-        # never narrows remediation, gate on or off.
-        return
+    if not structural_gate_enabled() or not contract.causal_structure.may_decide():
+        return  # dark-launch, or a Lane B machine (audit-only) attestation: telemetry only
 
     override = apply_structural_remediation_gate(
         structural_role=structural_role,
@@ -3886,12 +3867,7 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
         contract = lookup_feature_contract(feat, data_source=manifest_source)
         structural_role: Optional[CausalRole] = None
         structural_unclassifiable = False
-        # Lane B (real-data causal estimation, 2026-09-22): only a reviewed or
-        # human-signed attestation may DECIDE. An unreviewed ``machine``
-        # attestation (e.g. the 110 Optum-initiation fragments) is audit-only:
-        # the structural rule is skipped for it here, and its derived role is
-        # recorded as telemetry by ``_apply_structural_attestation`` below.
-        if structural_decider_enabled and _attestation_may_decide(contract):
+        if structural_decider_enabled and attestation_may_decide(contract):
             _role_str, _structural_err = derive_structural_role(contract)
             structural_unclassifiable = _structural_err is not None
             # extract_role returns exactly the six CausalRole members → cast is sound.

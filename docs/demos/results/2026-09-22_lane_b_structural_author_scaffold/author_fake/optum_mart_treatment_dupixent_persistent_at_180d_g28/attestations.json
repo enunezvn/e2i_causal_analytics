@@ -1,6 +1,6 @@
 {
   "meta": {
-    "authored_at": "2026-09-22T16:16:13.951647+00:00",
+    "authored_at": "2026-09-22T16:49:47.471309+00:00",
     "manifest": "optum_mart",
     "treatment": "treatment_dupixent",
     "outcome": "persistent_at_180d_g28",
@@ -81,7 +81,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:15:54.145474+00:00",
+      "authored_at": "2026-09-22T16:49:24.787248+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -151,7 +151,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:15:54.455452+00:00",
+      "authored_at": "2026-09-22T16:49:25.152788+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -221,7 +221,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:15:54.751599+00:00",
+      "authored_at": "2026-09-22T16:49:25.498899+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -291,7 +291,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:15:55.050130+00:00",
+      "authored_at": "2026-09-22T16:49:25.929801+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -361,7 +361,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:15:55.348963+00:00",
+      "authored_at": "2026-09-22T16:49:26.316486+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -431,7 +431,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:15:55.667984+00:00",
+      "authored_at": "2026-09-22T16:49:26.669454+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -501,7 +501,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:15:55.980235+00:00",
+      "authored_at": "2026-09-22T16:49:27.034355+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -571,7 +571,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:15:56.291504+00:00",
+      "authored_at": "2026-09-22T16:49:27.392388+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -641,7 +641,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:15:56.658321+00:00",
+      "authored_at": "2026-09-22T16:49:27.763543+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -711,7 +711,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:15:56.957860+00:00",
+      "authored_at": "2026-09-22T16:49:28.219804+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -781,7 +781,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:15:57.267975+00:00",
+      "authored_at": "2026-09-22T16:49:28.605710+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -851,7 +851,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:15:57.578923+00:00",
+      "authored_at": "2026-09-22T16:49:29.018287+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -921,7 +921,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:15:57.885405+00:00",
+      "authored_at": "2026-09-22T16:49:29.384251+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -991,7 +991,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:15:58.195880+00:00",
+      "authored_at": "2026-09-22T16:49:29.748402+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -1061,7 +1061,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:15:58.503286+00:00",
+      "authored_at": "2026-09-22T16:49:30.105279+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -1131,7 +1131,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:15:58.810589+00:00",
+      "authored_at": "2026-09-22T16:49:30.516429+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -1201,7 +1201,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:15:59.113377+00:00",
+      "authored_at": "2026-09-22T16:49:30.944998+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -1271,7 +1271,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:15:59.426256+00:00",
+      "authored_at": "2026-09-22T16:49:31.360679+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -1341,7 +1341,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:15:59.734843+00:00",
+      "authored_at": "2026-09-22T16:49:31.809795+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -1411,7 +1411,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:00.047192+00:00",
+      "authored_at": "2026-09-22T16:49:32.202798+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -1481,7 +1481,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:00.390455+00:00",
+      "authored_at": "2026-09-22T16:49:32.592562+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -1551,7 +1551,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:00.751996+00:00",
+      "authored_at": "2026-09-22T16:49:32.963035+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -1621,7 +1621,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:01.086847+00:00",
+      "authored_at": "2026-09-22T16:49:33.337533+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -1691,7 +1691,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:01.414885+00:00",
+      "authored_at": "2026-09-22T16:49:33.717885+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -1761,7 +1761,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:01.762471+00:00",
+      "authored_at": "2026-09-22T16:49:34.122526+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -1831,7 +1831,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:02.088964+00:00",
+      "authored_at": "2026-09-22T16:49:34.512238+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -1901,7 +1901,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:02.400555+00:00",
+      "authored_at": "2026-09-22T16:49:34.858260+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -1971,7 +1971,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:02.711056+00:00",
+      "authored_at": "2026-09-22T16:49:35.191928+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -2041,7 +2041,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:03.030741+00:00",
+      "authored_at": "2026-09-22T16:49:35.561600+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -2111,7 +2111,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:03.353096+00:00",
+      "authored_at": "2026-09-22T16:49:35.941110+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -2181,7 +2181,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:03.683651+00:00",
+      "authored_at": "2026-09-22T16:49:36.293859+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -2251,7 +2251,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:04.003595+00:00",
+      "authored_at": "2026-09-22T16:49:36.624479+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -2321,7 +2321,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:04.329883+00:00",
+      "authored_at": "2026-09-22T16:49:36.960902+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -2391,7 +2391,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:04.649162+00:00",
+      "authored_at": "2026-09-22T16:49:37.297845+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -2461,7 +2461,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:04.945518+00:00",
+      "authored_at": "2026-09-22T16:49:37.621879+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -2531,7 +2531,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:05.240046+00:00",
+      "authored_at": "2026-09-22T16:49:37.947914+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -2601,7 +2601,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:05.537741+00:00",
+      "authored_at": "2026-09-22T16:49:38.291461+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -2671,7 +2671,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:05.835303+00:00",
+      "authored_at": "2026-09-22T16:49:38.657519+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -2741,7 +2741,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:06.136601+00:00",
+      "authored_at": "2026-09-22T16:49:38.994624+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -2811,7 +2811,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:06.438336+00:00",
+      "authored_at": "2026-09-22T16:49:39.346293+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -2881,7 +2881,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:06.751089+00:00",
+      "authored_at": "2026-09-22T16:49:39.698074+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -2951,7 +2951,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:07.053119+00:00",
+      "authored_at": "2026-09-22T16:49:40.032141+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -3021,7 +3021,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:07.359499+00:00",
+      "authored_at": "2026-09-22T16:49:40.371486+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -3091,7 +3091,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:07.665645+00:00",
+      "authored_at": "2026-09-22T16:49:40.711376+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -3161,7 +3161,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:08.018882+00:00",
+      "authored_at": "2026-09-22T16:49:41.045617+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -3231,7 +3231,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:08.361990+00:00",
+      "authored_at": "2026-09-22T16:49:41.381261+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -3301,7 +3301,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:08.700237+00:00",
+      "authored_at": "2026-09-22T16:49:41.720175+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -3371,7 +3371,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:09.022718+00:00",
+      "authored_at": "2026-09-22T16:49:42.051000+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -3441,7 +3441,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:09.341394+00:00",
+      "authored_at": "2026-09-22T16:49:42.377441+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -3511,7 +3511,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:09.674511+00:00",
+      "authored_at": "2026-09-22T16:49:42.703197+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -3581,7 +3581,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:09.984604+00:00",
+      "authored_at": "2026-09-22T16:49:43.029337+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -3651,7 +3651,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:10.273857+00:00",
+      "authored_at": "2026-09-22T16:49:43.355900+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -3721,7 +3721,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:10.567916+00:00",
+      "authored_at": "2026-09-22T16:49:43.688761+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -3791,7 +3791,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:10.866754+00:00",
+      "authored_at": "2026-09-22T16:49:44.035542+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -3861,7 +3861,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:11.160447+00:00",
+      "authored_at": "2026-09-22T16:49:44.376593+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -3931,7 +3931,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:11.445105+00:00",
+      "authored_at": "2026-09-22T16:49:44.697999+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -4001,7 +4001,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:11.729938+00:00",
+      "authored_at": "2026-09-22T16:49:45.027919+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -4071,7 +4071,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:12.041600+00:00",
+      "authored_at": "2026-09-22T16:49:45.348043+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -4141,7 +4141,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:12.344499+00:00",
+      "authored_at": "2026-09-22T16:49:45.695793+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -4211,7 +4211,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:12.649232+00:00",
+      "authored_at": "2026-09-22T16:49:46.046045+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -4281,7 +4281,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:12.955362+00:00",
+      "authored_at": "2026-09-22T16:49:46.391369+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -4351,7 +4351,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:13.264746+00:00",
+      "authored_at": "2026-09-22T16:49:46.728361+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -4421,7 +4421,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:13.580619+00:00",
+      "authored_at": "2026-09-22T16:49:47.065329+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     },
@@ -4491,7 +4491,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:16:13.882377+00:00",
+      "authored_at": "2026-09-22T16:49:47.399111+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
     }

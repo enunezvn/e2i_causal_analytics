@@ -88,7 +88,20 @@ def test_fake_dry_run_on_optum_writes_artefacts_and_diffs_the_manifest(tmp_path,
         f"zip3->{OPTUM_Y}"
     ]
     assert rows["zip3"]["manifest_provenance"] == "machine"
-    assert "authored_rationale" in rows["zip3"] and "manifest_rationale" in rows["zip3"]
+    # Both rationales, feature-specific (codex r1 MED 6): the author's reasoning
+    # and the manifest side's family bullet naming zip3, with its PMIDs and line.
+    assert rows["zip3"]["authored_reasoning"].startswith("fake LM (dry run)")
+    grounding = rows["zip3"]["manifest_rationale"]
+    assert grounding["found"] is True
+    assert grounding["source"] == "docs/layer4/optum_initiation_attestation_research.md"
+    assert any("`zip3`" in b["text"] and "36481046" in b["pmids"] for b in grounding["bullets"])
+    assert all(isinstance(b["line"], int) and b["line"] > 0 for b in grounding["bullets"])
+    # A feature from another family gets ITS bullet, not the same text.
+    age_grounding = mod.manifest_grounding("age_at_index")
+    assert age_grounding["found"] is True
+    assert age_grounding["bullets"][0]["text"] != grounding["bullets"][0]["text"]
+    assert "`age_at_index`" in age_grounding["bullets"][0]["text"]
+    assert mod.manifest_grounding("not_a_feature")["found"] is False
     assert diff["disagreements"] == ["zip3"] and diff["n_compared"] == 2
 
     review = (out / "review.md").read_text()
@@ -197,6 +210,258 @@ def test_real_lm_refuses_without_cost_acceptance(tmp_path):
     )
     assert rc == 3
     assert not any(tmp_path.iterdir())
+
+
+@pytest.mark.timeout(60)
+def test_real_lm_without_a_panel_is_refused_unless_overridden(tmp_path):
+    mod = _load()
+    rc = mod.main(
+        [
+            "--manifest",
+            "optum_mart",
+            "--treatment",
+            "treatment_dupixent",
+            "--outcome",
+            "persistent_at_180d_g28",
+            "--lm",
+            "real",
+            "--i-accept-cost",
+            "--out-root",
+            str(tmp_path),
+        ]
+    )
+    assert rc == 4
+    assert not any(tmp_path.iterdir())
+
+
+def _panel_payload(records):
+    return {
+        "manifest_source": "optum",
+        "treatment": OPTUM_T,
+        "outcome": OPTUM_Y,
+        "records": records,
+    }
+
+
+def _record(feature, **over):
+    rec = {
+        "feature": feature,
+        "layer_1": {"verdict": "pre_index"},
+        "layer_2": {},
+        "layer_3": {"ran": False},
+        "layer_4": {"fired": False},
+        "ensemble": {"final_role": None},
+        "leak_verdict": False,
+        "leak_source": None,
+        "review_required": False,
+    }
+    rec.update(over)
+    return rec
+
+
+@pytest.mark.timeout(60)
+def test_panel_records_are_validated_strictly(tmp_path):
+    """codex r1 MED 4: a malformed or incomplete panel must not silently
+    become "no panel" for a feature (that would drop the Lane E constraints)."""
+    mod = _load()
+    panel = tmp_path / "panel.json"
+    panel.write_text(
+        json.dumps(_panel_payload({"age_at_index": _record("age_at_index", leak_verdict="true")}))
+    )
+    with pytest.raises(ValueError, match="leak_verdict is not a bool"):
+        mod._load_panel(panel, manifest="optum", treatment=OPTUM_T, outcome=OPTUM_Y)
+    panel.write_text(json.dumps(_panel_payload({"age_at_index": _record("zip3")})))
+    with pytest.raises(ValueError, match="carries feature='zip3'"):
+        mod._load_panel(panel, manifest="optum", treatment=OPTUM_T, outcome=OPTUM_Y)
+    panel.write_text(json.dumps(_panel_payload({"age_at_index": "nope"})))
+    with pytest.raises(ValueError, match="is not an object"):
+        mod._load_panel(panel, manifest="optum", treatment=OPTUM_T, outcome=OPTUM_Y)
+    # Valid panel, but it does not cover every requested feature → refused.
+    panel.write_text(json.dumps(_panel_payload({"age_at_index": _record("age_at_index")})))
+    loaded = mod._load_panel(panel, manifest="optum", treatment=OPTUM_T, outcome=OPTUM_Y)
+    with pytest.raises(ValueError, match=r"no record for 1 feature\(s\): \['zip3'\]"):
+        mod.build_briefs(
+            manifest="optum",
+            treatment=OPTUM_T,
+            outcome=OPTUM_Y,
+            treatment_label="t",
+            outcome_label="y",
+            features=["age_at_index", "zip3"],
+            panel=loaded,
+        )
+
+
+class _CasRepo:
+    """An in-memory expert_reviews store that enforces the SAME version-pair
+    guard as ``ExpertReviewRepository.update_agent_assessment`` (both halves
+    filter the UPDATE; a None adjustment half means IS NULL)."""
+
+    def __init__(self):
+        self.rows = {}
+
+    async def create_review(self, **row):
+        review_id = "44444444-4444-4444-4444-444444444444"
+        self.rows[review_id] = {
+            "review_id": review_id,
+            "approval_status": "pending",
+            "valid_until": None,
+            "dag_structure_json": row.get("dag_structure"),
+            "agent_assessment_json": None,
+            **{k: v for k, v in row.items() if k != "dag_structure"},
+        }
+        return review_id
+
+    async def update_agent_assessment(
+        self, review_id, assessment, *, for_dag_version_hash=None, for_adjustment_set_hash=None
+    ):
+        row = self.rows.get(review_id)
+        if row is None:
+            return False
+        if for_dag_version_hash is not None:
+            if row.get("dag_version_hash") != for_dag_version_hash:
+                return False
+            if row.get("adjustment_set_hash") != for_adjustment_set_hash:
+                return False  # IS NULL semantics for None: a non-null row never matches
+        row["agent_assessment_json"] = assessment
+        return True
+
+
+@pytest.mark.timeout(240)
+def test_opened_review_seeds_a_prior_once_approved(tmp_path):
+    """Producer → loader round trip (codex r1 HIGH 1): the review the CLI mints
+    carries a non-null adjustment hash, so the evidence write must pass BOTH
+    halves of the version pair or it matches no row; once a human approves the
+    row, the loader derives the prior from the stored snapshot."""
+    import asyncio
+
+    from src.data.kg.structural_author import author_feature
+    from src.data.kg.structural_prior_loader import structural_prior_from_review_row
+    from src.ml.causal_role_dgp.assembler import assemble_cohort_dag
+
+    mod = _load()
+    from dspy.utils.dummies import DummyLM
+
+    records = []
+    for feat, edges in (
+        ("age_at_index", [["age_at_index", "T"], ["age_at_index", "Y"], ["T", "Y"]]),
+        ("zip3", [["zip3", "T"], ["T", "Y"]]),
+    ):
+        [brief] = mod.build_briefs(
+            manifest="optum",
+            treatment=OPTUM_T,
+            outcome=OPTUM_Y,
+            treatment_label="t",
+            outcome_label="y",
+            features=[feat],
+        )
+        lm = DummyLM(
+            [
+                {
+                    "reasoning": "r",
+                    "edges": json.dumps(edges),
+                    "edge_rationales": "[]",
+                    "entity_names": "{}",
+                    "expected_role": "confounder",
+                    "ambiguous": "false",
+                }
+            ]
+        )
+        records.append(author_feature(brief, resolver=mod.OfflineResolver(), lm=lm))
+    dag = assemble_cohort_dag(records, treatment=OPTUM_T, outcome=OPTUM_Y)
+    repo = _CasRepo()
+    result = asyncio.run(
+        mod.open_review(
+            dag=dag,
+            attestations_path=tmp_path / "attestations.json",
+            manifest="optum",
+            treatment=OPTUM_T,
+            outcome=OPTUM_Y,
+            treatment_label="t",
+            outcome_label="y",
+            brand=None,
+            model_id="dummy",
+            prompt_hash="p" * 64,
+            guide_hash="g" * 64,
+            assumption=None,
+            repo=repo,
+        )
+    )
+    assert result["assessment_persisted"] is True
+    row = repo.rows[result["review_id"]]
+    assert row["review_type"] == "initial_dag"
+    assert row["dag_version_hash"] == result["dag_version_hash"]
+    assert row["adjustment_set_hash"] == result["adjustment_set_hash"]
+    assert "structural_author" in row["agent_assessment_json"]
+    # Pending: never a prior. Approved: the prior comes from the stored snapshot.
+    assert structural_prior_from_review_row(row) is None
+    row["approval_status"] = "approved"
+    prior = structural_prior_from_review_row(row)
+    assert prior is not None
+    assert prior.anchored_confounders == ["age_at_index"]
+    assert prior.instruments == ["zip3"]
+    assert prior.roles == {"age_at_index": "confounder", "zip3": "instrument"}
+
+
+@pytest.mark.timeout(240)
+def test_open_review_fails_loudly_when_the_evidence_write_matches_no_row(tmp_path):
+    import asyncio
+
+    from src.data.kg.structural_author import author_feature
+    from src.ml.causal_role_dgp.assembler import assemble_cohort_dag
+
+    mod = _load()
+    from dspy.utils.dummies import DummyLM
+
+    [brief] = mod.build_briefs(
+        manifest="optum",
+        treatment=OPTUM_T,
+        outcome=OPTUM_Y,
+        treatment_label="t",
+        outcome_label="y",
+        features=["age_at_index"],
+    )
+    lm = DummyLM(
+        [
+            {
+                "reasoning": "r",
+                "edges": json.dumps([["age_at_index", "T"], ["age_at_index", "Y"], ["T", "Y"]]),
+                "edge_rationales": "[]",
+                "entity_names": "{}",
+                "expected_role": "confounder",
+                "ambiguous": "false",
+            }
+        ]
+    )
+    dag = assemble_cohort_dag(
+        [author_feature(brief, resolver=mod.OfflineResolver(), lm=lm)],
+        treatment=OPTUM_T,
+        outcome=OPTUM_Y,
+    )
+
+    class _MovedRepo(_CasRepo):
+        async def create_review(self, **row):
+            rid = await super().create_review(**row)
+            self.rows[rid]["adjustment_set_hash"] = "moved"  # a concurrent advance
+            return rid
+
+    with pytest.raises(RuntimeError, match="NOT persisted"):
+        asyncio.run(
+            mod.open_review(
+                dag=dag,
+                attestations_path=tmp_path / "a.json",
+                manifest="optum",
+                treatment=OPTUM_T,
+                outcome=OPTUM_Y,
+                treatment_label="t",
+                outcome_label="y",
+                brand=None,
+                model_id="dummy",
+                prompt_hash="p" * 64,
+                guide_hash="g" * 64,
+                assumption=None,
+                repo=_MovedRepo(),
+            )
+        )
 
 
 @pytest.mark.timeout(60)

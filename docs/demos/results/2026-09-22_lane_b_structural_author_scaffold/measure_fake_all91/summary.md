@@ -2,11 +2,11 @@
 
 - lm: `fake` (fake source: replay)
 - resolver: `offline`; cohort: `all`; briefs: 91
-- measured_at: 2026-09-22T16:23:25.010037+00:00
+- measured_at: 2026-09-22T16:47:35.248851+00:00
 
 ## Score
 
-    FAIL: gate missed_leaks == 0 — missed leaks 28 (rate 0.308 over 91 scored, 0 routed to review, n=91)
+    FAIL: gate missed_leaks == 0 — missed leaks 28 (rate 0.667 over 42 scored golden-leak features; 91 scored, 0 routed to review, n=91)
     exact role agreement 39/91 (0.429); leak-decision agreement 63/91 (0.692); conservative errors 0
       ancestor    support=13  predicted=5   tp=5   precision=1.00 recall=0.38
       collider    support=14  predicted=8   tp=5   precision=0.62 recall=0.36

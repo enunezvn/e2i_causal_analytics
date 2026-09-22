@@ -355,19 +355,53 @@
 
 - compared 110/110; edge-exact agreement 93; role agreement 93; disagreements 17 (no threshold)
 - **zip5**: authored confounder vs manifest instrument; authored-only ['zip5->initiated_biologic_180d']; manifest-only []
+  - manifest (docs/layer4/optum_initiation_attestation_research.md:59): - Geography/residence — `zip5`, `zip3`, `zip_code`, `geographic_region`, `urban_rural_code`: specialist proximity & regional adoption shift omalizumab use (PMID 36481046 — use varied by patient ZIP, higher nearer the allergist practice; PMID 40169378 — BRIT registry, deprivation/distance affect access).
+  - author: fake LM (dry run): stand-in confounder fragment, not an authored claim
 - **zip3**: authored confounder vs manifest instrument; authored-only ['zip3->initiated_biologic_180d']; manifest-only []
+  - manifest (docs/layer4/optum_initiation_attestation_research.md:59): - Geography/residence — `zip5`, `zip3`, `zip_code`, `geographic_region`, `urban_rural_code`: specialist proximity & regional adoption shift omalizumab use (PMID 36481046 — use varied by patient ZIP, higher nearer the allergist practice; PMID 40169378 — BRIT registry, deprivation/distance affect access).
+  - author: fake LM (dry run): stand-in confounder fragment, not an authored claim
 - **zip_code**: authored confounder vs manifest instrument; authored-only ['zip_code->initiated_biologic_180d']; manifest-only []
+  - manifest (docs/layer4/optum_initiation_attestation_research.md:59): - Geography/residence — `zip5`, `zip3`, `zip_code`, `geographic_region`, `urban_rural_code`: specialist proximity & regional adoption shift omalizumab use (PMID 36481046 — use varied by patient ZIP, higher nearer the allergist practice; PMID 40169378 — BRIT registry, deprivation/distance affect access).
+  - author: fake LM (dry run): stand-in confounder fragment, not an authored claim
 - **geographic_region**: authored confounder vs manifest instrument; authored-only ['geographic_region->initiated_biologic_180d']; manifest-only []
+  - manifest (docs/layer4/optum_initiation_attestation_research.md:59): - Geography/residence — `zip5`, `zip3`, `zip_code`, `geographic_region`, `urban_rural_code`: specialist proximity & regional adoption shift omalizumab use (PMID 36481046 — use varied by patient ZIP, higher nearer the allergist practice; PMID 40169378 — BRIT registry, deprivation/distance affect access).
+  - author: fake LM (dry run): stand-in confounder fragment, not an authored claim
 - **insurance_product**: authored confounder vs manifest instrument; authored-only ['insurance_product->initiated_biologic_180d']; manifest-only []
+  - manifest (docs/layer4/optum_initiation_attestation_research.md:60): - Coverage/payer — `insurance_product`, `plan_type`, `payer_category`: prior-auth / step-therapy / formulary gate initiation (Aetna CPB 0670; Cigna & UHC Xolair PA policies; PMID 40004611 cost/access disparities).
+  - author: fake LM (dry run): stand-in confounder fragment, not an authored claim
 - **plan_type**: authored confounder vs manifest instrument; authored-only ['plan_type->initiated_biologic_180d']; manifest-only []
+  - manifest (docs/layer4/optum_initiation_attestation_research.md:60): - Coverage/payer — `insurance_product`, `plan_type`, `payer_category`: prior-auth / step-therapy / formulary gate initiation (Aetna CPB 0670; Cigna & UHC Xolair PA policies; PMID 40004611 cost/access disparities).
+  - author: fake LM (dry run): stand-in confounder fragment, not an authored claim
 - **payer_category**: authored confounder vs manifest instrument; authored-only ['payer_category->initiated_biologic_180d']; manifest-only []
+  - manifest (docs/layer4/optum_initiation_attestation_research.md:60): - Coverage/payer — `insurance_product`, `plan_type`, `payer_category`: prior-auth / step-therapy / formulary gate initiation (Aetna CPB 0670; Cigna & UHC Xolair PA policies; PMID 40004611 cost/access disparities).
+  - author: fake LM (dry run): stand-in confounder fragment, not an authored claim
 - **urban_rural_code**: authored confounder vs manifest instrument; authored-only ['urban_rural_code->initiated_biologic_180d']; manifest-only []
+  - manifest (docs/layer4/optum_initiation_attestation_research.md:59): - Geography/residence — `zip5`, `zip3`, `zip_code`, `geographic_region`, `urban_rural_code`: specialist proximity & regional adoption shift omalizumab use (PMID 36481046 — use varied by patient ZIP, higher nearer the allergist practice; PMID 40169378 — BRIT registry, deprivation/distance affect access).
+  - author: fake LM (dry run): stand-in confounder fragment, not an authored claim
 - **office_visits_allergist**: authored confounder vs manifest instrument; authored-only ['office_visits_allergist->initiated_biologic_180d']; manifest-only []
+  - manifest (docs/layer4/optum_initiation_attestation_research.md:61): - Specialist access — `office_visits_allergist`, `office_visits_dermatology`, `specialist_concentration`, `primary_specialist_type`, `saw_allergist_flag`, `saw_dermatologist_flag`, `specialist_visit_interaction`: allergist/derm contact is the biologic-prescribing channel (PMID 36481046; PMID 33528934).
+  - author: fake LM (dry run): stand-in confounder fragment, not an authored claim
 - **office_visits_dermatology**: authored confounder vs manifest instrument; authored-only ['office_visits_dermatology->initiated_biologic_180d']; manifest-only []
+  - manifest (docs/layer4/optum_initiation_attestation_research.md:61): - Specialist access — `office_visits_allergist`, `office_visits_dermatology`, `specialist_concentration`, `primary_specialist_type`, `saw_allergist_flag`, `saw_dermatologist_flag`, `specialist_visit_interaction`: allergist/derm contact is the biologic-prescribing channel (PMID 36481046; PMID 33528934).
+  - author: fake LM (dry run): stand-in confounder fragment, not an authored claim
 - **specialist_concentration**: authored confounder vs manifest instrument; authored-only ['specialist_concentration->initiated_biologic_180d']; manifest-only []
+  - manifest (docs/layer4/optum_initiation_attestation_research.md:61): - Specialist access — `office_visits_allergist`, `office_visits_dermatology`, `specialist_concentration`, `primary_specialist_type`, `saw_allergist_flag`, `saw_dermatologist_flag`, `specialist_visit_interaction`: allergist/derm contact is the biologic-prescribing channel (PMID 36481046; PMID 33528934).
+  - author: fake LM (dry run): stand-in confounder fragment, not an authored claim
 - **primary_specialist_type**: authored confounder vs manifest instrument; authored-only ['primary_specialist_type->initiated_biologic_180d']; manifest-only []
+  - manifest (docs/layer4/optum_initiation_attestation_research.md:61): - Specialist access — `office_visits_allergist`, `office_visits_dermatology`, `specialist_concentration`, `primary_specialist_type`, `saw_allergist_flag`, `saw_dermatologist_flag`, `specialist_visit_interaction`: allergist/derm contact is the biologic-prescribing channel (PMID 36481046; PMID 33528934).
+  - author: fake LM (dry run): stand-in confounder fragment, not an authored claim
 - **saw_allergist_flag**: authored confounder vs manifest instrument; authored-only ['saw_allergist_flag->initiated_biologic_180d']; manifest-only []
+  - manifest (docs/layer4/optum_initiation_attestation_research.md:61): - Specialist access — `office_visits_allergist`, `office_visits_dermatology`, `specialist_concentration`, `primary_specialist_type`, `saw_allergist_flag`, `saw_dermatologist_flag`, `specialist_visit_interaction`: allergist/derm contact is the biologic-prescribing channel (PMID 36481046; PMID 33528934).
+  - author: fake LM (dry run): stand-in confounder fragment, not an authored claim
 - **saw_dermatologist_flag**: authored confounder vs manifest instrument; authored-only ['saw_dermatologist_flag->initiated_biologic_180d']; manifest-only []
+  - manifest (docs/layer4/optum_initiation_attestation_research.md:61): - Specialist access — `office_visits_allergist`, `office_visits_dermatology`, `specialist_concentration`, `primary_specialist_type`, `saw_allergist_flag`, `saw_dermatologist_flag`, `specialist_visit_interaction`: allergist/derm contact is the biologic-prescribing channel (PMID 36481046; PMID 33528934).
+  - author: fake LM (dry run): stand-in confounder fragment, not an authored claim
 - **index_date**: authored confounder vs manifest instrument; authored-only ['index_date->initiated_biologic_180d']; manifest-only []
+  - manifest (docs/layer4/optum_initiation_attestation_research.md:62): - Calendar anchors — `index_date`, `lookback_start_date`: temporal adoption of biologics (PMID 32382379; PMID 40004611).
+  - author: fake LM (dry run): stand-in confounder fragment, not an authored claim
 - **lookback_start_date**: authored confounder vs manifest instrument; authored-only ['lookback_start_date->initiated_biologic_180d']; manifest-only []
+  - manifest (docs/layer4/optum_initiation_attestation_research.md:62): - Calendar anchors — `index_date`, `lookback_start_date`: temporal adoption of biologics (PMID 32382379; PMID 40004611).
+  - author: fake LM (dry run): stand-in confounder fragment, not an authored claim
 - **specialist_visit_interaction**: authored confounder vs manifest instrument; authored-only ['specialist_visit_interaction->initiated_biologic_180d']; manifest-only []
+  - manifest (docs/layer4/optum_initiation_attestation_research.md:61): - Specialist access — `office_visits_allergist`, `office_visits_dermatology`, `specialist_concentration`, `primary_specialist_type`, `saw_allergist_flag`, `saw_dermatologist_flag`, `specialist_visit_interaction`: allergist/derm contact is the biologic-prescribing channel (PMID 36481046; PMID 33528934).
+  - author: fake LM (dry run): stand-in confounder fragment, not an authored claim

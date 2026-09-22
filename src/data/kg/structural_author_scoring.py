@@ -97,7 +97,11 @@ class ScoreReport:
     leak_decision_agreement: int
     leak_decision_accuracy: Optional[float]
     missed_leaks: list[dict[str, str]]
+    #: missed leaks over the golden LEAK-role features that were scored (the
+    #: false-negative rate of the leak decision), not over every feature.
     missed_leak_rate: Optional[float]
+    n_leak_truth: int
+    n_leak_scored: int
     conservative_errors: list[dict[str, str]]
     review: list[dict[str, str]]
     per_role: list[RoleMetrics]
@@ -119,7 +123,8 @@ class ScoreReport:
         verdict = "PASS" if self.gate_passed else "FAIL"
         lines = [
             f"{verdict}: gate {self.gate} — missed leaks {len(self.missed_leaks)} "
-            f"(rate {mlr} over {self.n_scored} scored, {self.n_review} routed to review, n={self.n})",
+            f"(rate {mlr} over {self.n_leak_scored} scored golden-leak features; "
+            f"{self.n_scored} scored, {self.n_review} routed to review, n={self.n})",
             f"exact role agreement {self.exact_role_agreement}/{self.n_scored} ({acc}); "
             f"leak-decision agreement {self.leak_decision_agreement}/{self.n_scored} ({leak}); "
             f"conservative errors {len(self.conservative_errors)}",
@@ -233,6 +238,10 @@ def score_roles(
 
     n_review = len(review)
     n_scored = n - n_review
+    n_leak_truth = sum(1 for e in entries if _bucket(str(e["ground_truth_role"])) == "leak")
+    n_leak_scored = n_leak_truth - sum(
+        1 for x in review if _bucket(x["ground_truth_role"]) == "leak"
+    )
     per_role = []
     for role in ROLES:
         p = _ratio(tp[role], pred_count[role])
@@ -266,7 +275,9 @@ def score_roles(
         leak_decision_agreement=leak_agree,
         leak_decision_accuracy=_ratio(leak_agree, n_scored),
         missed_leaks=missed,
-        missed_leak_rate=_ratio(len(missed), n_scored),
+        missed_leak_rate=_ratio(len(missed), n_leak_scored),
+        n_leak_truth=n_leak_truth,
+        n_leak_scored=n_leak_scored,
         conservative_errors=conservative,
         review=review,
         per_role=per_role,

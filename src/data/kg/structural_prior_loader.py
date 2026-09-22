@@ -11,17 +11,22 @@ review yields no prior, and a review that carries no structural-author
 evidence is not a structural prior at all.
 
 What is read, and from where. ``scripts/author_cohort_dag.py --review`` writes
-the assembled DAG to ``expert_reviews.dag_structure_json`` and the per-feature
-evidence table (feature → cohort role, adjustment membership, leak verdict,
-review flags, provenance) to ``agent_assessment_json["structural_author"]``,
-next to the DAG hash it graded. The loader reads the roles from that row, so
-it works inside the API container, where the ``docs/`` tree (and with it
-``docs/layer4/generated/<manifest>_<T>_<Y>/attestations.json``) is not shipped
-(``.dockerignore:76``). When the attestations file IS reachable (the dev box,
-a CLI) it is cross-checked against the row — feature set and fragment roles —
-and a mismatch fails closed. The row's ``dag_version_hash`` must equal the hash
-the evidence was graded against: a review whose structure advanced after the
-author wrote its evidence is not an approval of the authored DAG.
+the assembled DAG to ``expert_reviews.dag_structure_json`` (nodes, edges,
+treatment/outcome, adjustment sets) and the per-feature evidence table
+(feature → leak verdict, review flags, provenance, the cohort role the
+assembler derived) to ``agent_assessment_json["structural_author"]``. The
+prior is DERIVED FROM THE APPROVED SNAPSHOT (codex r1 HIGH 2): the row's
+``dag_version_hash`` must be the hash of the stored snapshot (recomputed with
+``compute_dag_hash``), the row's ``adjustment_set_hash`` must be what the
+snapshot proves (``adjustment_hash_from_snapshot``), the evidence must have
+graded that same hash, and every role is re-derived from the snapshot's edges
+with ``extract_role`` — an evidence row that claims a role the approved edges
+do not derive fails closed. Anchored confounders are the derived confounders
+inside the approved adjustment sets with no leak verdict. The docs tree (and
+``docs/layer4/generated/<manifest>_<T>_<Y>/attestations.json``) is not in the
+API image (``.dockerignore:76``); when the file IS reachable (the dev box, a
+CLI) it is cross-checked against the row — feature set and fragment roles —
+and a mismatch fails closed.
 
 Failure policy: a store outage or a malformed row never fails a run — the run
 proceeds WITHOUT a prior and says so in ``warnings`` (spec §5). Fail-closed
@@ -38,6 +43,9 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Mapping, Optional, Sequence
 
+import networkx as nx
+
+from src.ml.causal_role_dgp.extractor import extract_role
 from src.repositories.expert_review import estimand_key_for, is_active_approval
 
 logger = logging.getLogger(__name__)
@@ -64,11 +72,12 @@ class StructuralPriorError(ValueError):
 class ApprovedStructuralPrior:
     review_id: str
     dag_version_hash: str
-    #: feature → cohort role on the approved DAG (every feature that has one).
+    adjustment_set_hash: str
+    #: feature → role DERIVED from the approved snapshot's edges.
     roles: dict[str, str]
-    #: approved confounders in the approved adjustment set, no leak verdict.
+    #: derived confounders inside the approved adjustment sets, no leak verdict.
     anchored_confounders: list[str]
-    #: approved instruments (not adjusted, not anchored: graph_builder would
+    #: derived instruments (not adjusted, not anchored: graph_builder would
     #: force ``inst -> outcome`` for an anchored node).
     instruments: list[str]
     #: feature → why it is neither anchored nor an instrument.
@@ -93,6 +102,29 @@ def _as_dict(value: Any) -> Optional[dict[str, Any]]:
     return value if isinstance(value, dict) else None
 
 
+def _snapshot_graph(snapshot: Mapping[str, Any], review_id: str) -> tuple[nx.DiGraph, str, str]:
+    nodes = snapshot.get("nodes")
+    edges = snapshot.get("edges")
+    if not isinstance(nodes, list) or not nodes or not isinstance(edges, list):
+        raise StructuralPriorError(f"review {review_id}: the approved snapshot has no nodes/edges")
+    t_nodes = snapshot.get("treatment_nodes") or []
+    y_nodes = snapshot.get("outcome_nodes") or []
+    if len(t_nodes) != 1 or len(y_nodes) != 1:
+        raise StructuralPriorError(
+            f"review {review_id}: the approved snapshot must name exactly one treatment and one "
+            f"outcome node (got {t_nodes!r}, {y_nodes!r})"
+        )
+    graph = nx.DiGraph()
+    graph.add_nodes_from(str(n) for n in nodes)
+    for e in edges:
+        if not isinstance(e, (list, tuple)) or len(e) != 2:
+            raise StructuralPriorError(f"review {review_id}: malformed edge {e!r} in the snapshot")
+        graph.add_edge(str(e[0]), str(e[1]))
+    if not nx.is_directed_acyclic_graph(graph):
+        raise StructuralPriorError(f"review {review_id}: the approved snapshot is not acyclic")
+    return graph, str(t_nodes[0]), str(y_nodes[0])
+
+
 def structural_prior_from_review_row(
     row: Mapping[str, Any],
     *,
@@ -103,8 +135,10 @@ def structural_prior_from_review_row(
 
     ``None``: not an active approval (pending / rejected / expired), not an
     ``initial_dag`` review, or no structural-author evidence on the row.
-    Raises :class:`StructuralPriorError` on a fail-closed mismatch (hash,
-    feature set, fragment roles).
+    Raises :class:`StructuralPriorError` on a fail-closed mismatch: the row's
+    hashes are not the stored snapshot's, the evidence graded another hash,
+    a claimed role is not what the approved edges derive, or the attestations
+    file (when reachable) disagrees with the row.
     """
     if not is_active_approval(row, today):
         return None
@@ -117,19 +151,56 @@ def structural_prior_from_review_row(
     if not sa:
         return None
     review_id = str(row.get("review_id") or "")
+
+    # The approved structure IS the stored snapshot; the hashes must prove it.
+    from src.causal_engine.dag_hash import adjustment_hash_from_snapshot, compute_dag_hash
+
+    snapshot = _as_dict(row.get("dag_structure_json"))
+    if not snapshot:
+        raise StructuralPriorError(f"review {review_id}: approved row carries no DAG snapshot")
     row_hash = row.get("dag_version_hash")
-    sa_hash = sa.get("dag_version_hash")
-    if not row_hash or not sa_hash or row_hash != sa_hash:
+    snap_hash = compute_dag_hash(causal_graph=snapshot)
+    if not row_hash or row_hash != snap_hash:
         raise StructuralPriorError(
-            f"review {review_id}: approved dag_version_hash {row_hash!r} is not the hash the "
-            f"structural author graded {sa_hash!r} — the structure moved after authoring"
+            f"review {review_id}: dag_version_hash {row_hash!r} is not the hash of the stored "
+            f"snapshot ({snap_hash})"
         )
+    if sa.get("dag_version_hash") != row_hash:
+        raise StructuralPriorError(
+            f"review {review_id}: the structural author graded {sa.get('dag_version_hash')!r}, "
+            f"the approved structure is {row_hash!r} — the structure moved after authoring"
+        )
+    snap_adj = adjustment_hash_from_snapshot(snapshot)
+    if snap_adj is None:
+        raise StructuralPriorError(
+            f"review {review_id}: the snapshot's adjustment sets are unprovable (malformed)"
+        )
+    row_adj = row.get("adjustment_set_hash")
+    if row_adj is not None and row_adj != snap_adj:
+        raise StructuralPriorError(
+            f"review {review_id}: adjustment_set_hash {row_adj!r} is not what the snapshot "
+            f"proves ({snap_adj}) — the covariate set moved"
+        )
+    if sa.get("adjustment_set_hash") not in (None, snap_adj):
+        raise StructuralPriorError(
+            f"review {review_id}: the structural author graded adjustment sets "
+            f"{sa.get('adjustment_set_hash')!r}, the approved snapshot proves {snap_adj!r}"
+        )
+    graph, treatment, outcome = _snapshot_graph(snapshot, review_id)
+    for col, node in (("treatment_variable", treatment), ("outcome_variable", outcome)):
+        if row.get(col) not in (None, node):
+            raise StructuralPriorError(
+                f"review {review_id}: {col}={row.get(col)!r} but the snapshot's node is {node!r}"
+            )
+    approved_union: set[str] = set()
+    for s in snapshot.get("adjustment_sets") or []:
+        approved_union.update(str(v) for v in s)
+
     features = sa.get("features")
     if not isinstance(features, list) or not features:
         raise StructuralPriorError(
             f"review {review_id}: structural_author evidence has no features"
         )
-    approved_set = {str(f) for f in (sa.get("adjustment_set") or [])}
 
     roles: dict[str, str] = {}
     anchored: list[str] = []
@@ -137,24 +208,45 @@ def structural_prior_from_review_row(
     excluded: dict[str, str] = {}
     for f in features:
         name = str(f.get("feature"))
-        role = f.get("cohort_role")
+        claimed = f.get("cohort_role")
         if f.get("leak_verdict"):
             excluded[name] = f"leak verdict ({f.get('leak_source')})"
             continue
-        if role is None:
+        if claimed is None:
             excluded[name] = "no cohort role (review only)"
             continue
-        roles[name] = str(role)
-        if role == "confounder" and name in approved_set:
+        if name not in graph:
+            raise StructuralPriorError(
+                f"review {review_id}: evidence names {name!r}, which is not in the approved DAG"
+            )
+        try:
+            derived = extract_role(name, treatment, outcome, graph)
+        except ValueError as exc:
+            raise StructuralPriorError(
+                f"review {review_id}: {name!r} is unclassifiable on the approved DAG: {exc}"
+            ) from exc
+        if derived != claimed:
+            raise StructuralPriorError(
+                f"review {review_id}: evidence claims {name!r} is a {claimed}, the approved edges "
+                f"derive {derived}"
+            )
+        roles[name] = derived
+        if derived == "confounder" and name in approved_union:
             anchored.append(name)
-        elif role == "instrument":
+        elif derived == "instrument":
             instruments.append(name)
         else:
-            excluded[name] = f"cohort role {role}" + (
-                "" if role != "confounder" else " not in the approved adjustment set"
+            excluded[name] = f"cohort role {derived}" + (
+                " not in the approved adjustment sets" if derived == "confounder" else ""
             )
 
     warnings: list[str] = []
+    unlisted = sorted(approved_union - set(roles) - set(excluded))
+    if unlisted:
+        warnings.append(
+            "approved adjustment set names feature(s) the evidence table does not cover, "
+            f"not anchored: {', '.join(unlisted)}"
+        )
     source = "review_row"
     if attestations_path is not None:
         path = Path(attestations_path)
@@ -180,20 +272,21 @@ def structural_prior_from_review_row(
             source = "review_row+attestations_file"
         else:
             warnings.append(
-                f"attestations file {path} not reachable here; roles read from the review row"
+                f"attestations file {path} not reachable here; roles derived from the review row"
             )
 
     return ApprovedStructuralPrior(
         review_id=review_id,
         dag_version_hash=str(row_hash),
+        adjustment_set_hash=snap_adj,
         roles=roles,
         anchored_confounders=sorted(anchored),
         instruments=sorted(instruments),
         excluded=excluded,
         source=source,
         manifest=sa.get("manifest"),
-        treatment=sa.get("treatment"),
-        outcome=sa.get("outcome"),
+        treatment=treatment,
+        outcome=outcome,
         model_id=sa.get("model_id"),
         warnings=warnings,
     )

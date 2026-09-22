@@ -2,18 +2,22 @@
 
 Spec §3 Lane B item 5: an approved review's structure becomes the run's
 ``anchored_confounders``; unapproved machine attestations never do. The rows
-here are hand-built in the ``expert_reviews`` shape the CLI writes; the repo is
-an in-memory stand-in (the loader only calls ``get_by_id`` /
+are hand-built in the ``expert_reviews`` shape the CLI writes — a REAL DAG
+snapshot whose hashes are computed with the production functions — so the
+loader is exercised on what it actually reads: the approved edges. The repo
+is an in-memory stand-in (the loader only calls ``get_by_id`` /
 ``get_reviews_for_estimand``). No DB, no network.
 """
 
 from __future__ import annotations
 
+import copy
 import json
 from datetime import date
 
 import pytest
 
+from src.causal_engine.dag_hash import compute_adjustment_set_hash, compute_dag_hash
 from src.data.kg.structural_prior_loader import (
     ApprovedStructuralPrior,
     StructuralPriorError,
@@ -26,10 +30,44 @@ from src.data.kg.structural_prior_loader import (
 from src.repositories.expert_review import estimand_key_for
 
 T, Y = "treatment_dupixent", "persistent_at_180d_g28"
-HASH = "a" * 64
+REVIEW_ID = "11111111-1111-1111-1111-111111111111"
 
 
-def _feature(name, role, *, in_set=True, leak=False, leak_source=None, review=False):
+def _snapshot():
+    """The assembled cohort DAG as the CLI stores it: two confounders (one
+    latent-driven), an instrument, an ancestor, a leaky confounder and an
+    M-structure collider; adjustment sets = minimal, then full."""
+    edges = [
+        ["age_at_index", T],
+        ["age_at_index", Y],
+        ["charlson_score", T],
+        ["charlson_score", Y],
+        ["U_sev", "charlson_score"],
+        ["U_sev", Y],
+        ["payer_category", T],
+        ["family_atopy", Y],
+        ["post_index_visits", T],
+        ["post_index_visits", Y],
+        [T, "on_therapy_90d"],
+        ["U_dis", "on_therapy_90d"],
+        ["U_dis", Y],
+        [T, Y],
+    ]
+    nodes = sorted({n for e in edges for n in e})
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "treatment_nodes": [T],
+        "outcome_nodes": [Y],
+        "adjustment_sets": [
+            ["age_at_index", "charlson_score", "post_index_visits"],
+            ["age_at_index", "charlson_score", "family_atopy", "post_index_visits"],
+        ],
+        "latent_nodes": ["U_dis", "U_sev"],
+    }
+
+
+def _feature(name, role, *, leak=False, leak_source=None, review=False):
     return {
         "feature": name,
         "fragment_role": role,
@@ -42,8 +80,8 @@ def _feature(name, role, *, in_set=True, leak=False, leak_source=None, review=Fa
         "leak_source": leak_source,
         "panel_final_role": None,
         "edge_grades": {},
-        "in_adjustment_set": in_set and role == "confounder",
-        "in_minimal_adjustment_set": in_set and role == "confounder",
+        "in_adjustment_set": role == "confounder" and not leak,
+        "in_minimal_adjustment_set": role == "confounder" and not leak,
         "adjustment_exclusion": None,
         "provenance": "machine",
         "model_id": "dummy",
@@ -57,6 +95,7 @@ FEATURES = [
     _feature("payer_category", "instrument"),
     _feature("post_index_visits", "confounder", leak=True, leak_source="layer_3_high"),
     _feature("family_atopy", "ancestor"),
+    _feature("on_therapy_90d", "collider"),
     _feature("unauthored", None, review=True),
 ]
 
@@ -67,11 +106,19 @@ def _row(
     valid_until=None,
     review_type="initial_dag",
     evidence=True,
-    row_hash=HASH,
-    sa_hash=HASH,
+    snapshot=None,
+    row_hash=None,
+    sa_hash=None,
+    row_adj=None,
+    features=None,
     as_string=False,
     brand=None,
+    treatment_variable=T,
 ):
+    snap = snapshot if snapshot is not None else _snapshot()
+    dag_hash = compute_dag_hash(causal_graph=snap)
+    adj_hash = compute_adjustment_set_hash(snap.get("adjustment_sets") or [])
+    snap = dict(snap, dag_version_hash=dag_hash)
     assessment = (
         {
             "structural_author": {
@@ -80,25 +127,28 @@ def _row(
                 "treatment": T,
                 "outcome": Y,
                 "model_id": "dummy",
-                "dag_version_hash": sa_hash,
-                "adjustment_set": ["age_at_index", "charlson_score"],
-                "minimal_adjustment_set": ["age_at_index", "charlson_score"],
-                "features": FEATURES,
+                "dag_version_hash": sa_hash if sa_hash is not None else dag_hash,
+                "adjustment_set_hash": adj_hash,
+                "adjustment_set": snap["adjustment_sets"][-1],
+                "minimal_adjustment_set": snap["adjustment_sets"][0],
+                "features": features if features is not None else FEATURES,
             }
         }
         if evidence
         else {"items": []}
     )
     return {
-        "review_id": "11111111-1111-1111-1111-111111111111",
+        "review_id": REVIEW_ID,
         "review_type": review_type,
         "approval_status": status,
         "valid_until": valid_until,
-        "dag_version_hash": row_hash,
-        "treatment_variable": T,
+        "dag_version_hash": row_hash if row_hash is not None else dag_hash,
+        "adjustment_set_hash": row_adj if row_adj is not None else adj_hash,
+        "treatment_variable": treatment_variable,
         "outcome_variable": Y,
         "brand": brand,
         "estimand_key": estimand_key_for(brand, T, Y),
+        "dag_structure_json": json.dumps(snap) if as_string else snap,
         "agent_assessment_json": json.dumps(assessment) if as_string else assessment,
     }
 
@@ -118,15 +168,16 @@ class _FakeRepo:
 
 
 # ---------------------------------------------------------------------------
-# Pure: row -> prior
+# Pure: approved row -> prior, derived from the snapshot
 # ---------------------------------------------------------------------------
 
 
-def test_approved_row_yields_anchored_confounders_instruments_and_exclusions():
+def test_approved_row_yields_prior_derived_from_the_approved_edges():
     prior = structural_prior_from_review_row(_row())
     assert isinstance(prior, ApprovedStructuralPrior)
-    assert prior.review_id == "11111111-1111-1111-1111-111111111111"
-    assert prior.dag_version_hash == HASH
+    assert prior.review_id == REVIEW_ID
+    assert prior.dag_version_hash == compute_dag_hash(causal_graph=_snapshot())
+    assert prior.adjustment_set_hash == compute_adjustment_set_hash(_snapshot()["adjustment_sets"])
     assert prior.anchored_confounders == ["age_at_index", "charlson_score"]
     assert prior.instruments == ["payer_category"]
     assert prior.roles == {
@@ -134,17 +185,20 @@ def test_approved_row_yields_anchored_confounders_instruments_and_exclusions():
         "charlson_score": "confounder",
         "payer_category": "instrument",
         "family_atopy": "ancestor",
+        "on_therapy_90d": "collider",
     }
-    # A leak-verdict feature is never a prior, whatever the authored role.
+    # A leak-verdict feature is never a prior, even inside the approved set.
     assert prior.excluded["post_index_visits"] == "leak verdict (layer_3_high)"
     assert "post_index_visits" not in prior.roles
     assert prior.excluded["unauthored"] == "no cohort role (review only)"
     assert prior.excluded["family_atopy"] == "cohort role ancestor"
+    assert prior.excluded["on_therapy_90d"] == "cohort role collider"
     assert prior.source == "review_row"
     assert (prior.manifest, prior.treatment, prior.outcome) == ("optum_mart", T, Y)
+    assert prior.warnings == []
 
 
-def test_json_string_assessment_column_is_parsed():
+def test_json_string_columns_are_parsed():
     prior = structural_prior_from_review_row(_row(as_string=True))
     assert prior is not None and prior.anchored_confounders == ["age_at_index", "charlson_score"]
 
@@ -164,11 +218,64 @@ def test_unapproved_or_foreign_rows_are_never_a_prior(row):
     assert structural_prior_from_review_row(row, today=date(2026, 9, 22)) is None
 
 
-def test_hash_mismatch_fails_closed():
+def test_edges_that_moved_under_unchanged_hash_strings_fail_closed():
+    """codex r1 HIGH 2: the hash must be RECOMPUTED from the stored snapshot,
+    not compared with a copied string. Mutate an edge and keep both hash
+    strings as they were."""
+    row = _row()
+    snap = copy.deepcopy(row["dag_structure_json"])
+    snap["edges"] = [e for e in snap["edges"] if e != ["age_at_index", Y]]
+    row["dag_structure_json"] = snap  # dag_version_hash strings untouched
+    with pytest.raises(StructuralPriorError, match="not the hash of the stored snapshot"):
+        structural_prior_from_review_row(row)
+
+
+def test_adjustment_sets_that_moved_under_unchanged_hash_strings_fail_closed():
+    row = _row()
+    snap = copy.deepcopy(row["dag_structure_json"])
+    snap["adjustment_sets"] = [["age_at_index"]]  # the DAG hash excludes adjustment sets
+    row["dag_structure_json"] = snap
+    with pytest.raises(StructuralPriorError, match="covariate set moved"):
+        structural_prior_from_review_row(row)
+
+
+def test_evidence_that_graded_another_structure_fails_closed():
     with pytest.raises(StructuralPriorError, match="structure moved after authoring"):
+        structural_prior_from_review_row(_row(sa_hash="b" * 64))
+    with pytest.raises(StructuralPriorError, match="not the hash of the stored snapshot"):
         structural_prior_from_review_row(_row(row_hash="b" * 64))
-    with pytest.raises(StructuralPriorError, match="structure moved"):
-        structural_prior_from_review_row(_row(sa_hash=None))
+
+
+def test_claimed_role_the_approved_edges_do_not_derive_fails_closed():
+    # The snapshot's edges make family_atopy an ancestor; the evidence claims confounder.
+    feats = copy.deepcopy(FEATURES)
+    next(f for f in feats if f["feature"] == "family_atopy")["cohort_role"] = "confounder"
+    with pytest.raises(StructuralPriorError, match="claims 'family_atopy' is a confounder"):
+        structural_prior_from_review_row(_row(features=feats))
+    # A feature the approved DAG does not contain cannot be anchored either.
+    feats = copy.deepcopy(FEATURES) + [_feature("ghost", "confounder")]
+    with pytest.raises(StructuralPriorError, match="not in the approved DAG"):
+        structural_prior_from_review_row(_row(features=feats))
+
+
+def test_confounder_outside_the_approved_adjustment_sets_is_not_anchored():
+    snap = _snapshot()
+    snap["adjustment_sets"] = [["age_at_index"]]
+    prior = structural_prior_from_review_row(_row(snapshot=snap))
+    assert prior is not None
+    assert prior.anchored_confounders == ["age_at_index"]
+    assert prior.excluded["charlson_score"] == (
+        "cohort role confounder not in the approved adjustment sets"
+    )
+
+
+def test_row_without_snapshot_or_with_mismatched_estimand_fails_closed():
+    row = _row()
+    row["dag_structure_json"] = None
+    with pytest.raises(StructuralPriorError, match="no DAG snapshot"):
+        structural_prior_from_review_row(row)
+    with pytest.raises(StructuralPriorError, match="treatment_variable"):
+        structural_prior_from_review_row(_row(treatment_variable="other_treatment"))
 
 
 def test_attestations_file_is_cross_checked_when_reachable(tmp_path):
@@ -180,12 +287,10 @@ def test_attestations_file_is_cross_checked_when_reachable(tmp_path):
     path.write_text(json.dumps({"meta": {}, "records": records}))
     prior = structural_prior_from_review_row(_row(), attestations_path=path)
     assert prior is not None and prior.source == "review_row+attestations_file"
-    # A file that disagrees on a fragment role fails closed.
     records[0]["derived_role"] = "instrument"
     path.write_text(json.dumps({"meta": {}, "records": records}))
     with pytest.raises(StructuralPriorError, match="fragment role differs"):
         structural_prior_from_review_row(_row(), attestations_path=path)
-    # A file covering a different feature set fails closed.
     path.write_text(json.dumps({"meta": {}, "records": records[:2]}))
     with pytest.raises(StructuralPriorError, match="covers 2 features"):
         structural_prior_from_review_row(_row(), attestations_path=path)
@@ -205,7 +310,7 @@ def test_unreachable_attestations_file_is_a_warning_not_a_refusal(tmp_path):
 
 async def test_load_by_review_id():
     repo = _FakeRepo([_row()])
-    prior = await load_approved_structural_prior("11111111-1111-1111-1111-111111111111", repo)
+    prior = await load_approved_structural_prior(REVIEW_ID, repo)
     assert prior is not None and prior.anchored_confounders == ["age_at_index", "charlson_score"]
     assert (
         await load_approved_structural_prior("22222222-2222-2222-2222-222222222222", repo) is None
@@ -266,8 +371,8 @@ def test_apply_to_state_restricts_anchors_to_declared_covariates_and_records_pro
     assert state["anchored_confounders"] == ["age_at_index"]
     assert state["approved_structure_roles"] == prior.roles
     assert state["warnings"] == lines
-    assert lines[0].startswith("structural prior: approved expert review 11111111")
-    assert "anchors 1 confounder(s); 1 instrument(s), 3 excluded" in lines[0]
+    assert lines[0].startswith(f"structural prior: approved expert review {REVIEW_ID}")
+    assert "anchors 1 confounder(s); 1 instrument(s), 4 excluded" in lines[0]
     assert lines[1] == (
         "structural prior: approved confounder(s) not among this run's covariates, "
         "not anchored: charlson_score"

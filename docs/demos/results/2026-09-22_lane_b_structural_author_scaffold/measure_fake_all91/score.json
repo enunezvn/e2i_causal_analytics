@@ -1,6 +1,6 @@
 {
   "meta": {
-    "measured_at": "2026-09-22T16:23:25.010037+00:00",
+    "measured_at": "2026-09-22T16:47:35.248851+00:00",
     "lm": "fake",
     "fake_source": "replay",
     "resolver": "offline",
@@ -185,7 +185,9 @@
       "derived_role": "confounder"
     }
   ],
-  "missed_leak_rate": 0.3076923076923077,
+  "missed_leak_rate": 0.6666666666666666,
+  "n_leak_truth": 42,
+  "n_leak_scored": 42,
   "conservative_errors": [],
   "review": [],
   "per_role": [

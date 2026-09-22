@@ -45,6 +45,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -136,6 +137,12 @@ def build_briefs(
 
     names = features if features else _safe_features(manifest)
     records = (panel or {}).get("records") or {}
+    if panel is not None:
+        # A panel that does not cover a feature would silently drop the Lane E
+        # constraints for it (post-index veto, leak exclusion): refuse.
+        missing = [f for f in names if f not in records]
+        if missing:
+            raise ValueError(f"panel has no record for {len(missing)} feature(s): {missing}")
     briefs = []
     for feat in names:
         contract = lookup_feature_contract(feat, data_source=manifest)
@@ -165,14 +172,50 @@ def _load_panel(path: Path, *, manifest: str, treatment: str, outcome: str) -> d
             raise ValueError(
                 f"panel {path}: {key}={got!r} does not match --{key.replace('_source', '')} {want!r}"
             )
-    if not isinstance(payload.get("records"), dict):
+    records = payload.get("records")
+    if not isinstance(records, dict) or not records:
         raise ValueError(f"panel {path}: no records")
+    for key, rec in records.items():
+        if not isinstance(rec, dict):
+            raise ValueError(f"panel {path}: record {key!r} is not an object")
+        if rec.get("feature") != key:
+            raise ValueError(f"panel {path}: record {key!r} carries feature={rec.get('feature')!r}")
+        for flag in ("leak_verdict", "review_required"):
+            if not isinstance(rec.get(flag, False), bool):
+                raise ValueError(f"panel {path}: record {key!r}.{flag} is not a bool")
+        for layer in ("layer_1", "layer_2", "layer_3", "layer_4", "ensemble"):
+            if not isinstance(rec.get(layer, {}), dict):
+                raise ValueError(f"panel {path}: record {key!r}.{layer} is not an object")
     return payload
 
 
 # ---------------------------------------------------------------------------
 # Run (b): diff against the manifest's machine attestations
 # ---------------------------------------------------------------------------
+
+
+def manifest_grounding(
+    feature: str, *, doc: Path = PROJECT_ROOT / OPTUM_RESEARCH_DOC
+) -> dict[str, Any]:
+    """The manifest side's rationale for ``feature``: the family bullet(s) of the
+    Optum research record that name the feature (with their PMIDs and the
+    doc line), or an explicit "no grounding found". The manifest code itself
+    carries only the two edge patterns, not prose."""
+    if not doc.exists():
+        return {"found": False, "source": str(doc), "note": "research record not on this tree"}
+    bullets: list[dict[str, Any]] = []
+    needle = f"`{feature}`"
+    for lineno, line in enumerate(doc.read_text(encoding="utf-8").splitlines(), start=1):
+        if line.lstrip().startswith("-") and needle in line:
+            pmids = sorted(set(re.findall(r"PMID\s*(\d{1,9})", line)))
+            bullets.append({"line": lineno, "text": line.strip(), "pmids": pmids})
+    return {
+        "found": bool(bullets),
+        "source": OPTUM_RESEARCH_DOC,
+        "bullets": bullets,
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": None if bullets else f"no bullet in {OPTUM_RESEARCH_DOC} names `{feature}`",
+    }
 
 
 def diff_against_manifest(records: list[Any], *, manifest: str) -> dict[str, Any]:
@@ -233,11 +276,7 @@ def diff_against_manifest(records: list[Any], *, manifest: str) -> dict[str, Any
                 for p in rec.edge_provenance
             }
             row["authored_reasoning"] = rec.reasoning
-            row["manifest_rationale"] = (
-                f"pattern attestation (instrument set vs confounder default) in "
-                f"src/data/manifests/optum_feature_manifest.py::_optum_attestation; "
-                f"literature grounding per feature in {OPTUM_RESEARCH_DOC}"
-            )
+            row["manifest_rationale"] = manifest_grounding(rec.feature_name)
         rows.append(row)
     return {
         "manifest": manifest,
@@ -274,11 +313,14 @@ async def open_review(
     prompt_hash: str,
     guide_hash: str,
     assumption: Optional[str],
+    repo: Any = None,
 ) -> dict[str, Any]:
     """Create the ``initial_dag`` review row and cache the evidence table.
 
     Raises ``RuntimeError`` when no row was created (no client, refused write)
-    so the CLI exits non-zero instead of pretending a review exists.
+    or when the evidence write matched no row, so the CLI exits non-zero
+    instead of pretending a usable review exists. ``repo`` lets a test inject
+    an in-memory repository that enforces the same version-pair guard.
     """
     from src.causal_engine.dag_hash import compute_adjustment_set_hash, compute_dag_hash
     from src.memory.services.factories import get_async_supabase_client
@@ -316,8 +358,9 @@ async def open_review(
         if assumption
         else []
     }
-    client = await get_async_supabase_client()
-    repo = ExpertReviewRepository(supabase_client=client)
+    if repo is None:
+        client = await get_async_supabase_client()
+        repo = ExpertReviewRepository(supabase_client=client)
     review_id = await repo.create_review(
         reviewer_id="structural_author",
         review_type="initial_dag",
@@ -339,14 +382,22 @@ async def open_review(
     )
     if not review_id:
         raise RuntimeError("no expert_reviews row was created (no client or the write was refused)")
+    # The repository guards the write on the version PAIR: with only the DAG
+    # half given, the adjustment half is matched as IS NULL and the row we just
+    # minted (non-null adjustment hash) matches zero rows (codex r1 HIGH 1).
     persisted = await repo.update_agent_assessment(
-        review_id, evidence, for_dag_version_hash=dag_hash
+        review_id, evidence, for_dag_version_hash=dag_hash, for_adjustment_set_hash=adj_hash
     )
+    if not persisted:
+        raise RuntimeError(
+            f"review {review_id} was created but its structural-author evidence was NOT "
+            "persisted (version filter matched no row); the review cannot seed a prior"
+        )
     return {
         "review_id": review_id,
         "dag_version_hash": dag_hash,
         "adjustment_set_hash": adj_hash,
-        "assessment_persisted": bool(persisted),
+        "assessment_persisted": True,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -445,6 +496,12 @@ def render_review_md(
                 f"{row['manifest_role']}; authored-only {row['authored_only']}; "
                 f"manifest-only {row['manifest_only']}"
             )
+            for b in (row.get("manifest_rationale") or {}).get("bullets") or []:
+                lines.append(
+                    f"  - manifest ({row['manifest_rationale']['source']}:{b['line']}): {b['text']}"
+                )
+            if row.get("authored_reasoning"):
+                lines.append(f"  - author: {row['authored_reasoning']}")
     _ = by_feat
     return "\n".join(lines) + "\n"
 
@@ -477,6 +534,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--allow-fake-review", action="store_true", help="Let a fake-LM run open a review."
     )
     p.add_argument("--no-assumption", action="store_true", help="Omit the run (a) checklist item.")
+    p.add_argument(
+        "--allow-no-panel", action="store_true", help="Let a real run author without --panel."
+    )
     p.add_argument("--diff-manifest-attestations", action="store_true")
     p.add_argument("--merge-latents", choices=("yes", "no"), default="yes")
     p.add_argument("--log-level", default="INFO")
@@ -512,6 +572,12 @@ def main(argv: Optional[list[str]] = None) -> int:
             return 3
         from src.optimization.dspy_lm import ensure_dspy_configured
 
+        if args.panel is None and not args.allow_no_panel:
+            logger.error(
+                "--lm real without --panel would author without the Lane E voters (spec: the "
+                "panel is part of every brief); pass --panel, or --allow-no-panel deliberately"
+            )
+            return 4
         if not ensure_dspy_configured():
             logger.error("no DSPy LM could be configured (missing provider key?)")
             return 3

@@ -10,14 +10,18 @@ captured file:line in this directory.
 
 ## Cheapest disproofs run before building
 
-| # | Assumption the deliverable rests on | Experiment | Result |
-|---|---|---|---|
-| 1 | A DSPy signature with typed list / bool outputs can be driven by `dspy.utils.dummies.DummyLM` (so the parser and CLI can be tested without a paid LM) | one `dspy.Predict` under `DummyLM` with `edges: list[list[str]]`, `ambiguous: bool` (session probe, dspy 3.1.0) | parsed `[['f','T'],['f','Y'],['T','Y']]` as `list`, `False` as `bool` — survives |
-| 2 | The graph builder's backdoor finder can be reused by the assembler | `import src.agents.causal_impact.nodes.graph_builder` timed with `-X importtime` | 14.9 s (the whole agent package) → the criterion was extracted to `src/ml/causal_role_dgp/backdoor.py` (light) and the node delegates to it; the delegation is pinned by `tests/unit/test_agents/test_causal_impact/test_graph_builder_backdoor_shared.py` |
-| 3 | `CitationResolver.verify_citation` can be exercised offline | `inspect.signature(CitationResolver.__init__)` | `(*, europe_pmc=None, crossref=None, umls=None)` — clients are injectable; the grader takes any object with `verify_citation` |
-| 4 | Under the unit tree's dead-Supabase pin a `--review` cannot silently succeed | `ExpertReviewRepository().create_review(...)` with `SUPABASE_URL=http://127.0.0.1:1` | returns `None` in 0.0 s ("No Supabase client, skipping review creation") → the CLI treats `None` as failure (exit 3, files kept), pinned by `tests/unit/test_scripts/test_author_cohort_dag.py::test_review_under_the_dead_supabase_pin_fails_loudly_and_keeps_files` |
-| 5 | The guide can be read from `docs/` at runtime inside the API container | `.dockerignore:76` is `docs/` | the docs tree is NOT in the image → sections 0–6 are embedded (`src/data/kg/_structural_author_guide.py`) and pinned byte-for-byte to the guide by `test_guide_sections_are_verbatim`; likewise the item-5 loader reads roles from the review row, not from `docs/layer4/generated/` |
-| 6 | dspy keeps the docstring verbatim as instructions | `StructuralAttestationSignature.instructions` vs the constant | 16545 vs 16546 chars: `inspect.cleandoc` drops the trailing newline only (the test compares to `.strip()`) |
+Captured by `disproofs.py` → `disproofs.txt` (re-runnable from the worktree
+root; `disproofs.txt:1` names the commit it ran at).
+
+| # | Assumption the deliverable rests on | Result (cited) |
+|---|---|---|
+| 1 | A DSPy signature with typed list / bool outputs can be driven by `dspy.utils.dummies.DummyLM` (so the parser and CLIs are testable without a paid LM) | `disproofs.txt:2` — dspy 3.1.0 parsed `[['f','T'],['f','Y'],['T','Y']]` as `list`, `False` as `bool` — survives |
+| 2 | The graph builder's backdoor finder can be reused by the assembler | `disproofs.txt:3` — importing the node costs 13.1 s (the whole agent package); `disproofs.txt:4` — the extracted `src/ml/causal_role_dgp/backdoor.py` imports in 0.000 s → the node now delegates to it (pinned by `tests/unit/test_agents/test_causal_impact/test_graph_builder_backdoor_shared.py`) |
+| 3 | `CitationResolver.verify_citation` can be exercised offline | `disproofs.txt:5` — `__init__(*, europe_pmc=None, crossref=None, umls=None)`: clients are injectable; the grader takes any object with `verify_citation` |
+| 4 | Under the unit tree's dead-Supabase pin a `--review` cannot silently succeed | `disproofs.txt:6` — `repo.client=None`, `create_review -> None` in 0.0 s → the CLI treats `None` as failure (exit 3, files kept), pinned by `tests/unit/test_scripts/test_author_cohort_dag.py::test_review_under_the_dead_supabase_pin_fails_loudly_and_keeps_files` |
+| 5 | The guide can be read from `docs/` at runtime inside the API container | `disproofs.txt:7` — `.dockerignore:76 == 'docs/'`: the docs tree is NOT in the image → sections 0–6 are embedded (`src/data/kg/_structural_author_guide.py`) and pinned byte-for-byte by `test_guide_sections_are_verbatim`; likewise the item-5 loader reads the approved DAG from the review row, not from `docs/layer4/generated/` |
+| 6 | dspy keeps the docstring verbatim as instructions | `disproofs.txt:8` — 16545 vs 16546 chars, equal after `.strip()`: `inspect.cleandoc` drops the trailing newline only |
+| 7 | The node edit stays under the module-size ratchet | `disproofs.txt:9` — 4237 lines (pin lowered from 4238 to 4237 in `tests/unit/test_tests_meta/test_module_size_ratchet.py`; the provenance helper lives in `src/ml/causal_role_dgp/extractor.py`) |
 
 Red proof for the provenance field (T1): `red_t1_provenance.txt:2` —
 `TypeError: ... unexpected keyword argument 'provenance'` at `31a4c5b6d`.
@@ -36,7 +40,7 @@ replays the committed CSU blind authored edges through the full pipeline
 `--cohort all` (91 briefs; the 60 non-CSU briefs get a stand-in confounder
 fragment, clearly not an authored claim):
 
-- `measure_fake_all91/summary.md:9` — `FAIL: gate missed_leaks == 0 — missed leaks 28 (rate 0.308 over 91 scored ...)`, exit code 2: the gate has teeth on a stand-in author (28 = every leak-role feature of the PNH and BC cohorts), and "the report is the deliverable" is the exit path.
+- `measure_fake_all91/summary.md:9` — `FAIL: gate missed_leaks == 0 — missed leaks 28 (rate 0.667 over 42 scored golden-leak features; ...)`, exit code 2: the gate has teeth on a stand-in author (28 = every leak-role feature of the PNH and BC cohorts; the rate is over the 42 golden leak features, not over all 91), and "the report is the deliverable" is the exit path.
 
 ### Cost estimate for the REAL benchmark (owner decision)
 
@@ -58,7 +62,7 @@ Command for the real run (not executed):
 
 Run (b) shape, `python -m scripts.author_cohort_dag --manifest optum --treatment biologic_initiation --outcome initiated_biologic_180d --lm fake --diff-manifest-attestations --no-assumption --out-root author_fake`:
 
-- `author_fake/optum_biologic_initiation_initiated_biologic_180d/manifest_diff.json:3-6` — `n_features 110, n_compared 110, edge_exact_agreement 93, role_agreement 93`; the 17 disagreements are exactly the manifest's 17 `_OPTUM_INSTRUMENT_FEATURES` (the fake author draws a confounder for everything), verified in-session against `src/data/manifests/optum_feature_manifest.py`.
+- `author_fake/optum_biologic_initiation_initiated_biologic_180d/manifest_diff.json:3-6` — `n_features 110, n_compared 110, edge_exact_agreement 93, role_agreement 93`; `disproofs.txt:10` — the 17 disagreements are exactly the manifest's 17 `_OPTUM_INSTRUMENT_FEATURES` (the fake author draws a confounder for everything). Each disagreement carries the author's reasoning and the manifest side's feature-specific grounding (the family bullet of `docs/layer4/optum_initiation_attestation_research.md` that names the feature, with its PMIDs and line).
 
 Run (a) shape, `--manifest optum_mart --treatment treatment_dupixent --outcome persistent_at_180d_g28 --treatment-label "remibrutinib vs competitor biologic (CSU escalation therapy; rehearsed as Dupixent vs Xolair)" --lm fake`:
 
@@ -72,14 +76,25 @@ Commands for the real runs (not executed; paid LLM + a prod `expert_reviews` wri
         --treatment-label "remibrutinib vs competitor biologic (CSU escalation therapy)" \
         --outcome-label "persistence at 180 days (g28)" \
         --panel <Lane E panel.json for optum_mart/treatment_dupixent/persistent_at_180d_g28> \
-        --lm real --i-accept-cost --resolver live --brand Remibrutinib --review
+        --lm real --i-accept-cost --resolver live --review
 
     python -m scripts.author_cohort_dag --manifest optum --treatment biologic_initiation \
         --outcome initiated_biologic_180d --lm real --i-accept-cost --resolver live \
-        --no-assumption --diff-manifest-attestations
+        --allow-no-panel --no-assumption --diff-manifest-attestations
 
-Cost per run at the same measured prompt size: (a) 64 briefs ≈ 0.70 × the
-91-brief estimate; (b) 110 briefs ≈ 1.21 × it.
+(run (b) has no Lane E panel — the `optum` manifest's causal panel is not
+part of the program — hence `--allow-no-panel`, an explicit override; a real
+run without `--panel` is refused otherwise.)
+
+Cost per run at the same measured prompt size (`disproofs.txt:11`): (a) 64
+briefs ≈ 0.70 × the 91-brief estimate; (b) 110 briefs ≈ 1.21 × it.
+
+Brand mapping for the prior (codex r1 MED 3): the loader looks the approved
+review up by the estimand key `lower(brand):treatment:outcome`, trying the
+run's brand first and then the brandless key. Run (a) above is therefore
+created WITHOUT `--brand` so that both a brandless and a branded Lane A
+request find it; pass `--brand` only when the consuming requests carry that
+exact brand.
 
 ## What is deliberately NOT in this directory
 
