@@ -242,6 +242,23 @@ class TestGateReadsTheCensus:
         structure = evaluation.metadata["structure_score"]
         assert evaluation.confidence == pytest.approx(0.4 * (1 / 3) + 0.4 * 1.0 + 0.2 * structure)
 
+    def test_disjoint_voters_leave_no_structure_and_are_rejected(self):
+        """Zero agreement is the one case the calibration identity does not cover:
+        the union used to grade a DAG nobody corroborated; now there is nothing to
+        grade and the gate REJECTs on min_edges (codex r3)."""
+        result = self._result([_run(GES, [("A", "B")]), _run(PC, [("C", "D")])])
+        assert result.edges == []
+        assert result.vote_census == {
+            "n_converged": 2,
+            "min_votes": 2,
+            "n_candidate_edges": 2,
+            "n_agreed_edges": 0,
+            "agreement_rate": 0.0,
+        }
+        evaluation = DiscoveryGate().evaluate(result)
+        assert evaluation.decision == DiscoveryGateDecision.REJECT
+        assert evaluation.reasons == ["Too few edges discovered: 0 < 1"]
+
     def test_a_result_without_a_census_keeps_the_votes_per_edge_math(self):
         """Hand-built or externally built results (no census on the DAG) still score."""
         dag = nx.DiGraph()
@@ -264,6 +281,21 @@ class TestGateReadsTheCensus:
 
 
 class TestAlgorithmAgreementProperty:
+    def test_a_failed_algorithm_is_not_a_voter_in_the_fallback_either(self):
+        """GES converged, PC failed, no census: the one voter agrees with itself,
+        1/1, not 1/2 (codex r3) -- the persisted value must match the gate's voter
+        definition."""
+        edges = [DiscoveredEdge(source="A", target="B", confidence=1.0, algorithm_votes=1)]
+        results = [_run(GES, [("A", "B")]), _run(PC, [], converged=False)]
+        result = DiscoveryResult(
+            success=True,
+            config=DiscoveryConfig(),
+            ensemble_dag=None,
+            edges=edges,
+            algorithm_results=results,
+        )
+        assert result.algorithm_agreement == pytest.approx(1.0)
+
     def test_property_reports_the_census_rate_not_the_survivors(self):
         runner = DiscoveryRunner(enable_tracing=False)
         results = [_run(GES, [("A", "B"), ("B", "C")]), _run(PC, [("A", "B"), ("A", "C")])]

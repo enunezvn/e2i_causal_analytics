@@ -5,8 +5,10 @@ arrows from data, DiscoveryRunner runs an ensemble (GES, PC, FCI, DirectLiNGAM,
 ICA-LiNGAM via causal-learn), votes edges into a single DAG" — versus the observed
 "Two votes. FCI, DirectLiNGAM and ICA-LiNGAM are wired but not on by default."
 
-Every number below is quoted from a captured file at the cited `file:line`. Captures
-were produced by `run_vote_rule.py` (this directory) with a cwd-first import; each
+Every MEASURED number below (edges, recall, gate grades, runtimes, refusals, test
+outcomes) is quoted from a captured file at the cited `file:line`; frame construction
+and code facts cite the source file and line instead. Captures were produced by
+`run_vote_rule.py` (this directory) with a cwd-first import; each
 capture prints `src resolves to:` naming the tree it ran against (pre-fix = the main
 checkout at `efaad6eeb`, post-fix = this branch).
 
@@ -42,7 +44,7 @@ checkout at `efaad6eeb`, post-fix = this branch).
 
 | Frame | Rows | T | Y | Covariates | Source |
 |---|---|---|---|---|---|
-| planted synthetic | 4,000 | `treatment_arm` | `treatment_initiated` | 10 (`synthetic_ges.json` `columns`) | `data/rwd/synthetic_CSU/patient_journeys.parquet`, Remibrutinib rows, the discovery-disproof lane's frame B byte-for-byte (`run_vote_rule.py::synthetic_frame`) |
+| planted synthetic | 4,000 (`synthetic_ges.json:4`) | `treatment_arm` | `treatment_initiated` | 10 (`synthetic_ges.json:5-18`: 12 columns = T, Y and 10 covariates) | `data/rwd/synthetic_CSU/patient_journeys.parquet`, Remibrutinib rows, the discovery-disproof lane's frame B byte-for-byte (`run_vote_rule.py::synthetic_frame`) |
 | real claims | 15,209 (`real_algo_runs.txt:4`) | `treatment_dupixent` | `persistent_at_180d_g28` | 10 (`real_algo_runs.txt:8`: `capped_covs(10)`) | `data/rwd/mart/persistence_causal/e2i_causal_v1_biologic_persistence.parquet`; 57 numeric `MART_SAFE_FEATURES`, 0 constant, 12 dropped as exactly collinear by the greedy rank rule (`real_algo_runs.txt:4-5`), 45 kept, capped to top-7 by \|corr T\| ∪ top-7 by \|corr Y\| (`real_algo_runs.txt:6-7`) — the two sets overlap on 4 columns, so the cap yields 10, of which 4 are binary (`real_algo_runs.txt:9`) |
 
 Planted edges of the synthetic frame (8), read from the generator and listed in
@@ -169,8 +171,12 @@ candidate edges, agreed edges, agreement rate) and `DiscoveryGate._calculate_cor
 reads the census's `agreement_rate` for >=2 converged voters. For two voters at rate r
 the gate then computes `0.4 * r + 0.4 * 1.0 + 0.2 * structure`, and the union rule
 computed `0.8 * (0.5 + 0.5 * r) + 0.2 * structure` (its mean edge confidence over the
-union is `(2a + u) / (2(a + u)) = 0.5 + 0.5 * r`) — the same number, so the
-ACCEPT/REVIEW/REJECT bands keep their calibration and only the DAG changes. Measured:
+union is `(2a + u) / (2(a + u)) = 0.5 + 0.5 * r`) — the same number, so for any
+`r > 0` the ACCEPT/REVIEW/REJECT bands keep their calibration and only the DAG
+changes. The one case outside the identity is `r = 0` (disjoint voters): the union
+graded a DAG nobody corroborated (2 single-voter edges at 0.5 → REVIEW-band numbers),
+the agreement rule leaves no edge and the gate REJECTs on `min_edges` — covered by
+`test_disjoint_voters_leave_no_structure_and_are_rejected`. Measured:
 synthetic GES+PC 0.699 under both rules (`synthetic_ensemble_prefix.txt:42`,
 `synthetic_ensemble_postfix.txt:30`, identical structure score 0.1634). On the real
 frame the union's 0.673 and the agreement rule's 0.608 differ only through the
@@ -183,15 +189,16 @@ value is the agreement rate, not a vacuous 1.0. A result built without a census 
 hand-built results) keeps the old votes-per-edge math.
 
 **Tests** (`tests/unit/test_causal_engine/test_discovery/test_ensemble_vote_rule.py`,
-18 tests). Thirteen build their ensemble through the real `_build_ensemble`: agreement
+20 tests). Fourteen build their ensemble through the real `_build_ensemble`: agreement
 at the default threshold, `ceil` vs `int` at 3 voters, unanimity at 1.0, floor of 2 at
 0.1, single-converged keeps every edge, failed algorithms are not voters, the same
 algorithm twice is one voter, a duplicated edge is one vote, census contents, and —
 through the real gate as well — disagreement blocks ACCEPT, full agreement scores 1.0,
 the calibration identity, the same algorithm twice is graded as a single-algorithm run
-(`uncorroborated_single_run`, REJECT), and the `algorithm_agreement` property. Five do
-not touch the ensemble: the threshold bounds (config only), the no-census gate fallback
-(hand-built result), and three consumer tests for the single source of truth (config
+(`uncorroborated_single_run`, REJECT), disjoint voters leave no structure and REJECT,
+and the `algorithm_agreement` property. Six do not touch the ensemble: the threshold
+bounds (config only), the no-census gate fallback and the failed-algorithm agreement
+fallback (hand-built results), and three consumer tests for the single source of truth (config
 default, tool schema and input model, graph_builder's unguided branch through
 `GraphBuilderNode.execute` with a capturing runner).
 

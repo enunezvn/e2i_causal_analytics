@@ -328,7 +328,10 @@ class DiscoveryGate:
             # 0.4 * r + 0.4 * 1.0 + 0.2 * structure below, the same number the
             # former union rule produced (mean union-edge confidence
             # 0.5 + 0.5 * r, times 0.8), so the ACCEPT / REVIEW / REJECT bands
-            # keep their calibration; only the DAG loses single-voter edges.
+            # keep their calibration for any r > 0; only the DAG loses the
+            # single-voter edges. At r == 0 (disjoint voters) there is no
+            # agreed structure at all: the min_edges check above REJECTs it,
+            # where the union used to grade a DAG nobody corroborated.
             census = result.vote_census
             if census and census.get("n_converged", 0) >= 2:
                 return float(census["agreement_rate"]), "algorithm_agreement"
