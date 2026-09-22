@@ -1,0 +1,207 @@
+# Real-data causal estimation for CSU: design (2026-09-22)
+
+**Owner decision (2026-09-22):** the goal is causal estimation exclusively. The
+prediction frames stay as they are; this program adds a *causal* path over the same
+real data. Proposal accepted as scoped below.
+
+## 1. Problem
+
+Today no causal DAG is built and no causal effect is estimated on real claims data.
+The measured reasons (`docs/demos/results/2026-09-22_discovery_real_claims_disproof/`):
+
+- The causal agent (`src/agents/causal_impact`, routes under `src/api/routes/causal/`)
+  is reachable only for the three synthetic tables in
+  `datasets.py::_CAUSAL_DATASET_SPECS`.
+- The Optum mart converter (`scripts/convert_optum_mart.py`) selects the treated
+  cohorts on `index_biologic_brand` and then drops that column, because the mart
+  manifest (`optum_mart_feature_manifest.py`) declares it a post-index
+  `mart_treatment` column that would leak the prediction target. Correct for
+  prediction; wrong for causal estimation, where that column **is the treatment**.
+- Guided structure discovery fails on real claims frames (singular correlation
+  matrix, rank 45/59) and is too slow when pruned (230 s per PC fit on 43 covariates).
+- The authored causal structure (Layer-4 attestations) exists for one Optum pair only,
+  was authored by research agents, was never human-validated, and is not a DAG.
+
+What the real data holds (`data/rwd/Optum_Parquet/Optum_enriched.parquet`, 814,587
+patients, index dates 2016-06-01 to 2024-12-31, last observed 2025-09-30):
+
+| Fact | Value |
+|---|---|
+| Treatment | `index_biologic_brand`: XOLAIR 17,765 / DUPIXENT 6,664 / no_treatment 790,158; `treatment_start_date` for all 24,429 initiators |
+| Treated cohorts (mart persistence / discontinuation) | n = 15,209; XOLAIR 11,009 / DUPIXENT 4,200 (joined on `PAT_<patid>`) |
+| Outcomes observed for both arms | `persistent_at_180d` (raw 52.3 % vs 34.7 %), `discontinued_180d` (10.6 % vs 12.2 %), `biologic_switch_180d_flag` (0.96 % vs 1.24 %) |
+| Confounders | the mart manifest's 64 safe baseline features, measured at the diagnosis index, which precedes treatment start |
+| Remibrutinib | absent from every real drop (Rhapsido approved 2025-09-30, the drop's last day; the matcher recognises only omalizumab/dupilumab) |
+| Initiation vs none | blocked: non-initiators carry no post-index follow-up (all outcome columns zero, `last_observed_date` null) |
+
+## 2. Goal and non-goals
+
+**Goal.** A validated causal DAG and an adjusted causal estimate on real claims data for
+the CSU escalation-therapy decision, built so that remibrutinib vs competitor becomes a
+registry entry when post-launch data arrives.
+
+**Non-goals.** Changing the prediction frames or the tier-0 pipeline; making guided
+discovery work on claims frames (deferred: collinearity pruning only together with a
+covariate cap); CRM data; initiation-vs-none (needs a re-pull with follow-up for the
+untreated).
+
+## 3. Lanes
+
+Three lanes, each its own plan → implementation → PR, in this order. Lane A is
+usable on its own (curated-confounder DAG, discovery off); Lane B upgrades A's
+structure; Lane C is pre-wiring.
+
+### Lane A — real-data causal pipeline, rehearsed on Dupixent vs Xolair → persistence
+
+1. **Causal cohort export.** New cohort `persistence_causal` in
+   `convert_optum_mart.py` (registry entries `COHORT_TARGETS`, `_SELECTOR_BY_COHORT`,
+   `_ANCHOR_BY_COHORT`, `_OUTPUT_BY_COHORT`): the persistence selector's rows, the 64
+   `MART_SAFE_FEATURES`, the ids, **plus** `index_biologic_brand` (as-is) and a binary
+   `treatment_dupixent` (1 = DUPIXENT, 0 = XOLAIR), `treatment_start_date`, and the
+   three outcomes `persistent_at_180d`, `discontinued_180d`, `biologic_switch_180d_flag`.
+   Output `data/rwd/mart/persistence_causal/e2i_causal_v1_biologic_persistence.parquet`
+   with `is_synthetic = false` on every row. The prediction cohorts are untouched; the
+   manifest's forbidden list still applies to them. A unit test asserts the causal
+   frame carries the treatment and the prediction frame does not.
+2. **Table + load.** Migration `148_optum_biologic_persistence_causal.sql` creates
+   `public.optum_biologic_persistence_causal` (one column per exported field,
+   `is_synthetic BOOLEAN NOT NULL DEFAULT false`, indexes on treatment and outcomes).
+   `scripts/load_optum_causal_cohort.py` loads the parquet (idempotent upsert on
+   `patient_id`), with `--dry-run` and a row-count + arm-split verification printed
+   after the load. Loading production is an owner-GO step; the migration rides the
+   deploy as usual (`scripts/run_migrations.sh`).
+3. **Registry.** `datasets.py`: `optum_biologic_persistence` in `_CAUSAL_DATASET_SPECS`
+   (treatment `treatment_dupixent`; outcomes the three above; covariates the 64
+   baseline features), `_CAUSAL_PHYSICAL_TABLE`, `_CAUSAL_NUMERIC_COLUMNS`,
+   `_CAUSAL_CATEGORICAL_COLUMNS` (payer/geography/gender), `_CAUSAL_BRAND_COLUMN`
+   (`index_biologic_brand`), `_CAUSAL_NEGATIVE_CONTROL_OUTCOMES`: **none declared**
+   until the omitted-confounder experiment the file mandates is run on this source; the
+   runner then emits SKIPPED `no_negative_control_declared`, never a fabricated PASS.
+   `_load_agent_estimation_frame` (`loaders.py`) reads it like any single-table
+   dataset with the real-mode provenance filter.
+4. **Run shape.** For this dataset the API default is `auto_discover=False` (the
+   measured failure mode) and the curated DAG: every covariate a common cause of T
+   and Y, the estimand edge, adjustment set = the covariates (the graph builder's
+   existing manual path). The agent's `limit` cap (20,000) covers the full cohort.
+   Randomized design false. Refutation suite, E-value and expert-review consult run
+   unchanged; a REVIEW band queues a review, `CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL`
+   stays advisory.
+5. **Evidence.** A cert under `docs/demos/results/<date>_optum_biologic_persistence_cert/`:
+   the run's response (ATE with interval, refutation verdicts, gate decisions) for
+   all three outcomes, plus the two caveats a reviewer must weigh, recorded as data:
+   `treatment_response` is brand-coupled (4,109 "controlled" on Xolair vs 30 on
+   Dupixent) and is **not** used; median coverage runs are 14 d (Dupixent) vs 45 d
+   (Xolair), so the persistence definition's 60-day gap threshold is dosing-interval
+   sensitive.
+
+Gates: unit tests for export, loader, registry and spec consistency (the existing
+registry-consistency tests must include the new key); a real-DB probe of the loaded
+table's arm split against the parquet; the API run recorded as the cert.
+
+### Lane B — structural author with human validation
+
+Authors the DAG for the CSU escalation decision from the guide
+(`docs/layer4/structural_attestation_authoring.md`), validates it in the expert-review
+queue, and feeds the approved structure back to Lane A as its structural prior.
+
+1. `src/data/kg/structural_author.py`: a DSPy program (OpenAI via
+   `src/optimization/dspy_lm.py::ensure_dspy_configured`) whose instructions are the
+   guide's sections 0–6 verbatim. Inputs per feature: the brief the Layer-4 classifier
+   already gets (`adaptive_validity_check._build_layer_4_inputs`). Outputs: edges over
+   `{feature, T, Y, U_*}`, cited rationale per non-obvious edge, `ambiguous`, expected
+   role. Post-processing: `extract_role` derives the role; citations go through
+   `src/data/kg/citation_resolver.CitationResolver.verify_citation`; per-edge grade
+   `direct` / `family` / `unsupported`. Every record is stamped with model id, prompt
+   hash and guide hash. `CausalStructureAttestation` gains `provenance`
+   (`machine` | `machine_reviewed` | `human`). The 110 existing Optum entries are
+   labelled `machine`: they are research-agent output with no human sign-off. The
+   owner may relabel them after reading the Optum diff (run (b) below).
+2. `src/ml/causal_role_dgp/assembler.py`: unions the fragments for one (T, Y) into
+   a cohort DAG; adjustment set via the graph builder's backdoor finder; per-edge
+   provenance; emits the `dag_structure_json` shape `DagPanel` renders and a
+   per-feature evidence table for `agent_assessment_json`.
+3. `scripts/measure_structural_author.py`: author once on the 91 blind briefs
+   (`tests/fixtures/causal_role_csu_blind_briefs.json` and the golden set), score
+   once against `ground_truth_role`; reports per-role precision/recall and the
+   missed-leak rate. **Gate: zero missed leaks**, else the report is the deliverable.
+4. `scripts/author_cohort_dag.py --manifest {optum_mart,optum} --treatment --outcome
+   [--review]`: writes `docs/layer4/generated/<manifest>_<T>_<Y>/{attestations.json,
+   dag.json, review.md}`; with `--review` opens an `expert_reviews` row
+   (`review_type='initial_dag'`, `dag_structure_json`, `agent_assessment_json`).
+   Two runs: (a) `optum_mart`, T = the CSU escalation-therapy choice framed as
+   *remibrutinib vs competitor biologic*, Y = persistence at 180 d, over the 64
+   baseline features → the review queue (the human gate). Stated assumption, which
+   the reviewer is asked to confirm as a checklist item: remibrutinib enters at the
+   same decision point as the biologics (second line after H1-antihistamine failure),
+   so the confounders of *which* escalation therapy are the same set; Lane A's
+   rehearsal therefore uses this DAG with `treatment_dupixent` on the same
+   confounders. (b) `optum`, T =
+   `biologic_initiation`, Y = `initiated_biologic_180d` → diff against the 110
+   existing attestations (agreement per edge and role; disagreements listed with both
+   rationales; no threshold).
+5. Feedback to Lane A: an approved review's edges become the dataset's
+   `anchored_confounders` (the structural-prior channel already in `agent.py`) via a
+   loader that reads the approved `attestations.json` by review id; unapproved
+   machine attestations are never used as priors and the structural decider treats
+   them as audit-only.
+
+### Lane C — remibrutinib pre-wiring
+
+1. Matcher: `CSU_BIOLOGIC_*` in `convert_optum_rwd.py` and the mart converter gain
+   remibrutinib (generic `remibrutinib`, brand `RHAPSIDO`, NDC `00078-1100-30` from
+   `src/ml/synthetic/clinical_codes.py`); the CSU real-drop converter maps the
+   brand instead of collapsing to `competitor`.
+2. Registry template: `_CAUSAL_DATASET_SPECS` entry `csu_escalation_causal`
+   (treatment `treatment_remibrutinib` vs competitor, the same outcomes and covariate
+   contract as Lane A). Until a real table exists it is backed by the synthetic CSU
+   cohort table, whose rows carry `is_synthetic=true`, so real mode returns no rows
+   and only the planted-truth run below uses it; the real table replaces the backing
+   at the post-launch refresh with no registry change.
+3. Planted-truth end-to-end: the synthetic CSU cohort (`data/rwd/synthetic_CSU`,
+   Remibrutinib brand, planted confounders) run through the whole Lane A + B path
+   as a CI-runnable test of the wiring (the estimate must recover the planted ATE
+   within the generator's tolerance).
+
+## 4. Data flow
+
+```
+Optum_enriched.parquet ──convert_optum_mart --cohort persistence_causal──▶ parquet (T kept)
+        │                                                                     │
+        │                                                   load_optum_causal_cohort ──▶ public.optum_biologic_persistence_causal
+        │                                                                     │
+optum_mart manifest ──structural_author──▶ attestations.json ──assembler──▶ dag.json ──▶ expert_reviews (human)
+                                                                              │ approved
+                                                       anchored_confounders ◀─┘
+                                                                              ▼
+                       POST /api/causal/agent {dataset: optum_biologic_persistence, treatment_dupixent → persistent_at_180d}
+                                                                              ▼
+                        graph_builder (curated DAG / priors) → estimation → refutation → expert-review consult → response + cert
+```
+
+## 5. Error handling and honesty
+
+- Discovery stays off for the real dataset by default; if a caller turns it on, the
+  fixed runner (PR #2203) reports "could not run: singular…" rather than an empty DAG.
+- No negative control is fabricated; SKIPPED is the honest verdict until measured.
+- Author failures route features to review; unresolved citations downgrade edges;
+  nothing machine-authored decides without an approved review.
+- `is_synthetic=false` on every real row; the real-mode provenance filter applies.
+- Prod writes (migration apply, table load) are owner-GO steps; rehearsed with
+  `--dry-run` and, for the load, inside `BEGIN … ROLLBACK` first.
+
+## 6. Testing
+
+Red-first per lane; `pytest -n 0`; no mocks in production paths. Lane A: export shape,
+loader, registry consistency, real-DB arm-split probe, API run cert. Lane B: parser and
+grader on fixed model outputs, assembler on hand-built fragments (latent, M-structure),
+scorer on the golden fixtures, CLI with a fake LM and the dead-Supabase pin, provenance
+handling in the decider; the benchmark itself is a real-LM run recorded as evidence.
+Lane C: matcher unit tests, synthetic planted-truth end-to-end.
+
+## 7. Open items for the owner
+
+- GO for migration 148 apply and the production table load (Lane A step 2).
+- Whether the existing 110 Optum attestations should be relabelled `machine` now
+  (they are research-agent output with no human sign-off).
+- The persistence definition per brand (60-day gap vs dosing interval) before any
+  estimate is quoted externally.
