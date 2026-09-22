@@ -1,6 +1,6 @@
 # Feature-role panel — optum_mart · treatment_dupixent → persistent_at_180d_g28
 
-built_at: 2026-09-22T13:36:26.578961+00:00  ·  n_rows: 15209  ·  covariates: 64
+built_at: 2026-09-22T14:11:06.671270+00:00  ·  n_rows: 15209  ·  covariates: 64
 activation_profile: `{"adaptive_layer4_enabled": true, "adaptive_structural_decider_enabled": true, "kg_mode": "shadow"}`
 Layer 4 LM: **fake**. Fake LM (DummyLM): zero paid calls; measures which features fire.
 
@@ -41,7 +41,7 @@ promotion_eligibility: `{"cross_source_disagreement_rate": 0.0, "kg_decided_coun
 | `cci_pvd` | pre_index (pre_index) | no_signal | 6.92 / moderate | confounder | abstain | — | 0.00 |  |
 | `cci_cerebrovascular` | pre_index (pre_index) | no_signal | 5.14 / moderate | confounder | abstain | — | 0.00 |  |
 | `cci_dementia` | pre_index (pre_index) | no_signal | 2.34 / info | — | adversarial | — | — |  |
-| `cci_chronic_pulmonary` | pre_index (pre_index) | leak_drug_treats_disease | 2.20 / info | — | kg | descendant | 0.70 |  |
+| `cci_chronic_pulmonary` | pre_index (pre_index) | leak_drug_treats_disease | 2.20 / info | — | kg | — | 0.70 |  |
 | `cci_rheumatic` | pre_index (pre_index) | no_signal | 1.29 / info | — | adversarial | — | — |  |
 | `cci_peptic_ulcer` | pre_index (pre_index) | no_signal | -0.56 / info | — | adversarial | — | — |  |
 | `cci_mild_liver` | pre_index (pre_index) | no_signal | 0.24 / info | — | adversarial | — | — |  |
@@ -62,7 +62,7 @@ promotion_eligibility: `{"cross_source_disagreement_rate": 0.0, "kg_decided_coun
 | `elx_hypertension_complicated` | pre_index (pre_index) | no_signal | 4.21 / info | — | adversarial | — | — |  |
 | `elx_paralysis` | pre_index (pre_index) | no_signal | 0.29 / info | — | adversarial | — | — |  |
 | `elx_other_neurological` | pre_index (pre_index) | no_signal | 2.33 / info | — | adversarial | — | — |  |
-| `elx_chronic_pulmonary` | pre_index (pre_index) | leak_drug_treats_disease | 2.20 / info | — | kg | descendant | 0.70 |  |
+| `elx_chronic_pulmonary` | pre_index (pre_index) | leak_drug_treats_disease | 2.20 / info | — | kg | — | 0.70 |  |
 | `elx_diabetes_uncomplicated` | pre_index (pre_index) | no_signal | 0.17 / info | — | adversarial | — | — |  |
 | `elx_diabetes_complicated` | pre_index (pre_index) | no_signal | 6.70 / moderate | confounder | abstain | — | 0.00 |  |
 | `elx_hypothyroidism` | pre_index (pre_index) | no_signal | 0.47 / info | — | adversarial | — | — |  |

@@ -47,8 +47,10 @@ is per run). Return shape documented in the PR's `interfaces` field.
 `panel_layer4_fake/` — `scripts/measure_feature_role_panel.py --layer4 fake` on the
 real persistence frame (n = 15,209, the 64 `MART_SAFE_FEATURES`, T =
 `treatment_dupixent`, Y = `persistent_at_180d_g28`; provider keys blanked, `DummyLM`
-answering every call; run under the box lock; `lane_e_panel_real_fake2.out`:
-`maxrss_kb=833240 elapsed_s=237.21`). Numbers from `panel_layer4_fake/summary.md`:
+answering every call; run under the box lock on the FINAL code — commit `bc0bc4ed3` —
+log `run_log_panel_layer4_fake3.txt`; the identical-numbers run on the pre-round-4 code is
+`run_log_panel_layer4_fake2.txt`, `maxrss_kb=833240 elapsed_s=237.21`). Numbers from
+`panel_layer4_fake/summary.md`:
 
 | Layer | What fired (`summary.md:11-15`) |
 |---|---|
@@ -61,7 +63,7 @@ answering every call; run under the box lock; `lane_e_panel_real_fake2.out`:
 A null is a finding: on this cohort no covariate is excluded — all 64 are contracted
 pre-index, the prediction-era Layer-3 rule is inert by construction, and the only
 non-`no_signal` KG voice is indication evidence. The first fake run (before the
-`DummyLM` exhaustion fix) under-reported Layer 4 as "fired 1"; `lane_e_panel_real_fake.out`
+`DummyLM` exhaustion fix) under-reported Layer 4 as "fired 1"; `run_log_panel_layer4_fake.txt`
 shows the 18 `Layer 4 skipped` lines that exposed it.
 
 `promotion_eligibility` (`summary.md:17`, from `panel.json`): **`passes: false`** —

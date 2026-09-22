@@ -4,7 +4,7 @@
     "adaptive_structural_decider_enabled": true,
     "kg_mode": "shadow"
   },
-  "built_at": "2026-09-22T13:36:26.578961+00:00",
+  "built_at": "2026-09-22T14:11:06.671270+00:00",
   "features": [
     "age_at_index",
     "gdr_cd",
@@ -80,9 +80,7 @@
         "adversarial": 36,
         "kg": 2
       },
-      "final_roles": {
-        "descendant": 2
-      },
+      "final_roles": {},
       "leak_sources": {},
       "leak_verdicts": 0,
       "review_required": 0
@@ -161,6 +159,8 @@
         "disagreements": [],
         "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "abstain",
         "remediation": "review",
@@ -181,6 +181,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [],
         "mode": "shadow",
@@ -238,6 +239,8 @@
         "disagreements": [],
         "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "abstain",
         "remediation": "review",
@@ -267,6 +270,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "I67.9",
@@ -327,6 +331,8 @@
         "disagreements": [],
         "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "abstain",
         "remediation": "review",
@@ -356,6 +362,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "I50.9",
@@ -415,7 +422,9 @@
         "decided_by": "kg",
         "disagreements": [],
         "evidence": "KG-only verdict: signal=leak_drug_treats_disease (no LLM available); deterministic drop [shadow-mode: verdict capped to info/keep; KG not yet promoted]",
-        "final_role": "descendant",
+        "final_role": null,
+        "final_role_note": "withheld: the KG's predictive verdict is indication evidence in the causal contrast (treatment drug approved for this pre-index condition); the structural author and the reviewer decide the role",
+        "kg_predictive_role": "descendant",
         "kg_signal": "leak_drug_treats_disease",
         "layer": "2",
         "remediation": "keep",
@@ -453,6 +462,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": "indication_evidence",
         "edges": [
           {
             "datasource": "chembl_indications",
@@ -544,6 +554,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=2.34\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0010 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -573,6 +585,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "F03.90",
@@ -633,6 +646,8 @@
         "disagreements": [],
         "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "abstain",
         "remediation": "review",
@@ -662,6 +677,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "E11.8",
@@ -722,6 +738,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=0.17\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0003 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -751,6 +769,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "E11.9",
@@ -811,6 +830,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=0.92\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0002 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -840,6 +861,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "B20",
@@ -900,6 +922,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=1.16\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0011 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -929,6 +953,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "C80.1",
@@ -989,6 +1014,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=0.32\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0001 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -1018,6 +1045,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "C79.9",
@@ -1078,6 +1106,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=0.77\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0004 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -1107,6 +1137,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "I21.9",
@@ -1167,6 +1198,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=0.24\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0002 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -1196,6 +1229,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "K76.9",
@@ -1256,6 +1290,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=0.29\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0001 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -1285,6 +1321,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "G82.20",
@@ -1345,6 +1382,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=-0.56\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0002 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -1374,6 +1413,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "K27.9",
@@ -1434,6 +1474,8 @@
         "disagreements": [],
         "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "abstain",
         "remediation": "review",
@@ -1463,6 +1505,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "I73.9",
@@ -1523,6 +1566,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=4.22\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0044 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -1552,6 +1597,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "N18.9",
@@ -1612,6 +1658,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=1.29\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0015 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -1641,6 +1689,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "M06.9",
@@ -1701,6 +1750,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=0.73\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0001 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -1730,6 +1781,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "K74.60",
@@ -1790,6 +1842,8 @@
         "disagreements": [],
         "evidence": "no verdict: the node evaluates non-numeric columns only through a manifest contract, and this column has none",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": null,
         "remediation": null,
@@ -1810,6 +1864,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [],
         "mode": "shadow",
@@ -1867,6 +1922,8 @@
         "disagreements": [],
         "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "abstain",
         "remediation": "review",
@@ -1887,6 +1944,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [],
         "mode": "shadow",
@@ -1944,6 +2002,8 @@
         "disagreements": [],
         "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "abstain",
         "remediation": "review",
@@ -1964,6 +2024,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [],
         "mode": "shadow",
@@ -2021,6 +2082,8 @@
         "disagreements": [],
         "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "abstain",
         "remediation": "review",
@@ -2041,6 +2104,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [],
         "mode": "shadow",
@@ -2098,6 +2162,8 @@
         "disagreements": [],
         "evidence": "no verdict: the node evaluates non-numeric columns only through a manifest contract, and this column has none",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": null,
         "remediation": null,
@@ -2118,6 +2184,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [],
         "mode": "shadow",
@@ -2175,6 +2242,8 @@
         "disagreements": [],
         "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "abstain",
         "remediation": "review",
@@ -2195,6 +2264,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [],
         "mode": "shadow",
@@ -2252,6 +2322,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=0.92\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0002 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -2281,6 +2353,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "B20",
@@ -2341,6 +2414,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=3.98\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0020 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -2370,6 +2445,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "F10.10",
@@ -2430,6 +2506,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=1.70\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0008 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -2459,6 +2537,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "D50.0",
@@ -2519,6 +2598,8 @@
         "disagreements": [],
         "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "abstain",
         "remediation": "review",
@@ -2548,6 +2629,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "I49.9",
@@ -2608,6 +2690,8 @@
         "disagreements": [],
         "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "abstain",
         "remediation": "review",
@@ -2637,6 +2721,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "I50.9",
@@ -2696,7 +2781,9 @@
         "decided_by": "kg",
         "disagreements": [],
         "evidence": "KG-only verdict: signal=leak_drug_treats_disease (no LLM available); deterministic drop [shadow-mode: verdict capped to info/keep; KG not yet promoted]",
-        "final_role": "descendant",
+        "final_role": null,
+        "final_role_note": "withheld: the KG's predictive verdict is indication evidence in the causal contrast (treatment drug approved for this pre-index condition); the structural author and the reviewer decide the role",
+        "kg_predictive_role": "descendant",
         "kg_signal": "leak_drug_treats_disease",
         "layer": "2",
         "remediation": "keep",
@@ -2734,6 +2821,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": "indication_evidence",
         "edges": [
           {
             "datasource": "chembl_indications",
@@ -2825,6 +2913,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=-0.80\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0004 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -2854,6 +2944,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "D68.9",
@@ -2914,6 +3005,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=3.60\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0037 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -2943,6 +3036,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "D50.9",
@@ -3003,6 +3097,8 @@
         "disagreements": [],
         "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "abstain",
         "remediation": "review",
@@ -3032,6 +3128,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "F33.9",
@@ -3092,6 +3189,8 @@
         "disagreements": [],
         "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "abstain",
         "remediation": "review",
@@ -3121,6 +3220,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "E11.8",
@@ -3181,6 +3281,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=0.17\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0003 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -3210,6 +3312,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "E11.9",
@@ -3270,6 +3373,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=1.24\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0008 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -3299,6 +3404,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "F19.10",
@@ -3359,6 +3465,8 @@
         "disagreements": [],
         "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "abstain",
         "remediation": "review",
@@ -3384,6 +3492,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "E87.8"
@@ -3443,6 +3552,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=4.21\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0044 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -3472,6 +3583,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "I11.9",
@@ -3532,6 +3644,8 @@
         "disagreements": [],
         "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "abstain",
         "remediation": "review",
@@ -3561,6 +3675,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "I10",
@@ -3621,6 +3736,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=0.47\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0008 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -3650,6 +3767,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "E03.9",
@@ -3710,6 +3828,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=-0.24\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0002 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -3739,6 +3859,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "K76.9",
@@ -3799,6 +3920,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=-0.47\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0001 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -3828,6 +3951,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "C85.90",
@@ -3888,6 +4012,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=0.32\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0001 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -3917,6 +4043,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "C79.9",
@@ -3977,6 +4104,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=0.52\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0010 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -4006,6 +4135,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "E66.9",
@@ -4066,6 +4196,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=2.33\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0016 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -4095,6 +4227,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "G96.9",
@@ -4155,6 +4288,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=0.29\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0001 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -4180,6 +4315,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "G83.9"
@@ -4239,6 +4375,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=-0.56\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0002 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -4268,6 +4406,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "K27.9",
@@ -4328,6 +4467,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=3.51\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0028 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -4357,6 +4498,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "F29",
@@ -4417,6 +4559,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=4.45\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0027 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -4446,6 +4590,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "I27.20",
@@ -4506,6 +4651,8 @@
         "disagreements": [],
         "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "abstain",
         "remediation": "review",
@@ -4535,6 +4682,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "I73.9",
@@ -4595,6 +4743,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=4.19\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0044 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -4624,6 +4774,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "N18.9",
@@ -4684,6 +4835,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=1.29\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0015 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -4713,6 +4866,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "M06.9",
@@ -4773,6 +4927,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=1.10\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0010 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -4802,6 +4958,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "C80.1",
@@ -4862,6 +5019,8 @@
         "disagreements": [],
         "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "abstain",
         "remediation": "review",
@@ -4887,6 +5046,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "C0018824"
@@ -4946,6 +5106,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=2.35\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0016 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -4975,6 +5137,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [
           "R63.4",
@@ -5035,6 +5198,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=3.96\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0125 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -5055,6 +5220,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [],
         "mode": "shadow",
@@ -5112,6 +5278,8 @@
         "disagreements": [],
         "evidence": "no verdict: the node evaluates non-numeric columns only through a manifest contract, and this column has none",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": null,
         "remediation": null,
@@ -5132,6 +5300,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [],
         "mode": "shadow",
@@ -5189,6 +5358,8 @@
         "disagreements": [],
         "evidence": "no verdict: the node evaluates non-numeric columns only through a manifest contract, and this column has none",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": null,
         "remediation": null,
@@ -5209,6 +5380,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [],
         "mode": "shadow",
@@ -5266,6 +5438,8 @@
         "disagreements": [],
         "evidence": "Layer 3 adversarial discriminator: z=-0.31\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0001 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "3",
         "remediation": "keep",
@@ -5286,6 +5460,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [],
         "mode": "shadow",
@@ -5343,6 +5518,8 @@
         "disagreements": [],
         "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "abstain",
         "remediation": "review",
@@ -5363,6 +5540,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [],
         "mode": "shadow",
@@ -5420,6 +5598,8 @@
         "disagreements": [],
         "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": "abstain",
         "remediation": "review",
@@ -5440,6 +5620,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [],
         "mode": "shadow",
@@ -5497,6 +5678,8 @@
         "disagreements": [],
         "evidence": "no verdict: the node evaluates non-numeric columns only through a manifest contract, and this column has none",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": null,
         "remediation": null,
@@ -5517,6 +5700,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [],
         "mode": "shadow",
@@ -5574,6 +5758,8 @@
         "disagreements": [],
         "evidence": "no verdict: the node evaluates non-numeric columns only through a manifest contract, and this column has none",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": null,
         "remediation": null,
@@ -5594,6 +5780,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [],
         "mode": "shadow",
@@ -5651,6 +5838,8 @@
         "disagreements": [],
         "evidence": "no verdict: the node evaluates non-numeric columns only through a manifest contract, and this column has none",
         "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
         "kg_signal": "no_signal",
         "layer": null,
         "remediation": null,
@@ -5671,6 +5860,7 @@
       },
       "layer_2": {
         "cache_bound": true,
+        "causal_interpretation": null,
         "edges": [],
         "feature_entity_ids": [],
         "mode": "shadow",
@@ -5722,5 +5912,6 @@
       "review_required": false
     }
   },
+  "schema_version": "1",
   "treatment": "treatment_dupixent"
 }
