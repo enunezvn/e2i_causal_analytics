@@ -90,12 +90,14 @@ async def test_train_and_persist_records_the_training_frame_identity(file_tracki
     )
 
     kwargs = repo.save_model.await_args.kwargs
-    assert kwargs["training_frame"] == {
+    frame = kwargs["training_frame"]
+    assert {k: frame[k] for k in ("source", "seed", "n_rows", "target_column")} == {
         "source": "synthetic_training_frame",
         "seed": 2,
         "n_rows": 1100,
         "target_column": "outcome",
     }
+    assert len(frame["content_sha256"]) == 64
 
 
 @pytest.mark.asyncio
@@ -121,3 +123,21 @@ async def test_train_and_persist_reaches_the_real_repository_facade(file_trackin
     kwargs = repo.models.save_model.await_args.kwargs
     assert kwargs["training_frame"]["seed"] == 2
     assert kwargs["data_provenance"] == "synthetic"
+
+
+def test_training_frame_identity_is_a_content_digest():
+    """codex r5 #1: source/seed/path are metadata a different frame can share; the
+    recorded identity is a digest of the frame's CONTENT, stable across runs of the
+    same frame and different for a different frame (no training needed to prove it;
+    the test above proves the digest is what gets recorded)."""
+    from src.digital_twin.training_data import synthetic_training_frame
+    from src.digital_twin.training_job import _frame_content_sha256
+
+    a = _frame_content_sha256(synthetic_training_frame(TwinType.HCP, n_rows=1100, seed=3))
+    b = _frame_content_sha256(synthetic_training_frame(TwinType.HCP, n_rows=1100, seed=3))
+    c = _frame_content_sha256(synthetic_training_frame(TwinType.HCP, n_rows=1100, seed=4))
+    assert len(a) == 64 and a == b
+    assert c != a
+    # Column order and names are part of the identity.
+    frame = synthetic_training_frame(TwinType.HCP, n_rows=1100, seed=3)
+    assert _frame_content_sha256(frame[list(reversed(frame.columns))]) != a

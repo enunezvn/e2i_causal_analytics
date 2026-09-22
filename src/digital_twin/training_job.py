@@ -19,6 +19,7 @@ never mistaken for an RWD-trained one (anti-mock discipline).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from functools import partial
 from typing import Any, Dict, Optional, Tuple
@@ -63,6 +64,15 @@ def _resolve_training_frame(
         "train_and_persist_twin requires one of: data, data_source, or "
         "synthetic=True (fail closed rather than train on nothing)"
     )
+
+
+def _frame_content_sha256(frame: pd.DataFrame) -> str:
+    """sha256 over the frame's values, column order and column names (index ignored)."""
+    row_hashes = pd.util.hash_pandas_object(frame, index=False).to_numpy()
+    h = hashlib.sha256()
+    h.update("|".join(str(c) for c in frame.columns).encode("utf-8"))
+    h.update(row_hashes.tobytes())
+    return h.hexdigest()
 
 
 async def train_and_persist_twin(
@@ -124,6 +134,10 @@ async def train_and_persist_twin(
             "target_column": target_column,
         },
     }[provenance]
+    # Source/seed/path are metadata another frame can share (a path can be
+    # overwritten, an in-memory frame has no name): the identity that counts is
+    # the CONTENT digest (codex r5 #1), stable across runs of the same frame.
+    training_frame["content_sha256"] = _frame_content_sha256(frame)
 
     generator = TwinGenerator(twin_type=twin_type, brand=brand)
     # Training (sklearn fit + 5-fold CV) is blocking CPU work — run it off the

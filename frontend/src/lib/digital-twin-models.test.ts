@@ -134,6 +134,17 @@ describe('digital-twin model census (#2206)', () => {
     );
   });
 
+  it('counts brand labels, not active rows (codex r5 #2)', () => {
+    const rows = [
+      model('Remibrutinib', { model_id: 'v1', shared_fit_model_count: 2, shared_fit_with: ['Kisqali'] }),
+      model('Remibrutinib', { model_id: 'v2', shared_fit_model_count: 2, shared_fit_with: ['Kisqali'] }),
+      model('Kisqali', { shared_fit_model_count: 2, shared_fit_with: ['Remibrutinib'] }),
+    ];
+    expect(describeModelCensus(rows)).toBe('2 brand labels over 1 shared synthetic fit · unvalidated');
+    expect(summarizeModelCensus(rows)).toMatchObject({ visible: 2, labels: 2, hiddenSharedLabels: 0 });
+    expect(summarizeModelCensus(rows)?.sharedBrands).toEqual(['Remibrutinib', 'Kisqali']);
+  });
+
   it('is null with no models and labels unknown states as unknown', () => {
     expect(allModelsUnvalidated([])).toBe(false);
     expect(allModelsUnvalidated([model('Kisqali')])).toBe(true);

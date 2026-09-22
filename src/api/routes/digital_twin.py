@@ -373,24 +373,26 @@ def _model_honesty_fields(
     tc = row.get("training_config") or {}
     provenance = tc.get("data_provenance", row.get("data_provenance"))
     fingerprint = _fit_fingerprint(row)
-    same_fit = [
-        r
+    # Distinct BRANDS sharing the fingerprint (codex r5 #2): nothing enforces one
+    # active row per brand, and two active versions of one brand are one label.
+    same_fit_brands = {
+        str(r.get("brand"))
         for r in census
-        if _fit_fingerprint(r) == fingerprint
+        if r.get("brand")
+        and _fit_fingerprint(r) == fingerprint
         and str(r.get("twin_type", "")) == str(row.get("twin_type", ""))
-    ]
-    others = sorted(
-        {
-            str(r.get("brand"))
-            for r in same_fit
-            if str(r.get("model_id")) != str(row.get("model_id")) and r.get("brand")
-        }
-    )
+    }
+    own_brand = str(row.get("brand")) if row.get("brand") else None
+    if own_brand:
+        same_fit_brands.add(own_brand)
+    others = sorted(b for b in same_fit_brands if b != own_brand)
     visible_others = [b for b in others if resolve_brand_for_read(user, b)[0]]
     status, score, n = _model_fidelity_state(row)
     features = [str(c) for c in (row.get("feature_columns") or [])]
+    frame_meta = tc.get("training_frame") or {}
     return {
-        "training_frame_recorded": bool(tc.get("training_frame")),
+        # A content digest is the frame's identity; source/seed/path alone are not.
+        "training_frame_recorded": bool(frame_meta.get("content_sha256")),
         "fidelity_status": status,
         "fidelity_score": score,
         "fidelity_sample_count": n,
@@ -398,7 +400,7 @@ def _model_honesty_fields(
         "r2_score_basis": _r2_score_basis(provenance),
         "brand_is_feature": "brand" in {f.lower() for f in features},
         "training_fingerprint": fingerprint,
-        "shared_fit_model_count": max(1, len(same_fit) if same_fit else 1),
+        "shared_fit_model_count": max(1, len(same_fit_brands)),
         "shared_fit_with": visible_others,
     }
 
@@ -845,8 +847,9 @@ class TwinModelSummary(BaseModel):
     )
     shared_fit_model_count: int = Field(
         description=(
-            "Active models of this twin_type (all brands) with the same training_fingerprint, "
-            "including this one. >1 means brand is a label over ONE recorded fit."
+            "Distinct BRANDS whose active model of this twin_type has the same "
+            "training_fingerprint, including this one (two active rows of one brand "
+            "count once). >1 means brand is a label over ONE recorded fit."
         ),
     )
     shared_fit_with: List[str] = Field(
@@ -855,10 +858,11 @@ class TwinModelSummary(BaseModel):
     )
     training_frame_recorded: bool = Field(
         description=(
-            "Whether training_config.training_frame (source/seed/rows) was recorded for "
-            "this row. False for rows trained before it was recorded: their fingerprint "
-            "compares configuration, columns and metrics only — training-frame and "
-            "artifact identity were not recorded."
+            "Whether a CONTENT digest of the training frame "
+            "(training_config.training_frame.content_sha256) was recorded for this row. "
+            "False for rows trained before it was recorded: their fingerprint compares "
+            "configuration, columns and metrics only — training-frame and artifact "
+            "identity were not recorded."
         ),
     )
 

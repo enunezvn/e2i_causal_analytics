@@ -19968,7 +19968,7 @@ export interface components {
             training_fingerprint: string;
             /**
              * Shared Fit Model Count
-             * @description Active models of this twin_type (all brands) with the same training_fingerprint, including this one. >1 means brand is a label over ONE recorded fit.
+             * @description Distinct BRANDS whose active model of this twin_type has the same training_fingerprint, including this one (two active rows of one brand count once). >1 means brand is a label over ONE recorded fit.
              */
             shared_fit_model_count: number;
             /**
@@ -19978,7 +19978,7 @@ export interface components {
             shared_fit_with?: string[];
             /**
              * Training Frame Recorded
-             * @description Whether training_config.training_frame (source/seed/rows) was recorded for this row. False for rows trained before it was recorded: their fingerprint compares configuration, columns and metrics only — training-frame and artifact identity were not recorded.
+             * @description Whether a CONTENT digest of the training frame (training_config.training_frame.content_sha256) was recorded for this row. False for rows trained before it was recorded: their fingerprint compares configuration, columns and metrics only — training-frame and artifact identity were not recorded.
              */
             training_frame_recorded: boolean;
             /** Model Description */
@@ -20064,7 +20064,7 @@ export interface components {
             training_fingerprint: string;
             /**
              * Shared Fit Model Count
-             * @description Active models of this twin_type (all brands) with the same training_fingerprint, including this one. >1 means brand is a label over ONE recorded fit.
+             * @description Distinct BRANDS whose active model of this twin_type has the same training_fingerprint, including this one (two active rows of one brand count once). >1 means brand is a label over ONE recorded fit.
              */
             shared_fit_model_count: number;
             /**
@@ -20074,7 +20074,7 @@ export interface components {
             shared_fit_with?: string[];
             /**
              * Training Frame Recorded
-             * @description Whether training_config.training_frame (source/seed/rows) was recorded for this row. False for rows trained before it was recorded: their fingerprint compares configuration, columns and metrics only — training-frame and artifact identity were not recorded.
+             * @description Whether a CONTENT digest of the training frame (training_config.training_frame.content_sha256) was recorded for this row. False for rows trained before it was recorded: their fingerprint compares configuration, columns and metrics only — training-frame and artifact identity were not recorded.
              */
             training_frame_recorded: boolean;
         };

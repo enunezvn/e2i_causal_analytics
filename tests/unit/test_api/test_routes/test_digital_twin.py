@@ -2405,7 +2405,12 @@ async def test_list_models_says_whether_the_training_frame_was_recorded(mock_twi
     recorded = _shared_fit_row("Kisqali", duration=7.1)
     recorded["training_config"] = {
         **recorded["training_config"],
-        "training_frame": {"source": "synthetic_training_frame", "seed": 0, "n_rows": 2000},
+        "training_frame": {
+            "source": "synthetic_training_frame",
+            "seed": 0,
+            "n_rows": 2000,
+            "content_sha256": "cd" * 32,
+        },
     }
     mock_twin_repository.list_active_models = AsyncMock(return_value=[legacy, recorded])
 
@@ -2416,3 +2421,39 @@ async def test_list_models_says_whether_the_training_frame_was_recorded(mock_twi
     assert by_brand["Kisqali"].training_frame_recorded is True
     # A recorded frame is part of the fingerprint: these two are not one recorded fit.
     assert by_brand["Remibrutinib"].training_fingerprint != by_brand["Kisqali"].training_fingerprint
+
+
+@pytest.mark.asyncio
+async def test_shared_fit_census_counts_brands_not_active_rows(mock_twin_repository):
+    """codex r5 #2: nothing enforces one active model per brand; two active rows of
+    one brand are still ONE brand label, and shared_fit_with never names the row's
+    own brand."""
+    from src.api.routes.digital_twin import list_models
+
+    rows = [
+        _shared_fit_row("Remibrutinib", duration=7.1),
+        _shared_fit_row("Remibrutinib", duration=7.3),  # a second active version
+        _shared_fit_row("Kisqali", duration=7.7),
+    ]
+    mock_twin_repository.list_active_models = AsyncMock(return_value=rows)
+
+    result = await list_models(brand=None, twin_type=None, user=_ADMIN)
+
+    for m in result.models:
+        assert m.shared_fit_model_count == 2
+        assert m.brand not in m.shared_fit_with
+    remi = [m for m in result.models if m.brand == "Remibrutinib"]
+    assert all(m.shared_fit_with == ["Kisqali"] for m in remi)
+
+
+def test_training_frame_recorded_requires_a_content_digest():
+    from src.api.routes.digital_twin import _model_honesty_fields
+
+    row = _shared_fit_row("Kisqali", duration=1.0)
+    row["training_config"] = {
+        **row["training_config"],
+        "training_frame": {"source": "rwd_file", "path": "/x.csv"},
+    }
+    assert _model_honesty_fields(row, [row], _ADMIN)["training_frame_recorded"] is False
+    row["training_config"]["training_frame"]["content_sha256"] = "ab" * 32
+    assert _model_honesty_fields(row, [row], _ADMIN)["training_frame_recorded"] is True
