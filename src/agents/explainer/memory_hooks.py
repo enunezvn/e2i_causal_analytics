@@ -263,9 +263,12 @@ class ExplanationMemoryHooks:
             # round (RxNav) at first build; keep it off the event loop.
             if self._entity_extractor is None:
                 self._entity_extractor = await asyncio.to_thread(self._build_entity_extractor)
+            # Bind once. Reading the lazy property again after a failed build
+            # would rebuild synchronously on the loop thread, once per read.
+            extractor = self._entity_extractor
 
-            if self.entity_extractor:
-                entities = self.entity_extractor.extract(query)
+            if extractor:
+                entities = extractor.extract(query)
 
                 # Query semantic memory for each extracted entity type
                 # Brands map to general entity lookups
@@ -353,9 +356,9 @@ class ExplanationMemoryHooks:
                 "causal_paths": causal_paths[:10],  # Cap causal paths
                 "graph_stats": stats,
                 "extraction_summary": {
-                    "brands_found": len(entities.brands) if self.entity_extractor else 0,
-                    "kpis_found": len(entities.kpis) if self.entity_extractor else 0,
-                    "agents_found": len(entities.agents) if self.entity_extractor else 0,
+                    "brands_found": len(entities.brands) if extractor else 0,
+                    "kpis_found": len(entities.kpis) if extractor else 0,
+                    "agents_found": len(entities.agents) if extractor else 0,
                 },
             }
         except Exception as e:

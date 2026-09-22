@@ -51,3 +51,26 @@ async def test_entity_extractor_is_constructed_off_the_loop_thread():
     )
     # The built instance is cached for the sync property too.
     assert hooks.entity_extractor is hooks._entity_extractor
+
+
+@pytest.mark.asyncio
+async def test_a_failed_off_loop_build_is_not_retried_on_the_loop_thread():
+    # Codex r2 MED: when the off-loop build returns None, the lazy property
+    # rebuilt the extractor synchronously on the loop thread, once per read
+    # (up to five times in one call). One call = one off-loop attempt.
+    attempts: list[int] = []
+
+    def _failing_extractor():
+        attempts.append(threading.get_ident())
+        raise RuntimeError("vocabulary unavailable")
+
+    hooks = ExplanationMemoryHooks()
+    hooks._semantic_memory = _SemanticMemoryStub()
+    loop_thread = threading.get_ident()
+    with patch("src.rag.entity_extractor.EntityExtractor", _failing_extractor):
+        context = await hooks._get_semantic_context("iptacopan TRx in the northeast")
+
+    assert len(attempts) == 1, f"the build was attempted {len(attempts)} times in one call"
+    assert attempts[0] != loop_thread, "the build ran on the event-loop thread"
+    # The call still degrades to an empty extraction, not to the outer exception fallback.
+    assert context["extraction_summary"]["brands_found"] == 0
