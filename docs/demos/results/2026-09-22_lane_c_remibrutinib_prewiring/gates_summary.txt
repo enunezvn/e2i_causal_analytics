@@ -17,3 +17,11 @@ PLANT loader_missing_dummy: rc=1 red=True wall=35.0s ['================== 1 fail
 PLANT e2e_no_adjustment: rc=1 red=True wall=47.6s ['======================= 1 failed, 15 warnings in 27.97s ========================'] named=['test_planted_ate_is_recovered_through_the_production_path']
 e2e_no_adjustment detail: with confounders/modeled_confounders emptied in the task state the graph served the unadjusted estimate 0.4976 (== the generator's naive_diff 0.4976) and the tolerance assertion failed — the naive-bias plant landed:
 E   AssertionError: {'ate': 0.497561534641489, 'estimator': 'linear_regression', 'naive_diff': 0.4976, 'tolerance': 0.1, ...}
+
+## Verifier round (2026-09-22, lane-c-fix; four MEDs A-D) — every pytest -n 0 -p no:cacheprovider under the box lock, Supabase blanked
+red-first MED-B/C (tests written before the code): registry + propose test files -> 2 collection ImportErrors (_CAUSAL_SYNTHETIC_BACKED / PLANTED_TRUTH_RUN_ENV absent); vocabulary file -> 6 failed, 32 passed (the new NDC-form assertions)
+green batch: registry, propose-categoricals, remibrutinib vocabulary, mart csu arms, cohort contract, brands, geo encoding, loaders, optum registry, provenance/894, test_provenance, unit-tree real-mode pin, agent analyze -> 256 passed in 24.5 s
+E2E (planted truth, new capability check) -> 1 passed; ATE 0.40622 (error 0.0422; identical to 15 decimals across two runs)
+teeth plant E (payer_category dropped from the CI adjustment set) -> FAILED on `assert truth.is_recovery_convincing(result.ate)`: error 0.0724 > 0.06 (d2b_graph_payer_lost_measure.jsonl:4)
+teeth plant C (adjustment set reduced to gdr_cd) -> FAILED on the sidecar tolerance AND the capability: ATE 0.4965, error 0.1325 (d2b_graph_payer_lost_measure.jsonl:5)
+ruff check --no-cache src/ tests/ -> All checks passed!; ruff format --check src/ tests/ -> 3385 files already formatted (the only reformat hits were the two untracked plant scratch files, deleted)
