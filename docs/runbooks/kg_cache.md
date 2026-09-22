@@ -152,6 +152,16 @@ Current bindings:
 | Manifest source | Cache | Target | Mode |
 |---|---|---|---|
 | `optum` | `1cdaa038__96bfd2e0.json` | `RXNORM:302379` (omalizumab) | `shadow` |
+| `optum_mart` | `0b4c5fdb__214e5b23.json` | `RXNORM:302379,RXNORM:1876376` (omalizumab, dupilumab — the Lane A contrast) | `shadow` |
+| `csu` | `2e1be83e__214e5b23.json` | `RXNORM:302379,RXNORM:1876376` (omalizumab, dupilumab) | `shadow` |
+
+A multi-code target gets the drug-disease pass **per drug** (`_resolve_target_drugs`,
+Lane E 2026-09-22); before that the build used only the first code that resolved.
+Measured on the committed causal-cohort caches
+(`docs/demos/results/2026-09-22_lane_e_feature_role_voters/kg_cache_signals.txt`):
+`optum_mart` 2 of 48 comorbidity flags signal (`cci_chronic_pulmonary`,
+`elx_chronic_pulmonary`: both drugs approved for asthma), `csu` 1 of 1
+(omalizumab `treats` urticaria; dupilumab only `associated_with`).
 
 ### Modes
 

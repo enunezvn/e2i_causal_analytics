@@ -57,6 +57,15 @@ class KGActivation:
     note: str = ""
 
 
+#: RxNav RxCUIs of the two treatment concepts of the Lane A contrast
+#: (``docs/superpowers/specs/2026-09-22-real-data-causal-estimation-design.md``,
+#: Lane E item 1). Both resolved live through RxNav on 2026-09-22 as EXACT
+#: ingredient (TTY=IN) matches and are pinned by
+#: ``tests/integration/test_kg/test_kg_layer2_live_contracts.py``; evidence in
+#: ``docs/demos/results/2026-09-22_lane_e_feature_role_voters/rxnav_dupilumab_resolution.txt``.
+OMALIZUMAB_RXCUI = "302379"
+DUPILUMAB_RXCUI = "1876376"
+
 # Optum / CSU. Built 2026-08-14 by::
 #
 #     python scripts/build_kg_cache.py --live \
@@ -75,12 +84,58 @@ class KGActivation:
 # (dx_l50_1/8/9_count, dx_total_csu, primary_diagnosis_code) and the asthma
 # features (omalizumab is approved for asthma as well). The remaining 67 are
 # ``no_signal``, which is the honest answer for labs and utilisation counts.
+#
+# Causal cohorts (Lane E, 2026-09-22). Built by::
+#
+#     python scripts/build_kg_cache.py --live \
+#         --manifest-module src.data.manifests.optum_mart_feature_manifest \
+#         --features-attr OPTUM_MART_FEATURES \
+#         --target-entity-codes RXNORM:302379,RXNORM:1876376 \
+#         --out data/kg_cache
+#     python scripts/build_kg_cache.py --live \
+#         --manifest-module src.data.manifests.csu_feature_manifest \
+#         --features-attr CSU_FEATURES \
+#         --target-entity-codes RXNORM:302379,RXNORM:1876376 \
+#         --out data/kg_cache
+#
+# The target is the Lane A treatment CONTRAST (dupilumab vs omalizumab), so
+# both drugs get the Open Targets approved-indication pass (per-drug since
+# Lane E; ``_resolve_target_drugs``). Measured on the committed artifacts
+# (``docs/demos/results/2026-09-22_lane_e_feature_role_voters/kg_cache_signals.txt``):
+# optum_mart — 48 records (the Charlson/Elixhauser flags, which carry entity
+# codes since Lane E), 2 of 48 signal ``leak_drug_treats_disease``
+# (``cci_chronic_pulmonary`` / ``elx_chronic_pulmonary``: both drugs are
+# approved for asthma), the other 46 are honestly ``no_signal``; csu — 1 record
+# (``primary_diagnosis_code``), omalizumab ``treats`` urticaria, dupilumab only
+# ``associated_with`` (not approved for CSU). In the causal setting a ``treats``
+# edge onto a PRE-index comorbidity is indication evidence for the treatment
+# choice (a confounder candidate), not a leak: the panel records the edges and
+# the author/human decide. Shadow until the owner promotes on the Lane E
+# measurement (spec §7).
 KG_ACTIVATIONS: Dict[str, KGActivation] = {
     "optum": KGActivation(
         cache_filename="1cdaa038__96bfd2e0.json",
-        target_entity_codes=[("RXNORM", "302379")],
+        target_entity_codes=[("RXNORM", OMALIZUMAB_RXCUI)],
         mode="shadow",
         note="Optum/CSU vs omalizumab (RXNORM:302379); shadow observation window",
+    ),
+    "optum_mart": KGActivation(
+        cache_filename="0b4c5fdb__214e5b23.json",
+        target_entity_codes=[("RXNORM", OMALIZUMAB_RXCUI), ("RXNORM", DUPILUMAB_RXCUI)],
+        mode="shadow",
+        note=(
+            "Optum mart causal cohorts vs the dupilumab/omalizumab contrast "
+            "(RXNORM:302379, RXNORM:1876376); shadow until the Lane E measurement"
+        ),
+    ),
+    "csu": KGActivation(
+        cache_filename="2e1be83e__214e5b23.json",
+        target_entity_codes=[("RXNORM", OMALIZUMAB_RXCUI), ("RXNORM", DUPILUMAB_RXCUI)],
+        mode="shadow",
+        note=(
+            "CSU demo cohort vs the dupilumab/omalizumab contrast "
+            "(RXNORM:302379, RXNORM:1876376); shadow until the Lane E measurement"
+        ),
     ),
 }
 
