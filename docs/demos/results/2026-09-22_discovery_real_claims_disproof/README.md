@@ -20,7 +20,7 @@ on real and planted-truth frames. The disproof script never calls `execute()`
 | A1 (`disproof_runs.txt:16`: `n=4000 … k=14`) | same, pruned: `keep = [age_at_index, enrollment_duration_days, comorbidity_diag_distinct_count, charlson_score]` + every `cci_*` flag with prevalence `>= 0.02` (`run_disproof.py:75-76`) | same | same | 14 | 4,000 |
 | A2 (`disproof_runs.txt:27`: `n=4000 … k=13`) | A1 without `charlson_score` | same | same | 13 | 4,000 |
 | B (`disproof_runs.txt:38`: `n=4000 … k=10`) | synthetic `data/rwd/synthetic_CSU/patient_journeys.parquet` (Remibrutinib rows), planted confounders `disease_severity`, `academic_hcp` (`data/synthetic/ground_truth_20260611T150429.json`) | `treatment_arm` | `treatment_initiated` | 10 | 4,000 |
-| timing (`timing_run.txt:2`: `kept k= 43`; `run_timing.py:6`: `n=4000`) | A0 rank-pruned greedily (a column is kept iff it raises the correlation-matrix rank; `run_timing.py`), ONE PC run, `discovery_bootstrap_resamples=0`, latent diagnostic off | same as A | same as A | 43 | 4,000 |
+| timing (`timing_run.txt:2`: `kept k= 43`; `run_timing.py:8`: `n=4000`) | A0 rank-pruned greedily (a column is kept iff it raises the correlation-matrix rank; `run_timing.py`), ONE PC run, `discovery_bootstrap_resamples=0`, latent diagnostic off | same as A | same as A | 43 | 4,000 |
 
 ## Captured results
 
