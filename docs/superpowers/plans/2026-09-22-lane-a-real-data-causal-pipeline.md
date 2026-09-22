@@ -2621,6 +2621,12 @@ scores rankable, `energy_score_gap` 0.0 with < 2 scores. §3A's two reviewer cav
 Codex rounds stop here: r7's findings were pre-existing contracts or wording, the signal that the loop
 now generates its own work (memory 2026-09-18); residuals are reported to the owner in the PR.
 
+**Amendment 8 (codex r8, final → REVISE: 2 HIGH + 2 LOW):** the non-finite rebuttal was wrong — the
+fallback opened a path that could serve a NaN-scored success unreviewed; fixed (finite-score eligibility,
+fail closed otherwise, teeth proven by planting). The prune probe JSON was stale against its script; the
+script now compares the shipped prune with an explicit r3 baseline and the JSON is regenerated with the
+commit recorded. LOWs (tournament-fit raise; wording) are pre-existing/wording.
+
 ---
 
 ### Task 10: Codex review rounds to ACCEPT

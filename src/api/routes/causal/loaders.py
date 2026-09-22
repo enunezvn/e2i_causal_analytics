@@ -737,7 +737,7 @@ def _resolve_agent_estimation_frame(
 ) -> tuple["pd.DataFrame", List[str]]:  # type: ignore[name-defined] # noqa: F821
     """Everything the agent loader does AFTER the rows are fetched: per-row
     coercion, the constant-treatment refusal, the all-NULL covariate drop, the
-    one-hot expansion and the exact-collinearity prune -- returning
+    one-hot expansion and the machine-precision collinearity prune -- returning
     ``(frame, [treatment, outcome, *resolved covariates])``.
 
     Split out of :func:`_load_agent_estimation_frame` so an offline run on the

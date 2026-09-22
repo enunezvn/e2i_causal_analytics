@@ -85,7 +85,7 @@ class _MemStore:
 
 def build_frame(outcome: str):
     """The exported parquet rows through the loader's OWN post-fetch resolution
-    (coercion, constant-treatment refusal, one-hot, exact-collinearity prune):
+    (coercion, constant-treatment refusal, one-hot, machine-precision collinearity prune):
     ``_resolve_agent_estimation_frame`` is exactly what the API path runs after
     its PostgREST read, so the pre-flight sees the served design. Returns
     ``(frame, resolved_covariates)``."""

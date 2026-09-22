@@ -195,6 +195,23 @@ Standalone attribution of the pre-fix budget on this frame (`timing_probe*.py/js
   is 0.0 with fewer than two scores — pre-existing contract typed `float` in state, DSPy and the API;
   making it `None` ripples through every consumer. The caveat section now states that §3A's two
   reviewer caveats are Task 12 data, not carried by this pre-flight.
+- **Round 8 (FINAL, codex r8 → REVISE: 2 HIGH + 2 LOW; both HIGH fixed, LOWs pre-existing/wording).**
+  (1) HIGH — my Round 7 rebuttal (b) was WRONG and codex's scenario is real: before this lane a refused
+  winner failed closed; with the fallback, `_select_best_energy(remaining)` could pick a successful
+  candidate whose energy score is NaN (the tie band degenerates, `NaN > threshold` is False, so
+  `requires_review` stays False) and serve its refit — a path this lane opened. Fixed: only candidates
+  with a FINITE tournament score are eligible for the fallback; NaN-scored successes are named in the
+  reason as not eligible; with none eligible the selection fails closed. Tests: finite winner refused →
+  NaN causal_forest skipped, finite OLS served, causal_forest never refit; only-NaN-remains → fails
+  closed. Teeth proven by planting the old filter (both tests fail). The INITIAL tournament pick over
+  a NaN-scored success is pre-existing `_select_best_energy` behaviour and stays filed. (2) HIGH — the
+  checked-in `prune_tolerance_probe.json` had been measured on the Round-3 code while the script now
+  imported the shipped prune, so re-running did not reproduce it. The script now compares the SHIPPED
+  prune against an explicit inline Round-3 baseline, records `measured_at_commit`, and the JSON is
+  regenerated at `a3db16164`: same 16 columns in the same order; all synthetic probes as documented
+  (plus float-max and one-ULP). (3) LOW — a raise inside a TOURNAMENT fit still escapes (pre-existing
+  boundary; production wrappers catch). (4) LOW — three remaining "exact-collinearity" phrasings
+  reworded to machine-precision collinearity.
 
 Final-code node timeline of the primary run (from the run's own INFO log; the graph itself started
 at ~09:22:30 after imports):

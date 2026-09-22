@@ -1,8 +1,9 @@
 {
+ "measured_at_commit": "a3db16164",
  "real": {
   "n": 15209,
   "k": 77,
-  "current_dropped": [
+  "r3_baseline_dropped": [
    "cci_hiv",
    "elx_chf",
    "elx_pvd",
@@ -20,7 +21,7 @@
    "payer_bus=MCR",
    "charlson_risk_band=5 plus"
   ],
-  "candidate_dropped": [
+  "shipped_dropped": [
    "cci_hiv",
    "elx_chf",
    "elx_pvd",
@@ -43,47 +44,61 @@
   "kept_ratio_min": 0.04694304093947346
  },
  "offset_1e14": {
-  "current_dropped": [
+  "r3_baseline_dropped": [
    "x"
   ],
-  "candidate_dropped": []
+  "shipped_dropped": []
  },
  "noise_5e-9": {
-  "current_dropped": [
+  "r3_baseline_dropped": [
    "almost"
   ],
-  "candidate_dropped": []
+  "shipped_dropped": []
  },
  "scale_1e-200": {
-  "current_dropped": [
+  "r3_baseline_dropped": [
    "a",
    "b"
   ],
-  "candidate_dropped": []
+  "shipped_dropped": []
  },
  "exact_dup_offset_1e14": {
-  "current_dropped": [
+  "r3_baseline_dropped": [
    "a",
    "b"
   ],
-  "candidate_dropped": [
+  "shipped_dropped": [
    "b"
   ]
  },
  "exact_dup": {
-  "current_dropped": [
+  "r3_baseline_dropped": [
    "b"
   ],
-  "candidate_dropped": [
+  "shipped_dropped": [
    "b"
   ]
  },
  "constant_float": {
-  "current_dropped": [
+  "r3_baseline_dropped": [
    "a"
   ],
-  "candidate_dropped": [
+  "shipped_dropped": [
    "a"
+  ]
+ },
+ "float_max": {
+  "r3_baseline_dropped": [
+   "a"
+  ],
+  "shipped_dropped": []
+ },
+ "one_ulp": {
+  "r3_baseline_dropped": [
+   "b"
+  ],
+  "shipped_dropped": [
+   "b"
   ]
  }
 }

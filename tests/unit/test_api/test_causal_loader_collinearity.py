@@ -1,4 +1,6 @@
-"""Lane A (codex r2 HIGH): the agent loader prunes EXACTLY collinear covariates so
+"""Lane A (codex r2 HIGH): the agent loader prunes covariates that are NUMERICALLY
+collinear at machine precision (exact linear combinations of the intercept and
+earlier resolved columns, and independent variation at or below max(n,k)*eps) so
 the estimators never see a rank-deficient design.
 
 Measured 2026-09-22 on the real Optum biologic-persistence frame (n=15,209,

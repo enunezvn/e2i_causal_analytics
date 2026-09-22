@@ -1890,6 +1890,71 @@ class TestSubsampledSelection:
         assert "Tournament winner linear_dml" in sel.selection_reason
         assert "Served the next ranked candidate causal_forest" in sel.selection_reason
 
+    def _three_wrapper_selector_with_nan_candidate(self, nan_type: EstimatorType):
+        """linear_dml (finite winner, refuses its served refit), causal_forest
+        (successful tournament fit whose energy score is NaN), ols (finite)."""
+        config = EstimatorSelectorConfig(
+            estimators=[
+                EstimatorConfig(EstimatorType.OLS, priority=1),
+                EstimatorConfig(EstimatorType.CAUSAL_FOREST, priority=2),
+                EstimatorConfig(EstimatorType.LINEAR_DML, priority=3),
+            ],
+            selection_max_rows=200,
+            energy_score_config=EnergyScoreConfig(enable_bootstrap=False),
+        )
+        selector = EstimatorSelector(config)
+        a = _RecordingWrapper(EstimatorType.LINEAR_DML, cate_value=2.0, fail_above_rows=200)
+        b = _RecordingWrapper(EstimatorType.CAUSAL_FOREST, cate_value=2.3)
+        c = _RecordingWrapper(EstimatorType.OLS, cate_value=50.0)
+        # codex r8's scenario: the NaN-scored success sits AHEAD of the finite
+        # candidate among the remaining results, so an unguarded fallback's
+        # tie-band ranking degenerates and picks it.
+        selector.estimators = [b, c, a]
+        real_compute = selector.energy_calculator.compute
+
+        def nan_for(*args, **kwargs):
+            res = real_compute(*args, **kwargs)
+            if kwargs.get("estimator_name") == nan_type.value:
+                res.energy_score = float("nan")
+            return res
+
+        selector.energy_calculator.compute = nan_for  # type: ignore[method-assign]
+        return selector, a, b, c
+
+    def test_fallback_never_serves_a_candidate_without_a_finite_tournament_score(self):
+        """codex r8 HIGH: before the fallback a refused winner failed closed; the
+        fallback must not hand selection to a successful candidate whose energy
+        score is NaN (the tie-band ranking degenerates and the review gate's
+        ``NaN > threshold`` is False). Only finite-scored candidates are eligible."""
+        treatment, outcome, covariates = _subsample_frame(n=1_000)
+        selector, a, b, c = self._three_wrapper_selector_with_nan_candidate(
+            EstimatorType.CAUSAL_FOREST
+        )
+
+        sel = selector.select(treatment, outcome, covariates)
+
+        assert a.fit_row_counts == [200, 1_000]
+        assert sel.selected.success and sel.selected.estimator_type == EstimatorType.OLS
+        assert c.fit_row_counts == [200, 1_000]
+        assert b.fit_row_counts == [200]  # never refit: not eligible without a finite score
+        assert "causal_forest" in sel.selection_reason and "finite" in sel.selection_reason
+        assert sel.exceeded_max_energy_score == (
+            sel.selected.energy_score > EstimatorSelectorConfig().max_acceptable_energy_score
+        )
+
+    def test_fallback_fails_closed_when_only_nan_scored_candidates_remain(self):
+        treatment, outcome, covariates = _subsample_frame(n=1_000)
+        selector, a, b, c = self._three_wrapper_selector_with_nan_candidate(
+            EstimatorType.CAUSAL_FOREST
+        )
+        c._fail_above_rows = 100  # ols fails in the tournament; only NaN causal_forest remains
+
+        sel = selector.select(treatment, outcome, covariates)
+
+        assert sel.selected.success is False
+        assert b.fit_row_counts == [200]
+        assert "no estimate is served" in sel.selection_reason.lower()
+
     def test_every_full_frame_refit_failing_fails_closed(self):
         """When NO candidate survives its full-frame refit the selection FAILS
         CLOSED (estimation.py raises EstimationError): no subsample fit is
@@ -1907,7 +1972,7 @@ class TestSubsampledSelection:
         assert all(not r.success for r in sel.all_results)
         # codex r5 HIGH: nothing may be described as served when nothing was
         assert "served the next" not in sel.selection_reason.lower()
-        assert "every full-frame refit" in sel.selection_reason.lower()
+        assert "every eligible full-frame refit" in sel.selection_reason.lower()
         # codex r6: every refusal is named, including the last one
         assert sel.selection_reason.count("refused its served full-frame refit") == 2
         assert "reported ATE/CI come from" not in sel.selection_reason

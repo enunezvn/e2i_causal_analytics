@@ -1653,7 +1653,21 @@ class EstimatorSelector:
                 f"{refit.error_message}."
             )
             refused_label = "Next-ranked candidate"
-            remaining = [r for r in results if r.success]
+            # codex r8: only candidates with a FINITE tournament score are
+            # eligible -- a NaN-scored success would degenerate the tie-band
+            # ranking and slip past the review gate (NaN > threshold is False).
+            # Before the fallback existed a refused winner failed closed; the
+            # fallback must not open a less-reviewed path than that.
+            remaining = [r for r in results if r.success and np.isfinite(r.energy_score)]
+            unscored = [
+                r.estimator_type.value
+                for r in results
+                if r.success and not np.isfinite(r.energy_score)
+            ]
+            if unscored:
+                fallback_notes.append(
+                    f"Not eligible without a finite tournament energy score: {', '.join(unscored)}."
+                )
             if not remaining:
                 selection = refit
                 break
@@ -1672,7 +1686,9 @@ class EstimatorSelector:
                     f"{len(fallback_notes)} refused."
                 )
             else:
-                fallback_notes.append("Every full-frame refit was refused; no estimate is served.")
+                fallback_notes.append(
+                    "Every eligible full-frame refit was refused; no estimate is served."
+                )
 
         # Build energy score comparison: every candidate the tournament SCORED,
         # including a winner whose served refit was refused (codex r4 MED) --
