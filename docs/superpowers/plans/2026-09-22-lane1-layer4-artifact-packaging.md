@@ -328,9 +328,9 @@ Part of the 2026-09-22 public-APIs-live-path design (docs/superpowers/specs/2026
 
 **Change.** COPY the file in both app stages; a static guard test (red on main) mirrors the KG-cache packaging guard and pins the matcher's Docker root-only semantics for slash-less patterns so it isn't mistaken for a gitignore-style any-depth match. `.dockerignore` is untouched. `deploy.yml` gains a deploy-trigger entry (#1783) and an in-image assertion that the artifact and the KG caches actually exist in the pushed image, not just the Dockerfile text (#1607 shape).
 
-**This lane makes the artifact loadable, not activated.** `load_compiled_classifier` will return a classifier instead of raising, but Layer 4 does **not** fire in production retrains as a result. Two independent gates keep it dark: the LLM-call gate `adaptive_layer4_enabled` defaults OFF (`src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py:3776`, deliberate per commit `d97f52dd5` after the classifier scored 0.633 on hard roles in #242, guarded by `test_layer4_llm_not_called_by_default`), and there is no live consumer of the retrain path (`execute_model_retraining` routes to the `ml` queue; its only consumer `worker_heavy` ships at `replicas: 0`; `HEAVY_OFFLOAD_ENABLED` is unset live). When it IS enabled elsewhere, the trigger set is `severity_pre_joint_check == "moderate"` OR (`== "high"` AND `layer_1_declared_safe`), calls run serially with no per-node budget, and a provider failure fails open (retrain continues without Layer-4 evidence). Activation is a separate owner decision — see the spec's "What this does and does not change" for what it would take.
+**This lane makes the artifact loadable, not activated.** `load_compiled_classifier` will return a classifier instead of raising, but Layer 4 does **not** fire in production retrains as a result. Two independent gates keep it dark: the LLM-call gate `adaptive_layer4_enabled` defaults OFF (`src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py:3776`, deliberate per commit `d97f52dd5` after the classifier scored 0.633 on hard roles in #242, guarded by `test_layer4_llm_not_called_by_default`), and there is no live consumer of the retrain path (`execute_model_retraining` routes to the `ml` queue; `worker_heavy`, the only `ml`-queue consumer, ships at `replicas: 0` and is not running live). When it IS enabled elsewhere, the trigger set is `severity_pre_joint_check == "moderate"` OR (`== "high"` AND `layer_1_declared_safe`), calls run serially with no per-node budget, and a provider failure fails open (retrain continues without Layer-4 evidence). Activation is a separate owner decision — see the spec's "What this does and does not change" for what it would take.
 
-**Live cert plan.** (i) After deploy, inside `e2i_api`: `load_compiled_classifier(strict=True)` returns a classifier; `_try_load_layer_4_classifier()` is not None. Before control recorded 2026-09-22. (ii) Negative control — the call gate is still OFF: `test_layer4_llm_not_called_by_default` passes, and `docker exec e2i_api sh -c 'echo [$HEAVY_OFFLOAD_ENABLED]'` prints `[]`.
+**Live cert plan.** (i) After deploy, inside `e2i_api`: `load_compiled_classifier(strict=True)` returns a classifier; `_try_load_layer_4_classifier()` is not None. Before control recorded 2026-09-22. (ii) Negative control — the call gate is still OFF: `test_layer4_llm_not_called_by_default` passes, and `docker ps --filter name=worker_heavy -q` prints nothing (`worker_heavy` still not running).
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 EOF
@@ -388,9 +388,9 @@ cert does not read as "Layer 4 is now live":
 
 ```bash
 pytest -n 0 tests/unit/test_data_preparer/test_adaptive_validity_check_layer_4.py::test_layer4_llm_not_called_by_default -q
-docker exec e2i_api sh -c 'echo [$HEAVY_OFFLOAD_ENABLED]'
+docker ps --filter name=worker_heavy -q
 ```
-Expected: the pytest passes; the echo prints `[]` (empty — no live retrain
-consumer).
+Expected: the pytest passes; the `docker ps` prints nothing (`worker_heavy`,
+the only `ml`-queue consumer, is not running).
 
 - [ ] **Step 3: Record the cert in-repo** — commit the cert file on a follow-up docs branch (a docs-only merge fires no deploy). Note in the cert that the cited before-control was measured on container started `2026-09-22T01:09:44Z`.

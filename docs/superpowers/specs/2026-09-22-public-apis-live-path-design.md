@@ -107,10 +107,9 @@ Layer 4 and incurs no classifier-call cost. Two gates still keep it dark:
   `tests/unit/test_data_preparer/test_adaptive_validity_check_layer_4.py::test_layer4_llm_not_called_by_default`.
 - There is no live consumer of the retrain path at all:
   `src/workers/celery_app.py:176` routes `execute_model_retraining` to the
-  `ml` queue, whose only consumer is `worker_heavy`, which ships at
-  `replicas: 0` (`docker/docker-compose.yml:1174`), and `HEAVY_OFFLOAD_ENABLED`
-  is unset live (measured 2026-09-22:
-  `docker exec e2i_api sh -c 'echo [$HEAVY_OFFLOAD_ENABLED]'` → `[]`).
+  `ml` queue; `worker_heavy` (the only `ml`-queue consumer) ships at
+  `replicas: 0` (`docker/docker-compose.yml:1174`) and is not running live
+  (measured 2026-09-22: `docker ps --filter name=worker_heavy -q` → empty).
 
 When it IS enabled, the trigger set is
 `severity_pre_joint_check == "moderate"` OR (`== "high"` AND
@@ -121,11 +120,11 @@ citation lookups only, not classifier calls); a provider failure returns
 
 Activating Layer 4 is a separate owner decision, not part of this lane. It
 would need: (a) declaring and propagating `adaptive_layer4_enabled` from
-`PipelineConfig` through `DataPreparerAgent` into `DataPreparerState`; (b) a
-live `ml`-queue consumer (scaling `worker_heavy` or setting
-`HEAVY_OFFLOAD_ENABLED`); (c) a per-node LLM-call budget/timeout plus
-attempted/succeeded/skipped telemetry; (d) a test that exercises the real
-retraining path, not just the loader.
+`PipelineConfig` through `DataPreparerAgent` into `DataPreparerState`; (b)
+scaling `worker_heavy` above zero (or routing the task to a served queue);
+(c) a per-node LLM-call budget/timeout plus attempted/succeeded/skipped
+telemetry; (d) a test that exercises the real retraining path, not just the
+loader.
 
 **Live cert.** (i) Before control (already recorded 2026-09-22): the file is
 absent and the loader returns `None`. After deploy, inside `e2i_api`:
@@ -133,8 +132,8 @@ absent and the loader returns `None`. After deploy, inside `e2i_api`:
 `_try_load_layer_4_classifier()` is not `None`. Record container `StartedAt`.
 (ii) Negative control — the call gate is still OFF:
 `tests/unit/test_data_preparer/test_adaptive_validity_check_layer_4.py::test_layer4_llm_not_called_by_default`
-passes, and `docker exec e2i_api sh -c 'echo [$HEAVY_OFFLOAD_ENABLED]'` prints
-`[]`.
+passes, and `docker ps --filter name=worker_heavy -q` prints nothing
+(`worker_heavy` still not running).
 
 ## Lane 2 — RxNav-backed brand aliases for chat entity extraction
 
