@@ -33,7 +33,7 @@ after #2207, per table (details in each section):
 | Table | Producer after #2207 | Runs where |
 |-------|----------------------|------------|
 | `ml_feast_feature_views`, `ml_feast_materialization_jobs`, `ml_feast_feature_freshness` | `src/tasks/feast_tracking.py` from the three Feast beat tasks | live — worker_medium `analytics` (6 h / 4 h / weekly) |
-| `ml_hpo_studies`, `ml_hpo_trials` | `OptunaOptimizer.save_to_database` from the HPO tuner node | live on the host-run tier-0 harness (the path that wrote the 943 `ml_hpo_patterns`); on worker_medium the hosting pipeline is routed but **blocked at the data-prep Feast gate** (see §1.5) |
+| `ml_hpo_studies`, `ml_hpo_trials` | `OptunaOptimizer.save_to_database` from the HPO tuner node | wired on the tuner; the exact typed payload verified against the live schema in a rolled-back rehearsal (no row has landed yet — needs migration ml/045 deployed, then a host-run tier-0 harness run); on worker_medium the hosting pipeline is routed but **blocked at the data-prep Feast gate** (see §1.5) |
 | `estimator_evaluations` | `EnergyScoreMLflowTracker.record_evaluations` from the causal_impact estimation node | live — every energy-score selection (chat, `/api/causal`) |
 | `ml_data_quality_reports` | `DataQualityReportRepository` from data_preparer inside `MLFoundationPipeline` | routed — `execute_model_retraining` on worker_medium `analytics` after measurement; **blocked on the worker image at the data-prep Feast gate** (see §1.5) |
 | `ml_retraining_history` | `RetrainingHistoryRepository` via retraining_trigger / drift tasks | routes only — the daily `retraining-evaluation-daily` sweep (quick) evaluates and never enqueues (no persisted cohort contract); execution on `analytics` |
@@ -726,8 +726,12 @@ id; the label stays in `study_name`); the study row and its whole trial set are 
 ONE transaction by `persist_hpo_study(jsonb, jsonb)` (migration ml/045: upsert on
 `study_name`, replace the trial set — a rerun of the same study name replaces both together
 or changes nothing). Before #2207 the writer had zero call sites and both tables sat at
-0 rows. Rows land from the tier-0 harness run by hand on the host (the path that produced
-the 943 `ml_hpo_patterns`; a run there now also writes its studies and trials). The other
+0 rows, and none has landed yet: the payload the live graph builds (Pydantic search-space
+distributions, numpy scalars, a failed trial's `-inf`, a large objective) is reduced to
+JSON-native values by `OptunaOptimizer.build_persist_payload` and was verified against the
+live schema only in a rolled-back rehearsal. The first rows come from the tier-0 harness run
+by hand on the host (the path that produced the 943 `ml_hpo_patterns`) once ml/045 is
+deployed — prove it with `SELECT study_name, n_trials FROM ml_hpo_studies`. The other
 host of the tuner, `execute_model_retraining`, is routed to worker_medium's `analytics`
 queue but on the current worker image stops at the data-prep Feast gate before the tuner
 runs (see §1.5) — no HPO rows from the worker until that owner decision lands.

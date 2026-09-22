@@ -55,6 +55,35 @@ def _finite_or_none(value: Any) -> Optional[float]:
     return f if math.isfinite(f) else None
 
 
+def _json_native(obj: Any) -> Any:
+    """Recursively reduce ``obj`` to what the stdlib JSON encoder accepts (#2207, r7).
+
+    The live graph (``StateGraph(ModelTrainerState)``) hands the saver Pydantic
+    ``Optuna*Distribution`` objects for the search space, Optuna params/attrs can
+    carry numpy scalars, and a failed trial carries ``-inf``: PostgREST's encoder
+    rejects all three and the RPC never runs. Pydantic -> ``model_dump(mode="json")``,
+    numpy -> Python scalars, datetimes -> ISO strings, enums -> values, non-finite
+    floats -> None, anything else unknown -> ``str``.
+    """
+    if obj is None or isinstance(obj, (bool, int, str)):
+        return obj
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, np.generic):
+        return _json_native(obj.item())
+    if hasattr(obj, "model_dump"):
+        return _json_native(obj.model_dump(mode="json"))
+    if isinstance(obj, dict):
+        return {str(k): _json_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set, frozenset, np.ndarray)):
+        return [_json_native(v) for v in obj]
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    if hasattr(obj, "value") and hasattr(type(obj), "__members__"):  # Enum
+        return _json_native(obj.value)
+    return str(obj)
+
+
 # Default config path
 DEFAULT_CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "optuna_config.yaml"
 
@@ -792,34 +821,18 @@ class OptunaOptimizer:
                 logger.warning("Supabase client not available, skipping database save")
                 return {"success": False, "error": "Supabase not available"}
 
-            # Prepare study record
-            study_record = {
-                "study_name": study.study_name,
-                # #2207: the FK target is ml_experiments(id); self.experiment_id is the
-                # pipeline's LABEL (ml_experiments.mlflow_experiment_id), so resolve it.
-                "experiment_id": await self._resolve_experiment_uuid(client),
-                "algorithm_name": algorithm_name,
-                "problem_type": problem_type,
-                "direction": study.direction.name.lower(),
-                "sampler_name": type(study.sampler).__name__,
-                "pruner_name": type(study.pruner).__name__ if study.pruner else "NoPruner",
-                "metric": metric,
-                "search_space": search_space or {},
-                "n_trials": optimization_results["n_trials"],
-                "n_completed": optimization_results["n_completed"],
-                "n_pruned": optimization_results["n_pruned"],
-                "n_failed": optimization_results["n_trials"]
-                - optimization_results["n_completed"]
-                - optimization_results["n_pruned"],
-                "best_trial_number": optimization_results["best_trial_number"],
-                # Non-finite -> NULL (codex r6): the objective returns -inf on a caught
-                # trial failure; json/numeric(10,6) reject it and the study would be lost.
-                "best_value": _finite_or_none(optimization_results["best_value"]),
-                "best_params": optimization_results["best_params"],
-                "duration_seconds": optimization_results["duration_seconds"],
-                "status": "completed",
-                "completed_at": datetime.now(timezone.utc).isoformat(),
-            }
+            # #2207: the FK target is ml_experiments(id); self.experiment_id is the
+            # pipeline's LABEL (ml_experiments.mlflow_experiment_id), so resolve it.
+            experiment_uuid = await self._resolve_experiment_uuid(client)
+            study_record, trial_records = self.build_persist_payload(
+                study,
+                optimization_results,
+                algorithm_name=algorithm_name,
+                problem_type=problem_type,
+                metric=metric,
+                search_space=search_space,
+                experiment_uuid=experiment_uuid,
+            )
 
             # ONE transaction (#2207, codex r5): persist_hpo_study (migration ml/045)
             # upserts the study on its UNIQUE study_name — an in-memory Optuna rerun
@@ -828,7 +841,6 @@ class OptunaOptimizer:
             # statements could not promise that: a reader could have seen the new
             # parent with the old run's trials, or a half-written set. Now the parent
             # and its trials change together or not at all.
-            trial_records = self._trial_records(study.trials)
             result = await client.rpc(
                 "persist_hpo_study",
                 {"p_study": study_record, "p_trials": trial_records},
@@ -858,6 +870,54 @@ class OptunaOptimizer:
         except Exception as e:
             logger.error(f"Failed to save study to database: {e}")
             return {"success": False, "error": str(e)}
+
+    def build_persist_payload(
+        self,
+        study: optuna.Study,
+        optimization_results: Dict[str, Any],
+        *,
+        algorithm_name: str = "unknown",
+        problem_type: str = "binary_classification",
+        metric: str = "roc_auc",
+        search_space: Optional[Dict[str, Any]] = None,
+        experiment_uuid: Optional[str] = None,
+    ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+        """The exact ``persist_hpo_study`` payload: ``(p_study, p_trials)``, JSON-native.
+
+        This is the ONE serialiser for the study + trial set (#2207). Everything the
+        live graph can hand in — Pydantic search-space distributions, numpy scalars
+        in params/attrs, a failed trial's -inf — is reduced by ``_json_native`` so the
+        payload survives PostgREST's encoder; ``experiment_uuid`` must already be an
+        ``ml_experiments.id`` uuid or None.
+        """
+        n_trials = optimization_results["n_trials"]
+        study_record = {
+            "study_name": study.study_name,
+            "experiment_id": experiment_uuid,
+            "algorithm_name": algorithm_name,
+            "problem_type": problem_type,
+            "direction": study.direction.name.lower(),
+            "sampler_name": type(study.sampler).__name__,
+            "pruner_name": type(study.pruner).__name__ if study.pruner else "NoPruner",
+            "metric": metric,
+            "search_space": search_space or {},
+            "n_trials": n_trials,
+            "n_completed": optimization_results["n_completed"],
+            "n_pruned": optimization_results["n_pruned"],
+            "n_failed": n_trials
+            - optimization_results["n_completed"]
+            - optimization_results["n_pruned"],
+            "best_trial_number": optimization_results["best_trial_number"],
+            # Non-finite -> NULL (codex r6): the objective returns -inf on a caught
+            # trial failure; json and the numeric columns reject it.
+            "best_value": _finite_or_none(optimization_results["best_value"]),
+            "best_params": optimization_results["best_params"],
+            "duration_seconds": optimization_results["duration_seconds"],
+            "status": "completed",
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        trial_records = self._trial_records(study.trials)
+        return _json_native(study_record), _json_native(trial_records)
 
     async def _resolve_experiment_uuid(self, client: Any) -> Optional[str]:
         """Map ``self.experiment_id`` onto an ``ml_experiments.id`` UUID, or None (#2207).

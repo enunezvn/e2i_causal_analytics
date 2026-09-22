@@ -24,6 +24,7 @@ And the contract every writer in this lane shares: persistence never fails the p
 from __future__ import annotations
 
 import copy
+import json
 import math
 import uuid
 from types import SimpleNamespace
@@ -121,6 +122,11 @@ class _AsyncRpc:
 
     async def execute(self):
         assert self._name == "persist_hpo_study", self._name
+        # PostgREST serialises the params with the stdlib encoder (codex r7): a
+        # Pydantic model, a numpy scalar or a non-finite float in the payload fails
+        # the call before the SQL function ever runs. Enforce the same boundary.
+        encoded = json.dumps(self._params, allow_nan=False)
+        self._params = json.loads(encoded)
         study, trials = self._params["p_study"], self._params["p_trials"]
         # Postgres rejects a non-finite numeric the way json does: the whole call fails.
         for v in [study.get("best_value"), *(t.get("value") for t in trials)]:
@@ -466,3 +472,108 @@ async def test_a_failed_trial_with_a_non_finite_value_does_not_lose_the_study():
         for v in t["intermediate_values"].values()
     )
     assert len(db.store["ml_hpo_trials"]) == 3
+
+
+def _typed_search_space():
+    """The search space the way the LIVE graph holds it: StateGraph(ModelTrainerState)
+    validates the dict literals into Pydantic Optuna*Distribution objects (state.py)."""
+    from uuid import uuid4
+
+    from src.agents.ml_foundation.model_trainer.state import ModelTrainerState
+
+    state = ModelTrainerState(
+        audit_workflow_id=uuid4(),
+        hyperparameter_search_space={
+            "n_estimators": {"type": "int", "low": 50, "high": 500, "step": 50},
+            "learning_rate": {"type": "float", "low": 1e-4, "high": 0.3, "log": True},
+            "objective": {"type": "categorical", "choices": ["binary:logistic", "binary:hinge"]},
+        },
+    )
+    space = state.hyperparameter_search_space
+    assert space is not None and not isinstance(space["n_estimators"], dict)  # Pydantic, not dict
+    return space
+
+
+@pytest.mark.asyncio
+async def test_the_payload_built_from_the_live_typed_search_space_is_json_native():
+    """Codex r7 (HIGH): the live graph hands the saver Pydantic distribution objects
+    and numpy scalars can ride in params/attrs; PostgREST's encoder rejects both."""
+    import numpy as np
+
+    db = FakeAsyncSupabase()
+    study = optuna.create_study(study_name=f"e2i_typed_{uuid.uuid4().hex[:6]}_rf_hpo")
+
+    def objective(t):
+        # numpy scalars ride into params/attrs on the real path (sklearn metrics)
+        t.set_user_attr("np_flag", np.bool_(True))
+        t.set_user_attr("np_score", np.float64(0.5))
+        return t.suggest_int("n_estimators", 10, 20) / 20.0
+
+    study.optimize(objective, n_trials=2)
+    opt = OptunaOptimizer(experiment_id="unknown", mlflow_tracking=False)
+    with (
+        patch(
+            "src.memory.services.factories.get_async_supabase_client",
+            new=AsyncMock(return_value=db),
+        ),
+        patch(
+            "src.repositories.ml_experiment.MLExperimentRepository.get_by_mlflow_id",
+            new=AsyncMock(return_value=None),
+        ),
+    ):
+        out = await opt.save_to_database(study, _results(study), search_space=_typed_search_space())
+    assert out["success"] is True, out
+    (_, params) = db.rpc_calls[0]
+    json.dumps(params, allow_nan=False)  # the exact payload survives the stdlib encoder
+    space = params["p_study"]["search_space"]
+    # model_dump(mode="json") of the typed distribution: the dict literal's keys plus
+    # the variant's defaulted ones (log=None on int) — plain JSON either way.
+    assert space["n_estimators"] == {"type": "int", "low": 50, "high": 500, "step": 50, "log": None}
+    assert space["learning_rate"]["log"] is True and space["learning_rate"]["low"] == 1e-4
+    assert space["objective"]["choices"] == ["binary:logistic", "binary:hinge"]
+    t0 = next(t for t in params["p_trials"] if t["trial_number"] == 0)
+    assert t0["user_attrs"] == {"np_flag": True, "np_score": 0.5}
+
+
+def test_build_persist_payload_is_the_single_serialiser_and_never_carries_pydantic():
+    study = _study_with_trials(1)
+    opt = OptunaOptimizer(experiment_id="unknown", mlflow_tracking=False)
+    study_record, trial_records = opt.build_persist_payload(
+        study,
+        _results(study),
+        algorithm_name="RandomForest",
+        problem_type="binary_classification",
+        metric="roc_auc",
+        search_space=_typed_search_space(),
+        experiment_uuid=None,
+    )
+    json.dumps({"p_study": study_record, "p_trials": trial_records}, allow_nan=False)
+    assert study_record["search_space"]["objective"]["type"] == "categorical"
+
+
+@pytest.mark.asyncio
+async def test_a_large_regression_objective_persists_as_its_value():
+    """Codex r7 (MEDIUM): numeric(10,6) capped objectives at 9999.999999 — a 1e6 rmse
+    aborted the atomic RPC. ml/045 widens best_value / trial value to double precision,
+    and the payload keeps the real number."""
+    db = FakeAsyncSupabase()
+    study = optuna.create_study(study_name=f"e2i_big_{uuid.uuid4().hex[:6]}_lr_hpo")
+    study.optimize(lambda t: 1e6 + t.suggest_int("k", 1, 3), n_trials=2)
+    results = _results(study)
+    assert results["best_value"] >= 1e6
+    opt = OptunaOptimizer(experiment_id="unknown", mlflow_tracking=False)
+    with (
+        patch(
+            "src.memory.services.factories.get_async_supabase_client",
+            new=AsyncMock(return_value=db),
+        ),
+        patch(
+            "src.repositories.ml_experiment.MLExperimentRepository.get_by_mlflow_id",
+            new=AsyncMock(return_value=None),
+        ),
+    ):
+        out = await opt.save_to_database(study, results)
+    assert out["success"] is True
+    (_, params) = db.rpc_calls[0]
+    assert params["p_study"]["best_value"] == results["best_value"]
+    assert all(t["value"] >= 1e6 for t in params["p_trials"])

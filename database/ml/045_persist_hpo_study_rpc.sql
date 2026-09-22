@@ -15,7 +15,16 @@
 -- datetime_complete, duration_seconds, user_attrs, system_attrs). Returns the
 -- study id. Idempotent (CREATE OR REPLACE). SECURITY INVOKER, pinned search_path,
 -- executable by service_role (the backend client), like ml/040.
+--
+-- Objective columns (codex r7): 016 declared best_value / trial value as
+-- numeric(10,6), which overflows above 9999.999999 — a legitimate large
+-- regression objective (an rmse in the millions) would abort the whole atomic
+-- call. Widened to double precision (what the Python side holds anyway); the
+-- casts below follow. Both tables were at 0 rows when this shipped.
 -- ============================================================================
+
+ALTER TABLE ml_hpo_studies ALTER COLUMN best_value TYPE DOUBLE PRECISION;
+ALTER TABLE ml_hpo_trials ALTER COLUMN value TYPE DOUBLE PRECISION;
 
 CREATE OR REPLACE FUNCTION public.persist_hpo_study(
     p_study JSONB,
@@ -59,7 +68,7 @@ BEGIN
         COALESCE((p_study->>'n_pruned')::int, 0),
         COALESCE((p_study->>'n_failed')::int, 0),
         NULLIF(p_study->>'best_trial_number', '')::int,
-        NULLIF(p_study->>'best_value', '')::numeric,
+        NULLIF(p_study->>'best_value', '')::double precision,
         COALESCE(p_study->'best_params', '{}'::jsonb),
         NULLIF(p_study->>'duration_seconds', '')::numeric,
         COALESCE(p_study->>'status', 'completed'),
@@ -102,7 +111,7 @@ BEGIN
         (t->>'trial_number')::int,
         COALESCE(t->>'state', 'COMPLETE'),
         COALESCE(t->'params', '{}'::jsonb),
-        NULLIF(t->>'value', '')::numeric,
+        NULLIF(t->>'value', '')::double precision,
         COALESCE(t->'intermediate_values', '{}'::jsonb),
         NULLIF(t->>'datetime_start', '')::timestamptz,
         NULLIF(t->>'datetime_complete', '')::timestamptz,

@@ -54,3 +54,15 @@ def test_invoker_security_pinned_search_path_and_service_role_grant():
 def test_experiment_id_is_a_nullable_uuid_never_a_label():
     s = _sql()
     assert "NULLIF(p_study->>'experiment_id', '')::uuid" in s
+
+
+@pytest.mark.unit
+def test_objective_columns_are_widened_to_double_precision():
+    """Codex r7: numeric(10,6) capped objectives at 9999.999999; a large regression
+    objective aborted the atomic call."""
+    s = _sql()
+    assert "ALTER TABLE ml_hpo_studies ALTER COLUMN best_value TYPE DOUBLE PRECISION" in s
+    assert "ALTER TABLE ml_hpo_trials ALTER COLUMN value TYPE DOUBLE PRECISION" in s
+    assert "NULLIF(p_study->>'best_value', '')::double precision" in s
+    assert "NULLIF(t->>'value', '')::double precision" in s
+    assert "::numeric(10,6)" not in s
