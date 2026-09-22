@@ -51,6 +51,10 @@ class _RxNavLike(Protocol):
 
 
 _lock = threading.Lock()
+# Single-flight for the round itself. Held ACROSS the RxNav I/O on purpose:
+# without it, N first-builders (workers, threadpool requests) would each run the
+# same round; waiters block for at most the client timeouts, then read the cache.
+_fetch_lock = threading.Lock()
 # key -> (expires_at, aliases). A failed round stores {} with the shorter TTL.
 # This is the cross-round cache: rxnav.py's own lru_caches key on the client
 # INSTANCE, and each round here builds (and closes) a fresh client, so those
@@ -126,6 +130,15 @@ def _fetch_round(brands: tuple[str, ...], client: _RxNavLike) -> tuple[dict[str,
     return gathered, True
 
 
+def _cached(key: tuple[str, ...]) -> dict[str, list[str]] | None:
+    """A copy of the unexpired entry for ``key``, or None."""
+    with _lock:
+        hit = _cache.get(key)
+        if hit is not None and hit[0] > _now():
+            return {b: list(a) for b, a in hit[1].items()}
+    return None
+
+
 def _remember(key: tuple[str, ...], gathered: dict[str, list[str]], *, complete: bool) -> None:
     """Store a round's result; a failed round never evicts a fresh successful one."""
     with _lock:
@@ -148,16 +161,19 @@ def rxnav_brand_aliases(
     key = tuple(sorted(ordered))
     if not key:
         return {}
-    with _lock:
-        hit = _cache.get(key)
-        if hit is not None and hit[0] > _now():
-            return {b: list(a) for b, a in hit[1].items()}
-    owns_client = client is None
-    rx: _RxNavLike = client if client is not None else RxNavClient(timeout=CLIENT_TIMEOUT_S)
-    try:
-        gathered, complete = _fetch_round(ordered, rx)
-    finally:
-        if owns_client:
-            rx.close()
-    _remember(key, gathered, complete=complete)
+    hit = _cached(key)
+    if hit is not None:
+        return hit
+    with _fetch_lock:
+        hit = _cached(key)  # a concurrent builder may have finished while we waited
+        if hit is not None:
+            return hit
+        owns_client = client is None
+        rx: _RxNavLike = client if client is not None else RxNavClient(timeout=CLIENT_TIMEOUT_S)
+        try:
+            gathered, complete = _fetch_round(ordered, rx)
+        finally:
+            if owns_client:
+                rx.close()
+        _remember(key, gathered, complete=complete)
     return {b: list(a) for b, a in gathered.items()}

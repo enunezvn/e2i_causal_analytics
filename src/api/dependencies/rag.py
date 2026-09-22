@@ -14,6 +14,11 @@ from src.api.dependencies.supabase_client import get_supabase
 logger = logging.getLogger(__name__)
 
 _rag_deps: Optional[Dict[str, Any]] = None
+# Single-flight for the first build: a burst of first requests must not each
+# construct the retriever, embedder and extractor (lane 2: the extractor's first
+# build runs a bounded RxNav round). Module-level asyncio.Lock is loop-agnostic
+# on Python 3.10+.
+_rag_deps_lock = asyncio.Lock()
 
 
 async def get_rag_dependencies() -> Dict[str, Any]:
@@ -29,6 +34,14 @@ async def get_rag_dependencies() -> Dict[str, Any]:
     if _rag_deps is not None:
         return _rag_deps
 
+    async with _rag_deps_lock:
+        if _rag_deps is not None:  # built by the request that held the lock first
+            return _rag_deps
+        _rag_deps = await _build_rag_dependencies()
+        return _rag_deps
+
+
+async def _build_rag_dependencies() -> Dict[str, Any]:
     supabase_client = get_supabase()
     falkordb_client = await get_falkordb()
 
@@ -39,8 +52,7 @@ async def get_rag_dependencies() -> Dict[str, Any]:
         if not falkordb_client:
             missing.append("FalkorDB")
         logger.warning(f"RAG backends unavailable ({', '.join(missing)}) - retriever disabled")
-        _rag_deps = {"retriever": None, "embedding_service": None, "entity_extractor": None}
-        return _rag_deps
+        return {"retriever": None, "embedding_service": None, "entity_extractor": None}
 
     try:
         from src.rag.config import EmbeddingConfig, RAGConfig
@@ -60,15 +72,14 @@ async def get_rag_dependencies() -> Dict[str, Any]:
             embedding_service=embedding_service,
         )
 
-        _rag_deps = {
+        deps = {
             "retriever": retriever,
             "embedding_service": embedding_service,
             "entity_extractor": entity_extractor,
         }
         logger.info("RAG dependencies initialized successfully")
-        return _rag_deps
+        return deps
 
     except Exception as e:
         logger.error(f"Failed to initialize RAG dependencies: {e}")
-        _rag_deps = {"retriever": None, "embedding_service": None, "entity_extractor": None}
-        return _rag_deps
+        return {"retriever": None, "embedding_service": None, "entity_extractor": None}

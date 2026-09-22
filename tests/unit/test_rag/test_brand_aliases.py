@@ -162,3 +162,27 @@ def test_a_non_rxnav_exception_is_a_failed_round_and_is_remembered():
         "Kisqali": ["ribociclib"]
     }
     assert fake.calls == ["Kisqali", "Fabhalta"]  # remembered: no retry
+
+
+def test_concurrent_builders_share_one_round():
+    import threading
+    import time
+
+    class _Slow(_FakeRxNav):
+        def rxcui_for_name(self, name):
+            time.sleep(0.2)
+            return super().rxcui_for_name(name)
+
+    fake = _Slow()
+    results: list[dict] = []
+
+    def _run():
+        results.append(rxnav_brand_aliases(["Kisqali"], client=fake))
+
+    workers = [threading.Thread(target=_run) for _ in range(2)]
+    for w in workers:
+        w.start()
+    for w in workers:
+        w.join(timeout=5)
+    assert fake.calls == ["Kisqali"], "two first-builders must not each run the RxNav round"
+    assert results == [{"Kisqali": ["ribociclib"]}, {"Kisqali": ["ribociclib"]}]
