@@ -1,0 +1,26 @@
+Removing cycle edge treatment_arm -> treatment_initiated (confidence: 1.00)
+src resolves to: /home/enunez/Projects/e2i_causal_analytics/.worktrees/discovery-vote-rule/src/__init__.py
+ALGO synthetic ges: converged=True n_edges=8 runtime=2.12s wall=2.13s error=None
+ALGO synthetic ges planted: {"n_edges": 8, "skeleton_recall": "7/8", "oriented_recall": "6/8", "reversed": [], "undirected_hit": [["treatment_arm", "treatment_initiated"]], "missed": [["age_at_diagnosis", "treatment_initiated"]], "false_pairs": [], "n_false_pairs": 0, "reciprocal_pairs": 1}
+ALGO wrote /home/enunez/Projects/e2i_causal_analytics/.worktrees/discovery-vote-rule/docs/demos/results/2026-09-22_discovery_vote_rule/synthetic_ges.json
+Removing cycle edge treatment_initiated -> disease_severity (confidence: 1.00)
+src resolves to: /home/enunez/Projects/e2i_causal_analytics/.worktrees/discovery-vote-rule/src/__init__.py
+ALGO synthetic pc: converged=True n_edges=7 runtime=0.07s wall=0.08s error=None
+ALGO synthetic pc planted: {"n_edges": 7, "skeleton_recall": "6/8", "oriented_recall": "4/8", "reversed": [["treatment_arm", "treatment_initiated"]], "undirected_hit": [["disease_severity", "treatment_initiated"]], "missed": [["academic_hcp", "treatment_initiated"], ["age_at_diagnosis", "treatment_initiated"]], "false_pairs": [], "n_false_pairs": 0, "reciprocal_pairs": 1}
+ALGO wrote /home/enunez/Projects/e2i_causal_analytics/.worktrees/discovery-vote-rule/docs/demos/results/2026-09-22_discovery_vote_rule/synthetic_pc.json
+Removing cycle edge treatment_initiated -> disease_severity (confidence: 1.00)
+src resolves to: /home/enunez/Projects/e2i_causal_analytics/.worktrees/discovery-vote-rule/src/__init__.py
+ALGO synthetic fci: converged=True n_edges=7 runtime=0.06s wall=0.07s error=None
+ALGO synthetic fci planted: {"n_edges": 7, "skeleton_recall": "6/8", "oriented_recall": "1/8", "reversed": [["disease_severity", "treatment_arm"], ["academic_hcp", "treatment_arm"], ["disease_severity", "engagement_score"], ["academic_hcp", "engagement_score"]], "undirected_hit": [["disease_severity", "treatment_initiated"]], "missed": [["academic_hcp", "treatment_initiated"], ["age_at_diagnosis", "treatment_initiated"]], "false_pairs": [], "n_false_pairs": 0, "reciprocal_pairs": 1}
+ALGO synthetic fci edge_type_counts: {'undirected': 5, 'directed': 1}
+ALGO wrote /home/enunez/Projects/e2i_causal_analytics/.worktrees/discovery-vote-rule/docs/demos/results/2026-09-22_discovery_vote_rule/synthetic_fci.json
+Algorithm direct_lingam failed: direct_lingam refused: LiNGAM assumes non-Gaussian continuous variables, but 4 column(s) are binary (<= 2 distinct non-null values): treatment_arm, treatment_initiated, ecog_performance_status, academic_hcp. Use a constraint-based algorithm (PC/FCI) for frames with binary treatment or outcome flags.
+Causal discovery could not run (direct_lingam: direct_lingam refused: LiNGAM assumes non-Gaussian continuous variables, but 4 column(s) are binary (<= 2 distinct non-null values): treatment_arm, treatment_initiated, ecog_performance_status, academic_hcp. Use a constraint-based algorithm (PC/FCI) for frames with binary treatment or outcome flags.) after 0.01s
+src resolves to: /home/enunez/Projects/e2i_causal_analytics/.worktrees/discovery-vote-rule/src/__init__.py
+ALGO synthetic direct_lingam: converged=False n_edges=0 runtime=0.0s wall=0.01s error='direct_lingam refused: LiNGAM assumes non-Gaussian continuous variables, but 4 column(s) are binary (<= 2 distinct non-null values): treatment_arm, treatment_initiated, ecog_performance_status, academic_hcp. Use a constraint-based algorithm (PC/FCI) for frames with binary treatment or outcome flags.'
+ALGO wrote /home/enunez/Projects/e2i_causal_analytics/.worktrees/discovery-vote-rule/docs/demos/results/2026-09-22_discovery_vote_rule/synthetic_direct_lingam.json
+Algorithm ica_lingam failed: ica_lingam refused: LiNGAM assumes non-Gaussian continuous variables, but 4 column(s) are binary (<= 2 distinct non-null values): treatment_arm, treatment_initiated, ecog_performance_status, academic_hcp. Use a constraint-based algorithm (PC/FCI) for frames with binary treatment or outcome flags.
+Causal discovery could not run (ica_lingam: ica_lingam refused: LiNGAM assumes non-Gaussian continuous variables, but 4 column(s) are binary (<= 2 distinct non-null values): treatment_arm, treatment_initiated, ecog_performance_status, academic_hcp. Use a constraint-based algorithm (PC/FCI) for frames with binary treatment or outcome flags.) after 0.01s
+src resolves to: /home/enunez/Projects/e2i_causal_analytics/.worktrees/discovery-vote-rule/src/__init__.py
+ALGO synthetic ica_lingam: converged=False n_edges=0 runtime=0.0s wall=0.01s error='ica_lingam refused: LiNGAM assumes non-Gaussian continuous variables, but 4 column(s) are binary (<= 2 distinct non-null values): treatment_arm, treatment_initiated, ecog_performance_status, academic_hcp. Use a constraint-based algorithm (PC/FCI) for frames with binary treatment or outcome flags.'
+ALGO wrote /home/enunez/Projects/e2i_causal_analytics/.worktrees/discovery-vote-rule/docs/demos/results/2026-09-22_discovery_vote_rule/synthetic_ica_lingam.json

@@ -28,6 +28,8 @@ DISCOVERY_BOOTSTRAP_RESAMPLES = 20
 from src.agents.causal_impact.state import CausalGraph, CausalImpactState, spread_safe
 from src.causal_engine import compute_dag_hash
 from src.causal_engine.discovery import (
+    DEFAULT_DISCOVERY_ALGORITHM_NAMES,
+    DEFAULT_DISCOVERY_ALGORITHMS,
     CausalPriorKnowledge,
     DiscoveryAlgorithmType,
     DiscoveryConfig,
@@ -852,7 +854,7 @@ class GraphBuilderNode:
             # here (opt-out via state), mirroring the bootstrap idiom above.
             latent_diagnostic = bool(state.get("discovery_latent_diagnostic", True))
         else:
-            algorithms_str = state.get("discovery_algorithms", ["ges", "pc"])
+            algorithms_str = state.get("discovery_algorithms", DEFAULT_DISCOVERY_ALGORITHM_NAMES)
             algorithms = []
             for algo in algorithms_str:
                 try:
@@ -860,7 +862,7 @@ class GraphBuilderNode:
                 except ValueError:
                     logger.warning(f"Unknown algorithm: {algo}, skipping")
             if not algorithms:
-                algorithms = [DiscoveryAlgorithmType.GES, DiscoveryAlgorithmType.PC]
+                algorithms = list(DEFAULT_DISCOVERY_ALGORITHMS)
             # Multi-algorithm ensembles are corroborated by cross-algorithm
             # agreement already; bootstrap stability is off by default here to
             # avoid a 20x runtime surprise for existing (unguided) consumers.

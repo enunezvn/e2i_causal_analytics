@@ -1,0 +1,16 @@
+# plant A: the pre-fix quorum max(1, int(n * threshold)) restored in _build_ensemble
+ src/causal_engine/discovery/runner.py | 38 +++++++++++++++++++++++++++++++----
+ 1 file changed, 34 insertions(+), 4 deletions(-)
+_______ TestAgreementRule.test_failed_algorithms_do_not_count_as_voters ________
+tests/unit/test_causal_engine/test_discovery/test_ensemble_vote_rule.py:133: in test_failed_algorithms_do_not_count_as_voters
+E     comparison failed
+E     comparison failed
+E     comparison failed
+FAILED tests/unit/test_causal_engine/test_discovery/test_ensemble_vote_rule.py::TestAgreementRule::test_two_converged_algorithms_require_agreement_at_the_default_threshold
+FAILED tests/unit/test_causal_engine/test_discovery/test_ensemble_vote_rule.py::TestAgreementRule::test_min_votes_is_the_ceiling_of_the_fraction
+FAILED tests/unit/test_causal_engine/test_discovery/test_ensemble_vote_rule.py::TestAgreementRule::test_a_low_threshold_still_needs_two_voters
+FAILED tests/unit/test_causal_engine/test_discovery/test_ensemble_vote_rule.py::TestAgreementRule::test_failed_algorithms_do_not_count_as_voters
+FAILED tests/unit/test_causal_engine/test_discovery/test_ensemble_vote_rule.py::TestGateReadsTheCensus::test_disagreement_lowers_corroboration_and_blocks_accept
+FAILED tests/unit/test_causal_engine/test_discovery/test_ensemble_vote_rule.py::TestGateReadsTheCensus::test_gate_confidence_is_calibrated_like_the_union_rule_was
+FAILED tests/unit/test_causal_engine/test_discovery/test_ensemble_vote_rule.py::TestAlgorithmAgreementProperty::test_property_reports_the_census_rate_not_the_survivors
+================== 7 failed, 8 passed, 12 warnings in 14.75s ===================

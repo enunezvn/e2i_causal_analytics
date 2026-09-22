@@ -1,0 +1,4 @@
+# floating-point quorum sweep (python 3.12, 2026-09-22); n = distinct voters (DiscoveryAlgorithmType has 6 members)
+n<=6, t=k/n: overshoots = []
+n<=6, 3-decimal t with n*t integral: overshoots = []
+n<=100: first overshoots = [(25, 0.28, '7.000000000000001'), (25, 0.56, '14.000000000000002'), (50, 0.14, '7.000000000000001')]

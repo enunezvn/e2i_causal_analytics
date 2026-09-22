@@ -1,0 +1,87 @@
+{
+ "frame": "synthetic",
+ "algorithm": "pc",
+ "n": 4000,
+ "columns": [
+  "treatment_arm",
+  "treatment_initiated",
+  "data_lag_hours",
+  "egfr",
+  "age_at_diagnosis",
+  "urticaria_severity_uas7",
+  "disease_severity",
+  "proteinuria_g_day",
+  "ldh_ratio",
+  "engagement_score",
+  "ecog_performance_status",
+  "academic_hcp"
+ ],
+ "wall_seconds": 0.08,
+ "runtime_seconds": 0.07,
+ "converged": true,
+ "error": null,
+ "edge_list": [
+  [
+   "treatment_initiated",
+   "treatment_arm"
+  ],
+  [
+   "treatment_initiated",
+   "disease_severity"
+  ],
+  [
+   "disease_severity",
+   "treatment_arm"
+  ],
+  [
+   "disease_severity",
+   "treatment_initiated"
+  ],
+  [
+   "disease_severity",
+   "engagement_score"
+  ],
+  [
+   "academic_hcp",
+   "treatment_arm"
+  ],
+  [
+   "academic_hcp",
+   "engagement_score"
+  ]
+ ],
+ "edge_types": null,
+ "n_bidirected": null,
+ "n_undirected": null,
+ "indep_test": "fisherz",
+ "planted": {
+  "n_edges": 7,
+  "skeleton_recall": "6/8",
+  "oriented_recall": "4/8",
+  "reversed": [
+   [
+    "treatment_arm",
+    "treatment_initiated"
+   ]
+  ],
+  "undirected_hit": [
+   [
+    "disease_severity",
+    "treatment_initiated"
+   ]
+  ],
+  "missed": [
+   [
+    "academic_hcp",
+    "treatment_initiated"
+   ],
+   [
+    "age_at_diagnosis",
+    "treatment_initiated"
+   ]
+  ],
+  "false_pairs": [],
+  "n_false_pairs": 0,
+  "reciprocal_pairs": 1
+ }
+}

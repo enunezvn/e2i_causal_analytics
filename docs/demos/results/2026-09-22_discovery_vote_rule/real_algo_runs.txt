@@ -1,0 +1,82 @@
+Removing cycle edge treatment_dupixent -> age_at_index (confidence: 1.00)
+Removing cycle edge treatment_dupixent -> cci_chronic_pulmonary (confidence: 1.00)
+src resolves to: /home/enunez/Projects/e2i_causal_analytics/.worktrees/discovery-vote-rule/src/__init__.py
+REAL rows=15209 numeric_manifest_covs=57 constant=[]
+REAL collinear_dropped(12)=['cci_hiv', 'elx_chf', 'elx_pvd', 'elx_paralysis', 'elx_chronic_pulmonary', 'elx_diabetes_uncomplicated', 'elx_diabetes_complicated', 'elx_peptic_ulcer', 'elx_aids_hiv', 'elx_metastatic_cancer', 'elx_rheumatoid_collagen', 'elx_depression']
+REAL rank_kept=45 top|corr T|=['enrollment_duration_days', 'comorbidity_diag_distinct_count', 'comorbidity_diag_claim_count', 'charlson_score', 'elixhauser_van_walraven_score', 'cci_chronic_pulmonary', 'cci_dementia']
+REAL top|corr Y|=['comorbidity_diag_distinct_count', 'lis_dual_flag', 'comorbidity_diag_claim_count', 'age_at_index', 'charlson_score', 'enrollment_duration_days', 'high_comorbidity_burden_flag']
+REAL capped_covs(10)=['age_at_index', 'lis_dual_flag', 'enrollment_duration_days', 'charlson_score', 'elixhauser_van_walraven_score', 'comorbidity_diag_distinct_count', 'comorbidity_diag_claim_count', 'high_comorbidity_burden_flag', 'cci_dementia', 'cci_chronic_pulmonary']
+REAL binary_among_capped=4
+ALGO real pc: converged=True n_edges=29 runtime=1.08s wall=1.09s error=None
+ALGO real pc summary: {"n_edges": 29, "n_pairs": 29, "reciprocal_pairs": 0, "T->Y": false, "Y->T": false, "into_T": ["cci_dementia", "comorbidity_diag_distinct_count", "enrollment_duration_days"], "into_Y": ["comorbidity_diag_distinct_count", "enrollment_duration_days", "lis_dual_flag"]}
+ALGO wrote /home/enunez/Projects/e2i_causal_analytics/.worktrees/discovery-vote-rule/docs/demos/results/2026-09-22_discovery_vote_rule/real_pc.json
+Removing cycle edge elixhauser_van_walraven_score -> high_comorbidity_burden_flag (confidence: 1.00)
+src resolves to: /home/enunez/Projects/e2i_causal_analytics/.worktrees/discovery-vote-rule/src/__init__.py
+REAL rows=15209 numeric_manifest_covs=57 constant=[]
+REAL collinear_dropped(12)=['cci_hiv', 'elx_chf', 'elx_pvd', 'elx_paralysis', 'elx_chronic_pulmonary', 'elx_diabetes_uncomplicated', 'elx_diabetes_complicated', 'elx_peptic_ulcer', 'elx_aids_hiv', 'elx_metastatic_cancer', 'elx_rheumatoid_collagen', 'elx_depression']
+REAL rank_kept=45 top|corr T|=['enrollment_duration_days', 'comorbidity_diag_distinct_count', 'comorbidity_diag_claim_count', 'charlson_score', 'elixhauser_van_walraven_score', 'cci_chronic_pulmonary', 'cci_dementia']
+REAL top|corr Y|=['comorbidity_diag_distinct_count', 'lis_dual_flag', 'comorbidity_diag_claim_count', 'age_at_index', 'charlson_score', 'enrollment_duration_days', 'high_comorbidity_burden_flag']
+REAL capped_covs(10)=['age_at_index', 'lis_dual_flag', 'enrollment_duration_days', 'charlson_score', 'elixhauser_van_walraven_score', 'comorbidity_diag_distinct_count', 'comorbidity_diag_claim_count', 'high_comorbidity_burden_flag', 'cci_dementia', 'cci_chronic_pulmonary']
+REAL binary_among_capped=4
+ALGO real ges: converged=True n_edges=36 runtime=10.89s wall=10.9s error=None
+ALGO real ges summary: {"n_edges": 36, "n_pairs": 35, "reciprocal_pairs": 1, "T->Y": false, "Y->T": false, "into_T": ["age_at_index", "cci_dementia", "comorbidity_diag_distinct_count"], "into_Y": ["comorbidity_diag_distinct_count", "enrollment_duration_days", "lis_dual_flag"]}
+ALGO wrote /home/enunez/Projects/e2i_causal_analytics/.worktrees/discovery-vote-rule/docs/demos/results/2026-09-22_discovery_vote_rule/real_ges.json
+Removing cycle edge treatment_dupixent -> enrollment_duration_days (confidence: 1.00)
+Removing cycle edge treatment_dupixent -> comorbidity_diag_distinct_count (confidence: 1.00)
+Removing cycle edge treatment_dupixent -> cci_dementia (confidence: 1.00)
+Removing cycle edge persistent_at_180d_g28 -> lis_dual_flag (confidence: 1.00)
+Removing cycle edge persistent_at_180d_g28 -> comorbidity_diag_distinct_count (confidence: 1.00)
+Removing cycle edge lis_dual_flag -> enrollment_duration_days (confidence: 1.00)
+Removing cycle edge age_at_index -> lis_dual_flag (confidence: 1.00)
+Removing cycle edge age_at_index -> charlson_score (confidence: 1.00)
+Removing cycle edge age_at_index -> comorbidity_diag_distinct_count (confidence: 1.00)
+Removing cycle edge age_at_index -> cci_dementia (confidence: 1.00)
+Removing cycle edge charlson_score -> cci_dementia (confidence: 1.00)
+Removing cycle edge lis_dual_flag -> comorbidity_diag_claim_count (confidence: 1.00)
+Removing cycle edge enrollment_duration_days -> comorbidity_diag_distinct_count (confidence: 1.00)
+Removing cycle edge enrollment_duration_days -> cci_chronic_pulmonary (confidence: 1.00)
+Removing cycle edge charlson_score -> cci_chronic_pulmonary (confidence: 1.00)
+Removing cycle edge elixhauser_van_walraven_score -> comorbidity_diag_claim_count (confidence: 1.00)
+Removing cycle edge elixhauser_van_walraven_score -> cci_chronic_pulmonary (confidence: 1.00)
+Removing cycle edge comorbidity_diag_claim_count -> cci_dementia (confidence: 1.00)
+Removing cycle edge comorbidity_diag_distinct_count -> cci_chronic_pulmonary (confidence: 1.00)
+src resolves to: /home/enunez/Projects/e2i_causal_analytics/.worktrees/discovery-vote-rule/src/__init__.py
+REAL rows=15209 numeric_manifest_covs=57 constant=[]
+REAL collinear_dropped(12)=['cci_hiv', 'elx_chf', 'elx_pvd', 'elx_paralysis', 'elx_chronic_pulmonary', 'elx_diabetes_uncomplicated', 'elx_diabetes_complicated', 'elx_peptic_ulcer', 'elx_aids_hiv', 'elx_metastatic_cancer', 'elx_rheumatoid_collagen', 'elx_depression']
+REAL rank_kept=45 top|corr T|=['enrollment_duration_days', 'comorbidity_diag_distinct_count', 'comorbidity_diag_claim_count', 'charlson_score', 'elixhauser_van_walraven_score', 'cci_chronic_pulmonary', 'cci_dementia']
+REAL top|corr Y|=['comorbidity_diag_distinct_count', 'lis_dual_flag', 'comorbidity_diag_claim_count', 'age_at_index', 'charlson_score', 'enrollment_duration_days', 'high_comorbidity_burden_flag']
+REAL capped_covs(10)=['age_at_index', 'lis_dual_flag', 'enrollment_duration_days', 'charlson_score', 'elixhauser_van_walraven_score', 'comorbidity_diag_distinct_count', 'comorbidity_diag_claim_count', 'high_comorbidity_burden_flag', 'cci_dementia', 'cci_chronic_pulmonary']
+REAL binary_among_capped=4
+treatment_dupixent --> age_at_index
+lis_dual_flag --> age_at_index
+comorbidity_diag_claim_count --> lis_dual_flag
+charlson_score --> elixhauser_van_walraven_score
+charlson_score --> comorbidity_diag_distinct_count
+comorbidity_diag_claim_count --> comorbidity_diag_distinct_count
+ALGO real fci: converged=True n_edges=43 runtime=2.69s wall=2.7s error=None
+ALGO real fci summary: {"n_edges": 43, "n_pairs": 26, "reciprocal_pairs": 17, "T->Y": false, "Y->T": false, "into_T": ["age_at_index", "cci_dementia", "comorbidity_diag_distinct_count", "enrollment_duration_days"], "into_Y": ["comorbidity_diag_distinct_count", "enrollment_duration_days", "lis_dual_flag"]}
+ALGO real fci edge_type_counts: {'directed': 7, 'bidirected': 17, 'undirected': 2}
+ALGO wrote /home/enunez/Projects/e2i_causal_analytics/.worktrees/discovery-vote-rule/docs/demos/results/2026-09-22_discovery_vote_rule/real_fci.json
+Algorithm direct_lingam failed: direct_lingam refused: LiNGAM assumes non-Gaussian continuous variables, but 6 column(s) are binary (<= 2 distinct non-null values): treatment_dupixent, persistent_at_180d_g28, lis_dual_flag, high_comorbidity_burden_flag, cci_dementia, cci_chronic_pulmonary. Use a constraint-based algorithm (PC/FCI) for frames with binary treatment or outcome flags.
+Causal discovery could not run (direct_lingam: direct_lingam refused: LiNGAM assumes non-Gaussian continuous variables, but 6 column(s) are binary (<= 2 distinct non-null values): treatment_dupixent, persistent_at_180d_g28, lis_dual_flag, high_comorbidity_burden_flag, cci_dementia, cci_chronic_pulmonary. Use a constraint-based algorithm (PC/FCI) for frames with binary treatment or outcome flags.) after 0.01s
+src resolves to: /home/enunez/Projects/e2i_causal_analytics/.worktrees/discovery-vote-rule/src/__init__.py
+REAL rows=15209 numeric_manifest_covs=57 constant=[]
+REAL collinear_dropped(12)=['cci_hiv', 'elx_chf', 'elx_pvd', 'elx_paralysis', 'elx_chronic_pulmonary', 'elx_diabetes_uncomplicated', 'elx_diabetes_complicated', 'elx_peptic_ulcer', 'elx_aids_hiv', 'elx_metastatic_cancer', 'elx_rheumatoid_collagen', 'elx_depression']
+REAL rank_kept=45 top|corr T|=['enrollment_duration_days', 'comorbidity_diag_distinct_count', 'comorbidity_diag_claim_count', 'charlson_score', 'elixhauser_van_walraven_score', 'cci_chronic_pulmonary', 'cci_dementia']
+REAL top|corr Y|=['comorbidity_diag_distinct_count', 'lis_dual_flag', 'comorbidity_diag_claim_count', 'age_at_index', 'charlson_score', 'enrollment_duration_days', 'high_comorbidity_burden_flag']
+REAL capped_covs(10)=['age_at_index', 'lis_dual_flag', 'enrollment_duration_days', 'charlson_score', 'elixhauser_van_walraven_score', 'comorbidity_diag_distinct_count', 'comorbidity_diag_claim_count', 'high_comorbidity_burden_flag', 'cci_dementia', 'cci_chronic_pulmonary']
+REAL binary_among_capped=4
+ALGO real direct_lingam: converged=False n_edges=0 runtime=0.0s wall=0.01s error='direct_lingam refused: LiNGAM assumes non-Gaussian continuous variables, but 6 column(s) are binary (<= 2 distinct non-null values): treatment_dupixent, persistent_at_180d_g28, lis_dual_flag, high_comorbidity_burden_flag, cci_dementia, cci_chronic_pulmonary. Use a constraint-based algorithm (PC/FCI) for frames with binary treatment or outcome flags.'
+ALGO wrote /home/enunez/Projects/e2i_causal_analytics/.worktrees/discovery-vote-rule/docs/demos/results/2026-09-22_discovery_vote_rule/real_direct_lingam.json
+# ica_lingam capture run OUTSIDE the box lock: the wrapper refuses binary columns before any fit (measured 0.01 s wall on direct_lingam above), so no heavy work runs
+Algorithm ica_lingam failed: ica_lingam refused: LiNGAM assumes non-Gaussian continuous variables, but 6 column(s) are binary (<= 2 distinct non-null values): treatment_dupixent, persistent_at_180d_g28, lis_dual_flag, high_comorbidity_burden_flag, cci_dementia, cci_chronic_pulmonary. Use a constraint-based algorithm (PC/FCI) for frames with binary treatment or outcome flags.
+Causal discovery could not run (ica_lingam: ica_lingam refused: LiNGAM assumes non-Gaussian continuous variables, but 6 column(s) are binary (<= 2 distinct non-null values): treatment_dupixent, persistent_at_180d_g28, lis_dual_flag, high_comorbidity_burden_flag, cci_dementia, cci_chronic_pulmonary. Use a constraint-based algorithm (PC/FCI) for frames with binary treatment or outcome flags.) after 0.01s
+src resolves to: /home/enunez/Projects/e2i_causal_analytics/.worktrees/discovery-vote-rule/src/__init__.py
+REAL rows=15209 numeric_manifest_covs=57 constant=[]
+REAL collinear_dropped(12)=['cci_hiv', 'elx_chf', 'elx_pvd', 'elx_paralysis', 'elx_chronic_pulmonary', 'elx_diabetes_uncomplicated', 'elx_diabetes_complicated', 'elx_peptic_ulcer', 'elx_aids_hiv', 'elx_metastatic_cancer', 'elx_rheumatoid_collagen', 'elx_depression']
+REAL rank_kept=45 top|corr T|=['enrollment_duration_days', 'comorbidity_diag_distinct_count', 'comorbidity_diag_claim_count', 'charlson_score', 'elixhauser_van_walraven_score', 'cci_chronic_pulmonary', 'cci_dementia']
+REAL top|corr Y|=['comorbidity_diag_distinct_count', 'lis_dual_flag', 'comorbidity_diag_claim_count', 'age_at_index', 'charlson_score', 'enrollment_duration_days', 'high_comorbidity_burden_flag']
+REAL capped_covs(10)=['age_at_index', 'lis_dual_flag', 'enrollment_duration_days', 'charlson_score', 'elixhauser_van_walraven_score', 'comorbidity_diag_distinct_count', 'comorbidity_diag_claim_count', 'high_comorbidity_burden_flag', 'cci_dementia', 'cci_chronic_pulmonary']
+REAL binary_among_capped=4
+ALGO real ica_lingam: converged=False n_edges=0 runtime=0.0s wall=0.02s error='ica_lingam refused: LiNGAM assumes non-Gaussian continuous variables, but 6 column(s) are binary (<= 2 distinct non-null values): treatment_dupixent, persistent_at_180d_g28, lis_dual_flag, high_comorbidity_burden_flag, cci_dementia, cci_chronic_pulmonary. Use a constraint-based algorithm (PC/FCI) for frames with binary treatment or outcome flags.'
+ALGO wrote /home/enunez/Projects/e2i_causal_analytics/.worktrees/discovery-vote-rule/docs/demos/results/2026-09-22_discovery_vote_rule/real_ica_lingam.json
