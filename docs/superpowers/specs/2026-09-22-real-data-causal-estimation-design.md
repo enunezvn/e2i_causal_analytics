@@ -40,16 +40,16 @@ patients, index dates 2016-06-01 to 2024-12-31, last observed 2025-09-30):
 the CSU escalation-therapy decision, built so that remibrutinib vs competitor becomes a
 registry entry when post-launch data arrives.
 
-**Non-goals.** Changing the prediction frames or the tier-0 pipeline; making guided
-discovery work on claims frames (deferred: collinearity pruning only together with a
-covariate cap); CRM data; initiation-vs-none (needs a re-pull with follow-up for the
-untreated).
+**Non-goals.** Changing the prediction frames or the tier-0 pipeline; CRM data;
+initiation-vs-none (needs a re-pull with follow-up for the untreated).
 
 ## 3. Lanes
 
-Three lanes, each its own plan → implementation → PR, in this order. Lane A is
-usable on its own (curated-confounder DAG, discovery off); Lane B upgrades A's
-structure; Lane C is pre-wiring.
+Four lanes, each its own plan → implementation → PR. Order: A, then B and D (independent
+of each other, both need A's frame), then C. Lane A is usable on its own
+(curated-confounder DAG, discovery off); Lane B upgrades A's structure with a validated
+prior; Lane D makes guided discovery run on claims frames so it can corroborate or
+challenge that prior; Lane C is pre-wiring.
 
 ### Lane A — real-data causal pipeline, rehearsed on Dupixent vs Xolair → persistence
 
@@ -79,8 +79,8 @@ structure; Lane C is pre-wiring.
    runner then emits SKIPPED `no_negative_control_declared`, never a fabricated PASS.
    `_load_agent_estimation_frame` (`loaders.py`) reads it like any single-table
    dataset with the real-mode provenance filter.
-4. **Run shape.** For this dataset the API default is `auto_discover=False` (the
-   measured failure mode) and the curated DAG: every covariate a common cause of T
+4. **Run shape.** Until Lane D lands, the API default for this dataset is
+   `auto_discover=False` (the measured failure mode) and the curated DAG: every covariate a common cause of T
    and Y, the estimand edge, adjustment set = the covariates (the graph builder's
    existing manual path). The agent's `limit` cap (20,000) covers the full cohort.
    Randomized design false. Refutation suite, E-value and expert-review consult run
@@ -145,6 +145,53 @@ queue, and feeds the approved structure back to Lane A as its structural prior.
    machine attestations are never used as priors and the structural decider treats
    them as audit-only.
 
+### Lane D — guided discovery on claims frames
+
+Measured starting point (`docs/demos/results/2026-09-22_discovery_real_claims_disproof/`):
+production shape (57 numeric covariates) → singular correlation matrix (rank 45/59),
+fisherz refuses, 0 edges; rank-pruned to 43 covariates → one un-bootstrapped PC fit
+230.3 s (production's 20 resamples ≈ 81 min, over the 900 s agent timeout); pruned to
+13–14 covariates → AUGMENT at 0.73 in 181–289 s with 20 resamples; the REQUIRED
+estimand edge `(T, Y)` was absent from the ensemble on the real frame although the
+prior declared it. Runtime is driven by the number of CI tests, not by rows, so the
+15,209-row frame is not the constraint.
+
+1. **Discovery frame pre-flight** (`src/causal_engine/discovery/preflight.py`, called
+   from `graph_builder._run_discovery` before tiers are built): drop constant columns;
+   greedy rank-preserving prune of exactly linearly dependent columns (a column is kept
+   iff it raises the correlation-matrix rank), which removes the Charlson/Elixhauser
+   duplicates and composite scores; then cap the DAG-learning frame at
+   `discovery_max_covariates` (default 20) by a pre-treatment screening rule that does
+   not peek at the outcome-treatment relation: the union of the top-k covariates by
+   absolute association with T and the top-k by absolute association with Y, ties broken
+   by manifest order. Every dropped or capped covariate stays in the adjustment
+   guarantee (`modeled_confounders`), so the estimate still conditions on it. The
+   pre-flight's decisions are recorded in `DiscoveryResult.metadata`
+   (`preflight: {constant, collinear, capped, kept}`) and surfaced in the API response.
+2. **Bootstrap under a budget.** `discovery_time_budget_s` (default derived from the
+   agent timeout minus refutation's budget) bounds the resample loop; the achieved
+   resample count is reported and the gate's corroboration is computed over the
+   achieved count. A run that achieves fewer than `min_resamples` (default 10) is
+   reported as uncorroborated, never as corroborated.
+3. **Required-edge honesty.** Establish in-lane why the prior's required `(T, Y)` edge
+   was missing from the ensemble on the real frame (causal-learn skeleton phase vs the
+   bootstrap ensemble threshold), fix it if it is ours, and in every case assert the
+   estimand edge on the shipped DAG with provenance `required_prior`, as the AUGMENT path
+   already does.
+4. **Independence test, measured not assumed.** Most claims covariates are binary
+   flags. The lane measures fisherz vs `gsq`/`chisq` on the capped real frame (gate
+   decision, runtime, resample stability, recovery of the planted synthetic structure)
+   and picks per frame type with the measurement recorded as evidence; #2009's fisherz
+   choice was measured on 10-level synthetic data, not on binary claims flags.
+5. **Acceptance.** On the real persistence frame (T = `treatment_dupixent`): discovery
+   reaches a gate decision inside the agent timeout with at least 10 resamples, the
+   shipped adjustment set contains every declared covariate, and the response names
+   what was pruned and capped. On the synthetic planted frame: unchanged (ACCEPT,
+   `disease_severity` recovered as confounder). With Lane B's approved prior as
+   `anchored_confounders`, discovery either corroborates the prior (ACCEPT/AUGMENT)
+   or the gate says why not; both outcomes are recorded in the Lane A cert. After
+   acceptance the real dataset's API default flips to guided discovery on.
+
 ### Lane C — remibrutinib pre-wiring
 
 1. Matcher: `CSU_BIOLOGIC_*` in `convert_optum_rwd.py` and the mart converter gain
@@ -175,13 +222,15 @@ optum_mart manifest ──structural_author──▶ attestations.json ──ass
                                                                               ▼
                        POST /api/causal/agent {dataset: optum_biologic_persistence, treatment_dupixent → persistent_at_180d}
                                                                               ▼
-                        graph_builder (curated DAG / priors) → estimation → refutation → expert-review consult → response + cert
+                        graph_builder (curated DAG / priors; Lane D: pre-flight → guided discovery → gate) → estimation → refutation → expert-review consult → response + cert
 ```
 
 ## 5. Error handling and honesty
 
-- Discovery stays off for the real dataset by default; if a caller turns it on, the
-  fixed runner (PR #2203) reports "could not run: singular…" rather than an empty DAG.
+- Discovery stays off for the real dataset until Lane D is accepted; if a caller turns
+  it on before then, the fixed runner (PR #2203) reports "could not run: singular…"
+  rather than an empty DAG. After Lane D, a frame the pre-flight cannot make full-rank
+  still fails loudly with the same message.
 - No negative control is fabricated; SKIPPED is the honest verdict until measured.
 - Author failures route features to review; unresolved citations downgrade edges;
   nothing machine-authored decides without an approved review.
@@ -196,7 +245,11 @@ loader, registry consistency, real-DB arm-split probe, API run cert. Lane B: par
 grader on fixed model outputs, assembler on hand-built fragments (latent, M-structure),
 scorer on the golden fixtures, CLI with a fake LM and the dead-Supabase pin, provenance
 handling in the decider; the benchmark itself is a real-LM run recorded as evidence.
-Lane C: matcher unit tests, synthetic planted-truth end-to-end.
+Lane C: matcher unit tests, synthetic planted-truth end-to-end. Lane D: pre-flight on
+hand-built collinear frames (exact duplicate, composite = sum of parts, constant),
+screening rule determinism and manifest-order tie-break, budgeted bootstrap with a fake
+slow algorithm, required-edge assertion, and the fisherz-vs-gsq measurement recorded as
+evidence with the planted synthetic frame as its control.
 
 ## 7. Open items for the owner
 
