@@ -1,6 +1,6 @@
 # Live probe — `auto_discover: true` on the real `optum_biologic_persistence` frame (2026-09-22)
 
-**Verdict: FAILED TO COMPLETE.** Guided discovery on the real frame (n = 15,209) blocked the API worker in the backdoor adjustment-set search after PC; gunicorn aborted the worker (code 134, its `--timeout 120` heartbeat) about 67 s after the discovery gate returned AUGMENT and ~4 min after PC itself finished; the job is orphaned in `running` with no failure surfaced to the caller. Run once, not re-run (per the brief; the container did not flip, so there was no environment cause to retry against). The four default-path outcomes in `../cert.md` (discovery off) are unaffected — the discovery-off default is what let the cert complete.
+**Verdict: FAILED TO COMPLETE.** Guided discovery on the real frame (n = 15,209) blocked the API worker in the backdoor adjustment-set search after PC; gunicorn aborted the worker (code 134, its `--timeout 120` heartbeat) about 67 s after the discovery gate returned AUGMENT and ~4 min after PC itself finished; the job is orphaned in `running` with no failure surfaced to the caller. Tracked as issue #2233. Run once, not re-run (per the brief; the container did not flip, so there was no environment cause to retry against). The four default-path outcomes in `../cert.md` (discovery off) are unaffected — the discovery-off default is what let the cert complete.
 
 ## The run
 
@@ -70,7 +70,7 @@ The same dump shows a second thread still inside `causallearn/.../FCI.py:980 rem
 
 **Observation on "1 algorithms: ['pc']" vs the `[GES, PC]` default.** `DEFAULT_DISCOVERY_ALGORITHMS = (GES, PC)` (`src/causal_engine/discovery/base.py`) is the ensemble default; the API submits `discovery_guided: True`, and guided discovery is single-algorithm PC with 20 bootstrap resamples, a 20-covariate cap and a 180 s budget **by design** (`graph_builder.py` constants, Lane D). So the vote rule's distinct-voter agreement is not what corroborated this run; resample stability (11/20) was. Not a defect; recorded so nobody reads "1 algorithm" as the ensemble default having been lost.
 
-## Consequences and follow-ups (not fixed here)
+## Consequences and follow-ups (not fixed here) — tracked as issue #2233 (part of, not closed by this evidence)
 
 - The default-path cert stands: `auto_discover` defaults to `false` for this dataset (`_default_auto_discover → False`, asserted in-process on c0860bbf4) and every submit warned so, verbatim (`../cert.md`).
 - Follow-up A (blocking for any discovery-on run on this frame): the post-AUGMENT `_find_adjustment_sets` must run off the event loop under a bound (it already has a cap concept; the cap did not save a 197-edge graph), or the augmented graph must be pruned before the search.
