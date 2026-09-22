@@ -19,6 +19,7 @@ from src.causal_engine.energy_score.estimator_selector import (
     _honest_ate_ci,
     logger,
 )
+from src.causal_engine.nuisance_config import propensity_model
 
 
 class DMLLearnerWrapper(BaseEstimatorWrapper):
@@ -72,32 +73,26 @@ class DMLLearnerWrapper(BaseEstimatorWrapper):
             with warnings.catch_warnings(record=True) as fit_warnings:
                 warnings.simplefilter("always")
                 model.fit(outcome, treatment, X=X, W=X)
-            invalid_inference = [
-                str(w.message)
-                for w in fit_warnings
-                if "inference will be invalid" in str(w.message).lower()
-                or "biased variance calculation" in str(w.message).lower()
-            ]
-            if invalid_inference:
-                raise ValueError(
-                    "dml_learner final-stage inference is not identified: "
-                    + "; ".join(invalid_inference)
-                )
+            from src.causal_engine.energy_score.estimator_selector import (
+                _refuse_invalid_final_stage_inference,
+            )
+
+            inference_invalid = _refuse_invalid_final_stage_inference(
+                "dml_learner", fit_warnings, served_fit=bool(kwargs.get("served_fit", True))
+            )
 
             cate = model.effect(X)
             ate = float(np.mean(cate))
 
             # Population ATE SAMPLING interval (honest; #1188).
-            inference = _honest_ate_ci(model, X)
+            inference = None if inference_invalid else _honest_ate_ci(model, X)
             if inference is not None:
                 ate_ci_lower, ate_ci_upper, ate_std = inference
             else:
                 ate_ci_lower = ate_ci_upper = ate_std = None  # type: ignore[assignment]
 
             # Propensity scores
-            from sklearn.linear_model import LogisticRegressionCV
-
-            ps_model = LogisticRegressionCV(cv=3, max_iter=500)
+            ps_model = propensity_model()
             ps_model.fit(X, treatment)
             propensity_scores = ps_model.predict_proba(X)[:, 1]
 

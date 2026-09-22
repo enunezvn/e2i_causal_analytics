@@ -6077,6 +6077,13 @@ export interface components {
              * @default true
              */
             auto_discover: boolean;
+            /**
+             * Feature Role Panel
+             * @description Serialised feature-role panel (src.causal_engine.feature_role_panel.FeatureRolePanel.to_dict()) for this dataset's covariates. When set, covariates the panel marks as leak verdicts are removed from the adjustment set and named in warnings.
+             */
+            feature_role_panel?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * AgentCausalAnalysisResponse
@@ -10050,6 +10057,16 @@ export interface components {
              * @description Energy score (LOWER is better); None if the fit failed
              */
             energy_score?: number | null;
+            /**
+             * Tournament Energy Score
+             * @description Energy score from the selection tournament whenever this candidate was scored -- kept even when its served full-frame refit was refused (LOWER is better); None if it was never scored
+             */
+            tournament_energy_score?: number | null;
+            /**
+             * Served Refit
+             * @description Outcome of this candidate's served full-frame refit after a subsampled tournament: True succeeded, False refused; None when no separate served refit happened (unsubsampled selection, or a tournament loser)
+             */
+            served_refit?: boolean | null;
             /**
              * Ate
              * @description This estimator's ATE estimate
@@ -20095,7 +20112,10 @@ export interface components {
          * @description Request to trigger model retraining.
          * @example {
          *       "auto_approve": false,
-         *       "data_source": "data/rwd/optum/initiation",
+         *       "data_source": {
+         *         "path": "data/rwd/optum/initiation",
+         *         "type": "file_dir"
+         *       },
          *       "feature_manifest_source": "optum",
          *       "notes": "Refresh on latest Optum cohort",
          *       "reason": "manual",
@@ -20118,9 +20138,11 @@ export interface components {
             auto_approve: boolean;
             /**
              * Data Source
-             * @description Committed cohort batch/table to retrain on
+             * @description Committed cohort: a table name or a file-source dict
              */
-            data_source?: string | null;
+            data_source?: string | {
+                [key: string]: unknown;
+            } | null;
             /**
              * Target Outcome
              * @description Prediction target column

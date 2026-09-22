@@ -1,0 +1,5 @@
+captured 2026-09-22 from the worktree venv:
+Name: causal-learn
+Version: 0.1.4.3
+importlib.metadata version: 0.1.4.3
+module file: /home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/causallearn/__init__.py

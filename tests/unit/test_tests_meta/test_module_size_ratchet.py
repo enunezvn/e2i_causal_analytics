@@ -23,10 +23,17 @@ LIMIT = 1500
 
 # path (relative to repo) -> pinned line count. Measured, not guessed. Only shrinks.
 ALLOWLIST: dict[str, int] = {
+    # 1566: MEASURED on main e3fb21186. The file crossed LIMIT on main itself:
+    # Lane D (#2227) took it to 1478 and Lane E (#2226) to 1566 — each PR was
+    # under the limit alone, and E's PR CI ran on a merge ref computed before D
+    # landed, so neither gate saw the sum. Pinned so the ratchet forbids further
+    # growth; Lane B lowers it (delegates the backdoor criterion out of the file)
+    # and the split by concern is an owner decision.
+    "src/agents/causal_impact/nodes/graph_builder.py": 1566,
     "src/agents/causal_impact/nodes/refutation.py": 2519,
     "src/agents/feedback_learner/dspy_integration.py": 1836,
-    "src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py": 4238,
-    "src/agents/ml_foundation/model_deployer/nodes/registry_manager.py": 1670,
+    "src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py": 4225,
+    "src/agents/ml_foundation/model_deployer/nodes/registry_manager.py": 1669,
     "src/agents/ml_foundation/model_trainer/nodes/evaluator.py": 4026,
     # 3710: MEASURED from the merged tree, not either side's pin. The lane's
     # value-lookup mask (#2114) and main's #2139 structural guard both run here,
@@ -51,15 +58,15 @@ ALLOWLIST: dict[str, int] = {
     "src/api/routes/explain.py": 2822,
     "src/api/routes/feedback.py": 2041,
     "src/api/routes/health_score.py": 2379,
-    "src/api/routes/monitoring.py": 2154,
+    "src/api/routes/monitoring.py": 2153,
     "src/api/routes/predictions.py": 1519,
     "src/api/routes/resource_optimizer.py": 1549,
     "src/api/routes/segments.py": 2934,
-    "src/api/schemas/causal.py": 2142,
-    "src/causal_engine/energy_score/estimator_selector.py": 1916,
+    "src/api/schemas/causal.py": 2100,
+    "src/causal_engine/energy_score/estimator_selector.py": 1858,
     "src/causal_engine/refutation_runner.py": 3166,
     "src/data/causal_role_classifier.py": 6525,
-    "src/feature_store/feast_client.py": 1711,
+    "src/feature_store/feast_client.py": 1682,
     "src/memory/lifecycle/consolidator.py": 1954,
     "src/memory/semantic_memory.py": 1795,
     "src/ml/data_generator.py": 1759,

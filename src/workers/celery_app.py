@@ -142,6 +142,17 @@ celery_app.conf.task_routes = {
     # Data processing
     "src.tasks.process_batch": {"queue": "analytics"},
     "src.tasks.transform_data": {"queue": "analytics"},
+    # Feast tasks (#2207): every one of them lands on worker_medium's analytics
+    # queue. The two 6 h / 4 h beats already pinned it via options.queue; the
+    # weekly full materialize was pinned to `ml`, which no running worker consumes
+    # (worker_heavy replicas: 0, #705) — measured 2026-09-22: 15 weekly messages
+    # sat undelivered in Redis. These routes also cover manual `celery call`
+    # triggers and materialize_feature_view's .delay() fan-out, which would
+    # otherwise land on `default`.
+    "src.tasks.materialize_features": {"queue": "analytics"},
+    "src.tasks.materialize_incremental_features": {"queue": "analytics"},
+    "src.tasks.check_feature_freshness": {"queue": "analytics"},
+    "src.tasks.materialize_feature_view": {"queue": "analytics"},
     # -------------------------------------------------------------------------
     # Heavy Worker Tasks (16 CPUs, 32GB RAM)
     # -------------------------------------------------------------------------
@@ -170,10 +181,34 @@ celery_app.conf.task_routes = {
     "src.tasks.hyperparameter_tune": {"queue": "ml"},
     "src.tasks.train_*": {"queue": "ml"},
     "src.tasks.fit_*": {"queue": "ml"},
-    # Live retraining runs a full MLFoundationPipeline (scope→prep→train→deploy),
-    # so it belongs on worker_heavy's `ml` queue, not the default queue. The
-    # name doesn't match the train_*/fit_* globs, so route it explicitly.
-    "src.tasks.execute_model_retraining": {"queue": "ml"},
+    # Live retraining runs a full MLFoundationPipeline (scope→prep→train→deploy).
+    # Phase D put it on worker_heavy's `ml` queue; that queue has had no consumer
+    # on this box since #705 (replicas: 0), so every trigger queued a job that
+    # never ran and its ml_retraining_history row stayed `pending` forever.
+    # #2207 measured the pipeline INSIDE worker_medium (docker exec, main's image,
+    # 2026-09-22): the tier-0 harness end-to-end (8 stages, 4 model-comparison
+    # fits, n=4000, 2 HPO trials) peaked at 838 MB tree RSS in 126 s; the same
+    # four fits at the prod cohort shape (15,209x77) add ~75 MB over the 326 MB
+    # import floor, RandomForest the slowest at 19 s per fit. That is ~1 GB and
+    # tens of minutes at PipelineConfig's 50 trials — inside worker_medium's 4G
+    # cgroup at concurrency 2, NOT inside worker_light's 1.5G one. Routed to
+    # `analytics` (worker_medium); the name doesn't match the train_*/fit_*
+    # globs, so it stays explicit.
+    # Known remaining blocker, NOT fixed here (owner decision): the pipeline's
+    # data-prep Feast gate (data_preparer/nodes/feast_registrar.py, #556) fails
+    # closed on the app/worker image, where Feast cannot be imported (#307) and
+    # freshness is therefore unverifiable — a table-sourced retrain on this
+    # worker stops at data-prep with "Feast features stale; ALLOW_STALE_FEAST not
+    # set" and is recorded as a failed job (the measurement above set that ops
+    # escape hatch to reach the training stages). Options: extend the
+    # file_dir advisory carve-out to committed-table cohorts (no pipeline data
+    # source is Feast-served), set ALLOW_STALE_FEAST on worker_medium, or fix #307.
+    "src.tasks.execute_model_retraining": {"queue": "analytics"},
+    # The retraining EVALUATION half (#2207): drift + performance reads per model,
+    # then a fan-out of per-model evaluations — light DB work. Explicit `quick`
+    # routes (they matched no glob and fell to `default`, also worker_light).
+    "src.tasks.check_retraining_for_all_models": {"queue": "quick"},
+    "src.tasks.evaluate_retraining_need": {"queue": "quick"},
     # Digital twin generation
     # (src.tasks.generate_twins removed — H15: dead route stub with no task body and
     # no producer; real population work is simulate_population / twin.* / train_twin_model.)
@@ -286,6 +321,7 @@ celery_app.conf.task_routes = {
 # Daily entries, in firing order:
 #   00:45  drift-history-cleanup            quick      prune before the 02:00 backup
 #   01:15  ab-interim-analysis-check        quick      quiet hours, clear of the backup
+#   01:45  retraining-evaluation-daily      quick      after the drift prune, pre-backup (#2207)
 #   02:10  feedback-loop-medium-window      analytics  "2 AM daily" per config, post-backup
 #   02:40  feedback-loop-drift-analysis     analytics  after medium-window
 #   03:15  business-metrics-per-hcp-rollup  analytics  after the Monday reseed
@@ -334,6 +370,24 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour=0, minute=45),
         "options": {"queue": "quick"},
     },
+    # Retraining evaluation sweep, daily at 01:45 UTC (#2207). Evaluates every
+    # production/staging model's drift + performance trend and logs the decision.
+    # It does NOT enqueue a job: a live retrain needs the committed cohort
+    # contract (data_source + target_outcome) that execute_model_retraining fails
+    # closed without, and no persisted model record carries one (codex r1 HIGH) —
+    # so evaluate_and_trigger_retraining refuses to trigger without it rather
+    # than write a `pending` ml_retraining_history row for a job that can only
+    # fail. Triggering (with the contract) stays on
+    # /monitoring/retraining/trigger/{model_id}. Until now this task existed, was
+    # route-reachable and had never fired: it was in no beat entry. Slot 01:45:
+    # after drift-history-cleanup (00:45) and the interim check (01:15), clear of
+    # the 02:00 host backup window.
+    "retraining-evaluation-daily": {
+        "task": "src.tasks.check_retraining_for_all_models",
+        "schedule": crontab(hour=1, minute=45),
+        "kwargs": {"auto_approve": False},
+        "options": {"queue": "quick"},
+    },
     # NOTE (#897): the scaffolded "health-check" -> src.tasks.health_check and
     # "cache-cleanup" -> src.tasks.cleanup_old_cache entries were removed.
     # Neither task was ever defined in any commit; each tick enqueued a message
@@ -367,12 +421,17 @@ celery_app.conf.beat_schedule = {
         "kwargs": {"alert_on_stale": True},
         "options": {"queue": "analytics"},
     },
-    # Full materialization weekly (Sunday at midnight UTC)
+    # Full materialization weekly (Sunday at midnight UTC).
+    # #2207: was queue `ml` — unconsumed on this box (worker_heavy replicas: 0,
+    # #705); 15 weekly messages were found undelivered in Redis on 2026-09-22.
+    # `analytics` is consumed by worker_medium, the same tier the 6 h incremental
+    # and 4 h freshness beats already run on. The outcome of every run is now
+    # recorded in ml_feast_materialization_jobs (src/tasks/feast_tracking.py).
     "feast-materialize-full-weekly": {
         "task": "src.tasks.materialize_features",
         "schedule": 604800.0,  # 7 days
         "kwargs": {"feature_views": None},  # All feature views
-        "options": {"queue": "ml"},
+        "options": {"queue": "analytics"},
     },
     # -------------------------------------------------------------------------
     # ETL Tasks (block 6B-infra-2*)

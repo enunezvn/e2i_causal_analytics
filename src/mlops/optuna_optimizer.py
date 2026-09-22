@@ -7,9 +7,12 @@ Version: 1.1.0
 """
 
 import asyncio
+import enum
 import logging
+import math
 import os
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -35,6 +38,65 @@ from sklearn.model_selection import KFold, StratifiedKFold, cross_val_score
 from src.mlops.lr_solver_policy import reconcile_lr_solver
 
 logger = logging.getLogger(__name__)
+
+
+def _finite_or_none(value: Any) -> Optional[float]:
+    """A finite float, else None (#2207, codex r6).
+
+    The objective returns ``-inf`` for a caught trial failure and a pruned/failed
+    trial can report NaN; serialised as-is either invalidates the persist_hpo_study
+    payload (json) and loses the whole study. NULL is the honest value for "no score".
+    """
+    if value is None:
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
+def _json_native(obj: Any) -> Any:
+    """Reduce ``obj`` to what the stdlib JSON encoder accepts, for the values the
+    live tuner currently produces (#2207, r7-r9).
+
+    Proven scope (traced through hyperparameter_tuner.py and covered by the
+    end-to-end typed test + the rolled-back live rehearsal): the Pydantic
+    ``Optuna*Distribution`` search-space entries the graph holds
+    (``StateGraph(ModelTrainerState)``), native sampled / best params, empty user
+    attrs, JSON-native warm-start system attrs, float intermediate and objective
+    values (including a caught failure's ``-inf``), and datetimes. Beyond that the
+    function also folds numpy scalars/arrays, nested Pydantic models and Enums, and
+    stringifies anything else — a best-effort net, not a guarantee for inputs the
+    tuner does not produce today. Pydantic -> ``model_dump(mode="python")`` then
+    recurse; numpy -> Python values; datetimes -> ISO; enums -> values; non-finite
+    floats -> None.
+    """
+    if obj is None or isinstance(obj, (bool, int, str)):
+        return obj
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, enum.Enum):
+        return _json_native(obj.value)
+    if isinstance(obj, np.generic):
+        return _json_native(obj.item())
+    if isinstance(obj, np.ndarray):
+        # tolist() gives Python scalars (a 0-d array becomes one scalar); recurse
+        # so nested non-finite floats still become None (codex r8).
+        return _json_native(obj.tolist())
+    if hasattr(obj, "model_dump"):
+        # mode="python", NOT "json": Pydantic's own JSON serialiser raises on an
+        # arbitrary-typed field (an ndarray inside a model) before this function
+        # can visit it; dumping to Python objects and recursing handles it (r8).
+        return _json_native(obj.model_dump(mode="python"))
+    if isinstance(obj, dict):
+        return {str(k): _json_native(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set, frozenset)):
+        return [_json_native(v) for v in obj]
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    return str(obj)
+
 
 # Default config path
 DEFAULT_CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "optuna_config.yaml"
@@ -750,7 +812,9 @@ class OptunaOptimizer:
     ) -> Dict[str, Any]:
         """Save optimization results to database.
 
-        Stores in ml_hpo_studies table with trial history in ml_hpo_trials.
+        Stores in ml_hpo_studies with trial history in ml_hpo_trials — the study row and
+        its whole trial set in ONE transaction via the persist_hpo_study SQL function
+        (migration ml/045, #2207).
 
         Args:
             study: Optuna Study object
@@ -771,50 +835,46 @@ class OptunaOptimizer:
                 logger.warning("Supabase client not available, skipping database save")
                 return {"success": False, "error": "Supabase not available"}
 
-            # Prepare study record
-            study_record = {
-                "study_name": study.study_name,
-                "experiment_id": self.experiment_id,
-                "algorithm_name": algorithm_name,
-                "problem_type": problem_type,
-                "direction": study.direction.name.lower(),
-                "sampler_name": type(study.sampler).__name__,
-                "pruner_name": type(study.pruner).__name__ if study.pruner else "NoPruner",
-                "metric": metric,
-                "search_space": search_space or {},
-                "n_trials": optimization_results["n_trials"],
-                "n_completed": optimization_results["n_completed"],
-                "n_pruned": optimization_results["n_pruned"],
-                "n_failed": optimization_results["n_trials"]
-                - optimization_results["n_completed"]
-                - optimization_results["n_pruned"],
-                "best_trial_number": optimization_results["best_trial_number"],
-                "best_value": float(optimization_results["best_value"])
-                if optimization_results["best_value"] is not None
-                else None,
-                "best_params": optimization_results["best_params"],
-                "duration_seconds": optimization_results["duration_seconds"],
-                "status": "completed",
-                "completed_at": datetime.now(timezone.utc).isoformat(),
-            }
+            # #2207: the FK target is ml_experiments(id); self.experiment_id is the
+            # pipeline's LABEL (ml_experiments.mlflow_experiment_id), so resolve it.
+            experiment_uuid = await self._resolve_experiment_uuid(client)
+            study_record, trial_records = self.build_persist_payload(
+                study,
+                optimization_results,
+                algorithm_name=algorithm_name,
+                problem_type=problem_type,
+                metric=metric,
+                search_space=search_space,
+                experiment_uuid=experiment_uuid,
+            )
 
-            # Insert study record
-            result = await client.table("ml_hpo_studies").insert(study_record).execute()
+            # ONE transaction (#2207, codex r5): persist_hpo_study (migration ml/045)
+            # upserts the study on its UNIQUE study_name — an in-memory Optuna rerun
+            # re-creates the same name, so the latest run replaces the parent — and
+            # REPLACES its trial set in the same SQL function. Separate PostgREST
+            # statements could not promise that: a reader could have seen the new
+            # parent with the old run's trials, or a half-written set. Now the parent
+            # and its trials change together or not at all.
+            result = await client.rpc(
+                "persist_hpo_study",
+                {"p_study": study_record, "p_trials": trial_records},
+            ).execute()
 
-            if not result.data:
-                logger.error("Failed to insert HPO study record")
-                return {"success": False, "error": "Insert failed"}
+            study_id = result.data if isinstance(result.data, str) else None
+            if not study_id and isinstance(result.data, list) and result.data:
+                study_id = result.data[0]
+            if not study_id:
+                logger.error("persist_hpo_study returned no study id")
+                return {"success": False, "error": "persist_hpo_study returned no id"}
 
-            study_id = result.data[0]["id"]
-            logger.info(f"Saved HPO study {study.study_name} with ID {study_id}")
-
-            # Save individual trials
-            trials_saved = await self._save_trials_to_database(client, study_id, study.trials)
-
+            logger.info(
+                f"Saved HPO study {study.study_name} with ID {study_id} "
+                f"({len(trial_records)} trials, atomically)"
+            )
             return {
                 "success": True,
-                "study_id": study_id,
-                "trials_saved": trials_saved,
+                "study_id": str(study_id),
+                "trials_saved": len(trial_records),
             }
 
         except ImportError as e:
@@ -825,34 +885,102 @@ class OptunaOptimizer:
             logger.error(f"Failed to save study to database: {e}")
             return {"success": False, "error": str(e)}
 
-    async def _save_trials_to_database(
+    def build_persist_payload(
         self,
-        client: Any,
-        study_id: str,
-        trials: List[optuna.trial.FrozenTrial],
-    ) -> int:
-        """Save individual trial records to database.
+        study: optuna.Study,
+        optimization_results: Dict[str, Any],
+        *,
+        algorithm_name: str = "unknown",
+        problem_type: str = "binary_classification",
+        metric: str = "roc_auc",
+        search_space: Optional[Dict[str, Any]] = None,
+        experiment_uuid: Optional[str] = None,
+    ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+        """The exact ``persist_hpo_study`` payload: ``(p_study, p_trials)``, JSON-native.
 
-        Args:
-            client: Supabase client
-            study_id: Parent study ID
-            trials: List of frozen trials
-
-        Returns:
-            Number of trials saved
+        This is the ONE serialiser for the study + trial set (#2207). Everything the
+        live graph can hand in — Pydantic search-space distributions, numpy scalars
+        in params/attrs, a failed trial's -inf — is reduced by ``_json_native`` so the
+        payload survives PostgREST's encoder; ``experiment_uuid`` must already be an
+        ``ml_experiments.id`` uuid or None.
         """
-        saved_count = 0
+        n_trials = optimization_results["n_trials"]
+        study_record = {
+            "study_name": study.study_name,
+            "experiment_id": experiment_uuid,
+            "algorithm_name": algorithm_name,
+            "problem_type": problem_type,
+            "direction": study.direction.name.lower(),
+            "sampler_name": type(study.sampler).__name__,
+            "pruner_name": type(study.pruner).__name__ if study.pruner else "NoPruner",
+            "metric": metric,
+            "search_space": search_space or {},
+            "n_trials": n_trials,
+            "n_completed": optimization_results["n_completed"],
+            "n_pruned": optimization_results["n_pruned"],
+            "n_failed": n_trials
+            - optimization_results["n_completed"]
+            - optimization_results["n_pruned"],
+            "best_trial_number": optimization_results["best_trial_number"],
+            # Non-finite -> NULL (codex r6): the objective returns -inf on a caught
+            # trial failure; json and the numeric columns reject it.
+            "best_value": _finite_or_none(optimization_results["best_value"]),
+            "best_params": optimization_results["best_params"],
+            "duration_seconds": optimization_results["duration_seconds"],
+            "status": "completed",
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        trial_records = self._trial_records(study.trials)
+        return _json_native(study_record), _json_native(trial_records)
 
+    async def _resolve_experiment_uuid(self, client: Any) -> Optional[str]:
+        """Map ``self.experiment_id`` onto an ``ml_experiments.id`` UUID, or None (#2207).
+
+        The tuner hands the optimizer the pipeline's experiment LABEL (e.g.
+        ``tier0_e2e_dd343e1e`` / ``exp_kisq_us_...``), which scope_definer stores in
+        ``ml_experiments.mlflow_experiment_id`` — not the row UUID that
+        ``ml_hpo_studies.experiment_id`` references. Writing the label raised
+        ``invalid input syntax for type uuid`` on every attempt. A real UUID is
+        passed through; a label is looked up the same way ``model_trainer/agent.py``
+        resolves ``ml_training_runs.experiment_id``; no row means NULL — never a
+        fabricated id (the study_name still carries the label).
+        """
+        label = self.experiment_id
+        if not label:
+            return None
+        try:
+            return str(uuid.UUID(str(label)))
+        except (ValueError, AttributeError, TypeError):
+            pass
+        try:
+            from src.repositories.ml_experiment import MLExperimentRepository
+
+            experiment = await MLExperimentRepository(supabase_client=client).get_by_mlflow_id(
+                str(label), include_synthetic=True
+            )
+        except Exception as e:  # noqa: BLE001 — a failed lookup degrades to NULL
+            logger.warning(f"HPO study: could not resolve experiment {label!r}: {e}")
+            return None
+        if experiment is None or not getattr(experiment, "id", None):
+            logger.info(f"HPO study: no ml_experiments row for label {label!r}; experiment_id=NULL")
+            return None
+        return str(experiment.id)
+
+    @staticmethod
+    def _trial_records(trials: List[optuna.trial.FrozenTrial]) -> List[Dict[str, Any]]:
+        """The ml_hpo_trials rows for ``trials``, as the persist_hpo_study payload."""
+        records: List[Dict[str, Any]] = []
         for trial in trials:
-            try:
-                trial_record = {
-                    "study_id": study_id,
+            records.append(
+                {
                     "trial_number": trial.number,
                     "state": trial.state.name,
                     "params": trial.params,
-                    "value": float(trial.value) if trial.value is not None else None,
+                    # Non-finite -> NULL (codex r6): a failed trial's -inf (or a NaN
+                    # report) must not invalidate the whole study's payload.
+                    "value": _finite_or_none(trial.value),
                     "intermediate_values": {
-                        str(k): float(v) for k, v in trial.intermediate_values.items()
+                        str(k): _finite_or_none(v) for k, v in trial.intermediate_values.items()
                     }
                     if trial.intermediate_values
                     else {},
@@ -866,15 +994,8 @@ class OptunaOptimizer:
                     "user_attrs": trial.user_attrs or {},
                     "system_attrs": trial.system_attrs or {},
                 }
-
-                await client.table("ml_hpo_trials").insert(trial_record).execute()
-                saved_count += 1
-
-            except Exception as e:
-                logger.warning(f"Failed to save trial {trial.number}: {e}")
-
-        logger.info(f"Saved {saved_count}/{len(trials)} trials to database")
-        return saved_count
+            )
+        return records
 
 
 class PrunerFactory:

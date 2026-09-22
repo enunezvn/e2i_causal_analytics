@@ -1,0 +1,29 @@
+{
+ "frame": "synthetic",
+ "algorithm": "direct_lingam",
+ "n": 4000,
+ "columns": [
+  "treatment_arm",
+  "treatment_initiated",
+  "data_lag_hours",
+  "egfr",
+  "age_at_diagnosis",
+  "urticaria_severity_uas7",
+  "disease_severity",
+  "proteinuria_g_day",
+  "ldh_ratio",
+  "engagement_score",
+  "ecog_performance_status",
+  "academic_hcp"
+ ],
+ "wall_seconds": 0.01,
+ "runtime_seconds": 0.0,
+ "converged": false,
+ "error": "direct_lingam refused: LiNGAM assumes non-Gaussian continuous variables, but 4 column(s) are binary (<= 2 distinct non-null values): treatment_arm, treatment_initiated, ecog_performance_status, academic_hcp. Use a constraint-based algorithm (PC/FCI) for frames with binary treatment or outcome flags.",
+ "edge_list": [],
+ "edge_types": null,
+ "n_bidirected": null,
+ "n_undirected": null,
+ "indep_test": null,
+ "planted": null
+}

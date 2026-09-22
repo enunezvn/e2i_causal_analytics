@@ -254,3 +254,36 @@ def dml_learner_init_params(discrete_treatment: bool = True) -> Dict[str, Any]:
         "model_final": dml_learner_model_final(),
         "featurizer": dml_learner_featurizer(),
     }
+
+
+# --------------------------------------------------------------------------
+# Energy-score propensity model. Every selector wrapper (and ``dml_learner``)
+# hands the energy score a logistic propensity fit on the design it estimated
+# on; the wrappers' own nuisances above are untouched by this.
+#
+# Why a StandardScaler pipeline (measured 2026-09-22, ``docs/demos/results/
+# 2026-09-22_optum_biologic_persistence_cert/timing_probe2_*.json``): on the
+# real Optum design (n=15,209 x 77 mixed-unit columns -- ages, counts, one-hot
+# dummies) the bare ``LogisticRegressionCV(cv=3, max_iter=500)`` took 441.4 s
+# (lbfgs grinding to its iteration cap: a truncated, non-converged solution)
+# versus 5.8 s standardised -- 441 of the production LinearDML wrapper's 605 s,
+# while the LinearDML fit itself took 13 s. An L2-penalised logistic fit is
+# not scale-equivariant either, so standardising inside the model makes the
+# propensity scores a function of the data alone, not of its units
+# (tests/unit/test_causal_engine/test_energy_score/test_propensity_scale_invariance.py).
+# --------------------------------------------------------------------------
+
+PROPENSITY_CV_FOLDS = 3
+PROPENSITY_MAX_ITER = 500
+
+
+def propensity_model() -> Any:
+    """Fresh ``StandardScaler -> LogisticRegressionCV`` pipeline for the energy-score propensity."""
+    from sklearn.linear_model import LogisticRegressionCV
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    return make_pipeline(
+        StandardScaler(),
+        LogisticRegressionCV(cv=PROPENSITY_CV_FOLDS, max_iter=PROPENSITY_MAX_ITER),
+    )

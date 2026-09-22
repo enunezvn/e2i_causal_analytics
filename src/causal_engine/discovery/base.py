@@ -37,6 +37,27 @@ class DiscoveryAlgorithmType(str, Enum):
     ICA_LINGAM = "ica_lingam"  # ICA-based LiNGAM
 
 
+# The default ensemble, ONE source of truth for every consumer (DiscoveryConfig,
+# graph_builder's unguided branch, the tool-registry schema and input model).
+# Why not FCI / DirectLiNGAM / ICA-LiNGAM -- measured, not assumed
+# (docs/demos/results/2026-09-22_discovery_vote_rule/README.md): FCI's PAG marks
+# (17 bidirected pairs on the real claims frame, 5 of 6 edges undirected on the
+# planted frame, 4 planted edges reversed) reach the DAG merge as votes for BOTH
+# directions, so adding it raised the real frame's agreement rate from 0.18 to
+# 0.56 without adding orientation evidence and lowered the planted frame's gate
+# from 0.699 to 0.562; the LiNGAM wrappers refuse every frame with a binary
+# column (#2009: both frames have a binary treatment and outcome) and the
+# ``lingam`` package is installed neither in the venv nor in the prod image.
+# Changing this tuple is an owner decision backed by a re-measurement on both
+# frames.
+DEFAULT_DISCOVERY_ALGORITHMS: Tuple["DiscoveryAlgorithmType", ...] = (
+    DiscoveryAlgorithmType.GES,
+    DiscoveryAlgorithmType.PC,
+)
+# The same default for consumers that speak strings (tool schema / state keys).
+DEFAULT_DISCOVERY_ALGORITHM_NAMES: List[str] = [a.value for a in DEFAULT_DISCOVERY_ALGORITHMS]
+
+
 class DiscoveryGateDecision(str, Enum):
     """Decision outcomes from DiscoveryGate evaluation."""
 
@@ -147,7 +168,7 @@ class DiscoveryConfig:
     """
 
     algorithms: List[DiscoveryAlgorithmType] = field(
-        default_factory=lambda: [DiscoveryAlgorithmType.GES, DiscoveryAlgorithmType.PC]
+        default_factory=lambda: list(DEFAULT_DISCOVERY_ALGORITHMS)
     )
     alpha: float = 0.05
     max_cond_vars: Optional[int] = None
@@ -175,7 +196,39 @@ class DiscoveryConfig:
     # Only the PC algorithm consumes these (causal-learn BackgroundKnowledge);
     # when set, prefer ``algorithms=[PC]`` so the ensemble is not polluted by
     # unconstrained orientations from algorithms that ignore the priors.
+    #
+    # ``required_edges`` is honoured by causal-learn at ORIENTATION only: the
+    # skeleton phase consults ``is_forbidden`` and never ``is_required``
+    # (``SkeletonDiscovery.skeleton_discovery``, causal-learn 0.1.4.3), so a
+    # required pair the data finds conditionally independent is removed and
+    # never returns (measured on the real Optum persistence frame: the
+    # estimand pair's marginal fisherz p = 0.21). The runner reports such
+    # edges as ``metadata["required_edges_missing"]``; the agent asserts the
+    # estimand edge on the SHIPPED DAG with provenance ``required_prior``.
     prior_knowledge: Optional[CausalPriorKnowledge] = None
+    # Lane D item 2: wall-clock budget (seconds) for the whole discovery run,
+    # charged from the first algorithm fit; the bootstrap resample loop stops
+    # before a resample that would overrun it and reports the ACHIEVED count.
+    # None = unbounded (legacy consumers).
+    time_budget_s: Optional[float] = None
+    # Fewer SUCCEEDED resamples than this leaves the run uncorroborated (no
+    # stability is written, so the gate scores it as a single unverified run).
+    # None = the legacy ``max(2, bootstrap_resamples // 2)`` rule.
+    min_resamples: Optional[int] = None
+    # Force a causal-learn conditional-independence test for PC (``fisherz``,
+    # ``gsq``, ``chisq``, ``kci``); None = the wrapper's measured auto-selection.
+    # Exists so the choice can be MEASURED per frame type (Lane D item 4).
+    indep_test: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        # ``ensemble_threshold`` is a fraction of the converged voters; only
+        # the tool-registry schema bounded it before (codex r1), so a state key
+        # or a direct caller could pass 1.5 and get a quorum no vote can meet,
+        # or a negative value and get a union. Fail loud at construction.
+        if not 0.0 <= self.ensemble_threshold <= 1.0:
+            raise ValueError(
+                f"ensemble_threshold must be a fraction in [0, 1], got {self.ensemble_threshold!r}"
+            )
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "DiscoveryConfig":
@@ -214,6 +267,9 @@ class DiscoveryConfig:
             bootstrap_resamples=data.get("bootstrap_resamples", 0),
             latent_diagnostic=data.get("latent_diagnostic", False),
             prior_knowledge=prior_knowledge,
+            time_budget_s=data.get("time_budget_s"),
+            min_resamples=data.get("min_resamples"),
+            indep_test=data.get("indep_test"),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -232,6 +288,9 @@ class DiscoveryConfig:
             "max_workers": self.max_workers,
             "bootstrap_resamples": self.bootstrap_resamples,
             "latent_diagnostic": self.latent_diagnostic,
+            "time_budget_s": self.time_budget_s,
+            "min_resamples": self.min_resamples,
+            "indep_test": self.indep_test,
             "prior_knowledge": (
                 {
                     "tiers": self.prior_knowledge.tiers,
@@ -312,12 +371,39 @@ class DiscoveryResult:
         return int(self.ensemble_dag.number_of_nodes())
 
     @property
+    def vote_census(self) -> Optional[Dict[str, Any]]:
+        """The ensemble's vote census (``DiscoveryRunner._build_ensemble`` records
+        it on the DAG): how many converged voters there were, the quorum, and how
+        many candidate edges reached it. None for a result built elsewhere."""
+        if self.ensemble_dag is None:
+            return None
+        census = self.ensemble_dag.graph.get("vote_census")
+        return dict(census) if census else None
+
+    @property
     def algorithm_agreement(self) -> float:
-        """Average agreement across algorithms for edges."""
+        """Agreement across algorithms.
+
+        With the agreement vote rule every surviving edge is agreed on by
+        construction (two voters -> every survivor at 2/2), so the survivors'
+        votes cannot measure agreement; the census's rate (agreed candidates /
+        all candidates) can, and this value is persisted
+        (``repositories/discovered_dag.py``). Results without a census keep the
+        votes-per-surviving-edge average.
+        """
         if not self.edges:
             return 0.0
+        census = self.vote_census
+        if census and census.get("n_converged", 0) >= 2:
+            return float(census["agreement_rate"])
         total_votes = sum(e.algorithm_votes for e in self.edges)
-        max_votes = len(self.algorithm_results) * len(self.edges)
+        # Distinct CONVERGED algorithm types -- the same voter definition as the
+        # runner's census and the gate: a duplicated run of one algorithm
+        # (``algorithms=["ges", "ges"]``) does not halve the value (codex r2) and
+        # a failed algorithm is not a voter (codex r3; a GES-only structure next
+        # to a failed PC is 1/1 agreed, not 1/2).
+        n_algorithms = len({r.algorithm for r in self.algorithm_results if r.converged})
+        max_votes = n_algorithms * len(self.edges)
         return total_votes / max_votes if max_votes > 0 else 0.0
 
     def get_high_confidence_edges(self, threshold: float = 0.8) -> List[DiscoveredEdge]:

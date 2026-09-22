@@ -731,7 +731,7 @@ def test_sidecar_payload_includes_schema_version_v1(tmp_path, monkeypatch):
     path = write_adaptive_verdicts_sidecar(state)
     assert path is not None
     payload = json.loads(Path(path).read_text())
-    assert payload.get("schema_version") == "1.8", (
+    assert payload.get("schema_version") == "1.9", (
         f"producer must emit top-level schema_version='1.8'; got {payload.get('schema_version')!r}"
     )
     # Schema 1.6: the FDR firing-driver summary is persisted in the audit-of-record.
@@ -815,12 +815,12 @@ def test_reader_warns_on_unknown_schema_version_major(tmp_path, caplog):
     # ``"2.0"`` AND the reader's expected current version. Without this assertion
     # the test would still pass if the WARN stopped naming the reader's
     # expected version, which is the actionable half of the message.
-    # Phase 2.6 citation channel (#1608): reader's current version is "1.8"
+    # Lane E (sidecar 1.9): reader's current version is "1.9"
     # (still MAJOR=1).
     matches = [
         rec
         for rec in caplog.records
-        if "schema_version" in rec.message and "2.0" in rec.message and "1.8" in rec.message
+        if "schema_version" in rec.message and "2.0" in rec.message and "1.9" in rec.message
     ]
     assert matches, (
         "expected unknown-major WARN naming both '2.0' (payload) and '1.8' (reader); "
@@ -1203,7 +1203,7 @@ def test_sidecar_roundtrip_schema_1_5(tmp_path):
         SidecarReader,
     )
 
-    assert _READER_SCHEMA_VERSION == "1.8"
+    assert _READER_SCHEMA_VERSION == "1.9"
 
     # --- 1.5 sidecar with the structural keys populated (older minor; the 1.7
     # reader must still parse it without a WARN — same MAJOR=1) ---

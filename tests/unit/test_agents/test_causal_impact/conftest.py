@@ -22,6 +22,36 @@ from unittest.mock import AsyncMock
 import pytest
 
 from src.agents.causal_impact.agent import CausalImpactAgent
+from src.agents.causal_impact.nodes.estimation import EstimationNode
+
+# #2207: the estimation node records every energy-score selection into
+# estimator_evaluations through a psycopg2 connection (the same networked-side-effect
+# class as #788 above). Unit tests that run the real node care about the ESTIMATION;
+# the recording is neutralised by default and opted back into by the wiring tests
+# (test_estimator_evaluations_persist_2207.py) via ``real_estimator_evaluation_recording``.
+_REAL_RECORD_ESTIMATOR_EVALUATIONS = EstimationNode._record_estimator_evaluations
+
+
+@pytest.fixture(autouse=True)
+def _neutralize_estimator_evaluation_recording(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Autouse: the real EstimationNode does not touch estimator_evaluations in unit tests."""
+    monkeypatch.setattr(
+        EstimationNode,
+        "_record_estimator_evaluations",
+        lambda self, *a, **k: None,
+        raising=True,
+    )
+
+
+@pytest.fixture()
+def real_estimator_evaluation_recording(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Opt back into the real recording seam (the tracker itself is still the test's to fake)."""
+    monkeypatch.setattr(
+        EstimationNode,
+        "_record_estimator_evaluations",
+        _REAL_RECORD_ESTIMATOR_EVALUATIONS,
+        raising=True,
+    )
 
 
 @pytest.fixture(autouse=True)

@@ -1,6 +1,6 @@
 # 03 --- ML Pipeline Schema
 
-> **E2I Causal Analytics** | Schema Version 4.2.1 | Last Updated: 2026-09-07
+> **E2I Causal Analytics** | Schema Version 4.2.1 | Last Updated: 2026-09-22
 
 | Navigation | |
 |---|---|
@@ -22,12 +22,48 @@ ls database/ml | sort | tail -1          # highest database/ml file
 ls database/migrations | sort | tail -1  # highest shared migration
 ```
 
+### Producer census (#2207, 2026-09-22)
+
+A documented table is not a populated one. The census behind #2207 found ten tables in
+this document whose writers were never called or ran only on the dark heavy worker
+(`worker_heavy` `replicas: 0`, owner decision #705), and that the **1,440
+`ml_training_runs` rows are synthetic seed rows** (shard 09), not real runs. The state
+after #2207, per table (details in each section):
+
+| Table | Producer after #2207 | Runs where |
+|-------|----------------------|------------|
+| `ml_feast_feature_views`, `ml_feast_materialization_jobs`, `ml_feast_feature_freshness` | `src/tasks/feast_tracking.py` from the three Feast beat tasks | live — worker_medium `analytics` (6 h / 4 h / weekly); since the 2026-09-22 owner decision the beats drive the e2i_feast sidecar over HTTP (`FEAST_URL`, `src/feature_store/feast_remote_materialize.py`) and the freshness beat records the real #559 source-table recency; a run that did nothing is RED in Celery (see §12) |
+| `ml_hpo_studies`, `ml_hpo_trials` | `OptunaOptimizer.save_to_database` from the HPO tuner node | wired on the tuner; the exact typed payload verified against the live schema in a rolled-back rehearsal (no row has landed yet — needs migration ml/045 deployed, then a host-run tier-0 harness run or a worker-run retraining, which the reshaped data-prep Feast gate no longer blocks, see §1.5) |
+| `estimator_evaluations` | `EnergyScoreMLflowTracker.record_evaluations` from the causal_impact estimation node | live — every energy-score selection (chat, `/api/causal`) |
+| `ml_data_quality_reports` | `DataQualityReportRepository` from data_preparer inside `MLFoundationPipeline` | routed — `execute_model_retraining` on worker_medium `analytics` after measurement; the data-prep Feast gate is advisory for table/file-sourced runs since 2026-09-22 (see §1.5) |
+| `ml_retraining_history` | `RetrainingHistoryRepository` via retraining_trigger / drift tasks | live routes — the daily `retraining-evaluation-daily` sweep (quick) evaluates every real model and enqueues a retrain for a model whose registry row carries its cohort contract (migration 150, §1.2 / §7.5); execution on `analytics` |
+| `ml_training_runs` | `MLTrainingRunRepository` from model_trainer (real); today's rows are synthetic seed | same as the pipeline; **no real run recorded yet** |
+| `ml_feature_store` | none | roadmap stake, kept (owner decision (c)) |
+| `driver_rankings`, `feature_rankings` | none | roadmap stake, kept (owner decision (c)) |
+
+Memory was not the binding constraint: the retraining pipeline measured inside worker_medium
+at ~0.85 GB peak (n=4000, 2 HPO trials; +~75 MB at the prod cohort shape 15,209×77) — see
+the routing comment in `src/workers/celery_app.py` — so it is routed there. Two blockers the
+dark queue had hidden were then decided by the owner (2026-09-22) and fixed: (1) the
+scheduled evaluation path had no committed cohort contract to trigger with — migration 150
+persists one per model on `ml_model_registry` (§1.2), written at training time by the
+deployer's registry writer and healed by the manual trigger route, and the sweep reads it
+(§7.5); the 14 pre-existing real models carry NULL contracts (neither value is provable:
+the experiment label is a column of no live table and the goldstd frames were host-built —
+see the migration's comment), so the sweep stays honestly blocked for them until an
+operator triggers once with `data_source` + `target_outcome` and that job completes; (2) the data-prep Feast gate (#556) was unpassable by construction
+(it probed a `feature_analyzer_<experiment_id>` view that exists nowhere) and fails closed
+on the worker image (#307) — it now measures the freshness of the Feast views sourced from
+the run's table through the feast-free #559 probe and blocks only a run that trains on
+Feast-served features (`features_served_by_feast`, which no pipeline path sets today);
+for table/file-sourced runs the result is advisory (§1.5).
+
 ---
 
 ## Table of Contents
 
 1. [MLOps Core](#1-mlops-core) --- 8 tables
-2. [Causal Validation](#2-causal-validation) --- 2 tables
+2. [Causal Validation](#2-causal-validation) --- 3 tables
 3. [Digital Twin](#3-digital-twin) --- 3 tables
 4. [Tool Composer](#4-tool-composer) --- 6 tables
 5. [ROI Calculations](#5-roi-calculations) --- 3 tables
@@ -105,8 +141,25 @@ Model versioning with performance metrics and lifecycle stage tracking. A trigge
 | `fairness_metrics` | JSONB | Fairness assessment results |
 | `stage` | model_stage_enum | Current lifecycle stage |
 | `is_champion` | BOOLEAN | Whether this is the active champion model |
+| `cohort_data_source` | TEXT | Cohort contract (migration 150, #2207): the table name or JSON file-source dict the model was trained on — what a retrain loads. NULL = unknown (sweep blocked for this model) |
+| `cohort_target_outcome` | TEXT | Cohort contract: the prediction target column the model was trained on; NULL for the 14 pre-existing real models (never backfilled: `ml_experiments.prediction_target` is an experiment label, a column of no live table) |
+| `cohort_feature_manifest_source` | TEXT | Cohort contract: the resolved Layer-5 manifest source (csu/optum/synthetic), optional |
 
 **Key constraints**: `UNIQUE(model_name, model_version)`, single-champion trigger per experiment
+
+**Cohort contract (migration 150, owner decision 2026-09-22).** The daily retraining sweep
+may enqueue a retrain only for a model whose row carries BOTH `cohort_data_source` and
+`cohort_target_outcome` (`has_cohort_contract`). Writers: `registry_manager
+._persist_model_registry_row` at training time (threaded from `MLFoundationPipeline.run`'s
+`input_data` through the deployer state; a reused row's NULL columns are healed) and
+`execute_model_retraining` on a COMPLETED, promotable retrain (`heal_registry_cohort_contract`:
+NULL columns only, as a consistent unit — a row value that disagrees with the contract that
+ran blocks the whole heal; per-column compare-and-set; never at trigger time, so a wrong
+manual contract cannot heal wrongly). `RetrainingTriggerService.trigger_retraining` only
+READS the row: a request that omits fields falls back to it, explicit values win.
+Reader: the drift-monitor connector projection (`src/agents/drift_monitor/connectors/
+supabase_connector.py`, with a narrow-projection fallback for a pre-150 schema). Encoding /
+decoding lives in `src/services/cohort_contract.py`.
 
 ### 1.3 `ml_training_runs`
 
@@ -127,6 +180,16 @@ Individual training run records with hyperparameters, per-split metrics, and Opt
 | `optuna_study_name` | VARCHAR(255) | Linked HPO study (if any) |
 | `is_best_trial` | BOOLEAN | Best trial in HPO study |
 
+**State (2026-09-22, #2207).** All 1,440 rows are **synthetic seed rows**: `is_synthetic = true`,
+`started_at` 2026-07-03..07-21, none with an `optuna_study_name`, emitted by
+`src/ml/synthetic/generators/mlops_generator.py` (which seeds only `ml_model_registry`,
+`ml_training_runs`, `ml_deployments`) through `scripts/load_synthetic_data.py` shard 09.
+**No real training run has been recorded in this table.** The real writer is
+`MLTrainingRunRepository` from `model_trainer/agent.py`, which persists a run once its
+experiment label resolves to an `ml_experiments` row; it runs wherever `MLFoundationPipeline`
+runs (the tier-0 harness by hand; `execute_model_retraining` on worker_medium's `analytics`
+queue since #2207).
+
 ### 1.4 `ml_feature_store`
 
 Feature metadata with statistics computed on the train split only, to prevent data leakage.
@@ -145,6 +208,11 @@ Feature metadata with statistics computed on the train split only, to prevent da
 
 **Key constraints**: `UNIQUE(feature_name, feature_version)`
 
+**Producer: none — roadmap stake (2026-09-22, #2207, owner decision (c)).** No code writes
+this table (its only mention in `src/` is a docstring); feature metadata lives in
+`feature_groups` / `features` / `feature_values` plus the Feast registry (§12). Kept as
+documented: no migration, no drop, 0 rows.
+
 ### 1.5 `ml_data_quality_reports`
 
 Great Expectations validation results with six E2I quality dimensions and leakage detection.
@@ -161,6 +229,20 @@ Great Expectations validation results with six E2I quality dimensions and leakag
 | `leakage_detected` | BOOLEAN | Whether train/test leakage was found |
 | `data_split` | data_split_type | Which split was validated |
 | `training_run_id` | UUID FK | Linked training run |
+
+**Producer (2026-09-22, #2207).** `DataQualityReportRepository.store_result`, called by the
+data_preparer agent's Great Expectations validation inside `MLFoundationPipeline`. Its only
+scheduled executor is `execute_model_retraining`, which #2207 moved from the dark `ml` queue to
+worker_medium's `analytics` queue after measuring the pipeline inside that worker (routing
+comment in `src/workers/celery_app.py`). Rows land when a retraining job passes data-prep:
+today that is the tier-0 harness run by hand on the host, or a trigger via
+`/monitoring/retraining/trigger/{model_id}` (with its cohort contract), or the daily sweep
+for a model whose registry row carries one (§1.2). The data-prep Feast gate (#556) no longer
+blocks such a run on the worker image: since 2026-09-22 it measures the freshness of the
+Feast views sourced from the run's table (feast-free #559 probe) and records the result;
+it hard-blocks only a run that trains on Feast-served features (`features_served_by_feast`,
+unset by every pipeline path today), where `ALLOW_STALE_FEAST=1` keeps its meaning. 0 rows
+on 2026-09-22.
 
 ### 1.6 `ml_shap_analyses`
 
@@ -330,6 +412,43 @@ Migration 119 pins that column three ways:
 
 `'refuted'` / `'overturned'` mark demoted paths; `'needs_review'` awaits
 adjudication.
+
+### 2.5 `estimator_evaluations`
+
+**Source**: `database/causal/011_energy_score_enhancement.sql`, extended by
+`database/causal/012_estimator_evaluations_selection_context.sql` (#2207)
+
+Per-estimator record of one energy-score selection: every estimator the `EstimatorSelector`
+evaluated for a query (success or failure), its ATE / CI, energy-score components, timing,
+and which one was selected.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `evaluation_id` | UUID PK | Row identifier |
+| `selection_run_id` | UUID (012) | Groups the N rows of one `select()` call |
+| `experiment_id` | UUID FK → `ml_experiments(id)` | Nullable since 012; NULL on the query-time path |
+| `query_id`, `session_id` | VARCHAR(255) (012) | The query / working-memory session that ran the selection |
+| `estimator_type` | VARCHAR(50) CHECK | `causal_forest`, `linear_dml`, `dml_learner`, `drlearner`, `ortho_forest`, `s_learner`, `t_learner`, `x_learner`, `ols` |
+| `estimator_priority` | INTEGER | Legacy first-success order |
+| `success` | BOOLEAN | Whether the estimator produced an estimate |
+| `ate`, `ate_std`, `ate_ci_lower`, `ate_ci_upper` | DOUBLE | The estimate |
+| `energy_score`, `treatment_balance_score`, `outcome_fit_score`, `propensity_calibration`, `energy_ci_lower`, `energy_ci_upper`, `energy_bootstrap_std` | DOUBLE | Energy-score components (NULL on failure) |
+| `n_samples`, `n_treated`, `n_control` | INTEGER | Frame size |
+| `estimation_time_ms`, `energy_computation_time_ms` | DOUBLE | Timing |
+| `was_selected`, `selection_reason` | BOOLEAN, TEXT | The pick |
+| `error_message`, `error_type` | TEXT, VARCHAR(100) | Why a failed estimator failed |
+| `treatment_variable`, `outcome_variable`, `brand`, `region`, `data_source`, `mlflow_run_id` | (012) | Selection context and frame provenance |
+
+**Producer (2026-09-22, #2207).** `EnergyScoreMLflowTracker.record_evaluations`, called by the
+causal_impact estimation node (`_select_estimator_with_energy_score`) after every selection —
+chat and `/api/causal` — over psycopg2 on `DATABASE_URL` / `SUPABASE_DB_URL`, DB-only (no MLflow
+run is opened on a request). Before #2207 the tracker was never instantiated outside its module
+and, as written, could not have inserted a row: `experiment_id` was `NOT NULL` against an MLflow
+experiment id / `uuid4()` that no `ml_experiments` row carries. 0 rows on 2026-09-22; rows land
+from the first energy-score selection after the deploy that applies 012. Readers:
+`v_estimator_performance`, `v_energy_score_trends`, `v_selection_comparison` (re-keyed on
+`selection_run_id` by 012) — the per-query estimator census the estimator-calibration work
+(#2031) had to collect by hand.
 
 ### Notable Functions
 
@@ -618,9 +737,30 @@ Itemized cost breakdown with one-time vs. recurring cost distinction.
 
 ## 6. HPO Studies
 
-**Source**: `database/ml/016_hpo_studies.sql` (Migration 016)
+**Source**: `database/ml/016_hpo_studies.sql` (Migration 016); objective columns widened by `database/ml/045_persist_hpo_study_rpc.sql` (#2207)
 
 Tracks Optuna hyperparameter optimization studies and their individual trial results.
+
+**Producer (2026-09-22, #2207).** `OptunaOptimizer.save_to_database`, called at the end of every
+HPO run in `model_trainer/nodes/hyperparameter_tuner.py` — the same live path that writes
+`ml_hpo_patterns` (943 rows). `experiment_id` is resolved from the pipeline's experiment label
+through `ml_experiments.mlflow_experiment_id` (NULL when no row exists — never a fabricated
+id; the label stays in `study_name`); the study row and its whole trial set are written in
+ONE transaction by `persist_hpo_study(jsonb, jsonb)` (migration ml/045: upsert on
+`study_name`, replace the trial set — a rerun of the same study name replaces both together
+or changes nothing). Before #2207 the writer had zero call sites and both tables sat at
+0 rows, and none has landed yet: the values the live graph produces today (the Pydantic
+search-space distributions the state holds, native sampled and best parameters, empty user
+attrs, JSON-native warm-start system attrs, float intermediate and objective values including
+a failed trial's `-inf` and a large objective, datetimes) are reduced to JSON-native values by
+`OptunaOptimizer.build_persist_payload` — proven by an end-to-end typed test and against the
+live schema in a rolled-back rehearsal; the serialiser is not a guarantee for inputs the
+tuner does not produce. The first rows come from the tier-0 harness run
+by hand on the host (the path that produced the 943 `ml_hpo_patterns`) once ml/045 is
+deployed — prove it with `SELECT study_name, n_trials FROM ml_hpo_studies`. The other
+host of the tuner, `execute_model_retraining`, is routed to worker_medium's `analytics`
+queue; since the 2026-09-22 gate reshape (§1.5) a worker-run retraining reaches the tuner,
+so HPO rows also land from the sweep / manual trigger once ml/045 is deployed.
 
 ### 6.1 `ml_hpo_studies`
 
@@ -636,7 +776,7 @@ Optuna study metadata including search space, sampler, pruner, and best results.
 | `metric` | VARCHAR(50) | Objective metric (roc_auc, rmse, etc.) |
 | `search_space` | JSONB | Param definitions: type, low, high, log, choices |
 | `best_trial_number` | INTEGER | Index of best trial |
-| `best_value` | DECIMAL(10,6) | Best objective value |
+| `best_value` | DOUBLE PRECISION (was DECIMAL(10,6) until ml/045) | Best objective value |
 | `best_params` | JSONB | Best hyperparameters found |
 | `n_trials` | INTEGER | Total trials run |
 | `n_pruned` | INTEGER | Trials pruned early |
@@ -652,7 +792,7 @@ Individual trial records within an HPO study.
 | `trial_number` | INTEGER | Trial index |
 | `state` | VARCHAR(50) | COMPLETE, PRUNED, FAIL, WAITING, RUNNING |
 | `params` | JSONB | Hyperparameters sampled |
-| `value` | DECIMAL(10,6) | Objective function value |
+| `value` | DOUBLE PRECISION (was DECIMAL(10,6) until ml/045) | Objective function value |
 | `intermediate_values` | JSONB | Step-wise values for pruning |
 | `duration_seconds` | DECIMAL(10,3) | Trial wall-clock time |
 
@@ -757,6 +897,29 @@ Automated retraining events triggered by monitoring alerts with before/after per
 | `auto_deployed` | BOOLEAN | Whether auto-promoted to production |
 
 **Retention (migration 093)**: the `alert_id → ml_monitoring_alerts(id)` FK is `ON DELETE SET NULL` — resolving/purging alerts keeps retraining history intact.
+
+**Producer (2026-09-22, #2207).** `RetrainingHistoryRepository`, via
+`services/retraining_trigger.py` (a trigger writes the `pending` row) and
+`tasks/drift_monitoring_tasks.py` (`execute_model_retraining` moves it to `training` →
+`completed` / `failed`, real metric only). Reachable through
+`/monitoring/retraining/{evaluate,trigger}/{model_id}` and, since #2207, the daily beat
+`retraining-evaluation-daily` (01:45 UTC, `quick`), which runs `check_retraining_for_all_models`
+. A row is written by a trigger. A job can only run with the committed cohort contract
+(`data_source` + `target_outcome`) — `execute_model_retraining` fails closed without it.
+Since the 2026-09-22 owner decision the contract of record is the model's `ml_model_registry`
+row (migration 150, §1.2): the sweep passes it to `evaluate_retraining_need` and enqueues
+for a contracted model; a model whose row lacks it is evaluated and blocked with
+`retraining_blocked_reason="no_cohort_contract"` (the 14 pre-existing real models carry NULL
+contracts, so they stay blocked until a manual trigger's completed run heals them). The API trigger route keeps
+both fields optional on `TriggerRetrainingRequest` (Phase D): a request that omits them falls
+back to the row's contract, explicit values win, the row's id is written to `model_id`
+(never populated before), and the row is healed only once the job has COMPLETED with a
+promotable model (never at trigger time); a request
+with no contract anywhere still writes the `pending` row and the job fails closed at
+execution (`failed`, reason in `notes`). The execution half runs on worker_medium's
+`analytics` queue (on the dark `ml` queue a triggered job never ran and its row stayed
+`pending`); the data-prep Feast gate no longer blocks a table/file-sourced run there
+(§1.5). 0 rows on 2026-09-22.
 
 ### 7.6 `health_check_history` (migration 096)
 
@@ -1199,6 +1362,33 @@ Time-series serving performance metrics collected periodically.
 
 Tracks Feast feature view configurations, materialization jobs, and feature freshness for the feature store.
 
+**Producer (2026-09-22, #2207).** `src/tasks/feast_tracking.py`, called from the three scheduled
+tasks in `src/tasks/feast_tasks.py` — `feast-materialize-incremental` (6 h),
+`feast-check-freshness` (4 h) and `feast-materialize-full-weekly` — all on worker_medium's
+`analytics` queue (the weekly entry had been pinned to the unconsumed `ml` queue: 15 undelivered
+weekly messages were found on the broker's db 1). What lands is the **real outcome**. Until
+the 2026-09-22 owner decision every scheduled run on the worker failed at
+`Failed to initialize Feast client` (the app/worker image cannot `import feast`, #307, and
+`MaterializationJob` built an embedded-mode client that ignored `FEAST_URL`) and Celery
+reported it as SUCCESS. Now: the job obtains its client through `get_feast_client()` (remote
+mode, `FEAST_URL=http://feast:6566`), `FeastClient.materialize` / `materialize_incremental`
+POST the window to the e2i_feast sidecar's `/materialize` and `/materialize-incremental`
+(`src/feature_store/feast_remote_materialize.py`; the request schema mirrors the sidecar's
+openapi), the freshness beat records the real per-view recency through the #559
+source-table probe, and a run that materialized or probed nothing is RED in Celery after its
+rows are recorded (`failed` job rows / `unknown` freshness rows; an init failure is no longer
+doubled by the auto-recovery branch). The e2i_feast_materializer sidecar shell loop
+(`docker/feast/materializer-entrypoint.sh`) still runs the same materialize every 6 h
+(belt and braces; retire it only once the beat is proven live) and has no database client,
+so its runs are not in these tables. Because Feast's file registry is written in place on
+every materialize, the serve container now runs `docker/feast/serve_locked.py` — the same
+feature server with `/materialize` and `/materialize-incremental` under the registry flock
+the loop and `apply` already use (falls back to plain `feast serve` if it cannot start). `ml_feast_feature_views` rows are created on first use
+from `FEAST_FEATURE_VIEW_SOURCE_TABLES` (`src/feature_store/feast_views.py` — the eleven
+registered Feast views and their source tables, read from the live sidecar registry; the ten
+online ones, `FEAST_ONLINE_FEATURE_VIEWS`, are what a `feature_views=None` materialize and the
+freshness beat cover). All three tables were at 0 rows on 2026-09-22.
+
 ### 12.1 `ml_feast_feature_views`
 
 Feast feature view configurations and metadata.
@@ -1445,7 +1635,8 @@ the payload; the RPC rejects a payload without it.
 (the run id), provenance-filtered by default (`HAS_PROVENANCE = True`, opt in with
 `include_synthetic=True`). `discovered_dags` is in `PROVENANCE_TAGGED_TABLES`.
 
-**Still writer-less (scoped out of #1974's lane).** `driver_rankings` /
+**Still writer-less — kept as a roadmap stake (owner decision (c), #2207, 2026-09-22; scoped
+out of #1974's lane; no migration, no drop, 0 rows each).** `driver_rankings` /
 `feature_rankings`: `DriverRanker` does not run on the causal_impact path that writes
 `discovered_dags`. It runs in two other places — the feature_analyzer agent's
 `causal_ranker` node (`rank_from_discovery_result`) and the tool-registry

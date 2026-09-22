@@ -427,7 +427,14 @@ class TestLogSelectionResult:
 
         with patch.object(tracker, "_log_to_database") as mock_log:
             tracker.log_selection_result(sample_selection_result)
-            mock_log.assert_called_once_with(sample_selection_result, "exp-1")
+            mock_log.assert_called_once()
+        args, kwargs = mock_log.call_args
+        assert args[0] is sample_selection_result
+        # #2207: "exp-1" is an MLflow experiment id, not an ml_experiments(id) uuid —
+        # the FK column gets NULL; the run id travels in the context instead.
+        assert args[1] is None
+        assert kwargs["context"]["selection_run_id"]
+        assert kwargs["context"]["mlflow_run_id"] is None  # mlflow disabled in this test
 
     def test_log_selection_result_with_additional_params(self, sample_selection_result):
         """Test logging with additional parameters."""
@@ -599,11 +606,97 @@ class TestLogToDatabase:
         ):
             tracker._log_to_database(sample_selection_result, "exp-123")
 
-        # Verify connection and cursor were used
-        mock_psycopg2.connect.assert_called_once_with("postgresql://test@host/db")
+        # Verify connection and cursor were used — bounded (#2207: the write runs
+        # inside the estimation compute slot, so connect + statements carry timeouts)
+        mock_psycopg2.connect.assert_called_once()
+        args, kwargs = mock_psycopg2.connect.call_args
+        assert args == ("postgresql://test@host/db",)
+        assert kwargs["connect_timeout"] == 5
+        assert "statement_timeout=5000" in kwargs["options"]
         mock_conn.commit.assert_called_once()
         mock_cursor.close.assert_called_once()
         mock_conn.close.assert_called_once()
+
+    def test_log_to_database_energy_details_carry_finite_tournament_score_and_served_refit(
+        self, sample_estimator_result, failed_estimator_result
+    ):
+        """codex r5/r6: energy_details carries the explicit tournament score and
+        served-refit outcome; a non-finite score is emitted as None (JSONB cannot
+        take NaN/Inf), matching to_dict / agent state / API."""
+        import math
+
+        from src.causal_engine.energy_score.estimator_selector import EstimatorType
+
+        refused = EstimatorResult(
+            estimator_type=EstimatorType.LINEAR_DML,
+            success=False,
+            error_message="refused",
+            energy_score_result=sample_estimator_result.energy_score_result,
+            served_refit=False,
+        )
+        nonfinite = EstimatorResult(
+            estimator_type=EstimatorType.OLS,
+            success=True,
+            ate=0.1,
+            energy_score_result=EnergyScoreResult(
+                estimator_name="ols",
+                energy_score=float("nan"),
+                treatment_balance_score=0.0,
+                outcome_fit_score=0.0,
+                propensity_calibration=0.0,
+                n_samples=10,
+                n_treated=5,
+                n_control=5,
+                computation_time_ms=1.0,
+            ),
+        )
+        served = sample_estimator_result
+        served.served_refit = True
+        result = SelectionResult(
+            selected=served,
+            selection_strategy=SelectionStrategy.BEST_ENERGY_SCORE,
+            all_results=[served, refused, nonfinite, failed_estimator_result],
+            selection_reason="r",
+            energy_scores={"causal_forest": 0.42},
+        )
+        mock_psycopg2 = MagicMock()
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_psycopg2.connect.return_value = mock_conn
+        mock_conn.cursor.return_value = mock_cursor
+        mock_psycopg2_extras = MagicMock()
+        mock_psycopg2_extras.Json = MagicMock(side_effect=lambda x: x)
+        with patch(
+            "src.causal_engine.energy_score.mlflow_tracker.EnergyScoreMLflowTracker._check_mlflow",
+            return_value=False,
+        ):
+            tracker = EnergyScoreMLflowTracker(
+                enable_db_logging=True, db_connection_string="postgresql://test@host/db"
+            )
+        import sys
+
+        with patch.dict(
+            sys.modules, {"psycopg2": mock_psycopg2, "psycopg2.extras": mock_psycopg2_extras}
+        ):
+            tracker._log_to_database(result, "exp-123")
+        # The energy_details JSONB is no longer the LAST parameter: #2207 (causal/012)
+        # appends the selection context (selection_run_id ... data_source) after it, so
+        # locate it by shape (estimator_params is the other JSONB, an empty dict).
+        details = [
+            next(p for p in call.args[1] if isinstance(p, dict) and "tournament_energy_score" in p)
+            for call in mock_cursor.execute.call_args_list
+        ]
+        assert len(details) == 4
+        assert details[0]["served_refit"] is True and details[0]["tournament_energy_score"] == 0.42
+        assert details[1]["served_refit"] is False
+        assert details[1]["tournament_energy_score"] == refused.energy_score
+        assert details[2]["tournament_energy_score"] is None  # NaN -> None, never into JSONB
+        assert details[3]["tournament_energy_score"] is None and details[3]["served_refit"] is None
+        assert all(
+            v is None or math.isfinite(v)
+            for d in details
+            for v in [d.get("tournament_energy_score")]
+        )
 
     def test_log_to_database_handles_exception(self, sample_selection_result):
         """Test that database exceptions are handled gracefully."""

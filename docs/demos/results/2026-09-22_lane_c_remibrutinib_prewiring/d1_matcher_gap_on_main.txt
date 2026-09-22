@@ -1,0 +1,9 @@
+main checkout converter clean vs its HEAD: efaad6eeb main
+origin/main sha: efaad6eeb
+converter module: /home/enunez/Projects/e2i_causal_analytics/scripts/convert_optum_rwd.py
+CSU_BIOLOGIC_BRANDS: ('XOLAIR', 'DUPIXENT')
+CSU_BIOLOGIC_GENERICS: ('omalizumab', 'dupilumab')
+CSU_BIOLOGIC_NDC_PREFIXES: ('50242', '00024', '0024')
+_csu_biologic_mask on a RHAPSIDO/remibrutinib/00078110030 row: [False]
+_classify_biologic_brand: None
+control, XOLAIR row mask: [True] classify: xolair

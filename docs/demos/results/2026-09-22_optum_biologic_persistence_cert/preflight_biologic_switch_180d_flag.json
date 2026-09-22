@@ -1,0 +1,1405 @@
+{
+  "analysis_id": "e2bf47b1-01da-40ad-b309-1ebb55c99d71",
+  "status": "completed",
+  "treatment_var": "treatment_dupixent",
+  "outcome_var": "biologic_switch_180d_flag",
+  "dataset": "optum_biologic_persistence",
+  "n_rows": 15209,
+  "data_source": "database",
+  "dag": {
+    "nodes": [
+      "treatment_dupixent",
+      "biologic_switch_180d_flag",
+      "age_at_index",
+      "health_exchange_flag",
+      "lis_dual_flag",
+      "enrollment_duration_days",
+      "charlson_score",
+      "elixhauser_van_walraven_score",
+      "comorbidity_diag_distinct_count",
+      "comorbidity_diag_claim_count",
+      "high_comorbidity_burden_flag",
+      "cci_mi",
+      "cci_chf",
+      "cci_pvd",
+      "cci_cerebrovascular",
+      "cci_dementia",
+      "cci_chronic_pulmonary",
+      "cci_rheumatic",
+      "cci_peptic_ulcer",
+      "cci_mild_liver",
+      "cci_diabetes_no_complication",
+      "cci_diabetes_complication",
+      "cci_paraplegia",
+      "cci_renal",
+      "cci_malignancy",
+      "cci_severe_liver",
+      "cci_metastatic_cancer",
+      "elx_cardiac_arrhythmia",
+      "elx_valvular_disease",
+      "elx_pulmonary_circulation",
+      "elx_hypertension_uncomplicated",
+      "elx_hypertension_complicated",
+      "elx_other_neurological",
+      "elx_hypothyroidism",
+      "elx_renal_failure",
+      "elx_liver_disease",
+      "elx_lymphoma",
+      "elx_solid_tumor_no_metastasis",
+      "elx_coagulopathy",
+      "elx_obesity",
+      "elx_weight_loss",
+      "elx_fluid_electrolyte",
+      "elx_blood_loss_anemia",
+      "elx_deficiency_anemia",
+      "elx_alcohol_abuse",
+      "elx_drug_abuse",
+      "elx_psychoses",
+      "gdr_cd=M",
+      "payer_category=medicare",
+      "payer_product=HMO",
+      "payer_product=IND",
+      "payer_product=OTH",
+      "payer_product=POS",
+      "payer_product=PPO",
+      "geographic_region=northeast",
+      "geographic_region=south",
+      "geographic_region=west",
+      "geographic_region=__missing__",
+      "charlson_risk_band=1 to 2",
+      "charlson_risk_band=3 to 4",
+      "elixhauser_risk_band=1 to 5",
+      "elixhauser_risk_band=10 plus",
+      "elixhauser_risk_band=6 to 10"
+    ],
+    "edges": [
+      [
+        "treatment_dupixent",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "age_at_index",
+        "treatment_dupixent"
+      ],
+      [
+        "age_at_index",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "health_exchange_flag",
+        "treatment_dupixent"
+      ],
+      [
+        "health_exchange_flag",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "lis_dual_flag",
+        "treatment_dupixent"
+      ],
+      [
+        "lis_dual_flag",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "enrollment_duration_days",
+        "treatment_dupixent"
+      ],
+      [
+        "enrollment_duration_days",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "charlson_score",
+        "treatment_dupixent"
+      ],
+      [
+        "charlson_score",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "elixhauser_van_walraven_score",
+        "treatment_dupixent"
+      ],
+      [
+        "elixhauser_van_walraven_score",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "comorbidity_diag_distinct_count",
+        "treatment_dupixent"
+      ],
+      [
+        "comorbidity_diag_distinct_count",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "comorbidity_diag_claim_count",
+        "treatment_dupixent"
+      ],
+      [
+        "comorbidity_diag_claim_count",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "high_comorbidity_burden_flag",
+        "treatment_dupixent"
+      ],
+      [
+        "high_comorbidity_burden_flag",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "cci_mi",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_mi",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "cci_chf",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_chf",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "cci_pvd",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_pvd",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "cci_cerebrovascular",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_cerebrovascular",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "cci_dementia",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_dementia",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "cci_chronic_pulmonary",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_chronic_pulmonary",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "cci_rheumatic",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_rheumatic",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "cci_peptic_ulcer",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_peptic_ulcer",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "cci_mild_liver",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_mild_liver",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "cci_diabetes_no_complication",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_diabetes_no_complication",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "cci_diabetes_complication",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_diabetes_complication",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "cci_paraplegia",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_paraplegia",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "cci_renal",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_renal",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "cci_malignancy",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_malignancy",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "cci_severe_liver",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_severe_liver",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "cci_metastatic_cancer",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_metastatic_cancer",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "elx_cardiac_arrhythmia",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_cardiac_arrhythmia",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "elx_valvular_disease",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_valvular_disease",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "elx_pulmonary_circulation",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_pulmonary_circulation",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "elx_hypertension_uncomplicated",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_hypertension_uncomplicated",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "elx_hypertension_complicated",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_hypertension_complicated",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "elx_other_neurological",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_other_neurological",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "elx_hypothyroidism",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_hypothyroidism",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "elx_renal_failure",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_renal_failure",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "elx_liver_disease",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_liver_disease",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "elx_lymphoma",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_lymphoma",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "elx_solid_tumor_no_metastasis",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_solid_tumor_no_metastasis",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "elx_coagulopathy",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_coagulopathy",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "elx_obesity",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_obesity",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "elx_weight_loss",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_weight_loss",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "elx_fluid_electrolyte",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_fluid_electrolyte",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "elx_blood_loss_anemia",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_blood_loss_anemia",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "elx_deficiency_anemia",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_deficiency_anemia",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "elx_alcohol_abuse",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_alcohol_abuse",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "elx_drug_abuse",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_drug_abuse",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "elx_psychoses",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_psychoses",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "gdr_cd=M",
+        "treatment_dupixent"
+      ],
+      [
+        "gdr_cd=M",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "payer_category=medicare",
+        "treatment_dupixent"
+      ],
+      [
+        "payer_category=medicare",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "payer_product=HMO",
+        "treatment_dupixent"
+      ],
+      [
+        "payer_product=HMO",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "payer_product=IND",
+        "treatment_dupixent"
+      ],
+      [
+        "payer_product=IND",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "payer_product=OTH",
+        "treatment_dupixent"
+      ],
+      [
+        "payer_product=OTH",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "payer_product=POS",
+        "treatment_dupixent"
+      ],
+      [
+        "payer_product=POS",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "payer_product=PPO",
+        "treatment_dupixent"
+      ],
+      [
+        "payer_product=PPO",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "geographic_region=northeast",
+        "treatment_dupixent"
+      ],
+      [
+        "geographic_region=northeast",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "geographic_region=south",
+        "treatment_dupixent"
+      ],
+      [
+        "geographic_region=south",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "geographic_region=west",
+        "treatment_dupixent"
+      ],
+      [
+        "geographic_region=west",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "geographic_region=__missing__",
+        "treatment_dupixent"
+      ],
+      [
+        "geographic_region=__missing__",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "charlson_risk_band=1 to 2",
+        "treatment_dupixent"
+      ],
+      [
+        "charlson_risk_band=1 to 2",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "charlson_risk_band=3 to 4",
+        "treatment_dupixent"
+      ],
+      [
+        "charlson_risk_band=3 to 4",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "elixhauser_risk_band=1 to 5",
+        "treatment_dupixent"
+      ],
+      [
+        "elixhauser_risk_band=1 to 5",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "elixhauser_risk_band=10 plus",
+        "treatment_dupixent"
+      ],
+      [
+        "elixhauser_risk_band=10 plus",
+        "biologic_switch_180d_flag"
+      ],
+      [
+        "elixhauser_risk_band=6 to 10",
+        "treatment_dupixent"
+      ],
+      [
+        "elixhauser_risk_band=6 to 10",
+        "biologic_switch_180d_flag"
+      ]
+    ],
+    "treatment_nodes": [
+      "treatment_dupixent"
+    ],
+    "outcome_nodes": [
+      "biologic_switch_180d_flag"
+    ],
+    "adjustment_sets": [
+      [
+        "age_at_index",
+        "cci_cerebrovascular",
+        "cci_chf",
+        "cci_chronic_pulmonary",
+        "cci_dementia",
+        "cci_diabetes_complication",
+        "cci_diabetes_no_complication",
+        "cci_malignancy",
+        "cci_metastatic_cancer",
+        "cci_mi",
+        "cci_mild_liver",
+        "cci_paraplegia",
+        "cci_peptic_ulcer",
+        "cci_pvd",
+        "cci_renal",
+        "cci_rheumatic",
+        "cci_severe_liver",
+        "charlson_risk_band=1 to 2",
+        "charlson_risk_band=3 to 4",
+        "charlson_score",
+        "comorbidity_diag_claim_count",
+        "comorbidity_diag_distinct_count",
+        "elixhauser_risk_band=1 to 5",
+        "elixhauser_risk_band=10 plus",
+        "elixhauser_risk_band=6 to 10",
+        "elixhauser_van_walraven_score",
+        "elx_alcohol_abuse",
+        "elx_blood_loss_anemia",
+        "elx_cardiac_arrhythmia",
+        "elx_coagulopathy",
+        "elx_deficiency_anemia",
+        "elx_drug_abuse",
+        "elx_fluid_electrolyte",
+        "elx_hypertension_complicated",
+        "elx_hypertension_uncomplicated",
+        "elx_hypothyroidism",
+        "elx_liver_disease",
+        "elx_lymphoma",
+        "elx_obesity",
+        "elx_other_neurological",
+        "elx_psychoses",
+        "elx_pulmonary_circulation",
+        "elx_renal_failure",
+        "elx_solid_tumor_no_metastasis",
+        "elx_valvular_disease",
+        "elx_weight_loss",
+        "enrollment_duration_days",
+        "gdr_cd=M",
+        "geographic_region=__missing__",
+        "geographic_region=northeast",
+        "geographic_region=south",
+        "geographic_region=west",
+        "health_exchange_flag",
+        "high_comorbidity_burden_flag",
+        "lis_dual_flag",
+        "payer_category=medicare",
+        "payer_product=HMO",
+        "payer_product=IND",
+        "payer_product=OTH",
+        "payer_product=POS",
+        "payer_product=PPO"
+      ]
+    ],
+    "dag_dot": "digraph CausalDAG {\n  rankdir=LR;\n  node [shape=box];\n\n  \"treatment_dupixent\" [label=\"Treatment Dupixent\"];\n  \"biologic_switch_180d_flag\" [label=\"Biologic Switch 180D Flag\"];\n  \"age_at_index\" [label=\"Age At Index\"];\n  \"health_exchange_flag\" [label=\"Health Exchange Flag\"];\n  \"lis_dual_flag\" [label=\"Lis Dual Flag\"];\n  \"enrollment_duration_days\" [label=\"Enrollment Duration Days\"];\n  \"charlson_score\" [label=\"Charlson Score\"];\n  \"elixhauser_van_walraven_score\" [label=\"Elixhauser Van Walraven Score\"];\n  \"comorbidity_diag_distinct_count\" [label=\"Comorbidity Diag Distinct Count\"];\n  \"comorbidity_diag_claim_count\" [label=\"Comorbidity Diag Claim Count\"];\n  \"high_comorbidity_burden_flag\" [label=\"High Comorbidity Burden Flag\"];\n  \"cci_mi\" [label=\"Cci Mi\"];\n  \"cci_chf\" [label=\"Cci Chf\"];\n  \"cci_pvd\" [label=\"Cci Pvd\"];\n  \"cci_cerebrovascular\" [label=\"Cci Cerebrovascular\"];\n  \"cci_dementia\" [label=\"Cci Dementia\"];\n  \"cci_chronic_pulmonary\" [label=\"Cci Chronic Pulmonary\"];\n  \"cci_rheumatic\" [label=\"Cci Rheumatic\"];\n  \"cci_peptic_ulcer\" [label=\"Cci Peptic Ulcer\"];\n  \"cci_mild_liver\" [label=\"Cci Mild Liver\"];\n  \"cci_diabetes_no_complication\" [label=\"Cci Diabetes No Complication\"];\n  \"cci_diabetes_complication\" [label=\"Cci Diabetes Complication\"];\n  \"cci_paraplegia\" [label=\"Cci Paraplegia\"];\n  \"cci_renal\" [label=\"Cci Renal\"];\n  \"cci_malignancy\" [label=\"Cci Malignancy\"];\n  \"cci_severe_liver\" [label=\"Cci Severe Liver\"];\n  \"cci_metastatic_cancer\" [label=\"Cci Metastatic Cancer\"];\n  \"elx_cardiac_arrhythmia\" [label=\"Elx Cardiac Arrhythmia\"];\n  \"elx_valvular_disease\" [label=\"Elx Valvular Disease\"];\n  \"elx_pulmonary_circulation\" [label=\"Elx Pulmonary Circulation\"];\n  \"elx_hypertension_uncomplicated\" [label=\"Elx Hypertension Uncomplicated\"];\n  \"elx_hypertension_complicated\" [label=\"Elx Hypertension Complicated\"];\n  \"elx_other_neurological\" [label=\"Elx Other Neurological\"];\n  \"elx_hypothyroidism\" [label=\"Elx Hypothyroidism\"];\n  \"elx_renal_failure\" [label=\"Elx Renal Failure\"];\n  \"elx_liver_disease\" [label=\"Elx Liver Disease\"];\n  \"elx_lymphoma\" [label=\"Elx Lymphoma\"];\n  \"elx_solid_tumor_no_metastasis\" [label=\"Elx Solid Tumor No Metastasis\"];\n  \"elx_coagulopathy\" [label=\"Elx Coagulopathy\"];\n  \"elx_obesity\" [label=\"Elx Obesity\"];\n  \"elx_weight_loss\" [label=\"Elx Weight Loss\"];\n  \"elx_fluid_electrolyte\" [label=\"Elx Fluid Electrolyte\"];\n  \"elx_blood_loss_anemia\" [label=\"Elx Blood Loss Anemia\"];\n  \"elx_deficiency_anemia\" [label=\"Elx Deficiency Anemia\"];\n  \"elx_alcohol_abuse\" [label=\"Elx Alcohol Abuse\"];\n  \"elx_drug_abuse\" [label=\"Elx Drug Abuse\"];\n  \"elx_psychoses\" [label=\"Elx Psychoses\"];\n  \"gdr_cd=M\" [label=\"Gdr Cd=M\"];\n  \"payer_category=medicare\" [label=\"Payer Category=Medicare\"];\n  \"payer_product=HMO\" [label=\"Payer Product=Hmo\"];\n  \"payer_product=IND\" [label=\"Payer Product=Ind\"];\n  \"payer_product=OTH\" [label=\"Payer Product=Oth\"];\n  \"payer_product=POS\" [label=\"Payer Product=Pos\"];\n  \"payer_product=PPO\" [label=\"Payer Product=Ppo\"];\n  \"geographic_region=northeast\" [label=\"Geographic Region=Northeast\"];\n  \"geographic_region=south\" [label=\"Geographic Region=South\"];\n  \"geographic_region=west\" [label=\"Geographic Region=West\"];\n  \"geographic_region=__missing__\" [label=\"Geographic Region=  Missing  \"];\n  \"charlson_risk_band=1 to 2\" [label=\"Charlson Risk Band=1 To 2\"];\n  \"charlson_risk_band=3 to 4\" [label=\"Charlson Risk Band=3 To 4\"];\n  \"elixhauser_risk_band=1 to 5\" [label=\"Elixhauser Risk Band=1 To 5\"];\n  \"elixhauser_risk_band=10 plus\" [label=\"Elixhauser Risk Band=10 Plus\"];\n  \"elixhauser_risk_band=6 to 10\" [label=\"Elixhauser Risk Band=6 To 10\"];\n\n  \"treatment_dupixent\" -> \"biologic_switch_180d_flag\";\n  \"age_at_index\" -> \"treatment_dupixent\";\n  \"age_at_index\" -> \"biologic_switch_180d_flag\";\n  \"health_exchange_flag\" -> \"treatment_dupixent\";\n  \"health_exchange_flag\" -> \"biologic_switch_180d_flag\";\n  \"lis_dual_flag\" -> \"treatment_dupixent\";\n  \"lis_dual_flag\" -> \"biologic_switch_180d_flag\";\n  \"enrollment_duration_days\" -> \"treatment_dupixent\";\n  \"enrollment_duration_days\" -> \"biologic_switch_180d_flag\";\n  \"charlson_score\" -> \"treatment_dupixent\";\n  \"charlson_score\" -> \"biologic_switch_180d_flag\";\n  \"elixhauser_van_walraven_score\" -> \"treatment_dupixent\";\n  \"elixhauser_van_walraven_score\" -> \"biologic_switch_180d_flag\";\n  \"comorbidity_diag_distinct_count\" -> \"treatment_dupixent\";\n  \"comorbidity_diag_distinct_count\" -> \"biologic_switch_180d_flag\";\n  \"comorbidity_diag_claim_count\" -> \"treatment_dupixent\";\n  \"comorbidity_diag_claim_count\" -> \"biologic_switch_180d_flag\";\n  \"high_comorbidity_burden_flag\" -> \"treatment_dupixent\";\n  \"high_comorbidity_burden_flag\" -> \"biologic_switch_180d_flag\";\n  \"cci_mi\" -> \"treatment_dupixent\";\n  \"cci_mi\" -> \"biologic_switch_180d_flag\";\n  \"cci_chf\" -> \"treatment_dupixent\";\n  \"cci_chf\" -> \"biologic_switch_180d_flag\";\n  \"cci_pvd\" -> \"treatment_dupixent\";\n  \"cci_pvd\" -> \"biologic_switch_180d_flag\";\n  \"cci_cerebrovascular\" -> \"treatment_dupixent\";\n  \"cci_cerebrovascular\" -> \"biologic_switch_180d_flag\";\n  \"cci_dementia\" -> \"treatment_dupixent\";\n  \"cci_dementia\" -> \"biologic_switch_180d_flag\";\n  \"cci_chronic_pulmonary\" -> \"treatment_dupixent\";\n  \"cci_chronic_pulmonary\" -> \"biologic_switch_180d_flag\";\n  \"cci_rheumatic\" -> \"treatment_dupixent\";\n  \"cci_rheumatic\" -> \"biologic_switch_180d_flag\";\n  \"cci_peptic_ulcer\" -> \"treatment_dupixent\";\n  \"cci_peptic_ulcer\" -> \"biologic_switch_180d_flag\";\n  \"cci_mild_liver\" -> \"treatment_dupixent\";\n  \"cci_mild_liver\" -> \"biologic_switch_180d_flag\";\n  \"cci_diabetes_no_complication\" -> \"treatment_dupixent\";\n  \"cci_diabetes_no_complication\" -> \"biologic_switch_180d_flag\";\n  \"cci_diabetes_complication\" -> \"treatment_dupixent\";\n  \"cci_diabetes_complication\" -> \"biologic_switch_180d_flag\";\n  \"cci_paraplegia\" -> \"treatment_dupixent\";\n  \"cci_paraplegia\" -> \"biologic_switch_180d_flag\";\n  \"cci_renal\" -> \"treatment_dupixent\";\n  \"cci_renal\" -> \"biologic_switch_180d_flag\";\n  \"cci_malignancy\" -> \"treatment_dupixent\";\n  \"cci_malignancy\" -> \"biologic_switch_180d_flag\";\n  \"cci_severe_liver\" -> \"treatment_dupixent\";\n  \"cci_severe_liver\" -> \"biologic_switch_180d_flag\";\n  \"cci_metastatic_cancer\" -> \"treatment_dupixent\";\n  \"cci_metastatic_cancer\" -> \"biologic_switch_180d_flag\";\n  \"elx_cardiac_arrhythmia\" -> \"treatment_dupixent\";\n  \"elx_cardiac_arrhythmia\" -> \"biologic_switch_180d_flag\";\n  \"elx_valvular_disease\" -> \"treatment_dupixent\";\n  \"elx_valvular_disease\" -> \"biologic_switch_180d_flag\";\n  \"elx_pulmonary_circulation\" -> \"treatment_dupixent\";\n  \"elx_pulmonary_circulation\" -> \"biologic_switch_180d_flag\";\n  \"elx_hypertension_uncomplicated\" -> \"treatment_dupixent\";\n  \"elx_hypertension_uncomplicated\" -> \"biologic_switch_180d_flag\";\n  \"elx_hypertension_complicated\" -> \"treatment_dupixent\";\n  \"elx_hypertension_complicated\" -> \"biologic_switch_180d_flag\";\n  \"elx_other_neurological\" -> \"treatment_dupixent\";\n  \"elx_other_neurological\" -> \"biologic_switch_180d_flag\";\n  \"elx_hypothyroidism\" -> \"treatment_dupixent\";\n  \"elx_hypothyroidism\" -> \"biologic_switch_180d_flag\";\n  \"elx_renal_failure\" -> \"treatment_dupixent\";\n  \"elx_renal_failure\" -> \"biologic_switch_180d_flag\";\n  \"elx_liver_disease\" -> \"treatment_dupixent\";\n  \"elx_liver_disease\" -> \"biologic_switch_180d_flag\";\n  \"elx_lymphoma\" -> \"treatment_dupixent\";\n  \"elx_lymphoma\" -> \"biologic_switch_180d_flag\";\n  \"elx_solid_tumor_no_metastasis\" -> \"treatment_dupixent\";\n  \"elx_solid_tumor_no_metastasis\" -> \"biologic_switch_180d_flag\";\n  \"elx_coagulopathy\" -> \"treatment_dupixent\";\n  \"elx_coagulopathy\" -> \"biologic_switch_180d_flag\";\n  \"elx_obesity\" -> \"treatment_dupixent\";\n  \"elx_obesity\" -> \"biologic_switch_180d_flag\";\n  \"elx_weight_loss\" -> \"treatment_dupixent\";\n  \"elx_weight_loss\" -> \"biologic_switch_180d_flag\";\n  \"elx_fluid_electrolyte\" -> \"treatment_dupixent\";\n  \"elx_fluid_electrolyte\" -> \"biologic_switch_180d_flag\";\n  \"elx_blood_loss_anemia\" -> \"treatment_dupixent\";\n  \"elx_blood_loss_anemia\" -> \"biologic_switch_180d_flag\";\n  \"elx_deficiency_anemia\" -> \"treatment_dupixent\";\n  \"elx_deficiency_anemia\" -> \"biologic_switch_180d_flag\";\n  \"elx_alcohol_abuse\" -> \"treatment_dupixent\";\n  \"elx_alcohol_abuse\" -> \"biologic_switch_180d_flag\";\n  \"elx_drug_abuse\" -> \"treatment_dupixent\";\n  \"elx_drug_abuse\" -> \"biologic_switch_180d_flag\";\n  \"elx_psychoses\" -> \"treatment_dupixent\";\n  \"elx_psychoses\" -> \"biologic_switch_180d_flag\";\n  \"gdr_cd=M\" -> \"treatment_dupixent\";\n  \"gdr_cd=M\" -> \"biologic_switch_180d_flag\";\n  \"payer_category=medicare\" -> \"treatment_dupixent\";\n  \"payer_category=medicare\" -> \"biologic_switch_180d_flag\";\n  \"payer_product=HMO\" -> \"treatment_dupixent\";\n  \"payer_product=HMO\" -> \"biologic_switch_180d_flag\";\n  \"payer_product=IND\" -> \"treatment_dupixent\";\n  \"payer_product=IND\" -> \"biologic_switch_180d_flag\";\n  \"payer_product=OTH\" -> \"treatment_dupixent\";\n  \"payer_product=OTH\" -> \"biologic_switch_180d_flag\";\n  \"payer_product=POS\" -> \"treatment_dupixent\";\n  \"payer_product=POS\" -> \"biologic_switch_180d_flag\";\n  \"payer_product=PPO\" -> \"treatment_dupixent\";\n  \"payer_product=PPO\" -> \"biologic_switch_180d_flag\";\n  \"geographic_region=northeast\" -> \"treatment_dupixent\";\n  \"geographic_region=northeast\" -> \"biologic_switch_180d_flag\";\n  \"geographic_region=south\" -> \"treatment_dupixent\";\n  \"geographic_region=south\" -> \"biologic_switch_180d_flag\";\n  \"geographic_region=west\" -> \"treatment_dupixent\";\n  \"geographic_region=west\" -> \"biologic_switch_180d_flag\";\n  \"geographic_region=__missing__\" -> \"treatment_dupixent\";\n  \"geographic_region=__missing__\" -> \"biologic_switch_180d_flag\";\n  \"charlson_risk_band=1 to 2\" -> \"treatment_dupixent\";\n  \"charlson_risk_band=1 to 2\" -> \"biologic_switch_180d_flag\";\n  \"charlson_risk_band=3 to 4\" -> \"treatment_dupixent\";\n  \"charlson_risk_band=3 to 4\" -> \"biologic_switch_180d_flag\";\n  \"elixhauser_risk_band=1 to 5\" -> \"treatment_dupixent\";\n  \"elixhauser_risk_band=1 to 5\" -> \"biologic_switch_180d_flag\";\n  \"elixhauser_risk_band=10 plus\" -> \"treatment_dupixent\";\n  \"elixhauser_risk_band=10 plus\" -> \"biologic_switch_180d_flag\";\n  \"elixhauser_risk_band=6 to 10\" -> \"treatment_dupixent\";\n  \"elixhauser_risk_band=6 to 10\" -> \"biologic_switch_180d_flag\";\n}",
+    "edge_provenance": [
+      {
+        "source": "treatment_dupixent",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "age_at_index",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "age_at_index",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "health_exchange_flag",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "health_exchange_flag",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "lis_dual_flag",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "lis_dual_flag",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "enrollment_duration_days",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "enrollment_duration_days",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "charlson_score",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "charlson_score",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "elixhauser_van_walraven_score",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "elixhauser_van_walraven_score",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "comorbidity_diag_distinct_count",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "comorbidity_diag_distinct_count",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "comorbidity_diag_claim_count",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "comorbidity_diag_claim_count",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "high_comorbidity_burden_flag",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "high_comorbidity_burden_flag",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_mi",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_mi",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_chf",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_chf",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_pvd",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_pvd",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_cerebrovascular",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_cerebrovascular",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_dementia",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_dementia",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_chronic_pulmonary",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_chronic_pulmonary",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_rheumatic",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_rheumatic",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_peptic_ulcer",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_peptic_ulcer",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_mild_liver",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_mild_liver",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_diabetes_no_complication",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_diabetes_no_complication",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_diabetes_complication",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_diabetes_complication",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_paraplegia",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_paraplegia",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_renal",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_renal",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_malignancy",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_malignancy",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_severe_liver",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_severe_liver",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_metastatic_cancer",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "cci_metastatic_cancer",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_cardiac_arrhythmia",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_cardiac_arrhythmia",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_valvular_disease",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_valvular_disease",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_pulmonary_circulation",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_pulmonary_circulation",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_hypertension_uncomplicated",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_hypertension_uncomplicated",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_hypertension_complicated",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_hypertension_complicated",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_other_neurological",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_other_neurological",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_hypothyroidism",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_hypothyroidism",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_renal_failure",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_renal_failure",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_liver_disease",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_liver_disease",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_lymphoma",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_lymphoma",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_solid_tumor_no_metastasis",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_solid_tumor_no_metastasis",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_coagulopathy",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_coagulopathy",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_obesity",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_obesity",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_weight_loss",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_weight_loss",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_fluid_electrolyte",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_fluid_electrolyte",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_blood_loss_anemia",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_blood_loss_anemia",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_deficiency_anemia",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_deficiency_anemia",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_alcohol_abuse",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_alcohol_abuse",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_drug_abuse",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_drug_abuse",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_psychoses",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "elx_psychoses",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "gdr_cd=M",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "gdr_cd=M",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "payer_category=medicare",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "payer_category=medicare",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "payer_product=HMO",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "payer_product=HMO",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "payer_product=IND",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "payer_product=IND",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "payer_product=OTH",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "payer_product=OTH",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "payer_product=POS",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "payer_product=POS",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "payer_product=PPO",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "payer_product=PPO",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "geographic_region=northeast",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "geographic_region=northeast",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "geographic_region=south",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "geographic_region=south",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "geographic_region=west",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "geographic_region=west",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "geographic_region=__missing__",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "geographic_region=__missing__",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "charlson_risk_band=1 to 2",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "charlson_risk_band=1 to 2",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "charlson_risk_band=3 to 4",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "charlson_risk_band=3 to 4",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "elixhauser_risk_band=1 to 5",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "elixhauser_risk_band=1 to 5",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "elixhauser_risk_band=10 plus",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "elixhauser_risk_band=10 plus",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      },
+      {
+        "source": "elixhauser_risk_band=6 to 10",
+        "target": "treatment_dupixent",
+        "provenance": "curated"
+      },
+      {
+        "source": "elixhauser_risk_band=6 to 10",
+        "target": "biologic_switch_180d_flag",
+        "provenance": "curated"
+      }
+    ]
+  },
+  "dag_source": "domain_knowledge",
+  "discovered_confounders": [],
+  "discovered_dag_id": null,
+  "ate": 0.003371352280564244,
+  "ate_ci_lower": -0.0011914841896934147,
+  "ate_ci_upper": 0.007934188750821901,
+  "standard_error": 0.0023280205688720455,
+  "p_value": 0.1475715862518212,
+  "statistical_significance": false,
+  "naive_ate": 0.0027524665965941286,
+  "naive_ate_ci_lower": -0.0010572823955560242,
+  "naive_ate_ci_upper": 0.006562215588744281,
+  "confounding_bias_removed": -0.0006188856839701154,
+  "adjustment_type": "confounding",
+  "baseline_covariates": [],
+  "selected_estimator": "LinearDML",
+  "estimator_comparison": {
+    "candidates": [
+      {
+        "estimator": "causal_forest",
+        "success": true,
+        "skipped": false,
+        "energy_score": 0.6757136653762037,
+        "ate": 0.0023650511296916974,
+        "error": null,
+        "is_selected": false
+      },
+      {
+        "estimator": "linear_dml",
+        "success": true,
+        "skipped": false,
+        "energy_score": 0.6762395883414121,
+        "ate": 0.003371352280564244,
+        "error": null,
+        "is_selected": true
+      },
+      {
+        "estimator": "drlearner",
+        "success": true,
+        "skipped": false,
+        "energy_score": 0.6765532450150433,
+        "ate": 0.0044022313103629085,
+        "error": null,
+        "is_selected": false
+      },
+      {
+        "estimator": "ols",
+        "success": true,
+        "skipped": false,
+        "energy_score": 0.6768115471079212,
+        "ate": 0.002465356944944262,
+        "error": null,
+        "is_selected": false
+      }
+    ],
+    "selection_reason": "Lowest energy score among: causal_forest=0.6757, linear_dml=0.6762, drlearner=0.6766, ols=0.6768 Tournament ranked on a deterministic stratified subsample of 5,000/15,209 rows; the reported ATE/CI come from the winner refit on the full frame.",
+    "energy_score_gap": 0.0005259229652083697,
+    "n_evaluated": 4,
+    "n_succeeded": 4,
+    "quality_tier": "poor",
+    "requires_review": false
+  },
+  "confidence": null,
+  "refutation": {
+    "gate_decision": "proceed",
+    "passed": true,
+    "needs_review": false,
+    "expert_review_id": null,
+    "expert_review_decision": null,
+    "review_caveat": null,
+    "tests_passed": 4,
+    "tests_total": 5,
+    "sensitivity_e_value": 2.037707425843251,
+    "tests": [
+      {
+        "test_name": "unobserved_common_cause",
+        "passed": false,
+        "status": "warning",
+        "original_effect": 0.003371352280564244,
+        "new_effect": 0.003371352280564244,
+        "p_value": null,
+        "details": "The 95 % CI [-0.001, 0.008] includes zero at n = 15209. The estimate is reported as a null finding; no unmeasured confounder is needed to explain it."
+      },
+      {
+        "test_name": "placebo_treatment",
+        "passed": true,
+        "status": "passed",
+        "original_effect": 0.003371352280564244,
+        "new_effect": 0.00019018163646087512,
+        "p_value": 0.4758947727797633,
+        "details": "Placebo treatment shows no significant effect (as expected)"
+      },
+      {
+        "test_name": "random_common_cause",
+        "passed": true,
+        "status": "passed",
+        "original_effect": 0.003371352280564244,
+        "new_effect": 0.003120247532930478,
+        "p_value": 0.06334369112905924,
+        "details": "Effect remains stable when adding a random common cause: shift 0.06 SE of the reported interval (PASSED at <= 1 SE; reference SE scaled x1.74 from the reported interval on 15209 rows to the 5000-row refit frame)"
+      },
+      {
+        "test_name": "data_subset",
+        "passed": true,
+        "status": "passed",
+        "original_effect": 0.003371352280564244,
+        "new_effect": 0.001963357055269945,
+        "p_value": 0.38657126511273443,
+        "details": "Effect consistent across 80% of data subsets"
+      },
+      {
+        "test_name": "bootstrap",
+        "passed": true,
+        "status": "passed",
+        "original_effect": 0.003371352280564244,
+        "new_effect": 0.003666514406100068,
+        "p_value": 0.41986631121488777,
+        "details": "Effect stable across 20 bootstrap samples"
+      }
+    ]
+  },
+  "narrative": "The causal analysis using LinearDML estimates an average treatment effect (ATE) of 0.00 (95% CI: [-0.00, 0.01]). This effect is classified as small and is not statistically significant. The effect passed 4 out of 5 robustness tests, indicating the finding is likely genuine and not spurious. No detectable effect at this sample size. The 95 % CI [-0.001, 0.008] includes zero at n = 15209. The estimate is reported as a null finding; no unmeasured confounder is needed to explain it. Because the treatment dupixent \u2192 biologic switch 180d flag effect is not yet significant and/or robust, hold off on acting on it: enlarge the cohort or extend the window to gain power, and re-run with an alternative adjustment set and a placebo outcome before making a strategic call.",
+  "executive_summary": "The estimated effect is 0.003 (small), but it is not statistically significant (4/5 robustness checks passed). Treat this as preliminary; overall confidence: low.",
+  "recommendations": [
+    "Do not act on treatment dupixent \u2192 biologic switch 180d flag for this brand yet: the effect is not yet distinguishable from zero and/or did not clear the robustness gate \u2014 treating it as real risks spending against noise.",
+    "Increase statistical power: enlarge the this brand cohort or extend the observation window, then re-estimate treatment dupixent \u2192 biologic switch 180d flag before making a call.",
+    "Pressure-test the design: re-run with an alternative adjustment set and a placebo outcome; a genuine treatment dupixent \u2192 biologic switch 180d flag effect should survive, a spurious one will not."
+  ],
+  "key_insights": [
+    "Estimated causal effect: 0.00 (small)",
+    "Statistical significance: No",
+    "Robustness tests: 4/5 passed",
+    "E-value: 2.04 \u2014 No detectable effect at this sample size"
+  ],
+  "warnings": [
+    "No detectable effect at this sample size: The 95 % CI [-0.001, 0.008] includes zero at n = 15209. The estimate is reported as a null finding; no unmeasured confounder is needed to explain it."
+  ],
+  "latency_ms": 185103,
+  "_preflight": {
+    "wall_s": 185.3,
+    "n_rows": 15209,
+    "n_covariates_resolved": 61,
+    "max_rss_mb": 1041.0,
+    "estimator_forced": null,
+    "auto_discover": false
+  }
+}

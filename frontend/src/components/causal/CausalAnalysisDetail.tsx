@@ -25,6 +25,7 @@ import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/EmptyState';
 import type {
   AgentCausalAnalysisResponse,
+  EstimatorCandidate,
   EstimatorComparison,
   RefutationTestDetail,
 } from '@/types/causal';
@@ -103,14 +104,20 @@ function EstimatorComparisonPanel({
   /** #1188: RCT variance-reduction run — OLS is the unbiased anchor. */
   efficiency?: boolean;
 }) {
-  // Rank fit estimators by energy score; sink skipped/failed ones to the bottom
-  // (a skipped estimator has no score and is not-applicable, not a loser).
+  // Rank by the TOURNAMENT score (immutable ranking metadata: a winner whose
+  // served refit was refused keeps its rank), falling back to the served
+  // score; sink skipped/unscored ones to the bottom (a skipped estimator has
+  // no score and is not-applicable, not a loser).
+  const rankScore = (c: EstimatorCandidate): number | null =>
+    c.tournament_energy_score ?? c.energy_score ?? null;
   const ranked = [...comparison.candidates].sort((a, b) => {
     if (a.skipped && !b.skipped) return 1;
     if (b.skipped && !a.skipped) return -1;
-    if (a.energy_score == null) return 1;
-    if (b.energy_score == null) return -1;
-    return a.energy_score - b.energy_score;
+    const sa = rankScore(a);
+    const sb = rankScore(b);
+    if (sa == null) return 1;
+    if (sb == null) return -1;
+    return sa - sb;
   });
   const nSkipped = comparison.candidates.filter((c) => c.skipped).length;
   const nApplicable = comparison.candidates.length - nSkipped;
@@ -161,14 +168,16 @@ function EstimatorComparisonPanel({
                     </Badge>
                   )}
                 </td>
-                <td className="p-2">{c.energy_score != null ? c.energy_score.toFixed(4) : '—'}</td>
+                <td className="p-2">{rankScore(c) != null ? rankScore(c)!.toFixed(4) : '—'}</td>
                 <td className="p-2">{c.ate != null ? c.ate.toFixed(4) : '—'}</td>
                 <td className="p-2 text-xs text-muted-foreground">
                   {c.success
                     ? 'fit'
                     : c.skipped
                       ? (c.error ?? 'not applicable to this design')
-                      : `failed${c.error ? `: ${c.error}` : ''}`}
+                      : c.served_refit === false
+                        ? `served refit refused${c.error ? `: ${c.error}` : ''}`
+                        : `failed${c.error ? `: ${c.error}` : ''}`}
                 </td>
               </tr>
             ))}

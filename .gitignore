@@ -254,6 +254,10 @@ data/kg_cache/*.json
 # with scripts/build_kg_cache.py --live (see docs/runbooks/kg_cache.md);
 # ad-hoc builds under other fingerprints stay ignored by the rule above.
 !data/kg_cache/1cdaa038__96bfd2e0.json
+# Lane E (2026-09-22): the causal cohorts' caches (optum_mart, csu) built against
+# the dupilumab/omalizumab contrast; KG_ACTIVATIONS names both.
+!data/kg_cache/0b4c5fdb__214e5b23.json
+!data/kg_cache/2e1be83e__214e5b23.json
 .codex
 
 # Layer-4 A/B compile intermediates (only the winning artifact is committed

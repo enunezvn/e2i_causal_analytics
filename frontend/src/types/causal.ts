@@ -300,6 +300,12 @@ export interface EstimatorCandidate {
   skipped?: boolean;
   /** Energy score — LOWER is better; null if the fit failed. */
   energy_score?: number | null;
+  /** Tournament ranking score whenever this candidate was scored — kept even
+   * when its served full-frame refit was refused (LOWER is better). */
+  tournament_energy_score?: number | null;
+  /** Served full-frame refit after a subsampled tournament: true succeeded,
+   * false refused; null/undefined when no separate served refit happened. */
+  served_refit?: boolean | null;
   ate?: number | null;
   error?: string | null;
   is_selected: boolean;

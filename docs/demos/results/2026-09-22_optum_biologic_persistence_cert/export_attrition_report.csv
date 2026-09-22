@@ -1,0 +1,10 @@
+step,count
+patient_panel,814587
+input_patients,24429
+initiators,24429
+quality_filter,22601
+followup_observable,15209
+coverage_end_observable,15209
+two_arm_contrast,15209
+target_positives,11206
+arm_dupixent,4200

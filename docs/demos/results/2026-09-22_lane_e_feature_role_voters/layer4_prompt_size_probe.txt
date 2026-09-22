@@ -1,0 +1,4 @@
+captured_at_utc 2026-09-22T11:36:18.406445+00:00
+verdict LLMVerdict(causal_role='confounder', mechanism='m', recommended_remediation='keep_with_caveat', cited_pmids=(), evaluator_audit=None)
+n_messages 386 prompt_chars 273047 approx_tokens_at_4chars 68261
+n_demos_on_predictor [192]

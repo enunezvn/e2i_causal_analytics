@@ -132,6 +132,7 @@ HPO_OPTIONAL_FIELDS = {
     "hpo_study_name": (str, type(None)),
     "hpo_metric": (str, type(None)),
     "hpo_pattern_id": (str, type(None)),  # Procedural memory pattern ID
+    "hpo_study_id": (str, type(None)),  # #2207: ml_hpo_studies row id
     # Issue #868: final-fit degeneracy guard decision metadata.
     "hpo_degeneracy_guard": (dict, type(None)),
 }
@@ -1021,6 +1022,32 @@ async def tune_hyperparameters(state: Dict[str, Any]) -> Dict[str, Any]:
                     )
             except Exception as e:
                 logger.debug(f"Pattern storage failed (non-critical): {e}")
+
+        # #2207: persist the study + every trial (ml_hpo_studies / ml_hpo_trials).
+        # This is the live HPO path — the writer existed since 356b57963 with no
+        # caller, so the tables sat at 0 rows next to 943 ml_hpo_patterns. Side
+        # channel: a persistence failure never fails HPO.
+        try:
+            saved = await optimizer.save_to_database(
+                study=study,
+                optimization_results=results,
+                algorithm_name=algorithm_name,
+                problem_type=problem_type,
+                metric=metric,
+                search_space=hyperparameter_search_space,
+            )
+            if saved.get("success") and saved.get("study_id"):
+                hpo_output["hpo_study_id"] = str(saved["study_id"])
+                logger.info(
+                    f"Persisted HPO study {results['study_name']} "
+                    f"({saved.get('trials_saved', 0)} trials) as {saved['study_id']}"
+                )
+            else:
+                logger.warning(
+                    f"HPO study {results['study_name']} not persisted: {saved.get('error')}"
+                )
+        except Exception as e:  # noqa: BLE001 — persistence is a side channel
+            logger.warning(f"HPO study persistence failed (non-critical): {e}")
 
         return hpo_output
 

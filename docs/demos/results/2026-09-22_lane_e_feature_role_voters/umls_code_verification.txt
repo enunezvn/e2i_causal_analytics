@@ -1,0 +1,102 @@
+captured_at_utc 2026-09-22T11:38:19.208531+00:00
+cci_mi                             ICD10CM:I21.9    -> cui=C0155626 name='Acute myocardial infarction' confidence=1.0
+cci_mi                             UMLS:C0027051 -> cui=C0027051 name='Myocardial Infarction' semtypes=('Disease or Syndrome',)
+cci_chf                            ICD10CM:I50.9    -> cui=C0018802 name='Congestive heart failure' confidence=1.0
+cci_chf                            UMLS:C0018802 -> cui=C0018802 name='Congestive heart failure' semtypes=('Disease or Syndrome',)
+cci_pvd                            ICD10CM:I73.9    -> cui=C0085096 name='Peripheral Vascular Diseases' confidence=1.0
+cci_pvd                            UMLS:C0085096 -> cui=C0085096 name='Peripheral Vascular Diseases' semtypes=('Disease or Syndrome',)
+cci_cerebrovascular                ICD10CM:I67.9    -> cui=C0007820 name='Cerebrovascular Disorders' confidence=1.0
+cci_cerebrovascular                UMLS:C0007820 -> cui=C0007820 name='Cerebrovascular Disorders' semtypes=('Disease or Syndrome',)
+cci_dementia                       ICD10CM:F03.90   -> cui=C5674962 name='Unspecified dementia, unspecified severity, without behavioral disturbance, psychotic disturbance, mood disturbance, and anxiety' confidence=1.0
+cci_dementia                       UMLS:C0497327 -> cui=C0497327 name='Dementia' semtypes=('Mental or Behavioral Dysfunction',)
+cci_chronic_pulmonary              ICD10CM:J44.9    -> cui=C0024117 name='Chronic Obstructive Airway Disease' confidence=1.0
+cci_chronic_pulmonary              UMLS:C0024117 -> cui=C0024117 name='Chronic Obstructive Airway Disease' semtypes=('Disease or Syndrome',)
+cci_chronic_pulmonary              ICD10CM:J45.909  -> cui=C0004096 name='Asthma' confidence=1.0
+cci_chronic_pulmonary              UMLS:C0004096 -> cui=C0004096 name='Asthma' semtypes=('Disease or Syndrome',)
+cci_rheumatic                      ICD10CM:M06.9    -> cui=C0003873 name='Rheumatoid Arthritis' confidence=1.0
+cci_rheumatic                      UMLS:C0003873 -> cui=C0003873 name='Rheumatoid Arthritis' semtypes=('Disease or Syndrome',)
+cci_peptic_ulcer                   ICD10CM:K27.9    -> cui=C2887651 name='Peptic Ulcer, Site Unspecified, Unspecified as Acute or Chronic, without Hemorrhage or Perforation' confidence=1.0
+cci_peptic_ulcer                   UMLS:C0030920 -> cui=C0030920 name='Peptic Ulcer' semtypes=('Disease or Syndrome',)
+cci_mild_liver                     ICD10CM:K76.9    -> cui=C0023895 name='Liver diseases' confidence=1.0
+cci_mild_liver                     UMLS:C0023895 -> cui=C0023895 name='Liver diseases' semtypes=('Disease or Syndrome',)
+cci_diabetes_no_complication       ICD10CM:E11.9    -> cui=C0494290 name='Non-insulin-dependent diabetes mellitus without complications' confidence=1.0
+cci_diabetes_no_complication       UMLS:C0011849 -> cui=C0011849 name='Diabetes Mellitus' semtypes=('Disease or Syndrome',)
+cci_diabetes_complication          ICD10CM:E11.8    -> cui=C1299614 name='Non-insulin-dependent diabetes mellitus with unspecified complications' confidence=1.0
+cci_diabetes_complication          UMLS:C0011849 -> (dup) cui=C0011849 name='Diabetes Mellitus' semtypes=('Disease or Syndrome',)
+cci_paraplegia                     ICD10CM:G82.20   -> cui=C0030486 name='Paraplegia' confidence=1.0
+cci_paraplegia                     UMLS:C0030486 -> cui=C0030486 name='Paraplegia' semtypes=('Disease or Syndrome',)
+cci_renal                          ICD10CM:N18.9    -> cui=C1561643 name='Chronic Kidney Diseases' confidence=1.0
+cci_renal                          UMLS:C0022661 -> cui=C0022661 name='Kidney Failure, Chronic' semtypes=('Disease or Syndrome',)
+cci_malignancy                     ICD10CM:C80.1    -> cui=C0006826 name='Malignant Neoplasms' confidence=1.0
+cci_malignancy                     UMLS:C0006826 -> cui=C0006826 name='Malignant Neoplasms' semtypes=('Neoplastic Process',)
+cci_severe_liver                   ICD10CM:K74.60   -> cui=C0023890 name='Liver Cirrhosis' confidence=1.0
+cci_severe_liver                   UMLS:C0023890 -> cui=C0023890 name='Liver Cirrhosis' semtypes=('Disease or Syndrome',)
+cci_metastatic_cancer              ICD10CM:C79.9    -> cui=C2939419 name='Metastatic malignant neoplasm' confidence=1.0
+cci_metastatic_cancer              UMLS:C0027627 -> cui=C0027627 name='Neoplasm Metastasis' semtypes=('Neoplastic Process',)
+cci_hiv                            ICD10CM:B20      -> cui=C0001857 name='AIDS related complex' confidence=1.0
+cci_hiv                            UMLS:C0019693 -> cui=C0019693 name='HIV Infections' semtypes=('Disease or Syndrome',)
+elx_chf                            ICD10CM:I50.9    -> (dup) cui=C0018802 name='Congestive heart failure' confidence=1.0
+elx_chf                            UMLS:C0018802 -> (dup) cui=C0018802 name='Congestive heart failure' semtypes=('Disease or Syndrome',)
+elx_cardiac_arrhythmia             ICD10CM:I49.9    -> cui=C0003811 name='Cardiac Arrhythmia' confidence=1.0
+elx_cardiac_arrhythmia             UMLS:C0003811 -> cui=C0003811 name='Cardiac Arrhythmia' semtypes=('Disease or Syndrome',)
+elx_valvular_disease               ICD10CM:I38      -> cui=C0042300 name='Valvular regurgitation' confidence=1.0
+elx_valvular_disease               UMLS:C0018824 -> cui=C0018824 name='Heart valve disease' semtypes=('Disease or Syndrome',)
+elx_pulmonary_circulation          ICD10CM:I27.20   -> cui=C0020542 name='Pulmonary Hypertension' confidence=1.0
+elx_pulmonary_circulation          UMLS:C0020542 -> cui=C0020542 name='Pulmonary Hypertension' semtypes=('Disease or Syndrome',)
+elx_pvd                            ICD10CM:I73.9    -> (dup) cui=C0085096 name='Peripheral Vascular Diseases' confidence=1.0
+elx_pvd                            UMLS:C0085096 -> (dup) cui=C0085096 name='Peripheral Vascular Diseases' semtypes=('Disease or Syndrome',)
+elx_hypertension_uncomplicated     ICD10CM:I10      -> cui=C0085580 name='Essential Hypertension' confidence=1.0
+elx_hypertension_uncomplicated     UMLS:C0020538 -> cui=C0020538 name='Hypertensive disease' semtypes=('Disease or Syndrome',)
+elx_hypertension_complicated       ICD10CM:I11.9    -> cui=C0152105 name='Hypertensive heart disease' confidence=1.0
+elx_hypertension_complicated       UMLS:C0020538 -> (dup) cui=C0020538 name='Hypertensive disease' semtypes=('Disease or Syndrome',)
+elx_paralysis                      ICD10CM:G83.9    -> cui=C0270788 name='Paralytic syndrome' confidence=1.0
+elx_paralysis                      UMLS:C0522224 -> cui=C0522224 name='Paralysed' semtypes=('Finding',)
+elx_other_neurological             ICD10CM:G96.9    -> cui=C0007682 name='CNS disorder' confidence=1.0
+elx_other_neurological             UMLS:C0027765 -> cui=C0027765 name='nervous system disorder' semtypes=('Disease or Syndrome',)
+elx_chronic_pulmonary              ICD10CM:J44.9    -> (dup) cui=C0024117 name='Chronic Obstructive Airway Disease' confidence=1.0
+elx_chronic_pulmonary              UMLS:C0024117 -> (dup) cui=C0024117 name='Chronic Obstructive Airway Disease' semtypes=('Disease or Syndrome',)
+elx_chronic_pulmonary              ICD10CM:J45.909  -> (dup) cui=C0004096 name='Asthma' confidence=1.0
+elx_chronic_pulmonary              UMLS:C0004096 -> (dup) cui=C0004096 name='Asthma' semtypes=('Disease or Syndrome',)
+elx_diabetes_uncomplicated         ICD10CM:E11.9    -> (dup) cui=C0494290 name='Non-insulin-dependent diabetes mellitus without complications' confidence=1.0
+elx_diabetes_uncomplicated         UMLS:C0011849 -> (dup) cui=C0011849 name='Diabetes Mellitus' semtypes=('Disease or Syndrome',)
+elx_diabetes_complicated           ICD10CM:E11.8    -> (dup) cui=C1299614 name='Non-insulin-dependent diabetes mellitus with unspecified complications' confidence=1.0
+elx_diabetes_complicated           UMLS:C0011849 -> (dup) cui=C0011849 name='Diabetes Mellitus' semtypes=('Disease or Syndrome',)
+elx_hypothyroidism                 ICD10CM:E03.9    -> cui=C0027145 name='Myxedema' confidence=1.0
+elx_hypothyroidism                 UMLS:C0020676 -> cui=C0020676 name='Hypothyroidism' semtypes=('Disease or Syndrome',)
+elx_renal_failure                  ICD10CM:N18.9    -> (dup) cui=C1561643 name='Chronic Kidney Diseases' confidence=1.0
+elx_renal_failure                  UMLS:C0022661 -> (dup) cui=C0022661 name='Kidney Failure, Chronic' semtypes=('Disease or Syndrome',)
+elx_liver_disease                  ICD10CM:K76.9    -> (dup) cui=C0023895 name='Liver diseases' confidence=1.0
+elx_liver_disease                  UMLS:C0023895 -> (dup) cui=C0023895 name='Liver diseases' semtypes=('Disease or Syndrome',)
+elx_peptic_ulcer                   ICD10CM:K27.9    -> (dup) cui=C2887651 name='Peptic Ulcer, Site Unspecified, Unspecified as Acute or Chronic, without Hemorrhage or Perforation' confidence=1.0
+elx_peptic_ulcer                   UMLS:C0030920 -> (dup) cui=C0030920 name='Peptic Ulcer' semtypes=('Disease or Syndrome',)
+elx_aids_hiv                       ICD10CM:B20      -> (dup) cui=C0001857 name='AIDS related complex' confidence=1.0
+elx_aids_hiv                       UMLS:C0019693 -> (dup) cui=C0019693 name='HIV Infections' semtypes=('Disease or Syndrome',)
+elx_lymphoma                       ICD10CM:C85.90   -> cui=C2854054 name='Non-Hodgkin lymphoma, unspecified, unspecified site' confidence=1.0
+elx_lymphoma                       UMLS:C0024299 -> cui=C0024299 name='Lymphoma' semtypes=('Neoplastic Process',)
+elx_metastatic_cancer              ICD10CM:C79.9    -> (dup) cui=C2939419 name='Metastatic malignant neoplasm' confidence=1.0
+elx_metastatic_cancer              UMLS:C0027627 -> (dup) cui=C0027627 name='Neoplasm Metastasis' semtypes=('Neoplastic Process',)
+elx_solid_tumor_no_metastasis      ICD10CM:C80.1    -> (dup) cui=C0006826 name='Malignant Neoplasms' confidence=1.0
+elx_solid_tumor_no_metastasis      UMLS:C0006826 -> (dup) cui=C0006826 name='Malignant Neoplasms' semtypes=('Neoplastic Process',)
+elx_rheumatoid_collagen            ICD10CM:M06.9    -> (dup) cui=C0003873 name='Rheumatoid Arthritis' confidence=1.0
+elx_rheumatoid_collagen            UMLS:C0003873 -> (dup) cui=C0003873 name='Rheumatoid Arthritis' semtypes=('Disease or Syndrome',)
+elx_coagulopathy                   ICD10CM:D68.9    -> cui=C0005779 name='Blood Coagulation Disorders' confidence=1.0
+elx_coagulopathy                   UMLS:C0005779 -> cui=C0005779 name='Blood Coagulation Disorders' semtypes=('Disease or Syndrome',)
+elx_obesity                        ICD10CM:E66.9    -> cui=C0028754 name='Obesity' confidence=1.0
+elx_obesity                        UMLS:C0028754 -> cui=C0028754 name='Obesity' semtypes=('Disease or Syndrome',)
+elx_weight_loss                    ICD10CM:R63.4    -> cui=C0936227 name='Abnormal weight loss (finding)' confidence=1.0
+elx_weight_loss                    UMLS:C1262477 -> cui=C1262477 name='Weight Loss' semtypes=('Finding',)
+elx_fluid_electrolyte              ICD10CM:E87.8    -> cui=C0869048 name='Other disorders of electrolyte and fluid balance, not elsewhere classified' confidence=1.0
+elx_fluid_electrolyte              UMLS:C0042990 -> RAISED UMLSNotFoundError: UTS 404: /content/current/CUI/C0042990
+elx_blood_loss_anemia              ICD10CM:D50.0    -> cui=C0154286 name='Iron deficiency anemia secondary to chronic blood loss' confidence=1.0
+elx_blood_loss_anemia              UMLS:C0002871 -> cui=C0002871 name='Anemia' semtypes=('Disease or Syndrome',)
+elx_deficiency_anemia              ICD10CM:D50.9    -> cui=C0162316 name='Iron deficiency anemia' confidence=1.0
+elx_deficiency_anemia              UMLS:C0162316 -> cui=C0162316 name='Iron deficiency anemia' semtypes=('Disease or Syndrome',)
+elx_alcohol_abuse                  ICD10CM:F10.10   -> cui=C2874370 name='alcohol abuse - uncomplicated' confidence=1.0
+elx_alcohol_abuse                  UMLS:C0001973 -> cui=C0001973 name='Alcoholic Intoxication, Chronic' semtypes=('Mental or Behavioral Dysfunction',)
+elx_drug_abuse                     ICD10CM:F19.10   -> cui=C2874790 name='Other Psychoactive Substance Abuse, Uncomplicated' confidence=1.0
+elx_drug_abuse                     UMLS:C0038586 -> cui=C0038586 name='Substance Use Disorders' semtypes=('Mental or Behavioral Dysfunction',)
+elx_psychoses                      ICD10CM:F29      -> cui=C0349204 name='Nonorganic psychosis' confidence=1.0
+elx_psychoses                      UMLS:C0033975 -> cui=C0033975 name='Psychotic Disorders' semtypes=('Mental or Behavioral Dysfunction',)
+elx_depression                     ICD10CM:F33.9    -> cui=C0011570 name='Mental Depression' confidence=1.0
+elx_depression                     UMLS:C0011581 -> cui=C0011581 name='Depressive disorder' semtypes=('Mental or Behavioral Dysfunction',)
+unresolved_or_raised 1

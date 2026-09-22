@@ -24,6 +24,7 @@ Usage:
 import argparse
 import asyncio
 import logging
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -34,6 +35,8 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.feature_store.feast_client import FeastClient, FeastConfig, get_feast_client
+from src.feature_store.feast_remote_materialize import INIT_FAILURE_ERROR
+from src.feature_store.feast_views import FEAST_ONLINE_FEATURE_VIEWS
 
 # Configure logging
 logging.basicConfig(
@@ -58,7 +61,11 @@ class MaterializationJob:
             config: Feast configuration. Uses defaults if None.
         """
         self.feast_client = feast_client
-        self.config = config or FeastConfig()
+        # #2207: no explicit config -> the same default get_feast_client() applies, so
+        # FEAST_URL (the e2i_feast sidecar, #532) puts the client in REMOTE mode on the
+        # app/worker image. A bare FeastConfig() forced embedded mode there, which needs
+        # `import feast` (#307) and failed every scheduled run (measured 2026-09-22).
+        self.config = config or FeastConfig(server_url=os.getenv("FEAST_URL"))
         self._initialized = False
 
     async def initialize(self) -> bool:
@@ -102,17 +109,13 @@ class MaterializationJob:
             Materialization result dict
         """
         if not await self.initialize():
-            return {
-                "status": "failed",
-                "error": "Failed to initialize Feast client",
-            }
+            return {"status": "failed", "error": INIT_FAILURE_ERROR, "stage": "init"}
 
         # After successful initialization, feast_client is guaranteed to be set
         assert self.feast_client is not None
 
         logger.info(
-            f"Starting full materialization: {start_date.isoformat()} to "
-            f"{end_date.isoformat()}"
+            f"Starting full materialization: {start_date.isoformat()} to {end_date.isoformat()}"
         )
         if feature_views:
             logger.info(f"Feature views: {', '.join(feature_views)}")
@@ -165,10 +168,7 @@ class MaterializationJob:
             Materialization result dict
         """
         if not await self.initialize():
-            return {
-                "status": "failed",
-                "error": "Failed to initialize Feast client",
-            }
+            return {"status": "failed", "error": INIT_FAILURE_ERROR, "stage": "init"}
 
         # After successful initialization, feast_client is guaranteed to be set
         assert self.feast_client is not None
@@ -223,10 +223,7 @@ class MaterializationJob:
             Freshness report dict
         """
         if not await self.initialize():
-            return {
-                "status": "failed",
-                "error": "Failed to initialize Feast client",
-            }
+            return {"status": "failed", "error": INIT_FAILURE_ERROR, "stage": "init"}
 
         # After successful initialization, feast_client is guaranteed to be set
         assert self.feast_client is not None
@@ -237,7 +234,9 @@ class MaterializationJob:
             # Get all feature views if not specified
             if not feature_views:
                 views = await self.feast_client.list_feature_views()
-                feature_views = [v["name"] for v in views]
+                # Remote mode has no registry to list (#2207): fall back to the ONLINE
+                # views so the check never reports "all 0 views are fresh".
+                feature_views = [v["name"] for v in views] or list(FEAST_ONLINE_FEATURE_VIEWS)
 
             stale_features = []
             fresh_features = []
@@ -256,28 +255,36 @@ class MaterializationJob:
                     if stats and stats.last_updated:
                         age_hours = (now - stats.last_updated).total_seconds() / 3600
                         if age_hours > max_staleness_hours:
-                            stale_features.append({
-                                "feature_view": fv_name,
-                                "last_updated": stats.last_updated.isoformat(),
-                                "age_hours": age_hours,
-                            })
+                            stale_features.append(
+                                {
+                                    "feature_view": fv_name,
+                                    "last_updated": stats.last_updated.isoformat(),
+                                    "age_hours": age_hours,
+                                }
+                            )
                         else:
-                            fresh_features.append({
-                                "feature_view": fv_name,
-                                "last_updated": stats.last_updated.isoformat(),
-                                "age_hours": age_hours,
-                            })
+                            fresh_features.append(
+                                {
+                                    "feature_view": fv_name,
+                                    "last_updated": stats.last_updated.isoformat(),
+                                    "age_hours": age_hours,
+                                }
+                            )
                     else:
-                        errors.append({
-                            "feature_view": fv_name,
-                            "error": "No statistics available",
-                        })
+                        errors.append(
+                            {
+                                "feature_view": fv_name,
+                                "error": "No statistics available",
+                            }
+                        )
 
                 except Exception as e:
-                    errors.append({
-                        "feature_view": fv_name,
-                        "error": str(e),
-                    })
+                    errors.append(
+                        {
+                            "feature_view": fv_name,
+                            "error": str(e),
+                        }
+                    )
 
             result = {
                 "status": "completed",
@@ -497,7 +504,7 @@ async def main():
 
         if "freshness_check" in result:
             fc = result["freshness_check"]
-            print(f"\nFreshness Check:")
+            print("\nFreshness Check:")
             print(f"  Fresh: {fc.get('fresh', 'unknown')}")
             print(f"  Stale features: {len(fc.get('stale_features', []))}")
             print(f"  Fresh features: {len(fc.get('fresh_features', []))}")

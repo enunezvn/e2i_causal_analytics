@@ -1,0 +1,7 @@
+## codex r1 (REVISE: 0 HIGH, 1 MED) — src/api/routes/causal/catalog.py propose_causal_questions indexed the frame by the RAW covariate names after the loader returned the one-hot EXPANDED names -> KeyError -> 500
+intent: commit 17d8aa0b0 (D5) threaded the expanded columns through discovery._prerank_signal + the manual path and missed this route; pre-existing on main for the DEFAULT dataset (patient_journeys offers geographic_region, a categorical), newly reachable for csu_escalation_causal (seven categoricals).
+red-first (tests/unit/test_api/test_causal_propose_categorical_covariates.py, before the fix, lane_c_pytest_fix_r1 red run 15:48Z):
+E   KeyError: "['geographic_region', 'insurance_access_score'] not in index"
+E   KeyError: "['gdr_cd', 'payer_category', 'payer_product', 'payer_bus', 'geographic_region', 'charlson_risk_band', 'elixhauser_risk_band'] not in index"
+fix: keep the loader's select_cols; cov_expanded = [c for c in select_cols if c not in (t, o)] (the discovery contract). Direct verification against the route (fake client): patient_journeys candidates == the route's own loadable pair set (9/9: treatment_arm x 5 outcomes + treatment_initiated x 4), csu_escalation_causal 4/4.
+green (lane_c_pytest_fix_r1c, 16:24Z, the new file + test_causal_propose.py + test_causal_nba_backdoor.py + test_causal_discover_effects.py + test_causal_openapi_unchanged_1991.py + test_causal_randomized_flag.py): ======================= 39 passed, 13 warnings in 39.22s =======================
