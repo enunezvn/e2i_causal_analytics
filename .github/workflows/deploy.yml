@@ -135,7 +135,9 @@ jobs:
     # Bounded so a wedged buildx / stalled GHCR push cannot hold the now-serialized
     # deploy queue (concurrency: deploy-production, cancel-in-progress: false) hostage
     # for GitHub's 360-min job default — that would block even an emergency hotfix. (#1412 review)
-    timeout-minutes: 20
+    # 25, not 20 (lane 1, 2026-09-22): the post-push in-image assertion pulls the just-pushed
+    # digest from GHCR (~1-2 min). Measured 2026-09-20..22: the build itself takes 7.4-10.3 min.
+    timeout-minutes: 25
     needs: test
     permissions:
       contents: read
