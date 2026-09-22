@@ -13,11 +13,12 @@ import pytest
 from src.services.cohort_contract import (
     REGISTRY_CONTRACT_COLUMNS,
     contract_from_registry_row,
+    contract_from_training_config,
     decode_data_source,
     encode_data_source,
+    heal_registry_cohort_contract,
     load_registry_cohort_contract,
     merge_contracts,
-    persist_registry_cohort_contract_if_missing,
 )
 from tests.unit._fakes.async_supabase import FakeAsyncSupabase
 
@@ -130,8 +131,15 @@ async def test_load_survives_a_pre_migration_schema():
 
 
 @pytest.mark.unit
+def test_contract_from_training_config_is_none_free_and_drops_non_contract_keys():
+    tc = {"data_source": "t", "target_outcome": "y", "feature_manifest_source": None, "notes": "n"}
+    assert contract_from_training_config(tc) == {"data_source": "t", "target_outcome": "y"}
+    assert contract_from_training_config(None) == {}
+
+
+@pytest.mark.unit
 @pytest.mark.asyncio
-async def test_persist_writes_only_null_columns_once():
+async def test_heal_fills_only_null_columns_and_never_overwrites():
     rid = str(uuid4())
     db = FakeAsyncSupabase(
         {
@@ -139,7 +147,7 @@ async def test_persist_writes_only_null_columns_once():
                 {
                     "id": rid,
                     "cohort_data_source": None,
-                    "cohort_target_outcome": "initiation_kisqali",  # backfilled by 150
+                    "cohort_target_outcome": "initiated_biologic_180d",
                     "cohort_feature_manifest_source": None,
                 }
             ]
@@ -147,26 +155,91 @@ async def test_persist_writes_only_null_columns_once():
     )
     contract = {
         "data_source": {"type": "file_dir", "path": "data/rwd/optum/initiation"},
-        "target_outcome": "initiated_biologic_180d",  # explicit request value
+        "target_outcome": "initiated_biologic_180d",  # consistent with the row
         "feature_manifest_source": "optum",
         "brand": "Kisqali",  # not a registry column
     }
-    written = await persist_registry_cohort_contract_if_missing(db, rid, contract)
+    written = await heal_registry_cohort_contract(db, rid, contract)
     assert written == {
         "cohort_data_source": json.dumps(contract["data_source"], sort_keys=True),
         "cohort_feature_manifest_source": "optum",
     }
     (row,) = db.rows("ml_model_registry")
-    assert row["cohort_target_outcome"] == "initiation_kisqali"  # NOT overwritten
+    assert row["cohort_target_outcome"] == "initiated_biologic_180d"
     # second call: nothing left NULL -> nothing written
-    assert await persist_registry_cohort_contract_if_missing(db, rid, contract) == {}
+    assert await heal_registry_cohort_contract(db, rid, contract) == {}
 
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_persist_is_a_noop_without_a_row_or_a_client():
-    assert await persist_registry_cohort_contract_if_missing(None, "x", {"data_source": "t"}) == {}
-    db = FakeAsyncSupabase({"ml_model_registry": []})
-    assert (
-        await persist_registry_cohort_contract_if_missing(db, "missing", {"data_source": "t"}) == {}
+async def test_heal_refuses_to_compose_a_mixed_pair_on_any_conflict():
+    """codex r1 HIGH-2: row {target=initiation_kisqali} + contract {source=patient_journeys,
+    target=treatment_initiated} must NOT become {patient_journeys, initiation_kisqali}."""
+    rid = str(uuid4())
+    db = FakeAsyncSupabase(
+        {
+            "ml_model_registry": [
+                {
+                    "id": rid,
+                    "cohort_data_source": None,
+                    "cohort_target_outcome": "initiation_kisqali",
+                    "cohort_feature_manifest_source": None,
+                }
+            ]
+        }
     )
+    written = await heal_registry_cohort_contract(
+        db, rid, {"data_source": "patient_journeys", "target_outcome": "treatment_initiated"}
+    )
+    assert written == {}
+    (row,) = db.rows("ml_model_registry")
+    assert (
+        row["cohort_data_source"] is None and row["cohort_target_outcome"] == "initiation_kisqali"
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_heal_is_a_compare_and_set_per_column():
+    """A concurrent healer that filled the column first wins; ours writes nothing."""
+    rid = str(uuid4())
+
+    class _RacingSupabase(FakeAsyncSupabase):
+        def table(self, name):
+            q = super().table(name)
+            real_execute = q.execute
+
+            async def _execute():
+                if q._op == "update":
+                    # someone else filled it between our read and our write
+                    for r in self.store["ml_model_registry"]:
+                        r["cohort_data_source"] = r["cohort_data_source"] or "theirs"
+                return await real_execute()
+
+            q.execute = _execute  # type: ignore[method-assign]
+            return q
+
+    db = _RacingSupabase(
+        {
+            "ml_model_registry": [
+                {
+                    "id": rid,
+                    "cohort_data_source": None,
+                    "cohort_target_outcome": None,
+                    "cohort_feature_manifest_source": None,
+                }
+            ]
+        }
+    )
+    written = await heal_registry_cohort_contract(db, rid, {"data_source": "ours"})
+    assert written == {}
+    (row,) = db.rows("ml_model_registry")
+    assert row["cohort_data_source"] == "theirs"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_heal_is_a_noop_without_a_row_or_a_client():
+    assert await heal_registry_cohort_contract(None, "x", {"data_source": "t"}) == {}
+    db = FakeAsyncSupabase({"ml_model_registry": []})
+    assert await heal_registry_cohort_contract(db, "missing", {"data_source": "t"}) == {}

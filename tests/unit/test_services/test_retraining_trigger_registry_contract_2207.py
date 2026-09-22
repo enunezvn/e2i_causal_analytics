@@ -3,8 +3,9 @@ is self-healing through the registry contract.
 
 - a request that omits ``data_source`` / ``target_outcome`` falls back to the registry
   row's contract (migration 150 columns); explicit request values win;
-- a complete contract (from either source) is persisted onto the registry row ONCE —
-  only the columns that are NULL;
+- the trigger NEVER writes the registry row: healing happens only when the job has
+  produced a promotable model (``execute_model_retraining`` on completion, see
+  test_retraining_execute_heals_contract_2207.py — codex r1 HIGH-2);
 - ``ml_retraining_history.model_id`` is set to the registry row's id (it was never
   written before: 0 rows carried it);
 - a request with no contract anywhere behaves exactly as today (no data_source in the
@@ -103,34 +104,23 @@ async def test_explicit_request_values_win_over_the_registry_row():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_a_complete_contract_is_persisted_onto_null_columns_once():
+async def test_the_trigger_never_writes_the_registry_row():
+    """codex r1 HIGH-2: a contract persisted at trigger time could heal wrongly (the job
+    has not run yet); healing is the completed job's business."""
     db, rid = _db(cohort_target_outcome="initiation_kisqali")  # 150 backfill; source NULL
     contract = {
         "data_source": "patient_journeys",
         "target_outcome": "treatment_initiated",
         "feature_manifest_source": "synthetic",
     }
-    await _trigger(db, cohort=contract)
-    (row,) = db.rows("ml_model_registry")
-    assert row["cohort_data_source"] == "patient_journeys"
-    assert row["cohort_feature_manifest_source"] == "synthetic"
-    assert row["cohort_target_outcome"] == "initiation_kisqali"  # NOT overwritten (was set)
-
-    # a second trigger with a different explicit source does not rewrite the row
-    await _trigger(db, cohort={"data_source": "other_table", "target_outcome": "x"})
-    (row,) = db.rows("ml_model_registry")
-    assert row["cohort_data_source"] == "patient_journeys"
-    assert len(db.rows("ml_retraining_history")) == 2
-    assert all(h["model_id"] == rid for h in db.rows("ml_retraining_history"))
-
-
-@pytest.mark.unit
-@pytest.mark.asyncio
-async def test_an_incomplete_contract_is_not_persisted():
-    db, _ = _db()
-    await _trigger(db, cohort={"data_source": "patient_journeys"})  # no target anywhere
+    _, queued = await _trigger(db, cohort=contract)
+    assert queued["training_config"]["data_source"] == "patient_journeys"  # the job gets it
     (row,) = db.rows("ml_model_registry")
     assert row["cohort_data_source"] is None
+    assert row["cohort_feature_manifest_source"] is None
+    assert row["cohort_target_outcome"] == "initiation_kisqali"
+    (history,) = db.rows("ml_retraining_history")
+    assert history["model_id"] == rid
 
 
 @pytest.mark.unit

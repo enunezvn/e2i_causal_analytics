@@ -150,9 +150,8 @@ async def test_persist_row_threads_the_contract_and_heals_a_reused_row():
     assert row["cohort_feature_manifest_source"] == "synthetic"
 
     # idempotent re-deploy of the same name+version: the row is reused, and NULL
-    # contract columns are healed (never overwritten)
+    # contract columns are healed from a CONSISTENT contract (never overwritten)
     row["cohort_feature_manifest_source"] = None
-    row["cohort_data_source"] = "kept_as_is"
     rid2 = await _persist_model_registry_row(
         db,
         experiment_id_str=MLFLOW_EXP,
@@ -164,8 +163,21 @@ async def test_persist_row_threads_the_contract_and_heals_a_reused_row():
     )
     assert rid2 == rid
     (row,) = db.rows("ml_model_registry")
-    assert row["cohort_data_source"] == "kept_as_is"
+    assert row["cohort_data_source"] == "patient_journeys"
     assert row["cohort_feature_manifest_source"] == "csu"
+    # a conflicting contract (different source) heals NOTHING on the reused row
+    row["cohort_feature_manifest_source"] = None
+    await _persist_model_registry_row(
+        db,
+        experiment_id_str=MLFLOW_EXP,
+        model_uri=f"runs:/{RUN_ID}/model",
+        registered_model_name="initiation_kisqali_retrain",
+        model_version=1,
+        validation_metrics={"auc_roc": 0.81},
+        cohort={**CONTRACT, "data_source": "other_table", "feature_manifest_source": "csu"},
+    )
+    (row,) = db.rows("ml_model_registry")
+    assert row["cohort_feature_manifest_source"] is None
 
 
 @pytest.mark.unit

@@ -16,9 +16,10 @@ model_name — ``_resolve_model_id``), merges an explicit request over the persi
 (explicit wins), and heals NULL columns from a complete contract (never overwrites).
 
 Writers of the contract: the model_deployer's registry writer at training time
-(``registry_manager._persist_model_registry_row``) and ``RetrainingTriggerService
-.trigger_retraining`` (the manual route's self-heal). Reader: the drift-monitor
-connector projection -> ``check_retraining_for_all_models`` -> ``evaluate_retraining_need``.
+(``registry_manager._persist_model_registry_row``) and ``execute_model_retraining`` on a
+COMPLETED, promotable retrain (``heal_registry_cohort_contract`` — the manual route's
+self-heal, deliberately not at trigger time). Reader: the drift-monitor connector
+projection -> ``check_retraining_for_all_models`` -> ``evaluate_retraining_need``.
 """
 
 from __future__ import annotations
@@ -124,14 +125,35 @@ async def load_registry_cohort_contract(
     return model_id, contract_from_registry_row(rows[0] if rows else None)
 
 
-async def persist_registry_cohort_contract_if_missing(
+def contract_from_training_config(training_config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The None-free cohort contract a retraining job's ``training_config`` carries."""
+    if not training_config:
+        return {}
+    return {k: training_config[k] for k in _KEY_TO_COLUMN if training_config.get(k) is not None}
+
+
+def _encoded(key: str, value: Any) -> str:
+    return (encode_data_source(value) if key == "data_source" else str(value)) or ""
+
+
+async def heal_registry_cohort_contract(
     client: Any, model_id: Optional[str], contract: Dict[str, Any]
 ) -> Dict[str, Any]:
-    """Write the contract's values into the row's NULL contract columns only.
+    """Fill the row's NULL contract columns from ``contract`` — as a CONSISTENT unit.
 
-    Returns the ``{column: value}`` actually written (``{}`` when nothing was NULL, the
-    contract has nothing to give, or the row/client is absent). Never overwrites a
-    persisted value — the row is the contract of record once set.
+    Called only with a contract that has just produced a promotable model
+    (``execute_model_retraining`` on completion) or that a re-deploy of the SAME model
+    carries (``registry_manager``); never at trigger time (codex r1 HIGH-2: a contract
+    persisted before the job ran could heal wrongly and the sweep would then enqueue
+    failing jobs).
+
+    Rules: (1) if any column the row already carries disagrees with the contract's
+    value for it, NOTHING is written — a half-filled pair ``{row's target, contract's
+    source}`` would be a contract nobody ever ran; (2) each NULL column is filled with an
+    atomic compare-and-set (``UPDATE ... WHERE id = ? AND <column> IS NULL``) so two
+    concurrent healers cannot overwrite each other; (3) a persisted value is never
+    overwritten. Returns the ``{column: value}`` actually written (``{}`` when nothing
+    was, including the conflict case, which is logged).
     """
     if client is None or not model_id or not contract:
         return {}
@@ -150,23 +172,44 @@ async def persist_registry_cohort_contract_if_missing(
     if not rows:
         return {}
     row = rows[0]
-    updates: Dict[str, Any] = {}
+    candidates: Dict[str, str] = {}
     for key, column in _KEY_TO_COLUMN.items():
         value = contract.get(key)
-        if value is None or row.get(column) is not None:
+        if value is None:
             continue
-        updates[column] = encode_data_source(value) if key == "data_source" else str(value)
-    if not updates:
-        return {}
-    try:
-        await client.table("ml_model_registry").update(updates).eq("id", model_id).execute()
-    except Exception as e:  # noqa: BLE001 — healing is best-effort; the trigger proceeds
-        logger.warning("Cohort contract for %s could not be persisted (%s)", model_id, e)
-        return {}
-    logger.info(
-        "Persisted cohort contract onto ml_model_registry %s: %s", model_id, sorted(updates)
-    )
-    return updates
+        encoded = _encoded(key, value)
+        existing = row.get(column)
+        if existing is not None:
+            if str(existing) != encoded:
+                logger.warning(
+                    "Cohort contract for %s NOT healed: %s is %r on the row but %r in the "
+                    "contract that ran — refusing to compose a mixed contract",
+                    model_id,
+                    column,
+                    existing,
+                    encoded,
+                )
+                return {}
+            continue
+        candidates[column] = encoded
+    written: Dict[str, Any] = {}
+    for column, value in candidates.items():
+        try:
+            result = await (
+                client.table("ml_model_registry")
+                .update({column: value})
+                .eq("id", model_id)
+                .is_(column, "null")
+                .execute()
+            )
+        except Exception as e:  # noqa: BLE001 — healing is best-effort
+            logger.warning("Cohort contract for %s: %s not persisted (%s)", model_id, column, e)
+            continue
+        if getattr(result, "data", None):
+            written[column] = value
+    if written:
+        logger.info("Healed cohort contract on ml_model_registry %s: %s", model_id, sorted(written))
+    return written
 
 
 __all__ = [
@@ -174,7 +217,8 @@ __all__ = [
     "contract_from_registry_row",
     "decode_data_source",
     "encode_data_source",
+    "contract_from_training_config",
+    "heal_registry_cohort_contract",
     "load_registry_cohort_contract",
     "merge_contracts",
-    "persist_registry_cohort_contract_if_missing",
 ]

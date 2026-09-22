@@ -152,8 +152,11 @@ may enqueue a retrain only for a model whose row carries BOTH `cohort_data_sourc
 `cohort_target_outcome` (`has_cohort_contract`). Writers: `registry_manager
 ._persist_model_registry_row` at training time (threaded from `MLFoundationPipeline.run`'s
 `input_data` through the deployer state; a reused row's NULL columns are healed) and
-`RetrainingTriggerService.trigger_retraining` (an explicit, complete manual trigger heals
-NULL columns once; explicit request values win over the row; nothing is ever overwritten).
+`execute_model_retraining` on a COMPLETED, promotable retrain (`heal_registry_cohort_contract`:
+NULL columns only, as a consistent unit — a row value that disagrees with the contract that
+ran blocks the whole heal; per-column compare-and-set; never at trigger time, so a wrong
+manual contract cannot heal wrongly). `RetrainingTriggerService.trigger_retraining` only
+READS the row: a request that omits fields falls back to it, explicit values win.
 Reader: the drift-monitor connector projection (`src/agents/drift_monitor/connectors/
 supabase_connector.py`, with a narrow-projection fallback for a pre-150 schema). Encoding /
 decoding lives in `src/services/cohort_contract.py`.
@@ -909,8 +912,9 @@ for a contracted model; a model whose row lacks it is evaluated and blocked with
 `retraining_blocked_reason="no_cohort_contract"` (the 12 pre-existing goldstd models carry
 only the backfilled target, so they stay blocked until healed). The API trigger route keeps
 both fields optional on `TriggerRetrainingRequest` (Phase D): a request that omits them falls
-back to the row's contract, explicit values win, a complete contract heals the row's NULL
-columns once, and the row's id is written to `model_id` (never populated before); a request
+back to the row's contract, explicit values win, the row's id is written to `model_id`
+(never populated before), and the row is healed only once the job has COMPLETED with a
+promotable model (never at trigger time); a request
 with no contract anywhere still writes the `pending` row and the job fails closed at
 execution (`failed`, reason in `notes`). The execution half runs on worker_medium's
 `analytics` queue (on the dark `ml` queue a triggered job never ran and its row stayed
@@ -1376,7 +1380,10 @@ rows are recorded (`failed` job rows / `unknown` freshness rows; an init failure
 doubled by the auto-recovery branch). The e2i_feast_materializer sidecar shell loop
 (`docker/feast/materializer-entrypoint.sh`) still runs the same materialize every 6 h
 (belt and braces; retire it only once the beat is proven live) and has no database client,
-so its runs are not in these tables. `ml_feast_feature_views` rows are created on first use
+so its runs are not in these tables. Because Feast's file registry is written in place on
+every materialize, the serve container now runs `docker/feast/serve_locked.py` — the same
+feature server with `/materialize` and `/materialize-incremental` under the registry flock
+the loop and `apply` already use (falls back to plain `feast serve` if it cannot start). `ml_feast_feature_views` rows are created on first use
 from `FEAST_FEATURE_VIEW_SOURCE_TABLES` (`src/feature_store/feast_views.py` — the nine real
 Feast views and their source tables). All three tables were at 0 rows on 2026-09-22.
 

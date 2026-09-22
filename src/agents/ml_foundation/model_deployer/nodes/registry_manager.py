@@ -994,7 +994,7 @@ async def _persist_model_registry_row(
         MLModelRegistryRepository,
         MLTrainingRunRepository,
     )
-    from src.services.cohort_contract import persist_registry_cohort_contract_if_missing
+    from src.services.cohort_contract import heal_registry_cohort_contract
 
     # 1. Resolve the real ml_experiments UUID: the tier-0 pipeline threads the
     #    ``mlflow_experiment_id`` STRING as ``experiment_id``; resolve it exactly as
@@ -1086,7 +1086,7 @@ async def _persist_model_registry_row(
             existing.id,
         )
         if cohort:  # #2207: heal NULL contract columns on the reused row
-            await persist_registry_cohort_contract_if_missing(client, str(existing.id), cohort)
+            await heal_registry_cohort_contract(client, str(existing.id), cohort)
         return str(existing.id)
 
     # 4. Source the NOT-NULL ``algorithm`` + ``hyperparameters`` from the REAL

@@ -345,25 +345,21 @@ class RetrainingTriggerService:
 
         # #2207 (owner decision 2026-09-22): the registry row is the cohort contract of
         # record (migration 150). A request that omits data_source / target_outcome falls
-        # back to the row's contract; explicit request values win; a complete contract
-        # (from either source) heals the row's NULL columns once — so a model triggered
-        # by hand with its cohort becomes eligible for the scheduled sweep. A request
-        # with no contract anywhere behaves exactly as before (the job fails closed at
-        # execution). The row id also becomes ml_retraining_history.model_id.
+        # back to the row's contract; explicit request values win. The row is NOT healed
+        # here — only a contract that has just produced a promotable model heals it
+        # (execute_model_retraining on completion; codex r1 HIGH-2: healing at trigger
+        # time could persist a wrong contract and the sweep would then enqueue failing
+        # jobs). A request with no contract anywhere behaves exactly as before (the job
+        # fails closed at execution). The row id becomes ml_retraining_history.model_id.
         from src.services.cohort_contract import (
             load_registry_cohort_contract,
             merge_contracts,
-            persist_registry_cohort_contract_if_missing,
         )
 
         registry_model_id, registry_contract = await load_registry_cohort_contract(
             client, model_version
         )
         effective_cohort = merge_contracts(cohort, registry_contract)
-        if registry_model_id and has_cohort_contract(effective_cohort):
-            await persist_registry_cohort_contract_if_missing(
-                client, registry_model_id, effective_cohort
-            )
         # Cohort identity → reaches execute_model_retraining → MLFoundationPipeline.
         if effective_cohort:
             training_config.update(effective_cohort)
