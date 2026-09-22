@@ -94,12 +94,28 @@ def test_declared_safe_covariates_are_never_leak_verdicts(panel: FeatureRolePane
     covariate keeps its Layer-3 statistic as EVIDENCE but is not a leak. This is
     the property that keeps prediction-era leakage out of the causal adjustment
     set unless the feature is genuinely post-index or uncontracted-and-leaking."""
-    for name in ("age_at_index", "dx_total_csu"):
+    for name in ("age_at_index", "dx_total_csu", "charlson_score"):
         rec = panel.records[name]
         assert rec.layer_1["verdict"] == "pre_index"
         assert rec.layer_1["declared_safe"] is True
         assert rec.leak_verdict is False, (name, rec.ensemble)
         assert rec.leak_source is None
+    # Verifier MED-2: the property is only exercised by a declared-safe feature
+    # whose Layer-3 z-band actually said ``high`` — ``charlson_score`` is a
+    # near-copy of Y. It is NOT a leak, and the served field says the contract
+    # overruled the statistic (MED-3: the field reads pre-joint high AND declared
+    # safe AND not leaked, the lever that keeps it adjustable — not the node's
+    # post-joint severity, which it never leaves at ``high`` here).
+    high_safe = panel.records["charlson_score"]
+    assert high_safe.layer_3["ran"] is True
+    assert high_safe.layer_3["severity_pre_joint_check"] == "high", high_safe.layer_3
+    assert high_safe.leak_verdict is False, high_safe.ensemble
+    assert high_safe.layer_3["declared_safe_immunity_applied"] is True, high_safe.layer_3
+    assert panel.layer_activity["layer_3"]["declared_safe_immunity_applied"] == 1
+    # And the un-immune control: the uncontracted near-copy IS the leak verdict.
+    assert panel.records["leak_probe"].layer_3["severity_pre_joint_check"] == "high"
+    assert panel.records["leak_probe"].layer_3["declared_safe_immunity_applied"] is False
+    assert "charlson_score" not in panel.leak_features()
 
 
 def test_layer_2_reports_the_committed_signal_with_its_edges(panel: FeatureRolePanel) -> None:
@@ -186,18 +202,29 @@ def test_layer_4_does_not_fire_without_the_profile(_frame, stub_lm) -> None:
 
 def test_layer_activity_counts_and_abstain_rate(panel: FeatureRolePanel) -> None:
     la = panel.layer_activity
-    assert la["layer_1"]["consulted"] == 6
-    assert la["layer_1"]["contracted"] == 3
+    # Seven covariates since verifier MED-2 added ``charlson_score`` (declared
+    # safe, pre-joint high): contracted 4, scored 6, immunity applied 1.
+    assert la["layer_1"]["consulted"] == 7
+    assert la["layer_1"]["contracted"] == 4
     assert la["layer_1"]["post_index"] == 1
     assert la["layer_2"]["cache_bound"] is True
     assert la["layer_2"]["signalled"] == 1
-    assert la["layer_3"]["scored"] == 5  # the post-index column never reaches Layer 3
+    assert la["layer_3"]["scored"] == 6  # the post-index column never reaches Layer 3
+    assert la["layer_3"]["declared_safe_immunity_applied"] == 1
     assert la["layer_4"]["enabled"] is True
     assert la["layer_4"]["classifier_loaded"] is True
     assert la["layer_4"]["fired"] == 1
     assert la["layer_4"]["roles"] == {"confounder": 1}
-    assert la["ensemble"]["decided_by"]["layer_1"] == 1
-    assert la["ensemble"]["decided_by"]["structural"] == 2
+    # ``charlson_score`` is attested, but an FDR-confident ``high`` is decided
+    # by the adversarial layer; the node's declared-safe strip then keeps it
+    # out of the leak set (immunity applied 1 above), so it is adversarial
+    # here, not structural.
+    assert la["ensemble"]["decided_by"] == {
+        "layer_1": 1,
+        "structural": 2,
+        "adversarial": 3,
+        "abstain": 1,
+    }
     assert la["ensemble"]["leak_verdicts"] == 2
     assert la["ensemble"]["leak_sources"] == {"layer_1_post_index": 1, "layer_3_high": 1}
     assert 0.0 <= la["ensemble"]["abstain_rate"] <= 1.0

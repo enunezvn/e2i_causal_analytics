@@ -37,6 +37,11 @@ def make_panel_frame(n: int = 400, seed: int = 7) -> pd.DataFrame:
     * ``treatment_initiated`` — optum contract, POST-index → Layer 1 veto.
     * ``leak_probe`` — no contract; a near-copy of Y → Layer 3 high, no immunity.
     * ``noise_feature`` — no contract; pure noise → info.
+    * ``charlson_score`` — optum contract, index_date (declared safe) and
+      attested; a near-copy of Y drawn LAST (verifier MED-2). Layer 3's z-band
+      says ``high`` pre-joint on it, so the declared-safe immunity path — the
+      one ``test_declared_safe_covariates_are_never_leak_verdicts`` exists to
+      pin — is actually exercised: the contract keeps it out of the leak set.
     """
     rng = np.random.default_rng(seed)
     y = rng.integers(0, 2, n)
@@ -51,6 +56,7 @@ def make_panel_frame(n: int = 400, seed: int = 7) -> pd.DataFrame:
             "leak_probe": y + 0.01 * rng.standard_normal(n),
             "noise_feature": rng.standard_normal(n),
             "moderate_probe": 0.20 * y + 0.5 * rng.standard_normal(n),
+            "charlson_score": y + 0.01 * rng.standard_normal(n),
         }
     )
 
