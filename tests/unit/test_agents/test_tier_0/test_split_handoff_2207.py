@@ -62,9 +62,47 @@ def test_frames_become_x_y_row_count_with_target_entity_and_dates_removed():
     assert train["y"].tolist() == [0, 1, 0, 1, 0, 1]
     assert train["row_count"] == 6
     assert splits["holdout_data"]["row_count"] == 2
-    # original indices are preserved (the trainer's leakage validator compares index sets)
+    # every split gets a DISJOINT RangeIndex (the loaders reset each split to 0..n-1 and
+    # the trainer's duplicate-index leakage check compares index sets across splits)
     assert list(train["X"].index) == [0, 1, 2, 3, 4, 5]
-    assert list(splits["validation_data"]["X"].index) == [100, 101, 102, 103]
+    assert list(splits["validation_data"]["X"].index) == [6, 7, 8, 9]
+    assert list(splits["test_data"]["X"].index) == [10, 11, 12]
+    assert list(splits["holdout_data"]["X"].index) == [13, 14]
+    assert list(splits["validation_data"]["y"].index) == [6, 7, 8, 9]
+    all_idx = [i for k in SPLIT_KEYS for i in splits[k]["X"].index]
+    assert len(all_idx) == len(set(all_idx))
+
+
+@pytest.mark.unit
+def test_identifier_like_and_high_cardinality_object_columns_are_dropped():
+    """codex r2 HIGH-2: the scope names no entity/date columns and the trainer's
+    preprocessor passes high-cardinality strings through — ids must never reach X."""
+    n = 20
+    df = pd.DataFrame(
+        {
+            "patient_hash": [f"p{i}" for i in range(n)],  # *_hash -> dropped by name
+            "id": range(n),  # id -> dropped by name
+            "data_split": ["train"] * n,  # split bookkeeping -> dropped
+            "zip_code": [f"{10000 + i}" for i in range(n)],  # object, 100% distinct -> dropped
+            "region": ["east", "west"]
+            * (n // 2),  # object, low cardinality -> kept (encoded later)
+            "f1": [float(i) for i in range(n)],
+            "y": [i % 2 for i in range(n)],
+        }
+    )
+    frames = {"train": df, "validation": df.copy(), "test": df.copy(), "holdout": None}
+    plan = frames_to_trainer_splits.__globals__["feature_columns_to_drop"](df, "y")
+    assert set(plan["identifier_named"]) == {"patient_hash", "id", "data_split"}
+    assert plan["identifier_cardinality"] == ["zip_code"]
+    splits = frames_to_trainer_splits(frames, "y")
+    assert list(splits["train_data"]["X"].columns) == ["region", "f1"]
+    assert list(splits["validation_data"]["X"].columns) == ["region", "f1"]
+
+
+@pytest.mark.unit
+def test_scope_excluded_features_are_dropped_through_drop_columns():
+    splits = frames_to_trainer_splits(FRAMES, "treatment_initiated", drop_columns=("f1",))
+    assert "f1" not in splits["train_data"]["X"].columns
 
 
 @pytest.mark.unit
@@ -172,6 +210,28 @@ async def test_training_stage_hands_prepared_frames_to_the_trainer_when_nothing_
     assert "hcp_id" not in captured["train_data"]["X"].columns
     assert "treatment_initiated" not in captured["train_data"]["X"].columns
     assert captured["train_data"]["y"].name == "treatment_initiated"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_training_stage_drops_the_scopes_excluded_features():
+    pipeline = _pipeline()
+    result = _result()
+    result.scope_spec["excluded_features"] = ["f1"]
+    result.prepared_frames = dict(FRAMES)
+    captured: Dict[str, Any] = {}
+    fake_trainer = MagicMock()
+
+    async def _run(trainer_input):
+        captured.update(trainer_input)
+        return {"validation_metrics": {}, "success_criteria_met": False}
+
+    fake_trainer.run = AsyncMock(side_effect=_run)
+    with patch.object(pipeline, "_get_agent", return_value=fake_trainer):
+        await pipeline._run_model_training(
+            input_data={"data_source": "patient_journeys"}, result=result, obs_context=None
+        )
+    assert "f1" not in captured["train_data"]["X"].columns
 
 
 @pytest.mark.unit

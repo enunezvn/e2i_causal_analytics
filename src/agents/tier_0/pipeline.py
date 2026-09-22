@@ -1028,7 +1028,11 @@ class MLFoundationPipeline:
             splits = frames_to_trainer_splits(
                 result.prepared_frames,
                 target_column=scope.get("prediction_target"),
-                drop_columns=(scope.get("entity_column"), scope.get("date_column")),
+                drop_columns=(
+                    scope.get("entity_column"),
+                    scope.get("date_column"),
+                    *(scope.get("excluded_features") or []),
+                ),
             )
         splits = splits or {k: input_data.get(k) for k in SPLIT_KEYS}
 
