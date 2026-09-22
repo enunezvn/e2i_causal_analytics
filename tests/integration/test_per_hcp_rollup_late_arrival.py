@@ -371,3 +371,49 @@ def test_the_reconcile_deletes_our_obsolete_row_and_spares_a_foreign_one(
                 "DELETE FROM territory_metrics WHERE metric_date = %s AND territory_id IN (%s, %s)",
                 (orphan_date, ours, theirs),
             )
+
+
+def test_the_preview_names_the_cohort_data_an_obsolete_row_still_carries(
+    db_conn: Any, planted: dict
+) -> None:
+    """2026-09-21: the reconcile deleted obsolete rows wholesale and the Digital Twin's
+    planted cohort data went with them. Before ``--execute`` the preview must say how many
+    obsolete rows carry that data, so the operator knows the plant must follow. The row
+    planted here is a per_hcp_rollup cell on a day with no trigger, which the recompute
+    never produces (obsolete), carrying one planted channel; the fixture deletes it by hcp."""
+    from src.etl.business_metrics_per_hcp_etl import preview_per_hcp_rollup
+
+    rid, a = planted["rid"], planted["a"]
+    metric_id = f"per_hcp_late_{rid}"
+    with db_conn:
+        with db_conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO business_metrics (
+                    metric_id, metric_date, metric_type, brand, region, hcp_id,
+                    triggers_delivered_count, triggers_accepted_count, triggers_total_count,
+                    market_share, conversion_rate, is_synthetic, email_campaign_count
+                ) VALUES (
+                    %s, %s, 'per_hcp_rollup', %s::brand_type, 'northeast'::region_type, %s,
+                    1, 0, 1, 1.0, 0.0, true, 3
+                )
+                """,
+                (metric_id, date(2019, 1, 3), BRAND, a),
+            )
+    with_channel = preview_per_hcp_rollup("2019-01-01", "2019-01-15")
+    assert (with_channel["rows_obsolete"], with_channel["rows_obsolete_with_cohort_data"]) == (
+        1,
+        1,
+    ), with_channel
+    # The same row stripped of its cohort data is still obsolete, but no longer cohort data:
+    # the count is about the columns, not about obsolescence.
+    with db_conn:
+        with db_conn.cursor() as cur:
+            cur.execute(
+                "UPDATE business_metrics SET email_campaign_count = NULL WHERE metric_id = %s",
+                (metric_id,),
+            )
+    stripped = preview_per_hcp_rollup("2019-01-01", "2019-01-15")
+    assert (stripped["rows_obsolete"], stripped["rows_obsolete_with_cohort_data"]) == (1, 0), (
+        stripped
+    )
