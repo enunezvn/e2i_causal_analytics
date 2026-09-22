@@ -24,20 +24,27 @@ from scripts.load_optum_causal_cohort import (  # noqa: E402
     OUTCOME_COLUMNS,
     TABLE,
     arm_split,
+    fetch_live_rows,
     fetch_live_split,
     load_frame,
     main,
     to_records,
     upsert,
     verify,
+    verify_rows,
 )
+from src.data.manifests import MART_SAFE_FEATURES  # noqa: E402
 
 
 def _frame(n_x: int = 3, n_d: int = 2) -> pd.DataFrame:
+    """All 81 causal-export columns: the 64 MART_SAFE_FEATURES default to 0, then
+    the journey-metadata/treatment/outcome keys (and a few interesting per-row
+    baseline overrides already exercised by other tests) are layered on top."""
     rows = []
     for i in range(n_x + n_d):
         dup = int(i >= n_x)
-        rows.append(
+        row: dict = dict.fromkeys(MART_SAFE_FEATURES, 0)
+        row.update(
             {
                 "patient_journey_id": f"PJ_{i}",
                 "patient_id": f"PAT_{i}",
@@ -61,6 +68,7 @@ def _frame(n_x: int = 3, n_d: int = 2) -> pd.DataFrame:
                 "is_synthetic": False,
             }
         )
+        rows.append(row)
     return pd.DataFrame(rows)
 
 
@@ -80,6 +88,7 @@ class _FakeQuery:
     def __init__(self, table: "_FakeTable", op: str, batch=None, on_conflict=None):
         self._t, self._op, self._filters, self._count = table, op, [], None
         self._batch, self._on_conflict = batch, on_conflict
+        self._range = None
 
     def select(self, cols, count=None):
         self._count = count
@@ -89,14 +98,24 @@ class _FakeQuery:
         self._filters.append((col, val))
         return self
 
+    def range(self, start, end):
+        self._range = (start, end)
+        return self
+
     def execute(self):
         if self._op == "upsert":
             for rec in self._batch:
                 self._t.rows[rec["patient_id"]] = rec
             self._t.upserts.append((list(self._batch), self._on_conflict))
             return type("R", (), {"data": list(self._batch), "count": None})()
+        # rows.values() preserves insertion order (dict semantics), so paging via
+        # .range() below sees a stable, real-order slice like a live table would.
         rows = [r for r in self._t.rows.values() if all(r.get(c) == v for c, v in self._filters)]
-        count = len(rows) if self._count == "exact" else None
+        total = len(rows)
+        if self._range is not None:
+            start, end = self._range
+            rows = rows[start : end + 1]
+        count = total if self._count == "exact" else None
         return type("R", (), {"data": rows, "count": count})()
 
 
@@ -167,6 +186,9 @@ def test_load_frame_accepts_the_export(tmp_path):
         ),
         (lambda d: d.assign(index_biologic_brand="RHAPSIDO"), "index_biologic_brand"),
         (lambda d: d.assign(persistent_at_180d_g28=2), "persistent_at_180d_g28"),
+        # a dropped baseline confounder must refuse loud, never upsert as a silent NULL
+        (lambda d: d.drop(columns=["cci_mi"]), "cci_mi"),
+        (lambda d: d.assign(unexpected_extra_column="oops"), "unexpected_extra_column"),
     ],
 )
 def test_load_frame_fails_loud(tmp_path, mutate, match):
@@ -242,6 +264,40 @@ def test_fetch_live_split_degrades_to_none_when_exact_counts_are_unavailable():
     assert fetch_live_split(client) is None
 
 
+def test_fetch_live_rows_pages_the_whole_table():
+    client = _FakeClient()
+    upsert(client, to_records(_frame(n_x=3, n_d=2)))
+    rows = fetch_live_rows(client)
+    assert rows is not None
+    assert {r["patient_id"] for r in rows} == {f"PAT_{i}" for i in range(5)}
+
+
+def test_fetch_live_rows_reports_a_missing_table_as_none():
+    assert fetch_live_rows(_FakeClient(missing=True)) is None
+
+
+def test_verify_rows_catches_field_corruption_and_id_drift():
+    """Mutation-proof for the gap aggregate verification cannot see: wrong
+    patient_ids and corrupted covariates must surface even when arm/outcome
+    totals still match."""
+    records = to_records(_frame(n_x=3, n_d=2))
+    live = [dict(r) for r in records]
+    live[0]["age_at_index"] = (live[0]["age_at_index"] or 0) + 999  # corrupted covariate
+    live[1]["patient_id"] = "PAT_changed"  # id drift: PAT_1 vanishes, PAT_changed appears
+    live.append({**records[0], "patient_id": "PAT_extra"})  # an extra live row
+
+    problems = verify_rows(records, live)
+    assert any("age_at_index" in p for p in problems)
+    assert any("PAT_1" in p for p in problems)
+    assert any("PAT_changed" in p for p in problems)
+    assert any("PAT_extra" in p for p in problems)
+
+
+def test_verify_rows_agrees_on_identical_data():
+    records = to_records(_frame(n_x=3, n_d=2))
+    assert verify_rows(records, [dict(r) for r in records]) == []
+
+
 def test_verify_verdicts():
     a = arm_split(_frame(n_x=3, n_d=2))
     assert verify(a, a) == []
@@ -289,7 +345,31 @@ def test_main_execute_loads_then_verifies(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(mod, "_client", lambda: client)
     assert main(["--input", str(path), "--execute"]) == 0
     assert len(client.t.rows) == 5
-    assert "VERIFIED" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "VERIFIED" in out
+    assert "compared 5 exported rows" in out
+
+
+def test_main_execute_returns_nonzero_when_a_live_row_is_corrupted(tmp_path, monkeypatch, capsys):
+    """Mutation-proof for verify() alone: the aggregate arm/outcome/treatment
+    margins still match (same rows, same brand/outcome values) but a covariate on
+    one live row is wrong -- row-level verification must still fail the run."""
+    path = _write(tmp_path, _frame())
+    client = _FakeClient()
+    import scripts.load_optum_causal_cohort as mod
+
+    monkeypatch.setattr(mod, "_client", lambda: client)
+    real_fetch_live_rows = mod.fetch_live_rows
+
+    def _corrupting_fetch_live_rows(c):
+        rows = real_fetch_live_rows(c)
+        if rows:
+            rows[0] = {**rows[0], "age_at_index": (rows[0]["age_at_index"] or 0) + 999}
+        return rows
+
+    monkeypatch.setattr(mod, "fetch_live_rows", _corrupting_fetch_live_rows)
+    assert main(["--input", str(path), "--execute"]) == 1
+    assert "MISMATCH" in capsys.readouterr().out
 
 
 def test_main_execute_returns_nonzero_when_live_split_disagrees(tmp_path, monkeypatch, capsys):

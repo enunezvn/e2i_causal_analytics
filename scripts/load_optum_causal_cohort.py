@@ -8,13 +8,21 @@ Lane A (spec docs/superpowers/specs/2026-09-22-real-data-causal-estimation-desig
 ``scripts/load_hcp_brand_adoption.py`` uses — the worker containers mount no
 ``data/rwd`` volume, so this runs on the host venv).
 
-Fail-loud validation BEFORE any write: required columns present, every row
-``is_synthetic == False``, ``patient_id`` unique, the treatment coding agrees with
-``index_biologic_brand`` and only the observed two-arm contrast is present, every
-outcome is 0/1. After ``--execute`` the live table's arm split, treatment-column
-counts, and per-outcome positives are re-read and compared with the parquet; a
-disagreement is printed as MISMATCH and the exit code is 1 — the load is never
-reported as verified on the strength of the write call alone.
+Fail-loud validation BEFORE any write: the frame must carry EXACTLY the export's
+81-column contract (7 journey-metadata keys + the primary outcome + the 64
+``MART_SAFE_FEATURES`` baseline covariates + ``data_quality_score`` + the 6
+``CAUSAL_EXTRA_COLS`` + ``is_synthetic`` + ``data_split`` -- no missing column, no
+unexpected extra one, so a frame missing baseline confounders can never silently
+upsert NULLs into them), every row ``is_synthetic == False``, ``patient_id``
+unique, the treatment coding agrees with ``index_biologic_brand`` and only the
+observed two-arm contrast is present, every outcome is 0/1. After ``--execute``
+the live table's arm split, treatment-column counts, and per-outcome positives are
+re-read and compared with the parquet, AND every exported field of every row is
+re-read and compared patient-by-patient (``fetch_live_rows``/``verify_rows``) --
+matching aggregate margins alone cannot hide wrong patient_ids or corrupted
+covariates. A disagreement at either level is printed as MISMATCH and the exit
+code is 1 — the load is never reported as verified on the strength of the write
+call alone.
 
 USAGE
 -----
@@ -49,33 +57,55 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(_PROJECT_ROOT / ".env")
 
+from scripts.convert_optum_mart import CAUSAL_EXTRA_COLS, TARGET_PERSISTENT_G28  # noqa: E402
+from src.data.manifests import MART_SAFE_FEATURES  # noqa: E402
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 TABLE = "optum_biologic_persistence_causal"
 ON_CONFLICT = "patient_id"
 BATCH_SIZE = 500
+ROW_PAGE_SIZE = 1000
 DEFAULT_INPUT = "data/rwd/mart/persistence_causal/e2i_causal_v1_biologic_persistence.parquet"
 TREATMENT = "treatment_dupixent"
 BRAND = "index_biologic_brand"
 ARMS = ("XOLAIR", "DUPIXENT")
 OUTCOME_COLUMNS = (
-    "persistent_at_180d_g28",
+    TARGET_PERSISTENT_G28,
     "discontinued_180d",
     "biologic_switch_180d_flag",
     "persistent_at_180d",
 )
-REQUIRED_COLUMNS = (
-    "patient_id",
+# The journey-metadata keys the converter emits for every cohort (not part of the
+# owner-approved feature allow-list, not an outcome, not the treatment).
+JOURNEY_METADATA_COLUMNS = (
     "patient_journey_id",
+    "patient_id",
     "patient_hash",
     "index_date",
     "journey_start_date",
-    BRAND,
-    TREATMENT,
-    "treatment_start_date",
-    *OUTCOME_COLUMNS,
+    "journey_status",
+    "discontinuation_flag",
+)
+# The EXACT causal export contract (81 columns), derived from the converter's own
+# constants rather than hand-listed, so this loader cannot drift from what
+# ``scripts/convert_optum_mart.py --cohort persistence_causal`` actually emits:
+# 7 journey-metadata keys + the primary outcome + the 64 owner-approved pre-index
+# baseline features (``MART_SAFE_FEATURES``, includes geographic_region and
+# enrollment_duration_days) + data_quality_score + the 6 CAUSAL_EXTRA_COLS
+# (treatment + brand + the 3 remaining outcomes) + is_synthetic + data_split.
+# ``load_frame`` refuses BOTH a missing column (e.g. a dropped baseline
+# confounder, which would otherwise upsert as a silent NULL) and an unexpected
+# extra one.
+REQUIRED_COLUMNS = (
+    *JOURNEY_METADATA_COLUMNS,
+    TARGET_PERSISTENT_G28,
+    *MART_SAFE_FEATURES,
+    "data_quality_score",
+    *CAUSAL_EXTRA_COLS,
     "is_synthetic",
+    "data_split",
 )
 
 
@@ -85,11 +115,16 @@ REQUIRED_COLUMNS = (
 
 
 def load_frame(path: Path | str) -> pd.DataFrame:
-    """Read the export and refuse anything that is not the causal cohort contract."""
+    """Read the export and refuse anything that is not EXACTLY the causal cohort
+    contract -- missing OR unexpected extra columns, so a frame lacking baseline
+    confounders can never silently upsert NULLs into them."""
     df = pd.read_parquet(path)
     missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
     if missing:
         raise ValueError(f"export is missing required column(s) {missing}")
+    extra = [c for c in df.columns if c not in REQUIRED_COLUMNS]
+    if extra:
+        raise ValueError(f"export has unexpected column(s) not in the causal contract: {extra}")
     if df["is_synthetic"].astype(bool).any():
         n = int(df["is_synthetic"].astype(bool).sum())
         raise ValueError(
@@ -245,6 +280,92 @@ def verify(expected: Dict[str, Any], live: Dict[str, Any]) -> List[str]:
     return problems
 
 
+def fetch_live_rows(client: Any) -> Optional[List[Dict[str, Any]]]:
+    """Page the whole live table back, ``ROW_PAGE_SIZE`` rows at a time, until a
+    short page. None when the table is unreachable — never a partial or empty
+    result mistaken for the truth (mirrors ``fetch_live_split``'s honesty)."""
+    try:
+        rows: List[Dict[str, Any]] = []
+        start = 0
+        while True:
+            page = (
+                client.table(TABLE)
+                .select("*")
+                .range(start, start + ROW_PAGE_SIZE - 1)
+                .execute()
+                .data
+            )
+            rows.extend(page)
+            if len(page) < ROW_PAGE_SIZE:
+                break
+            start += ROW_PAGE_SIZE
+        return rows
+    except Exception as e:  # noqa: BLE001 — a missing relation / store hiccup is reported, not hidden
+        logger.warning("Could not read live %s rows: %s", TABLE, e)
+        return None
+
+
+def _same(a: Any, b: Any) -> bool:
+    """Value equality across the JSON round-trip: PostgREST returns NUMERIC/INTEGER
+    columns as JSON numbers, DATE as 'YYYY-MM-DD' strings, and BOOLEAN as bools --
+    none of which necessarily share a Python type with the exported record."""
+    if a is None and b is None:
+        return True
+    if isinstance(a, bool) or isinstance(b, bool):
+        return bool(a) == bool(b)
+    try:
+        return float(a) == float(b)
+    except (TypeError, ValueError):
+        return str(a) == str(b)
+
+
+_LIVE_ONLY_COLUMNS = ("created_at", "updated_at")
+
+
+def verify_rows(
+    expected_records: List[Dict[str, Any]], live_rows: List[Dict[str, Any]]
+) -> List[str]:
+    """Row-level diff keyed on ``patient_id``: missing/extra ids (counts + first 5)
+    and, for every exported field of every row present in both, a value mismatch
+    (first 10 reported, plus a total). Aggregate margins (``verify``) can match
+    while patient_ids or covariates are wrong; this is the check that cannot be
+    fooled that way. Live-only bookkeeping columns (created_at/updated_at) are
+    never compared -- the export never emits them."""
+    problems: List[str] = []
+    expected_by_id = {r["patient_id"]: r for r in expected_records}
+    live_by_id = {
+        r["patient_id"]: {k: v for k, v in r.items() if k not in _LIVE_ONLY_COLUMNS}
+        for r in live_rows
+    }
+    expected_ids, live_ids = set(expected_by_id), set(live_by_id)
+
+    missing_ids = sorted(expected_ids - live_ids)
+    if missing_ids:
+        problems.append(
+            f"{len(missing_ids)} patient_id(s) in the export missing from the live table "
+            f"(first 5): {missing_ids[:5]}"
+        )
+    extra_ids = sorted(live_ids - expected_ids)
+    if extra_ids:
+        problems.append(
+            f"{len(extra_ids)} patient_id(s) in the live table not present in the export "
+            f"(first 5): {extra_ids[:5]}"
+        )
+
+    mismatches: List[str] = []
+    for pid in sorted(expected_ids & live_ids):
+        exp_row, live_row = expected_by_id[pid], live_by_id[pid]
+        for field, exp_val in exp_row.items():
+            if not _same(exp_val, live_row.get(field)):
+                mismatches.append(
+                    f"{pid}.{field}: parquet {exp_val!r} vs live {live_row.get(field)!r}"
+                )
+    if mismatches:
+        problems.append(f"{len(mismatches)} field value mismatch(es) (first 10 shown):")
+        problems.extend(mismatches[:10])
+    return problems
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -308,20 +429,36 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("ERROR: cannot --execute without a Supabase client.")
         return 1
 
-    n = upsert(client, to_records(df), batch_size=args.batch_size)
+    expected_records = to_records(df)
+    n = upsert(client, expected_records, batch_size=args.batch_size)
     print(f"EXECUTE: upserted {n} rows into {TABLE} (idempotent on {ON_CONFLICT}).")
+
     live_after = fetch_live_split(client)
     if live_after is None:
         print("MISMATCH: could not re-read the live table after the write.")
         return 1
     _print_split("LIVE AFTER", live_after)
     problems = verify(expected, live_after)
-    if problems:
+
+    live_rows = fetch_live_rows(client)
+    if live_rows is None:
+        print("MISMATCH: could not re-read the live table's rows for row-level verification.")
+        return 1
+    row_problems = verify_rows(expected_records, live_rows)
+    print(
+        f"ROW VERIFICATION: compared {len(expected_records)} exported rows against {len(live_rows)} live rows."
+    )
+
+    all_problems = problems + row_problems
+    if all_problems:
         print("MISMATCH between the parquet and the live table:")
-        for p in problems:
+        for p in all_problems:
             print(f"  - {p}")
         return 1
-    print("VERIFIED: live arm split and per-outcome positives equal the parquet.")
+    print(
+        "VERIFIED: live arm split, treatment counts, per-outcome positives, and "
+        "every exported field of every row equal the parquet."
+    )
     return 0
 
 
