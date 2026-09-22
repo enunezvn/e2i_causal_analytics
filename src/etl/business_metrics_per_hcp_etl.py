@@ -328,6 +328,23 @@ INSERT_PER_HCP_ROLLUP_SQL: str = _compose_rollup_insert("trigger_timestamp")
 #: recomputed whole.
 INSERT_PER_HCP_ROLLUP_BY_ARRIVAL_SQL: str = _compose_rollup_insert("created_at")
 
+_PER_HCP_RECONCILE_SCOPE_BY_ARRIVAL: str = (
+    "b.metric_date IN (SELECT metric_date FROM affected_dates)"
+)
+_PER_HCP_RECONCILE_SCOPE_BY_WINDOW: str = (
+    "b.metric_date >= %(start_date)s::DATE AND b.metric_date <  %(end_date)s::DATE"
+)
+
+#: The explicit-window reconcile's WHERE clause, on the preview's alias ``o``: a stored row on
+#: a scoped date that no recomputed row reproduces. Both obsolete counts below are built from
+#: this ONE fragment, and a unit test holds it equal (aliases normalised) to the reconcile's
+#: whole predicate, so the preview cannot count a row the reconcile would spare or vice versa.
+_PREVIEW_OBSOLETE_WHERE: str = (
+    "o.metric_type = %(metric_type)s AND o.hcp_id IS NOT NULL AND "
+    + _PER_HCP_RECONCILE_SCOPE_BY_WINDOW.replace("b.", "o.")
+    + " AND NOT EXISTS (SELECT 1 FROM rollup r2 WHERE r2.metric_id = o.metric_id)"
+)
+
 _PREVIEW_COUNTS_SQL: str = """
 SELECT
     COUNT(DISTINCT r.metric_date)                        AS metric_dates,
@@ -342,17 +359,13 @@ SELECT
     )                                                    AS rows_changed,
     COUNT(*) FILTER (WHERE b.metric_id IS NOT NULL)      AS rows_existing,
     (SELECT count(*) FROM business_metrics o
-      WHERE o.metric_type = %(metric_type)s AND o.hcp_id IS NOT NULL
-        AND o.metric_date >= %(start_date)s::DATE AND o.metric_date < %(end_date)s::DATE
-        AND NOT EXISTS (SELECT 1 FROM rollup r2 WHERE r2.metric_id = o.metric_id))
+      WHERE __OBSOLETE_WHERE__)
                                                          AS rows_obsolete,
     -- Of the obsolete rows, those still carrying the Digital Twin's planted channels or
     -- outcome (columns this ETL never writes; 2026-09-21 a full-window reconcile deleted
     -- them wholesale and the twin went dark). The operator sees this before --execute.
     (SELECT count(*) FROM business_metrics o
-      WHERE o.metric_type = %(metric_type)s AND o.hcp_id IS NOT NULL
-        AND o.metric_date >= %(start_date)s::DATE AND o.metric_date < %(end_date)s::DATE
-        AND NOT EXISTS (SELECT 1 FROM rollup r2 WHERE r2.metric_id = o.metric_id)
+      WHERE __OBSOLETE_WHERE__
         AND (__COHORT_DATA_PREDICATE__))
                                                          AS rows_obsolete_with_cohort_data,
     MIN(r.metric_date)                                   AS first_date,
@@ -365,15 +378,11 @@ LEFT JOIN business_metrics b ON b.metric_id = r.metric_id
 #: single-writer tests pin it against the plant script). Named in the preview only.
 COHORT_DATA_COLUMNS: tuple[str, ...] = PLANTED_COLUMNS
 _PREVIEW_COUNTS_SQL = _PREVIEW_COUNTS_SQL.replace(
+    "__OBSOLETE_WHERE__", _PREVIEW_OBSOLETE_WHERE
+).replace(
     "__COHORT_DATA_PREDICATE__", " OR ".join(f"o.{col} IS NOT NULL" for col in COHORT_DATA_COLUMNS)
 )
 
-_PER_HCP_RECONCILE_SCOPE_BY_ARRIVAL: str = (
-    "b.metric_date IN (SELECT metric_date FROM affected_dates)"
-)
-_PER_HCP_RECONCILE_SCOPE_BY_WINDOW: str = (
-    "b.metric_date >= %(start_date)s::DATE AND b.metric_date <  %(end_date)s::DATE"
-)
 
 #: codex r13-08: an upsert cannot delete. A row whose (hcp, brand, date) lost its last
 #: trigger must go, or that date's market shares exceed 1.

@@ -19,6 +19,8 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
 from src.digital_twin.effect import cohort_causal_estimator, cohort_loader, provider
 from src.etl import business_metrics_per_hcp_etl as etl
 
@@ -139,3 +141,27 @@ def test_the_etl_preview_guards_exactly_the_columns_the_plant_writes():
     script = _plant_script()
     assert set(etl.COHORT_DATA_COLUMNS) == set(script.PLANTED_WRITE_COLUMNS)
     assert set(etl.COHORT_DATA_COLUMNS).isdisjoint(_etl_upsert_set_columns())
+
+
+def test_the_plant_derives_every_channel_column_from_the_shared_map():
+    """codex r1 (2026-09-22): a second intervention->column map in the plant would let a
+    swap in the shared map plant one channel's DGP under another's name while every
+    set-based check stayed green. The plant may name interventions; it may not name columns."""
+    from src.data.per_hcp_cohort_columns import INTERVENTION_TREATMENT_MAP
+
+    script = _plant_script()
+    assert script.ChannelSpec.__dataclass_fields__["column"].init is False
+    derived = {spec.intervention: spec.column for spec in script.CHANNEL_SPECS}
+    derived["digital_engagement"] = script.LEGACY_ENGAGEMENT_COLUMN
+    assert derived == INTERVENTION_TREATMENT_MAP
+    with pytest.raises(KeyError):
+        script.ChannelSpec(
+            intervention="not_an_intervention",
+            kind="poisson",
+            intercept=0.0,
+            beta_market=0.0,
+            beta_volume=0.0,
+            region_offset={},
+            noise_std=0.0,
+            tau_by_region={},
+        )

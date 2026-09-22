@@ -749,13 +749,30 @@ def test_the_cohort_data_count_names_every_planted_column_and_only_obsolete_rows
     from src.data.per_hcp_cohort_columns import PLANTED_COLUMNS
 
     sql = etl._PREVIEW_COUNTS_SQL
+    assert "__COHORT_DATA_PREDICATE__" not in sql
     body = sql.split("AS rows_obsolete,", 1)[1].split("AS rows_obsolete_with_cohort_data", 1)[0]
     for col in PLANTED_COLUMNS:
         assert re.search(rf"\bo\.{col} IS NOT NULL", body), col
-    # the same obsolete predicate as rows_obsolete and the reconcile: no rollup row produces it
-    assert "NOT EXISTS (SELECT 1 FROM rollup r2 WHERE r2.metric_id = o.metric_id)" in body
-    assert "o.metric_type = %(metric_type)s" in body
     assert tuple(etl.COHORT_DATA_COLUMNS) == PLANTED_COLUMNS
+
+
+def _normalised(sql: str) -> str:
+    return " ".join(sql.split())
+
+
+def test_both_obsolete_counts_share_the_explicit_reconciles_whole_predicate() -> None:
+    """codex r1 (2026-09-22): naming two of the predicate's four conditions is a proxy. Both
+    preview aggregates are built from ONE fragment, and that fragment, aliases normalised,
+    is the explicit-window reconcile's entire WHERE clause -- so no row can be counted the
+    reconcile would spare, or spared that the reconcile would delete."""
+    fragment = etl._PREVIEW_OBSOLETE_WHERE
+    assert etl._PREVIEW_COUNTS_SQL.count(fragment) == 2
+    reconcile_where = etl.RECONCILE_PER_HCP_ROLLUP_SQL.rsplit("WHERE", 1)[1].rstrip().rstrip(";")
+    # the reconcile's last WHERE is the anti-join's; take the DELETE's whole clause instead
+    delete_clause = etl.RECONCILE_PER_HCP_ROLLUP_SQL.split("DELETE FROM business_metrics b", 1)[1]
+    delete_where = delete_clause.split("WHERE", 1)[1].rstrip().rstrip(";")
+    assert reconcile_where in delete_where
+    assert _normalised(fragment.replace("o.", "b.").replace("r2", "r")) == _normalised(delete_where)
 
 
 def test_the_etl_module_does_not_import_the_twin_package() -> None:

@@ -385,6 +385,7 @@ def test_the_preview_names_the_cohort_data_an_obsolete_row_still_carries(
 
     rid, a = planted["rid"], planted["a"]
     metric_id = f"per_hcp_late_{rid}"
+    baseline = preview_per_hcp_rollup("2019-01-01", "2019-01-15")
     with db_conn:
         with db_conn.cursor() as cur:
             cur.execute(
@@ -401,10 +402,13 @@ def test_the_preview_names_the_cohort_data_an_obsolete_row_still_carries(
                 (metric_id, date(2019, 1, 3), BRAND, a),
             )
     with_channel = preview_per_hcp_rollup("2019-01-01", "2019-01-15")
-    assert (with_channel["rows_obsolete"], with_channel["rows_obsolete_with_cohort_data"]) == (
-        1,
-        1,
-    ), with_channel
+    # Deltas against a baseline taken before the insert (codex r1): the explicit window is
+    # wider than the fixture's arrival-scoped guard, so an unrelated obsolete row in it must
+    # not fail this test -- only the row planted here is asserted on.
+    assert (
+        with_channel["rows_obsolete"] - baseline["rows_obsolete"],
+        with_channel["rows_obsolete_with_cohort_data"] - baseline["rows_obsolete_with_cohort_data"],
+    ) == (1, 1), (baseline, with_channel)
     # The same row stripped of its cohort data is still obsolete, but no longer cohort data:
     # the count is about the columns, not about obsolescence.
     with db_conn:
@@ -414,6 +418,7 @@ def test_the_preview_names_the_cohort_data_an_obsolete_row_still_carries(
                 (metric_id,),
             )
     stripped = preview_per_hcp_rollup("2019-01-01", "2019-01-15")
-    assert (stripped["rows_obsolete"], stripped["rows_obsolete_with_cohort_data"]) == (1, 0), (
-        stripped
-    )
+    assert (
+        stripped["rows_obsolete"] - baseline["rows_obsolete"],
+        stripped["rows_obsolete_with_cohort_data"] - baseline["rows_obsolete_with_cohort_data"],
+    ) == (1, 0), (baseline, stripped)
