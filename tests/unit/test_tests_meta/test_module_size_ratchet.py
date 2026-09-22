@@ -23,6 +23,13 @@ LIMIT = 1500
 
 # path (relative to repo) -> pinned line count. Measured, not guessed. Only shrinks.
 ALLOWLIST: dict[str, int] = {
+    # 1566: MEASURED on main e3fb21186. The file crossed LIMIT on main itself:
+    # Lane D (#2227) took it to 1478 and Lane E (#2226) to 1566 — each PR was
+    # under the limit alone, and E's PR CI ran on a merge ref computed before D
+    # landed, so neither gate saw the sum. Pinned so the ratchet forbids further
+    # growth; Lane B lowers it (delegates the backdoor criterion out of the file)
+    # and the split by concern is an owner decision.
+    "src/agents/causal_impact/nodes/graph_builder.py": 1566,
     "src/agents/causal_impact/nodes/refutation.py": 2519,
     "src/agents/feedback_learner/dspy_integration.py": 1836,
     "src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py": 4225,
