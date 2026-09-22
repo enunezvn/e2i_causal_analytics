@@ -12,8 +12,8 @@ Elixhauser) plus their composite scores, so its correlation matrix is singular
 (rank 63 of 79 on the resolved Optum persistence frame) and fisherz refuses it
 outright; and PC's cost is driven by the number of conditional-independence
 tests, so even a full-rank frame with 43 covariates costs ~230 s per fit
-(~81 min under the production 20-resample bootstrap, against a 900 s agent
-timeout). Three steps, in this order:
+(~81 min under the production 20-resample bootstrap, against the agent's
+900 s hard timeout). Three steps, in this order:
 
 1. **Constant columns** are dropped (exact ``min == max`` — constancy is
    equality, not a tolerance).

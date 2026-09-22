@@ -747,8 +747,8 @@ class DiscoveryRunner:
         (the primary fits' wall before any resample ran); a resample that is
         still running when the budget ends is abandoned (``n_abandoned``). Measured on the real Optum
         persistence frame at 43 covariates, one PC fit is 230 s: under
-        production's 20 resamples that is ~81 min against a 900 s agent
-        timeout, which is why the loop must be bounded and the ACHIEVED count
+        production's 20 resamples that is ~81 min against the agent's 900 s
+        hard timeout, which is why the loop must be bounded and the ACHIEVED count
         reported rather than the requested one.
 
         Always returns the summary — achieved counts are reported whether or
