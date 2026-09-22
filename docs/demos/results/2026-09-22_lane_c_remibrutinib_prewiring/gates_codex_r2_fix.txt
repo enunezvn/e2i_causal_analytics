@@ -1,0 +1,8 @@
+## codex r2 (REVISE: 0 HIGH, 1 MED) — patient_journeys.brand did not survive the converter's write path
+verified: 'brand' in OPTUM_FORBIDDEN_NON_TARGET (post-index, derived from treatment_initiated); _build_and_write_cohort -> _drop_forbidden_columns strips it from e2i_ml_v3_patient_journeys.parquet (gate since d72db4e7a, 2026-05-08); the pre-Lane-C literal 'competitor' never reached that artifact either; treatment_events is not gated. Consumers read the journeys file by EXPLICIT name (data_preparer file_ingestor.py:63/128; run_optum_tier0_test.py:124), so a new sidecar file is invisible to the model frame.
+fix: _build_and_write_cohort also writes e2i_ml_v3_patient_journey_brands.parquet (patient_journey_id, patient_id, brand) from the UNGATED journeys; the gate is untouched, brand is NOT relabelled pre-index nor added to OPTUM_TARGETS.
+red-first (TestWrittenArtifactBrand, lane_c_pytest_r2_red.log, 16:51Z):
+FAILED tests/unit/test_scripts/test_convert_optum_rwd_remibrutinib.py::TestWrittenArtifactBrand::test_remibrutinib_brand_survives_in_the_sidecar_not_the_model_frame
+FAILED tests/unit/test_scripts/test_convert_optum_rwd_remibrutinib.py::TestWrittenArtifactBrand::test_competitor_brand_survives_in_the_sidecar
+======================= 2 failed, 12 warnings in 14.71s ========================
+green (lane_c_pytest_r2_green, 16:54Z, the whole test_convert_optum_rwd* family + test_cohort_builder_forbidden_gate.py + test_treatment_response_proxy.py): ====================== 328 passed, 12 warnings in 19.45s =======================

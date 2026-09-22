@@ -31,7 +31,6 @@ from src.api.schemas.causal import (
     RefutationSummary,
     RefutationTestDetail,
 )
-from src.repositories.provenance import deployment_includes_synthetic
 
 from ._common import (
     _AGENT_HARD_TIMEOUT_S,
@@ -45,6 +44,7 @@ from .datasets import (
     _default_auto_discover,
     _is_randomized_treatment,
     _negative_control_outcome,
+    serves_synthetic_rows,
 )
 from .loaders import _load_agent_estimation_frame, _resolve_requested_baselines
 
@@ -267,7 +267,7 @@ async def run_causal_agent_analysis(
     ]
 
     analysis_id = str(uuid.uuid4())
-    data_source = "synthetic" if deployment_includes_synthetic() else "database"
+    data_source = "synthetic" if serves_synthetic_rows(request.dataset) else "database"
     pending = AgentCausalAnalysisResponse(
         analysis_id=analysis_id,
         status="pending",

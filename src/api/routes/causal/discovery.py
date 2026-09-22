@@ -34,7 +34,6 @@ from src.api.schemas.causal import (
     RefutationSummary,
 )
 from src.insights.robustness_phrase import gate_verdict_phrase
-from src.repositories.provenance import deployment_includes_synthetic
 
 # The task calls the agent task — and reads the agent JOB STORE — THROUGH the
 # module namespace so a patch on ``agent._run_agent_analysis_task`` or on
@@ -56,6 +55,7 @@ from .datasets import (
     _default_auto_discover,
     _list_dataset_brands,
     _negative_control_outcome,
+    serves_synthetic_rows,
 )
 from .loaders import _get_causal_path_repo, _load_agent_estimation_frame
 
@@ -725,7 +725,9 @@ async def discover_causal_effects(
     brand, candidates = await _resolve_discovery_scope(dataset, brand)
     questions = _select_discovery_questions(candidates, body.questions if body else None)
     job_id = str(uuid.uuid4())
-    data_source = "synthetic" if deployment_includes_synthetic() else "database"
+    # Dataset-aware (codex r1 HIGH): a synthetic-backed dataset is labelled by
+    # the planted-truth seam, never by the deployment-wide flag.
+    data_source = "synthetic" if serves_synthetic_rows(dataset) else "database"
     initial = DiscoverEffectsResponse(
         job_id=job_id,
         status="pending",

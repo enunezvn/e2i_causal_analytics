@@ -1,0 +1,22 @@
+# D2 probe summary — probe_graph_runtime.py on main efaad6eeb + this lane, in-process, Supabase blanked, MLflow file store, Redis dead port
+# host: prod droplet (PROD == DEV), 8 cpu, run 2026-09-22 14:36-14:52 UTC, box lock held, one probe at a time
+=== PROBE 2000 narrow start 14:36:52
+Mem:           15991        9238        2889          68        4512        6752
+PROBE narrow n=2000 k=5 wall=83.5s rss=781.0MB status=completed ate=0.4135782017275297 true=0.3619 ci=[0.37230266468601203, 0.4548537387690473] estimator=LinearDML dag_source=domain_knowledge refutation_passed=True warnings=[]
+=== end 14:38:38
+=== PROBE 3000 narrow start 14:38:38
+Mem:           15991        8312        3773          68        4554        7679
+PROBE narrow n=3000 k=5 wall=85.0s rss=801.5MB status=completed ate=0.40719209740361195 true=0.3643 ci=[0.37261009805084433, 0.4417740967563796] estimator=LinearDML dag_source=domain_knowledge refutation_passed=True warnings=[]
+=== end 14:40:23
+=== PROBE 2000 wide start 14:40:23
+Mem:           15991        7725        4358          69        4556        8265
+PROBE wide n=2000 k=73 wall=671.3s rss=858.2MB status=failed ate=0.4107208653550076 true=0.3619 ci=[0.3719726570833538, 0.44946907362666144] estimator=LinearDML dag_source=domain_knowledge refutation_passed=False warnings=['Refutation did not run — the effect is unvalidated.']
+=== end 14:51:54
+# tournament / refutation split, narrow n=2000 (from lane_c_probe_narrow_2000.log timestamps):
+2026-09-22 14:37:18,218 INFO src.causal_engine.energy_score.estimator_selector: Evaluating causal_forest...
+2026-09-22 14:37:28,702 INFO src.causal_engine.energy_score.estimator_selector: Evaluating linear_dml...
+2026-09-22 14:37:40,396 INFO src.causal_engine.energy_score.estimator_selector: Evaluating drlearner...
+2026-09-22 14:37:47,642 INFO src.causal_engine.energy_score.estimator_selector: Evaluating ols...
+2026-09-22 14:37:55,510 INFO src.causal_engine.energy_score.estimator_selector: Energy-score tie within gap 0.0500: selected confounding-robust estimator linear
+2026-09-22 14:37:55,589 INFO src.agents.causal_impact.nodes.refutation: Running refutation suite for treatment_remibrutinib → persistent_at_180d_g28 (ATE=0.41
+2026-09-22 14:38:33,081 INFO src.causal_engine.refutation_runner: Refutation suite completed: 5/5 passed, confidence=1.00, gate=proceed

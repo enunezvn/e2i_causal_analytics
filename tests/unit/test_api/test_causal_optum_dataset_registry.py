@@ -105,8 +105,10 @@ def test_brand_scoping_passes_every_baseline_feature_through():
 # ---------------------------------------------------------------------------
 
 
-def test_discovery_is_off_by_default_only_for_the_real_dataset():
-    assert _CAUSAL_DISCOVERY_DEFAULT_OFF == frozenset({DATASET})
+def test_discovery_is_off_by_default_only_for_the_claims_frame_datasets():
+    # Exact pin: the real cohort and Lane C's pre-wired csu_escalation_causal
+    # (same 64-feature claims-frame shape, measured singular) and nothing else.
+    assert _CAUSAL_DISCOVERY_DEFAULT_OFF == frozenset({DATASET, "csu_escalation_causal"})
     assert _default_auto_discover(DATASET) is False
     assert _default_auto_discover("patient_journeys") is True
     assert _default_auto_discover(None) is True

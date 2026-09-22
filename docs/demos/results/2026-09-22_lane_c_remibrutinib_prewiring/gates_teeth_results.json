@@ -1,0 +1,60 @@
+{
+ "rwd_journey_brand": {
+  "rc": 1,
+  "wall_s": 31.6,
+  "red": true,
+  "named_failures_seen": [],
+  "summary": [
+   "================== 1 failed, 1 passed, 12 warnings in 13.90s ==================="
+  ],
+  "restored_sha_ok": true
+ },
+ "mart_one_arm": {
+  "rc": 1,
+  "wall_s": 31.7,
+  "red": true,
+  "named_failures_seen": [
+   "test_one_arm_frame_is_refused"
+  ],
+  "summary": [
+   "================== 1 failed, 4 passed, 12 warnings in 14.06s ==================="
+  ],
+  "restored_sha_ok": true
+ },
+ "migration_column": {
+  "rc": 1,
+  "wall_s": 31.0,
+  "red": true,
+  "named_failures_seen": [
+   "test_migration_149_columns_equal_the_contract"
+  ],
+  "summary": [
+   "======================= 1 failed, 12 warnings in 13.53s ========================"
+  ],
+  "restored_sha_ok": true
+ },
+ "loader_missing_dummy": {
+  "rc": 1,
+  "wall_s": 35.0,
+  "red": true,
+  "named_failures_seen": [
+   "test_synthetic_mode_loads_coerces_and_one_hots_the_backing"
+  ],
+  "summary": [
+   "================== 1 failed, 8 passed, 12 warnings in 16.37s ==================="
+  ],
+  "restored_sha_ok": true
+ },
+ "e2e_no_adjustment": {
+  "rc": 1,
+  "wall_s": 47.6,
+  "red": true,
+  "named_failures_seen": [
+   "test_planted_ate_is_recovered_through_the_production_path"
+  ],
+  "summary": [
+   "======================= 1 failed, 15 warnings in 27.97s ========================"
+  ],
+  "restored_sha_ok": true
+ }
+}
