@@ -216,6 +216,42 @@ class DiscoveryRunner:
                 data, config, session_id, node_names, start_time
             )
 
+    @staticmethod
+    def _run_outcome(algorithm_results: List[AlgorithmResult]) -> Tuple[bool, Dict[str, Any]]:
+        """``(success, metadata)`` for a finished run, derived from what the
+        algorithms actually did.
+
+        A run is successful only if at least one algorithm CONVERGED. Before
+        this, ``success`` was hard-coded ``True`` on both result paths, so a run
+        in which every algorithm raised (measured 2026-09-22 on the real Optum
+        persistence cohort: fisherz refuses the singular correlation matrix of
+        the claims comorbidity families) came back as a successful discovery
+        with zero edges. The gate then reported "Too few edges discovered" and
+        the API answered ``dag_source='domain_knowledge'`` with no reason --
+        the error string never left ``algorithm_results[].metadata``.
+
+        ``algorithm_errors`` (``{algorithm: message}``) is recorded whenever
+        any algorithm failed; ``error`` (one line naming each failed algorithm)
+        is set only when NONE converged, because that is the case in which the
+        gate must say "could not run" rather than "found nothing".
+        """
+        errors = {
+            r.algorithm.value: str(r.metadata.get("error") or "did not converge")
+            for r in algorithm_results
+            if not r.converged
+        }
+        success = any(r.converged for r in algorithm_results)
+        metadata: Dict[str, Any] = {}
+        if errors:
+            metadata["algorithm_errors"] = errors
+        if not success:
+            metadata["error"] = (
+                "; ".join(f"{algo}: {msg}" for algo, msg in errors.items())
+                if errors
+                else "no discovery algorithm ran"
+            )
+        return success, metadata
+
     async def _discover_dag_internal(
         self,
         data: pd.DataFrame,
@@ -242,10 +278,19 @@ class DiscoveryRunner:
         latent_metadata = await self._maybe_latent_diagnostic(data, config)
 
         total_runtime = time.time() - start_time
-        logger.info(f"Causal discovery complete: {len(edges)} edges found in {total_runtime:.2f}s")
+        success, outcome_metadata = self._run_outcome(algorithm_results)
+        if success:
+            logger.info(
+                f"Causal discovery complete: {len(edges)} edges found in {total_runtime:.2f}s"
+            )
+        else:
+            logger.warning(
+                f"Causal discovery could not run ({outcome_metadata['error']}) "
+                f"after {total_runtime:.2f}s"
+            )
 
         return DiscoveryResult(
-            success=True,
+            success=success,
             config=config,
             ensemble_dag=ensemble_dag,
             edges=edges,
@@ -257,6 +302,7 @@ class DiscoveryRunner:
                 "n_samples": len(data),
                 **bootstrap_metadata,
                 **latent_metadata,
+                **outcome_metadata,
             },
         )
 
@@ -317,18 +363,26 @@ class DiscoveryRunner:
             span.n_edges_discovered = len(edges)
             span.algorithm_agreement = agreement
 
-            logger.info(
-                f"Causal discovery complete: {len(edges)} edges found in {total_runtime:.2f}s"
-            )
+            success, outcome_metadata = self._run_outcome(algorithm_results)
+            if success:
+                logger.info(
+                    f"Causal discovery complete: {len(edges)} edges found in {total_runtime:.2f}s"
+                )
+            else:
+                logger.warning(
+                    f"Causal discovery could not run ({outcome_metadata['error']}) "
+                    f"after {total_runtime:.2f}s"
+                )
 
             return DiscoveryResult(
-                success=True,
+                success=success,
                 config=config,
                 ensemble_dag=ensemble_dag,
                 edges=edges,
                 algorithm_results=algorithm_results,
                 session_id=session_id,
                 metadata={
+                    **outcome_metadata,
                     "total_runtime_seconds": total_runtime,
                     "node_names": node_names,
                     "n_samples": len(data),
