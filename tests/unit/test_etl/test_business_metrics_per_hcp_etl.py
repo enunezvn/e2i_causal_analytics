@@ -850,12 +850,18 @@ def test_the_preflight_counts_exactly_what_the_preview_reports_as_cohort_data() 
     sql = etl.PREFLIGHT_COHORT_DATA_SQL
     cte_text = etl.INSERT_PER_HCP_ROLLUP_SQL.split("INSERT INTO business_metrics", 1)[0]
     assert sql.startswith(cte_text.rstrip())
-    head = ")\nSELECT count(*), (array_agg(o.metric_id ORDER BY o.metric_id))[1:5]\n  FROM business_metrics o\n WHERE "
+    head = "),\nat_stake AS (\n  SELECT o.metric_id\n    FROM business_metrics o\n   WHERE "
     tail = sql.split(head, 1)[1]
     assert tail.startswith(etl._PREVIEW_OBSOLETE_WHERE)
     predicate = " OR ".join(f"o.{c} IS NOT NULL" for c in etl.COHORT_DATA_COLUMNS)
-    assert tail.rstrip().endswith(f"AND ({predicate})")
+    where, readout = tail.split(f"AND ({predicate})\n)\n", 1)
+    assert etl._PREVIEW_OBSOLETE_WHERE in where
     assert f"AND ({predicate})" in etl._PREVIEW_COUNTS_SQL
+    # codex r2: the ids at stake are materialised once, counted, and sampled by an ordered
+    # LIMIT 5 -- never aggregated whole and sliced.
+    assert readout.startswith("SELECT (SELECT count(*) FROM at_stake)")
+    assert "(SELECT metric_id FROM at_stake ORDER BY metric_id LIMIT 5) s" in readout
+    assert "array_agg(s.metric_id)" in readout and "[1:5]" not in sql
     code = "\n".join(line.split("--", 1)[0] for line in sql.splitlines())
     assert not re.search(r"\b(INSERT|UPDATE|DELETE|MERGE)\b|ON CONFLICT", code)
 
@@ -902,21 +908,35 @@ def test_explicit_window_run_takes_one_snapshot_for_preflight_insert_and_reconci
     assert set(result) == _BASE_RUN_KEYS
 
 
-def test_a_serialization_failure_fails_closed_without_a_second_attempt() -> None:
+@pytest.mark.parametrize(
+    ("failing_statement", "statements_run"),
+    [
+        pytest.param("INSERT_PER_HCP_ROLLUP_SQL", 3, id="upsert"),
+        pytest.param("RECONCILE_PER_HCP_ROLLUP_SQL", 4, id="reconcile"),
+    ],
+)
+def test_a_serialization_failure_fails_closed_without_a_second_attempt(
+    failing_statement: str, statements_run: int
+) -> None:
+    """Under REPEATABLE READ a row changed after the snapshot fails whichever statement
+    touches it first -- the upsert's ON CONFLICT DO UPDATE or the reconcile's DELETE
+    (codex r2) -- and the run reports ``failed`` without retrying or writing."""
     import psycopg2
 
     conn = _conn_with_preflight(0)
     cur = conn.cursor.return_value
+    failing = getattr(etl, failing_statement)
 
     def _execute(statement, *_a):
-        if statement is etl.RECONCILE_PER_HCP_ROLLUP_SQL:
+        if statement is failing:
             raise psycopg2.errors.SerializationFailure("could not serialize access")
 
     cur.execute.side_effect = _execute
     with patch.object(etl, "_connect_to_db", return_value=conn):
         result = etl._run_per_hcp_rollup_impl(start_date="2026-05-01", end_date="2026-09-16")
     assert result["status"] == "failed" and "serialize" in result["error"]
-    assert cur.execute.call_count == 4
+    assert (result["rows_affected"], result["rows_deleted"]) == (0, 0)
+    assert cur.execute.call_count == statements_run
     conn.close.assert_called_once()
 
 

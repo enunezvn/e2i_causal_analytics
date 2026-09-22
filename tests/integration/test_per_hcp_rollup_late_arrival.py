@@ -44,12 +44,18 @@ EARLY_BATCH = datetime(2019, 1, 2, 3, 0, 55, tzinfo=UTC)
 MONDAY_BATCH = datetime(2019, 1, 14, 3, 0, 55, tzinfo=UTC)
 BRAND = "Kisqali"
 # Guard windows: wide enough to cover every window any phase of this file uses -- the
-# two arrival runs (03:15 and 03:45 on 2019-01-14) and the explicit 2019-01-20 reconcile
-# of test_the_reconcile_deletes_our_obsolete_row_and_spares_a_foreign_one. Deliberately
-# the UNION of the file's windows, not one of them: a guard that censuses a narrower
-# range than the test writes over cannot fail for the reason it exists.
+# two arrival runs (03:15 and 03:45 on 2019-01-14), the explicit 2019-01-20 territory
+# reconcile of test_the_reconcile_deletes_our_obsolete_row_and_spares_a_foreign_one, and
+# the explicit per-HCP window [EXPLICIT_START, EXPLICIT_END) the #2210 guard tests run.
+# Deliberately the UNION of the file's windows, not one of them: a guard that censuses a
+# narrower range than the test writes over cannot fail for the reason it exists.
 GUARD_ARRIVAL_END = datetime(2019, 1, 21, tzinfo=UTC)
 GUARD_DATE_END = date(2019, 1, 21)
+# The explicit per-HCP window: selected by trigger_timestamp, not by arrival, so it needs
+# its own census (codex r2 on #2212: a foreign trigger dated inside it but created outside
+# the arrival window would be rolled up and left behind by the prefix-scoped teardown).
+EXPLICIT_START = "2019-01-01"
+EXPLICIT_END = "2019-01-15"
 
 
 @pytest.fixture(scope="module")
@@ -71,7 +77,9 @@ def planted(db_conn: Any) -> Any:
     # the derivation leg (no unplanted trigger on an affected date) and the key-space
     # leg (the territory CROSS JOIN reaching real territories), and it FAILS rather than
     # raising a bare AssertionError, so the message names the window and the counts.
-    # Every phase this file runs is by ARRIVAL, so each census windows on created_at.
+    # The arrival phases census on created_at; the explicit per-HCP runs of the #2210 guard
+    # tests select by trigger_timestamp and get their own census, so a trigger dated in the
+    # explicit window but created outside the arrival window cannot pass the gate.
     require_isolated_windows(
         db_conn,
         per_hcp_rollup_spec(
@@ -81,6 +89,14 @@ def planted(db_conn: Any) -> Any:
             hcp_like=f"hl_{rid}_%",
             trigger_like=f"trlate_{rid}_%",
             window_column="created_at",
+        ),
+        per_hcp_rollup_spec(
+            test_file=__file__,
+            start=datetime.fromisoformat(EXPLICIT_START).replace(tzinfo=UTC),
+            end=datetime.fromisoformat(EXPLICIT_END).replace(tzinfo=UTC),
+            hcp_like=f"hl_{rid}_%",
+            trigger_like=f"trlate_{rid}_%",
+            window_column="trigger_timestamp",
         ),
         territory_rollup_spec(
             test_file=__file__,
@@ -239,7 +255,7 @@ def test_a_late_weekly_batch_rolls_up_under_each_triggers_own_date(
     )
 
     # The dry-run readout agrees with what the run wrote.
-    after = preview_per_hcp_rollup("2019-01-01", "2019-01-15")
+    after = preview_per_hcp_rollup(EXPLICIT_START, EXPLICIT_END)
     assert (
         after["metric_dates"],
         after["rows_new"],
@@ -385,7 +401,7 @@ def test_the_preview_names_the_cohort_data_an_obsolete_row_still_carries(
 
     rid, a = planted["rid"], planted["a"]
     metric_id = f"per_hcp_late_{rid}"
-    baseline = preview_per_hcp_rollup("2019-01-01", "2019-01-15")
+    baseline = preview_per_hcp_rollup(EXPLICIT_START, EXPLICIT_END)
     with db_conn:
         with db_conn.cursor() as cur:
             cur.execute(
@@ -401,7 +417,7 @@ def test_the_preview_names_the_cohort_data_an_obsolete_row_still_carries(
                 """,
                 (metric_id, date(2019, 1, 3), BRAND, a),
             )
-    with_channel = preview_per_hcp_rollup("2019-01-01", "2019-01-15")
+    with_channel = preview_per_hcp_rollup(EXPLICIT_START, EXPLICIT_END)
     # Deltas against a baseline taken before the insert (codex r1): the explicit window is
     # wider than the fixture's arrival-scoped guard, so an unrelated obsolete row in it must
     # not fail this test -- only the row planted here is asserted on.
@@ -417,7 +433,7 @@ def test_the_preview_names_the_cohort_data_an_obsolete_row_still_carries(
                 "UPDATE business_metrics SET email_campaign_count = NULL WHERE metric_id = %s",
                 (metric_id,),
             )
-    stripped = preview_per_hcp_rollup("2019-01-01", "2019-01-15")
+    stripped = preview_per_hcp_rollup(EXPLICIT_START, EXPLICIT_END)
     assert (
         stripped["rows_obsolete"] - baseline["rows_obsolete"],
         stripped["rows_obsolete_with_cohort_data"] - baseline["rows_obsolete_with_cohort_data"],
@@ -458,7 +474,7 @@ def test_an_explicit_window_run_refuses_to_delete_planted_cohort_data_unless_ack
                 return cur.fetchone() is not None
 
     refused = _run_per_hcp_rollup_impl(
-        start_date="2019-01-01", end_date="2019-01-15", request_id="late-arrival-guard"
+        start_date=EXPLICIT_START, end_date=EXPLICIT_END, request_id="late-arrival-guard"
     )
     assert refused["status"] == "refused", refused
     assert refused["rows_obsolete_with_cohort_data"] >= 1, refused
@@ -466,8 +482,8 @@ def test_an_explicit_window_run_refuses_to_delete_planted_cohort_data_unless_ack
     assert _row_exists(), "a refused run must write nothing"
 
     acknowledged = _run_per_hcp_rollup_impl(
-        start_date="2019-01-01",
-        end_date="2019-01-15",
+        start_date=EXPLICIT_START,
+        end_date=EXPLICIT_END,
         request_id="late-arrival-guard-ack",
         allow_cohort_data_loss=True,
     )
@@ -477,62 +493,165 @@ def test_an_explicit_window_run_refuses_to_delete_planted_cohort_data_unless_ack
     assert not _row_exists(), "the acknowledged run's reconcile deletes the obsolete row"
 
 
-def test_the_guard_snapshot_hides_a_row_planted_after_the_preflight(
+class _AfterStatement:
+    """A real psycopg2 connection whose cursor calls ``after()`` once, right after the run
+    executes ``statement`` and before its next statement -- the seam a concurrent writer
+    lands in. Everything else (``with conn:`` commit/rollback, ``close``) is the real
+    connection's, so the run under test is the production function, not a re-enactment of
+    its SQL (codex r2 on #2212)."""
+
+    def __init__(self, conn: Any, statement: str, after: Any) -> None:
+        self._conn, self._statement, self._after = conn, statement, after
+        self.fired = 0
+
+    def cursor(self) -> "_AfterStatementCursor":
+        return _AfterStatementCursor(self, self._conn.cursor())
+
+    def __enter__(self) -> "_AfterStatement":
+        self._conn.__enter__()
+        return self
+
+    def __exit__(self, *exc: Any) -> Any:
+        return self._conn.__exit__(*exc)
+
+    def close(self) -> None:
+        self._conn.close()
+
+
+class _AfterStatementCursor:
+    def __init__(self, owner: _AfterStatement, cur: Any) -> None:
+        self._owner, self._cur = owner, cur
+
+    def execute(self, sql: Any, params: Any = None) -> None:
+        self._cur.execute(sql, params)
+        if sql is self._owner._statement:
+            self._owner.fired += 1
+            self._owner._after()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._cur, name)
+
+    def __enter__(self) -> "_AfterStatementCursor":
+        self._cur.__enter__()
+        return self
+
+    def __exit__(self, *exc: Any) -> Any:
+        return self._cur.__exit__(*exc)
+
+
+def _run_with_writer_after_preflight(etl: Any, after: Any, **kwargs: Any) -> tuple[dict, int]:
+    """Run the real explicit-window function with ``after()`` committed from another
+    connection immediately after its preflight. Returns (result, times the hook fired)."""
+    from unittest.mock import patch
+
+    hooked = _AfterStatement(etl._connect_to_db(), etl.PREFLIGHT_COHORT_DATA_SQL, after)
+    with patch.object(etl, "_connect_to_db", return_value=hooked):
+        result = etl._run_per_hcp_rollup_impl(
+            start_date=EXPLICIT_START, end_date=EXPLICIT_END, **kwargs
+        )
+    return result, hooked.fired
+
+
+def test_the_run_snapshot_hides_a_row_planted_after_its_preflight(
     db_conn: Any, planted: dict
 ) -> None:
     """codex r1 on #2212: one transaction is not one snapshot under READ COMMITTED. Prove on
-    the real database that the run's REPEATABLE READ snapshot, taken by the preflight, hides
-    a cohort-bearing row another connection commits afterwards: the reconcile in the same
-    transaction deletes nothing, the row survives, and the next run refuses on it."""
-    import os
-
-    import psycopg2
-
+    the real database, through the real run: another connection commits a cohort-bearing
+    obsolete row right after the run's preflight counted zero. The run completes, its
+    reconcile spares the row (invisible to the REPEATABLE READ snapshot), the row survives,
+    and the next run refuses on it. Cleans its own plant so later tests start at zero."""
     from src.etl import business_metrics_per_hcp_etl as etl
 
     rid, a = planted["rid"], planted["a"]
     metric_id = f"per_hcp_snap_{rid}"
-    params = {
-        "start_date": date(2019, 1, 1),
-        "end_date": date(2019, 1, 15),
-        "metric_id_prefix": etl.METRIC_ID_PREFIX,
-        "metric_type": etl.METRIC_TYPE,
-    }
-    runner = psycopg2.connect(os.environ["SUPABASE_DB_URL"])
+
+    def plant_after_preflight() -> None:
+        with db_conn:
+            with db_conn.cursor() as other:
+                other.execute(
+                    """
+                    INSERT INTO business_metrics (
+                        metric_id, metric_date, metric_type, brand, region, hcp_id,
+                        triggers_delivered_count, triggers_accepted_count,
+                        triggers_total_count, market_share, conversion_rate,
+                        is_synthetic, rep_training_score
+                    ) VALUES (
+                        %s, %s, 'per_hcp_rollup', %s::brand_type,
+                        'northeast'::region_type, %s, 1, 0, 1, 1.0, 0.0, true, 0.7
+                    )
+                    """,
+                    (metric_id, date(2019, 1, 5), BRAND, a),
+                )
+
+    def _row_exists() -> bool:
+        with db_conn:
+            with db_conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM business_metrics WHERE metric_id = %s", (metric_id,))
+                return cur.fetchone() is not None
+
     try:
-        with runner:
-            with runner.cursor() as cur:
-                cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-                cur.execute(etl.PREFLIGHT_COHORT_DATA_SQL, params)
-                at_stake, sample = cur.fetchone()
-                assert (at_stake, sample) == (0, None), (at_stake, sample)
-                # another connection lands a cohort-bearing obsolete row and commits
-                with db_conn:
-                    with db_conn.cursor() as other:
-                        other.execute(
-                            """
-                            INSERT INTO business_metrics (
-                                metric_id, metric_date, metric_type, brand, region, hcp_id,
-                                triggers_delivered_count, triggers_accepted_count,
-                                triggers_total_count, market_share, conversion_rate,
-                                is_synthetic, rep_training_score
-                            ) VALUES (
-                                %s, %s, 'per_hcp_rollup', %s::brand_type,
-                                'northeast'::region_type, %s, 1, 0, 1, 1.0, 0.0, true, 0.7
-                            )
-                            """,
-                            (metric_id, date(2019, 1, 5), BRAND, a),
-                        )
-                cur.execute(etl.RECONCILE_PER_HCP_ROLLUP_SQL, params)
-                assert cur.rowcount == 0, "the snapshot must hide the row planted after it"
+        completed, fired = _run_with_writer_after_preflight(
+            etl, plant_after_preflight, request_id="late-arrival-snapshot"
+        )
+        assert fired == 1
+        assert completed["status"] == "completed", completed
+        # the preflight counted zero: the payload is the pre-#2210 one
+        assert "rows_obsolete_with_cohort_data" not in completed, completed
+        assert completed["rows_deleted"] == 0, completed
+        assert _row_exists(), "the row planted after the snapshot must survive the reconcile"
+        refused = etl._run_per_hcp_rollup_impl(
+            start_date=EXPLICIT_START, end_date=EXPLICIT_END, request_id="late-arrival-snapshot-2"
+        )
+        assert refused["status"] == "refused", refused
+        assert metric_id in refused["rows_obsolete_with_cohort_data_sample"], refused
+        assert _row_exists()
     finally:
-        runner.close()
-    with db_conn:
-        with db_conn.cursor() as cur:
-            cur.execute("SELECT 1 FROM business_metrics WHERE metric_id = %s", (metric_id,))
-            assert cur.fetchone() is not None, "the concurrently planted row must survive"
-    refused = etl._run_per_hcp_rollup_impl(
-        start_date="2019-01-01", end_date="2019-01-15", request_id="late-arrival-snapshot"
-    )
-    assert refused["status"] == "refused", refused
-    assert metric_id in refused["rows_obsolete_with_cohort_data_sample"], refused
+        with db_conn:
+            with db_conn.cursor() as cur:
+                cur.execute("DELETE FROM business_metrics WHERE metric_id = %s", (metric_id,))
+
+
+def test_a_row_changed_after_the_preflight_fails_the_run_and_commits_nothing(
+    db_conn: Any, planted: dict
+) -> None:
+    """codex r2 on #2212: the snapshot's other edge. The run's INSERT ... ON CONFLICT DO
+    UPDATE touches (a, TUESDAY), a row the earlier phases wrote; another connection updates
+    that row right after the preflight. PostgreSQL will not let a REPEATABLE READ
+    transaction update a row changed since its snapshot: the real run ends ``failed`` with
+    a serialization failure, nothing it wrote is committed, and the concurrent update is
+    what remains in every planted row."""
+    from src.etl import business_metrics_per_hcp_etl as etl
+
+    rid, a = planted["rid"], planted["a"]
+    target = etl._build_metric_id(a, BRAND, TUESDAY)
+    before = _rows(db_conn, rid)
+    assert (a, TUESDAY) in before, before
+    original_count, share = before[(a, TUESDAY)]
+    assert original_count != 99
+
+    def touch_after_preflight() -> None:
+        with db_conn:
+            with db_conn.cursor() as other:
+                other.execute(
+                    "UPDATE business_metrics SET triggers_total_count = 99 WHERE metric_id = %s",
+                    (target,),
+                )
+                assert other.rowcount == 1, "the upsert target must exist before the run"
+
+    try:
+        failed, fired = _run_with_writer_after_preflight(
+            etl, touch_after_preflight, request_id="late-arrival-concurrent-update"
+        )
+        assert fired == 1
+        assert failed["status"] == "failed", failed
+        assert "serialize" in failed["error"], failed
+        assert (failed["rows_affected"], failed["rows_deleted"]) == (0, 0), failed
+        # nothing of the run landed: the concurrent update is the only change
+        assert _rows(db_conn, rid) == {**before, (a, TUESDAY): (99, share)}
+    finally:
+        with db_conn:
+            with db_conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE business_metrics SET triggers_total_count = %s WHERE metric_id = %s",
+                    (original_count, target),
+                )

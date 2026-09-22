@@ -445,15 +445,20 @@ PREVIEW_PER_HCP_ROLLUP_SQL: str = (
 #: aggregate on its own, composed from the same CTEs, the same obsolete predicate and the same
 #: planted-column list, so what the run refuses on is exactly what the preview reported. Runs
 #: inside the run's own transaction, before the INSERT, so the count is race-free with the DELETE.
+#: The ids at stake are materialised once (``at_stake``, referenced twice so PostgreSQL keeps
+#: it), counted, and sampled with an ordered ``LIMIT 5`` -- not aggregated whole and sliced,
+#: which would size the diagnostic by every affected row (codex r2).
 PREFLIGHT_COHORT_DATA_SQL: str = (
     _PER_HCP_ROLLUP_CTES_TEMPLATE.replace("__WINDOW_COLUMN__", "trigger_timestamp")
     + ",\nrollup AS ("
     + _PER_HCP_ROLLUP_ROWS_SELECT
-    + ")\nSELECT count(*), (array_agg(o.metric_id ORDER BY o.metric_id))[1:5]\n  FROM business_metrics o\n WHERE "
+    + "),\nat_stake AS (\n  SELECT o.metric_id\n    FROM business_metrics o\n   WHERE "
     + _PREVIEW_OBSOLETE_WHERE
-    + "\n   AND ("
+    + "\n     AND ("
     + " OR ".join(f"o.{col} IS NOT NULL" for col in COHORT_DATA_COLUMNS)
-    + ")"
+    + ")\n)\nSELECT (SELECT count(*) FROM at_stake),\n"
+    "       (SELECT array_agg(s.metric_id)\n"
+    "          FROM (SELECT metric_id FROM at_stake ORDER BY metric_id LIMIT 5) s)"
 )
 
 
@@ -647,9 +652,12 @@ def _run_per_hcp_rollup_impl(
                     # READ COMMITTED (the connection default) each statement would see its
                     # own snapshot and a concurrent plant could land a cohort-bearing row
                     # between the count and the DELETE. Under REPEATABLE READ a row written
-                    # after the snapshot is invisible to the DELETE, and a row the DELETE
-                    # touches that another transaction changed fails the run (serialization
+                    # after the snapshot is invisible to the DELETE, and a row that another
+                    # transaction changed after the snapshot fails the run when either the
+                    # upsert (ON CONFLICT DO UPDATE) or the DELETE touches it (serialization
                     # failure -> status "failed", nothing committed): closed either way.
+                    # Both edges are proven on the live database by
+                    # tests/integration/test_per_hcp_rollup_late_arrival.py.
                     cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
                     cur.execute(PREFLIGHT_COHORT_DATA_SQL, params)
                     row = cur.fetchone()
