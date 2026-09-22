@@ -316,8 +316,21 @@ class DiscoveryGate:
             return 0.0, "no_evidence"
 
         if len(converged) >= 2:
+            # The runner's vote census (agreed candidates / all candidates).
+            # Under the agreement quorum every SURVIVING edge is agreed on by
+            # construction -- with two voters every survivor is 2/2 -- so the
+            # survivors' votes would score 1.0 whatever the voters disagreed
+            # on; the census keeps the disagreement. Two voters at rate r give
+            # 0.4 * r + 0.4 * 1.0 + 0.2 * structure below, the same number the
+            # former union rule produced (mean union-edge confidence
+            # 0.5 + 0.5 * r, times 0.8), so the ACCEPT / REVIEW / REJECT bands
+            # keep their calibration; only the DAG loses single-voter edges.
+            census = result.vote_census
+            if census and census.get("n_converged", 0) >= 2:
+                return float(census["agreement_rate"]), "algorithm_agreement"
             n_algorithms = len(converged)
-            # Average votes per edge normalized by number of algorithms
+            # No census (a result built outside the runner): average votes per
+            # edge normalized by number of algorithms.
             total = sum(e.algorithm_votes / n_algorithms for e in result.edges)
             return total / len(result.edges), "algorithm_agreement"
 

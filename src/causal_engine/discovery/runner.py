@@ -15,6 +15,7 @@ Author: E2I Causal Analytics Team
 
 import asyncio
 import logging
+import math
 import time
 from concurrent.futures import ProcessPoolExecutor
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type, cast
@@ -639,12 +640,31 @@ class DiscoveryRunner:
         """Build ensemble DAG from algorithm results.
 
         Uses voting across algorithms to determine which edges to include.
-        Edges found by >= threshold fraction of algorithms are included.
+        An edge is included when at least ``threshold`` of the CONVERGED
+        algorithms agree on it, and agreement means at least two of them:
+        ``min_votes = max(2, ceil(n_converged * threshold))``. Before
+        2026-09-22 the quorum was ``max(1, int(n_converged * threshold))``,
+        which with the two-voter default and threshold 0.5 resolved to ONE
+        vote -- an edge found by EITHER algorithm shipped at confidence 0.5,
+        so the "vote" was a union (measured on the planted synthetic frame:
+        docs/demos/results/2026-09-22_discovery_vote_rule/). ``ceil`` because
+        "at least a fraction t" is ``votes >= n * t``; the floor of 2 because
+        one voter cannot agree with anyone.
+
+        A single converged algorithm keeps every edge at one vote: it cannot
+        agree with anyone, and its corroboration is the bootstrap resample
+        path (``_maybe_bootstrap`` / ``DiscoveryGate``), unchanged here.
+
+        The DAG carries a ``vote_census`` graph attribute (converged voters,
+        quorum, candidate edges, agreed edges, agreement rate). Every edge
+        that survives an agreement filter is agreed on by construction, so
+        the gate scores corroboration from the census, not from the
+        survivors' confidences.
 
         Args:
             results: Results from individual algorithms
             node_names: Names of nodes
-            threshold: Minimum fraction of algorithms that must agree
+            threshold: Minimum fraction of converged algorithms that must agree
 
         Returns:
             Tuple of (edge list with confidence, networkx DiGraph)
@@ -676,8 +696,11 @@ class DiscoveryRunner:
                     edge_votes[edge_key] = []
                 edge_votes[edge_key].append(result.algorithm.value)
 
-        # Filter edges by threshold and create DiscoveredEdge objects
-        min_votes = max(1, int(n_converged * threshold))
+        # Filter edges by the agreement quorum and create DiscoveredEdge
+        # objects. ``- 1e-9`` keeps a floating-point product such as
+        # ``10 * 0.3 == 3.0000000000000004`` from rounding the quorum UP.
+        quorum = math.ceil(n_converged * threshold - 1e-9)
+        min_votes = 1 if n_converged < 2 else max(2, quorum)
         edges = []
 
         for (source, target), algorithms in edge_votes.items():
@@ -698,6 +721,13 @@ class DiscoveryRunner:
         # Build networkx DiGraph
         dag = nx.DiGraph()
         dag.add_nodes_from(node_names)
+        dag.graph["vote_census"] = {
+            "n_converged": n_converged,
+            "min_votes": min_votes,
+            "n_candidate_edges": len(edge_votes),
+            "n_agreed_edges": len(edges),
+            "agreement_rate": (len(edges) / len(edge_votes)) if edge_votes else 0.0,
+        }
 
         for edge in edges:
             dag.add_edge(
