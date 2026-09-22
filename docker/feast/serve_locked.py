@@ -18,12 +18,13 @@ CLI defaults: access log on, keep-alive 5 s, registry TTL 5 s). The handlers loo
 methods up on the instance at call time, so the wrapped bound attributes are what run.
 The two handlers are sync ``def`` routes (Starlette threadpool); the online read path
 (``/get-online-features``) is ``async`` and does not share that pool. The lock wait is
-BOUNDED (``FEAST_REGISTRY_LOCK_WAIT_SECONDS``, default 600 s — longer than any loop
-cycle): a caller that cannot get the lock in time gets an error (HTTP 500), which the
-worker records as a failed job and fails loud on, instead of a thread parked forever.
+BOUNDED (``FEAST_REGISTRY_LOCK_WAIT_SECONDS``, default 300 s — the materializer loop's
+own per-cycle budget, config ``materialization.timeout_seconds``; a cycle takes seconds
+in practice): a caller that cannot get the lock in time gets an error (HTTP 500), which
+the worker records as a failed job and fails loud on, instead of a thread parked forever.
 The worker's HTTP timeout for these calls (``FeastConfig.materialize_timeout_seconds``,
-900 s) exceeds this wait plus a materialize run, so the worker never records a failure
-for a call the server later completes (codex r3 MED-4).
+900 s) = this wait + a 300 s materialize budget + margin, so the worker does not record
+a failure for a call the server then completes (codex r3 MED-4, r4 MED-3).
 
 There is deliberately NO fallback to an unlocked server: if this cannot start, the
 container fails and the deploy's feast recreate step rolls back and fails loud
@@ -43,7 +44,7 @@ import time
 from typing import Any, Callable
 
 LOCK_PATH = os.environ.get("FEAST_REGISTRY_LOCK", "/feast/data/.registry.lock")
-LOCK_WAIT_SECONDS = float(os.environ.get("FEAST_REGISTRY_LOCK_WAIT_SECONDS", "600"))
+LOCK_WAIT_SECONDS = float(os.environ.get("FEAST_REGISTRY_LOCK_WAIT_SECONDS", "300"))
 REPO_PATH = os.environ.get("FEAST_REPO_PATH", "/feast")
 HOST = os.environ.get("FEAST_SERVE_HOST", "0.0.0.0")
 PORT = int(os.environ.get("FEAST_SERVE_PORT", "6566"))

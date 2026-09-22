@@ -25,7 +25,10 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from src.feature_store.feast_views import FEAST_FEATURE_VIEW_SOURCE_TABLES
+from src.feature_store.feast_views import (
+    FEAST_FEATURE_VIEW_SOURCE_TABLES,
+    FEAST_ONLINE_FEATURE_VIEWS,
+)
 from src.repositories.feast_tracking import (
     FeastFeatureViewRepository,
     FeastFreshnessRepository,
@@ -40,8 +43,9 @@ _REGISTERED_BY = "src.tasks.feast_tasks"
 
 
 def targeted_feature_views(feature_views: Optional[List[str]]) -> List[str]:
-    """The views a run targeted: the explicit list, else every real Feast view."""
-    return list(feature_views) if feature_views else list(FEAST_FEATURE_VIEW_SOURCE_TABLES)
+    """The views a run targeted: the explicit list, else every ONLINE Feast view (what a
+    ``feature_views=None`` materialize covers in the sidecar)."""
+    return list(feature_views) if feature_views else list(FEAST_ONLINE_FEATURE_VIEWS)
 
 
 def _parse_ts(value: Any) -> Optional[datetime]:

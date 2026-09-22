@@ -21,8 +21,21 @@ FEAST_FEATURE_VIEW_SOURCE_TABLES: Dict[str, str] = {
     "trigger_effectiveness_features": "triggers",  # source=triggers_source
     "trigger_response_features": "triggers",  # source=triggers_source
     "territory_performance_features": "territory_metrics",  # source=territory_metrics_source
-    "market_dynamics_features": "business_metrics",  # source=business_metrics_source
+    "market_dynamics_features": "business_metrics",  # source=business_metrics_source (online=False)
+    # Gold-standard serving views (feature_repo/features/goldstd_*.py, #39): materialized by
+    # scripts/sync_goldstd_serving.py, absent from config/feast_materialization.yaml.
+    "goldstd_cohort_features": "patient_journeys",  # source=goldstd_cohort_source
+    "goldstd_hcp_cohort_features": "hcp_profiles",  # source=goldstd_hcp_source
 }
+
+# The views the sidecar serves ONLINE — what a `feature_views=None` materialize covers
+# and what the freshness beat must probe. Read from the live registry
+# (FeatureStore.list_feature_views() inside e2i_feast, 2026-09-22): 11 views, all online
+# except market_dynamics_features (online=False, #556). codex r4 HIGH-2: the source map
+# alone had omitted the two gold-standard views and included the offline one.
+FEAST_ONLINE_FEATURE_VIEWS: List[str] = [
+    view for view in FEAST_FEATURE_VIEW_SOURCE_TABLES if view != "market_dynamics_features"
+]
 
 # #559: per-source-table RAW timestamp column to MAX() for genuine recency. Keyed by the
 # source table name (the unit that resolves in the statistics path). Feast's
@@ -50,6 +63,7 @@ def feast_views_for_source_table(table: str | None) -> List[str]:
 
 __all__ = [
     "FEAST_FEATURE_VIEW_SOURCE_TABLES",
+    "FEAST_ONLINE_FEATURE_VIEWS",
     "FEAST_SOURCE_TABLE_TIMESTAMP_COLUMNS",
     "feast_views_for_source_table",
 ]

@@ -45,6 +45,7 @@ from src.feature_store.feast_remote_materialize import (
 )
 from src.feature_store.feast_views import (
     FEAST_FEATURE_VIEW_SOURCE_TABLES,
+    FEAST_ONLINE_FEATURE_VIEWS,
     FEAST_SOURCE_TABLE_TIMESTAMP_COLUMNS,
 )
 
@@ -185,7 +186,6 @@ class FeastConfig(BaseModel):
     # Feature-server base URL (http://feast:6566): remote mode over the e2i_feast
     # sidecar, required where `import feast` is unavailable (#307); from FEAST_URL. #532
     server_url: Optional[str] = Field(default=None, description="Feast feature-server URL")
-    # #2207: > the sidecar's bounded registry-lock wait (600 s) + a materialize run.
     materialize_timeout_seconds: float = Field(default=900.0, description="Remote materialize")
 
 
@@ -807,10 +807,10 @@ class FeastClient:
             return {"status": "failed", "error": str(e)}
 
     def _enabled_feature_view_names(self) -> List[str]:
-        """Config views not marked ``enabled: false`` — what a ``feature_views=None``
-        remote materialize covers (the sidecar skips non-online views, #556)."""
-        views = self._materialization_config.get("feature_views", {}) or {}
-        return [name for name, cfg in views.items() if (cfg or {}).get("enabled", True)]
+        """The sidecar's ONLINE views — what a ``feature_views=None`` remote materialize
+        covers (feast skips online=False views). The config's list is not it: it omits
+        the two gold-standard views (codex r4 HIGH-2)."""
+        return list(FEAST_ONLINE_FEATURE_VIEWS)
 
     def _record_remote_materialization(self, result: Dict[str, Any]) -> Dict[str, Any]:
         if result.get("status") == "completed":

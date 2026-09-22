@@ -27,7 +27,7 @@ from unittest.mock import patch
 
 import pytest
 
-from src.feature_store.feast_views import FEAST_FEATURE_VIEW_SOURCE_TABLES
+from src.feature_store.feast_views import FEAST_ONLINE_FEATURE_VIEWS
 from src.tasks import feast_tasks
 from src.workers.celery_app import celery_app
 
@@ -169,15 +169,15 @@ def test_failed_incremental_materialize_lands_one_failed_job_row_per_view(fake_d
     jobs = fake_db.store.get("ml_feast_materialization_jobs", [])
     incremental = [j for j in jobs if j["job_type"] == "incremental"]
     recovery = [j for j in jobs if j["job_type"] == "full"]
-    assert {j["feature_view_name"] for j in incremental} == set(FEAST_FEATURE_VIEW_SOURCE_TABLES), (
-        "one row per real Feast feature view when the run targeted all views"
+    assert {j["feature_view_name"] for j in incremental} == set(FEAST_ONLINE_FEATURE_VIEWS), (
+        "one row per ONLINE Feast feature view when the run targeted all views"
     )
     assert all(j["status"] == "failed" for j in incremental)
     assert all(j["error_message"] == "Failed to initialize Feast client" for j in incremental)
     assert recovery == []  # no recovery attempt for an init failure
     # every job row links to a registry row for its view
     views = {v["name"]: v for v in fake_db.store.get("ml_feast_feature_views", [])}
-    assert set(views) == set(FEAST_FEATURE_VIEW_SOURCE_TABLES)
+    assert set(views) == set(FEAST_ONLINE_FEATURE_VIEWS)
     for j in incremental:
         assert j["feature_view_id"] == views[j["feature_view_name"]]["id"]
         assert j["start_time"] and j["end_time"]
@@ -291,7 +291,7 @@ def test_freshness_check_that_cannot_run_records_every_targeted_view_as_unknown(
         feast_tasks.check_feature_freshness(feature_views=None, alert_on_stale=False)
 
     rows = fake_db.store["ml_feast_feature_freshness"]
-    assert {r["feature_view_name"] for r in rows} == set(FEAST_FEATURE_VIEW_SOURCE_TABLES)
+    assert {r["feature_view_name"] for r in rows} == set(FEAST_ONLINE_FEATURE_VIEWS)
     assert all(r["freshness_status"] == "unknown" for r in rows)
 
 

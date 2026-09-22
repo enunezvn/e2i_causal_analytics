@@ -36,7 +36,7 @@ sys.path.insert(0, str(project_root))
 
 from src.feature_store.feast_client import FeastClient, FeastConfig, get_feast_client
 from src.feature_store.feast_remote_materialize import INIT_FAILURE_ERROR
-from src.feature_store.feast_views import FEAST_FEATURE_VIEW_SOURCE_TABLES
+from src.feature_store.feast_views import FEAST_ONLINE_FEATURE_VIEWS
 
 # Configure logging
 logging.basicConfig(
@@ -234,9 +234,9 @@ class MaterializationJob:
             # Get all feature views if not specified
             if not feature_views:
                 views = await self.feast_client.list_feature_views()
-                # Remote mode has no registry to list (#2207): fall back to the nine
-                # real views so the check never reports "all 0 views are fresh".
-                feature_views = [v["name"] for v in views] or list(FEAST_FEATURE_VIEW_SOURCE_TABLES)
+                # Remote mode has no registry to list (#2207): fall back to the ONLINE
+                # views so the check never reports "all 0 views are fresh".
+                feature_views = [v["name"] for v in views] or list(FEAST_ONLINE_FEATURE_VIEWS)
 
             stale_features = []
             fresh_features = []

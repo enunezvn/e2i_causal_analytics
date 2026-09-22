@@ -1384,8 +1384,10 @@ so its runs are not in these tables. Because Feast's file registry is written in
 every materialize, the serve container now runs `docker/feast/serve_locked.py` — the same
 feature server with `/materialize` and `/materialize-incremental` under the registry flock
 the loop and `apply` already use (falls back to plain `feast serve` if it cannot start). `ml_feast_feature_views` rows are created on first use
-from `FEAST_FEATURE_VIEW_SOURCE_TABLES` (`src/feature_store/feast_views.py` — the nine real
-Feast views and their source tables). All three tables were at 0 rows on 2026-09-22.
+from `FEAST_FEATURE_VIEW_SOURCE_TABLES` (`src/feature_store/feast_views.py` — the eleven
+registered Feast views and their source tables, read from the live sidecar registry; the ten
+online ones, `FEAST_ONLINE_FEATURE_VIEWS`, are what a `feature_views=None` materialize and the
+freshness beat cover). All three tables were at 0 rows on 2026-09-22.
 
 ### 12.1 `ml_feast_feature_views`
 

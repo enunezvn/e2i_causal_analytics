@@ -16,6 +16,13 @@ recording — and it is what this probe measures — but it is a property of ser
 the training data, so it is advisory unless the run really trains on Feast-served
 features (``features_served_by_feast`` in the data_preparer state).
 
+What "fresh" means here (codex r4 HIGH-1, stated so nobody reads more into it): the
+#559 signal is the SOURCE TABLE's recency (``MAX(<raw timestamp column>)``), i.e. "is
+the data the online views are built from current" — not whether the online store has
+been materialized since. Materialization state is a separate signal, recorded per run in
+``ml_feast_materialization_jobs`` (#2207); a Feast-read training path that wants both
+must also consult that table. Today no training path reads Feast.
+
 How: the run's ``data_source`` is a table name (or a file dict); the inverse of
 ``FEAST_FEATURE_VIEW_SOURCE_TABLES`` names the views sourced from it; the #559 recency
 probe (``MAX(<raw timestamp column>)`` over PostgREST, no feast import) gives the table's

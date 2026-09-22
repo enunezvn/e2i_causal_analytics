@@ -346,6 +346,7 @@ async def test_check_feature_freshness_helper():
     assert set(result["feature_views"]) == {
         "patient_journey_features",
         "patient_adherence_features",
+        "goldstd_cohort_features",
     }
 
 

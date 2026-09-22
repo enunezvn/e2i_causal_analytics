@@ -21,6 +21,7 @@ from src.feature_store.feast_source_freshness import (
 )
 from src.feature_store.feast_views import (
     FEAST_FEATURE_VIEW_SOURCE_TABLES,
+    FEAST_ONLINE_FEATURE_VIEWS,
     FEAST_SOURCE_TABLE_TIMESTAMP_COLUMNS,
     feast_views_for_source_table,
 )
@@ -48,8 +49,39 @@ def test_business_metrics_sources_three_views_and_unmapped_table_none():
         "hcp_engagement_features",
         "market_dynamics_features",
     ]
+    assert feast_views_for_source_table("patient_journeys") == [
+        "patient_journey_features",
+        "patient_adherence_features",
+        "goldstd_cohort_features",
+    ]
     assert feast_views_for_source_table("hcp_features") == []
     assert feast_views_for_source_table("") == []
+
+
+@pytest.mark.unit
+def test_view_map_matches_the_live_sidecar_registry():
+    """Read from FeatureStore.list_feature_views() inside e2i_feast on 2026-09-22: 11
+    views, all online except market_dynamics_features. codex r4 HIGH-2: the map had
+    omitted the two gold-standard views."""
+    assert set(FEAST_FEATURE_VIEW_SOURCE_TABLES) == {
+        "goldstd_cohort_features",
+        "goldstd_hcp_cohort_features",
+        "hcp_conversion_features",
+        "hcp_engagement_features",
+        "hcp_profile_features",
+        "market_dynamics_features",
+        "patient_adherence_features",
+        "patient_journey_features",
+        "territory_performance_features",
+        "trigger_effectiveness_features",
+        "trigger_response_features",
+    }
+    assert set(FEAST_ONLINE_FEATURE_VIEWS) == set(FEAST_FEATURE_VIEW_SOURCE_TABLES) - {
+        "market_dynamics_features"
+    }
+    # feature_repo/features/goldstd_*.py: `FROM patient_journeys` / `FROM hcp_profiles`
+    assert FEAST_FEATURE_VIEW_SOURCE_TABLES["goldstd_cohort_features"] == "patient_journeys"
+    assert FEAST_FEATURE_VIEW_SOURCE_TABLES["goldstd_hcp_cohort_features"] == "hcp_profiles"
 
 
 @pytest.mark.unit

@@ -31,7 +31,7 @@ import pytest
 
 from src.feature_store import feast_client as feast_client_module
 from src.feature_store.feast_remote_materialize import INIT_FAILURE_ERROR
-from src.feature_store.feast_views import FEAST_FEATURE_VIEW_SOURCE_TABLES
+from src.feature_store.feast_views import FEAST_ONLINE_FEATURE_VIEWS
 from src.tasks import feast_tasks
 
 # reuse the in-memory tracking fake from the sibling test module
@@ -79,7 +79,7 @@ def test_init_failure_records_rows_skips_recovery_and_raises(fake_db, fake_job):
     with pytest.raises(RuntimeError, match=INIT_FAILURE_ERROR):
         feast_tasks.materialize_incremental_features()
     incremental = _jobs(fake_db, "incremental")
-    assert {j["feature_view_name"] for j in incremental} == set(FEAST_FEATURE_VIEW_SOURCE_TABLES)
+    assert {j["feature_view_name"] for j in incremental} == set(FEAST_ONLINE_FEATURE_VIEWS)
     assert all(
         j["status"] == "failed" and j["error_message"] == INIT_FAILURE_ERROR for j in incremental
     )
@@ -130,7 +130,7 @@ def test_freshness_beat_that_could_not_probe_records_unknown_and_raises(fake_db,
     with pytest.raises(RuntimeError, match=INIT_FAILURE_ERROR):
         feast_tasks.check_feature_freshness(alert_on_stale=False)
     rows = fake_db.store["ml_feast_feature_freshness"]
-    assert {r["feature_view_name"] for r in rows} == set(FEAST_FEATURE_VIEW_SOURCE_TABLES)
+    assert {r["feature_view_name"] for r in rows} == set(FEAST_ONLINE_FEATURE_VIEWS)
     assert all(r["freshness_status"] == "unknown" for r in rows)
 
 
@@ -186,10 +186,8 @@ async def test_freshness_check_falls_back_to_the_real_views_when_client_lists_no
     job = MaterializationJob(feast_client=client)
     result = await job.check_feature_freshness(feature_views=None, max_staleness_hours=24.0)
     assert result["status"] == "completed"
-    assert set(probed) == set(FEAST_FEATURE_VIEW_SOURCE_TABLES)
-    assert {f["feature_view"] for f in result["fresh_features"]} == set(
-        FEAST_FEATURE_VIEW_SOURCE_TABLES
-    )
+    assert set(probed) == set(FEAST_ONLINE_FEATURE_VIEWS)
+    assert {f["feature_view"] for f in result["fresh_features"]} == set(FEAST_ONLINE_FEATURE_VIEWS)
 
 
 @pytest.mark.unit
