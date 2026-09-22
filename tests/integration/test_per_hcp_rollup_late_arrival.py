@@ -61,8 +61,10 @@ def db_conn() -> Any:
 
 @pytest.fixture(scope="module")
 def planted(db_conn: Any) -> Any:
-    rid = uuid.uuid4().hex[:10]
-    hcps = {"a": f"hcplate_{rid}_a", "b": f"hcplate_{rid}_b"}
+    # 6 hex: every id built from it must fit the prod varchar(20) columns (hcp_id,
+    # patient_id, patient_journey_id, territory_id); the old 10-hex ids were 27-28 chars.
+    rid = uuid.uuid4().hex[:6]
+    hcps = {"a": f"hl_{rid}_a", "b": f"hl_{rid}_b"}
     # Prod-write guard (owner-approved, 2026-09-17). This replaces the narrower inline
     # check this fixture used to carry -- it proved only that territory_metrics was
     # empty on the planted dates, which is the guard's third leg. The shared guard adds
@@ -76,7 +78,7 @@ def planted(db_conn: Any) -> Any:
             test_file=__file__,
             start=EARLY_BATCH,
             end=GUARD_ARRIVAL_END,
-            hcp_like=f"hcplate_{rid}_%",
+            hcp_like=f"hl_{rid}_%",
             trigger_like=f"trlate_{rid}_%",
             window_column="created_at",
         ),
@@ -91,7 +93,7 @@ def planted(db_conn: Any) -> Any:
             test_file=__file__,
             start=EARLY_BATCH,
             end=GUARD_ARRIVAL_END,
-            journey_like=f"pjlate_hcplate_{rid}_%",
+            journey_like=f"pj_hl_{rid}_%",
             window_column="created_at",
         ),
     )
@@ -103,19 +105,41 @@ def planted(db_conn: Any) -> Any:
                     "VALUES (%s, %s, 'northeast'::region_type, NULL)",
                     (hcp_id, f"T_LATE_{rid}"),
                 )
+            # Three journeys, all ARRIVING with the weekly batch (created_at is what the
+            # scheduled adherence run selects on; left to its now() default the journeys
+            # would sit outside every 2019 window and the run would find nothing).
+            # a's and b's journeys are open-ended (NULL end date): adherence_rate is not
+            # computable and must be preserved. c's journey (a second patient of HCP a)
+            # is computable -- 5 of 10 days -- and its stored 0.42 must become 0.5. It is
+            # what proves the run reached the planted rows rather than missing them.
+            journeys = (
+                (f"pj_{hcps['a']}", f"pt_{hcps['a']}", hcps["a"], None, None),
+                (f"pj_{hcps['b']}", f"pt_{hcps['b']}", hcps["b"], None, None),
+                (f"pj_hl_{rid}_c", f"pt_hl_{rid}_c", hcps["a"], date(2019, 1, 4), 5),
+            )
+            for journey_id, patient_id, hcp_id, end_date, duration in journeys:
                 cur.execute(
                     """
                     INSERT INTO patient_journeys (
-                        patient_journey_id, patient_id, journey_start_date,
-                        journey_stage, journey_status, brand, geographic_region, hcp_id,
-                        adherence_rate, gap_days
+                        patient_journey_id, patient_id, journey_start_date, journey_end_date,
+                        journey_duration_days, journey_stage, journey_status, brand,
+                        geographic_region, hcp_id, adherence_rate, gap_days, created_at
                     ) VALUES (
-                        %s, %s, %s, 'diagnosis'::journey_stage_type,
-                        'active'::journey_status_type, %s::brand_type, 'northeast'::region_type, %s,
-                        0.42, 7
+                        %s, %s, %s, %s, %s, 'diagnosis'::journey_stage_type,
+                        'active'::journey_status_type, %s::brand_type, 'northeast'::region_type,
+                        %s, 0.42, 7, %s
                     )
                     """,
-                    (f"pjlate_{hcp_id}", f"patlate_{hcp_id}", date(2018, 12, 25), BRAND, hcp_id),
+                    (
+                        journey_id,
+                        patient_id,
+                        date(2018, 12, 25),
+                        end_date,
+                        duration,
+                        BRAND,
+                        hcp_id,
+                        MONDAY_BATCH,
+                    ),
                 )
     yield {"rid": rid, **hcps}
     with db_conn:
@@ -123,13 +147,13 @@ def planted(db_conn: Any) -> Any:
             cur.execute(
                 "DELETE FROM territory_metrics WHERE metric_date IN (%s, %s)", (TUESDAY, MONDAY)
             )
-            cur.execute("DELETE FROM business_metrics WHERE hcp_id LIKE %s", (f"hcplate_{rid}_%",))
+            cur.execute("DELETE FROM business_metrics WHERE hcp_id LIKE %s", (f"hl_{rid}_%",))
             cur.execute("DELETE FROM triggers WHERE trigger_id LIKE %s", (f"trlate_{rid}_%",))
             cur.execute(
                 "DELETE FROM patient_journeys WHERE patient_journey_id LIKE %s",
-                (f"pjlate_hcplate_{rid}_%",),
+                (f"pj_hl_{rid}_%",),
             )
-            cur.execute("DELETE FROM hcp_profiles WHERE hcp_id LIKE %s", (f"hcplate_{rid}_%",))
+            cur.execute("DELETE FROM hcp_profiles WHERE hcp_id LIKE %s", (f"hl_{rid}_%",))
 
 
 def _land_batch(
@@ -147,7 +171,7 @@ def _land_batch(
                         delivery_status, acceptance_status, delivery_timestamp, created_at
                     ) VALUES (%s, %s, %s, %s, 'UNKNOWN', 'delivered', 'pending', %s, %s)
                     """,
-                    (f"trlate_{rid}_{suffix}", f"patlate_{hcp_id}", hcp_id, ts, ts, arrival),
+                    (f"trlate_{rid}_{suffix}", f"pt_{hcp_id}", hcp_id, ts, ts, arrival),
                 )
 
 
@@ -157,7 +181,7 @@ def _rows(db_conn: Any, rid: str) -> dict:
             cur.execute(
                 "SELECT hcp_id, metric_date, triggers_total_count, market_share FROM business_metrics "
                 "WHERE hcp_id LIKE %s AND metric_type = 'per_hcp_rollup'",
-                (f"hcplate_{rid}_%",),
+                (f"hl_{rid}_%",),
             )
             return {(h, d): (int(n), float(s)) for h, d, n, s in cur.fetchall()}
 
@@ -247,27 +271,34 @@ def test_a_late_weekly_batch_rolls_up_under_each_triggers_own_date(
     assert (rebuilt["metric_dates"], rebuilt["rows_new"], rebuilt["rows_changed"]) == (2, 0, 0)
 
     # Adherence (owner decision #6, revised by codex r13-05): the 03:30 run must keep the
-    # known adherence_rate (every journey has a NULL end date, so it is not computable) and
-    # must not touch gap_days at all, which the synthetic DGP owns.
+    # known adherence_rate of the open-ended journeys (NULL end date, so it is not
+    # computable) and must not touch gap_days at all, which the synthetic DGP owns.
+    # After codex r14-02 a preserved row is not written (IS DISTINCT FROM), so the run's
+    # own count is 1: the one computable journey. That single row is the evidence that the
+    # arrival window selected the planted journeys at all -- a run that missed them would
+    # also report the two preserved values untouched.
     from src.etl.patient_adherence_etl import _run_patient_adherence_impl
 
     adherence = _run_patient_adherence_impl(
         arrived_before="2019-01-14T03:30:00+00:00", request_id="late-arrival-adherence"
     )
     assert adherence["status"] == "completed" and adherence["selected_by"] == "arrival", adherence
+    assert adherence["rows_affected"] == 1, adherence
     with db_conn:
         with db_conn.cursor() as cur:
             cur.execute(
-                "SELECT hcp_id, adherence_rate, gap_days FROM patient_journeys "
+                "SELECT patient_journey_id, adherence_rate, gap_days FROM patient_journeys "
                 "WHERE patient_journey_id LIKE %s",
-                (f"pjlate_hcplate_{rid}_%",),
+                (f"pj_hl_{rid}_%",),
             )
-            journeys = {h: (float(rate), gap) for h, rate, gap in cur.fetchall()}
-    # Both planted journeys keep exactly what the fixture wrote. Before the fix, a's would
+            journeys = {j: (float(rate), gap) for j, rate, gap in cur.fetchall()}
+    # The open-ended journeys keep exactly what the fixture wrote. Before the fix, a's would
     # have been (0.0, ...) from the LEAST/GREATEST clamp; the withdrawn gap rewrite would
-    # have written 13 for a and 0 for b over the generator's 7.
-    assert journeys[a] == (0.42, 7), journeys
-    assert journeys[b] == (0.42, 7), journeys
+    # have written 13 for a and 0 for b over the generator's 7. The computable one is
+    # recomputed (5 of 10 days) and its gap_days is still the generator's.
+    assert journeys[f"pj_{a}"] == (0.42, 7), journeys
+    assert journeys[f"pj_{b}"] == (0.42, 7), journeys
+    assert journeys[f"pj_hl_{rid}_c"] == (0.5, 7), journeys
 
 
 def test_the_reconcile_deletes_our_obsolete_row_and_spares_a_foreign_one(
