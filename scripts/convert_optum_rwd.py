@@ -50,6 +50,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts import rwd_common as rwdc  # noqa: E402
+from src.data import csu_biologics as _csu_vocab  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -268,13 +269,16 @@ EXCLUSION_DX_PREFIXES = {
     "immunosuppression_range": ("D8",),
 }
 
-# CSU biologics: Xolair (omalizumab, J2357, NDC prefix 50242-04) and
-# Dupixent (dupilumab, J0517 misspelling → J0517 is actually eculizumab;
-# but the analyst spec lists it. Dupixent NDC prefix is 0024-59.)
-CSU_BIOLOGIC_HCPCS = {"J2357", "J0517"}
-CSU_BIOLOGIC_NDC_PREFIXES = ("50242", "00024", "0024")
-CSU_BIOLOGIC_GENERICS = ("omalizumab", "dupilumab")
-CSU_BIOLOGIC_BRANDS = ("XOLAIR", "DUPIXENT")
+# CSU escalation therapies: Xolair (omalizumab, J2357, NDC prefix 50242-04),
+# Dupixent (dupilumab, J0517 misspelling → J0517 is actually eculizumab; but the
+# analyst spec lists it. Dupixent NDC prefix is 0024-59) and, since Lane C
+# (2026-09-22), remibrutinib (Rhapsido). The vocabulary is ONE source shared with
+# the mart converter (src/data/csu_biologics.py); these names are the historical
+# module-level views the mask, the classifier and the tests read.
+CSU_BIOLOGIC_HCPCS = set(_csu_vocab.CSU_BIOLOGIC_HCPCS)
+CSU_BIOLOGIC_NDC_PREFIXES = _csu_vocab.CSU_BIOLOGIC_NDC_PREFIXES
+CSU_BIOLOGIC_GENERICS = _csu_vocab.CSU_BIOLOGIC_GENERICS
+CSU_BIOLOGIC_BRANDS = _csu_vocab.CSU_BIOLOGIC_BRANDS
 
 COMORBIDITY_CODES: dict[str, tuple[str, ...]] = {
     "atopic_dermatitis": ("L20",),
@@ -1966,6 +1970,28 @@ class OptumDataConverter:
             return None
         return dates.iloc[0]
 
+    def _index_biologic_key(self, patid: int) -> str | None:
+        """The drug key ('xolair' / 'dupixent' / 'remibrutinib') of the patient's
+        FIRST CSU biologic fill -- the same row ``_first_biologic_fill`` dates the
+        treatment-anchored cohorts on -- or None without one (Lane C)."""
+        grp = self._med_by_pat.get(patid)
+        if grp is None or "medication_date" not in grp.columns:
+            return None
+        bio = grp.loc[self._csu_biologic_mask(grp)]
+        bio = bio[bio["medication_date"].notna()].sort_values("medication_date")
+        if bio.empty:
+            return None
+        return self._classify_biologic_brand(bio.iloc[0])
+
+    def _journey_brand(self, patid: int) -> str:
+        """``patient_journeys.brand`` (enum brand_type) for a CSU patient: the
+        platform brand ``Remibrutinib`` when the index biologic is remibrutinib,
+        otherwise ``competitor`` (Xolair / Dupixent / no biologic -- the value
+        every CSU row carried before Lane C). ``brand`` is a post-index label
+        (optum_feature_manifest: derived from treatment_initiated), never a
+        feature."""
+        return _csu_vocab.journey_brand_for(self._index_biologic_key(patid))
+
     def _csu_biologic_mask(self, med_df: pd.DataFrame) -> pd.Series:
         """Boolean mask for rows whose NDC/HCPCS/brand/generic matches a CSU biologic."""
         m = pd.Series(False, index=med_df.index)
@@ -2767,37 +2793,19 @@ class OptumDataConverter:
 
     @staticmethod
     def _classify_biologic_brand(row: pd.Series) -> str | None:
-        """Return 'xolair' / 'dupixent' / None for a medication row.
+        """Return 'xolair' / 'dupixent' / 'remibrutinib' / None for a medication row.
 
         Used to detect biologic switch (different NDC prefix) for the
-        `refractory` rule. Reuses the same signals as `_csu_biologic_mask`
-        but distinguishes between the two brands.
+        `refractory` rule and, since Lane C, to label the journey / event
+        ``brand``. Reuses the same signals as `_csu_biologic_mask` but
+        distinguishes the drugs; the vocabulary and the Brand_Name >
+        Generic_Name > code precedence live in ``src/data/csu_biologics.py``.
         """
-        # Brand_Name takes priority where present.
-        bn = row.get("Brand_Name")
-        if pd.notna(bn):
-            b = str(bn).strip().upper()
-            if "XOLAIR" in b:
-                return "xolair"
-            if "DUPIXENT" in b:
-                return "dupixent"
-        gn = row.get("Generic_Name")
-        if pd.notna(gn):
-            g = str(gn).strip().lower()
-            if "omalizumab" in g:
-                return "xolair"
-            if "dupilumab" in g:
-                return "dupixent"
-        code = row.get("code")
-        if pd.notna(code):
-            c = str(code).strip().upper()
-            # Xolair = NDC prefix 50242, HCPCS J2357.
-            if c.startswith("50242") or c == "J2357":
-                return "xolair"
-            # Dupixent = NDC prefix 0024/00024, HCPCS J0517 (per spec).
-            if c.startswith("00024") or c.startswith("0024") or c == "J0517":
-                return "dupixent"
-        return None
+        return _csu_vocab.classify_csu_biologic(
+            brand_name=row.get("Brand_Name"),
+            generic_name=row.get("Generic_Name"),
+            code=row.get("code"),
+        )
 
     def _coverage_days(self, bio_fills: pd.DataFrame) -> int:
         """Total covered days across (non-overlapping union of) biologic fills.
@@ -3172,7 +3180,9 @@ class OptumDataConverter:
             "primary_diagnosis_code": rwdc.format_diagcode(str(demo_row.get("diagcode_raw") or "")),
             "primary_diagnosis_desc": "Chronic Spontaneous Urticaria",
             "secondary_diagnosis_codes": [],
-            "brand": "competitor",
+            # Lane C: the platform brand for a remibrutinib initiator,
+            # 'competitor' for Xolair / Dupixent / no biologic (unchanged).
+            "brand": self._journey_brand(patid),
             "state": None,
             "zip_code": feats.get("zip5"),
             "comorbidities": [],
@@ -3409,14 +3419,12 @@ class OptumDataConverter:
                         # Later fills in the window are still emitted for
                         # provenance but with NULL response.
                         first_row = bio_win.iloc[0]
-                        first_brand = self._classify_biologic_brand(first_row)
                         # `brand` enum on treatment_events is brand_type
-                        # (defined in core schema). Schema constraints
-                        # accept 'competitor' / 'innovator' / brand-name
-                        # values depending on cohort. CSU biologics map
-                        # to 'competitor' for non-Pluvicto cohorts per
-                        # current converter convention; we mirror that
-                        # via the patient_journeys.brand assignment.
+                        # (defined in core schema). Lane C: each fill row
+                        # carries ITS OWN drug's label -- 'Remibrutinib' for a
+                        # Rhapsido fill, 'competitor' for Xolair / Dupixent --
+                        # so a switch inside the window is visible per row
+                        # (BR-001 / BR-002 KPIs group by brand).
                         events.append(
                             _emit(
                                 seq,
@@ -3439,7 +3447,9 @@ class OptumDataConverter:
                                     else None
                                 ),
                                 duration=rwdc.safe_int(first_row.get("days_sup")),
-                                brand="competitor",
+                                brand=_csu_vocab.journey_brand_for(
+                                    self._classify_biologic_brand(first_row)
+                                ),
                                 treatment_response=tr,
                                 outcome_indicator=oc,
                             )
@@ -3468,14 +3478,12 @@ class OptumDataConverter:
                                         else None
                                     ),
                                     duration=rwdc.safe_int(row.get("days_sup")),
-                                    brand="competitor",
+                                    brand=_csu_vocab.journey_brand_for(
+                                        self._classify_biologic_brand(row)
+                                    ),
                                 )
                             )
                             seq += 1
-                        # Silence unused-variable lint if downstream code adds
-                        # consumers later — `first_brand` is reserved for a
-                        # follow-up emission (per-brand audit JSONL).
-                        _ = first_brand
         return events
 
     def _compute_npi_first_fill(

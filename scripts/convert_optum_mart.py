@@ -50,6 +50,7 @@ from scripts.rwd_common import (  # noqa: E402
     write_data_dictionary,
     write_records,
 )
+from src.data import csu_biologics  # noqa: E402
 from src.data.manifests import MART_SAFE_FEATURES  # noqa: E402
 from src.data.manifests.optum_mart_feature_manifest import optum_mart_contract_for  # noqa: E402
 
@@ -78,6 +79,72 @@ _GATING_COLS = (
     "elig_start_date",
     "zipcode_5",
 )
+
+# ---------------------------------------------------------------------------
+# Lane C (2026-09-22, remibrutinib pre-wiring, spec §3C.1-2): the CSU arm
+# vocabulary a causal cohort export contrasts on, shared with the claim-level
+# converter through src/data/csu_biologics.py. The enriched drop labels
+# ``index_biologic_brand`` with the vendor's uppercase brand (XOLAIR / DUPIXENT /
+# no_treatment) and ``index_biologic_molecule`` with the molecule; a post-launch
+# drop adds RHAPSIDO (or REMIBRUTINIB) and ``canonical_csu_arm`` folds either
+# spelling onto the one arm label. Consumers today: the synthetic backing
+# builder (scripts/build_csu_escalation_synthetic_cohort.py) derives the
+# treatment through this function so the synthetic rows and the future real
+# export agree by construction; the post-launch ``csu_escalation_causal``
+# export calls it on the real drop.
+# ---------------------------------------------------------------------------
+CSU_ESCALATION_TREATMENT_COL = "treatment_remibrutinib"
+CSU_ESCALATION_TREATED_ARM = csu_biologics.REMIBRUTINIB_ARM_LABEL  # RHAPSIDO
+CSU_ESCALATION_COMPETITOR_ARMS = ("XOLAIR", "DUPIXENT")
+CSU_ESCALATION_ARMS = (CSU_ESCALATION_TREATED_ARM, *CSU_ESCALATION_COMPETITOR_ARMS)
+
+
+def select_csu_escalation_contrast(
+    df: pd.DataFrame,
+) -> tuple[pd.DataFrame, list[tuple[str, int]]]:
+    """Shape the remibrutinib-vs-competitor contrast from initiator rows.
+
+    ``index_biologic_brand`` is canonicalised (brand or molecule spelling ->
+    XOLAIR / DUPIXENT / RHAPSIDO); rows outside the three arms leave with a loud
+    per-label ``excluded_arm:<label>`` attrition step (Lane A's convention); the
+    kept rows gain ``treatment_remibrutinib`` (1 = RHAPSIDO, 0 = a competitor).
+    A NULL brand on an initiator is a data-integrity failure and raises; a
+    one-arm result raises too (a constant treatment is not a contrast -- the
+    API loader refuses it as well, this fails earlier and louder).
+    Returns ``(contrast_df, attrition)``.
+    """
+    attrition: list[tuple[str, int]] = [("input_rows", len(df))]
+    null_brand = df["index_biologic_brand"].isna()
+    if null_brand.any():
+        n = int(null_brand.sum())
+        sample = df.loc[null_brand, "patid"].head(5).tolist() if "patid" in df.columns else []
+        raise ValueError(
+            f"{n} row(s) carry a NULL index_biologic_brand -- a data-integrity "
+            f"failure, not a silent exclusion (first patids: {sample})"
+        )
+    arm = df["index_biologic_brand"].map(csu_biologics.canonical_csu_arm)
+    in_contrast = arm.isin(CSU_ESCALATION_ARMS)
+    excluded_counts = (
+        df.loc[~in_contrast, "index_biologic_brand"].astype(str).value_counts().sort_index()
+    )
+    for label, n in excluded_counts.items():
+        attrition.append((f"excluded_arm:{label}", int(n)))
+    out = df.loc[in_contrast].copy()
+    out["index_biologic_brand"] = arm.loc[in_contrast]
+    out[CSU_ESCALATION_TREATMENT_COL] = (
+        out["index_biologic_brand"].eq(CSU_ESCALATION_TREATED_ARM).astype("int64")
+    )
+    attrition.append(("in_contrast", len(out)))
+    attrition.append(
+        (f"{CSU_ESCALATION_TREATMENT_COL}=1", int(out[CSU_ESCALATION_TREATMENT_COL].sum()))
+    )
+    if out[CSU_ESCALATION_TREATMENT_COL].nunique() < 2:
+        raise ValueError(
+            f"{CSU_ESCALATION_TREATMENT_COL} is constant over the {len(out)} in-contrast "
+            f"row(s) (arms present: {sorted(out['index_biologic_brand'].unique())}); "
+            "a causal contrast needs both arms"
+        )
+    return out, attrition
 
 
 def select_initiation_cohort(
