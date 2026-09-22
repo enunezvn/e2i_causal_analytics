@@ -181,10 +181,25 @@ celery_app.conf.task_routes = {
     "src.tasks.hyperparameter_tune": {"queue": "ml"},
     "src.tasks.train_*": {"queue": "ml"},
     "src.tasks.fit_*": {"queue": "ml"},
-    # Live retraining runs a full MLFoundationPipeline (scope→prep→train→deploy),
-    # so it belongs on worker_heavy's `ml` queue, not the default queue. The
-    # name doesn't match the train_*/fit_* globs, so route it explicitly.
-    "src.tasks.execute_model_retraining": {"queue": "ml"},
+    # Live retraining runs a full MLFoundationPipeline (scope→prep→train→deploy).
+    # Phase D put it on worker_heavy's `ml` queue; that queue has had no consumer
+    # on this box since #705 (replicas: 0), so every trigger queued a job that
+    # never ran and its ml_retraining_history row stayed `pending` forever.
+    # #2207 measured the pipeline INSIDE worker_medium (docker exec, main's image,
+    # 2026-09-22): the tier-0 harness end-to-end (8 stages, 4 model-comparison
+    # fits, n=4000, 2 HPO trials) peaked at 838 MB tree RSS in 126 s; the same
+    # four fits at the prod cohort shape (15,209x77) add ~75 MB over the 326 MB
+    # import floor, RandomForest the slowest at 19 s per fit. That is ~1 GB and
+    # tens of minutes at PipelineConfig's 50 trials — inside worker_medium's 4G
+    # cgroup at concurrency 2, NOT inside worker_light's 1.5G one. Routed to
+    # `analytics` (worker_medium); the name doesn't match the train_*/fit_*
+    # globs, so it stays explicit.
+    "src.tasks.execute_model_retraining": {"queue": "analytics"},
+    # The retraining EVALUATION half (#2207): drift + performance reads per model,
+    # then a fan-out of per-model evaluations — light DB work. Explicit `quick`
+    # routes (they matched no glob and fell to `default`, also worker_light).
+    "src.tasks.check_retraining_for_all_models": {"queue": "quick"},
+    "src.tasks.evaluate_retraining_need": {"queue": "quick"},
     # Digital twin generation
     # (src.tasks.generate_twins removed — H15: dead route stub with no task body and
     # no producer; real population work is simulate_population / twin.* / train_twin_model.)
@@ -291,6 +306,7 @@ celery_app.conf.task_routes = {
 # Daily entries, in firing order:
 #   00:45  drift-history-cleanup            quick      prune before the 02:00 backup
 #   01:15  ab-interim-analysis-check        quick      quiet hours, clear of the backup
+#   01:45  retraining-evaluation-daily      quick      after the drift prune, pre-backup (#2207)
 #   02:10  feedback-loop-medium-window      analytics  "2 AM daily" per config, post-backup
 #   02:40  feedback-loop-drift-analysis     analytics  after medium-window
 #   03:15  business-metrics-per-hcp-rollup  analytics  after the Monday reseed
@@ -337,6 +353,20 @@ celery_app.conf.beat_schedule = {
     "drift-history-cleanup": {
         "task": "src.tasks.cleanup_old_drift_history",
         "schedule": crontab(hour=0, minute=45),
+        "options": {"queue": "quick"},
+    },
+    # Retraining evaluation sweep, daily at 01:45 UTC (#2207). Evaluates every
+    # production/staging model's drift + performance trend and records a
+    # retraining trigger (ml_retraining_history) ONLY when the decision needs no
+    # approval (drift >= auto_approve_threshold) — the routes under
+    # /monitoring/retraining/* remain the human approval path. Until now this
+    # task existed, was route-reachable and had never fired: it was in no beat
+    # entry. Slot 01:45: after drift-history-cleanup (00:45) and the interim
+    # check (01:15), clear of the 02:00 host backup window.
+    "retraining-evaluation-daily": {
+        "task": "src.tasks.check_retraining_for_all_models",
+        "schedule": crontab(hour=1, minute=45),
+        "kwargs": {"auto_approve": False},
         "options": {"queue": "quick"},
     },
     # NOTE (#897): the scaffolded "health-check" -> src.tasks.health_check and

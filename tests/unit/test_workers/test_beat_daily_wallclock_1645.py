@@ -61,6 +61,9 @@ def _finalized_app() -> None:
 DAILY_SLOTS_UTC: dict[str, tuple[int, int]] = {
     "drift-history-cleanup": (0, 45),
     "ab-interim-analysis-check": (1, 15),
+    # #2207: the retraining evaluation sweep (light DB reads, quick queue) — after
+    # the cleanup + interim check, clear of the 02:00 host backup window.
+    "retraining-evaluation-daily": (1, 45),
     "feedback-loop-medium-window": (2, 10),
     "feedback-loop-drift-analysis": (2, 40),
     "business-metrics-per-hcp-rollup": (3, 15),
