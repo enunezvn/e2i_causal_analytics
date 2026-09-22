@@ -723,6 +723,25 @@ class GraphBuilderNode:
             # response's prose channel.
             if preflight.constant or preflight.collinear or preflight.capped:
                 lines.append(preflight_summary(preflight))
+        # The API response carries no gate decision and no corroborated
+        # flag (AgentCausalAnalysisResponse), so a bootstrap that fell short
+        # of min_resamples is said here, in the only channel the consumer
+        # reads (verifier MED-2 on this lane).
+        bootstrap = discovery_result.metadata.get("bootstrap")
+        if isinstance(bootstrap, dict) and bootstrap.get("corroborated") is False:
+            budget = bootstrap.get("time_budget_s")
+            budget_note = (
+                f", the {float(budget):.0f} s discovery time budget was exhausted"
+                if bootstrap.get("budget_exhausted") and budget is not None
+                else ""
+            )
+            lines.append(
+                f"Discovery bootstrap achieved {bootstrap.get('n_succeeded')} of "
+                f"{bootstrap.get('n_resamples')} resamples (minimum "
+                f"{bootstrap.get('min_resamples')}{budget_note}): the discovered "
+                "structure is uncorroborated and the gate scored it as a single "
+                "unverified run; the shipped DAG is the curated construction."
+            )
         missing = discovery_result.metadata.get("required_edges_missing") or []
         if any(list(edge) == [treatment, outcome] for edge in missing):
             cause = discovery_result.metadata.get("required_edges_missing_cause") or ""

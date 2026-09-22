@@ -323,11 +323,26 @@ class DiscoveryGate:
 
         required = self._required_edge_set(result)
         beyond_prior = [e for e in result.edges if (e.source, e.target) not in required]
+        # Lane D: a run that ASKED for corroboration (``min_resamples``
+        # configured) and did not achieve it is uncorroborated, prior-only
+        # graph or not. A required edge is honoured by causal-learn at
+        # orientation only — the skeleton phase can drop it from a resample
+        # (measured: d1_required_edge_mechanism.txt) — so its resample
+        # frequency is informative and a graph made only of required edges is
+        # not exempt. Checked BEFORE the prior-determined branch; the
+        # bootstrap-off legacy path (no ``min_resamples``, no summary) keeps
+        # the renormalisation below.
+        bootstrap = result.metadata.get("bootstrap")
+        if (
+            result.config.min_resamples is not None
+            and isinstance(bootstrap, dict)
+            and bootstrap.get("corroborated") is False
+        ):
+            return 0.0, "uncorroborated_single_run"
         if not beyond_prior:
-            # Every edge is prior-required: resampling can neither confirm nor
-            # refute the graph, so this axis is not applicable — whether or
-            # not bootstrap even ran — and the caller renormalizes over the
-            # remaining components.
+            # Every edge is prior-required and no corroboration was asked for
+            # (or it was achieved): this axis is not applicable and the
+            # caller renormalizes over the remaining components.
             return 1.0, "prior_determined"
 
         if all(e.bootstrap_stability is None for e in result.edges):

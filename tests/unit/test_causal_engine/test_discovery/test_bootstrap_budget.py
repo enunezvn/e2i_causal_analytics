@@ -242,16 +242,17 @@ class TestMinResamples:
         assert evaluation.confidence == 0.0
 
     @pytest.mark.asyncio
-    async def test_all_prior_edges_with_too_few_resamples_reports_both_facts(self) -> None:
-        """codex r3 MED, rebutted by design: a single-algorithm run whose every
-        edge is prior-REQUIRED is ``prior_determined`` whether or not the
-        bootstrap achieved ``min_resamples`` — a required edge is forced into
-        every resample, so resampling can neither confirm nor refute it and
-        the corroboration axis is not applicable (gate docstring; the
-        ordering was a deliberate decision of the calibration round). The
-        run still reports the achieved count and ``corroborated = False``,
-        and the gate never labels the basis ``bootstrap_stability``, so
-        nothing claims a corroboration that did not happen."""
+    async def test_all_prior_edges_with_too_few_resamples_is_uncorroborated(self) -> None:
+        """codex r3 MED, applied after the verifier disproved the lane's
+        rebuttal with the lane's own evidence (d1_required_edge_mechanism.txt:
+        the skeleton phase never consults ``is_required``): a required edge
+        CAN drop out of a resample's skeleton, so its resample frequency is
+        informative and a graph made only of required edges is not exempt
+        from corroboration. When ``min_resamples`` is configured and the
+        bootstrap reports ``corroborated = False``, the gate scores the run as
+        an uncorroborated single run BEFORE the prior-determined branch.
+        The bootstrap-off legacy path keeps ``prior_determined``
+        (test_gate.py::test_prior_determined_without_bootstrap_still_renormalizes)."""
         from src.causal_engine.discovery.base import CausalPriorKnowledge
 
         algorithm = _SlowAlgorithm(0.05)
@@ -271,8 +272,31 @@ class TestMinResamples:
         assert summary["corroborated"] is False
         assert all(e.bootstrap_stability is None for e in result.edges)
         evaluation = DiscoveryGate().evaluate(result, [("a", "b")])
+        assert evaluation.metadata["corroboration_basis"] == "uncorroborated_single_run"
+        assert evaluation.confidence == 0.0
+        assert evaluation.decision.value != "accept"
+
+    @pytest.mark.asyncio
+    async def test_all_prior_edges_with_enough_resamples_stays_prior_determined(self) -> None:
+        """Control: the same graph with the corroboration achieved keeps the
+        prior-determined renormalisation (the rule fires only on an explicit
+        ``corroborated = False``)."""
+        from src.causal_engine.discovery.base import CausalPriorKnowledge
+
+        algorithm = _SlowAlgorithm(0.0)
+        runner = _runner(algorithm)
+        config = DiscoveryConfig(
+            algorithms=[DiscoveryAlgorithmType.PC],
+            bootstrap_resamples=12,
+            min_resamples=10,
+            prior_knowledge=CausalPriorKnowledge(
+                tiers=[["a", "c"], ["b", "d"]], required_edges=[("a", "b"), ("c", "d")]
+            ),
+        )
+        result = await runner.discover_dag(_frame(), config)
+        assert result.metadata["bootstrap"]["corroborated"] is True
+        evaluation = DiscoveryGate().evaluate(result, [("a", "b")])
         assert evaluation.metadata["corroboration_basis"] == "prior_determined"
-        assert evaluation.metadata["corroboration_basis"] != "bootstrap_stability"
 
     @pytest.mark.asyncio
     async def test_min_resamples_met_is_corroborated(self) -> None:

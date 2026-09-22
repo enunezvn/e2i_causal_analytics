@@ -214,11 +214,33 @@ False`, seconds left), but its worker thread cannot be cancelled and runs the
 fit to completion — ~380 s on this frame — in the background. In the
 acceptance script that thread kept the interpreter alive past the 600 s hard
 timeout (rc = 124 after the results were printed); in the API worker it costs
-one CPU for ~6 min per query on this dataset. That is the same contract as the
+one CPU for ~6 min per query on this dataset. Worse than the CPU: the FCI fit
+and the bootstrap run on the event loop's SHARED default executor
+(`loop.run_in_executor(None, …)`, `min(32, cpu + 4)` threads), so under
+production defaults every guided real-frame query starts FCI with 6–9 s of
+budget left (`acceptance_runs_final2.txt:16`: "timeout after 8.8s") and
+abandons a ~380 s worker thread that keeps its slot; concurrent guided queries
+could starve every other `run_in_executor` user app-wide once the dataset's
+default flips (verifier LOW on this lane). That is the same contract as the
 per-algorithm timeout, but on the real frame it is paid on every guided query
 under production defaults, which is why the latent-diagnostic default is an
 owner decision (PR body, decision 2: accept the skip and its background cost /
-turn the diagnostic off for this dataset / raise the budget).
+turn the diagnostic off for this dataset / raise the budget / give the
+diagnostic its own bounded pool).
+
+**Gate rule applied after the verifier (codex r3 MED).** The lane first
+rebutted codex's proposal that an all-prior-edge run whose bootstrap fell short
+of `min_resamples` be scored uncorroborated, on the premise that a required
+edge is forced into every resample. That premise is false by this lane's own
+D1 capture (`d1_required_edge_mechanism.txt:3`: the skeleton phase never
+consults `is_required`), so a required edge CAN drop out of a resample and its
+frequency IS informative. The rule now ships: with `min_resamples` configured
+and the bootstrap reporting `corroborated = False`, the gate returns
+`uncorroborated_single_run` before the prior-determined branch (the
+bootstrap-off legacy path keeps `prior_determined`), and the response's
+warnings channel says "achieved N of M resamples (minimum K): uncorroborated"
+— the API response has no gate-decision or corroborated field, so the prose
+line is the only place a consumer learns it.
 
 Spec acceptance, real frame: a gate decision inside the agent timeout with at
 least 10 resamples — met; the shipped adjustment set contains every declared

@@ -288,6 +288,56 @@ class TestRemovedCovariatesStayAdjusted:
         assert "stays in the adjustment set" in line
 
 
+class _UncorroboratedRunner(_AcceptingRunner):
+    """An ACCEPT-shaped ensemble whose bootstrap achieved 3 of 20 resamples
+    (minimum 10): the runner reports it, the gate must not ACCEPT it, and
+    the response must SAY it."""
+
+    async def discover_dag(self, data, config, session_id=None) -> DiscoveryResult:
+        result = await super().discover_dag(data, config, session_id)
+        for edge in result.edges:
+            edge.bootstrap_stability = None
+        result.metadata["bootstrap"] = {
+            "n_resamples": 20,
+            "n_attempted": 3,
+            "n_succeeded": 3,
+            "n_abandoned": 0,
+            "min_resamples": 10,
+            "corroborated": False,
+            "time_budget_s": 180.0,
+            "elapsed_s": 181.0,
+            "budget_exhausted": True,
+        }
+        return result
+
+
+class TestUncorroboratedRunIsSaidOutLoud:
+    """The API response has no gate-decision or corroborated field
+    (AgentCausalAnalysisResponse), so the prose warnings channel is the only
+    place a consumer learns that the bootstrap fell short of ``min_resamples``
+    (verifier MED-2)."""
+
+    @pytest.mark.asyncio
+    async def test_warning_names_the_achieved_count_and_the_minimum(self) -> None:
+        frame, covs = _frame()
+        node = GraphBuilderNode()
+        node._discovery_runner = _UncorroboratedRunner([("sev", T), ("sev", Y)], draw_estimand=True)  # type: ignore[assignment]
+        out = await node.execute(_state(frame, covs, discovery_max_covariates=4))
+        lines = [w for w in out.get("warnings", []) if "uncorroborated" in w]
+        assert len(lines) == 1
+        assert "3 of 20" in lines[0] and "minimum 10" in lines[0]
+        assert "budget" in lines[0]
+        assert out["causal_graph"]["discovery_gate_decision"] != "accept"
+
+    @pytest.mark.asyncio
+    async def test_corroborated_run_raises_no_such_line(self) -> None:
+        frame, covs = _frame()
+        node = GraphBuilderNode()
+        node._discovery_runner = _AcceptingRunner([("sev", T), ("sev", Y)], draw_estimand=True)  # type: ignore[assignment]
+        out = await node.execute(_state(frame, covs, discovery_max_covariates=4))
+        assert not [w for w in out.get("warnings", []) if "uncorroborated" in w]
+
+
 class TestRequiredEdgeHonesty:
     @pytest.mark.asyncio
     async def test_missing_estimand_edge_is_reported_and_asserted_on_the_shipped_dag(

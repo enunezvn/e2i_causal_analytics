@@ -141,8 +141,11 @@ def hash_config(config: DiscoveryConfig) -> str:
         "latent_diagnostic": config.latent_diagnostic,
         # Lane D: a budget changes how many resamples a run can achieve and a
         # forced independence test changes the skeleton, so both are part of
-        # the result's identity. None hashes like the legacy config (the two
-        # behave identically everywhere).
+        # the result's identity. The three keys are in the dict even when
+        # None, so EVERY config's hash differs from the pre-Lane-D hasher:
+        # each cached discovery result misses once after deploy (harmless,
+        # one-time), and a None-valued config does NOT hash like the legacy
+        # one (the two behave identically, but their cache keys differ).
         "time_budget_s": config.time_budget_s,
         "min_resamples": config.min_resamples,
         "indep_test": config.indep_test,
