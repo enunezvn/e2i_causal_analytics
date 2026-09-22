@@ -242,6 +242,199 @@ class FeatureRolePanel:
 
 PanelLike = Union[FeatureRolePanel, Mapping[str, Any]]
 
+_PANEL_KEYS = frozenset(
+    {
+        "schema_version",
+        "manifest_source",
+        "treatment",
+        "outcome",
+        "n_rows",
+        "features",
+        "records",
+        "layer_activity",
+        "activation_profile",
+        "leakage_fdr",
+        "promotion_eligibility",
+        "built_at",
+    }
+)
+_RECORD_KEYS = frozenset(
+    {
+        "feature",
+        "layer_1",
+        "layer_2",
+        "layer_3",
+        "layer_4",
+        "ensemble",
+        "leak_verdict",
+        "leak_source",
+        "review_required",
+    }
+)
+
+
+def validate_panel_payload(payload: Mapping[str, Any]) -> None:
+    """Strict, NON-coercing validation of a serialised panel (codex r4).
+
+    Runs on the raw mapping BEFORE ``from_dict``: an explicit, supported
+    ``schema_version`` is required; every field must carry its exact type; no
+    unknown field is accepted at either level (nothing is silently normalised
+    away); and the verdict invariants hold in BOTH directions:
+
+    * ``layer_1.verdict == "post_index"``  ⇔  ``leak_verdict`` with source
+      ``layer_1_post_index`` (keeping a post-index column is the dangerous way);
+    * ``leak_source == "layer_3_high"``  ⇒  ``layer_1.verdict == "no_contract"``
+      (a declared pre-index covariate can never be presented as one),
+      ``layer_3.ran`` and ``review_required``;
+    * ``review_required``  ⇔  ``leak_source == "layer_3_high"``.
+
+    Raises ``ValueError`` naming the first violation. Establishes CONSISTENCY,
+    not authenticity.
+    """
+    from src.data.manifests import MANIFEST_SOURCES
+
+    if not isinstance(payload, Mapping):
+        raise ValueError("panel payload must be a mapping")
+    unknown = sorted(set(payload) - _PANEL_KEYS)
+    if unknown:
+        raise ValueError(f"unknown panel field(s): {unknown}")
+    if "schema_version" not in payload:
+        raise ValueError("schema_version is required")
+    if payload["schema_version"] != PANEL_SCHEMA_VERSION:
+        raise ValueError(
+            f"schema_version {payload['schema_version']!r} is not the supported "
+            f"{PANEL_SCHEMA_VERSION!r}"
+        )
+    for key in ("manifest_source", "treatment", "outcome"):
+        if not isinstance(payload.get(key), str) or not payload[key]:
+            raise ValueError(f"{key} must be a non-empty string")
+    if payload["manifest_source"] not in MANIFEST_SOURCES:
+        raise ValueError(
+            f"manifest_source {payload['manifest_source']!r} is not a registered manifest"
+        )
+    if payload["treatment"] == payload["outcome"]:
+        raise ValueError("treatment and outcome must be distinct")
+    n_rows = payload.get("n_rows")
+    if isinstance(n_rows, bool) or not isinstance(n_rows, int) or n_rows <= 0:
+        raise ValueError(f"n_rows must be a positive integer, got {n_rows!r}")
+    features = payload.get("features")
+    if (
+        not isinstance(features, list)
+        or not features
+        or not all(isinstance(f, str) for f in features)
+    ):
+        raise ValueError("features must be a non-empty list of strings")
+    if len(set(features)) != len(features):
+        raise ValueError("features contains duplicates")
+    records = payload.get("records")
+    if not isinstance(records, Mapping):
+        raise ValueError("records must be a mapping")
+    if set(records) != set(features):
+        raise ValueError(
+            "records keys must equal features: "
+            f"missing={sorted(set(features) - set(records))} extra={sorted(set(records) - set(features))}"
+        )
+    for name, rec in records.items():
+        if not isinstance(rec, Mapping):
+            raise ValueError(f"record {name!r} must be a mapping")
+        unknown_rec = sorted(set(rec) - _RECORD_KEYS)
+        if unknown_rec:
+            raise ValueError(f"record {name!r}: unknown field(s) {unknown_rec}")
+        if rec.get("feature") != name:
+            raise ValueError(f"record {name!r} carries feature={rec.get('feature')!r}")
+        for key in ("layer_1", "layer_2", "layer_3", "layer_4", "ensemble"):
+            if not isinstance(rec.get(key), Mapping):
+                raise ValueError(f"record {name!r}: {key} must be a mapping")
+        leak = rec.get("leak_verdict")
+        review = rec.get("review_required", False)
+        if not isinstance(leak, bool):
+            raise ValueError(f"record {name!r}: leak_verdict must be a bool")
+        if not isinstance(review, bool):
+            raise ValueError(f"record {name!r}: review_required must be a bool")
+        source = rec.get("leak_source")
+        verdict = rec["layer_1"].get("verdict")
+        if leak:
+            if source not in _LEAK_SOURCES:
+                raise ValueError(
+                    f"record {name!r}: leak_verdict=True needs leak_source in {_LEAK_SOURCES}, got {source!r}"
+                )
+        elif source is not None:
+            raise ValueError(f"record {name!r}: leak_source set without leak_verdict")
+        if verdict == "post_index" and source != LEAK_SOURCE_LAYER_1:
+            raise ValueError(
+                f"record {name!r}: a post_index Layer-1 verdict must be a leak verdict with source "
+                f"{LEAK_SOURCE_LAYER_1!r}"
+            )
+        if source == LEAK_SOURCE_LAYER_1 and verdict != "post_index":
+            raise ValueError(
+                f"record {name!r}: leak_source {LEAK_SOURCE_LAYER_1!r} requires a post_index Layer-1 "
+                f"verdict, got {verdict!r}"
+            )
+        if source == LEAK_SOURCE_LAYER_3:
+            if verdict != "no_contract":
+                raise ValueError(
+                    f"record {name!r}: leak_source {LEAK_SOURCE_LAYER_3!r} requires a no_contract "
+                    f"Layer-1 verdict (Layer 3 cannot override a contract), got {verdict!r}"
+                )
+            if not rec["layer_3"].get("ran"):
+                raise ValueError(
+                    f"record {name!r}: leak_source {LEAK_SOURCE_LAYER_3!r} requires layer_3.ran"
+                )
+            if not review:
+                raise ValueError(
+                    f"record {name!r}: a {LEAK_SOURCE_LAYER_3!r} exclusion must carry review_required=True"
+                )
+        elif review:
+            raise ValueError(
+                f"record {name!r}: review_required=True is only valid with leak_source {LEAK_SOURCE_LAYER_3!r}"
+            )
+
+
+def _ensemble_from_verdict(
+    v: Mapping[str, Any],
+    *,
+    kg_causal_interpretation: Optional[str],
+    kg_signal: str,
+) -> Dict[str, Any]:
+    """The ensemble block of a record from the node's legacy verdict dict.
+
+    A KG-decided verdict carries the prediction-era conclusion ("descendant":
+    the condition leaks the target). The causal role is WITHHELD for the author
+    and the reviewer and the raw predictive role kept under its own name; the
+    note is signal-specific — only a ``leak_drug_treats_disease`` signal on a
+    declared pre-index covariate is indication evidence (codex r3/r4).
+    """
+    kg_decided = v.get("decided_by") == "kg"
+    if not kg_decided:
+        note: Optional[str] = None
+    elif kg_causal_interpretation == KG_CAUSAL_INTERPRETATION_INDICATION:
+        note = (
+            "withheld: the KG's predictive verdict is indication evidence in the causal "
+            "contrast (treatment drug approved for this pre-index condition); the "
+            "structural author and the reviewer decide the role"
+        )
+    else:
+        note = (
+            f"withheld: the KG decided on a {kg_signal!r} signal, a prediction-era "
+            "relation with no causal reading here; the structural author and the "
+            "reviewer decide the role"
+        )
+    return {
+        "decided_by": v.get("decided_by"),
+        "final_role": None if kg_decided else v.get("final_role"),
+        "kg_predictive_role": v.get("final_role") if kg_decided else None,
+        "final_role_note": note,
+        "confidence": v.get("confidence"),
+        "severity": v.get("severity"),
+        "remediation": v.get("remediation"),
+        "layer": v.get("layer"),
+        "disagreements": list(v.get("disagreements") or []),
+        "evidence": v.get("evidence"),
+        "kg_signal": v.get("kg_signal"),
+        "structural_role": v.get("structural_role"),
+        "structural_unclassifiable": v.get("structural_unclassifiable"),
+    }
+
 
 def _resolve_covariates(
     frame: pd.DataFrame,
@@ -482,6 +675,8 @@ async def build_feature_role_panel(
             ensemble: Dict[str, Any] = {
                 "decided_by": None,
                 "final_role": None,
+                "kg_predictive_role": None,
+                "final_role_note": None,
                 "confidence": None,
                 "severity": None,
                 "remediation": None,
@@ -494,37 +689,11 @@ async def build_feature_role_panel(
                 "kg_signal": signal,
                 "structural_role": None,
                 "structural_unclassifiable": None,
-                "kg_predictive_role": None,
-                "final_role_note": None,
             }
         else:
-            kg_decided = v.get("decided_by") == "kg"
-            ensemble = {
-                "decided_by": v.get("decided_by"),
-                # A KG-decided verdict carries the prediction-era conclusion
-                # ("descendant": the condition leaks the target). In the causal
-                # contrast that is indication evidence, so the causal role is
-                # WITHHELD for the author and the reviewer; the raw predictive
-                # role stays under its own name (codex r3).
-                "final_role": None if kg_decided else v.get("final_role"),
-                "kg_predictive_role": v.get("final_role") if kg_decided else None,
-                "final_role_note": (
-                    "withheld: the KG's predictive verdict is indication evidence in the "
-                    "causal contrast (treatment drug approved for this pre-index condition); "
-                    "the structural author and the reviewer decide the role"
-                    if kg_decided
-                    else None
-                ),
-                "confidence": v.get("confidence"),
-                "severity": severity,
-                "remediation": v.get("remediation"),
-                "layer": v.get("layer"),
-                "disagreements": list(v.get("disagreements") or []),
-                "evidence": v.get("evidence"),
-                "kg_signal": v.get("kg_signal"),
-                "structural_role": v.get("structural_role"),
-                "structural_unclassifiable": v.get("structural_unclassifiable"),
-            }
+            ensemble = _ensemble_from_verdict(
+                v, kg_causal_interpretation=kg_causal, kg_signal=signal
+            )
 
         leak_source: Optional[str] = None
         if feat in leaked:
@@ -673,6 +842,12 @@ class ConfounderChannels:
     #: Removed covariates whose exclusion rests on Layer 3 alone (temporal
     #: status unknown): excluded per spec 3(b), but a human must confirm.
     review_required: List[str] = field(default_factory=list)
+    #: Every FRAME column (when ``frame_columns`` was given) that must leave the
+    #: estimation frame: the removed declared covariates plus any other frame
+    #: column — declared or not, dummy or root — that the panel marks as a leak
+    #: verdict or an approved role rules out (codex r4). Guided discovery and
+    #: the estimator's fallback read the frame, not the declared list.
+    excluded_frame_columns: List[str] = field(default_factory=list)
 
 
 #: Approved roles that are NOT backdoor variables and leave the modeled set.
@@ -704,6 +879,7 @@ def derive_confounder_channels(
     *,
     declared_covariates: Sequence[str],
     approved_structure_roles: Optional[Mapping[str, str]] = None,
+    frame_columns: Optional[Sequence[str]] = None,
 ) -> ConfounderChannels:
     """Apply the panel to the agent's confounder channels (spec item 3(d)).
 
@@ -721,7 +897,11 @@ def derive_confounder_channels(
       ``review_required``: Layer 3 measures predictiveness of Y, not timing, so
       the warning says the temporal status is unknown (codex r1).
     * A declared covariate the panel never saw is kept and named: the panel
-      cannot vouch for a column it did not evaluate.
+      cannot vouch for a column it did not evaluate — unless an approved role
+      rules it out, which is checked first.
+    * ``frame_columns`` (the estimation frame's columns) yields
+      ``excluded_frame_columns``: every frame column the panel or an approved
+      role rules out, declared or not, so it can leave the frame itself.
     """
     leaks, n_panel = _leak_map(panel)
     approved: Dict[str, str] = (
@@ -745,6 +925,16 @@ def derive_confounder_channels(
         if name not in leaks and "=" in name and name.split("=", 1)[0] in leaks:
             key = name.split("=", 1)[0]
             via_dummy = True
+        role = approved.get(key)
+        if key not in leaks and role in _NON_ADJUSTMENT_ROLES:
+            # An approved role rules the column out whether or not the panel saw
+            # it (codex r4): the approval is the authority for the role.
+            removed.append((name, f"approved_{role}"))
+            warnings.append(
+                f"feature_role_panel: '{name}' removed from modeled_confounders "
+                f"(approved structure derives {role}); a {role} is not a backdoor variable"
+            )
+            continue
         if key not in leaks:
             modeled.append(name)
             warnings.append(
@@ -771,7 +961,6 @@ def derive_confounder_channels(
                     "per spec 3(b) pending temporal review, not proven leakage"
                 )
             continue
-        role = approved.get(key)
         if role in _NON_ADJUSTMENT_ROLES:
             removed.append((name, f"approved_{role}"))
             warnings.append(
@@ -821,6 +1010,29 @@ def derive_confounder_channels(
             # mediator / collider / descendant / ancestor: handled in the loop
             # above (never adjustment inputs; an ancestor of T alone is neither
             # anchored nor removed).
+    excluded_frame: List[str] = []
+    if frame_columns is not None:
+        removed_names = {name for name, _why in removed}
+        for col in frame_columns:
+            name = str(col)
+            root = name.split("=", 1)[0] if ("=" in name and name not in leaks) else name
+            leak_source = leaks.get(root, (None, False))[0]
+            ruled_out = (
+                name in removed_names
+                or leak_source is not None
+                or (approved.get(root) in _NON_ADJUSTMENT_ROLES)
+            )
+            if ruled_out and name not in excluded_frame:
+                excluded_frame.append(name)
+                if name not in removed_names:
+                    why = (
+                        leak_source if leak_source is not None else f"approved_{approved.get(root)}"
+                    )
+                    warnings.append(
+                        f"feature_role_panel: frame column '{name}' (not a declared covariate) "
+                        f"removed from the estimation frame ({why}); discovery and the "
+                        "estimator's fallback must not see it"
+                    )
     return ConfounderChannels(
         modeled_confounders=modeled,
         anchored_confounders=anchored,
@@ -828,11 +1040,14 @@ def derive_confounder_channels(
         removed=removed,
         warnings=warnings,
         review_required=review,
+        excluded_frame_columns=excluded_frame,
     )
 
 
 __all__ = [
     "CAUSAL_ACTIVATION_PROFILE",
+    "PANEL_SCHEMA_VERSION",
+    "validate_panel_payload",
     "LEAK_SOURCE_LAYER_1",
     "LEAK_SOURCE_LAYER_3",
     "ConfounderChannels",

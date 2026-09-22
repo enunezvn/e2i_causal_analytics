@@ -359,3 +359,81 @@ def test_kg_decided_features_get_indication_evidence_not_a_causal_descendant(stu
     assert panel.records["age_at_index"].layer_2["causal_interpretation"] is None
     assert "kg_predictive_role" in panel.records["age_at_index"].ensemble
     assert panel.records["age_at_index"].ensemble["kg_predictive_role"] is None
+
+
+def test_raw_payload_validation_is_strict_not_coercive(panel: FeatureRolePanel) -> None:
+    """codex r4: validate the RAW payload before any coercion — required explicit
+    schema_version, exact types, no unknown fields — and enforce the invariants
+    in BOTH directions."""
+    from src.causal_engine.feature_role_panel import validate_panel_payload
+
+    payload = panel.to_dict()
+    validate_panel_payload(payload)  # the real panel passes
+
+    def broken(**top):
+        return {**payload, **top}
+
+    def broken_record(name: str, **fields):
+        recs = {**payload["records"], name: {**payload["records"][name], **fields}}
+        return broken(records=recs)
+
+    with pytest.raises(ValueError, match="schema_version"):
+        validate_panel_payload({k: v for k, v in payload.items() if k != "schema_version"})
+    with pytest.raises(ValueError, match="unknown"):
+        validate_panel_payload(broken(smuggled=1))
+    with pytest.raises(ValueError, match="n_rows"):
+        validate_panel_payload(broken(n_rows="15209"))
+    with pytest.raises(ValueError, match="features"):
+        validate_panel_payload(broken(features="age_at_index"))
+    with pytest.raises(ValueError, match="leak_verdict"):
+        validate_panel_payload(broken_record("age_at_index", leak_verdict="yes"))
+    with pytest.raises(ValueError, match="unknown"):
+        validate_panel_payload(broken_record("age_at_index", extra_field=1))
+    # A post-index Layer-1 verdict MUST be a leak verdict (keeping it is the
+    # dangerous direction).
+    with pytest.raises(ValueError, match="post_index"):
+        validate_panel_payload(
+            broken_record(
+                "treatment_initiated", leak_verdict=False, leak_source=None, review_required=False
+            )
+        )
+    # Layer-3-high needs an UNCONTRACTED column, Layer 3 having run, and the
+    # review flag; a declared pre-index feature cannot be presented as one.
+    with pytest.raises(ValueError, match="no_contract"):
+        validate_panel_payload(
+            broken_record(
+                "age_at_index", leak_verdict=True, leak_source="layer_3_high", review_required=True
+            )
+        )
+    with pytest.raises(ValueError, match="review_required"):
+        validate_panel_payload(broken_record("leak_probe", review_required=False))
+    with pytest.raises(ValueError, match="review_required"):
+        validate_panel_payload(broken_record("noise_feature", review_required=True))
+
+
+def test_kg_withheld_role_note_is_signal_specific() -> None:
+    """codex r4: only a `leak_drug_treats_disease` signal on a declared pre-index
+    covariate is indication evidence; another KG signal gets its own explanation."""
+    from src.causal_engine.feature_role_panel import _ensemble_from_verdict
+
+    v = {
+        "decided_by": "kg",
+        "final_role": "descendant",
+        "severity": "info",
+        "kg_signal": "taxonomic_descendant",
+    }
+    e = _ensemble_from_verdict(v, kg_causal_interpretation=None, kg_signal="taxonomic_descendant")
+    assert e["final_role"] is None and e["kg_predictive_role"] == "descendant"
+    assert "taxonomic_descendant" in e["final_role_note"] and "approved" not in e["final_role_note"]
+    e2 = _ensemble_from_verdict(
+        {**v, "kg_signal": "leak_drug_treats_disease"},
+        kg_causal_interpretation="indication_evidence",
+        kg_signal="leak_drug_treats_disease",
+    )
+    assert "indication" in e2["final_role_note"]
+    e3 = _ensemble_from_verdict(
+        {"decided_by": "adversarial", "final_role": None},
+        kg_causal_interpretation=None,
+        kg_signal="no_signal",
+    )
+    assert e3["kg_predictive_role"] is None and e3["final_role_note"] is None

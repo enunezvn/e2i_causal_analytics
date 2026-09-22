@@ -131,10 +131,16 @@ class GraphBuilderNode:
             if panel_payload:
                 from src.causal_engine.feature_role_panel import derive_confounder_channels
 
+                _frame0 = (state.get("data_cache") or {}).get("estimation_data")
                 channels = derive_confounder_channels(
                     panel_payload,
                     declared_covariates=[str(c) for c in (confounders or [])],
                     approved_structure_roles=state.get("approved_structure_roles"),
+                    frame_columns=(
+                        [str(c) for c in _frame0.columns]
+                        if _frame0 is not None and hasattr(_frame0, "columns")
+                        else None
+                    ),
                 )
                 confounders = list(channels.modeled_confounders)
                 narrowed: Dict[str, Any] = {
@@ -153,7 +159,11 @@ class GraphBuilderNode:
                 # confounder and the estimator's no-backdoor fallback adjusts on
                 # every column, so a column left in the frame can re-enter an
                 # ACCEPT/AUGMENT DAG or the adjustment set (codex r3).
-                excluded_columns = [name for name, _why in channels.removed]
+                excluded_columns = list(
+                    dict.fromkeys(
+                        [name for name, _why in channels.removed] + channels.excluded_frame_columns
+                    )
+                )
                 _cache = dict(state.get("data_cache") or {})
                 _frame = _cache.get("estimation_data")
                 if excluded_columns and _frame is not None and hasattr(_frame, "columns"):
@@ -164,8 +174,10 @@ class GraphBuilderNode:
                 state = cast(CausalImpactState, {**state, **narrowed})
                 _pp = panel_payload if isinstance(panel_payload, dict) else {}
                 panel_warnings = [
-                    "feature_role_panel applied (caller-supplied; identity checked at submit "
-                    "on question/manifest/coverage/invariants, provenance not verified): "
+                    "feature_role_panel applied (caller-supplied; submit established only: "
+                    "registered manifest, exact treatment/outcome, at least one covariate overlap, "
+                    "structural invariants, dataset-manifest binding only when the dataset declares "
+                    "one; provenance not verified): "
                     f"manifest={_pp.get('manifest_source', '?')}, question "
                     f"{_pp.get('treatment', '?')} -> {_pp.get('outcome', '?')}, "
                     f"{len(_pp.get('records') or {})} covariate(s) in the panel, "

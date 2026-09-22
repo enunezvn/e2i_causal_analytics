@@ -281,3 +281,9 @@ async def test_route_task_forwards_the_normalised_panel_not_the_raw_dict(monkeyp
     assert captured["feature_role_panel"] == FeatureRolePanel.from_dict(raw).to_dict()
     assert "smuggled" not in captured["feature_role_panel"]
     assert captured["feature_role_panel"]["features"] == list(_PANEL["features"])
+
+
+@pytest.mark.asyncio
+async def test_submit_refuses_unknown_panel_fields_instead_of_normalising_them_away() -> None:
+    """codex r4: reject unknown fields at submit rather than silently dropping them."""
+    await _expect_400(_submit_request(smuggled={"anything": 1}), "unknown")

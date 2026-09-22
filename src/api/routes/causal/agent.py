@@ -77,9 +77,10 @@ def _validate_feature_role_panel(
     covariates: List[str],
 ) -> None:
     """Refuse (400) a panel that does not answer THIS question (codex r2)."""
-    from src.causal_engine.feature_role_panel import FeatureRolePanel
+    from src.causal_engine.feature_role_panel import FeatureRolePanel, validate_panel_payload
 
     try:
+        validate_panel_payload(request.feature_role_panel or {})
         panel = FeatureRolePanel.from_dict(request.feature_role_panel or {})
     except Exception as exc:  # noqa: BLE001 — any malformed payload is a caller error
         raise HTTPException(

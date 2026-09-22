@@ -205,6 +205,33 @@ class TestDeriveConfounderChannels:
         assert ("c2=x", "approved_mediator") in ch.removed
         assert ch.instruments == ["z"]
 
+    def test_frame_columns_with_a_leak_verdict_are_excluded_even_when_not_declared(self) -> None:
+        """codex r4: the denylist is derived against the FRAME, not only the declared
+        covariates — a panel-marked leak that the route added to the frame but the
+        caller did not declare must still leave discovery and estimation."""
+        ch = derive_confounder_channels(
+            _panel(post_dx="layer_1_post_index"),
+            declared_covariates=["c1"],
+            frame_columns=["t", "y", "c1", "c2", "post_dx", "post_dx=1", "extra"],
+        )
+        assert ch.modeled_confounders == ["c1"]
+        assert ch.excluded_frame_columns == ["post_dx", "post_dx=1"]
+        assert any("post_dx" in w and "frame" in w for w in ch.warnings), ch.warnings
+
+    def test_approved_non_adjustment_roles_apply_before_the_not_in_panel_branch(self) -> None:
+        """codex r4: an approved mediator the panel never saw must still leave the
+        modeled set (and the frame) — the approved role is checked first."""
+        ch = derive_confounder_channels(
+            _panel(),
+            declared_covariates=["c1", "extra"],
+            approved_structure_roles={"extra": "mediator", "c1": "confounder"},
+            frame_columns=["t", "y", "c1", "extra", "extra=b"],
+        )
+        assert ch.modeled_confounders == ["c1"]
+        assert ("extra", "approved_mediator") in ch.removed
+        assert ch.excluded_frame_columns == ["extra", "extra=b"]
+        assert not any("not in the panel" in w and "extra" in w for w in ch.warnings)
+
     def test_accepts_the_serialised_panel(self) -> None:
         payload = _panel(post_dx="layer_1_post_index").to_dict()
         ch = derive_confounder_channels(payload, declared_covariates=["c1", "post_dx"])
@@ -400,9 +427,37 @@ class TestExcludedColumnsNeverReenterViaDiscovery:
         assert "post_dx=1" not in result["data_cache"]["estimation_data"].columns
 
     @pytest.mark.asyncio
-    async def test_the_provenance_line_says_caller_supplied_not_vetted(self) -> None:
+    async def test_the_provenance_line_says_precisely_what_was_checked(self) -> None:
         node = GraphBuilderNode()
         result = await node.execute(_state(feature_role_panel=_panel().to_dict()))
         line = next(w for w in result["warnings"] if w.startswith("feature_role_panel applied"))
         assert "caller-supplied" in line and "provenance not verified" in line
-        assert "vetted" not in line
+        assert "vetted" not in line and "identity checked" not in line
+        # codex r4: say exactly what submit established, no more.
+        for phrase in (
+            "registered manifest",
+            "exact treatment/outcome",
+            "at least one covariate overlap",
+            "structural invariants",
+            "dataset-manifest binding only when the dataset declares one",
+        ):
+            assert phrase in line, (phrase, line)
+
+    @pytest.mark.asyncio
+    async def test_an_undeclared_frame_column_with_a_leak_verdict_leaves_the_frame(self) -> None:
+        node = GraphBuilderNode()
+        runner = _RecordingAcceptingRunner([("post_dx", "t"), ("post_dx", "y")])
+        node._discovery_runner = runner  # type: ignore[assignment]
+        _accept(node)
+        result = await node.execute(
+            _state(
+                confounders=["c1", "c2"],
+                modeled_confounders=["c1", "c2"],
+                auto_discover=True,
+                discovery_guided=True,
+                feature_role_panel=_panel(post_dx="layer_1_post_index").to_dict(),
+            )
+        )
+        assert "post_dx" not in runner.seen_columns
+        assert "post_dx" not in result["data_cache"]["estimation_data"].columns
+        assert all("post_dx" not in adj for adj in result["causal_graph"]["adjustment_sets"])
