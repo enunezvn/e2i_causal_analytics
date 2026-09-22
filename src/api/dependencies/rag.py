@@ -23,7 +23,7 @@ _rag_deps: Optional[Dict[str, Any]] = None
 # and a concurrent Future that ANY loop can await; an asyncio.Lock would bind to
 # one loop and let a second loop start its own build.
 _build_guard = threading.Lock()
-_build_future: Optional[concurrent.futures.Future] = None
+_build_future: Optional["concurrent.futures.Future[Dict[str, Any]]"] = None
 
 
 async def get_rag_dependencies() -> Dict[str, Any]:
@@ -43,10 +43,11 @@ async def get_rag_dependencies() -> Dict[str, Any]:
         with _build_guard:
             if _rag_deps is not None:
                 return _rag_deps
-            leader = _build_future is None
-            if leader:
-                _build_future = concurrent.futures.Future()
             flight = _build_future
+            leader = flight is None
+            if flight is None:
+                flight = concurrent.futures.Future()
+                _build_future = flight
 
         if leader:
             try:
