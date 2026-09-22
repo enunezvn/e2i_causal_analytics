@@ -2376,3 +2376,43 @@ def test_fit_fingerprint_includes_the_recorded_training_frame():
         "training_frame": {"source": "synthetic", "seed": 1, "n_rows": 2000},
     }
     assert _fit_fingerprint(a) != _fit_fingerprint(b)
+
+
+def test_fit_fingerprint_does_not_collapse_large_integers():
+    """codex r4 #2: int→float normalisation collides above 2**53; ints stay exact."""
+    from src.api.routes.digital_twin import _fit_fingerprint
+
+    a = _shared_fit_row("Remibrutinib", duration=1.0)
+    b = _shared_fit_row("Kisqali", duration=1.0)
+    a["training_config"] = {**a["training_config"], "seed": 2**53 + 1}
+    b["training_config"] = {**b["training_config"], "seed": 2**53 + 2}
+    assert _fit_fingerprint(a) != _fit_fingerprint(b)
+    # ... while an integral float still equals its int.
+    c = _shared_fit_row("Fabhalta", duration=1.0)
+    c["training_config"] = {**c["training_config"], "seed": 7.0}
+    d = _shared_fit_row("Fabhalta", duration=1.0)
+    d["training_config"] = {**d["training_config"], "seed": 7}
+    assert _fit_fingerprint(c) == _fit_fingerprint(d)
+
+
+@pytest.mark.asyncio
+async def test_list_models_says_whether_the_training_frame_was_recorded(mock_twin_repository):
+    """codex r4 #2: legacy rows carry no frame identity; the listing says so, so the
+    UI can scope its 'same frame' claim to rows that recorded one."""
+    from src.api.routes.digital_twin import list_models
+
+    legacy = _shared_fit_row("Remibrutinib", duration=7.1)
+    recorded = _shared_fit_row("Kisqali", duration=7.1)
+    recorded["training_config"] = {
+        **recorded["training_config"],
+        "training_frame": {"source": "synthetic_training_frame", "seed": 0, "n_rows": 2000},
+    }
+    mock_twin_repository.list_active_models = AsyncMock(return_value=[legacy, recorded])
+
+    result = await list_models(brand=None, twin_type=None, user=_ADMIN)
+
+    by_brand = {m.brand: m for m in result.models}
+    assert by_brand["Remibrutinib"].training_frame_recorded is False
+    assert by_brand["Kisqali"].training_frame_recorded is True
+    # A recorded frame is part of the fingerprint: these two are not one recorded fit.
+    assert by_brand["Remibrutinib"].training_fingerprint != by_brand["Kisqali"].training_fingerprint

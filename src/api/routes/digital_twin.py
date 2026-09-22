@@ -272,11 +272,17 @@ _FIT_FINGERPRINT_EXCLUDED_METRICS = frozenset({"training_duration_seconds"})
 
 
 def _canonical(value: Any) -> Any:
-    """JSONB round-trips ``1`` and ``1.0`` interchangeably; hash them the same."""
+    """JSONB round-trips ``1`` and ``1.0`` interchangeably; hash them the same.
+
+    Integral floats become ints (lossless); ints are never widened to float, so
+    values above 2**53 keep their identity.
+    """
     if isinstance(value, bool):
         return value
-    if isinstance(value, (int, float)):
-        return repr(float(value))
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else repr(value)
+    if isinstance(value, int):
+        return value
     if isinstance(value, dict):
         return {str(k): _canonical(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
@@ -384,6 +390,7 @@ def _model_honesty_fields(
     status, score, n = _model_fidelity_state(row)
     features = [str(c) for c in (row.get("feature_columns") or [])]
     return {
+        "training_frame_recorded": bool(tc.get("training_frame")),
         "fidelity_status": status,
         "fidelity_score": score,
         "fidelity_sample_count": n,
@@ -845,6 +852,14 @@ class TwinModelSummary(BaseModel):
     shared_fit_with: List[str] = Field(
         default_factory=list,
         description="Other brands sharing this exact fit that the caller may read (brand-scoped).",
+    )
+    training_frame_recorded: bool = Field(
+        description=(
+            "Whether training_config.training_frame (source/seed/rows) was recorded for "
+            "this row. False for rows trained before it was recorded: their fingerprint "
+            "compares configuration, columns and metrics only — training-frame and "
+            "artifact identity were not recorded."
+        ),
     )
 
 

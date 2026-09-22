@@ -1024,15 +1024,17 @@ class TwinRepository:
         mlflow_run_id: Optional[str] = None,
         mlflow_model_uri: Optional[str] = None,
         data_provenance: Optional[str] = None,
+        training_frame: Optional[Dict[str, Any]] = None,
     ) -> UUID:
-        """Save a trained twin model."""
+        """Save a trained twin model (forwards every field, incl. training_frame)."""
         return await self.models.save_model(  # type: ignore[no-any-return]
             config,
             metrics,
             model_artifact,
             mlflow_run_id,
             mlflow_model_uri,
-            data_provenance,
+            data_provenance=data_provenance,
+            training_frame=training_frame,
         )
 
     async def get_model(self, model_id: UUID) -> Optional[Dict[str, Any]]:

@@ -37,6 +37,14 @@ import {
 } from './data/memory';
 
 import { RetrievalMethod } from '@/types/memory';
+import {
+  EstimateScope,
+  FidelityStatus,
+  Recommendation,
+  SimulationStatus,
+  type SimulationDetailResponse,
+  type SimulationResponse,
+} from '@/types/digital-twin';
 
 // Base URL for API requests
 const baseUrl = env.apiUrl;
@@ -997,177 +1005,64 @@ const digitalTwinHandlers = [
     await delay(1500); // Longer delay to simulate processing
 
     const body = (await request.json()) as {
-      intervention_type: string;
+      intervention: { intervention_type: string; duration_weeks?: number };
       brand: string;
-      sample_size: number;
-      duration_days: number;
+      twin_type?: string;
+      twin_count?: number;
     };
 
-    // Generate realistic mock simulation results
-    const ateEstimate = 25 + Math.random() * 30; // 25-55 effect
-    const trxLift = 8 + Math.random() * 7; // 8-15% TRx lift
-    const nrxLift = 5 + Math.random() * 5; // 5-10% NRx lift
-    const marketShare = 0.5 + Math.random() * 1; // 0.5-1.5% market share change
-    const roiEstimate = 2.5 + Math.random() * 2; // 2.5-4.5x ROI
-
-    // Generate projection data points
-    const startDate = new Date();
-    const projections = Array.from({ length: Math.ceil(body.duration_days / 7) }, (_, i) => {
-      const date = new Date(startDate);
-      date.setDate(date.getDate() + i * 7);
-      const baseValue = 1000 + i * 50;
-      const effect = ateEstimate * (1 - Math.exp(-0.3 * (i + 1)));
-      return {
-        date: date.toISOString().split('T')[0],
-        with_intervention: Math.round(baseValue + effect),
-        without_intervention: Math.round(baseValue),
-        lower_bound: Math.round(baseValue + effect * 0.7),
-        upper_bound: Math.round(baseValue + effect * 1.3),
-      };
-    });
-
-    // Determine recommendation type based on ROI
-    const recommendationType = roiEstimate > 3 ? 'deploy' : roiEstimate > 2 ? 'refine' : 'analyze';
-    const confidenceLevel = roiEstimate > 3.5 ? 'high' : roiEstimate > 2.5 ? 'medium' : 'low';
-
-    return HttpResponse.json({
+    // The FLAT SimulationResponse contract (#705 H1/H2; #2206): no fabricated
+    // TRx/NRx/ROI/projection breakdowns. The live models are one synthetic fit with
+    // a NULL fidelity, so the mock states 'unvalidated' with the backend's warning —
+    // never a blank that reads like a pass.
+    const ate = 0.03 + Math.random() * 0.06; // 3–9 pp
+    const se = 0.012;
+    const ciLower = ate - 1.96 * se;
+    const ciUpper = ate + 1.96 * se;
+    const twinCount = body.twin_count ?? 5000;
+    const response = {
       simulation_id: `sim_${Date.now()}`,
-      created_at: new Date().toISOString(),
-      request: {
-        intervention_type: body.intervention_type,
-        brand: body.brand,
-        sample_size: body.sample_size,
-        duration_days: body.duration_days,
-      },
-      outcomes: {
-        ate: {
-          lower: ateEstimate * 0.8,
-          estimate: ateEstimate,
-          upper: ateEstimate * 1.2,
-        },
-        trx_lift: {
-          lower: trxLift * 0.7,
-          estimate: trxLift,
-          upper: trxLift * 1.3,
-        },
-        nrx_lift: {
-          lower: nrxLift * 0.6,
-          estimate: nrxLift,
-          upper: nrxLift * 1.4,
-        },
-        market_share_change: {
-          lower: marketShare * 0.5,
-          estimate: marketShare,
-          upper: marketShare * 1.5,
-        },
-        roi: {
-          lower: roiEstimate * 0.7,
-          estimate: roiEstimate,
-          upper: roiEstimate * 1.4,
-        },
-        nnt: Math.round(20 + Math.random() * 30),
-        cate_by_segment: {
-          'High-Value HCPs': {
-            lower: ateEstimate * 1.1,
-            estimate: ateEstimate * 1.4,
-            upper: ateEstimate * 1.7,
-          },
-          'Medium-Value HCPs': {
-            lower: ateEstimate * 0.7,
-            estimate: ateEstimate * 0.9,
-            upper: ateEstimate * 1.1,
-          },
-          'Low-Value HCPs': {
-            lower: ateEstimate * 0.3,
-            estimate: ateEstimate * 0.5,
-            upper: ateEstimate * 0.7,
-          },
-        },
-      },
-      fidelity: {
-        overall_score: 0.82 + Math.random() * 0.1,
-        data_coverage: 0.88 + Math.random() * 0.08,
-        calibration: 0.79 + Math.random() * 0.12,
-        temporal_alignment: 0.85 + Math.random() * 0.1,
-        feature_completeness: 0.90 + Math.random() * 0.08,
-        confidence_level: confidenceLevel,
-        warnings: [
-          'Limited historical data for this segment in Q4',
-          'Model trained on 18 months of data',
-        ],
-      },
-      sensitivity: [
-        {
-          parameter: 'Sample Size',
-          base_value: body.sample_size,
-          low_value: body.sample_size * 0.5,
-          high_value: body.sample_size * 1.5,
-          ate_at_low: ateEstimate * 0.85,
-          ate_at_high: ateEstimate * 1.1,
-          sensitivity_score: 0.65,
-        },
-        {
-          parameter: 'Duration',
-          base_value: body.duration_days,
-          low_value: body.duration_days * 0.5,
-          high_value: body.duration_days * 1.5,
-          ate_at_low: ateEstimate * 0.7,
-          ate_at_high: ateEstimate * 1.15,
-          sensitivity_score: 0.72,
-        },
-        {
-          parameter: 'Engagement Quality',
-          base_value: 0.8,
-          low_value: 0.5,
-          high_value: 1.0,
-          ate_at_low: ateEstimate * 0.6,
-          ate_at_high: ateEstimate * 1.25,
-          sensitivity_score: 0.85,
-        },
-        {
-          parameter: 'Market Conditions',
-          base_value: 1.0,
-          low_value: 0.8,
-          high_value: 1.2,
-          ate_at_low: ateEstimate * 0.9,
-          ate_at_high: ateEstimate * 1.08,
-          sensitivity_score: 0.35,
-        },
-        {
-          parameter: 'Competitor Activity',
-          base_value: 0.5,
-          low_value: 0.2,
-          high_value: 0.8,
-          ate_at_low: ateEstimate * 1.15,
-          ate_at_high: ateEstimate * 0.85,
-          sensitivity_score: 0.55,
-        },
-      ],
-      recommendation: {
-        type: recommendationType,
-        confidence: confidenceLevel,
-        rationale: `Based on the simulation, the ${body.intervention_type.replace(/_/g, ' ')} for ${body.brand} shows a projected ${trxLift.toFixed(1)}% lift in TRx volume with an ROI of ${roiEstimate.toFixed(1)}x. The model has ${confidenceLevel} confidence in these predictions.`,
-        evidence: [
-          'High-value HCPs show 40% stronger response than average',
-          'Effect builds over first 6-8 weeks then stabilizes',
-          `ROI projection of ${roiEstimate.toFixed(1)}x based on 85% historical simulation accuracy`,
-          `Expected ${Math.round(ateEstimate)} additional TRx per 100 treated HCPs`,
-        ],
-        risk_factors: [
-          'Seasonal variation in Q4 may impact actual results by ±15%',
-          'Assumes consistent engagement quality across all territories',
-          'Competitor launches could reduce effect by up to 20%',
-        ],
-        suggested_refinements: recommendationType === 'refine' ? {
-          sample_size: Math.round(body.sample_size * 1.2),
-          duration_days: Math.round(body.duration_days * 1.25),
-          focus_segment: 'High-Value HCPs',
-        } : undefined,
-        expected_value: Math.round(body.sample_size * 150 * roiEstimate),
-      },
-      projections,
+      model_id: 'mock-model-shared-synthetic-fit',
+      intervention_type: body.intervention.intervention_type,
+      brand: body.brand,
+      twin_type: body.twin_type ?? 'hcp',
+      twin_count: twinCount,
+      simulated_ate: Number(ate.toFixed(4)),
+      simulated_ci_lower: Number(ciLower.toFixed(4)),
+      simulated_ci_upper: Number(ciUpper.toFixed(4)),
+      simulated_std_error: se,
+      recommendation: ciLower > 0.05 ? Recommendation.DEPLOY : Recommendation.REFINE,
+      recommendation_rationale:
+        ciLower > 0.05
+          ? 'Effect is positive and the 95% CI excludes the minimum effect threshold.'
+          : 'The 95% CI does not clear the minimum effect threshold; refine the design.',
+      recommended_sample_size: 4000,
+      recommended_duration_weeks: body.intervention.duration_weeks ?? 12,
+      simulation_confidence: 0.61,
+      fidelity_warning: true,
+      fidelity_warning_reason:
+        'Model fidelity is unvalidated: no experiment outcome has been compared against this model yet (fidelity_score is NULL), so its prediction accuracy is unknown. Interpret with caution.',
+      model_fidelity_score: undefined,
+      fidelity_status: FidelityStatus.UNVALIDATED,
+      status: SimulationStatus.COMPLETED,
+      data_provenance: 'cohort_dml_v1',
       execution_time_ms: 1200 + Math.round(Math.random() * 800),
-    });
+      is_significant: ciLower > 0 || ciUpper < 0,
+      effect_direction: ate > 0 ? 'positive' : ate < 0 ? 'negative' : 'neutral',
+      created_at: new Date().toISOString(),
+      estimate_scope: EstimateScope.COHORT,
+      target_regions: [],
+      effect_heterogeneity: {
+        by_specialty: {},
+        by_decile: {},
+        by_region: {},
+        by_adoption_stage: {},
+        top_segments: [],
+        axis_provenance: {},
+      },
+      subgroups_basis: 'cohort_rows',
+    } satisfies SimulationResponse;
+    return HttpResponse.json(response);
   }),
 
   // GET /digital-twin/simulations - List simulations
@@ -1200,19 +1095,50 @@ const digitalTwinHandlers = [
   http.get(`${baseUrl}/digital-twin/simulations/:id`, async ({ params }) => {
     await simulateDelay();
     const { id } = params;
-    return HttpResponse.json({
-      simulation_id: id,
-      intervention_type: 'hcp_engagement',
+    const detail = {
+      simulation_id: String(id),
+      model_id: 'mock-model-shared-synthetic-fit',
+      intervention_type: 'email_campaign',
       brand: 'Remibrutinib',
-      sample_size: 1000,
-      duration_days: 90,
-      status: 'completed',
-      predicted_ate: 0.092,
-      confidence_interval: { lower: 0.065, upper: 0.119 },
-      p_value: 0.002,
+      twin_type: 'hcp',
+      twin_count: 5000,
+      simulated_ate: 0.067,
+      simulated_ci_lower: 0.031,
+      simulated_ci_upper: 0.103,
+      simulated_std_error: 0.018,
+      recommendation: Recommendation.DEPLOY,
+      recommendation_rationale: 'Effect is positive and the 95% CI excludes zero.',
+      recommended_sample_size: 4000,
+      recommended_duration_weeks: 12,
+      simulation_confidence: 0.61,
+      // A stored run derives its fidelity state from the model row at read time (#2206).
+      fidelity_warning: true,
+      fidelity_warning_reason:
+        'Model fidelity is unvalidated: no experiment outcome has been compared against this model yet (fidelity_score is NULL), so its prediction accuracy is unknown. Interpret with caution.',
+      model_fidelity_score: undefined,
+      fidelity_status: FidelityStatus.UNVALIDATED,
+      status: SimulationStatus.COMPLETED,
+      data_provenance: 'cohort_dml_v1',
+      execution_time_ms: 1840,
+      is_significant: true,
+      effect_direction: 'positive',
       created_at: new Date(Date.now() - 86400000).toISOString(),
       completed_at: new Date(Date.now() - 86300000).toISOString(),
-    });
+      estimate_scope: EstimateScope.COHORT,
+      target_regions: [],
+      population_filters: {},
+      intervention_config: { intervention_type: 'email_campaign', duration_weeks: 12 },
+      effect_heterogeneity: {
+        by_specialty: {},
+        by_decile: {},
+        by_region: {},
+        by_adoption_stage: {},
+        top_segments: [],
+        axis_provenance: {},
+      },
+      subgroups_basis: 'cohort_rows',
+    } satisfies SimulationDetailResponse;
+    return HttpResponse.json(detail);
   }),
 
   // GET /digital-twin/fidelity - Get fidelity metrics

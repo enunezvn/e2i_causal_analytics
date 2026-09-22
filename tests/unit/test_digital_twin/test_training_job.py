@@ -96,3 +96,28 @@ async def test_train_and_persist_records_the_training_frame_identity(file_tracki
         "n_rows": 1100,
         "target_column": "outcome",
     }
+
+
+@pytest.mark.asyncio
+async def test_train_and_persist_reaches_the_real_repository_facade(file_tracking):
+    """codex r4 #1: the Celery path constructs the TwinRepository facade, whose
+    save_model did not accept training_frame — real training raised TypeError after
+    fitting. The facade is exercised for real here; only the model store is faked."""
+    from unittest.mock import create_autospec
+
+    from src.digital_twin.training_job import train_and_persist_twin
+    from src.digital_twin.twin_repository import TwinModelRepository, TwinRepository
+
+    repo = TwinRepository(supabase_client=None)
+    repo.models = create_autospec(TwinModelRepository, instance=True)
+    saved_id = uuid4()
+    repo.models.save_model = AsyncMock(return_value=saved_id)
+
+    result = await train_and_persist_twin(
+        twin_type=TwinType.HCP, brand=Brand.KISQALI, repo=repo, synthetic=True, n_rows=1100, seed=2
+    )
+
+    assert result["model_id"] == str(saved_id)
+    kwargs = repo.models.save_model.await_args.kwargs
+    assert kwargs["training_frame"]["seed"] == 2
+    assert kwargs["data_provenance"] == "synthetic"

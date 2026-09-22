@@ -189,6 +189,7 @@ function sharedFitModel(brand: string, over: Partial<TwinModelSummary> = {}): Tw
     training_fingerprint: 'a1b2c3d4e5f60718',
     shared_fit_model_count: 3,
     shared_fit_with: ['Remibrutinib', 'Fabhalta', 'Kisqali'].filter((b) => b !== brand),
+    training_frame_recorded: false,
     ...over,
   };
 }

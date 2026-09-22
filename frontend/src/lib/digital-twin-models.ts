@@ -50,6 +50,8 @@ export interface ModelCensus {
   hiddenSharedLabels: number;
   /** Whether any visible model uses brand as a feature (false: routing metadata). */
   brandIsFeature: boolean;
+  /** Every visible row recorded its training frame, so "same frame" is a recorded fact. */
+  frameRecorded: boolean;
 }
 
 /**
@@ -86,6 +88,7 @@ export function summarizeModelCensus(models: readonly TwinModelSummary[]): Model
     sharedBrands,
     hiddenSharedLabels,
     brandIsFeature: models.some((m) => m.brand_is_feature),
+    frameRecorded: models.every((m) => m.training_frame_recorded),
   };
 }
 
@@ -129,9 +132,13 @@ export function explainModelCensus(models: readonly TwinModelSummary[]): string 
     // only when brand is NOT a feature; otherwise state the shared fit alone.
     const lead = c.brandIsFeature ? '' : 'Brand is routing metadata: ';
     const feature = c.brandIsFeature ? 'brand is a model feature.' : 'brand is not a model feature.';
+    // Say only what the rows recorded (codex r4 #2): the frame is part of the
+    // fingerprint only when it was written; older rows never recorded it.
+    const basis = c.frameRecorded
+      ? 'same training config and frame, features, and every reported metric'
+      : 'matching recorded configuration, columns and every reported metric; training-frame and artifact identity were not recorded';
     parts.push(
-      `${lead}${c.sharedBrands.join(', ')}${hidden} share one identical recorded fit ` +
-        `(same training config and frame, features, and every reported metric); ${feature}`
+      `${lead}${c.sharedBrands.join(', ')}${hidden} share one identical recorded fit (${basis}); ${feature}`
     );
   }
   if (c.allSynthetic) {

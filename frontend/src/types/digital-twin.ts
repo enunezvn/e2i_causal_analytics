@@ -577,6 +577,10 @@ export interface TwinModelSummary {
   shared_fit_model_count: number;
   /** Other brands sharing this exact fit that the caller may read. */
   shared_fit_with: string[];
+  /** Whether the training frame (source/seed/rows) was recorded for this row. False
+   *  for rows trained before it was recorded: the fingerprint then compares
+   *  configuration, columns and metrics only. */
+  training_frame_recorded: boolean;
 }
 
 /**

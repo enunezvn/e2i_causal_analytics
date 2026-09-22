@@ -19976,6 +19976,11 @@ export interface components {
              * @description Other brands sharing this exact fit that the caller may read (brand-scoped).
              */
             shared_fit_with?: string[];
+            /**
+             * Training Frame Recorded
+             * @description Whether training_config.training_frame (source/seed/rows) was recorded for this row. False for rows trained before it was recorded: their fingerprint compares configuration, columns and metrics only — training-frame and artifact identity were not recorded.
+             */
+            training_frame_recorded: boolean;
             /** Model Description */
             model_description?: string | null;
             /** Feature Columns */
@@ -20067,6 +20072,11 @@ export interface components {
              * @description Other brands sharing this exact fit that the caller may read (brand-scoped).
              */
             shared_fit_with?: string[];
+            /**
+             * Training Frame Recorded
+             * @description Whether training_config.training_frame (source/seed/rows) was recorded for this row. False for rows trained before it was recorded: their fingerprint compares configuration, columns and metrics only — training-frame and artifact identity were not recorded.
+             */
+            training_frame_recorded: boolean;
         };
         /**
          * TwinTypeEnum

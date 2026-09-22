@@ -28,6 +28,7 @@ function model(brand: string, over: Partial<TwinModelSummary> = {}): TwinModelSu
     training_fingerprint: 'fp-shared',
     shared_fit_model_count: 3,
     shared_fit_with: [],
+    training_frame_recorded: false,
     ...over,
   };
 }
@@ -43,6 +44,20 @@ describe('digital-twin model census (#2206)', () => {
     expect(why).toMatch(/Remibrutinib, Fabhalta, Kisqali/);
     expect(why).toMatch(/self-generated target/);
     expect(why).toMatch(/no experiment outcome has been compared/);
+    // Legacy rows recorded no frame: the claim is scoped to what was recorded.
+    expect(why).toMatch(/training-frame and artifact identity were not recorded/);
+    expect(why).not.toMatch(/config and frame/);
+  });
+
+  it('claims "same frame" only when every row recorded its training frame (codex r4 #2)', () => {
+    const rows = [
+      model('Remibrutinib', { training_frame_recorded: true }),
+      model('Fabhalta', { training_frame_recorded: true }),
+      model('Kisqali', { training_frame_recorded: true }),
+    ];
+    const why = explainModelCensus(rows) ?? '';
+    expect(why).toMatch(/same training config and frame/);
+    expect(why).not.toMatch(/were not recorded/);
   });
 
   it('does not call distinct fits shared, and counts validated models honestly', () => {
