@@ -186,3 +186,36 @@ def test_concurrent_builders_share_one_round():
         w.join(timeout=5)
     assert fake.calls == ["Kisqali"], "two first-builders must not each run the RxNav round"
     assert results == [{"Kisqali": ["ribociclib"]}, {"Kisqali": ["ribociclib"]}]
+
+
+def test_a_client_that_cannot_be_built_or_closed_is_a_failed_round_and_is_remembered(monkeypatch):
+    # Codex r4 MED: RxNavClient(...) (httpx reads proxy env at construction) and
+    # close() sat outside the failed-round handling, so such an exception escaped
+    # the documented {}-when-down contract and was never negative-cached.
+    built = {"n": 0}
+
+    class _Unbuildable:
+        def __init__(self, *, timeout):
+            built["n"] += 1
+            raise ValueError("bad proxy url")
+
+    monkeypatch.setattr(brand_aliases, "RxNavClient", _Unbuildable)
+    assert rxnav_brand_aliases(["Kisqali"]) == {}
+    assert rxnav_brand_aliases(["Kisqali"]) == {}
+    assert built["n"] == 1, "a failed construction must be remembered, not retried per build"
+
+    brand_aliases.reset_cache()
+    closed = {"n": 0}
+
+    class _CloseBoom(_FakeRxNav):
+        def close(self):
+            closed["n"] += 1
+            raise OSError("socket already gone")
+
+    monkeypatch.setattr(brand_aliases, "RxNavClient", lambda *, timeout: _CloseBoom())
+    out = rxnav_brand_aliases(["Kisqali"])
+    assert out == {"Kisqali": ["ribociclib"]}, (
+        "a close() failure after a full round keeps its aliases"
+    )
+    assert rxnav_brand_aliases(["Kisqali"]) == {"Kisqali": ["ribociclib"]}
+    assert closed["n"] == 1, "the full round is cached; close() is not attempted again"

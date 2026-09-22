@@ -168,12 +168,25 @@ def rxnav_brand_aliases(
         hit = _cached(key)  # a concurrent builder may have finished while we waited
         if hit is not None:
             return hit
-        owns_client = client is None
-        rx: _RxNavLike = client if client is not None else RxNavClient(timeout=CLIENT_TIMEOUT_S)
+        # The whole owned-client lifecycle is inside the failed-round handling:
+        # RxNavClient() (httpx reads proxy env at construction) or close() raising
+        # is still "RxNav down" — {} now, negative TTL, no retry per build.
+        gathered: dict[str, list[str]] = {}
+        complete = False
         try:
-            gathered, complete = _fetch_round(ordered, rx)
-        finally:
-            if owns_client:
-                rx.close()
+            rx: _RxNavLike = client if client is not None else RxNavClient(timeout=CLIENT_TIMEOUT_S)
+            try:
+                gathered, complete = _fetch_round(ordered, rx)
+            finally:
+                if client is None:
+                    rx.close()
+        except Exception as exc:  # noqa: BLE001 — see above; BaseException still propagates
+            logger.warning(
+                "brand_aliases: RxNav client raised %s outside the round (complete=%s); "
+                "recording what was gathered",
+                type(exc).__name__,
+                complete,
+                exc_info=True,
+            )
         _remember(key, gathered, complete=complete)
     return {b: list(a) for b, a in gathered.items()}
