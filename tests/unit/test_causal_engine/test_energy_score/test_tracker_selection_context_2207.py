@@ -96,9 +96,10 @@ def fake_pg():
     sink: List[tuple] = []
     conns: List[_FakeConn] = []
 
-    def _connect(dsn):
+    def _connect(dsn, **kwargs):
         c = _FakeConn(sink)
         c.dsn = dsn  # type: ignore[attr-defined]
+        c.kwargs = kwargs  # type: ignore[attr-defined]
         conns.append(c)
         return c
 

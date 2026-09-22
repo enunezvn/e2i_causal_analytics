@@ -32,6 +32,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Bounds on the direct-postgres write (#2207): the recording runs inside the bounded
+# estimation compute slot, so it may never wait on a degraded database for long.
+DB_CONNECT_TIMEOUT_S = 5
+DB_STATEMENT_TIMEOUT_MS = 5000
+
 
 def _as_uuid_or_none(value: Optional[str]) -> Optional[str]:
     """A value is an ``ml_experiments.id`` candidate only if it IS a uuid (#2207)."""
@@ -375,11 +380,19 @@ class EnergyScoreMLflowTracker:
         ctx = context or {}
         selection_run_id = ctx.get("selection_run_id") or str(uuid4())
 
+        conn = None
         try:
             import psycopg2
             from psycopg2.extras import Json
 
-            conn = psycopg2.connect(self.db_connection_string)
+            # Latency-isolated as well as exception-isolated (#2207): this runs
+            # inside the bounded estimation slot, so a degraded database must not
+            # hold that slot — bounded connect, bounded statements, always closed.
+            conn = psycopg2.connect(
+                self.db_connection_string,
+                connect_timeout=DB_CONNECT_TIMEOUT_S,
+                options=f"-c statement_timeout={DB_STATEMENT_TIMEOUT_MS}",
+            )
             cur = conn.cursor()
 
             for i, eval_result in enumerate(result.all_results):
@@ -469,7 +482,6 @@ class EnergyScoreMLflowTracker:
 
             conn.commit()
             cur.close()
-            conn.close()
 
             logger.info(
                 f"Logged {len(result.all_results)} evaluations to database "
@@ -480,6 +492,12 @@ class EnergyScoreMLflowTracker:
         except Exception as e:
             logger.error(f"Failed to log to database: {e}")
             return False
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001 — closing a broken connection
+                    pass
 
     def get_selection_comparison(
         self,

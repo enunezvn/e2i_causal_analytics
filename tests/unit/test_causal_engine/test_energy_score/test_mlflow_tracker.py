@@ -606,8 +606,13 @@ class TestLogToDatabase:
         ):
             tracker._log_to_database(sample_selection_result, "exp-123")
 
-        # Verify connection and cursor were used
-        mock_psycopg2.connect.assert_called_once_with("postgresql://test@host/db")
+        # Verify connection and cursor were used — bounded (#2207: the write runs
+        # inside the estimation compute slot, so connect + statements carry timeouts)
+        mock_psycopg2.connect.assert_called_once()
+        args, kwargs = mock_psycopg2.connect.call_args
+        assert args == ("postgresql://test@host/db",)
+        assert kwargs["connect_timeout"] == 5
+        assert "statement_timeout=5000" in kwargs["options"]
         mock_conn.commit.assert_called_once()
         mock_cursor.close.assert_called_once()
         mock_conn.close.assert_called_once()
