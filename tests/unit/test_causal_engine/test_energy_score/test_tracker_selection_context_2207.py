@@ -264,3 +264,30 @@ def test_migration_012_is_what_the_writer_now_depends_on():
     src = inspect.getsource(EnergyScoreMLflowTracker._log_to_database)
     for col in ("selection_run_id", "query_id", "session_id", "data_source", "mlflow_run_id"):
         assert col in src, col
+
+
+@pytest.mark.unit
+def test_an_established_connection_is_closed_when_a_statement_fails(selection_result):
+    """Codex r2: the `finally` close must be proven on the failure path AFTER connect —
+    a connect() failure never had a connection to leak."""
+    conn = MagicMock()
+    conn.cursor.return_value.execute.side_effect = RuntimeError("statement timeout")
+    tracker = EnergyScoreMLflowTracker(
+        enable_db_logging=True, enable_mlflow=False, db_connection_string="postgresql://x"
+    )
+    with patch("psycopg2.connect", return_value=conn):
+        assert tracker.record_evaluations(selection_result, query_id="q") is None
+    conn.close.assert_called_once()
+    conn.commit.assert_not_called()
+
+
+@pytest.mark.unit
+def test_a_connection_is_closed_when_commit_fails(selection_result):
+    conn = MagicMock()
+    conn.commit.side_effect = RuntimeError("commit failed")
+    tracker = EnergyScoreMLflowTracker(
+        enable_db_logging=True, enable_mlflow=False, db_connection_string="postgresql://x"
+    )
+    with patch("psycopg2.connect", return_value=conn):
+        assert tracker._log_to_database(selection_result, None, context={}) is False
+    conn.close.assert_called_once()

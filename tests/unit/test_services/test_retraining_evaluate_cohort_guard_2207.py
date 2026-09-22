@@ -10,7 +10,13 @@ approval. ``execute_model_retraining`` requires ``data_source`` + ``target_outco
 No persisted model record carries a committed cohort identity (ml_model_registry has
 no data_source column; ml_experiments has prediction_target/brand only), so the auto
 path cannot invent one. It now refuses to trigger without a contract and says so in
-its result; a caller that HAS the contract (the API route does) passes it through.
+its result; a caller that has the contract passes it through.
+
+Scope: this guard covers ONLY the scheduled helper. The API trigger route calls
+``RetrainingTriggerService.trigger_retraining`` directly and, by Phase-D design, keeps
+``data_source`` / ``target_outcome`` optional (tests/api/test_monitoring_endpoints.py
+expects an empty-cohort request to return a pending job) — an incomplete API trigger is
+accepted and then fails closed at execution. Tightening that boundary is an owner call.
 """
 
 from __future__ import annotations

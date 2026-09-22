@@ -33,7 +33,7 @@ after #2207, per table (details in each section):
 | Table | Producer after #2207 | Runs where |
 |-------|----------------------|------------|
 | `ml_feast_feature_views`, `ml_feast_materialization_jobs`, `ml_feast_feature_freshness` | `src/tasks/feast_tracking.py` from the three Feast beat tasks | live — worker_medium `analytics` (6 h / 4 h / weekly) |
-| `ml_hpo_studies`, `ml_hpo_trials` | `OptunaOptimizer.save_to_database` from the HPO tuner node | live — wherever `MLFoundationPipeline` runs |
+| `ml_hpo_studies`, `ml_hpo_trials` | `OptunaOptimizer.save_to_database` from the HPO tuner node | live on the host-run tier-0 harness (the path that wrote the 943 `ml_hpo_patterns`); on worker_medium the hosting pipeline is routed but **blocked at the data-prep Feast gate** (see §1.5) |
 | `estimator_evaluations` | `EnergyScoreMLflowTracker.record_evaluations` from the causal_impact estimation node | live — every energy-score selection (chat, `/api/causal`) |
 | `ml_data_quality_reports` | `DataQualityReportRepository` from data_preparer inside `MLFoundationPipeline` | routed — `execute_model_retraining` on worker_medium `analytics` after measurement; **blocked on the worker image at the data-prep Feast gate** (see §1.5) |
 | `ml_retraining_history` | `RetrainingHistoryRepository` via retraining_trigger / drift tasks | routes only — the daily `retraining-evaluation-daily` sweep (quick) evaluates and never enqueues (no persisted cohort contract); execution on `analytics` |
@@ -723,8 +723,11 @@ HPO run in `model_trainer/nodes/hyperparameter_tuner.py` — the same live path 
 through `ml_experiments.mlflow_experiment_id` (NULL when no row exists — never a fabricated
 id; the label stays in `study_name`); the study upserts on `study_name`, trials on
 `(study_id, trial_number)`. Before #2207 the writer had zero call sites and both tables sat at
-0 rows. Rows land wherever `MLFoundationPipeline` runs (tier-0 harness by hand;
-`execute_model_retraining` on worker_medium's `analytics` queue).
+0 rows. Rows land from the tier-0 harness run by hand on the host (the path that produced
+the 943 `ml_hpo_patterns`; a run there now also writes its studies and trials). The other
+host of the tuner, `execute_model_retraining`, is routed to worker_medium's `analytics`
+queue but on the current worker image stops at the data-prep Feast gate before the tuner
+runs (see §1.5) — no HPO rows from the worker until that owner decision lands.
 
 ### 6.1 `ml_hpo_studies`
 
@@ -868,14 +871,19 @@ Automated retraining events triggered by monitoring alerts with before/after per
 `completed` / `failed`, real metric only). Reachable through
 `/monitoring/retraining/{evaluate,trigger}/{model_id}` and, since #2207, the daily beat
 `retraining-evaluation-daily` (01:45 UTC, `quick`), which runs `check_retraining_for_all_models`
-— evaluation only. A row is written by a trigger, and a trigger needs the committed cohort
-contract (`data_source` + `target_outcome`) that `execute_model_retraining` fails closed
-without; no persisted model record carries one, so the daily sweep logs its decision and never
-enqueues (it used to write a `pending` row for a job that could only fail). Rows therefore land
-from `/monitoring/retraining/trigger/{model_id}` with the contract. The execution half runs on
-worker_medium's `analytics` queue (on the dark `ml` queue a triggered job never ran and its row
-stayed `pending`); on the current worker image it stops at the data-prep Feast gate and the row
-goes `failed` with that reason (see §1.5). 0 rows on 2026-09-22.
+— evaluation only. A row is written by a trigger. A job can only run with the committed
+cohort contract (`data_source` + `target_outcome`) — `execute_model_retraining` fails closed
+without it — and no persisted model record carries one, so the daily sweep logs its decision
+and never enqueues (it used to write a `pending` row for a job that could only fail). The API
+trigger route enforces nothing here: Phase D deliberately kept both fields optional on
+`TriggerRetrainingRequest`, so `POST /monitoring/retraining/trigger/{model_id}` accepts an
+incomplete contract, writes the `pending` row, and the job then fails closed at execution
+(`failed`, reason in `notes`); with a complete contract the job reaches the pipeline. The
+execution half runs on worker_medium's `analytics` queue (on the dark `ml` queue a triggered
+job never ran and its row stayed `pending`); on the current worker image it stops at the
+data-prep Feast gate and the row goes `failed` with that reason (see §1.5). Net: rows land only
+from the API trigger route today, and every one of them ends `failed` on this worker image
+until the Feast-gate decision. 0 rows on 2026-09-22.
 
 ### 7.6 `health_check_history` (migration 096)
 
