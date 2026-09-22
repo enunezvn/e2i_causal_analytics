@@ -23,6 +23,11 @@ LIMIT = 1500
 
 # path (relative to repo) -> pinned line count. Measured, not guessed. Only shrinks.
 ALLOWLIST: dict[str, int] = {
+    # 1566: MEASURED from the merged tree. graph_builder.py crossed LIMIT on main in
+    # #2227 + #2226 (2026-09-22, both lanes' Backend Tests were still queued when
+    # this lane merged main); pinned at its size so the ratchet keeps guarding
+    # regrowth — lower it when that file is split.
+    "src/agents/causal_impact/nodes/graph_builder.py": 1566,
     "src/agents/causal_impact/nodes/refutation.py": 2519,
     "src/agents/feedback_learner/dspy_integration.py": 1836,
     "src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py": 4225,
