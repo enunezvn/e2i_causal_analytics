@@ -45,7 +45,7 @@ _NOUN = r"\b(?:tool|capability|feature|engine|way|function|module)s?\b"
 _NEG = (
     r"(?:\bno\b|\b(?:isn'?t|is not|not)\s+an?\b|\bnot\s+any\b)"
     r"(?!\s+(?:missing|lack\w*|absen\w*|unavail\w*|(?:platform\s+)?limitation"
-    r"|evidence|data|result|sign|indication|record|row|proof|support)s?\b)"
+    r"|evidence|data|result|sign|indication|record|row|proof|support)s?(?:\s|$|[.,;:]))"
 )
 #: Shapes of a platform-level negative about simulation, each measured on 2026-09-22's
 #: answer or its obvious paraphrases. Every pattern needs a NEGATION and a SUBJECT within a
@@ -54,9 +54,13 @@ _NEG = (
 _DENIAL_PATTERNS = tuple(
     re.compile(p, re.IGNORECASE | re.DOTALL)
     for p in (
-        # "doesn't include a digital twin simulation capability" / "lacks a … simulation"
+        # "doesn't include a digital twin simulation capability" / "the platform lacks a …
+        # simulation". "lacks" needs a platform-level subject: "the model lacks a region
+        # column, so the simulation cannot report regional effects" is a data limitation
+        # (codex r2 #4).
         r"(?:\b(?:doesn'?t|does not|don'?t|do not|didn'?t|did not)\s+"
-        r"(?:include|have|offer|provide|support|expose)\b|\black(?:s|ing)?\b)"
+        r"(?:include|have|offer|provide|support|expose)\b"
+        r"|\b(?:platform|assistant|system|e2i|toolbox|we|i)\s+lack(?:s|ing)?\b)"
         r"[^.\n]{0,60}?" + _SUBJECT,
         # "there's no tool that runs a counterfactual" — the capability noun first.
         _NEG + r"[^.\n]{0,40}?" + _NOUN + r"[^.\n]{0,80}?" + _SUBJECT,
@@ -147,11 +151,14 @@ def _note(capability: TwinCapability) -> str:
             f"usable cohort effect data for {brands}. Ask me to run one — e.g. 'simulate an "
             "email campaign for Kisqali' — and I will report what the engine returns."
         )
+    # The probe establishes only that no brand's cohort has enough jointly usable rows; WHY
+    # (missing channels, outcome, regions, confounders, or too few rows) is the engine's
+    # refusal to name, not this note's (codex r2 #3).
     brands = ", ".join(capability.model_brands) or "any brand"
     return head + (
-        f" Right now it cannot run: {brands} have a trained twin model but no usable cohort "
-        "effect data (the per-HCP cohort's planted treatment channels are missing), so every "
-        "simulation would refuse until the cohort is restored."
+        f" Right now it cannot run: {brands} have a trained twin model, but the Digital Twin "
+        "health check finds no usable cohort effect data for any of them, so a simulation "
+        "would refuse — the refusal itself states the cause."
     )
 
 

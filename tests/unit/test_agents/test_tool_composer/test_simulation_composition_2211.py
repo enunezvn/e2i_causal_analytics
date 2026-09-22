@@ -55,6 +55,8 @@ def _map(
         "What would the simulated Fabhalta conversion rate be if call frequency for its HCPs were increased?",
         "Run a counterfactual: what happens to conversion if we increase call frequency?",
         "Use the digital twin to predict the effect of a speaker program invitation",
+        # An explicit twin / counterfactual cue wins even beside an experiment noun.
+        "Run a counterfactual on the experiment's HCP conversion outcome",
     ],
 )
 def test_a_simulation_shaped_experimental_ask_maps_to_the_simulator(question):
@@ -74,6 +76,8 @@ def test_a_simulation_shaped_experimental_ask_maps_to_the_simulator(question):
         "Simulate statistical power for this A/B test",
         "What would happen to power if the sample size increased?",
         "What if we ran the experiment with 200 per arm — what MDE could we detect?",
+        # A design question with no design vocabulary but an experiment noun (codex r2 probe).
+        "What would happen if we ran the pilot with more HCPs?",
     ],
 )
 def test_a_design_shaped_experimental_ask_still_maps_to_the_power_calculator(question):

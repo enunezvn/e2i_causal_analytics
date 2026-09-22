@@ -84,10 +84,31 @@ AFTER_TW2_OUTAGE = (
         "I can't run a simulation here — no tool simulates an intervention forward.",
         "Digital-twin simulation isn't available in this assistant.",
         "We don't offer what-if simulation of interventions.",
+        "No data-driven simulation tool exists on this platform.",
     ],
 )
 def test_a_denial_of_the_simulation_capability_is_detected(text):
     assert guard.denies_simulation_capability(text)
+
+
+#: What the answer says after a SUCCESSFUL run (measured 2026-09-22, whole graph with the
+#: prod registry) and the tool's own outage / refusal strings: none is a denial.
+AFTER_TW1_SUCCESS = (
+    "## Digital Twin Simulation: Email Campaign — Kisqali\n\nNote: this is a **simulation on "
+    "Kisqali's synthetic-gold per-HCP twin cohort** (700 twins), not an observed result — the "
+    "payload explicitly flags `evidence_is_synthetic: true`.\n\n**Predicted effect on HCP "
+    "conversion:**\n- Cohort effect: **+0.125** (95% CI: 0.022 to 0.228)\n\n**Recommendation: "
+    "REFINE** — the CI straddles the minimum meaningful effect threshold of 0.050."
+)
+TOOL_OUTAGE_TEXT = (
+    "The simulation could not run right now (service outage): counterfactual_simulator: "
+    "trained twin model 428cea1e for Kisqali/hcp could not be loaded from the model registry. "
+    "The capability exists — retry, or use the Digital Twin page."
+)
+TOOL_REFUSAL_TEXT = (
+    "counterfactual_simulator: no effect data for intervention 'email_campaign' and brand "
+    "'Kisqali' — the brand's per-HCP cohort (0 rows) does not identify it."
+)
 
 
 @pytest.mark.parametrize(
@@ -103,6 +124,13 @@ def test_a_denial_of_the_simulation_capability_is_detected(text):
         "channel (no_treatment_contrast). Re-run the backfill and try again.",
         "I cannot run a simulation: the model registry is unavailable.",
         "I cannot run the simulation because the twin model for Kisqali could not be loaded.",
+        "The model lacks a region column, so per-region effects are unavailable.",
+        "The model lacks a region column, so the digital-twin simulation cannot report "
+        "regional effects.",
+        "The digital twin simulation lacks a confidence interval for region effects.",
+        AFTER_TW1_SUCCESS,
+        TOOL_OUTAGE_TEXT,
+        TOOL_REFUSAL_TEXT,
         "Kisqali TRx was 12,400 last month.",
         "",
     ],
@@ -161,6 +189,10 @@ async def test_a_denial_while_the_twin_is_dark_is_corrected_without_promising_a_
     assert "cannot run" in note
     assert "Fabhalta" in note and "Kisqali" in note
     assert "active twin model with usable" not in note
+    # The probe proves only "no usable cohort effect data"; the CAUSE (channels, outcome,
+    # regions, confounders, row count) is the engine's refusal to name (codex r2 #3).
+    assert "channels are missing" not in note and "restored" not in note
+    assert "refusal itself states the cause" in note
 
 
 async def test_an_unmeasurable_probe_corrects_existence_but_claims_nothing_about_running():
@@ -243,11 +275,27 @@ async def test_a_direct_denial_through_the_real_agui_graph_carries_the_correctio
     assert any("digital_twin_simulate_tool" in t for t in emitted), emitted
 
 
-async def test_a_synthesized_denial_after_a_tool_turn_carries_the_correction_too():
+@pytest.mark.parametrize(
+    ("seeded_tool", "seeded_payload"),
+    [
+        # The 2026-09-22 shape: the causal tool ran, the synthesis denied the twin.
+        ("causal_analysis_tool", '{"success": true, "causal_chains_found": 0}'),
+        # The twin tool itself ran and FAILED, and the synthesis repeats the denial — the
+        # answer the guard exists for; there is no "the twin tool ran" bypass (codex r2 #5).
+        (
+            "digital_twin_simulate_tool",
+            '{"success": false, "retryable": true, "error": "The simulation could not run '
+            'right now (service outage): model registry unreachable."}',
+        ),
+    ],
+)
+async def test_a_synthesized_denial_after_a_tool_turn_carries_the_correction_too(
+    seeded_tool, seeded_payload
+):
     """The synthesize seam, through the same compiled graph: the state is placed as if the
-    tools node had just run (a causal_analysis_tool turn — the 2026-09-22 shape), the graph
-    is resumed, and synthesize_node's streamed denial leaves with the correction appended
-    to the user-visible answer and emitted. No source counting: the seam runs."""
+    tools node had just run, the graph is resumed, and synthesize_node's streamed denial
+    leaves with the correction appended to the user-visible answer and emitted. No source
+    counting: the seam runs."""
     from src.api.routes import copilotkit as copilotkit_mod
 
     emitted: list = []
@@ -255,7 +303,7 @@ async def test_a_synthesized_denial_after_a_tool_turn_carries_the_correction_too
         patches = _graph_boundaries(copilotkit_mod, emitted)
         with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
             graph = copilotkit_mod.create_e2i_chat_agent()
-            config = {"configurable": {"thread_id": "test-2211-synth"}}
+            config = {"configurable": {"thread_id": f"test-2211-synth-{seeded_tool}"}}
             graph.update_state(
                 config,
                 {
@@ -265,16 +313,14 @@ async def test_a_synthesized_denial_after_a_tool_turn_carries_the_correction_too
                             content="",
                             tool_calls=[
                                 {
-                                    "name": "causal_analysis_tool",
-                                    "args": {"kpi_name": "email campaign", "brand": "Kisqali"},
+                                    "name": seeded_tool,
+                                    "args": {"intervention": "email_campaign", "brand": "Kisqali"},
                                     "id": "call-1",
                                 }
                             ],
                         ),
                         ToolMessage(
-                            content='{"success": true, "causal_chains_found": 0}',
-                            name="causal_analysis_tool",
-                            tool_call_id="call-1",
+                            content=seeded_payload, name=seeded_tool, tool_call_id="call-1"
                         ),
                     ]
                 },

@@ -1285,19 +1285,24 @@ _INTERVENTION_CUE_RE = re.compile(
 )
 _DESIGN_CUE_RE = re.compile(
     r"\b(?:power|sample[\s-]size|per[\s-]arm|a/?b test|alpha|statistical|design|mde"
-    r"|minimum detectable)\b",
+    r"|minimum detectable|experiments?|pilots?|trials?|tests?)\b",
     re.IGNORECASE,
 )
 
 
 def is_simulation_question(text: str) -> bool:
-    """True when ``text`` asks to run the twin: an explicit twin / counterfactual cue, or a
-    simulate / what-if cue about an intervention — and never a power / design question."""
+    """True when ``text`` asks to run the twin.
+
+    An explicit twin / counterfactual cue decides on its own. Otherwise a simulate / what-if
+    cue counts only when it is about an intervention AND the question carries no design cue
+    ("what would happen if we ran the pilot with more HCPs" is a design question, not a
+    simulation — codex r2 probe).
+    """
     text = text or ""
-    if _DESIGN_CUE_RE.search(text):
-        return False
     if _TWIN_CUE_RE.search(text):
         return True
+    if _DESIGN_CUE_RE.search(text):
+        return False
     return bool(_SIMULATION_CUE_RE.search(text) and _INTERVENTION_CUE_RE.search(text))
 
 
