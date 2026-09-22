@@ -1296,6 +1296,13 @@ class MLFoundationPipeline:
             "regulatory_adaptation_entry": result.regulatory_adaptation_entry,
             # D1.1: thread workflow-level audit_workflow_id (see scope_input).
             "audit_workflow_id": result.audit_workflow_id,
+            # #2207 cohort contract: what this run trained on, persisted by the
+            # deployer's registry writer (migration 150) so the scheduled retraining
+            # sweep can enqueue a retrain of the registered model. The manifest source
+            # is the RESOLVED one scope_definer put on scope_spec.
+            "data_source": input_data.get("data_source"),
+            "target_outcome": input_data.get("target_outcome"),
+            "feature_manifest_source": deployer_scope_spec.get("feature_manifest_source"),
         }
 
         # Add shadow mode metrics if deploying to production

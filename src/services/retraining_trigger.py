@@ -300,7 +300,9 @@ class RetrainingTriggerService:
                 committed cohort batch/table), ``target_outcome``, and optionally
                 ``brand`` / ``feature_manifest_source``. Threaded into
                 training_config so ``execute_model_retraining`` can run the real
-                MLFoundationPipeline. Without it the queued task fails closed.
+                MLFoundationPipeline. Missing keys fall back to the model's
+                persisted contract on ``ml_model_registry`` (#2207, migration 150);
+                without a contract from either source the queued task fails closed.
 
         Returns:
             Created retraining job
@@ -340,9 +342,31 @@ class RetrainingTriggerService:
 
         # Build training config
         training_config = self._build_training_config(reason, drift_score, performance_before)
+
+        # #2207 (owner decision 2026-09-22): the registry row is the cohort contract of
+        # record (migration 150). A request that omits data_source / target_outcome falls
+        # back to the row's contract; explicit request values win; a complete contract
+        # (from either source) heals the row's NULL columns once — so a model triggered
+        # by hand with its cohort becomes eligible for the scheduled sweep. A request
+        # with no contract anywhere behaves exactly as before (the job fails closed at
+        # execution). The row id also becomes ml_retraining_history.model_id.
+        from src.services.cohort_contract import (
+            load_registry_cohort_contract,
+            merge_contracts,
+            persist_registry_cohort_contract_if_missing,
+        )
+
+        registry_model_id, registry_contract = await load_registry_cohort_contract(
+            client, model_version
+        )
+        effective_cohort = merge_contracts(cohort, registry_contract)
+        if registry_model_id and has_cohort_contract(effective_cohort):
+            await persist_registry_cohort_contract_if_missing(
+                client, registry_model_id, effective_cohort
+            )
         # Cohort identity → reaches execute_model_retraining → MLFoundationPipeline.
-        if cohort:
-            training_config.update({k: v for k, v in cohort.items() if v is not None})
+        if effective_cohort:
+            training_config.update(effective_cohort)
         if config_overrides:
             training_config.update(config_overrides)
         training_config["approved_by"] = approved_by
@@ -356,6 +380,7 @@ class RetrainingTriggerService:
             drift_score_before=drift_score,
             performance_before=performance_before,
             training_config=training_config,
+            model_id=registry_model_id,
         )
 
         # Queue retraining task
@@ -653,6 +678,8 @@ def has_cohort_contract(cohort: Optional[Dict[str, Any]]) -> bool:
     if not cohort:
         # None or {} — nothing to retrain on; the caller logs the reason.
         return False
+    # A file-source data_source is a dict ({"type": "file_dir"|"files", ...}); truthiness
+    # covers both the string and the dict shape (an empty dict is not a source).
     return all(cohort.get(k) for k in REQUIRED_COHORT_CONTRACT_KEYS)
 
 
@@ -677,6 +704,9 @@ async def evaluate_and_trigger_retraining(
             has no data_source column; ml_experiments holds prediction_target/brand
             only), so the scheduled sweep evaluates and reports; a trigger with the
             contract comes through ``/monitoring/retraining/trigger/{model_id}``.
+            Since the 2026-09-22 owner decision the sweep reads the contract off the
+            registry row (migration 150) and passes it here; models whose row carries
+            none still block with the same reason.
 
     Returns:
         Evaluation and trigger results

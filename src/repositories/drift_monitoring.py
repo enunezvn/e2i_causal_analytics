@@ -1323,17 +1323,22 @@ class RetrainingHistoryRepository(BaseRepository[RetrainingHistoryRecord]):
         drift_score_before: float,
         performance_before: float,
         training_config: Optional[Dict[str, Any]] = None,
+        *,
+        model_id: Optional[str] = None,
     ) -> RetrainingHistoryRecord:
         """Record a retraining trigger.
 
         ``drift_score_before`` has no dedicated column on ml_retraining_history;
         it is preserved inside ``config`` (alongside the training contract).
-        ``performance_before`` maps to ``old_metric_value``.
+        ``performance_before`` maps to ``old_metric_value``. ``model_id`` is the
+        ``ml_model_registry`` uuid the handle resolved to (#2207: it was never
+        written before — every row's FK was NULL); None when unregistered.
         """
         config = dict(training_config or {})
         config.setdefault("drift_score_before", drift_score_before)
 
         record = RetrainingHistoryRecord(
+            model_id=model_id,
             old_model_version=old_model_version,
             new_model_version=new_model_version,
             trigger_reason=trigger_reason,

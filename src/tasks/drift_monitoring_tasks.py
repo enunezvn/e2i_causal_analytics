@@ -784,20 +784,24 @@ def evaluate_retraining_need(
     self,
     model_id: str,
     auto_approve: bool = False,
+    cohort: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Evaluate whether a model needs retraining (scheduled path: evaluation only).
+    """Evaluate whether a model needs retraining and trigger it when it can.
 
     Checks drift scores and performance metrics to decide whether retraining is
-    needed. This task carries no cohort contract, and a live retrain needs one
-    (``data_source`` + ``target_outcome`` — see ``_cohort_input_from_training_config``),
-    so ``evaluate_and_trigger_retraining`` refuses to enqueue a job from here
-    (#2207): the decision is logged and returned with
-    ``retraining_blocked_reason="no_cohort_contract"``. Triggering with the
-    contract is ``POST /monitoring/retraining/trigger/{model_id}``.
+    needed. A live retrain needs the model's cohort contract (``data_source`` +
+    ``target_outcome`` — see ``_cohort_input_from_training_config``); since the
+    2026-09-22 owner decision (#2207 follow-up) the sweep reads it off the
+    ``ml_model_registry`` row (migration 150) and passes it as ``cohort``.
+    Without one, ``evaluate_and_trigger_retraining`` refuses to enqueue a job that
+    would fail closed: the decision is logged and returned with
+    ``retraining_blocked_reason="no_cohort_contract"``; triggering by hand is
+    ``POST /monitoring/retraining/trigger/{model_id}`` (which heals the row).
 
     Args:
         model_id: Model version/ID to evaluate
         auto_approve: Skip approval requirement if True
+        cohort: The model's persisted cohort contract (None-free), if any
 
     Returns:
         Evaluation results and trigger status
@@ -811,6 +815,7 @@ def evaluate_retraining_need(
             result = await evaluate_and_trigger_retraining(
                 model_version=model_id,
                 auto_approve=auto_approve,
+                cohort=cohort,
             )
             return result
 
@@ -1024,12 +1029,14 @@ def check_retraining_for_all_models(
     self,
     auto_approve: bool = False,
 ) -> Dict[str, Any]:
-    """Check retraining needs for all production models (evaluation only).
+    """Check retraining needs for all production/staging models.
 
     Fans out one ``evaluate_retraining_need`` per production/staging model. Since
     #2207 this runs daily from the ``retraining-evaluation-daily`` beat on the
-    ``quick`` queue; it never enqueues a retraining job because no cohort contract
-    is known on this path (see ``evaluate_retraining_need``).
+    ``quick`` queue. Each model's persisted cohort contract (``ml_model_registry``
+    migration-150 columns, projected by the connector) travels with the evaluation
+    so a model that carries one can be retrained; one that does not is evaluated
+    and blocked with ``no_cohort_contract`` (see ``evaluate_retraining_need``).
 
     Args:
         auto_approve: Skip approval requirement for all models
@@ -1038,6 +1045,7 @@ def check_retraining_for_all_models(
         Summary of evaluations and triggered retraining jobs
     """
     from src.agents.drift_monitor.connectors import get_connector
+    from src.services.cohort_contract import contract_from_registry_row
 
     logger.info(f"Checking retraining for all production models: task {self.request.id}")
 
@@ -1064,11 +1072,14 @@ def check_retraining_for_all_models(
             # #894: the registry projection uses the live column names
             # (model_name, not name)
             model_id = model.get("id") or model.get("model_name")
+            # #2207: the row's cohort contract (None-free; {} -> None = unknown)
+            cohort = contract_from_registry_row(model) or None
             try:
                 # Queue evaluation task
                 task = evaluate_retraining_need.delay(
                     model_id=model_id,
                     auto_approve=auto_approve,
+                    cohort=cohort,
                 )
                 results.append(
                     {

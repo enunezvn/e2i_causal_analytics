@@ -254,6 +254,14 @@ class ModelDeployerState(BaseAgentSchema):
     scope_spec: Optional[Dict[str, Any]] = None
     feature_manifest_source: Optional[str] = None
 
+    # #2207 cohort contract (migration 150): the data source (table name or file-source
+    # dict) and prediction target the model was trained on, threaded from
+    # MLFoundationPipeline.run's input_data so the register_model node persists them on
+    # the ml_model_registry row (what the scheduled retraining sweep needs to enqueue).
+    # Declared for the same channel-boundary reason as scope_spec above.
+    data_source: Optional[Any] = None
+    target_outcome: Optional[str] = None
+
     # === OUTPUT FIELDS (Final) ===
 
     # Deployment manifest (K8s / serving)

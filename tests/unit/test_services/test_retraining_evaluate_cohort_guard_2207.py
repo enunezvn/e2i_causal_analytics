@@ -121,3 +121,32 @@ def test_has_cohort_contract_handles_none_empty_partial_and_complete():
     assert has_cohort_contract({"data_source": "cohort_x"}) is False
     assert has_cohort_contract({"data_source": "cohort_x", "target_outcome": ""}) is False
     assert has_cohort_contract({"data_source": "cohort_x", "target_outcome": "y"}) is True
+
+
+# ---------------------------------------------------------------------------
+# #2207 follow-up (2026-09-22): the sweep now supplies the registry row's contract
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_registry_contract_with_a_file_source_dict_is_triggered_with_it():
+    """A JSON-encoded file source decodes back to the loader's dict shape."""
+    service = MagicMock()
+    service.evaluate_retraining_need = AsyncMock(return_value=_auto_approvable_decision())
+    job = MagicMock(job_id="job-2", new_model_version="model_v1_retrained_y")
+    service.trigger_retraining = AsyncMock(return_value=job)
+    cohort = {
+        "data_source": {"type": "file_dir", "path": "data/rwd/optum/initiation"},
+        "target_outcome": "initiated_biologic_180d",
+    }
+    with patch(
+        "src.services.retraining_trigger.get_retraining_trigger_service", return_value=service
+    ):
+        result = await evaluate_and_trigger_retraining("model_v1", auto_approve=True, cohort=cohort)
+    assert service.trigger_retraining.await_args.kwargs["cohort"] == cohort
+    assert result["retraining_triggered"] is True
+
+
+def test_has_cohort_contract_accepts_a_dict_data_source():
+    assert has_cohort_contract({"data_source": {"type": "files"}, "target_outcome": "y"}) is True
+    assert has_cohort_contract({"data_source": {}, "target_outcome": "y"}) is False
