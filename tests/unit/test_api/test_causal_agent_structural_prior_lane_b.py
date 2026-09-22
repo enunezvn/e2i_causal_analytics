@@ -178,6 +178,7 @@ def test_approved_structure_roles_survives_the_langgraph_boundary():
     def _node(state):
         seen["roles"] = state.get("approved_structure_roles")
         seen["anchored"] = state.get("anchored_confounders")
+        seen["excluded"] = state.get("approved_leak_exclusions")
         return {}
 
     g = StateGraph(CausalImpactState)
@@ -188,12 +189,14 @@ def test_approved_structure_roles_survives_the_langgraph_boundary():
         {
             "approved_structure_roles": {"age_at_index": "confounder"},
             "anchored_confounders": ["age_at_index"],
+            "approved_leak_exclusions": ["post_index_visits"],
             "warnings": [],
         }
     )
     assert seen["roles"] == {"age_at_index": "confounder"}
     assert seen["anchored"] == ["age_at_index"]
     assert out["approved_structure_roles"] == {"age_at_index": "confounder"}
+    assert out["approved_leak_exclusions"] == ["post_index_visits"]
 
 
 @pytest.mark.unit
@@ -221,3 +224,50 @@ async def test_dead_supabase_pin_leaves_the_run_prior_less_with_a_warning(declar
     assert "approved_structure_roles" not in state
     assert len(state["warnings"]) == 1
     assert state["warnings"][0].startswith("structural prior not consulted:")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "with_panel", [False, True], ids=["no_request_panel", "incomplete_request_panel"]
+)
+async def test_approved_leak_exclusion_leaves_channels_and_frame_at_the_hook(
+    declared_manifest, with_panel
+):
+    """codex r4 HIGH 1: the approved review's leak verdict is enforced by the
+    hook itself — before graph_builder, independent of whether the request
+    carried a panel (and of what that panel says)."""
+    import pandas as pd
+
+    row = _row()
+    row["agent_assessment_json"]["structural_author"]["features"].append(
+        {
+            "feature": "post_index_visits",
+            "fragment_role": "confounder",
+            "cohort_role": "confounder",
+            "leak_verdict": True,
+            "leak_source": "layer_3_high",
+            "review_required": True,
+        }
+    )
+
+    async def factory():
+        return _FakeRepo([row])
+
+    covs = ["age_at_index", "payer_category", "post_index_visits"]
+    state = {
+        "confounders": list(covs),
+        "modeled_confounders": list(covs),
+        "anchored_confounders": [],
+        "warnings": [],
+        "data_cache": {"estimation_data": pd.DataFrame({c: [0, 1] for c in [T, Y, *covs]})},
+    }
+    if with_panel:
+        # A request panel that does NOT cover post_index_visits: it cannot
+        # exclude what it never saw; the approved review still does.
+        state["feature_role_panel"] = {"records": {"age_at_index": {"feature": "age_at_index"}}}
+    await _apply_approved_structural_prior(state, declared_manifest, covs, repo_factory=factory)
+    assert state["approved_leak_exclusions"] == ["post_index_visits"]
+    for channel in ("confounders", "modeled_confounders", "anchored_confounders"):
+        assert "post_index_visits" not in state[channel], channel
+    assert "post_index_visits" not in state["data_cache"]["estimation_data"].columns
+    assert state["anchored_confounders"] == ["age_at_index"]

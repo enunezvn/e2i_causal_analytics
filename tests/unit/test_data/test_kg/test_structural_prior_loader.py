@@ -470,3 +470,41 @@ def test_apply_to_state_expands_an_approved_root_to_its_declared_dummies():
     resolved = GraphBuilderNode._resolve_anchored_confounders(state)
     assert [c for c in resolved if c in frame.columns and c not in (T, Y)] == resolved
     assert resolved == state["anchored_confounders"]
+
+
+def test_apply_to_state_enforces_reviewed_leak_exclusions_without_a_panel():
+    """codex r4 HIGH 1: a leak verdict the human APPROVED is an exclusion, not
+    metadata. Without any request panel the feature (and its dummies) must
+    leave every channel graph_builder reads AND the estimation frame — the
+    frame is what guided discovery tiers and what the no-backdoor fallback
+    adjusts on."""
+    import pandas as pd
+
+    prior = structural_prior_from_review_row(_row())
+    assert prior.leak_excluded == {"post_index_visits": "layer_3_high"}
+    covs = ["age_at_index", "charlson_score", "post_index_visits", "post_index_visits=high"]
+    frame = pd.DataFrame({c: [0, 1] for c in [T, Y, *covs]})
+    state = {
+        "confounders": list(covs),
+        "modeled_confounders": list(covs),
+        "anchored_confounders": [],
+        "warnings": [],
+        "data_cache": {"estimation_data": frame},
+    }
+    lines = apply_structural_prior_to_state(state, prior, covariates=covs)
+    leaked = {"post_index_visits", "post_index_visits=high"}
+    assert state["approved_leak_exclusions"] == sorted(leaked)
+    for channel in ("confounders", "modeled_confounders", "anchored_confounders"):
+        assert not set(state[channel]) & leaked, channel
+    assert state["anchored_confounders"] == ["age_at_index", "charlson_score"]
+    assert not leaked & set(state["data_cache"]["estimation_data"].columns)
+    assert list(state["data_cache"]["estimation_data"].columns) == [
+        T,
+        Y,
+        "age_at_index",
+        "charlson_score",
+    ]
+    assert any(
+        "reviewed leak verdict" in line and "post_index_visits (layer_3_high)" in line
+        for line in lines
+    )

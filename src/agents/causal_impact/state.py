@@ -309,6 +309,13 @@ class CausalImpactState(TypedDict):
     # (``confounder`` / ``instrument`` / ...). Never populated from unapproved
     # machine attestations. Read only by graph_builder together with the panel.
     approved_structure_roles: NotRequired[Dict[str, str]]
+    # Lane B: columns an APPROVED structural review excludes as leak verdicts
+    # (feature and its ``root=level`` dummies). Enforced at the API hook —
+    # removed from confounders / modeled_confounders / anchored_confounders
+    # and dropped from the estimation frame BEFORE the graph runs, independent
+    # of any request panel — and declared here so the audit trail survives
+    # the graph boundary.
+    approved_leak_exclusions: NotRequired[List[str]]
     # #1188: pre-treatment baseline covariates for a randomized (empty-backdoor)
     # question — routed to the estimator selector's efficiency_controls channel
     # (ANCOVA-style variance reduction), NEVER merged into confounders /

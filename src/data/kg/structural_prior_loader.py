@@ -83,6 +83,9 @@ class ApprovedStructuralPrior:
     #: feature → why it is neither anchored nor an instrument.
     excluded: dict[str, str]
     source: str
+    #: feature → leak source for every feature the review carries a LEAK
+    #: VERDICT for: an approved exclusion, enforced on the run (not metadata).
+    leak_excluded: dict[str, str] = field(default_factory=dict)
     manifest: Optional[str] = None
     treatment: Optional[str] = None
     outcome: Optional[str] = None
@@ -217,11 +220,13 @@ def structural_prior_from_review_row(
     anchored: list[str] = []
     instruments: list[str] = []
     excluded: dict[str, str] = {}
+    leak_excluded: dict[str, str] = {}
     for f in features:
         name = str(f.get("feature"))
         claimed = f.get("cohort_role")
         if f.get("leak_verdict"):
             excluded[name] = f"leak verdict ({f.get('leak_source')})"
+            leak_excluded[name] = str(f.get("leak_source"))
             continue
         if claimed is None:
             excluded[name] = "no cohort role (review only)"
@@ -295,6 +300,7 @@ def structural_prior_from_review_row(
         instruments=sorted(instruments),
         excluded=excluded,
         source=source,
+        leak_excluded=leak_excluded,
         manifest=sa.get("manifest"),
         treatment=treatment,
         outcome=outcome,
@@ -421,8 +427,32 @@ def apply_structural_prior_to_state(
             anchored.extend(m for m in matches if m not in anchored)
         else:
             missing.append(conf)
+    # A leak verdict the human approved is an EXCLUSION (codex r4 HIGH 1): the
+    # feature and its dummies leave every channel graph_builder reads and the
+    # estimation frame itself (guided discovery tiers every frame column; the
+    # no-backdoor fallback adjusts on every column) — independent of whether
+    # the request carried a panel, and before the graph runs.
+    frame_cols: list[str] = []
+    cache = dict(state.get("data_cache") or {})
+    frame = cache.get("estimation_data")
+    if frame is not None and hasattr(frame, "columns"):
+        frame_cols = [str(c) for c in frame.columns]
+    universe = list(dict.fromkeys(declared + frame_cols))
+    leaked = sorted(
+        c for c in universe if c in prior.leak_excluded or c.split("=", 1)[0] in prior.leak_excluded
+    )
+    anchored = [c for c in anchored if c not in leaked]
+    for channel in ("confounders", "modeled_confounders"):
+        if channel in state:
+            state[channel] = [c for c in state[channel] if str(c) not in leaked]
+    if leaked and frame is not None and hasattr(frame, "columns"):
+        present = [c for c in leaked if c in frame.columns]
+        if present:
+            cache["estimation_data"] = frame.drop(columns=present)
+            state["data_cache"] = cache
     state["anchored_confounders"] = anchored
     state["approved_structure_roles"] = dict(prior.roles)
+    state["approved_leak_exclusions"] = leaked
     lines = [
         f"structural prior: approved expert review {prior.review_id} "
         f"(dag {prior.dag_version_hash[:12]}, {prior.source}) anchors "
@@ -433,6 +463,15 @@ def apply_structural_prior_to_state(
         lines.append(
             "structural prior: approved confounder(s) not among this run's covariates, "
             f"not anchored: {', '.join(missing)}"
+        )
+    if leaked:
+        named = ", ".join(
+            f"{c} ({prior.leak_excluded.get(c) or prior.leak_excluded.get(c.split('=', 1)[0])})"
+            for c in leaked
+        )
+        lines.append(
+            "structural prior: reviewed leak verdict(s) excluded from every adjustment set "
+            f"and the frame: {named}"
         )
     lines.extend(prior.warnings)
     state.setdefault("warnings", []).extend(lines)
