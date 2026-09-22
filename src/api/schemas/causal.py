@@ -666,6 +666,22 @@ class EstimatorCandidate(BaseModel):
     energy_score: Optional[float] = Field(
         default=None, description="Energy score (LOWER is better); None if the fit failed"
     )
+    tournament_energy_score: Optional[float] = Field(
+        default=None,
+        description=(
+            "Energy score from the selection tournament whenever this candidate was "
+            "scored -- kept even when its served full-frame refit was refused "
+            "(LOWER is better); None if it was never scored"
+        ),
+    )
+    served_refit: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Outcome of this candidate's served full-frame refit after a subsampled "
+            "tournament: True succeeded, False refused; None when no separate served "
+            "refit happened (unsubsampled selection, or a tournament loser)"
+        ),
+    )
     ate: Optional[float] = Field(default=None, description="This estimator's ATE estimate")
     error: Optional[str] = Field(
         default=None, description="Failure reason (or not-applicable reason if skipped)"

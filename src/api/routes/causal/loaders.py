@@ -872,12 +872,15 @@ def _resolve_agent_estimation_frame(
 
 
 def _collinearity_rel_tol(n_rows: int, n_cols: int) -> float:
-    """Machine-precision tolerance for an EXACT redundancy: ``max(n, k) * eps``,
-    the same convention ``numpy.linalg.lstsq(rcond=None)`` uses -- and econml's
-    final stage calls that ``lstsq`` and declares its inference invalid when the
-    returned rank is short. So the prune drops what that check would call
-    redundant and nothing looser: an independent component at 5e-9 relative
-    (far above ~3e-12 at n = 15,209) is kept for the estimators' own refusal."""
+    """Machine-precision tolerance for an EXACT redundancy: ``max(n, k) * eps``
+    (the ``rcond=None`` convention of ``numpy.linalg.lstsq``). It bounds the
+    Gram-Schmidt residual an exact linear combination can leave behind in
+    float64 (measured 2.6e-15 on the real frame); an independent component at
+    5e-9 relative sits far above it and is KEPT. This is NOT a replica of
+    econml's own rank check, which runs ``lstsq`` on the unscaled, residualised
+    final-stage matrix with a global tolerance: a design that check still calls
+    underdetermined (a pathological offset or scale the estimator sees raw) is
+    refused by the wrappers' fail-closed inference guard, never served."""
     import numpy as np
 
     return float(max(n_rows, n_cols) * np.finfo(float).eps)
@@ -897,16 +900,22 @@ def _prune_exactly_collinear(
     design is NOT reordered -- every dataset's forest fits subsample features by
     column index, so a new order would be a new fit.
 
-    Criterion (translation- and scale-invariant by construction, codex r3/r4):
-    a column is CONSTANT iff every value is the same represented number (exact
-    equality, no tolerance). Otherwise its first value is subtracted (exact for
-    close values, so a 1e14 offset cannot leak rounding into the variation) and
-    it is scaled by a power of two (exact) before centering, so neither an
-    offset nor extreme units (1e-200) can underflow or dominate the norms.
-    Incremental Gram-Schmidt against the intercept and the kept basis; the
-    column is dropped when its residual is below ``max(n, k) * eps`` of its
-    centered norm (``_collinearity_rel_tol``). Exact redundancy measures
-    ~1e-15 on the real frame; the smallest kept ratio there is 0.047.
+    Criterion (translation- and scale-invariant on the resolved frame, codex
+    r3/r4/r5): a column is CONSTANT iff every value is the same represented
+    number (exact equality, no tolerance). Otherwise it is scaled by a power
+    of two (exact; ``frexp`` of its largest magnitude, so a value near
+    ``float.max`` cannot overflow) and its first scaled value is subtracted
+    (exact for close values, so a 1e14 offset cannot leak rounding into the
+    variation) before centering; a column whose scaled differences are still
+    non-finite is kept (it cannot be tested). Incremental Gram-Schmidt against
+    the intercept and the kept basis; the column is dropped when its residual
+    is below ``max(n, k) * eps`` of its centered norm
+    (``_collinearity_rel_tol``). Exact redundancy measures ~1e-15 on the real
+    frame; the smallest kept ratio there is 0.047. What is guaranteed: exact
+    linear combinations of earlier resolved columns are dropped and nothing
+    informative is; what is NOT guaranteed: that econml's global-tolerance
+    rank check on its own raw final-stage matrix agrees on every pathological
+    input -- where it does not, the wrappers refuse the served fit.
 
     Skipped (nothing dropped) when the frame cannot rank the columns
     (``n < k + 1``: fewer rows than intercept-plus-columns) or when a column
@@ -932,8 +941,14 @@ def _prune_exactly_collinear(
         if x.min() == x.max():
             dropped.append(name)  # constant: collinear with the intercept
             continue
-        x = x - x[0]  # remove the offset exactly (Sterbenz) before any rounding-prone step
-        x = x / (2.0 ** math.floor(math.log2(float(np.abs(x).max()))))  # exact rescale
+        # exact power-of-two rescale FIRST (frexp: |x|max -> [0.5, 1)), so a
+        # value near float.max cannot overflow the reference subtraction
+        x = np.ldexp(x, -math.frexp(float(np.abs(x).max()))[1])
+        x = x - x[0]  # remove the offset (exact for close values, Sterbenz)
+        if not np.isfinite(x).all():
+            kept.append(name)  # cannot be tested; the estimators' guards own it
+            basis.append(np.zeros(n))
+            continue
         centered = x - intercept * float(intercept @ x)
         c_norm = float(np.linalg.norm(centered))
         resid = centered.copy()

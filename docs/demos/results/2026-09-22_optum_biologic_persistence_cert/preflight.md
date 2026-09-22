@@ -114,9 +114,8 @@ Standalone attribution of the pre-fix budget on this frame (`timing_probe*.py/js
 - **Round 4 (codex r4 → REVISE: 1 HIGH + 1 MED, both fixed).** (1) HIGH — the Round 3 criterion was
   still not translation- or scale-invariant in two branches: the "constant" test (centered/raw ≤ 1e-12)
   dropped `1e14 + arange(100)` as constant, `np.linalg.norm` underflowed at a 1e-200 scale, and the
-  fixed 1e-8 tolerance dropped an independent component at 5e-9 relative — which econml's own rank
-  check (`np.linalg.lstsq(rcond=None)`, `rank < df`, i.e. max(n,k)·eps ≈ 3.4e-12 at this n) would
-  NOT call underdetermined, so the prune was ~3,000× looser than the check it exists to satisfy. Now:
+  fixed 1e-8 tolerance dropped an independent component at 5e-9 relative — far above machine
+  precision (max(n,k)·eps ≈ 3.4e-12 at this n), so the prune dropped informative columns. Now:
   constant = exact represented equality; the first value is subtracted before centering (exact for
   close values, so an offset cannot leak rounding into the variation); the column is scaled by a power
   of two (exact); tolerance = max(n,k)·eps (`_collinearity_rel_tol`). Measured on the real frame
@@ -135,6 +134,29 @@ Standalone attribution of the pre-fix budget on this frame (`timing_probe*.py/js
   with an honest candidate left; the energy-score directory had last been run BEFORE `fabbec0c9`).
   Its intent (never serve a subsample fit) survives: the test now asserts the served fit is the next
   candidate's FULL-FRAME refit, and a sibling asserts fail-closed when EVERY refit fails.
+- **Round 5 (codex r5 → REVISE: 3 HIGH + 1 MED; two fixed, one fixed as a claim, one MED fixed).**
+  (1) HIGH, `_collinearity_rel_tol` "matches econml's `lstsq` rank check" — an overstated CLAIM,
+  withdrawn: econml runs `lstsq` on its own unscaled, residualised final-stage matrix with a global
+  tolerance, so it can still call a design underdetermined that the prune keeps (`[1, 1e14+arange]`
+  has lstsq rank 1). That case is not a wrong served value: the wrappers refuse the served fit
+  (fail-closed) and Auto falls back. What the prune guarantees is now stated exactly (exact linear
+  combinations of earlier resolved columns dropped, nothing informative dropped, translation- and
+  scale-invariant on the resolved frame); the same 16 columns on the real frame are unchanged.
+  Standardising the estimators' own final-stage inputs is filed as a follow-up (engine-wide,
+  owner-visible). (2) MED — `[-1e308, 1e308]` overflowed the reference subtraction and
+  `floor(log2(inf))` raised: the column is now scaled by a power of two FIRST (`frexp`), then the
+  reference is subtracted, and a column whose scaled differences are still non-finite is kept
+  (test at float max, with an exact half-scale duplicate dropped). (3) HIGH — the fallback narration
+  said "served B" before B's refit ran; now each refusal is recorded alone and exactly one closing
+  sentence names the served candidate ("Served the next ranked candidate ols … after 2 refused") or
+  states that every full-frame refit was refused (test: A and B refused, C served; all-fail wording).
+  (4) HIGH — the per-candidate `energy_score: None` for a refused winner contradicted
+  `energy_scores`: every serialisation surface now carries two EXPLICIT fields,
+  `tournament_energy_score` (the ranking score whenever scored) and `served_refit` (True / False /
+  None), on `EstimatorResult`, `to_dict()`, the agent's `all_estimators_evaluated`, the MLflow DB
+  logger's `energy_details`, and the API `EstimatorCandidate` (additive; `frontend/src/types/generated/api.ts`
+  regenerated with CI's own command — 10 added lines). `energy_score` keeps its documented
+  "None if the fit failed" meaning.
 
 Final-code node timeline of the primary run (from the run's own INFO log; the graph itself started
 at ~09:22:30 after imports):

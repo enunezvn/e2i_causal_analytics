@@ -2600,6 +2600,13 @@ The #1392 test that pinned fail-closed-with-a-candidate-left (broken by the r3 f
 the energy-score directory had not been re-run after `fabbec0c9`) now asserts the new contract plus a
 fail-closed sibling when every refit fails.
 
+**Amendment 5 (codex r5 → REVISE: 3 HIGH + 1 MED):** the "matches econml's lstsq" claim was withdrawn
+(econml checks its own unscaled final-stage matrix with a global tolerance; a design it still rejects is
+refused fail-closed, never served — follow-up: standardise the final-stage inputs engine-wide); the prune
+scales by a power of two before subtracting the reference (float-max safe); the fallback narration records
+each refusal alone and one closing served/none sentence; `tournament_energy_score` + `served_refit` are
+explicit fields on every serialisation surface including the API candidate (api.ts regenerated).
+
 ---
 
 ### Task 10: Codex review rounds to ACCEPT

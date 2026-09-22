@@ -1778,6 +1778,49 @@ class TestSubsampledSelection:
         assert set(sel.energy_scores) == {"linear_dml", "causal_forest"}
         assert "refused" in sel.selection_reason and "causal_forest" in sel.selection_reason
 
+    def test_fallback_narration_names_every_refused_candidate_and_one_served(self):
+        """codex r5 HIGH: with A and B refused and C served, the reason must say
+        A refused, B refused, C served -- never "served B" before B's refit ran.
+        The refused entries carry ``served_refit=False`` and their tournament
+        score; the served one carries ``served_refit=True``; ``to_dict`` exposes
+        both explicitly (``tournament_energy_score`` / ``served_refit``)."""
+        treatment, outcome, covariates = _subsample_frame(n=1_000)
+        config = EstimatorSelectorConfig(
+            estimators=[
+                EstimatorConfig(EstimatorType.OLS, priority=1),
+                EstimatorConfig(EstimatorType.CAUSAL_FOREST, priority=2),
+                EstimatorConfig(EstimatorType.LINEAR_DML, priority=3),
+            ],
+            selection_max_rows=200,
+            energy_score_config=EnergyScoreConfig(enable_bootstrap=False),
+        )
+        selector = EstimatorSelector(config)
+        a = _RecordingWrapper(EstimatorType.LINEAR_DML, cate_value=2.0, fail_above_rows=200)
+        b = _RecordingWrapper(EstimatorType.CAUSAL_FOREST, cate_value=2.5, fail_above_rows=200)
+        c = _RecordingWrapper(EstimatorType.OLS, cate_value=50.0)
+        selector.estimators = [c, b, a]
+
+        sel = selector.select(treatment, outcome, covariates)
+
+        assert sel.selected.success and sel.selected.estimator_type == EstimatorType.OLS
+        assert a.fit_row_counts == [200, 1_000] and b.fit_row_counts == [200, 1_000]
+        assert c.fit_row_counts == [200, 1_000]
+        reason = sel.selection_reason
+        assert reason.count("refused its served full-frame refit") == 2
+        assert reason.index("linear_dml") < reason.index("causal_forest") < reason.rindex("ols")
+        assert reason.count("Served the next ranked candidate") == 1, reason
+        assert "Served the next ranked candidate ols" in reason
+        assert "candidate causal_forest" not in reason and "candidate linear_dml" not in reason
+        by_type = {r.estimator_type: r for r in sel.all_results}
+        assert by_type[EstimatorType.LINEAR_DML].served_refit is False
+        assert by_type[EstimatorType.CAUSAL_FOREST].served_refit is False
+        assert by_type[EstimatorType.OLS].served_refit is True
+        d = by_type[EstimatorType.LINEAR_DML].to_dict()
+        assert d["energy_score"] is None and np.isfinite(d["tournament_energy_score"])
+        assert d["served_refit"] is False
+        assert by_type[EstimatorType.OLS].to_dict()["served_refit"] is True
+        assert set(sel.energy_scores) == {"linear_dml", "causal_forest", "ols"}
+
     def test_every_full_frame_refit_failing_fails_closed(self):
         """When NO candidate survives its full-frame refit the selection FAILS
         CLOSED (estimation.py raises EstimationError): no subsample fit is
@@ -1793,6 +1836,9 @@ class TestSubsampledSelection:
         assert sel.selected.success is False
         assert "full-frame" in (sel.selected.error_message or "").lower()
         assert all(not r.success for r in sel.all_results)
+        # codex r5 HIGH: nothing may be described as served when nothing was
+        assert "served the next" not in sel.selection_reason.lower()
+        assert "every full-frame refit" in sel.selection_reason.lower()
 
     def test_real_wrappers_end_to_end_subsampled(self):
         """Real OLS + LinearDML wrappers on a >cap frame: the pipeline

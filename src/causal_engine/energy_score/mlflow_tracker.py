@@ -358,9 +358,22 @@ class EnergyScoreMLflowTracker:
                         eval_result.error_type,
                         Json({}),  # estimator_params
                         Json(
-                            eval_result.energy_score_result.details
-                            if eval_result.energy_score_result
-                            else {}
+                            {
+                                **(
+                                    eval_result.energy_score_result.details
+                                    if eval_result.energy_score_result
+                                    else {}
+                                ),
+                                # codex r5: the tournament score and the served-refit
+                                # outcome travel explicitly; ``energy_score`` above
+                                # stays success-gated.
+                                "tournament_energy_score": (
+                                    eval_result.energy_score
+                                    if eval_result.energy_score_result
+                                    else None
+                                ),
+                                "served_refit": getattr(eval_result, "served_refit", None),
+                            }
                         ),
                     ),
                 )

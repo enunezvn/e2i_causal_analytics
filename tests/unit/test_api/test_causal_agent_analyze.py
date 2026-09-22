@@ -178,6 +178,8 @@ def test_estimator_comparison_surfaced_when_multiple_evaluated():
                 "estimator": "OLS",
                 "success": False,
                 "energy_score": None,
+                "tournament_energy_score": 0.61,
+                "served_refit": False,
                 "ate": None,
                 "error": "singular",
             },
@@ -197,6 +199,11 @@ def test_estimator_comparison_surfaced_when_multiple_evaluated():
     assert len(cmp.candidates) == 4
     assert cmp.selection_reason and "robust" in cmp.selection_reason
     assert cmp.quality_tier == "good"
+    # codex r5: a refused served refit keeps its tournament score on an EXPLICIT
+    # field; ``energy_score`` stays "None if the fit failed".
+    ols = next(c for c in cmp.candidates if c.estimator == "OLS")
+    assert ols.energy_score is None and ols.tournament_energy_score == 0.61
+    assert ols.served_refit is False
     # Exactly the winner is flagged.
     selected = [c for c in cmp.candidates if c.is_selected]
     assert len(selected) == 1 and selected[0].estimator == "LinearDML"

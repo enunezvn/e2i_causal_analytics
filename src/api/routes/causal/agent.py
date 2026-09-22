@@ -568,6 +568,8 @@ def _estimator_comparison_from_estimation(
             success=bool(e.get("success")),
             skipped=bool(e.get("skipped", False)),
             energy_score=e.get("energy_score"),
+            tournament_energy_score=e.get("tournament_energy_score"),
+            served_refit=e.get("served_refit"),
             ate=e.get("ate"),
             error=e.get("error"),
             is_selected=(e.get("estimator") == selected),

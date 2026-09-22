@@ -353,6 +353,12 @@ class EstimatorResult:
     # ``skipped`` distinguishes this from a genuine ``.fit()`` failure so the UI
     # renders "not applicable" instead of a cryptic sklearn traceback.
     skipped: bool = False
+    # Served-refit status (codex r5). None: no separate served refit happened
+    # (an unsubsampled selection serves the tournament fit itself, or this
+    # candidate lost the tournament). True: this candidate's served full-frame
+    # refit succeeded. False: it was refused -- ``energy_score_result`` then
+    # still carries the TOURNAMENT score (the ranking is immutable metadata).
+    served_refit: Optional[bool] = None
 
     # Timing
     estimation_time_ms: float = 0.0
@@ -378,6 +384,12 @@ class EstimatorResult:
             "ate_ci_lower": self.ate_ci_lower,
             "ate_ci_upper": self.ate_ci_upper,
             "energy_score": self.energy_score if self.success else None,
+            # explicit, not success-gated: the tournament ranking score whenever
+            # this candidate was scored, and whether its served refit succeeded
+            "tournament_energy_score": self.energy_score
+            if np.isfinite(self.energy_score)
+            else None,
+            "served_refit": self.served_refit,
             "error_message": self.error_message,
             "estimation_time_ms": self.estimation_time_ms,
         }
@@ -1638,13 +1650,24 @@ class EstimatorSelector:
                 refit.estimator_type.value,
                 refit.error_message,
             )
-            selection = self._select_best_energy(remaining)
+            # Record the refusal only; whether the NEXT candidate is served is
+            # known when its own refit returns (codex r5: never "served B"
+            # before B's refit ran).
             fallback_notes.append(
                 f"Tournament winner {refit.estimator_type.value} (energy score "
                 f"{refit.energy_score:.4f}) refused its served full-frame refit: "
-                f"{refit.error_message}; served the next ranked candidate "
-                f"{selection.estimator_type.value} (energy score {selection.energy_score:.4f})."
+                f"{refit.error_message}."
             )
+            selection = self._select_best_energy(remaining)
+        if fallback_notes:
+            if selection.success:
+                fallback_notes.append(
+                    f"Served the next ranked candidate {selection.estimator_type.value} "
+                    f"(energy score {selection.energy_score:.4f}) after "
+                    f"{len(fallback_notes)} refused."
+                )
+            else:
+                fallback_notes.append("Every full-frame refit was refused; no estimate is served.")
 
         # Build energy score comparison: every candidate the tournament SCORED,
         # including a winner whose served refit was refused (codex r4 MED) --
@@ -1736,6 +1759,7 @@ class EstimatorSelector:
             len(treatment),
         )
         full_result = wrapper.fit(treatment, outcome, fit_frame, **{**kwargs, "served_fit": True})
+        full_result.served_refit = bool(full_result.success)
         if full_result.success:
             full_result.energy_score_result = selection.energy_score_result
         else:
@@ -1778,7 +1802,11 @@ class EstimatorSelector:
         as a clean valid estimate.
         """
         if energy_scores is None:
-            energy_scores = {r.estimator_type.value: r.energy_score for r in results if r.success}
+            energy_scores = {
+                r.estimator_type.value: r.energy_score
+                for r in results
+                if np.isfinite(r.energy_score)
+            }
         exceeded = bool(
             selection.success and selection.energy_score > self.config.max_acceptable_energy_score
         )

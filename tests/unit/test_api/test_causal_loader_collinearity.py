@@ -226,6 +226,15 @@ def test_prune_drops_only_the_exact_duplicate_when_both_carry_a_large_offset():
     assert _prune(df, ["a", "b"]) == (["a"], ["b"])
 
 
+def test_prune_is_finite_safe_at_float_max():
+    # codex r5 MED: [-1e308, 1e308] overflowed the reference subtraction to inf and
+    # floor(log2(inf)) raised. Scale by a power of two BEFORE subtracting.
+    df = pd.DataFrame({"a": [-1e308, 1e308, 5e307, 0.0, 1.0], "b": [1.0, 2.0, 4.0, 8.0, 16.0]})
+    assert _prune(df, ["a", "b"]) == (["a", "b"], [])
+    df["half_a"] = df["a"] * 0.5  # exact duplicate at the edge of the range
+    assert _prune(df, ["a", "b", "half_a"]) == (["a", "b"], ["half_a"])
+
+
 @pytest.mark.asyncio
 async def test_loader_evaluates_numeric_columns_before_one_hot_dummies(monkeypatch):
     """The resolved order is numeric registry columns first, then the one-hot

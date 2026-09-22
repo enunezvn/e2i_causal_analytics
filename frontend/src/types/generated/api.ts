@@ -9956,6 +9956,16 @@ export interface components {
              */
             energy_score?: number | null;
             /**
+             * Tournament Energy Score
+             * @description Energy score from the selection tournament whenever this candidate was scored -- kept even when its served full-frame refit was refused (LOWER is better); None if it was never scored
+             */
+            tournament_energy_score?: number | null;
+            /**
+             * Served Refit
+             * @description Outcome of this candidate's served full-frame refit after a subsampled tournament: True succeeded, False refused; None when no separate served refit happened (unsubsampled selection, or a tournament loser)
+             */
+            served_refit?: boolean | null;
+            /**
              * Ate
              * @description This estimator's ATE estimate
              */
