@@ -12,9 +12,37 @@ from typing import Any, Dict, List, Optional, cast
 
 import yaml  # type: ignore[import-untyped]
 
+from src.tasks.feast_tracking import record_freshness_checks, record_materialization_jobs
 from src.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
+
+
+def _tracking_client():
+    """The SYNC supabase client the feast_tracking repositories drive (#2207).
+
+    Resolved per call (not at import) so the task module imports on any box and a
+    missing ``SUPABASE_URL`` surfaces as a logged, non-fatal recording failure.
+    """
+    from src.memory.services.factories import get_supabase_client
+
+    return get_supabase_client()
+
+
+def _record(label: str, coro_factory) -> None:
+    """Record a run's outcome into the Feast tracking tables — best-effort (#2207).
+
+    Recording is a side channel of the beat task: it must NEVER raise into the task,
+    so a broken tracking backend cannot turn a materialize/freshness run into a
+    failed task (or mask the run's real result).
+    """
+    try:
+        client = _tracking_client()
+        written = run_async(coro_factory(client))
+        logger.info(f"Feast tracking: recorded {written} {label} row(s)")
+    except Exception as e:  # noqa: BLE001 — side channel, never fail the parent
+        logger.warning(f"Feast tracking: could not record {label} (non-fatal): {e}")
+
 
 # Load configuration
 CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "feast_materialization.yaml"
@@ -118,6 +146,22 @@ def materialize_features(
 
     result = cast(Dict[str, Any], run_async(run_job()))
 
+    # #2207: record the run's REAL outcome (success or failure) per targeted view
+    # before the skip check can raise — a skipped run is a failed job row too.
+    if not dry_run:
+        _record(
+            "full materialization job",
+            lambda client: record_materialization_jobs(
+                client,
+                job_type="full",
+                requested_start=start_dt,
+                requested_end=end_dt,
+                feature_views=feature_views,
+                result=result,
+                task_id=self.request.id,
+            ),
+        )
+
     # Log result
     status = result.get("status", "unknown")
     _fail_loud_if_skipped(result, "Full")
@@ -176,6 +220,22 @@ def materialize_incremental_features(
 
     result = cast(Dict[str, Any], run_async(run_job()))
 
+    # #2207: record the run's REAL outcome per targeted view (the window start is
+    # whatever the client resolved as "since the last run"; absent on a failed run).
+    if not dry_run:
+        _record(
+            "incremental materialization job",
+            lambda client: record_materialization_jobs(
+                client,
+                job_type="incremental",
+                requested_start=None,
+                requested_end=end_dt,
+                feature_views=feature_views,
+                result=result,
+                task_id=self.request.id,
+            ),
+        )
+
     # Log result
     status = result.get("status", "unknown")
     _fail_loud_if_skipped(result, "Incremental")
@@ -206,6 +266,20 @@ def materialize_incremental_features(
                     await recovery_job.close()
 
             result["recovery_attempt"] = run_async(run_recovery())
+            # #2207: the recovery is a second, distinct (full-mode) job — recorded too.
+            recovery_result = result["recovery_attempt"]
+            _record(
+                "recovery materialization job",
+                lambda client: record_materialization_jobs(
+                    client,
+                    job_type="full",
+                    requested_start=start_dt,
+                    requested_end=end_dt,
+                    feature_views=feature_views,
+                    result=recovery_result,
+                    task_id=self.request.id,
+                ),
+            )
 
     return result
 
@@ -248,6 +322,19 @@ def check_feature_freshness(
             await job.close()
 
     result = cast(Dict[str, Any], run_async(run_check()))
+
+    # #2207: one freshness row per view the run reported on; a run that could not
+    # probe at all records every targeted view as ``unknown`` (#556: unverifiable
+    # is not fresh).
+    _record(
+        "freshness check",
+        lambda client: record_freshness_checks(
+            client,
+            result=result,
+            feature_views=feature_views,
+            max_staleness_hours=staleness_hours,
+        ),
+    )
 
     # Log and alert
     if result.get("status") == "completed":

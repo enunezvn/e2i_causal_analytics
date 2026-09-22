@@ -142,6 +142,17 @@ celery_app.conf.task_routes = {
     # Data processing
     "src.tasks.process_batch": {"queue": "analytics"},
     "src.tasks.transform_data": {"queue": "analytics"},
+    # Feast tasks (#2207): every one of them lands on worker_medium's analytics
+    # queue. The two 6 h / 4 h beats already pinned it via options.queue; the
+    # weekly full materialize was pinned to `ml`, which no running worker consumes
+    # (worker_heavy replicas: 0, #705) — measured 2026-09-22: 15 weekly messages
+    # sat undelivered in Redis. These routes also cover manual `celery call`
+    # triggers and materialize_feature_view's .delay() fan-out, which would
+    # otherwise land on `default`.
+    "src.tasks.materialize_features": {"queue": "analytics"},
+    "src.tasks.materialize_incremental_features": {"queue": "analytics"},
+    "src.tasks.check_feature_freshness": {"queue": "analytics"},
+    "src.tasks.materialize_feature_view": {"queue": "analytics"},
     # -------------------------------------------------------------------------
     # Heavy Worker Tasks (16 CPUs, 32GB RAM)
     # -------------------------------------------------------------------------
@@ -361,12 +372,17 @@ celery_app.conf.beat_schedule = {
         "kwargs": {"alert_on_stale": True},
         "options": {"queue": "analytics"},
     },
-    # Full materialization weekly (Sunday at midnight UTC)
+    # Full materialization weekly (Sunday at midnight UTC).
+    # #2207: was queue `ml` — unconsumed on this box (worker_heavy replicas: 0,
+    # #705); 15 weekly messages were found undelivered in Redis on 2026-09-22.
+    # `analytics` is consumed by worker_medium, the same tier the 6 h incremental
+    # and 4 h freshness beats already run on. The outcome of every run is now
+    # recorded in ml_feast_materialization_jobs (src/tasks/feast_tracking.py).
     "feast-materialize-full-weekly": {
         "task": "src.tasks.materialize_features",
         "schedule": 604800.0,  # 7 days
         "kwargs": {"feature_views": None},  # All feature views
-        "options": {"queue": "ml"},
+        "options": {"queue": "analytics"},
     },
     # -------------------------------------------------------------------------
     # ETL Tasks (block 6B-infra-2*)
