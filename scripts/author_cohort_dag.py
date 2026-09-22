@@ -66,31 +66,6 @@ DEFAULT_OUT_ROOT = PROJECT_ROOT / "docs" / "layer4" / "generated"
 MANIFESTS = ("optum_mart", "optum")
 OPTUM_RESEARCH_DOC = "docs/layer4/optum_initiation_attestation_research.md"
 
-#: Lane E FeatureRoleRecord contract (PR #2226): the fields the author's
-#: constraints read, all REQUIRED on every panel record.
-_PANEL_RECORD_REQUIRED = (
-    "feature",
-    "layer_1",
-    "layer_2",
-    "layer_3",
-    "layer_4",
-    "ensemble",
-    "leak_verdict",
-    "leak_source",
-    "review_required",
-)
-_PANEL_L1_VERDICTS = ("pre_index", "post_index", "no_contract")
-_PANEL_ROLES_OR_NONE = (
-    None,
-    "ancestor",
-    "confounder",
-    "instrument",
-    "mediator",
-    "collider",
-    "descendant",
-)
-_PANEL_LEAK_SOURCES = (None, "layer_1_post_index", "layer_3_high")
-
 #: The stated assumption of run (a), confirmed by the reviewer as a checklist item.
 ESCALATION_ASSUMPTION = (
     "Remibrutinib enters at the same decision point as the biologics (second line "
@@ -186,7 +161,26 @@ def build_briefs(
 
 
 def _load_panel(path: Path, *, manifest: str, treatment: str, outcome: str) -> dict[str, Any]:
+    """Load a Lane E panel for this run, refusing anything Lane E itself would.
+
+    Lane E's own validators run first (``validate_panel_payload``: exact types,
+    no unknown fields, the leak invariants in both directions — a post-index
+    contract IS a leak verdict and vice versa; then the typed round-trip's
+    ``validate_strict``), so the CLI keeps NO parallel schema (codex r3 HIGH 1).
+    Then the panel must be the one for this manifest / treatment / outcome, and
+    every record must load through the author's typed adapter
+    (``PanelRecordView``), which refuses verdict / role / source values it
+    would otherwise read blind.
+    """
+    from src.causal_engine.feature_role_panel import FeatureRolePanel, validate_panel_payload
+    from src.data.kg.structural_author import PanelRecordView
+
     payload = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        validate_panel_payload(payload)
+        FeatureRolePanel.from_dict(payload).validate_strict()
+    except ValueError as exc:
+        raise ValueError(f"panel {path}: {exc}") from exc
     for key, want in (
         ("manifest_source", manifest),
         ("treatment", treatment),
@@ -197,45 +191,11 @@ def _load_panel(path: Path, *, manifest: str, treatment: str, outcome: str) -> d
             raise ValueError(
                 f"panel {path}: {key}={got!r} does not match --{key.replace('_source', '')} {want!r}"
             )
-    records = payload.get("records")
-    if not isinstance(records, dict) or not records:
-        raise ValueError(f"panel {path}: no records")
-    for key, rec in records.items():
-        if not isinstance(rec, dict):
-            raise ValueError(f"panel {path}: record {key!r} is not an object")
-        if rec.get("feature") != key:
-            raise ValueError(f"panel {path}: record {key!r} carries feature={rec.get('feature')!r}")
-        # Every safety-critical field must be PRESENT with the right type: a
-        # missing field would silently default the Layer-1 veto, the leak
-        # exclusion or the cross-check away (codex r2 HIGH 2).
-        for field_name in _PANEL_RECORD_REQUIRED:
-            if field_name not in rec:
-                raise ValueError(f"panel {path}: record {key!r} lacks {field_name!r}")
-        for flag in ("leak_verdict", "review_required"):
-            if not isinstance(rec[flag], bool):
-                raise ValueError(f"panel {path}: record {key!r}.{flag} is not a bool")
-        for layer in ("layer_1", "layer_2", "layer_3", "layer_4", "ensemble"):
-            if not isinstance(rec[layer], dict):
-                raise ValueError(f"panel {path}: record {key!r}.{layer} is not an object")
-        if rec["layer_1"].get("verdict") not in _PANEL_L1_VERDICTS:
-            raise ValueError(
-                f"panel {path}: record {key!r}.layer_1.verdict={rec['layer_1'].get('verdict')!r} "
-                f"is not one of {_PANEL_L1_VERDICTS}"
-            )
-        if not isinstance(rec["layer_3"].get("ran"), bool):
-            raise ValueError(f"panel {path}: record {key!r}.layer_3.ran is not a bool")
-        if "final_role" not in rec["ensemble"] or "decided_by" not in rec["ensemble"]:
-            raise ValueError(f"panel {path}: record {key!r}.ensemble lacks final_role/decided_by")
-        if rec["ensemble"]["final_role"] not in _PANEL_ROLES_OR_NONE:
-            raise ValueError(
-                f"panel {path}: record {key!r}.ensemble.final_role="
-                f"{rec['ensemble']['final_role']!r} is not a role"
-            )
-        if rec["leak_source"] not in _PANEL_LEAK_SOURCES:
-            raise ValueError(
-                f"panel {path}: record {key!r}.leak_source={rec['leak_source']!r} is not one of "
-                f"{_PANEL_LEAK_SOURCES}"
-            )
+    for key, rec in payload["records"].items():
+        try:
+            PanelRecordView.from_record(rec)
+        except ValueError as exc:
+            raise ValueError(f"panel {path}: record {key!r}.{exc}") from exc
     return payload
 
 

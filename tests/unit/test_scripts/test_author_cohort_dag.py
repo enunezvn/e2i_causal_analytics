@@ -238,10 +238,15 @@ def test_real_lm_without_a_panel_is_refused_unless_overridden(tmp_path):
 
 
 def _panel_payload(records):
+    # The Lane E serialised shape (``FeatureRolePanel.to_dict()``): the raw
+    # validator requires schema_version, n_rows and features == records keys.
     return {
+        "schema_version": "1",
         "manifest_source": "optum",
         "treatment": OPTUM_T,
         "outcome": OPTUM_Y,
+        "n_rows": 10,
+        "features": list(records),
         "records": records,
     }
 
@@ -264,51 +269,80 @@ def _record(feature, **over):
 
 @pytest.mark.timeout(60)
 def test_panel_records_are_validated_strictly(tmp_path):
-    """codex r1 MED 4: a malformed or incomplete panel must not silently
-    become "no panel" for a feature (that would drop the Lane E constraints)."""
+    """codex r1 MED 4 / r2 HIGH 2 / r3 HIGH 1: a malformed, incomplete or
+    self-contradictory panel must not silently become "no panel" for a feature
+    (that would drop the Lane E constraints). The CLI runs Lane E's own
+    validators (``validate_panel_payload`` + ``validate_strict``) and then the
+    author's typed adapter — no parallel schema."""
     mod = _load()
     panel = tmp_path / "panel.json"
-    panel.write_text(
-        json.dumps(_panel_payload({"age_at_index": _record("age_at_index", leak_verdict="true")}))
+
+    def _refuses(records, match):
+        panel.write_text(json.dumps(_panel_payload(records)))
+        with pytest.raises(ValueError, match=match):
+            mod._load_panel(panel, manifest="optum", treatment=OPTUM_T, outcome=OPTUM_Y)
+
+    _refuses(
+        {"age_at_index": _record("age_at_index", leak_verdict="true")},
+        "leak_verdict must be a bool",
     )
-    with pytest.raises(ValueError, match="leak_verdict is not a bool"):
-        mod._load_panel(panel, manifest="optum", treatment=OPTUM_T, outcome=OPTUM_Y)
-    panel.write_text(json.dumps(_panel_payload({"age_at_index": _record("zip3")})))
-    with pytest.raises(ValueError, match="carries feature='zip3'"):
-        mod._load_panel(panel, manifest="optum", treatment=OPTUM_T, outcome=OPTUM_Y)
-    panel.write_text(json.dumps(_panel_payload({"age_at_index": "nope"})))
-    with pytest.raises(ValueError, match="is not an object"):
-        mod._load_panel(panel, manifest="optum", treatment=OPTUM_T, outcome=OPTUM_Y)
-    # codex r2 HIGH 2: a record that OMITS a safety-critical field is refused,
-    # never defaulted (that would drop the veto / leak exclusion / cross-check).
-    for missing in (
-        "layer_1",
-        "layer_3",
-        "ensemble",
-        "leak_verdict",
-        "leak_source",
-        "review_required",
-    ):
+    _refuses({"age_at_index": _record("zip3")}, "carries feature='zip3'")
+    _refuses({"age_at_index": "nope"}, "must be a mapping")
+    # A record that OMITS a safety-critical field is refused, never defaulted.
+    for missing in ("layer_1", "layer_3", "ensemble"):
         rec = _record("age_at_index")
         del rec[missing]
-        panel.write_text(json.dumps(_panel_payload({"age_at_index": rec})))
-        with pytest.raises(ValueError, match=f"lacks '{missing}'"):
-            mod._load_panel(panel, manifest="optum", treatment=OPTUM_T, outcome=OPTUM_Y)
-    panel.write_text(
-        json.dumps(_panel_payload({"age_at_index": _record("age_at_index", layer_1={})}))
+        _refuses({"age_at_index": rec}, f"{missing} must be a mapping")
+    rec = _record("age_at_index")
+    del rec["leak_verdict"]
+    _refuses({"age_at_index": rec}, "leak_verdict must be a bool")
+    # Lane E's invariants, in both directions (the contradiction codex r3 named:
+    # a post-index contract that is not a leak verdict would dodge BOTH the
+    # feature->T veto and the adjustment exclusion).
+    _refuses(
+        {"age_at_index": _record("age_at_index", layer_1={"verdict": "post_index"})},
+        "a post_index Layer-1 verdict must be a leak verdict",
     )
-    with pytest.raises(ValueError, match="layer_1.verdict=None is not one of"):
-        mod._load_panel(panel, manifest="optum", treatment=OPTUM_T, outcome=OPTUM_Y)
-    panel.write_text(
-        json.dumps(_panel_payload({"age_at_index": _record("age_at_index", ensemble={})}))
+    _refuses(
+        {
+            "age_at_index": _record(
+                "age_at_index", leak_verdict=True, leak_source="layer_1_post_index"
+            )
+        },
+        "requires a post_index Layer-1 verdict",
     )
-    with pytest.raises(ValueError, match="ensemble lacks final_role/decided_by"):
-        mod._load_panel(panel, manifest="optum", treatment=OPTUM_T, outcome=OPTUM_Y)
-    panel.write_text(
-        json.dumps(_panel_payload({"age_at_index": _record("age_at_index", leak_source="layer_9")}))
+    _refuses(
+        {"age_at_index": _record("age_at_index", leak_source="layer_9")}, "set without leak_verdict"
     )
-    with pytest.raises(ValueError, match="leak_source='layer_9' is not one of"):
+    _refuses(
+        {"age_at_index": _record("age_at_index", review_required=True)},
+        "review_required=True is only valid",
+    )
+    # The author's typed adapter refuses values it would otherwise read blind.
+    _refuses(
+        {"age_at_index": _record("age_at_index", layer_1={})}, "layer_1.verdict=None is not one of"
+    )
+    _refuses(
+        {"age_at_index": _record("age_at_index", ensemble={})},
+        "ensemble lacks final_role/decided_by",
+    )
+    _refuses(
+        {
+            "age_at_index": _record(
+                "age_at_index", ensemble={"final_role": "proxy", "decided_by": "x"}
+            )
+        },
+        "ensemble.final_role='proxy' is not a role",
+    )
+    # Panel-level identity and shape.
+    bad = _panel_payload({"age_at_index": _record("age_at_index")})
+    bad["extra"] = 1
+    panel.write_text(json.dumps(bad))
+    with pytest.raises(ValueError, match="unknown panel field"):
         mod._load_panel(panel, manifest="optum", treatment=OPTUM_T, outcome=OPTUM_Y)
+    panel.write_text(json.dumps(_panel_payload({"age_at_index": _record("age_at_index")})))
+    with pytest.raises(ValueError, match="manifest_source='optum' does not match"):
+        mod._load_panel(panel, manifest="optum_mart", treatment=OPTUM_T, outcome=OPTUM_Y)
     # Valid panel, but it does not cover every requested feature → refused.
     panel.write_text(json.dumps(_panel_payload({"age_at_index": _record("age_at_index")})))
     loaded = mod._load_panel(panel, manifest="optum", treatment=OPTUM_T, outcome=OPTUM_Y)
@@ -501,10 +535,32 @@ def test_open_review_fails_loudly_when_the_evidence_write_matches_no_row(tmp_pat
 def test_panel_for_another_estimand_is_refused(tmp_path):
     mod = _load()
     panel = tmp_path / "panel.json"
-    panel.write_text(
-        json.dumps(
-            {"manifest_source": "optum_mart", "treatment": "other", "outcome": "y", "records": {}}
-        )
+    # A panel Lane E itself accepts, built for another treatment.
+    payload = _panel_payload({"age_at_index": _record("age_at_index")})
+    payload["manifest_source"], payload["treatment"], payload["outcome"] = (
+        "optum_mart",
+        "other",
+        "y",
     )
+    panel.write_text(json.dumps(payload))
     with pytest.raises(ValueError, match="treatment='other' does not match"):
         mod._load_panel(panel, manifest="optum_mart", treatment="treatment_dupixent", outcome="y")
+
+
+def test_lane_e_committed_panel_loads_for_run_a():
+    """Merged-tree teeth: Lane E's committed panel (PR #2226, the real
+    15,209-row optum_mart frame with Layer 4 fake) IS the run (a) panel and
+    passes the CLI's loader unchanged — 64 records, one per baseline feature."""
+    mod = _load()
+    path = (
+        mod.PROJECT_ROOT
+        / "docs/demos/results/2026-09-22_lane_e_feature_role_voters/panel_layer4_fake/panel.json"
+    )
+    loaded = mod._load_panel(
+        path,
+        manifest="optum_mart",
+        treatment="treatment_dupixent",
+        outcome="persistent_at_180d_g28",
+    )
+    assert len(loaded["records"]) == 64
+    assert loaded["n_rows"] == 15209
