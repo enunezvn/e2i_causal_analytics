@@ -8,7 +8,8 @@ COPY — `.dockerignore` never excluded it, because a slash-less pattern such as
 scripts/benchmarks/routing/data/agent_contracts.json is present in the same
 image under the same rule; Docker docs: "markdown files under subdirectories
 are still included"). The dockerignore check below is therefore a guard against
-a FUTURE exclusion (`artifacts/`, `**/*.json`), and `_matches` deliberately
+a FUTURE exclusion (`artifacts/`, `**/*.json`), and the shared
+`tests.unit.test_docker.dockerignore_semantics.matches` helper deliberately
 models Docker's root-only semantics for slash-less patterns — do not "fix" it
 to gitignore semantics.
 
@@ -18,40 +19,19 @@ the normal unit lane. Spec: docs/superpowers/specs/2026-09-22-public-apis-live-p
 
 from __future__ import annotations
 
-import re
+import subprocess
 from pathlib import Path
 
 from src.data.causal_role_classifier_loader import DEFAULT_ARTIFACT_PATH, PROJECT_ROOT
+from tests.unit.test_docker.dockerignore_semantics import dockerignore_excludes, matches
+from tests.unit.test_docker.test_deploy_trigger_covers_image_inputs_1783 import (
+    _image_input_paths,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _DOCKERIGNORE = _REPO_ROOT / ".dockerignore"
 _DOCKERFILE = _REPO_ROOT / "docker" / "Dockerfile"
 _ARTIFACT_REL = DEFAULT_ARTIFACT_PATH.relative_to(PROJECT_ROOT).as_posix()
-
-
-def _matches(pattern: str, rel_path: str) -> bool:
-    pattern = pattern.rstrip("/")
-    if not pattern:
-        return False
-    regex = re.escape(pattern).replace(r"\*\*", "\x00").replace(r"\*", "[^/]*")
-    regex = regex.replace("\x00", ".*").replace(r"\?", "[^/]")
-    if re.fullmatch(regex, rel_path):
-        return True
-    return bool(re.fullmatch(regex + "(/.*)?", rel_path))
-
-
-def _dockerignore_excludes(rel_path: str) -> bool:
-    """Last-match-wins, exactly as Docker evaluates it."""
-    excluded = False
-    for raw in _DOCKERIGNORE.read_text().splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        negate = line.startswith("!")
-        pattern = line[1:] if negate else line
-        if _matches(pattern, rel_path):
-            excluded = not negate
-    return excluded
 
 
 def test_the_loader_path_is_relative_to_the_repo_root() -> None:
@@ -63,10 +43,21 @@ def test_the_loader_path_is_relative_to_the_repo_root() -> None:
 
 def test_the_classifier_artifact_is_committed() -> None:
     assert (_REPO_ROOT / _ARTIFACT_REL).is_file(), f"{_ARTIFACT_REL} is not committed"
+    # `is_file()` alone is also satisfied by an untracked file sitting on disk (e.g. a
+    # local rebuild artifact); assert it is actually tracked by git, not merely present.
+    tracked = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", _ARTIFACT_REL],
+        cwd=_REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert tracked.returncode == 0, (
+        f"{_ARTIFACT_REL} exists on disk but is not git-tracked: {tracked.stderr.strip()}"
+    )
 
 
 def test_the_classifier_artifact_survives_dockerignore() -> None:
-    assert not _dockerignore_excludes(_ARTIFACT_REL), (
+    assert not dockerignore_excludes(_DOCKERIGNORE, _ARTIFACT_REL), (
         f"{_ARTIFACT_REL} is excluded from the Docker build context by .dockerignore; "
         "remove or narrow the rule that excludes it (a slash-less pattern only matches "
         "the root, so look for a directory or `**/` rule), otherwise Layer 4 silently "
@@ -77,24 +68,27 @@ def test_the_classifier_artifact_survives_dockerignore() -> None:
 def test_matcher_models_docker_root_only_semantics_for_slashless_patterns() -> None:
     """Measured on the production image 2026-09-22: `*.json` did not drop nested
     scripts/benchmarks/routing/data/agent_contracts.json. `**/*.json` would."""
-    assert _matches("*.json", "root.json")
-    assert not _matches("*.json", "artifacts/dspy/causal_role_classifier.json")
-    assert _matches("**/*.json", "artifacts/dspy/causal_role_classifier.json")
-    assert _matches("artifacts", "artifacts/dspy/causal_role_classifier.json")
+    assert matches("*.json", "root.json")
+    assert not matches("*.json", "artifacts/dspy/causal_role_classifier.json")
+    assert matches("**/*.json", "artifacts/dspy/causal_role_classifier.json")
+    assert matches("artifacts", "artifacts/dspy/causal_role_classifier.json")
 
 
 def test_dockerfile_copies_the_artifact_into_every_app_stage() -> None:
-    """Both `development` and `production` are separate FROMs; each needs its own COPY."""
+    """Both `development` and `production` are separate FROMs; each needs a COPY that is
+    an image input of ITS OWN reachable stage closure — not merely >=2 COPY lines
+    anywhere in the file, which a planted-failure review proved passes even when both
+    lines sit in the same stage (see the PR description for the planted-failure output).
+    Reuses the #1783 guard's stage-closure parser rather than a second, weaker one."""
     text = _DOCKERFILE.read_text()
-    copies = [
-        ln
-        for ln in text.splitlines()
-        if ln.startswith("COPY") and "artifacts/dspy/causal_role_classifier.json" in ln
-    ]
-    assert len(copies) >= 2, (
-        "expected a causal_role_classifier.json COPY in BOTH the development and "
-        f"production stages of docker/Dockerfile; found {len(copies)}: {copies}"
-    )
+    for stage in ("production", "development"):
+        inputs = _image_input_paths(text, root=stage)
+        assert _ARTIFACT_REL in inputs, (
+            f"{_ARTIFACT_REL} is not an image input reachable from the {stage!r} stage "
+            f"(found: {sorted(inputs)}); it must be COPYed directly in that stage (or a "
+            "stage its closure pulls the file from), not merely somewhere else in the "
+            "Dockerfile."
+        )
 
 
 def test_the_copy_lands_where_the_loader_looks() -> None:
