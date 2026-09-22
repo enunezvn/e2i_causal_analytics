@@ -36,6 +36,7 @@ from src.causal_engine.discovery import (
     DiscoveryResult,
     DiscoveryRunner,
 )
+from src.ml.causal_role_dgp.backdoor import satisfies_backdoor_criterion
 from src.utils.session_ids import coerce_session_uuid
 
 
@@ -583,17 +584,10 @@ class GraphBuilderNode:
         Returns:
             True iff the set is a valid backdoor adjustment set.
         """
-        if treatment in adjustment_set or outcome in adjustment_set:
-            return False
-
-        # (1) No descendant of treatment may be in the adjustment set.
-        if adjustment_set & nx.descendants(dag, treatment):
-            return False
-
-        # (2) d-separation in the proper backdoor graph (remove T's out-edges).
-        backdoor_graph = dag.copy()
-        backdoor_graph.remove_edges_from(list(dag.out_edges(treatment)))
-        return bool(nx.is_d_separator(backdoor_graph, {treatment}, {outcome}, set(adjustment_set)))
+        # Lane B (2026-09-22): the criterion lives in the light shared module
+        # ``src.ml.causal_role_dgp.backdoor`` so the structural assembler applies
+        # the SAME admissibility test without importing this agent package.
+        return satisfies_backdoor_criterion(dag, adjustment_set, treatment, outcome)
 
     def _to_dot_format(self, dag: nx.DiGraph) -> str:
         """Convert DAG to DOT format for visualization.
