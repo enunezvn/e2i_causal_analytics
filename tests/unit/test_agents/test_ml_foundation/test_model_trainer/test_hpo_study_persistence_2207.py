@@ -496,16 +496,18 @@ def _typed_search_space():
 
 @pytest.mark.asyncio
 async def test_the_payload_built_from_the_live_typed_search_space_is_json_native():
-    """Codex r7 (HIGH): the live graph hands the saver Pydantic distribution objects
-    and numpy scalars can ride in params/attrs; PostgREST's encoder rejects both."""
+    """Codex r7 (HIGH): the live graph hands the saver Pydantic distribution objects,
+    which PostgREST's encoder rejects — that is the live-path input. The numpy-scalar
+    user attrs below are NOT a live-path input (the tuner sets no user attrs today);
+    they exercise the serialiser's best-effort net only."""
     import numpy as np
 
     db = FakeAsyncSupabase()
     study = optuna.create_study(study_name=f"e2i_typed_{uuid.uuid4().hex[:6]}_rf_hpo")
 
     def objective(t):
-        # the live tuner sets no user attrs today (empty); numpy scalars are the kind
-        # of value a future caller could set — the serialiser must not choke on them
+        # best-effort net, not a live-path input: the live tuner sets no user attrs
+        # today; a numpy scalar here only shows the net folds it if one ever appears
         t.set_user_attr("np_flag", np.bool_(True))
         t.set_user_attr("np_score", np.float64(0.5))
         return t.suggest_int("n_estimators", 10, 20) / 20.0

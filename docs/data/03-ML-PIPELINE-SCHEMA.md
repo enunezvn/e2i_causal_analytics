@@ -727,8 +727,9 @@ ONE transaction by `persist_hpo_study(jsonb, jsonb)` (migration ml/045: upsert o
 `study_name`, replace the trial set — a rerun of the same study name replaces both together
 or changes nothing). Before #2207 the writer had zero call sites and both tables sat at
 0 rows, and none has landed yet: the values the live graph produces today (the Pydantic
-search-space distributions the state holds, native sampled params, a failed trial's `-inf`,
-a large objective, datetimes) are reduced to JSON-native values by
+search-space distributions the state holds, native sampled and best parameters, empty user
+attrs, JSON-native warm-start system attrs, float intermediate and objective values including
+a failed trial's `-inf` and a large objective, datetimes) are reduced to JSON-native values by
 `OptunaOptimizer.build_persist_payload` — proven by an end-to-end typed test and against the
 live schema in a rolled-back rehearsal; the serialiser is not a guarantee for inputs the
 tuner does not produce. The first rows come from the tier-0 harness run
