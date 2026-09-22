@@ -1059,8 +1059,17 @@ def _build_layer_4_inputs(
     contract: Optional[FeatureContract],
     target: str,
     manifest_source: Optional[str],
+    treatment: Optional[str] = None,
 ) -> tuple[str, str]:
     """Build the (derivation_pseudocode, dataset_context) pair for Layer 4.
+
+    ``treatment`` (Lane E, real-data causal estimation): the causal treatment
+    column when the node runs over a CAUSAL frame via
+    ``src.causal_engine.feature_role_panel`` (read from
+    ``scope_spec["causal_treatment"]``). The classifier's roles (confounder /
+    instrument / mediator / collider) are defined relative to a treatment, so
+    the dataset_context names T and the causal question. ``None`` — the
+    prediction path — leaves the context byte-identical to before.
 
     The compiled :class:`src.data.causal_role_classifier.CausalRoleClassifier`
     expects three input fields: ``feature_name`` (provided by caller),
@@ -1091,6 +1100,10 @@ def _build_layer_4_inputs(
 
     cohort = manifest_source or "unspecified"
     dataset_context = f"cohort={cohort}; target={target}; prediction_anchor=index_date"
+    if treatment:
+        dataset_context += (
+            f"; treatment={treatment}; causal_question=effect of {treatment} on {target}"
+        )
     return derivation, dataset_context
 
 
@@ -1710,6 +1723,15 @@ def _ensemble_to_legacy_dict(
         # supplied for this feature.
         "llm_role": llm_role,
         "llm_remediation": llm_remediation,
+        # Lane E (real-data causal estimation, sidecar schema 1.9): the
+        # ensemble's role and confidence, and the LLM's mechanism text. The
+        # feature-role panel (``src/causal_engine/feature_role_panel.py``)
+        # reads these instead of re-deriving the voter's precedence; before
+        # this they existed only on the ``EnsembleVerdict`` the node discards.
+        # Additive and nullable on every producer path.
+        "final_role": verdict.final_role,
+        "confidence": verdict.confidence,
+        "llm_mechanism": (getattr(llm_in, "mechanism", None) if llm_in is not None else None),
         # Layer-4 evaluator audit-only fields (Plan
         # .claude/plans/layer4_evaluator_audit_signal.md). All five
         # keys are None when the evaluator is disabled, the evaluator
@@ -1849,6 +1871,10 @@ def _legacy_adversarial_alone_verdict(
         # are ``None``.
         "llm_role": None,
         "llm_remediation": None,
+        # Lane E (sidecar 1.9): additive, None on the bypass paths.
+        "final_role": None,
+        "confidence": None,
+        "llm_mechanism": None,
         # Layer-4 evaluator audit-only fields (Plan
         # .claude/plans/layer4_evaluator_audit_signal.md). Adversarial-only
         # bypass has no LLM verdict, so the evaluator never runs.
@@ -1957,6 +1983,10 @@ def _legacy_info_verdict(
         # _ensemble_to_legacy_dict.
         "llm_role": None,
         "llm_remediation": None,
+        # Lane E (sidecar 1.9): additive, None on the bypass paths.
+        "final_role": None,
+        "confidence": None,
+        "llm_mechanism": None,
         # Layer-4 evaluator audit-only fields (Plan
         # .claude/plans/layer4_evaluator_audit_signal.md). Info-only
         # bypass has no LLM verdict.
@@ -2054,6 +2084,10 @@ def _legacy_short_circuit_verdict(feature: str, *, evidence: str) -> dict[str, A
         # _ensemble_to_legacy_dict.
         "llm_role": None,
         "llm_remediation": None,
+        # Lane E (sidecar 1.9): additive, None on the bypass paths.
+        "final_role": None,
+        "confidence": None,
+        "llm_mechanism": None,
         # Layer-4 evaluator audit-only fields (Plan
         # .claude/plans/layer4_evaluator_audit_signal.md). Short-circuit
         # bypass (too-few-rows / scoring-error) has no LLM verdict.
@@ -4036,7 +4070,11 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
                 from src.data.causal_role_classifier_loader import classify_feature
 
                 derivation, ds_context = _build_layer_4_inputs(
-                    feat, contract, target, manifest_source
+                    feat,
+                    contract,
+                    target,
+                    manifest_source,
+                    treatment=scope_spec.get("causal_treatment"),
                 )
                 llm_verdict = classify_feature(
                     feature_name=feat,
