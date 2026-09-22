@@ -134,6 +134,15 @@ describe('digital-twin model census (#2206)', () => {
     );
   });
 
+  it('does not merge fits across twin types on a coincident fingerprint (codex r9 #1)', () => {
+    const rows = [
+      model('Remibrutinib', { twin_type: 'hcp', shared_fit_model_count: 1, shared_fit_with: [] }),
+      model('Kisqali', { twin_type: 'patient', shared_fit_model_count: 1, shared_fit_with: [] }),
+    ];
+    expect(describeModelCensus(rows)).toBe('2 brand labels over 2 synthetic fits · unvalidated');
+    expect(summarizeModelCensus(rows)?.sharedBrands).toEqual([]);
+  });
+
   it('counts brand labels, not active rows (codex r5 #2)', () => {
     const rows = [
       model('Remibrutinib', { model_id: 'v1', shared_fit_model_count: 2, shared_fit_with: ['Kisqali'] }),

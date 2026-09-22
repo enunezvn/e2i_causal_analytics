@@ -2503,3 +2503,17 @@ async def test_active_model_census_reaches_the_real_facade_with_its_limit():
 
     assert len(census) == 1
     assert repo.models.list_active_models.await_args.kwargs["limit"] == route_mod._CENSUS_LIMIT
+
+
+def test_fit_fingerprint_keeps_a_float_distinct_from_its_string_form():
+    """codex r9 #2: a numeric 0.2 and the string "0.2" are different recorded values."""
+    from src.api.routes.digital_twin import _fit_fingerprint
+
+    a = _shared_fit_row("Remibrutinib", duration=1.0)
+    b = _shared_fit_row("Kisqali", duration=1.0)
+    a["training_config"] = {**a["training_config"], "validation_split": 0.2}
+    b["training_config"] = {**b["training_config"], "validation_split": "0.2"}
+    assert _fit_fingerprint(a) != _fit_fingerprint(b)
+    c = _shared_fit_row("Fabhalta", duration=1.0)
+    c["training_config"] = {**c["training_config"], "validation_split": 0.2}
+    assert _fit_fingerprint(a) == _fit_fingerprint(c)

@@ -280,7 +280,9 @@ def _canonical(value: Any) -> Any:
     if isinstance(value, bool):
         return value
     if isinstance(value, float):
-        return int(value) if value.is_integer() else repr(value)
+        # Integral floats fold to int; other floats stay NUMERIC (json.dumps emits
+        # repr), so 0.2 never collides with the string "0.2" (codex r9 #2).
+        return int(value) if value.is_integer() else value
     if isinstance(value, int):
         return value
     if isinstance(value, dict):

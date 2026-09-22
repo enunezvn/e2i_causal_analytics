@@ -62,11 +62,14 @@ export interface ModelCensus {
  */
 export function summarizeModelCensus(models: readonly TwinModelSummary[]): ModelCensus | null {
   if (models.length === 0) return null;
+  // A fit is shared only within a twin_type (the backend census keys on both);
+  // an HCP and a patient model with coincident fingerprints are two fits.
   const byFingerprint = new Map<string, TwinModelSummary[]>();
   for (const m of models) {
-    const group = byFingerprint.get(m.training_fingerprint) ?? [];
+    const key = `${m.twin_type}:${m.training_fingerprint}`;
+    const group = byFingerprint.get(key) ?? [];
     group.push(m);
-    byFingerprint.set(m.training_fingerprint, group);
+    byFingerprint.set(key, group);
   }
   let labels = 0;
   let hiddenSharedLabels = 0;
