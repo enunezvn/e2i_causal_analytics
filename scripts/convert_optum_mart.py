@@ -64,6 +64,23 @@ TARGET_PERSISTENT = "persistent_at_180d"
 # aggregated coverage/gap columns; disc180 validated 98.2% vs discontinued_90d_flag.
 DISCONT_GAP_DAYS = 90
 PERSIST_GAP_DAYS = 60
+# --- Lane A (spec 2026-09-22 §3A.1): the CAUSAL cohort ------------------------
+# The persistence outcome is days-supply sensitive per brand (14-d Dupixent fills
+# vs 28-45-d Xolair fills): the shipped ``persistent_at_180d`` gap of -17.6 pp
+# collapses to 3.5 pp with a 14-day grace and INVERTS from 28 d on. The primary
+# causal outcome is therefore covered-through-day-(180-28) AND no internal gap
+# > 60 d — brand-invariant across 28-60 d grace. Owner decision, spec §7;
+# evidence docs/demos/results/2026-09-22_persistence_definition_disproof/.
+TARGET_PERSISTENT_G28 = "persistent_at_180d_g28"
+PERSIST_GRACE_DAYS = 28
+# Binary treatment: 1 = DUPIXENT, 0 = XOLAIR — the only contrast the drop
+# observes (remibrutinib is absent; FDA approval 2025-09-30 is the drop's last
+# observed day). Any other brand is EXCLUDED with an attrition step rather than
+# silently coded as the reference arm.
+TREATMENT_COL = "treatment_dupixent"
+CAUSAL_ARMS = ("XOLAIR", "DUPIXENT")
+# Precomputed switch flag carried from the raw drop (int32, both arms observed).
+SWITCH_FLAG = "biologic_switch_180d_flag"
 DEFAULT_INPUT = "data/rwd/Optum_Parquet/Optum_enriched.parquet"
 DEFAULT_OUTPUT = "data/rwd/mart/initiation"
 _DERIVED = ("geographic_region", "enrollment_duration_days")
@@ -196,6 +213,58 @@ def select_persistence_cohort(
         "int64"
     )
     attrition.append(("target_positives", int(df[TARGET_PERSISTENT].sum())))
+    return df, attrition
+
+
+def select_persistence_causal_cohort(
+    df: pd.DataFrame, *, window_days: int = 180, min_claim_count: int = 2
+) -> tuple[pd.DataFrame, list[tuple[str, int]]]:
+    """Treatment-anchored CAUSAL cohort: Dupixent vs Xolair initiators with four
+    outcomes and the binary treatment (Lane A, spec 2026-09-22 §3A.1).
+
+    Same denominator as the prediction persistence cohort (``_initiator_eligible``)
+    restricted to the observed two-arm contrast. Emits:
+
+    - ``treatment_dupixent``     1 = DUPIXENT, 0 = XOLAIR
+    - ``persistent_at_180d_g28`` PRIMARY: covered through day window-28 AND no
+                                 internal gap > PERSIST_GAP_DAYS (brand-invariant)
+    - ``discontinued_180d``      secondary, as shipped (brand-robust)
+    - ``biologic_switch_180d_flag`` as shipped in the raw drop (NULL -> 0)
+    - ``persistent_at_180d``     the shipped definition, reported only alongside
+                                 the days-supply sweep (a measurement artefact)
+    """
+    df, attrition = _initiator_eligible(
+        df, window_days=window_days, min_claim_count=min_claim_count
+    )
+    if SWITCH_FLAG not in df.columns:
+        raise KeyError(
+            f"{SWITCH_FLAG} is not in the input frame; the causal cohort carries it as "
+            "an outcome and will not fabricate zeros for a missing column"
+        )
+    in_contrast = df["index_biologic_brand"].isin(CAUSAL_ARMS)
+    df = df.loc[in_contrast].copy()
+    attrition.append(("two_arm_contrast", len(df)))
+
+    ts = pd.to_datetime(df["treatment_start_date"])
+    lce = pd.to_datetime(df["last_coverage_end"])
+    cov_to_end = (lce - ts).dt.days
+    gap = df["max_internal_gap_days"].fillna(0)
+    term = df["terminal_gap_days"].fillna(0)
+
+    df[TREATMENT_COL] = df["index_biologic_brand"].eq("DUPIXENT").astype("int64")
+    df[TARGET_PERSISTENT] = ((cov_to_end >= window_days) & (gap <= PERSIST_GAP_DAYS)).astype(
+        "int64"
+    )
+    df[TARGET_PERSISTENT_G28] = (
+        (cov_to_end >= window_days - PERSIST_GRACE_DAYS) & (gap <= PERSIST_GAP_DAYS)
+    ).astype("int64")
+    df[TARGET_DISCONTINUED] = (
+        (cov_to_end < window_days) & ((gap >= DISCONT_GAP_DAYS) | (term >= DISCONT_GAP_DAYS))
+    ).astype("int64")
+    df[SWITCH_FLAG] = df[SWITCH_FLAG].fillna(0).astype("int64")
+
+    attrition.append(("target_positives", int(df[TARGET_PERSISTENT_G28].sum())))
+    attrition.append(("arm_dupixent", int(df[TREATMENT_COL].sum())))
     return df, attrition
 
 
