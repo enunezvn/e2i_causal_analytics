@@ -46,7 +46,7 @@ def _make_cohort(n: int = 3000, seed: int = 0) -> pd.DataFrame:
             "region": regions,
             "engagement_score": engagement,
             "call_frequency": call_frequency,
-            "conversion_rate": conversion,
+            "cohort_conversion_outcome": conversion,
             "market_share": market_share,
             "triggers_total_count": triggers_total_count,
         }
@@ -69,9 +69,9 @@ def test_region_standardized_ate_removes_region_confounding():
     cohort = _make_cohort()
     work = cohort.dropna()
     t_thr = work["engagement_score"].median()
-    y_thr = work["conversion_rate"].median()
+    y_thr = work["cohort_conversion_outcome"].median()
     t = (work["engagement_score"] > t_thr).astype(int)
-    y = (work["conversion_rate"] > y_thr).astype(int)
+    y = (work["cohort_conversion_outcome"] > y_thr).astype(int)
     raw = y[t == 1].mean() - y[t == 0].mean()
     standardized = region_standardized_ate(cohort, "engagement_score")
     assert raw > standardized
@@ -83,14 +83,14 @@ def test_region_standardized_ate_removes_region_confounding():
 
 def test_cohort_provider_returns_raw_cohort_frame():
     """The provider returns the RAW cohort (no synthetic injected-effect handoff):
-    treatment=engagement_score, outcome=conversion_rate, region as effect modifier,
+    treatment=engagement_score, outcome=cohort_conversion_outcome, region as effect modifier,
     the present pre-treatment confounders, and ground_truth_ate=None (estimated, not
     injected)."""
     cohort = _make_cohort()
     provider = CohortEffectDataProvider(cohort, seed=42)
     frame = provider.get_training_frame("digital_engagement", brand="Remibrutinib", twin_type="hcp")
     assert frame.treatment_var == "engagement_score"
-    assert frame.outcome_var == "conversion_rate"
+    assert frame.outcome_var == "cohort_conversion_outcome"
     assert frame.ground_truth_ate is None  # estimated from data, NOT injected
     assert frame.confounders == ["market_share", "triggers_total_count"]
     assert frame.effect_modifiers == ["region"]
@@ -140,7 +140,7 @@ def test_cohort_provider_call_frequency_estimable_from_its_own_channel():
     provider = CohortEffectDataProvider(_make_cohort())
     frame = provider.get_training_frame("call_frequency_increase", brand="Kisqali", twin_type="hcp")
     assert frame.treatment_var == "call_frequency"
-    assert frame.outcome_var == "conversion_rate"
+    assert frame.outcome_var == "cohort_conversion_outcome"
     assert frame.ground_truth_ate is None
 
 

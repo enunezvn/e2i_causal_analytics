@@ -44,7 +44,7 @@ def _small_cohort(volume_column: str, n: int = 300, seed: int = 7) -> pd.DataFra
             "engagement_score": engagement,
             "market_share": market,
             volume_column: volume,
-            "conversion_rate": np.clip(outcome, 0.0, None),
+            "cohort_conversion_outcome": np.clip(outcome, 0.0, None),
         }
     )
 

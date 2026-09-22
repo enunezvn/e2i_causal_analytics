@@ -38,7 +38,10 @@ Per per_hcp_rollup row i (one (hcp_id, brand, metric_date) cell):
     generation stream (same seed -> identical values), so the /segments/analyze
     treatment assignment is unchanged.
 
-  OUTCOME  conversion_rate_i  (the column we REGENERATE)
+  OUTCOME  cohort_conversion_outcome_i  (the column we REGENERATE; migration 147)
+    Its OWN column since 2026-09-21. It used to be written into conversion_rate, which the
+    per-HCP ETL recomputes on every upsert (accepted/delivered triggers, <= 1): two writers,
+    one column. See COHORT_OUTCOME_COLUMN in src/digital_twin/effect/provider.py.
     baseline(confounders) + SUM_k tau_k[region_i] * Tbin_k_i + N(0, out_noise)
 
     where Tbin_k_i = 1{T_k_i > median(T_k within brand)} is the SAME
@@ -94,7 +97,8 @@ COLUMNS WRITTEN (only with --execute; requires migration 099 applied)
   business_metrics.peer_influence_score        : treatment (NEW, mig 099)
   business_metrics.patient_support_enrollment  : treatment (NEW, mig 099)
   business_metrics.rep_training_score          : treatment (NEW, mig 099)
-  business_metrics.conversion_rate             : outcome  (REGENERATED)
+  business_metrics.cohort_conversion_outcome   : outcome  (REGENERATED; mig 147)
+  business_metrics.conversion_rate             : NOT written — it is the per-HCP ETL's column
 Only per_hcp_rollup rows (metric_type='per_hcp_rollup') are touched. The
 per-(brand, region) aggregate rows (metric_type in trx/nrx/market_share/...)
 and every other column are LEFT UNTOUCHED.
@@ -106,11 +110,21 @@ re-checked 2026-07-08)
     ExperimentOutcomeRepository only for experiments whose assignments overlap
     these hcp_ids (zero overlap, verified rev 1); the new columns are read only
     by the digital-twin cohort loader (the whole point).
-  conversion_rate (per_hcp_rollup): consumers unchanged from rev 1 — the
-    gap_analyzer/chatbot read the AGGREGATE conversion_rate rows, not
-    per_hcp_rollup. Regeneration shifts /segments/analyze recovered CATEs
-    slightly (added channel variance) while preserving the planted engagement
-    taus — re-proven by the recovery probe before any --execute.
+  cohort_conversion_outcome (per_hcp_rollup): read only by the digital-twin cohort loader
+    and estimator. Feast's business_metrics_source reads conversion_rate, which this script no
+    longer touches.
+  engagement_score / call_frequency ARE served by Feast (feature_repo/data_sources.py selects
+    both from these rows). A plant moves them NULL -> value, so online and offline disagree on
+    rows inside the 7-day TTL until the next scheduled materializer cycle (6-hourly). Do not
+    run --execute in the middle of anything that asserts Feast online == offline.
+  /segments/analyze NO LONGER reads this substrate (re-checked 2026-09-21): it moved to the
+    patient_journeys gold standard (treatment_arm). The rev-1 engagement_score stream is kept
+    identical anyway, for reproducibility of earlier estimates.
+
+AFTER A FULL-WINDOW PER-HCP BACKFILL, RE-RUN THIS SCRIPT. The ETL inserts every planted column
+as NULL; a backfill that replaces the rows replaces the plant with nothing (2026-09-19: usable
+rows per brand ~4,000 -> 1-6, the twin dark for every brand). The nightly windowed beat adds a
+few hundred unplanted rows a week, which the >= 500-usable-rows gate tolerates.
 
 USAGE
 -----
@@ -147,6 +161,7 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(_PROJECT_ROOT / ".env")
 
+from src.digital_twin.effect.provider import COHORT_OUTCOME_COLUMN  # noqa: E402
 from src.ml.synthetic.config import RegionEnum  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -191,7 +206,7 @@ _OUT_REGION_BASELINE: Dict[str, float] = {  # confounding region intercept (NOT 
     _MW: 0.15,
 }
 _OUT_NOISE_STD: float = 0.25
-_OUT_MIN: float = 0.0  # conversion_rate kept non-negative
+_OUT_MIN: float = 0.0  # the outcome is kept non-negative
 
 
 @dataclass(frozen=True)
@@ -308,6 +323,9 @@ ALL_CHANNEL_TAUS: Dict[str, Dict[str, float]] = {
     **{spec.column: spec.tau_by_region for spec in CHANNEL_SPECS},
 }
 _TREATMENT_COLUMNS: tuple[str, ...] = tuple(ALL_CHANNEL_TAUS)
+# Every column --execute writes. None may be a column the per-HCP ETL recomputes on upsert
+# (tests/unit/test_digital_twin/effect/test_cohort_columns_single_writer.py).
+PLANTED_WRITE_COLUMNS: tuple[str, ...] = (COHORT_OUTCOME_COLUMN, *_TREATMENT_COLUMNS)
 
 # Covariate columns READ from the live table (causal inputs; never re-drawn) +
 # the columns we will (re)derive, for the pre-write backup + comparison.
@@ -322,7 +340,7 @@ _COLS = [
     "triggers_total_count",
     "triggers_delivered_count",
     "triggers_accepted_count",
-    "conversion_rate",  # current live value -> backup + before/after
+    COHORT_OUTCOME_COLUMN,  # current live value -> backup + before/after
     *_TREATMENT_COLUMNS,  # current live values -> backup
     "is_synthetic",
 ]
@@ -344,6 +362,7 @@ def fetch_rows(client: Any) -> Optional[pd.DataFrame]:
                 client.table(TABLE)
                 .select(",".join(_COLS))
                 .eq("metric_type", METRIC_TYPE)
+                .eq("is_synthetic", True)
                 .order(KEY)
                 .range(page * page_size, (page + 1) * page_size - 1)
                 .execute()
@@ -358,9 +377,9 @@ def fetch_rows(client: Any) -> Optional[pd.DataFrame]:
         return pd.DataFrame(rows)
     except Exception as e:  # pragma: no cover - network/permission edge
         logger.warning(
-            "Could not read live %s: %s (if a migration-099 column is missing, "
-            "apply database/migrations/099_business_metrics_intervention_treatments.sql "
-            "first)",
+            "Could not read live %s: %s (if a planted column is missing, apply "
+            "database/migrations/099_business_metrics_intervention_treatments.sql and "
+            "147_business_metrics_cohort_conversion_outcome.sql first)",
             TABLE,
             e,
         )
@@ -479,7 +498,7 @@ def generate_dgp(rows: pd.DataFrame, *, seed: int = DEFAULT_SEED) -> pd.DataFram
         # internal-only (NOT written): planted bins + per-unit taus for the probe.
         result[f"_tbin_{col}"] = tbin_by_col[col]
         result[f"_tau_{col}"] = tau
-    result["conversion_rate"] = np.round(np.clip(conversion, _OUT_MIN, None), 4)
+    result[COHORT_OUTCOME_COLUMN] = np.round(np.clip(conversion, _OUT_MIN, None), 4)
 
     # De-confounding nuisances the recovery probe routes into W.
     result["_mkt"] = market
@@ -542,7 +561,7 @@ def recovery_probe(regen: pd.DataFrame, channel_col: str) -> Optional[Dict[str, 
         return None
 
     df = regen
-    y = df["conversion_rate"].to_numpy(dtype=float)
+    y = df[COHORT_OUTCOME_COLUMN].to_numpy(dtype=float)
     t = df[f"_tbin_{channel_col}"].to_numpy(dtype=int)
 
     # Encode region as the single effect modifier (label-encode, like the agent).
@@ -634,9 +653,9 @@ def verify(
             float(regen[f"_tbin_{col}"].mean()),
         )
 
-    logger.info("--- OUTCOME (conversion_rate) DISTRIBUTION: before -> after ---")
-    before = pd.to_numeric(live["conversion_rate"], errors="coerce")
-    after = regen["conversion_rate"]
+    logger.info("--- OUTCOME (%s) DISTRIBUTION: before -> after ---", COHORT_OUTCOME_COLUMN)
+    before = pd.to_numeric(live[COHORT_OUTCOME_COLUMN], errors="coerce")
+    after = regen[COHORT_OUTCOME_COLUMN]
     logger.info(
         "  before  mean=%.4f std=%.4f min=%.4f max=%.4f",
         float(before.mean()),
@@ -661,8 +680,8 @@ def verify(
             m = regen["region"].to_numpy(dtype=str) == r
             if not m.any():
                 continue
-            tr = regen.loc[m & (regen[f"_tbin_{col}"] == 1), "conversion_rate"]
-            ct = regen.loc[m & (regen[f"_tbin_{col}"] == 0), "conversion_rate"]
+            tr = regen.loc[m & (regen[f"_tbin_{col}"] == 1), COHORT_OUTCOME_COLUMN]
+            ct = regen.loc[m & (regen[f"_tbin_{col}"] == 0), COHORT_OUTCOME_COLUMN]
             if len(tr) and len(ct):
                 logger.info(
                     "  %-27s naive[%-9s] = %+.4f  (true %+.4f)",
@@ -707,7 +726,7 @@ def write_backup(live: pd.DataFrame, out_dir: Path) -> Path:
     path = out_dir / f"business_metrics_per_hcp_segment_backup_{ts}.tsv"
     cols = [
         c
-        for c in (KEY, "hcp_id", "brand", "region", "conversion_rate", *_TREATMENT_COLUMNS)
+        for c in (KEY, "hcp_id", "brand", "region", COHORT_OUTCOME_COLUMN, *_TREATMENT_COLUMNS)
         if c in live.columns
     ]
     live[cols].to_csv(path, sep="\t", index=False)
@@ -720,6 +739,30 @@ def write_backup(live: pd.DataFrame, out_dir: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 
+def require_synthetic_only(live: pd.DataFrame) -> None:
+    """Refuse to go on unless EVERY fetched row is explicitly ``is_synthetic is True``.
+
+    This DGP is synthetic-gold. Planting it into a real per-HCP row would put fabricated
+    treatments and a fabricated outcome under ``is_synthetic = false`` — plausible-looking values
+    in a real row, which is the one thing this platform must never do (codex r1).
+    """
+    flags = (
+        live["is_synthetic"] if "is_synthetic" in live.columns else pd.Series([None] * len(live))
+    )
+    # `flags != True` would give <NA> for a missing flag under pandas' nullable boolean dtype and
+    # sum() skips <NA>, so a missing flag went uncounted (codex r2 LOW). Count explicit True only.
+    explicitly_synthetic = flags.eq(True).fillna(False).astype(bool)
+    not_synthetic = int((~explicitly_synthetic).sum())
+    if not_synthetic:
+        logger.error(
+            "REFUSING: %d of %d fetched rows are not marked is_synthetic = true. This script "
+            "plants a synthetic DGP and must never touch a real row.",
+            not_synthetic,
+            len(live),
+        )
+        raise SystemExit(3)
+
+
 def update_rows(client: Any, regen: pd.DataFrame, *, batch_size: int = BATCH_SIZE) -> int:
     """Idempotent per-row UPDATE of every planted column keyed on metric_id.
     Only the planted columns change; every other column (triggers_delivered_count,
@@ -727,11 +770,13 @@ def update_rows(client: Any, regen: pd.DataFrame, *, batch_size: int = BATCH_SIZ
     Re-running with the same seed reproduces identical values.
     """
     written = 0
-    write_cols = ["conversion_rate", *_TREATMENT_COLUMNS]
+    write_cols = list(PLANTED_WRITE_COLUMNS)
     records = regen[[KEY, *write_cols]].to_dict(orient="records")
     for rec in records:
-        client.table(TABLE).update({c: float(rec[c]) for c in write_cols}).eq(
-            KEY, rec[KEY]
+        # is_synthetic in the WRITE predicate too: a row re-tagged real between the read and this
+        # update is left alone rather than planted (codex r1).
+        client.table(TABLE).update({c: float(rec[c]) for c in write_cols}).eq(KEY, rec[KEY]).eq(
+            "is_synthetic", True
         ).execute()
         written += 1
         if written % batch_size == 0:
@@ -751,7 +796,7 @@ def main() -> int:
     parser.add_argument(
         "--execute",
         action="store_true",
-        help="WRITE PATH: UPDATE every planted treatment column + conversion_rate on "
+        help="WRITE PATH: UPDATE every planted treatment column + the cohort outcome on "
         "per_hcp_rollup rows. Omit (the default) for a read-only dry-run.",
     )
     parser.add_argument(
@@ -824,6 +869,7 @@ def main() -> int:
     # Always write a backup of the CURRENT live values (cheap, safe, even in dry-run).
     write_backup(live, Path(args.backup_dir))
 
+    require_synthetic_only(live)
     regen = generate_dgp(live, seed=args.seed)
     probe_ok = verify(
         regen, live, run_probe=not args.no_recovery_probe, probe_channels=probe_channels
@@ -832,7 +878,7 @@ def main() -> int:
     if dry_run:
         logger.info(
             "DRY RUN complete. No rows updated. Re-run with --execute to write "
-            "the planted treatment channels + conversion_rate."
+            "the planted treatment channels + the cohort outcome."
         )
         return 0 if probe_ok else 2
 

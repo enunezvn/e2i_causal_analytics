@@ -145,6 +145,13 @@ export function useDigitalTwinHealth(
  * const selectable = data?.interventions.filter((i) => i.available) ?? [];
  * ```
  */
+/** An answer whose lookups did not complete is not a finding: ask again soon. */
+function lookupDidNotComplete(data: InterventionTypesResponse | undefined): boolean {
+  return (
+    data?.model_resolution === 'unavailable' || data?.effect_availability_status === 'unmeasured'
+  );
+}
+
 export function useInterventionTypes(
   params?: { brand?: string; twin_type?: string },
   options?: Omit<
@@ -155,7 +162,11 @@ export function useInterventionTypes(
   return useQuery<InterventionTypesResponse, ApiError>({
     queryKey: queryKeys.digitalTwin.interventionTypes(params),
     queryFn: () => listInterventionTypes(params),
-    staleTime: 5 * 60 * 1000, // 5 minutes — availability changes only on (re)training
+    // 5 minutes — availability changes only on (re)training or a cohort restore. An answer
+    // the backend marks 'unmeasured' (its cohort probes errored) is not a finding: keep it
+    // for 30 s so the page's "retried automatically" is true, not a five-minute wait.
+    staleTime: (query) => (lookupDidNotComplete(query.state.data) ? 30 * 1000 : 5 * 60 * 1000),
+    refetchInterval: (query) => (lookupDidNotComplete(query.state.data) ? 30 * 1000 : false),
     ...options,
   });
 }

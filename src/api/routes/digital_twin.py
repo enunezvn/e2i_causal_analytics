@@ -41,8 +41,18 @@ from src.api.dependencies.auth import (
     require_viewer,
     resolve_brand_for_read,
 )
+from src.api.routes.digital_twin_capability import (
+    effect_data_unmeasured,
+    simulable_brands,
+    warn_model_without_effect_data,
+)
 from src.api.routes.digital_twin_rejections import Decile, rejected_request
-from src.api.schemas.digital_twin import EffectHeterogeneityResponse
+from src.api.schemas.digital_twin import (
+    DigitalTwinHealthResponse,
+    EffectHeterogeneityResponse,
+    InterventionTypeItem,
+    InterventionTypesResponse,
+)
 from src.api.schemas.digital_twin import heterogeneity_response as _heterogeneity_response
 from src.api.schemas.digital_twin import live_subgroups_basis as _live_subgroups_basis
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
@@ -629,16 +639,6 @@ class FidelityReportResponse(BaseModel):
 # =============================================================================
 
 
-class DigitalTwinHealthResponse(BaseModel):
-    """Health status for Digital Twin service."""
-
-    status: str = Field(..., description="Service health status")
-    service: str = Field(default="digital-twin", description="Service name")
-    models_available: int = Field(..., description="Number of twin models available")
-    simulations_pending: int = Field(..., description="Number of pending simulations")
-    last_simulation_at: Optional[datetime] = Field(None, description="Timestamp of last simulation")
-
-
 @router.get(
     "/health",
     response_model=DigitalTwinHealthResponse,
@@ -667,8 +667,8 @@ async def digital_twin_health() -> DigitalTwinHealthResponse:
         logger.warning("Digital Twin health: failed to list active models: %s", e)
         return DigitalTwinHealthResponse(
             status="degraded",
-            service="digital-twin",
             models_available=0,
+            brands_simulable=0,
             simulations_pending=0,
             last_simulation_at=None,
         )
@@ -691,16 +691,20 @@ async def digital_twin_health() -> DigitalTwinHealthResponse:
         logger.warning("Digital Twin health: failed to list simulations: %s", e)
         return DigitalTwinHealthResponse(
             status="degraded",
-            service="digital-twin",
             models_available=models_available,
+            brands_simulable=0,
             simulations_pending=0,
             last_simulation_at=None,
         )
 
+    model_brands, brands_simulable = await simulable_brands(repo.client, models)
+    dark = bool(model_brands) and brands_simulable == 0
+
     return DigitalTwinHealthResponse(
-        status="healthy",
+        status="degraded" if dark else "healthy",
         service="digital-twin",
         models_available=models_available,
+        brands_simulable=brands_simulable,
         simulations_pending=pending,
         last_simulation_at=last_simulation_at,
     )
@@ -709,46 +713,6 @@ async def digital_twin_health() -> DigitalTwinHealthResponse:
 # =============================================================================
 # INTERVENTION TAXONOMY ENDPOINT (single source of truth for the dropdown)
 # =============================================================================
-
-
-class InterventionTypeItem(BaseModel):
-    """A canonical, selectable intervention type for the simulation dropdown."""
-
-    value: str = Field(..., description="Canonical intervention_type value")
-    label: str = Field(..., description="Human-readable label")
-    effect_basis: str = Field(
-        ...,
-        description=(
-            "'cohort_causal' (effect is IDENTIFIED in the connected cohort and estimated "
-            "by direct DML causal estimation) or 'unavailable' (not identified in the "
-            "data — no fabricated effect is produced)"
-        ),
-    )
-    available: bool = Field(
-        ...,
-        description=(
-            "True if a trained twin model exists for the requested brand/twin_type "
-            "(else /simulate would 503)."
-        ),
-    )
-    available_for_effect: bool = Field(
-        ...,
-        description=(
-            "True only if the intervention's effect is IDENTIFIED in the connected cohort "
-            "(a causal estimate is possible). The frontend should expose only "
-            "effect-available interventions; the rest are an honest 'no effect data' "
-            "state rather than a fabricated uplift (and /simulate returns 422 for them)."
-        ),
-    )
-
-
-class InterventionTypesResponse(BaseModel):
-    """Brand-aware list of canonical intervention types for the dropdown."""
-
-    interventions: List[InterventionTypeItem] = Field(default_factory=list)
-    brand: Optional[str] = Field(None, description="Brand the availability was resolved for")
-    twin_type: str = Field(..., description="Twin type the availability was resolved for")
-    timestamp: datetime = Field(..., description="Response timestamp")
 
 
 @router.get(
@@ -779,23 +743,27 @@ async def list_intervention_types(
     from src.digital_twin.effect.provider import INTERVENTION_CATALOG
     from src.digital_twin.models.twin_models import TwinType
 
-    available = False
-    effect_available: Dict[str, bool] = {}
+    available, effect_available = False, cast(Dict[str, bool], {})
+    # An empty answer must say whether it is a FINDING or a lookup that did not complete (r3).
+    resolution: Literal["resolved", "unavailable", "not_requested"] = "not_requested"
+    effect_status: Optional[Literal["measured", "unmeasured"]] = None
     if brand is not None:
         try:
             repo = await _get_twin_repo()
             actives = await repo.list_active_models(
                 twin_type=TwinType(twin_type.value), brand=brand.value
             )
-            available = len(actives) > 0
-            # Per-intervention: an intervention is effect-available only when ITS
-            # planted treatment channel has enough usable synthetic-gold cohort
-            # rows to estimate from (never a collective all-or-nothing flag).
+            available, resolution, effect_status = len(actives) > 0, "resolved", "measured"
+            # Per-intervention: an intervention is effect-available only when ITS planted
+            # treatment channel has enough usable cohort rows (never all-or-nothing).
             effect_available = await cohort_treatment_availability(repo.client, brand.value)
+            if available and not any(effect_available.values()):
+                warn_model_without_effect_data(brand.value, effect_available)
+                if effect_data_unmeasured(effect_available):
+                    effect_status = "unmeasured"
         except Exception as e:  # repo/DB unreachable — degrade, never fabricate
             logger.warning("intervention-types: availability/cohort check failed: %s", e)
-            available = False
-            effect_available = {}
+            available, effect_available, resolution, effect_status = False, {}, "unavailable", None
 
     items = [
         InterventionTypeItem(
@@ -809,6 +777,8 @@ async def list_intervention_types(
     ]
     return InterventionTypesResponse(
         interventions=items,
+        model_resolution=resolution,
+        effect_availability_status=effect_status,
         brand=brand.value if brand else None,
         twin_type=twin_type.value,
         timestamp=datetime.now(timezone.utc),

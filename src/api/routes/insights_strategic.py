@@ -514,6 +514,24 @@ async def digital_twin_insight(
             },
             provenance="Digital-twin simulation program (unavailable)",
         )
+    if g.get("grounding_incomplete"):
+        # The cohort probes errored: coverage is unknown, not zero. Same honest fallback as an
+        # unreachable repository, and never cached (codex r2).
+        logger.warning(
+            "digital-twin insight grounding incomplete for %s: %s",
+            req.brand,
+            g["intervention_coverage"],
+        )
+        return _finalize(
+            {
+                "insight": f"Digital-twin cohort availability for {req.brand} could not be "
+                "measured on this request, so no grounded interpretation can be produced right now.",
+                "key_takeaways": [],
+                "grounding": [],
+                "is_fallback": True,
+            },
+            provenance="Digital-twin simulation program (unavailable)",
+        )
     key = cache_key(
         "digital-twin",
         f"{req.brand}:{req.twin_type}",

@@ -222,6 +222,20 @@ function SimulationForm({
 
   const noneAvailable =
     !typesLoading && !typesError && availableInterventions.length === 0;
+  // Two different gates empty the menu, and they need different remedies: no trained
+  // model (train one) vs a model whose cohort identifies no intervention effect
+  // (restore the cohort's treatment data). Naming the wrong one sends the reader
+  // looking for a model that already exists.
+  const modelExists = (typesData?.interventions ?? []).some((i) => i.available);
+  // The backend says whether an empty set is a FINDING or a lookup that did not complete. A
+  // repository outage must not read as "no trained model", and errored cohort probes must not
+  // read as "your cohort data is gone" (that message recommends a production restore).
+  const lookupDidNotComplete =
+    noneAvailable &&
+    (typesData?.model_resolution === 'unavailable' ||
+      (modelExists && typesData?.effect_availability_status === 'unmeasured'));
+  const noModel = noneAvailable && !modelExists && !lookupDidNotComplete;
+  const modelExistsWithoutEffectData = noneAvailable && modelExists && !lookupDidNotComplete;
 
   // Phase 2: surface HOW the selected intervention's effect is computed —
   // "cohort_estimated" (brand/intervention-specific, estimated from the
@@ -272,9 +286,23 @@ function SimulationForm({
             Could not verify availability — showing all interventions.
           </p>
         )}
-        {noneAvailable && (
+        {noModel && (
           <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
             No trained twin model for {brand} yet — simulations are unavailable for this brand.
+          </p>
+        )}
+        {lookupDidNotComplete && (
+          <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+            Intervention availability for {brand} could not be verified just now — the model or
+            cohort lookup did not complete. It is retried automatically; simulations stay disabled
+            until it succeeds.
+          </p>
+        )}
+        {modelExistsWithoutEffectData && (
+          <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+            A trained twin model exists for {brand}, but its cohort has no usable treatment data
+            to estimate an intervention effect from — simulations are unavailable until the
+            cohort data is restored.
           </p>
         )}
         {!typesLoading && !noneAvailable && selectedBasis === 'cohort_estimated' && (

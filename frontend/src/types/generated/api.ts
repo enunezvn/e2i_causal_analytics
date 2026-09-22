@@ -9129,6 +9129,12 @@ export interface components {
              */
             models_available: number;
             /**
+             * Brands Simulable
+             * @description Brands with an active twin model AND at least one intervention whose effect is identified in the connected cohort, i.e. brands /simulate can actually serve. models_available > 0 with brands_simulable == 0 means the models are present but the cohort's treatment data is not (status is then 'degraded').
+             * @default 0
+             */
+            brands_simulable: number;
+            /**
              * Simulations Pending
              * @description Number of pending simulations
              */
@@ -12278,6 +12284,18 @@ export interface components {
         InterventionTypesResponse: {
             /** Interventions */
             interventions?: components["schemas"]["InterventionTypeItem"][];
+            /**
+             * Model Resolution
+             * @description 'resolved': the brand's active models were looked up, so available=False means no trained model exists. 'unavailable': the lookup itself failed (repository or DB unreachable) — every flag is unknown, not an absence; retry. 'not_requested': no brand was given, the catalog alone was served.
+             * @default not_requested
+             * @enum {string}
+             */
+            model_resolution: "resolved" | "unavailable" | "not_requested";
+            /**
+             * Effect Availability Status
+             * @description Set only when model_resolution is 'resolved'. 'measured': every cohort probe ran, so available_for_effect=False means the cohort holds too few usable rows for that channel. 'unmeasured': the probes errored and nothing usable was found — the flags are unknown, not a finding; retry, do not restore data.
+             */
+            effect_availability_status?: ("measured" | "unmeasured") | null;
             /**
              * Brand
              * @description Brand the availability was resolved for

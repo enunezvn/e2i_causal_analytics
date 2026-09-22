@@ -23,6 +23,7 @@ from src.digital_twin.effect.provider import (
     COHORT_CONFOUNDERS,
     COHORT_ESTIMABLE_INTERVENTIONS,
     COHORT_MIN_ROWS,
+    COHORT_OUTCOME_COLUMN,
     INTERVENTION_TREATMENT_MAP,
     CohortEffectDataProvider,
 )
@@ -42,14 +43,14 @@ _COHORT_COLUMNS = ",".join(
         "hcp_id",
         "region",
         "hcp_profiles(specialty)",
-        "conversion_rate",
+        COHORT_OUTCOME_COLUMN,
         "market_share",
         "triggers_total_count",
         *_TREATMENT_COLUMNS,
     ]
 )
 _NUMERIC_COLUMNS: tuple[str, ...] = (
-    "conversion_rate",
+    COHORT_OUTCOME_COLUMN,
     "market_share",
     "triggers_total_count",
     *_TREATMENT_COLUMNS,
@@ -193,7 +194,7 @@ def assess_cohort_frame(df: pd.DataFrame, intervention_type: str) -> CohortUsabi
     # non-null — aligned with what the direct estimator needs (it fails closed otherwise),
     # so we never build a provider that /simulate would then reject.
     has_treatment = treatment_col in df.columns
-    has_outcome = "conversion_rate" in df.columns
+    has_outcome = COHORT_OUTCOME_COLUMN in df.columns
     has_region = "region" in df.columns
     n_missing_confounders = sum(1 for c in COHORT_CONFOUNDERS if c not in df.columns)
     if not (has_treatment and has_outcome and has_region) or n_missing_confounders:
@@ -208,7 +209,7 @@ def assess_cohort_frame(df: pd.DataFrame, intervention_type: str) -> CohortUsabi
                 "n_missing_confounder_columns": n_missing_confounders,
             },
         )
-    required = [treatment_col, "conversion_rate", "region", *COHORT_CONFOUNDERS]
+    required = [treatment_col, COHORT_OUTCOME_COLUMN, "region", *COHORT_CONFOUNDERS]
     usable = df.dropna(subset=required)
     if len(usable) < COHORT_MIN_ROWS:
         logger.info(
@@ -226,7 +227,7 @@ def assess_cohort_frame(df: pd.DataFrame, intervention_type: str) -> CohortUsabi
                 "n_usable_rows": int(len(usable)),
                 "n_min_usable_rows": COHORT_MIN_ROWS,
                 "n_null_treatment_rows": int(df[treatment_col].isna().sum()),
-                "n_null_outcome_rows": int(df["conversion_rate"].isna().sum()),
+                "n_null_outcome_rows": int(df[COHORT_OUTCOME_COLUMN].isna().sum()),
                 "n_null_region_rows": int(df["region"].isna().sum()),
                 "n_null_confounder_rows": int(
                     df[list(COHORT_CONFOUNDERS)].isna().any(axis=1).sum()
@@ -248,7 +249,7 @@ async def _treatment_column_usable(client: Any, brand: str, treatment_col: str) 
         .eq("metric_type", COHORT_METRIC_TYPE)
         .eq("brand", brand)
         .not_.is_(treatment_col, "null")
-        .not_.is_("conversion_rate", "null")
+        .not_.is_(COHORT_OUTCOME_COLUMN, "null")
         .not_.is_("region", "null")
     )
     for col in COHORT_CONFOUNDERS:
@@ -258,7 +259,19 @@ async def _treatment_column_usable(client: Any, brand: str, treatment_col: str) 
     return bool(count is not None and count >= COHORT_MIN_ROWS)
 
 
-async def cohort_treatment_availability(client: Any, brand: str) -> dict[str, bool]:
+class ChannelAvailability(dict[str, bool]):
+    """``{intervention: usable}``, plus how many column probes ERRORED.
+
+    All-False has two very different causes: every probe MEASURED too few usable rows (the
+    cohort's treatment data is gone — the remedy is a re-plant, a production write), or the probes
+    could not run (a connection blip — the remedy is to ask again). A plain dict cannot say which,
+    and the difference decides whether an operator is told to write to production (codex r1).
+    """
+
+    n_probe_errors: int = 0
+
+
+async def cohort_treatment_availability(client: Any, brand: str) -> ChannelAvailability:
     """Per-intervention effect availability for a brand: ``{intervention: usable}``.
 
     An intervention is usable when its planted treatment column has enough usable
@@ -266,20 +279,23 @@ async def cohort_treatment_availability(client: Any, brand: str) -> dict[str, bo
     ``GET /digital-twin/intervention-types`` — HONEST per channel, so a substrate
     holding only some channels (pre-backfill, or future RWD with partial coverage)
     advertises exactly what ``/simulate`` can estimate. Degrades to ``False`` per
-    column on any error (advisory only); never raises.
+    column on any error (advisory only); never raises. ``n_probe_errors`` on the result
+    counts the columns whose probe errored, so "could not measure" is not read as "empty".
     """
 
-    async def _safe(col: str) -> bool:
+    async def _safe(col: str) -> bool | None:
         try:
             return await _treatment_column_usable(client, brand, col)
         except Exception as e:
             logger.warning("cohort availability check failed for %s/%s: %s", brand, col, e)
-            return False
+            return None
 
     columns = list(_TREATMENT_COLUMNS)
     results = await asyncio.gather(*(_safe(c) for c in columns))
-    usable_by_column = dict(zip(columns, results, strict=True))
-    return {
-        intervention: usable_by_column.get(column, False)
+    usable_by_column = {c: bool(r) for c, r in zip(columns, results, strict=True)}
+    availability = ChannelAvailability(
+        (intervention, usable_by_column.get(column, False))
         for intervention, column in INTERVENTION_TREATMENT_MAP.items()
-    }
+    )
+    availability.n_probe_errors = sum(1 for r in results if r is None)
+    return availability

@@ -408,6 +408,73 @@ describe('DigitalTwin', () => {
     expect(screen.getByRole('button', { name: /Run Simulation/i })).toBeDisabled();
   });
 
+  it('names the missing cohort effect data, not a missing model, when a trained model exists', () => {
+    // The live payload of 2026-09-21: a trained model per brand (available) but no
+    // treatment channel identified in the cohort (available_for_effect false for all).
+    // The helper above couples the two flags, so this state is built explicitly.
+    (useInterventionTypes as ReturnType<typeof vi.fn>).mockReturnValue({
+      ...interventionTypesResult([]),
+      data: {
+        ...interventionTypesResult([]).data,
+        interventions: INTERVENTION_CATALOG.map(([value, label]) => ({
+          value,
+          label,
+          effect_basis: 'unavailable',
+          available: true,
+          available_for_effect: false,
+        })),
+      },
+    });
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+
+    expect(screen.queryByText(/No trained twin model/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/trained twin model exists for Remibrutinib.*no usable treatment data/i)
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Run Simulation/i })).toBeDisabled();
+  });
+
+  it('says availability could not be verified, never "no model", when the model lookup failed', () => {
+    // codex r3: a repository outage rendered as an ESTABLISHED absence of a model.
+    (useInterventionTypes as ReturnType<typeof vi.fn>).mockReturnValue({
+      ...interventionTypesResult([]),
+      data: {
+        ...interventionTypesResult([]).data,
+        model_resolution: 'unavailable',
+        effect_availability_status: null,
+      },
+    });
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+
+    expect(screen.getByText(/could not be verified/i)).toBeInTheDocument();
+    expect(screen.queryByText(/No trained twin model/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Run Simulation/i })).toBeDisabled();
+  });
+
+  it('says availability could not be verified, never "restore the cohort", when the probe failed', () => {
+    // codex r2: a connection blip used to render as measured-missing data.
+    (useInterventionTypes as ReturnType<typeof vi.fn>).mockReturnValue({
+      ...interventionTypesResult([]),
+      data: {
+        ...interventionTypesResult([]).data,
+        effect_availability_status: 'unmeasured',
+        interventions: INTERVENTION_CATALOG.map(([value, label]) => ({
+          value,
+          label,
+          effect_basis: 'unavailable',
+          available: true,
+          available_for_effect: false,
+        })),
+      },
+    });
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+
+    expect(screen.getByText(/could not be verified/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no usable treatment data/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No trained twin model/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Run Simulation/i })).toBeDisabled();
+  });
+
   // Phase 2 — the dropdown surfaces HOW the selected intervention's effect is
   // computed: cohort-estimated (brand-specific) vs uniform synthetic.
   it('shows the brand cohort–estimated basis note for a cohort-estimated intervention', async () => {

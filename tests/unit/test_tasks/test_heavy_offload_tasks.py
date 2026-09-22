@@ -298,7 +298,7 @@ def _planted_cohort(n_per_region: int = 300, seed: int = 3):
         )
     df = pd.concat(frames, ignore_index=True)
     treated = (df["email_campaign_count"] > df["email_campaign_count"].median()).astype(float)
-    df["conversion_rate"] = (
+    df["cohort_conversion_outcome"] = (
         0.2 + 0.3 * df["market_share"] + df["_tau"] * treated + rng.normal(0, 0.05, len(df))
     )
     return df.drop(columns="_tau")

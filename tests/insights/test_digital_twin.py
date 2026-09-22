@@ -73,6 +73,30 @@ def test_build_grounding_partial_coverage_names_missing_channels():
     assert g["latest_result"] == "No completed simulation yet for this brand."
 
 
+def test_build_grounding_does_not_report_coverage_it_could_not_measure():
+    """codex r2 MEDIUM: an errored probe map read as "0 of 8 identified" and that false grounding
+    was cached for an hour."""
+    from src.digital_twin.effect.cohort_loader import ChannelAvailability
+
+    errored = ChannelAvailability({value: False for value, _ in INTERVENTION_CATALOG})
+    errored.n_probe_errors = len(INTERVENTION_CATALOG)
+    g = build_grounding("Kisqali", _MODELS, [], errored, INTERVENTION_CATALOG)
+    assert "could not be measured" in g["intervention_coverage"]
+    assert "0 of 8" not in g["intervention_coverage"]
+    assert "Not yet identified" not in g["intervention_coverage"]
+    assert g["grounding_incomplete"] is True
+
+    measured_empty = build_grounding(
+        "Kisqali",
+        _MODELS,
+        [],
+        {value: False for value, _ in INTERVENTION_CATALOG},
+        INTERVENTION_CATALOG,
+    )
+    assert "0 of 8" in measured_empty["intervention_coverage"]
+    assert measured_empty.get("grounding_incomplete", False) is False
+
+
 def test_build_grounding_empty_program_is_honest():
     g = build_grounding("Fabhalta", [], [], {}, INTERVENTION_CATALOG)
     assert "No active twin model" in g["model_summary"]

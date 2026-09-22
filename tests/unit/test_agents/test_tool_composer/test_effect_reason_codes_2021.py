@@ -80,7 +80,7 @@ def _loader_details():
     no_treatment["email_campaign_count"] = float("nan")
     frames = [
         pd.DataFrame(),
-        cohort.drop(columns="conversion_rate"),
+        cohort.drop(columns="cohort_conversion_outcome"),
         cohort.head(100),
         no_treatment,
     ]

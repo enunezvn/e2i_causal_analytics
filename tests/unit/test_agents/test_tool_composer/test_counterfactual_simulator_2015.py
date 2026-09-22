@@ -66,7 +66,7 @@ def _cohort(n_per_region: int = 300, seed: int = 3) -> pd.DataFrame:
         )
     df = pd.concat(frames, ignore_index=True)
     treated = (df["email_campaign_count"] > df["email_campaign_count"].median()).astype(float)
-    df["conversion_rate"] = (
+    df["cohort_conversion_outcome"] = (
         0.2 + 0.3 * df["market_share"] + df["_tau"] * treated + rng.normal(0, 0.05, len(df))
     )
     return df.drop(columns="_tau")
@@ -274,7 +274,7 @@ def test_the_assumptions_name_the_contrast_the_estimate_answers(whole_population
         targeted=None,
     )
     text = " ".join(out.assumptions)
-    for fragment in ("email_campaign_count", "conversion_rate", "median", "market_share"):
+    for fragment in ("email_campaign_count", "cohort_conversion_outcome", "median", "market_share"):
         assert fragment in text, fragment
     assert "synthetic" in text
     assert f"recommended_sample_size = {out.recommended_sample_size} per arm" in text
@@ -373,7 +373,7 @@ async def test_an_unreachable_database_is_not_a_refusal():
             pd.DataFrame, "email_campaign", ReasonCode.NO_USABLE_ROWS, {"n_rows": 0}, id="empty"
         ),
         pytest.param(
-            lambda: _cohort().drop(columns="conversion_rate"),
+            lambda: _cohort().drop(columns="cohort_conversion_outcome"),
             "email_campaign",
             ReasonCode.MISSING_REQUIRED_COLUMN,
             {

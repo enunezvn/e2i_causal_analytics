@@ -147,6 +147,18 @@ export interface InterventionTypeItem {
 /** Brand-aware list of canonical intervention types for the dropdown. */
 export interface InterventionTypesResponse {
   interventions: InterventionTypeItem[];
+  /**
+   * 'resolved': the brand's models were looked up, so `available: false` means no trained model.
+   * 'unavailable': the lookup itself failed — every flag is unknown, not an absence (retry).
+   * 'not_requested': no brand was given. Absent on older backends = resolved.
+   */
+  model_resolution?: 'resolved' | 'unavailable' | 'not_requested';
+  /**
+   * Set only when resolved. 'measured': every cohort probe ran, so `available_for_effect: false`
+   * means too few usable rows. 'unmeasured': the probes errored and nothing usable was found —
+   * the flags are unknown, not a finding (retry; do not restore data).
+   */
+  effect_availability_status?: 'measured' | 'unmeasured' | null;
   /** Brand the availability was resolved for (null when no brand was passed). */
   brand: string | null;
   /** Twin type the availability was resolved for. */
@@ -611,6 +623,11 @@ export interface DigitalTwinHealthResponse {
   service: string;
   /** Number of models available */
   models_available: number;
+  /**
+   * Brands with an active model AND at least one intervention identified in the cohort — the
+   * brands `/simulate` can actually serve. `models_available > 0` with this at 0 is `degraded`.
+   */
+  brands_simulable?: number;
   /** Number of pending simulations */
   simulations_pending: number;
   /** Timestamp of last simulation */

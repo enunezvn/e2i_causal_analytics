@@ -23,6 +23,7 @@ from src.digital_twin.effect.provider import (
     COHORT_CONFOUNDERS,
     COHORT_ESTIMABLE_INTERVENTIONS,
     COHORT_MIN_ROWS,
+    INTERVENTION_TREATMENT_MAP,
     CohortEffectDataProvider,
 )
 
@@ -97,7 +98,7 @@ def _cohort_rows(n: int = 600, seed: int = 0, *, with_all_channels: bool = False
             "region": str(regions[i]),
             "engagement_score": float(eng[i]),
             "call_frequency": float(rng.uniform(0, 14)),
-            "conversion_rate": float(conv[i]),
+            "cohort_conversion_outcome": float(conv[i]),
             # Pre-treatment confounders the direct estimator/gate now require.
             "market_share": float(market[i]),
             "triggers_total_count": float(total_rx[i]),
@@ -234,7 +235,7 @@ def _rows(n_rows, n_usable, *, null_treatment=0):
         ),
         # Before #2021 9b this raised KeyError from dropna: the outcome was never checked.
         pytest.param(
-            lambda: _frame().drop(columns="conversion_rate"),
+            lambda: _frame().drop(columns="cohort_conversion_outcome"),
             "digital_engagement",
             EffectCause.REQUIRED_COLUMN_MISSING,
             _columns(outcome=False),
@@ -288,7 +289,7 @@ def test_a_usable_cohort_gets_a_provider_and_no_cause():
 
 
 def test_the_optional_wrapper_refuses_a_cohort_without_its_outcome_column():
-    frame = _frame().drop(columns="conversion_rate")
+    frame = _frame().drop(columns="cohort_conversion_outcome")
     assert cohort_loader.cohort_provider_from_frame(frame, "digital_engagement") is None
 
 
@@ -308,6 +309,19 @@ async def test_availability_false_below_threshold_and_on_error():
         _FakeClient(_FakeResult(count=None), raise_on_execute=True), "X"
     )
     assert not any(erroring.values())
+
+
+@pytest.mark.asyncio
+async def test_availability_tells_a_failed_probe_from_a_measured_shortfall():
+    """codex r1 MEDIUM: both read all-False. Only one of them means the cohort data is gone; the
+    other is a connection blip, and treating it as data loss recommends a production write."""
+    measured = await cohort_treatment_availability(_FakeClient(_FakeResult(count=10)), "X")
+    errored = await cohort_treatment_availability(
+        _FakeClient(_FakeResult(count=None), raise_on_execute=True), "X"
+    )
+    assert not any(measured.values()) and not any(errored.values())
+    assert measured.n_probe_errors == 0
+    assert errored.n_probe_errors == len(set(INTERVENTION_TREATMENT_MAP.values()))
 
 
 def test_blocking_build_opens_and_closes_its_own_client_on_each_call(monkeypatch):
