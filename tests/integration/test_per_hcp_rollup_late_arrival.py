@@ -25,7 +25,7 @@ from tests.integration._prod_write_guard import (
     adherence_spec,
     per_hcp_rollup_spec,
     require_isolated_windows,
-    selected_metric_dates_sql,
+    selected_metric_dates,
     territory_arrival_spec,
     territory_rollup_spec,
 )
@@ -184,14 +184,29 @@ def planted(db_conn: Any) -> Any:
                 )
     # The territory ARRIVAL run writes a row for EVERY territory on EVERY date it selects;
     # the test records that set (from the run's own CTE, right before the run) here, and
-    # the teardown deletes those dates wholesale. The two planted dates are the floor.
+    # the teardown deletes those dates. The two planted dates are the floor. Only rows
+    # created after this fixture started are deleted (the run's INSERT leaves created_at
+    # to its now() default and the ON CONFLICT arm never sets it): a row on those dates
+    # that pre-dates the file is not ours, and the teardown REPORTS it rather than
+    # destroying it (codex r2-1). The clock is the database's, not this host's.
     territory_selected_dates: set[date] = set()
+    with db_conn:
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT now()")
+            (started_at,) = cur.fetchone()
     yield {"rid": rid, "territory_selected_dates": territory_selected_dates, **hcps}
+    dates = sorted({TUESDAY, MONDAY} | territory_selected_dates)
     with db_conn:
         with db_conn.cursor() as cur:
             cur.execute(
-                "DELETE FROM territory_metrics WHERE metric_date = ANY(%s)",
-                (sorted({TUESDAY, MONDAY} | territory_selected_dates),),
+                "SELECT territory_id, metric_date FROM territory_metrics "
+                " WHERE metric_date = ANY(%s) AND created_at < %s ORDER BY 2, 1",
+                (dates, started_at),
+            )
+            not_ours = cur.fetchall()
+            cur.execute(
+                "DELETE FROM territory_metrics WHERE metric_date = ANY(%s) AND created_at >= %s",
+                (dates, started_at),
             )
             cur.execute("DELETE FROM business_metrics WHERE hcp_id LIKE %s", (f"hl_{rid}_%",))
             cur.execute("DELETE FROM triggers WHERE trigger_id LIKE %s", (f"trlate_{rid}_%",))
@@ -200,6 +215,10 @@ def planted(db_conn: Any) -> Any:
                 (f"pj_hl_{rid}_%",),
             )
             cur.execute("DELETE FROM hcp_profiles WHERE hcp_id LIKE %s", (f"hl_{rid}_%",))
+    assert not not_ours, (
+        f"territory_metrics rows on {dates} pre-date this file and were left in place, "
+        f"not deleted: {not_ours}"
+    )
 
 
 def _land_batch(
@@ -329,17 +348,16 @@ def test_a_late_weekly_batch_rolls_up_under_each_triggers_own_date(
     assert (census.source_rows_total, census.source_rows_planted) == (7, 7), census
 
     def _selected_dates() -> set[date]:
-        with db_conn:
-            with db_conn.cursor() as cur:
-                cur.execute(
-                    selected_metric_dates_sql(metric_dates_cte),
-                    {
-                        "start_date": arrival_start,
-                        "end_date": arrival_end,
-                        "per_hcp_metric_type": territory_metrics_etl.PER_HCP_METRIC_TYPE,
-                    },
-                )
-                return {row[0] for row in cur.fetchall()}
+        # READ ONLY by construction (codex r2-2): the selection is the ETL's raw CTE.
+        return selected_metric_dates(
+            db_conn,
+            metric_dates_cte,
+            {
+                "start_date": arrival_start,
+                "end_date": arrival_end,
+                "per_hcp_metric_type": territory_metrics_etl.PER_HCP_METRIC_TYPE,
+            },
+        )
 
     # Pinned BEFORE it is recorded (codex r1-2): a date that is not one of ours fails here
     # and is never handed to the wholesale teardown.

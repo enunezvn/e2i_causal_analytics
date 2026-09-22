@@ -82,6 +82,7 @@ __all__ = [
     "census_sql",
     "per_hcp_rollup_spec",
     "require_isolated_windows",
+    "selected_metric_dates",
     "selected_metric_dates_sql",
     "territory_arrival_spec",
     "territory_rollup_spec",
@@ -463,8 +464,9 @@ def _selected_metric_dates_subquery(metric_dates_cte: str) -> str:
             "territory_metrics_etl._TERRITORY_METRIC_DATES_BY_ARRIVAL"
         )
     # Checked on the SQL proper: the ETL's constant carries a ';' and parentheses inside
-    # its comments, and a check that read them refused the real constant.
-    body = _strip_line_comments(metric_dates_cte).strip()
+    # its comments, and a check that read them refused the real constant; a literal may
+    # carry them too (codex r2-2), so literals are blanked as well before the scan.
+    body = re.sub(r"'[^']*'", "''", _strip_line_comments(metric_dates_cte)).strip()
     if ";" in body:
         raise ValueError("territory arrival census: the CTE must not contain a semicolon")
     depth = 0
@@ -479,6 +481,19 @@ def _selected_metric_dates_subquery(metric_dates_cte: str) -> str:
         raise ValueError(
             "territory arrival census: the CTE must be a single CTE 'metric_dates AS ( ... )' "
             "with nothing after its closing parenthesis"
+        )
+    # A selection, not a data-modifying CTE (codex r2-2: `metric_dates AS (DELETE ...
+    # RETURNING metric_date)` is valid PostgreSQL and would otherwise pass). The body must
+    # be a SELECT and carry no write verb anywhere, nested included.
+    inner = body[body.index("(") + 1 : close_at].strip()
+    if not re.match(r"SELECT\b", inner, re.I):
+        raise ValueError("territory arrival census: the CTE body must be a SELECT")
+    verb = re.search(
+        r"\b(INSERT|UPDATE|DELETE|TRUNCATE|ALTER|DROP|CREATE|GRANT|MERGE|CALL|DO)\b", body, re.I
+    )
+    if verb:
+        raise ValueError(
+            f"territory arrival census: the CTE must not contain {verb.group(1).upper()}"
         )
     for name in ("start_date", "end_date", "per_hcp_metric_type"):
         if f"%({name})s" not in metric_dates_cte:
@@ -496,6 +511,19 @@ def selected_metric_dates_sql(metric_dates_cte: str) -> str:
     (``start_date``, ``end_date``, ``per_hcp_metric_type``).
     """
     return f"SELECT sel.metric_date FROM {_selected_metric_dates_subquery(metric_dates_cte)} sel ORDER BY 1"
+
+
+def selected_metric_dates(conn: Any, metric_dates_cte: str, params: Mapping[str, Any]) -> set:
+    """Run :func:`selected_metric_dates_sql` inside a READ ONLY transaction and return the
+    dates as a set. The selection is raw SQL executed by a test on its writable connection
+    (codex r2-2); the READ ONLY boundary is the backstop behind the shape check."""
+    with conn.cursor() as cur:
+        cur.execute("BEGIN TRANSACTION READ ONLY")
+        try:
+            cur.execute(selected_metric_dates_sql(metric_dates_cte), dict(params))
+            return {row[0] for row in cur.fetchall()}
+        finally:
+            cur.execute("ROLLBACK")
 
 
 def territory_arrival_spec(

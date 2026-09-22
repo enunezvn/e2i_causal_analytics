@@ -29,6 +29,7 @@ from tests.integration._prod_write_guard import (
     assess,
     census_sql,
     per_hcp_rollup_spec,
+    selected_metric_dates,
     selected_metric_dates_sql,
     territory_arrival_spec,
     territory_rollup_spec,
@@ -487,9 +488,14 @@ def test_the_arrival_census_composes_the_runs_own_selection_verbatim() -> None:
     for leg in ("source_rows_total", "source_rows_planted", "teardown_reach_preexisting"):
         sql = _normalised(_leg(spec, leg).sql)
         assert cte in sql, leg
-        assert "hcp_id IS NOT NULL" in sql, leg
         for name in ("start_date", "end_date", "per_hcp_metric_type"):
             assert name in _leg(spec, leg).params, (leg, name)
+    # codex r2-3: the CTE itself carries `hcp_id IS NOT NULL`, so the OUTER filters are
+    # asserted on the legs with the embedded CTE cut out, per alias, or the check is vacuous.
+    for leg in ("source_rows_total", "source_rows_planted"):
+        outer = _normalised(_leg(spec, leg).sql).replace(cte, "")
+        assert outer.count("bm.hcp_id IS NOT NULL") == 1, leg
+        assert outer.count("t.hcp_id IS NOT NULL") == 1, leg
     # The selection the test records for its teardown is the SAME subquery the legs use.
     selection = _normalised(selected_metric_dates_sql(_TERRITORY_METRIC_DATES_BY_ARRIVAL))
     assert cte in selection
@@ -567,8 +573,30 @@ def test_the_arrival_census_waives_the_key_space_leg_and_keeps_the_teardown_leg(
         (_FAKE_METRIC_DATES_CTE + ", extra AS (SELECT 1)", "single CTE"),
         (_FAKE_METRIC_DATES_CTE.replace("%(end_date)s", "now()"), "end_date"),
         (_FAKE_METRIC_DATES_CTE.replace("%(per_hcp_metric_type)s", "'x'"), "per_hcp_metric_type"),
+        (
+            _FAKE_METRIC_DATES_CTE.replace(
+                "SELECT DISTINCT bm.metric_date FROM business_metrics bm",
+                "DELETE FROM business_metrics bm RETURNING bm.metric_date",
+            ),
+            "SELECT",
+        ),
+        (
+            _FAKE_METRIC_DATES_CTE.replace(
+                "bm.hcp_id IS NOT NULL",
+                "bm.hcp_id IN (SELECT hcp_id FROM hcp_profiles WHERE (UPDATE x SET y = 1) IS NULL)",
+            ),
+            "UPDATE",
+        ),
     ],
-    ids=["other-name", "second-statement", "second-cte", "missing-bound", "missing-type"],
+    ids=[
+        "other-name",
+        "second-statement",
+        "second-cte",
+        "missing-bound",
+        "missing-type",
+        "delete-returning",
+        "nested-write-verb",
+    ],
 )
 def test_the_arrival_census_refuses_a_cte_that_is_not_one_metric_dates_selection(
     cte: str, why: str
@@ -590,6 +618,47 @@ def test_the_arrival_census_shape_check_reads_the_sql_not_its_comments() -> None
     assert "; and" in _TERRITORY_METRIC_DATES_BY_ARRIVAL  # the comment that bit
     _arrival_spec(_TERRITORY_METRIC_DATES_BY_ARRIVAL)
     _arrival_spec(_FAKE_METRIC_DATES_CTE.replace("-- a comment", "-- a (comment); with '('"))
+    # codex r2-2: nor its string literals -- a ';' or an unmatched '(' inside one is data.
+    _arrival_spec(
+        _FAKE_METRIC_DATES_CTE.replace("bm.hcp_id IS NOT NULL", "bm.hcp_id NOT LIKE 'x;(%'")
+    )
+
+
+def test_selected_metric_dates_reads_inside_a_read_only_transaction() -> None:
+    """codex r2-2: the selection is raw SQL run by the test on its writable connection.
+    The helper wraps it in ``BEGIN TRANSACTION READ ONLY`` … ``ROLLBACK`` so a CTE that
+    slipped past the shape check still cannot write."""
+    from datetime import date
+
+    class _Cursor:
+        def __init__(self, log: list) -> None:
+            self.log = log
+
+        def execute(self, sql: str, params: object = None) -> None:
+            self.log.append(sql)
+
+        def fetchall(self) -> list:
+            return [(date(2019, 1, 1),), (date(2019, 1, 14),)]
+
+        def __enter__(self) -> "_Cursor":
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+    class _Conn:
+        def __init__(self) -> None:
+            self.log: list = []
+
+        def cursor(self) -> _Cursor:
+            return _Cursor(self.log)
+
+    conn = _Conn()
+    got = selected_metric_dates(conn, _FAKE_METRIC_DATES_CTE, {"start_date": 1, "end_date": 2})
+    assert got == {date(2019, 1, 1), date(2019, 1, 14)}
+    assert conn.log[0] == "BEGIN TRANSACTION READ ONLY"
+    assert conn.log[-1] == "ROLLBACK"
+    assert conn.log[1] == selected_metric_dates_sql(_FAKE_METRIC_DATES_CTE)
 
 
 def test_the_disproof_counts_are_read_as_measured() -> None:
