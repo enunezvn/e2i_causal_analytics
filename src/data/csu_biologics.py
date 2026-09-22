@@ -17,16 +17,29 @@ and dropped by the other:
 
 Remibrutinib (Rhapsido, oral BTK inhibitor; FDA CSU approval 2025-09-30) is
 absent from every real drop to date (the drops end 2025-09-30). Its entry is
-pre-wiring: the brand and generic names are the marketed ones, while the NDC
-prefix is the synthetic-placeholder product code
-``src.ml.synthetic.clinical_codes.BRAND_NDC["Remibrutinib"]`` (00078-1100-30),
-which the synthetic claims generator emits. The marketed NDC is an owner
-addition at the post-launch refresh. Measured on the April 2026 raw drop
-(``data/rwd/csu/csu_data.xlsx`` medication sheet, 10,000 rows): Brand_Name and
-Generic_Name are populated on every row and no row is code-only, so on real
-data the names decide the match and the placeholder NDC never does. The bare
-Novartis labeler (00078) is deliberately NOT a prefix — Kisqali (00078-0903)
-and Fabhalta (00078-1175) share it.
+pre-wiring: the brand and generic names are the marketed ones and the NDC
+prefixes carry BOTH the marketed product and the synthetic placeholder:
+
+* marketed: openFDA product_ndc ``0078-1483`` (RHAPSIDO, Novartis
+  Pharmaceuticals Corporation, 25 mg tablet; packages ``0078-1483-20`` /
+  ``-92`` / ``-93``; verified 2026-09-22), listed in every form a claim code
+  can take -- 11-digit dashless ``000781483`` (the drop's form), dashed 5-4
+  ``00078-1483``, dashed 4-4 ``0078-1483`` (openFDA's print form) and the raw
+  dashless 10-digit 4-4-2 ``00781483``;
+* placeholder: ``src.ml.synthetic.clinical_codes.BRAND_NDC["Remibrutinib"]``
+  (00078-1100-30), which the synthetic claims generator emits, in the two
+  forms the generator produces (openFDA has no product ``0078-1100``, so it
+  cannot misclassify a real fill).
+
+Measured on the April 2026 raw drop (``data/rwd/csu/csu_data.xlsx`` medication
+sheet, 10,000 rows): Brand_Name and Generic_Name are populated on every row
+and no row is code-only, so on real data the names decide the match; the NDC
+prefixes are the code-only fallback for a future drop that changes shape. The
+bare Novartis labeler (00078 / 0078) is deliberately NOT a prefix — Kisqali
+(00078-0903) and Fabhalta (00078-1175) share it. Known and accepted: an 8-digit
+raw prefix (``00781483``) would also match an 11-digit code on labeler 00781
+(Sandoz) with product code 483x; openFDA lists no such product (2026-09-22),
+and Dupixent's ``0024`` prefix has carried the same ambiguity since #157.
 """
 
 from __future__ import annotations
@@ -88,14 +101,22 @@ CSU_BIOLOGICS: Final[tuple[CsuBiologic, ...]] = (
         hcpcs=frozenset({"J0517"}),
         journey_brand=COMPETITOR_JOURNEY_BRAND,
     ),
-    # Remibrutinib (Rhapsido): oral BTK inhibitor, no J-code. The product-level
-    # NDC prefix is the synthetic placeholder (see the module docstring).
+    # Remibrutinib (Rhapsido): oral BTK inhibitor, no J-code. Product-level NDC
+    # prefixes: the marketed 0078-1483 in every claim-code form, then the
+    # synthetic placeholder 0078-1100 (see the module docstring).
     CsuBiologic(
         key="remibrutinib",
         arm_label="RHAPSIDO",
         brand_names=("RHAPSIDO",),
         generic_names=("remibrutinib",),
-        ndc_prefixes=("000781100", "00078-1100"),
+        ndc_prefixes=(
+            "000781483",
+            "00078-1483",
+            "0078-1483",
+            "00781483",
+            "000781100",
+            "00078-1100",
+        ),
         hcpcs=frozenset(),
         journey_brand=REMIBRUTINIB_JOURNEY_BRAND,
     ),

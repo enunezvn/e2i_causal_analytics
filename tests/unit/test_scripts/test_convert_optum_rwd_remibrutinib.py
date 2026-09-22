@@ -1,7 +1,8 @@
 """Lane C (remibrutinib pre-wiring, spec 2026-09-22 §3C.1): the CSU biologic
 matcher in ``scripts/convert_optum_rwd.py`` recognises remibrutinib (brand
-RHAPSIDO, generic remibrutinib, the synthetic-placeholder product NDC
-00078-1100 from ``src/ml/synthetic/clinical_codes.py``), and the real-drop
+RHAPSIDO, generic remibrutinib, the marketed product NDC 0078-1483 and the
+synthetic-placeholder product NDC 00078-1100 from
+``src/ml/synthetic/clinical_codes.py``), and the real-drop
 converter maps the journey / treatment-event ``brand`` to the platform's
 ``brand_type`` label instead of collapsing every CSU row to ``competitor``.
 
@@ -61,9 +62,20 @@ class TestVocabulary:
         assert remi.arm_label == REMIBRUTINIB_ARM_LABEL == "RHAPSIDO"
         assert "RHAPSIDO" in remi.brand_names
         assert "remibrutinib" in remi.generic_names
-        # The synthetic-placeholder product code (clinical_codes.BRAND_NDC), both
-        # the 11-digit dashless form the drop uses and the dashed 5-4 form.
-        assert remi.ndc_prefixes == ("000781100", "00078-1100")
+        # The marketed Rhapsido product (openFDA product_ndc 0078-1483, Novartis;
+        # packages -20/-92/-93; verified 2026-09-22) in the 11-digit dashless
+        # form the drop uses, the dashed 5-4 form, the dashed 4-4 form openFDA
+        # prints and the raw dashless 10-digit 4-4-2 form -- then the
+        # synthetic-placeholder product code (clinical_codes.BRAND_NDC) in the
+        # two forms the synthetic claims generator emits.
+        assert remi.ndc_prefixes == (
+            "000781483",
+            "00078-1483",
+            "0078-1483",
+            "00781483",
+            "000781100",
+            "00078-1100",
+        )
         assert remi.hcpcs == frozenset()  # oral BTK inhibitor: no J-code
         assert remi.journey_brand == "Remibrutinib"
 
@@ -81,6 +93,10 @@ class TestVocabulary:
             "50242",
             "00024",
             "0024",
+            "000781483",
+            "00078-1483",
+            "0078-1483",
+            "00781483",
             "000781100",
             "00078-1100",
         }
@@ -139,6 +155,19 @@ class TestClassifyRemibrutinib:
         assert OptumDataConverter._classify_biologic_brand(_row(code="00078-1100-30")) == (
             "remibrutinib"
         )
+
+    @pytest.mark.parametrize(
+        "code",
+        [
+            "00078148320",  # 11-digit dashless (the drop's form), package -20
+            "00078-1483-92",  # dashed 5-4-2
+            "0078-1483-93",  # dashed 4-4-2 as openFDA prints it
+            "0078148320",  # raw dashless 10-digit 4-4-2
+        ],
+    )
+    def test_marketed_rhapsido_ndc_in_every_form(self, code: str) -> None:
+        assert classify_csu_biologic(code=code) == "remibrutinib"
+        assert OptumDataConverter._classify_biologic_brand(_row(code=code)) == "remibrutinib"
 
     def test_other_novartis_products_on_the_same_labeler_are_not_matched(self) -> None:
         assert OptumDataConverter._classify_biologic_brand(_row(code="00078090351")) is None
