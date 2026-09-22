@@ -1,0 +1,75 @@
+{
+  "analysis_id": "b0cf6946-ecd8-41ab-8aee-e123fd731dc8",
+  "status": "running",
+  "treatment_var": "treatment_dupixent",
+  "outcome_var": "discontinued_180d",
+  "dataset": "optum_biologic_persistence",
+  "n_rows": 15209,
+  "data_source": "synthetic",
+  "dag": {
+    "nodes": [],
+    "edges": [],
+    "treatment_nodes": [],
+    "outcome_nodes": [],
+    "adjustment_sets": [],
+    "dag_dot": null,
+    "edge_provenance": []
+  },
+  "dag_source": "domain_knowledge",
+  "discovered_confounders": [],
+  "discovered_dag_id": null,
+  "ate": null,
+  "ate_ci_lower": null,
+  "ate_ci_upper": null,
+  "standard_error": null,
+  "p_value": null,
+  "statistical_significance": false,
+  "naive_ate": null,
+  "naive_ate_ci_lower": null,
+  "naive_ate_ci_upper": null,
+  "confounding_bias_removed": null,
+  "adjustment_type": null,
+  "baseline_covariates": [],
+  "selected_estimator": null,
+  "estimator_comparison": null,
+  "confidence": null,
+  "refutation": {
+    "gate_decision": null,
+    "passed": false,
+    "needs_review": false,
+    "expert_review_id": null,
+    "expert_review_decision": null,
+    "review_caveat": null,
+    "tests_passed": null,
+    "tests_total": null,
+    "sensitivity_e_value": null,
+    "tests": []
+  },
+  "narrative": null,
+  "executive_summary": null,
+  "recommendations": [],
+  "key_insights": [],
+  "warnings": [
+    "Analysis submitted; poll GET /causal/agent-analyze/{id} for the result."
+  ],
+  "latency_ms": 0,
+  "_cert": {
+    "request": {
+      "treatment_var": "treatment_dupixent",
+      "outcome_var": "discontinued_180d",
+      "dataset": "optum_biologic_persistence",
+      "limit": 20000,
+      "auto_discover": true
+    },
+    "submitted_at": "2026-09-22T22:13:40.172929+00:00",
+    "submitted_warnings": [
+      "Analysis submitted; poll GET /causal/agent-analyze/{id} for the result."
+    ],
+    "wall_s": 1005.7,
+    "polls": 65,
+    "poll_cap_s": 1000,
+    "poll_cap_hit": true,
+    "container_started_at": "2026-09-22T21:22:09.275118978Z",
+    "api_base": "https://eznomics.site/api"
+  }
+}

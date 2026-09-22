@@ -1,0 +1,41 @@
+{
+  "source": {
+    "raw_drop": "/home/enunez/Projects/e2i_causal_analytics/data/rwd/Optum_Parquet/Optum_enriched.parquet",
+    "cohort_export": "/home/enunez/Projects/e2i_causal_analytics/data/rwd/mart/persistence_causal/e2i_causal_v1_biologic_persistence.parquet",
+    "join_key": "patient_id = 'PAT_' + patid"
+  },
+  "n_cohort": 15209,
+  "n_by_arm": {
+    "XOLAIR": 11009,
+    "DUPIXENT": 4200
+  },
+  "raw_rows_unmatched_to_cohort": 0,
+  "treatment_response_counts_by_arm": {
+    "DUPIXENT": {
+      "controlled": 30,
+      "indeterminate": 3596,
+      "refractory": 52,
+      "uncontrolled": 522
+    },
+    "XOLAIR": {
+      "controlled": 4109,
+      "indeterminate": 5535,
+      "refractory": 106,
+      "uncontrolled": 1259
+    }
+  },
+  "treatment_response_note": "brand-coupled; NOT used as an outcome or covariate in the cert runs",
+  "max_consecutive_biologic_coverage_days_quartiles_by_arm": {
+    "DUPIXENT": {
+      "q25": 14.0,
+      "q50": 14.0,
+      "q75": 18.0
+    },
+    "XOLAIR": {
+      "q25": 28.0,
+      "q50": 55.0,
+      "q75": 84.0
+    }
+  },
+  "coverage_note": "the shipped persistent_at_180d (60-day gap) is days-supply sensitive; read it with the grace sweep (persistence_definition_disproof), not as an effect"
+}

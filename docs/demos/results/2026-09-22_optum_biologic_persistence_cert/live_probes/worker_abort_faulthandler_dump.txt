@@ -1,0 +1,143 @@
+[2026-09-22 22:18:03 +0000] [1] [CRITICAL] WORKER TIMEOUT (pid:104)
+Fatal Python error: Aborted
+
+Thread 0x000075a059ffb6c0 (most recent call first):
+  File "/usr/local/lib/python3.12/threading.py", line 359 in wait
+  File "/usr/local/lib/python3.12/threading.py", line 655 in wait
+  File "/app/.venv/lib/python3.12/site-packages/tqdm/_monitor.py", line 60 in run
+  File "/usr/local/lib/python3.12/threading.py", line 1075 in _bootstrap_inner
+  File "/usr/local/lib/python3.12/threading.py", line 1032 in _bootstrap
+
+Thread 0x000075a0c60276c0 (most recent call first):
+  File "/usr/local/lib/python3.12/concurrent/futures/thread.py", line 90 in _worker
+  File "/usr/local/lib/python3.12/threading.py", line 1012 in run
+  File "/usr/local/lib/python3.12/threading.py", line 1075 in _bootstrap_inner
+  File "/usr/local/lib/python3.12/threading.py", line 1032 in _bootstrap
+
+Thread 0x000075a0f930b6c0 (most recent call first):
+  File "/app/.venv/lib/python3.12/site-packages/causallearn/utils/cit.py", line 214 in __call__
+  File "/app/.venv/lib/python3.12/site-packages/causallearn/search/ConstraintBased/FCI.py", line 980 in removeByPossibleDsep
+  File "/app/.venv/lib/python3.12/site-packages/causallearn/search/ConstraintBased/FCI.py", line 1085 in fci
+  File "/app/src/causal_engine/discovery/algorithms/fci_wrapper.py", line 104 in discover
+  File "/app/src/causal_engine/discovery/runner.py", line 976 in _run_latent_diagnostic
+  File "/app/src/causal_engine/discovery/runner.py", line 1038 in <lambda>
+  File "/usr/local/lib/python3.12/concurrent/futures/thread.py", line 59 in run
+  File "/usr/local/lib/python3.12/concurrent/futures/thread.py", line 93 in _worker
+  File "/usr/local/lib/python3.12/threading.py", line 1012 in run
+  File "/usr/local/lib/python3.12/threading.py", line 1075 in _bootstrap_inner
+  File "/usr/local/lib/python3.12/threading.py", line 1032 in _bootstrap
+
+Thread 0x000075a104bed6c0 (most recent call first):
+  File "/usr/local/lib/python3.12/threading.py", line 359 in wait
+  File "/usr/local/lib/python3.12/queue.py", line 180 in get
+  File "/app/.venv/lib/python3.12/site-packages/mlflow/telemetry/client.py", line 367 in _consumer
+  File "/usr/local/lib/python3.12/threading.py", line 1012 in run
+  File "/usr/local/lib/python3.12/threading.py", line 1075 in _bootstrap_inner
+  File "/usr/local/lib/python3.12/threading.py", line 1032 in _bootstrap
+
+Thread 0x000075a1054f26c0 (most recent call first):
+  File "/usr/local/lib/python3.12/threading.py", line 359 in wait
+  File "/usr/local/lib/python3.12/queue.py", line 180 in get
+  File "/app/src/services/llm_usage_recorder.py", line 120 in _drain_batch
+  File "/app/src/services/llm_usage_recorder.py", line 151 in _flush_loop
+  File "/usr/local/lib/python3.12/threading.py", line 1012 in run
+  File "/usr/local/lib/python3.12/threading.py", line 1075 in _bootstrap_inner
+  File "/usr/local/lib/python3.12/threading.py", line 1032 in _bootstrap
+
+Thread 0x000075a105cf76c0 (most recent call first):
+  File "/usr/local/lib/python3.12/concurrent/futures/thread.py", line 90 in _worker
+  File "/usr/local/lib/python3.12/threading.py", line 1012 in run
+  File "/usr/local/lib/python3.12/threading.py", line 1075 in _bootstrap_inner
+  File "/usr/local/lib/python3.12/threading.py", line 1032 in _bootstrap
+
+Thread 0x000075a1076f86c0 (most recent call first):
+  File "/usr/local/lib/python3.12/concurrent/futures/thread.py", line 90 in _worker
+  File "/usr/local/lib/python3.12/threading.py", line 1012 in run
+  File "/usr/local/lib/python3.12/threading.py", line 1075 in _bootstrap_inner
+  File "/usr/local/lib/python3.12/threading.py", line 1032 in _bootstrap
+
+Current thread 0x000075a11f250b80 (most recent call first):
+  File "/app/.venv/lib/python3.12/site-packages/networkx/classes/graph.py", line 483 in __contains__
+  File "/app/.venv/lib/python3.12/site-packages/networkx/algorithms/dag.py", line 225 in topological_generations
+  File "/app/.venv/lib/python3.12/site-packages/networkx/algorithms/dag.py", line 308 in topological_sort
+  File "/app/.venv/lib/python3.12/site-packages/networkx/algorithms/dag.py", line 117 in has_cycle
+  File "/app/.venv/lib/python3.12/site-packages/networkx/utils/backends.py", line 551 in _call_if_no_backends_installed
+  File "<class 'networkx.utils.decorators.argmap'> compilation 12", line 3 in argmap_has_cycle_9
+  File "/app/.venv/lib/python3.12/site-packages/networkx/algorithms/dag.py", line 162 in is_directed_acyclic_graph
+  File "/app/.venv/lib/python3.12/site-packages/networkx/utils/backends.py", line 551 in _call_if_no_backends_installed
+  File "<class 'networkx.utils.decorators.argmap'> compilation 8", line 3 in argmap_is_directed_acyclic_graph_5
+  File "/app/.venv/lib/python3.12/site-packages/networkx/algorithms/d_separation.py", line 293 in is_d_separator
+  File "/app/.venv/lib/python3.12/site-packages/networkx/utils/backends.py", line 551 in _call_if_no_backends_installed
+  File "<class 'networkx.utils.decorators.argmap'> compilation 37", line 4 in argmap_is_d_separator_33
+  File "/app/src/agents/causal_impact/nodes/graph_builder.py", line 747 in _satisfies_backdoor_criterion
+  File "/app/src/agents/causal_impact/nodes/graph_builder.py", line 689 in _find_adjustment_sets
+  File "/app/src/agents/causal_impact/nodes/graph_builder.py", line 304 in execute
+  File "/app/src/agents/causal_impact/nodes/graph_builder.py", line 1566 in build_causal_graph
+  File "/app/src/agents/causal_impact/graph.py", line 170 in wrapper
+  File "/app/.venv/lib/python3.12/site-packages/langgraph/_internal/_runnable.py", line 501 in ainvoke
+  File "/usr/local/lib/python3.12/asyncio/runners.py", line 118 in run
+  File "/usr/local/lib/python3.12/asyncio/runners.py", line 195 in run
+  File "/app/.venv/lib/python3.12/site-packages/uvicorn/workers.py", line 107 in run
+  File "/app/.venv/lib/python3.12/site-packages/gunicorn/workers/base.py", line 143 in init_process
+  File "/app/.venv/lib/python3.12/site-packages/uvicorn/workers.py", line 75 in init_process
+  File "/app/.venv/lib/python3.12/site-packages/gunicorn/arbiter.py", line 608 in spawn_worker
+  File "/app/.venv/lib/python3.12/site-packages/gunicorn/arbiter.py", line 641 in spawn_workers
+  File "/app/.venv/lib/python3.12/site-packages/gunicorn/arbiter.py", line 570 in manage_workers
+  File "/app/.venv/lib/python3.12/site-packages/gunicorn/arbiter.py", line 201 in run
+  File "/app/.venv/lib/python3.12/site-packages/gunicorn/app/base.py", line 71 in run
+  File "/app/.venv/lib/python3.12/site-packages/gunicorn/app/base.py", line 235 in run
+  File "/app/.venv/lib/python3.12/site-packages/gunicorn/app/wsgiapp.py", line 66 in run
+  File "/app/.venv/bin/gunicorn", line 8 in <module>
+
+[2026-09-22 22:18:04 +0000] [1] [ERROR] Worker (pid:104) was sent code 134!
+[2026-09-22 22:18:04 +0000] [924] [INFO] Booting worker with pid: 924
+2026-09-22 22:18:05 [INFO    ] ...encies.opentelemetry_config - OpenTelemetry: Sampling ALL traces (rate=1.0)
+2026-09-22 22:18:05 [WARNING ] ...encies.opentelemetry_config - OTLP exporter not available. Install opentelemetry-exporter-otlp
+2026-09-22 22:18:05 [INFO    ] ...encies.opentelemetry_config - OpenTelemetry: Falling back to ConsoleSpanExporter
+/app/src/api/dependencies/opentelemetry_config.py:113: DeprecationWarning: You should use CompositePropagator. Deprecated since version 1.2.0.
+  propagator = CompositeHTTPPropagator(
+2026-09-22 22:18:05 [INFO    ] ...encies.opentelemetry_config - OpenTelemetry: ENABLED (service=e2i-causal-analytics, exporter=otlp)
+[2026-09-22 22:18:05 +0000] [924] [INFO] [gunicorn.conf] preload ON: worker pid=924 forked warm (#1560)
+[2026-09-22 22:18:07 +0000] [924] [INFO] [gunicorn.conf] faulthandler armed for SIGABRT dumps pid=924 (#1560)
+/app/.venv/lib/python3.12/site-packages/websockets/legacy/__init__.py:6: DeprecationWarning: websockets.legacy is deprecated; see https://websockets.readthedocs.io/en/stable/howto/upgrade.html for upgrade instructions
+  warnings.warn(  # deprecated in 14.0 - 2024-11-09
+/app/.venv/lib/python3.12/site-packages/uvicorn/protocols/websockets/websockets_impl.py:17: DeprecationWarning: websockets.server.WebSocketServerProtocol is deprecated
+  from websockets.server import WebSocketServerProtocol
+[2026-09-22 22:18:08 +0000] [924] [INFO] Started server process [924]
+[2026-09-22 22:18:08 +0000] [924] [INFO] Waiting for application startup.
+2026-09-22 22:18:08 [INFO    ] ...eware.rate_limit_middleware - Rate limit Redis backend connected: redis://:changeme@redis:6379/0
+2026-09-22 22:18:08 [INFO    ] ...eware.rate_limit_middleware - Rate limiting enabled: 100 req/60s
+2026-09-22 22:18:08 [INFO    ] src.api.main - ============================================================
+2026-09-22 22:18:08 [INFO    ] src.api.main - E2I Causal Analytics Platform - Starting
+2026-09-22 22:18:08 [INFO    ] src.api.main - ============================================================
+2026-09-22 22:18:08 [INFO    ] src.api.main - Version: 4.2.1
+2026-09-22 22:18:08 [INFO    ] src.api.main - Timestamp: 2026-09-22T22:18:08.552059+00:00
+2026-09-22 22:18:08 [INFO    ] ...dependencies.bentoml_client - BentoML client initialized with base_url=http://bentoml:3000
+2026-09-22 22:18:08 [INFO    ] src.api.main - BentoML client initialized successfully
+2026-09-22 22:18:08 [WARNING ] ...i.dependencies.redis_client - Starting call to 'src.api.dependencies.redis_client.init_redis', this is the 1st time calling it.
+2026-09-22 22:18:08 [INFO    ] ...i.dependencies.redis_client - Initializing Redis connection to redis://:changeme@redis:6379/0
+2026-09-22 22:18:08 [INFO    ] ...i.dependencies.redis_client - Redis connection established successfully
+2026-09-22 22:18:09 [INFO    ] src.api.main - Redis connection pool initialized
+2026-09-22 22:18:09 [WARNING ] ...ependencies.falkordb_client - Starting call to 'src.api.dependencies.falkordb_client.init_falkordb', this is the 1st time calling it.
+2026-09-22 22:18:09 [INFO    ] ...ependencies.falkordb_client - Initializing FalkorDB connection to falkordb:6379
+2026-09-22 22:18:09 [INFO    ] ...ependencies.falkordb_client - FalkorDB connected. Available graphs: ['e2i_causal']
+2026-09-22 22:18:09 [INFO    ] src.api.main - FalkorDB client initialized
+2026-09-22 22:18:09 [WARNING ] ...ependencies.supabase_client - Starting call to 'src.api.dependencies.supabase_client.init_supabase', this is the 1st time calling it.
+2026-09-22 22:18:09 [INFO    ] ...ependencies.supabase_client - Initializing Supabase connection to http://172.17.0.1:54321...
+2026-09-22 22:18:09 [INFO    ] ...ependencies.supabase_client - Supabase client initialized successfully
+2026-09-22 22:18:09 [INFO    ] src.api.main - Supabase client initialized
+2026-09-22 22:18:09 [INFO    ] src.api.main - Audit chain service wired to global singleton
+2026-09-22 22:18:09 [INFO    ] src.api.main - Tool registry: startup sync scheduled
+2026-09-22 22:18:09 [INFO    ] src.api.main - Tool-composer learning loop: recorder initialization scheduled
+2026-09-22 22:18:09 [INFO    ] src.utils.litellm_usage_logger - litellm usage logger registered
+2026-09-22 22:18:09 [INFO    ] src.mlops.mlflow_connector - MLflow initialized with tracking URI: http://mlflow:5000
+2026-09-22 22:18:09 [INFO    ] src.api.main - MLflow client initialized (tracking URI: http://mlflow:5000)
+2026-09-22 22:18:09 [ERROR   ] src.feature_store.feast_client - Feast not installed: No module named 'feast'
+2026-09-22 22:18:09 [WARNING ] src.api.main - Feast initialization failed (non-critical): No module named 'feast'
+2026-09-22 22:18:09 [INFO    ] src.api.main - Opik client initialized in disabled mode
+2026-09-22 22:18:09 [INFO    ] src.api.main - OpenTelemetry: Tracing available for this instance
+2026-09-22 22:18:09 [INFO    ] src.memory.services.factories - Creating Supabase client for: http://172.17.0.1:54321 (using service_role key)
+/app/.venv/lib/python3.12/site-packages/supabase/_sync/client.py:309: DeprecationWarning: The 'timeout' parameter is deprecated. Please configure it in the http client instead.
+  return SyncPostgrestClient(
+/app/.venv/lib/python3.12/site-packages/supabase/_sync/client.py:309: DeprecationWarning: The 'verify' parameter is deprecated. Please configure it in the http client instead.
+  return SyncPostgrestClient(
