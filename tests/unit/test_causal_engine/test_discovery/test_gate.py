@@ -219,6 +219,26 @@ class TestDiscoveryGate:
         assert evaluation.confidence == 0.0
         assert "Discovery failed" in evaluation.reasons
 
+    def test_failed_discovery_reason_names_the_algorithm_error(self, gate):
+        """The REJECT reason must carry the error text itself, not only the
+        word "failed": an operator reading the API warnings has to see WHY
+        discovery could not run (measured 2026-09-22 on the real Optum frame:
+        ``Data correlation matrix is singular``), otherwise a run that could
+        not execute reads exactly like a run that found nothing."""
+        result = DiscoveryResult(
+            success=False,
+            config=DiscoveryConfig(),
+            metadata={"error": "pc: Data correlation matrix is singular. Cannot run fisherz test."},
+        )
+
+        evaluation = gate.evaluate(result)
+
+        assert evaluation.decision == DiscoveryGateDecision.REJECT
+        assert evaluation.confidence == 0.0
+        assert "Discovery failed" in evaluation.reasons
+        assert any("singular" in r for r in evaluation.reasons), evaluation.reasons
+        assert evaluation.metadata["error"] == result.metadata["error"]
+
     def test_evaluate_no_edges(self, gate):
         """Test evaluation when no edges discovered."""
         config = DiscoveryConfig()

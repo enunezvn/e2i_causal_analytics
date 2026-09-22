@@ -532,3 +532,121 @@ class TestPerAlgorithmTimeout:
             del DiscoveryRunner.ALGORITHM_REGISTRY[DiscoveryAlgorithmType.LINGAM]
 
         assert result.algorithm_results[0].converged is True
+
+
+class TestAllAlgorithmsFailedIsNotSuccess:
+    """A run in which NO algorithm converged is not a successful discovery.
+
+    Measured on the real Optum persistence cohort (2026-09-22, 4,000 rows x 57
+    numeric covariates, production shape): the claims comorbidity families are
+    linearly dependent (correlation-matrix rank 45 of 59), causal-learn's
+    fisherz test raises ``Data correlation matrix is singular``, the PC wrapper
+    records it as ``converged=False`` -- and the runner still returned
+    ``success=True`` with zero edges. The gate then said "Too few edges
+    discovered: 0 < 1", the API reported ``dag_source='domain_knowledge'`` and
+    the real cause never left ``algorithm_results[].metadata``. "Found no
+    structure" and "could not run" are different facts; the result must carry
+    the second one.
+    """
+
+    @staticmethod
+    def _swap_algorithm(slot, impl):
+        original = DiscoveryRunner.ALGORITHM_REGISTRY.get(slot)
+        DiscoveryRunner.register_algorithm(slot, impl)
+        return original
+
+    @staticmethod
+    def _restore_algorithm(slot, original):
+        if original is None:
+            DiscoveryRunner.ALGORITHM_REGISTRY.pop(slot, None)
+        else:
+            DiscoveryRunner.ALGORITHM_REGISTRY[slot] = original
+
+    @pytest.mark.asyncio
+    async def test_every_algorithm_failing_marks_the_result_unsuccessful_with_the_error(self):
+        import pandas as pd
+
+        class SingularAlgorithm:
+            def discover(self, data, config):
+                raise ValueError("Data correlation matrix is singular. Cannot run fisherz test.")
+
+        original = self._swap_algorithm(DiscoveryAlgorithmType.LINGAM, SingularAlgorithm)
+        try:
+            runner = DiscoveryRunner(enable_tracing=False)
+            data = pd.DataFrame({"a": [1.0, 2.0, 3.0, 4.0], "b": [2.0, 1.0, 4.0, 3.0]})
+            config = DiscoveryConfig(algorithms=[DiscoveryAlgorithmType.LINGAM])
+            result = await runner.discover_dag(data, config)
+        finally:
+            self._restore_algorithm(DiscoveryAlgorithmType.LINGAM, original)
+
+        assert result.n_edges == 0
+        assert result.success is False
+        # The error names the algorithm and carries the underlying message verbatim.
+        assert "lingam" in result.metadata["error"]
+        assert "Data correlation matrix is singular" in result.metadata["error"]
+        assert result.metadata["algorithm_errors"] == {
+            "lingam": "Data correlation matrix is singular. Cannot run fisherz test."
+        }
+
+    @pytest.mark.asyncio
+    async def test_one_converged_algorithm_keeps_success_but_records_the_other_failure(self):
+        import pandas as pd
+
+        class SingularAlgorithm:
+            def discover(self, data, config):
+                raise ValueError("Data correlation matrix is singular. Cannot run fisherz test.")
+
+        class OneEdgeAlgorithm:
+            def discover(self, data, config):
+                adj = np.zeros((2, 2), dtype=int)
+                adj[0, 1] = 1
+                return AlgorithmResult(
+                    algorithm=DiscoveryAlgorithmType.GES,
+                    adjacency_matrix=adj,
+                    edge_list=[("a", "b")],
+                    runtime_seconds=0.0,
+                )
+
+        orig_lingam = self._swap_algorithm(DiscoveryAlgorithmType.LINGAM, SingularAlgorithm)
+        orig_ges = self._swap_algorithm(DiscoveryAlgorithmType.GES, OneEdgeAlgorithm)
+        try:
+            runner = DiscoveryRunner(enable_tracing=False)
+            data = pd.DataFrame({"a": [1.0, 2.0, 3.0, 4.0], "b": [2.0, 1.0, 4.0, 3.0]})
+            config = DiscoveryConfig(
+                algorithms=[DiscoveryAlgorithmType.GES, DiscoveryAlgorithmType.LINGAM],
+                ensemble_threshold=0.5,
+            )
+            result = await runner.discover_dag(data, config)
+        finally:
+            self._restore_algorithm(DiscoveryAlgorithmType.LINGAM, orig_lingam)
+            self._restore_algorithm(DiscoveryAlgorithmType.GES, orig_ges)
+
+        assert result.success is True
+        assert result.n_edges == 1
+        # A partial failure is not silent either: it is recorded, but does not
+        # claim the whole run failed.
+        assert "error" not in result.metadata
+        assert result.metadata["algorithm_errors"] == {
+            "lingam": "Data correlation matrix is singular. Cannot run fisherz test."
+        }
+
+    @pytest.mark.asyncio
+    async def test_real_pc_on_a_collinear_frame_reports_the_singular_matrix(self):
+        """Faithful reproduction through the REAL PC wrapper: an exactly
+        duplicated covariate (the claims-data shape -- Charlson and Elixhauser
+        flag families coincide) makes the correlation matrix singular."""
+        import pandas as pd
+
+        rng = np.random.default_rng(0)
+        n = 300
+        t = rng.normal(size=n)
+        u = rng.normal(size=n)
+        data = pd.DataFrame({"t": t, "y": t + rng.normal(size=n), "u": u, "u_dup": u})
+
+        runner = DiscoveryRunner(enable_tracing=False)
+        config = DiscoveryConfig(algorithms=[DiscoveryAlgorithmType.PC])
+        result = await runner.discover_dag(data, config)
+
+        assert result.success is False
+        assert "singular" in result.metadata["error"].lower()
+        assert "pc" in result.metadata["algorithm_errors"]

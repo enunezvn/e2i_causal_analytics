@@ -160,14 +160,18 @@ class DiscoveryGate:
         if "latent_diagnostic" in result.metadata:
             diagnostic_passthrough["latent_diagnostic"] = result.metadata["latent_diagnostic"]
 
-        # Check for failed discovery
+        # Check for failed discovery. The reason carries the error text itself
+        # (not only the word "failed"): it is what graph_builder surfaces as the
+        # skip reason and what the API's warnings show, so an operator can tell
+        # "discovery could not run: <why>" from "discovery found no structure".
         if not result.success:
+            error = result.metadata.get("error", "Unknown error")
             return GateEvaluation(
                 decision=DiscoveryGateDecision.REJECT,
                 confidence=0.0,
-                reasons=["Discovery failed"],
+                reasons=["Discovery failed", f"Discovery could not run: {error}"],
                 metadata={
-                    "error": result.metadata.get("error", "Unknown error"),
+                    "error": error,
                     **diagnostic_passthrough,
                 },
             )
