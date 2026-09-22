@@ -29,6 +29,7 @@ from src.services.retraining_trigger import (
     RetrainingDecision,
     TriggerReason,
     evaluate_and_trigger_retraining,
+    has_cohort_contract,
 )
 
 
@@ -112,3 +113,11 @@ async def test_a_decision_that_needs_approval_is_still_not_triggered():
     service.trigger_retraining.assert_not_awaited()
     assert result["retraining_triggered"] is False
     assert result["requires_approval"] is True
+
+
+def test_has_cohort_contract_handles_none_empty_partial_and_complete():
+    assert has_cohort_contract(None) is False
+    assert has_cohort_contract({}) is False
+    assert has_cohort_contract({"data_source": "cohort_x"}) is False
+    assert has_cohort_contract({"data_source": "cohort_x", "target_outcome": ""}) is False
+    assert has_cohort_contract({"data_source": "cohort_x", "target_outcome": "y"}) is True

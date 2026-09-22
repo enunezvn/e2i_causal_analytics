@@ -650,7 +650,10 @@ def has_cohort_contract(cohort: Optional[Dict[str, Any]]) -> bool:
     the prediction target (``target_outcome``) — ``_cohort_input_from_training_config``
     in drift_monitoring_tasks fails loud without them.
     """
-    return bool(cohort) and all(cohort.get(k) for k in REQUIRED_COHORT_CONTRACT_KEYS)
+    if not cohort:
+        # None or {} — nothing to retrain on; the caller logs the reason.
+        return False
+    return all(cohort.get(k) for k in REQUIRED_COHORT_CONTRACT_KEYS)
 
 
 async def evaluate_and_trigger_retraining(
