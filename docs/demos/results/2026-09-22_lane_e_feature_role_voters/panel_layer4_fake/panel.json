@@ -102,7 +102,7 @@
       "with_cached_edges": 24
     },
     "layer_3": {
-      "declared_safe_immunity_applied": 0,
+      "declared_safe_immunity_applied": 9,
       "fdr": {
         "active": true,
         "confident_features": [],
@@ -195,7 +195,7 @@
       "layer_3": {
         "ablation_severity": null,
         "actual_auc": 0.5342476722682867,
-        "declared_safe_immunity_applied": false,
+        "declared_safe_immunity_applied": true,
         "delta_auc": 0.03018033691857136,
         "delta_auc_below_floor": true,
         "fdr_confident": false,
@@ -379,7 +379,7 @@
       "layer_3": {
         "ablation_severity": null,
         "actual_auc": 0.5075814770191319,
-        "declared_safe_immunity_applied": false,
+        "declared_safe_immunity_applied": true,
         "delta_auc": 0.006496375970511781,
         "delta_auc_below_floor": true,
         "fdr_confident": false,
@@ -1958,7 +1958,7 @@
       "layer_3": {
         "ablation_severity": null,
         "actual_auc": 0.5262387762096506,
-        "declared_safe_immunity_applied": false,
+        "declared_safe_immunity_applied": true,
         "delta_auc": 0.02241970182266806,
         "delta_auc_below_floor": true,
         "fdr_confident": false,
@@ -2038,7 +2038,7 @@
       "layer_3": {
         "ablation_severity": null,
         "actual_auc": 0.5437066007383629,
-        "declared_safe_immunity_applied": false,
+        "declared_safe_immunity_applied": true,
         "delta_auc": 0.039432261463746676,
         "delta_auc_below_floor": true,
         "fdr_confident": false,
@@ -2118,7 +2118,7 @@
       "layer_3": {
         "ablation_severity": null,
         "actual_auc": 0.540509718995779,
-        "declared_safe_immunity_applied": false,
+        "declared_safe_immunity_applied": true,
         "delta_auc": 0.036227630637202246,
         "delta_auc_below_floor": true,
         "fdr_confident": false,
@@ -2646,7 +2646,7 @@
       "layer_3": {
         "ablation_severity": null,
         "actual_auc": 0.5114498277639263,
-        "declared_safe_immunity_applied": false,
+        "declared_safe_immunity_applied": true,
         "delta_auc": 0.00976830414596519,
         "delta_auc_below_floor": true,
         "fdr_confident": false,
@@ -2738,7 +2738,7 @@
       "layer_3": {
         "ablation_severity": null,
         "actual_auc": 0.5075814770191319,
-        "declared_safe_immunity_applied": false,
+        "declared_safe_immunity_applied": true,
         "delta_auc": 0.006496375970511781,
         "delta_auc_below_floor": true,
         "fdr_confident": false,
@@ -5554,7 +5554,7 @@
       "layer_3": {
         "ablation_severity": null,
         "actual_auc": 0.5140703191150275,
-        "declared_safe_immunity_applied": false,
+        "declared_safe_immunity_applied": true,
         "delta_auc": 0.012065493312249154,
         "delta_auc_below_floor": true,
         "fdr_confident": false,
@@ -5634,7 +5634,7 @@
       "layer_3": {
         "ablation_severity": null,
         "actual_auc": 0.537107431785611,
-        "declared_safe_immunity_applied": false,
+        "declared_safe_immunity_applied": true,
         "delta_auc": 0.03396302466714196,
         "delta_auc_below_floor": true,
         "fdr_confident": false,

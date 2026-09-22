@@ -627,7 +627,6 @@ async def build_feature_role_panel(
         # verdict) so the Layer-3 reads below type-check without per-line guards.
         vd: Dict[str, Any] = v if v is not None else {}
         ran = bool(vd.get("z_score") is not None)
-        severity = vd.get("severity")
         layer_3 = {
             "ran": ran,
             "z_score": vd.get("z_score") if ran else None,
@@ -641,10 +640,23 @@ async def build_feature_role_panel(
             "severity_pre_joint_check": vd.get("severity_pre_joint_check") if ran else None,
             "ablation_severity": vd.get("ablation_severity") if ran else None,
             "fdr_confident": feat in confident,
-            # The node's declared-safe immunity stripped a high finding: recorded
-            # so the evidence shows Layer 3 fired and the contract overruled it.
+            # Layer 3's z-band said ``high`` PRE-joint on a column the manifest
+            # declares pre-index, and the column is not in the node's leak set:
+            # the contract overruled the statistic. This reads the OUTCOME, not
+            # one lever — the node keeps such a column out of ``leaked_features``
+            # through whichever of its paths applies (the FDR re-decide demoting
+            # a non-confident ``high``, the declared-safe carve-out routing a
+            # confident one to review, ``_declared_safe_immune_features``
+            # stripping a flagged one, or the voter abstaining). Reading the
+            # post-joint ``severity == "high"`` instead (verifier MED-3, PR #2226)
+            # missed every path but the strip: the real-frame artifact served
+            # "immunity applied 0" against nine pre-joint-high declared-safe
+            # records whose post-joint severity was ``abstain``.
             "declared_safe_immunity_applied": bool(
-                ran and severity == "high" and declared_safe and feat not in leaked
+                ran
+                and vd.get("severity_pre_joint_check") == "high"
+                and declared_safe
+                and feat not in leaked
             ),
         }
 

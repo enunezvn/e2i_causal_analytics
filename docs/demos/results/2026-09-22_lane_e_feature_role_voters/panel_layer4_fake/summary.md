@@ -10,7 +10,7 @@ Layer 4 LM: **fake**. Fake LM (DummyLM): zero paid calls; measures which feature
 |---|---|
 | Layer 1 contracts | consulted 64, contracted 64, declared-safe 64, post-index 0 |
 | Layer 2 KG (shadow) | cache bound True, with cached edges 24, signalled 2 `{"leak_drug_treats_disease": 2, "no_signal": 62}` |
-| Layer 3 adversarial | scored 57, pre-joint severities `{"high": 9, "info": 38, "moderate": 10}`, FDR-confident 0, declared-safe immunity applied 0, fdr `{"active": true, "confident_features": [], "enabled": true, "n_confident": 0, "n_permutations": 569, "q": 0.1, "reason": "active"}` |
+| Layer 3 adversarial | scored 57, pre-joint severities `{"high": 9, "info": 38, "moderate": 10}`, FDR-confident 0, declared-safe immunity applied 9, fdr `{"active": true, "confident_features": [], "enabled": true, "n_confident": 0, "n_permutations": 569, "q": 0.1, "reason": "active"}` |
 | Layer 4 LLM | enabled True, classifier loaded True, fired 19, roles `{"confounder": 19}` |
 | Ensemble | decided_by `{"None": 7, "abstain": 19, "adversarial": 36, "kg": 2}`, abstain rate 0.406, leak verdicts 0 `{}` |
 
