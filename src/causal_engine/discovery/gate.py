@@ -311,7 +311,11 @@ class DiscoveryGate:
         Returns:
             Tuple of (corroboration score [0, 1], basis label)
         """
-        converged = [r for r in result.algorithm_results if r.converged]
+        # A voter is a DISTINCT converged algorithm, here as in the runner's
+        # census (codex r2): ``algorithms=["ges", "ges"]`` yields two converged
+        # results from one algorithm, which is a single-algorithm run and must
+        # take the bootstrap / uncorroborated path, not the agreement one.
+        converged = {r.algorithm for r in result.algorithm_results if r.converged}
         if not result.edges or not converged:
             return 0.0, "no_evidence"
 

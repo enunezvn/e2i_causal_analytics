@@ -369,7 +369,10 @@ class DiscoveryResult:
         if census and census.get("n_converged", 0) >= 2:
             return float(census["agreement_rate"])
         total_votes = sum(e.algorithm_votes for e in self.edges)
-        max_votes = len(self.algorithm_results) * len(self.edges)
+        # Distinct algorithm types, so a duplicated run of one algorithm
+        # (``algorithms=["ges", "ges"]``) does not halve the value (codex r2).
+        n_algorithms = len({r.algorithm for r in self.algorithm_results})
+        max_votes = n_algorithms * len(self.edges)
         return total_votes / max_votes if max_votes > 0 else 0.0
 
     def get_high_confidence_edges(self, threshold: float = 0.8) -> List[DiscoveredEdge]:

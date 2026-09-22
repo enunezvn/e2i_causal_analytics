@@ -152,8 +152,9 @@ fake agreement rate of 1.0. **`threshold` is validated to `[0, 1]`** at
 `DiscoveryConfig` construction (codex r1: only the tool schema bounded it; a state key
 could pass 1.5). No floating-point guard is needed: with at most six distinct voters
 (`DiscoveryAlgorithmType` has six members) no product `n * (k/n)` overshoots its
-integer in floating point (checked exhaustively for `n <= 6` and every 3-decimal
-threshold; the first overshoot is `25 * 0.28 = 7.000000000000001`).
+integer in floating point (`float_quorum_sweep.txt:2-3`: no overshoot for `n <= 6`
+with `t = k/n` or any 3-decimal threshold; `:4`: the first overshoot is
+`25 * 0.28 = 7.000000000000001`).
 
 **Gate interaction.** Under an agreement filter every surviving edge is agreed on by
 construction — with two voters every survivor is `2/2 = 1.0` — so the gate's former
@@ -182,16 +183,17 @@ value is the agreement rate, not a vacuous 1.0. A result built without a census 
 hand-built results) keeps the old votes-per-edge math.
 
 **Tests** (`tests/unit/test_causal_engine/test_discovery/test_ensemble_vote_rule.py`,
-17 tests). Fourteen go through the real `_build_ensemble` and, where a grade is
-asserted, the real gate: agreement at the default threshold, `ceil` vs `int` at 3
-voters, unanimity at 1.0, floor of 2 at 0.1, single-converged keeps every edge, failed
-algorithms are not voters, the same algorithm twice is one voter, a duplicated edge is
-one vote, the threshold bounds, census contents, gate reads the census (disagreement
-blocks ACCEPT; full agreement scores 1.0; the calibration identity; the no-census
-fallback) and the `algorithm_agreement` property. Three are consumer tests for the
-single source of truth (config default, tool schema and input model, graph_builder's
-unguided branch through `GraphBuilderNode.execute` with a capturing runner) and do not
-exercise the ensemble.
+18 tests). Thirteen build their ensemble through the real `_build_ensemble`: agreement
+at the default threshold, `ceil` vs `int` at 3 voters, unanimity at 1.0, floor of 2 at
+0.1, single-converged keeps every edge, failed algorithms are not voters, the same
+algorithm twice is one voter, a duplicated edge is one vote, census contents, and —
+through the real gate as well — disagreement blocks ACCEPT, full agreement scores 1.0,
+the calibration identity, the same algorithm twice is graded as a single-algorithm run
+(`uncorroborated_single_run`, REJECT), and the `algorithm_agreement` property. Five do
+not touch the ensemble: the threshold bounds (config only), the no-census gate fallback
+(hand-built result), and three consumer tests for the single source of truth (config
+default, tool schema and input model, graph_builder's unguided branch through
+`GraphBuilderNode.execute` with a capturing runner).
 
 **Teeth.** With the old quorum planted back (`teeth_plant_a.txt`): `7 failed, 8 passed`
 (15-test file at the time). With the census not recorded (`teeth_plant_b.txt`):

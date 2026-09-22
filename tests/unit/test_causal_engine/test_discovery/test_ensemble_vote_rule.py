@@ -155,6 +155,26 @@ class TestAgreementRule:
         assert dag_census(dag)["n_converged"] == 2
         assert {(e.source, e.target): e.algorithm_votes for e in edges} == {("B", "C"): 2}
 
+    def test_the_same_algorithm_run_twice_is_not_corroboration_at_the_gate(self):
+        """End to end through the census readers (codex r2): two converged GES
+        results are one voter, so the gate takes the single-algorithm path
+        (uncorroborated without bootstrap -> REJECT), never the agreement path,
+        and ``algorithm_agreement`` is the single-voter 1.0, not 0.5."""
+        runner = DiscoveryRunner(enable_tracing=False)
+        results = [_run(GES, [("A", "B"), ("B", "C")]), _run(GES, [("A", "B"), ("B", "C")])]
+        edges, dag = runner._build_ensemble(results, NODES, threshold=0.5)
+        result = DiscoveryResult(
+            success=True,
+            config=DiscoveryConfig(algorithms=[GES, GES]),
+            ensemble_dag=dag,
+            edges=edges,
+            algorithm_results=results,
+        )
+        evaluation = DiscoveryGate().evaluate(result)
+        assert evaluation.metadata["corroboration_basis"] == "uncorroborated_single_run"
+        assert evaluation.decision == DiscoveryGateDecision.REJECT
+        assert result.algorithm_agreement == pytest.approx(1.0)
+
     def test_a_duplicated_edge_inside_one_result_is_one_vote(self):
         runner = DiscoveryRunner(enable_tracing=False)
         results = [_run(GES, [("A", "B"), ("A", "B")]), _run(PC, [("B", "C")])]
