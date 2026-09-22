@@ -20,13 +20,27 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from scripts.convert_optum_mart import (  # noqa: E402
+    _ANCHOR_BY_COHORT,
+    _OUTPUT_BY_COHORT,
+    _SELECTOR_BY_COHORT,
+    _SPLIT_CONFIG_BY_COHORT,
+    _TREATMENT_ANCHORED,
     CAUSAL_ARMS,
+    CAUSAL_COHORT,
+    CAUSAL_EXTRA_COLS,
+    CAUSAL_RECORDS_NAME,
+    COHORT_TARGETS,
     PERSIST_GRACE_DAYS,
+    PREDICTION_COHORTS,
     SWITCH_FLAG,
+    TARGET_PERSISTENT,
     TARGET_PERSISTENT_G28,
     TREATMENT_COL,
+    build_journey_records,
+    convert,
     select_persistence_causal_cohort,
 )
+from scripts.convert_optum_mart import main as convert_main  # noqa: E402
 
 
 def _initiators_two_arms() -> pd.DataFrame:
@@ -91,6 +105,51 @@ def _initiators_two_arms() -> pd.DataFrame:
                 SWITCH_FLAG: 0,
                 **base,
             },
+            # p9: XOLAIR, cov_to_end=151 (one day BELOW the g28 boundary
+            #     window_days-PERSIST_GRACE_DAYS=152), gap 0 -> g28 0
+            {
+                "patid": 9,
+                "index_biologic_brand": "XOLAIR",
+                "treatment_start_date": ts,
+                "last_coverage_end": ts + 151 * day,
+                "max_internal_gap_days": 0,
+                SWITCH_FLAG: 0,
+                **base,
+            },
+            # p10: XOLAIR, cov_to_end=152 (AT the g28 boundary) -> g28 1; a
+            #      >=-to-> mutation on the cov_to_end predicate flips ONLY this row
+            {
+                "patid": 10,
+                "index_biologic_brand": "XOLAIR",
+                "treatment_start_date": ts,
+                "last_coverage_end": ts + 152 * day,
+                "max_internal_gap_days": 0,
+                SWITCH_FLAG: 0,
+                **base,
+            },
+            # p11: DUPIXENT, cov_to_end=220 (well past any window), gap=60 (AT the
+            #      PERSIST_GAP_DAYS boundary) -> persist/g28 1; a <=-to-< mutation
+            #      on the gap predicate flips ONLY this row
+            {
+                "patid": 11,
+                "index_biologic_brand": "DUPIXENT",
+                "treatment_start_date": ts,
+                "last_coverage_end": ts + 220 * day,
+                "max_internal_gap_days": 60,
+                SWITCH_FLAG: 0,
+                **base,
+            },
+            # p12: DUPIXENT, cov_to_end=220, gap=61 (one day PAST the gap
+            #      boundary) -> persist/g28 0
+            {
+                "patid": 12,
+                "index_biologic_brand": "DUPIXENT",
+                "treatment_start_date": ts,
+                "last_coverage_end": ts + 220 * day,
+                "max_internal_gap_days": 61,
+                SWITCH_FLAG: 0,
+                **base,
+            },
         ]
     )
 
@@ -100,14 +159,46 @@ def test_causal_selector_truth_table_and_treatment_coding():
         _initiators_two_arms(), window_days=180, min_claim_count=2
     )
     steps = dict(attrition)
-    assert steps["two_arm_contrast"] == 4  # p8 excluded
-    assert set(cohort["patid"]) == {4, 5, 6, 7}
+    assert steps["excluded_arm:RHAPSIDO"] == 1  # p8, loud not silent
+    assert steps["two_arm_contrast"] == 8  # p8 excluded; p4-p7, p9-p12 kept
+    assert set(cohort["patid"]) == {4, 5, 6, 7, 9, 10, 11, 12}
     by = cohort.set_index("patid")
-    assert by[TREATMENT_COL].to_dict() == {4: 0, 5: 1, 6: 0, 7: 1}
-    assert by["persistent_at_180d"].to_dict() == {4: 1, 5: 0, 6: 0, 7: 0}
-    assert by[TARGET_PERSISTENT_G28].to_dict() == {4: 1, 5: 0, 6: 0, 7: 1}
-    assert by["discontinued_180d"].to_dict() == {4: 0, 5: 1, 6: 0, 7: 0}
-    assert by[SWITCH_FLAG].to_dict() == {4: 0, 5: 1, 6: 0, 7: 0}
+    assert by[TREATMENT_COL].to_dict() == {4: 0, 5: 1, 6: 0, 7: 1, 9: 0, 10: 0, 11: 1, 12: 1}
+    assert by["persistent_at_180d"].to_dict() == {
+        4: 1,
+        5: 0,
+        6: 0,
+        7: 0,
+        9: 0,
+        10: 0,
+        11: 1,
+        12: 0,
+    }
+    # p10 (cov_to_end==152) and p11 (gap==60) are the boundary cases: a
+    # >=-to-> mutation on cov_to_end flips ONLY p10; a <=-to-< mutation on gap
+    # flips ONLY p11. p9 (151) and p12 (61) are the just-below-boundary
+    # complements that must NOT flip.
+    assert by[TARGET_PERSISTENT_G28].to_dict() == {
+        4: 1,
+        5: 0,
+        6: 0,
+        7: 1,
+        9: 0,
+        10: 1,
+        11: 1,
+        12: 0,
+    }
+    assert by["discontinued_180d"].to_dict() == {
+        4: 0,
+        5: 1,
+        6: 0,
+        7: 0,
+        9: 0,
+        10: 0,
+        11: 0,
+        12: 0,
+    }
+    assert by[SWITCH_FLAG].to_dict() == {4: 0, 5: 1, 6: 0, 7: 0, 9: 0, 10: 0, 11: 0, 12: 0}
     for col in (
         TREATMENT_COL,
         "persistent_at_180d",
@@ -116,8 +207,8 @@ def test_causal_selector_truth_table_and_treatment_coding():
         SWITCH_FLAG,
     ):
         assert cohort[col].dtype.kind in "iu", col
-    assert steps["target_positives"] == 2  # g28 positives: p4, p7
-    assert steps["arm_dupixent"] == 2
+    assert steps["target_positives"] == 4  # g28 positives: p4, p7, p10, p11
+    assert steps["arm_dupixent"] == 4  # p5, p7, p11, p12
 
 
 def test_causal_selector_grace_is_28_days_and_arms_are_the_observed_pair():
@@ -131,19 +222,6 @@ def test_causal_selector_fails_loud_without_the_switch_flag():
     df = _initiators_two_arms().drop(columns=[SWITCH_FLAG])
     with pytest.raises(KeyError, match=SWITCH_FLAG):
         select_persistence_causal_cohort(df, window_days=180, min_claim_count=2)
-
-
-from scripts.convert_optum_mart import (  # noqa: E402
-    CAUSAL_COHORT,
-    CAUSAL_EXTRA_COLS,
-    CAUSAL_RECORDS_NAME,
-    COHORT_TARGETS,
-    PREDICTION_COHORTS,
-    TARGET_PERSISTENT,
-    build_journey_records,
-    convert,
-)
-from scripts.convert_optum_mart import main as convert_main  # noqa: E402
 
 
 def _entity_mart_rows_two_arms() -> list[dict]:
@@ -265,6 +343,88 @@ def test_build_journey_records_extra_cols_are_emitted_and_default_is_unchanged()
         assert col not in plain, f"{col} leaked into a prediction record"
 
 
+def test_build_journey_records_extra_cols_reject_non_binary_flags():
+    """A flag-kind extra column (e.g. TREATMENT_COL/SWITCH_FLAG) must be exactly
+    0 or 1: a fractional value or a NaN raises ValueError naming the column,
+    never a silent truncation/coercion."""
+    base_row = {
+        "patid": 77,
+        "index_date": pd.Timestamp("2020-01-01"),
+        "treatment_start_date": pd.Timestamp("2020-03-01"),
+        "elig_start_date": pd.Timestamp("2019-09-01"),
+        "zipcode_5": "10001",
+        "age_at_index": 50.0,
+        "charlson_score": 2,
+        "cci_hiv": 0,
+        "index_biologic_brand": "DUPIXENT",
+        TREATMENT_COL: 1,
+        TARGET_PERSISTENT_G28: 1,
+        "discontinued_180d": 0,
+        SWITCH_FLAG: 0,
+        "persistent_at_180d": 0,
+    }
+    for bad_value in (0.5, float("nan")):
+        cohort = pd.DataFrame([{**base_row, SWITCH_FLAG: bad_value}])
+        with pytest.raises(ValueError, match=SWITCH_FLAG):
+            build_journey_records(
+                cohort,
+                target=TARGET_PERSISTENT_G28,
+                anchor_col="treatment_start_date",
+                extra_cols=CAUSAL_EXTRA_COLS,
+            )
+
+
+def test_build_journey_records_extra_cols_are_exactly_the_causal_columns():
+    """Allow-list guard extended over extra_cols (mirrors the multicohort guard
+    test_build_journey_records_emits_only_cataloged_columns): with
+    CAUSAL_EXTRA_COLS passed, the only keys beyond MART_SAFE_FEATURES + journey
+    metadata + target are EXACTLY the causal extra columns."""
+    from src.data.manifests import MART_SAFE_FEATURES
+
+    tstart = pd.Timestamp("2020-03-01")
+    cohort = pd.DataFrame(
+        [
+            {
+                "patid": 77,
+                "index_date": pd.Timestamp("2020-01-01"),
+                "treatment_start_date": tstart,
+                "elig_start_date": pd.Timestamp("2019-09-01"),
+                "zipcode_5": "10001",
+                "age_at_index": 50.0,
+                "charlson_score": 2,
+                "cci_hiv": 0,
+                "index_biologic_brand": "DUPIXENT",
+                TREATMENT_COL: 1,
+                TARGET_PERSISTENT_G28: 1,
+                "discontinued_180d": 0,
+                SWITCH_FLAG: 0,
+                "persistent_at_180d": 0,
+            }
+        ]
+    )
+    rec = build_journey_records(
+        cohort,
+        target=TARGET_PERSISTENT_G28,
+        anchor_col="treatment_start_date",
+        extra_cols=CAUSAL_EXTRA_COLS,
+    )[0]
+    # Enumerated journey-metadata / audit keys (NOT in MART_SAFE_FEATURES) --
+    # identical set to the multicohort guard (enrollment_duration_days and
+    # geographic_region are themselves MART_SAFE_FEATURES members).
+    metadata = {
+        "patient_journey_id",
+        "patient_id",
+        "patient_hash",
+        "index_date",
+        "journey_start_date",
+        "journey_status",
+        "discontinuation_flag",
+        "data_quality_score",
+    }
+    allowed = set(MART_SAFE_FEATURES) | metadata | {TARGET_PERSISTENT_G28}
+    assert set(rec) - allowed == set(CAUSAL_EXTRA_COLS)
+
+
 def test_causal_registry_entries():
     assert COHORT_TARGETS[CAUSAL_COHORT] == TARGET_PERSISTENT_G28
     assert CAUSAL_COHORT == "persistence_causal"
@@ -279,6 +439,20 @@ def test_causal_registry_entries():
     )
     assert CAUSAL_COHORT not in PREDICTION_COHORTS
     assert PREDICTION_COHORTS == ("initiation", "discontinuation", "persistence")
+
+
+def test_cohort_registries_share_one_key_set():
+    """The five per-cohort registries must never drift apart: adding a cohort to
+    one and forgetting another is a KeyError waiting to happen at call time."""
+    key_set = set(COHORT_TARGETS)
+    for registry in (
+        _SELECTOR_BY_COHORT,
+        _ANCHOR_BY_COHORT,
+        _SPLIT_CONFIG_BY_COHORT,
+        _OUTPUT_BY_COHORT,
+    ):
+        assert set(registry) == key_set, registry
+    assert set(_TREATMENT_ANCHORED) <= key_set
 
 
 def test_convert_persistence_causal_end_to_end(tmp_path):
