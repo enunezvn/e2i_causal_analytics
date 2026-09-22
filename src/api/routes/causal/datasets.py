@@ -739,6 +739,14 @@ _CAUSAL_PHYSICAL_TABLE: Dict[str, str] = {
 # the deployment flag does NOT unlock the rows: the real-mode predicate is
 # applied regardless, and only the planted-truth opt-in below reads them.
 _CAUSAL_SYNTHETIC_BACKED: frozenset = frozenset({"csu_escalation_causal"})
+# Datasets whose ONLY rows are real RWD (Lane A: the Optum persistence cohort,
+# every row is_synthetic=false by the loader and spec §5). The mirror image of
+# the set above, found by the Lane C live verify (2026-09-22): on the showcase
+# instance the Optum read followed the deployment rule -- no provenance
+# predicate, and /causal/agent-analyze labelled the response
+# data_source="synthetic" for real rows. For these datasets the real-mode
+# predicate is applied and the label is "database" regardless of the flag.
+_CAUSAL_REAL_BACKED: frozenset = frozenset({"optum_biologic_persistence"})
 # The planted-truth run's opt-in: a MODULE-LEVEL seam, not an environment
 # variable (codex r1: an env var is the same class of process-wide bypass as
 # E2I_INCLUDE_SYNTHETIC under another name -- a container manifest, config map
@@ -756,10 +764,12 @@ def _planted_truth_run() -> bool:
 def serves_synthetic_rows(dataset: str) -> bool:
     """Whether a read of ``dataset`` in THIS process returns synthetic rows --
     the ``data_source`` label the response carries. Synthetic-backed datasets
-    follow the planted-truth opt-in only; every other dataset follows the
-    deployment-wide flag."""
+    follow the planted-truth opt-in only; real-backed datasets never serve
+    synthetic rows; every other dataset follows the deployment-wide flag."""
     if dataset in _CAUSAL_SYNTHETIC_BACKED:
         return _planted_truth_run()
+    if dataset in _CAUSAL_REAL_BACKED:
+        return False
     return deployment_includes_synthetic()
 
 
@@ -770,13 +780,17 @@ def apply_dataset_provenance_filter(query: Any, dataset: str) -> Any:
     ``.eq('is_synthetic', False)`` REGARDLESS of ``E2I_INCLUDE_SYNTHETIC``;
     under the planted-truth opt-in the predicate flips to
     ``.eq('is_synthetic', True)`` -- ONLY the planted rows, never an unfiltered
-    real/synthetic mixture labelled ``synthetic`` (codex r1). Every other
-    dataset: :func:`apply_provenance_filter` (deployment-wide behaviour,
-    unchanged). Used by every reader of a dataset's rows: the agent loader,
-    the estimation-data route, the variables probe and the brand dropdown.
+    real/synthetic mixture labelled ``synthetic`` (codex r1). Real-backed
+    datasets (:data:`_CAUSAL_REAL_BACKED`): the real-mode predicate REGARDLESS
+    of the flag. Every other dataset: :func:`apply_provenance_filter`
+    (deployment-wide behaviour, unchanged). Used by every reader of a dataset's
+    rows: the agent loader, the estimation-data route, the variables probe and
+    the brand dropdown.
     """
     if dataset in _CAUSAL_SYNTHETIC_BACKED:
         return query.eq(PROVENANCE_COLUMN, _planted_truth_run())
+    if dataset in _CAUSAL_REAL_BACKED:
+        return query.eq(PROVENANCE_COLUMN, False)
     return apply_provenance_filter(query)
 
 
