@@ -219,3 +219,22 @@ def test_a_client_that_cannot_be_built_or_closed_is_a_failed_round_and_is_rememb
     )
     assert rxnav_brand_aliases(["Kisqali"]) == {"Kisqali": ["ribociclib"]}
     assert closed["n"] == 1, "the full round is cached; close() is not attempted again"
+
+
+def test_a_close_failure_never_masks_an_in_flight_base_exception(monkeypatch):
+    # Codex r5 MED: close() raising inside the finally replaced a KeyboardInterrupt
+    # from the round, and the replacement (an ordinary OSError) was then swallowed
+    # as a failed round. The interrupt must win; close() failures are logged only.
+    class _CloseBoom(_FakeRxNav):
+        def close(self):
+            raise OSError("socket already gone")
+
+    monkeypatch.setattr(brand_aliases, "RxNavClient", lambda *, timeout: _CloseBoom())
+
+    def _interrupted(brands, client):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(brand_aliases, "_fetch_round", _interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        rxnav_brand_aliases(["Kisqali"])
+    assert brand_aliases._cache == {}, "an interrupted round is not a remembered failure"

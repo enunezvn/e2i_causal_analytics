@@ -179,7 +179,10 @@ def rxnav_brand_aliases(
                 gathered, complete = _fetch_round(ordered, rx)
             finally:
                 if client is None:
-                    rx.close()
+                    try:
+                        rx.close()
+                    except Exception:  # noqa: BLE001 — must never replace an in-flight exception
+                        logger.debug("brand_aliases: RxNav client close() failed", exc_info=True)
         except Exception as exc:  # noqa: BLE001 — see above; BaseException still propagates
             logger.warning(
                 "brand_aliases: RxNav client raised %s outside the round (complete=%s); "
