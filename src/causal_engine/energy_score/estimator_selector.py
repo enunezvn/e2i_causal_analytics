@@ -48,6 +48,7 @@ from src.causal_engine.estimator_registry import (
     ESTIMATOR_SPEED_RANK,
     EstimatorType,
 )
+from src.causal_engine.nuisance_config import propensity_model
 
 from .design_matrix import numeric_design_frame
 from .score_calculator import (
@@ -572,9 +573,7 @@ class CausalForestWrapper(BaseEstimatorWrapper):
                 ate_ci_lower = ate_ci_upper = ate_std = None  # type: ignore[assignment]
 
             # Estimate propensity scores for energy score
-            from sklearn.linear_model import LogisticRegressionCV
-
-            ps_model = LogisticRegressionCV(cv=3, max_iter=500)
+            ps_model = propensity_model()
             ps_model.fit(X, treatment)
             propensity_scores = ps_model.predict_proba(X)[:, 1]
 
@@ -657,9 +656,7 @@ class LinearDMLWrapper(BaseEstimatorWrapper):
                 ate_ci_lower = ate_ci_upper = ate_std = None  # type: ignore[assignment]
 
             # Propensity scores
-            from sklearn.linear_model import LogisticRegressionCV
-
-            ps_model = LogisticRegressionCV(cv=3, max_iter=500)
+            ps_model = propensity_model()
             ps_model.fit(X, treatment)
             propensity_scores = ps_model.predict_proba(X)[:, 1]
 
@@ -734,9 +731,7 @@ class DRLearnerWrapper(BaseEstimatorWrapper):
                 ate_ci_lower = ate_ci_upper = ate_std = None  # type: ignore[assignment]
 
             # Propensity scores
-            from sklearn.linear_model import LogisticRegressionCV
-
-            ps_model = LogisticRegressionCV(cv=3, max_iter=500)
+            ps_model = propensity_model()
             ps_model.fit(X, treatment)
             propensity_scores = ps_model.predict_proba(X)[:, 1]
 
@@ -862,9 +857,7 @@ class OLSWrapper(BaseEstimatorWrapper):
             if empty_backdoor:
                 propensity_scores = np.full(len(treatment), float(np.mean(treatment)))
             else:
-                from sklearn.linear_model import LogisticRegressionCV
-
-                ps_model = LogisticRegressionCV(cv=3, max_iter=500)
+                ps_model = propensity_model()
                 ps_model.fit(X, treatment)
                 propensity_scores = ps_model.predict_proba(X)[:, 1]
 
@@ -954,9 +947,7 @@ class SLearnerWrapper(BaseEstimatorWrapper):
             ate_ci_upper = ate + 1.96 * ate_std
 
             # Propensity scores
-            from sklearn.linear_model import LogisticRegressionCV
-
-            ps_model = LogisticRegressionCV(cv=3, max_iter=500)
+            ps_model = propensity_model()
             ps_model.fit(X, treatment)
             propensity_scores = ps_model.predict_proba(X)[:, 1]
 
@@ -1049,9 +1040,7 @@ class TLearnerWrapper(BaseEstimatorWrapper):
             ate_ci_upper = ate + 1.96 * ate_std
 
             # Propensity scores
-            from sklearn.linear_model import LogisticRegressionCV
-
-            ps_model = LogisticRegressionCV(cv=3, max_iter=500)
+            ps_model = propensity_model()
             ps_model.fit(X, treatment)
             propensity_scores = ps_model.predict_proba(X)[:, 1]
 
@@ -1118,7 +1107,6 @@ class XLearnerWrapper(BaseEstimatorWrapper):
 
         try:
             from sklearn.ensemble import GradientBoostingRegressor
-            from sklearn.linear_model import LogisticRegressionCV
 
             X = covariates.values
 
@@ -1154,7 +1142,7 @@ class XLearnerWrapper(BaseEstimatorWrapper):
             model_tau_0.fit(X_0, tau_0)
 
             # Propensity scores for weighting
-            ps_model = LogisticRegressionCV(cv=3, max_iter=500)
+            ps_model = propensity_model()
             ps_model.fit(X, treatment)
             propensity_scores = ps_model.predict_proba(X)[:, 1]
 
@@ -1263,9 +1251,7 @@ class OrthoForestWrapper(BaseEstimatorWrapper):
                 ate_ci_upper = ate + 1.96 * ate_std
 
             # Propensity scores
-            from sklearn.linear_model import LogisticRegressionCV
-
-            ps_model = LogisticRegressionCV(cv=3, max_iter=500)
+            ps_model = propensity_model()
             ps_model.fit(X, treatment)
             propensity_scores = ps_model.predict_proba(X)[:, 1]
 

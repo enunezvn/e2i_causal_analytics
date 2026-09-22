@@ -19,6 +19,7 @@ from src.causal_engine.energy_score.estimator_selector import (
     _honest_ate_ci,
     logger,
 )
+from src.causal_engine.nuisance_config import propensity_model
 
 
 class DMLLearnerWrapper(BaseEstimatorWrapper):
@@ -95,9 +96,7 @@ class DMLLearnerWrapper(BaseEstimatorWrapper):
                 ate_ci_lower = ate_ci_upper = ate_std = None  # type: ignore[assignment]
 
             # Propensity scores
-            from sklearn.linear_model import LogisticRegressionCV
-
-            ps_model = LogisticRegressionCV(cv=3, max_iter=500)
+            ps_model = propensity_model()
             ps_model.fit(X, treatment)
             propensity_scores = ps_model.predict_proba(X)[:, 1]
 
