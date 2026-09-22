@@ -714,6 +714,37 @@ async def _load_agent_estimation_frame(
     result = await query.limit(limit).execute()
     rows = result.data or []
 
+    return _resolve_agent_estimation_frame(
+        rows,
+        dataset=dataset,
+        treatment_var=treatment_var,
+        outcome_var=outcome_var,
+        select_cols=select_cols,
+        passthrough_only=passthrough_only,
+        brand=brand,
+    )
+
+
+def _resolve_agent_estimation_frame(
+    rows: List[Dict[str, Any]],
+    *,
+    dataset: str,
+    treatment_var: str,
+    outcome_var: str,
+    select_cols: List[str],
+    passthrough_only: List[str],
+    brand: Optional[str],
+) -> tuple["pd.DataFrame", List[str]]:  # type: ignore[name-defined] # noqa: F821
+    """Everything the agent loader does AFTER the rows are fetched: per-row
+    coercion, the constant-treatment refusal, the all-NULL covariate drop, the
+    one-hot expansion and the exact-collinearity prune -- returning
+    ``(frame, [treatment, outcome, *resolved covariates])``.
+
+    Split out of :func:`_load_agent_estimation_frame` so an offline run on the
+    same rows (the Lane A pre-flight reads the exported parquet) goes through
+    the IDENTICAL resolution; a re-implementation of this path in the
+    pre-flight script silently skipped the collinearity prune on 2026-09-22.
+    """
     numeric_cols = _CAUSAL_NUMERIC_COLUMNS.get(dataset, set())
     categorical_cols = _CAUSAL_CATEGORICAL_COLUMNS.get(dataset, set())
     records: List[Dict[str, Any]] = []

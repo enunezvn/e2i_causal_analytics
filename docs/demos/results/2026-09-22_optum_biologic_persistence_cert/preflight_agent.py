@@ -59,15 +59,8 @@ import src  # noqa: E402
 assert ".worktrees/real-data-causal" in src.__file__, src.__file__
 
 from src.api.routes.causal import agent as causal_routes  # noqa: E402
-from src.api.routes.causal.datasets import (  # noqa: E402
-    _CAUSAL_CATEGORICAL_COLUMNS,
-    _CAUSAL_DATASET_SPECS,
-    _CAUSAL_NUMERIC_COLUMNS,
-)
-from src.api.routes.causal.loaders import (  # noqa: E402
-    _coerce_estimation_row,
-    _one_hot_categoricals,
-)
+from src.api.routes.causal.datasets import _CAUSAL_DATASET_SPECS  # noqa: E402
+from src.api.routes.causal.loaders import _resolve_agent_estimation_frame  # noqa: E402
 from src.api.schemas.causal import AgentCausalAnalysisRequest  # noqa: E402
 
 DATASET = "optum_biologic_persistence"
@@ -91,27 +84,27 @@ class _MemStore:
 
 
 def build_frame(outcome: str):
+    """The exported parquet rows through the loader's OWN post-fetch resolution
+    (coercion, constant-treatment refusal, one-hot, exact-collinearity prune):
+    ``_resolve_agent_estimation_frame`` is exactly what the API path runs after
+    its PostgREST read, so the pre-flight sees the served design. Returns
+    ``(frame, resolved_covariates)``."""
     spec = _CAUSAL_DATASET_SPECS[DATASET]
     covariates = list(spec["covariate"])
     select_cols = [TREATMENT, outcome, *covariates]
     raw = pd.read_parquet(PARQUET, columns=select_cols)
     raw = raw.astype(object).where(raw.notna(), None)
-    records = []
-    for row in raw.to_dict(orient="records"):
-        rec = _coerce_estimation_row(
-            row,
-            select_cols=select_cols,
-            treatment_var=TREATMENT,
-            outcome_var=outcome,
-            numeric_cols=_CAUSAL_NUMERIC_COLUMNS[DATASET],
-            categorical_cols=frozenset(_CAUSAL_CATEGORICAL_COLUMNS[DATASET]),
-        )
-        if rec is not None:
-            records.append(rec)
-    frame = pd.DataFrame(records)
-    cats = [c for c in select_cols if c in _CAUSAL_CATEGORICAL_COLUMNS[DATASET]]
-    frame, dummies = _one_hot_categoricals(frame, cats)
-    resolved = [c for c in select_cols if c not in (TREATMENT, outcome) and c not in cats] + dummies
+    rows = raw.to_dict(orient="records")
+    frame, expanded = _resolve_agent_estimation_frame(
+        rows,
+        dataset=DATASET,
+        treatment_var=TREATMENT,
+        outcome_var=outcome,
+        select_cols=select_cols,
+        passthrough_only=[],
+        brand=None,
+    )
+    resolved = [c for c in expanded if c not in (TREATMENT, outcome)]
     return frame, resolved
 
 
