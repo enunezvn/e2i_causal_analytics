@@ -577,3 +577,119 @@ async def test_a_large_regression_objective_persists_as_its_value():
     (_, params) = db.rpc_calls[0]
     assert params["p_study"]["best_value"] == results["best_value"]
     assert all(t["value"] >= 1e6 for t in params["p_trials"])
+
+
+# ---------------------------------------------------------------------------
+# codex r8: the serialiser must be recursive THROUGH Pydantic and numpy, and the
+# live typed path must be covered end to end (state -> node -> saver -> RPC).
+# ---------------------------------------------------------------------------
+
+
+def test_json_native_recurses_through_pydantic_numpy_and_enums():
+    import enum
+    from datetime import datetime, timezone
+
+    import numpy as np
+    from pydantic import BaseModel
+
+    from src.mlops.optuna_optimizer import _json_native
+
+    class Color(enum.Enum):
+        RED = "red"
+
+    class Inner(BaseModel):
+        model_config = {"arbitrary_types_allowed": True}
+        arr: Any
+        flag: Any
+
+    class Outer(BaseModel):
+        model_config = {"arbitrary_types_allowed": True}
+        inner: Inner
+        scores: Any
+
+    obj = {
+        "outer": Outer(
+            inner=Inner(
+                arr=np.array([[1.0, float("inf")], [float("nan"), 2.5]]), flag=np.bool_(True)
+            ),
+            scores=np.array(3.5),  # zero-dimensional
+        ),
+        "zero_d": np.array(7),
+        "state": Color.RED,
+        "when": datetime(2026, 9, 22, 12, 0, tzinfo=timezone.utc),
+        "tuple": (np.int64(1), np.float32(0.5)),
+    }
+    out = _json_native(obj)
+    json.dumps(out, allow_nan=False)
+    assert out["outer"]["inner"]["arr"] == [[1.0, None], [None, 2.5]]
+    assert out["outer"]["inner"]["flag"] is True
+    assert out["outer"]["scores"] == 3.5
+    assert out["zero_d"] == 7
+    assert out["state"] == "red"
+    assert out["when"] == "2026-09-22T12:00:00+00:00"
+    assert out["tuple"] == [1, 0.5]
+
+
+@pytest.mark.asyncio
+async def test_end_to_end_from_a_validated_model_trainer_state_to_the_rpc_payload():
+    """Codex r7/r8: ONE test through the live shape — a ModelTrainerState-validated
+    state (Pydantic search-space distributions), the real tune_hyperparameters node,
+    the real save_to_database / build_persist_payload, and a fake RPC that JSON-encodes
+    the exact params like PostgREST. Only the external DB / pattern memory are faked."""
+    from uuid import uuid4
+
+    import numpy as np
+
+    from src.agents.ml_foundation.model_trainer.state import ModelTrainerState
+
+    rng = np.random.default_rng(2207)
+    state = ModelTrainerState(
+        audit_workflow_id=uuid4(),
+        enable_hpo=True,
+        hpo_trials=2,
+        algorithm_name="RandomForest",
+        problem_type="binary_classification",
+        experiment_id="tier0_e2e_2207typed",
+        default_hyperparameters={"n_estimators": 10},
+        hyperparameter_search_space={
+            "n_estimators": {"type": "int", "low": 5, "high": 12},
+            "max_features": {"type": "categorical", "choices": ["sqrt", "log2"]},
+        },
+        X_train_preprocessed=rng.random((60, 4)),
+        X_validation_preprocessed=rng.random((30, 4)),
+        train_data={"y": rng.integers(0, 2, 60)},
+        validation_data={"y": rng.integers(0, 2, 30)},
+    )
+    assert not isinstance(state.hyperparameter_search_space["n_estimators"], dict)
+
+    db = FakeAsyncSupabase()
+    with (
+        patch(
+            "src.memory.services.factories.get_async_supabase_client",
+            new=AsyncMock(return_value=db),
+        ),
+        patch(
+            "src.repositories.ml_experiment.MLExperimentRepository.get_by_mlflow_id",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "src.agents.ml_foundation.model_trainer.nodes.hyperparameter_tuner."
+            "_get_hpo_pattern_memory",
+            return_value=None,
+        ),
+    ):
+        out = await tune_hyperparameters(state)
+
+    assert out["hpo_completed"] is True, out
+    assert out.get("hpo_study_id"), out
+    (name, params) = db.rpc_calls[0]
+    assert name == "persist_hpo_study"
+    json.dumps(params, allow_nan=False)  # the fake already did; assert it again explicitly
+    study = params["p_study"]
+    assert study["study_name"].endswith("_RandomForest_hpo")
+    assert study["experiment_id"] is None  # a label, not an ml_experiments uuid
+    assert study["search_space"]["n_estimators"]["type"] == "int"
+    assert study["search_space"]["max_features"]["choices"] == ["sqrt", "log2"]
+    assert study["n_trials"] == 2 == len(params["p_trials"])
+    assert all(isinstance(t["params"]["n_estimators"], int) for t in params["p_trials"])
+    assert len(db.store["ml_hpo_trials"]) == 2

@@ -714,7 +714,7 @@ Itemized cost breakdown with one-time vs. recurring cost distinction.
 
 ## 6. HPO Studies
 
-**Source**: `database/ml/016_hpo_studies.sql` (Migration 016)
+**Source**: `database/ml/016_hpo_studies.sql` (Migration 016); objective columns widened by `database/ml/045_persist_hpo_study_rpc.sql` (#2207)
 
 Tracks Optuna hyperparameter optimization studies and their individual trial results.
 
@@ -750,7 +750,7 @@ Optuna study metadata including search space, sampler, pruner, and best results.
 | `metric` | VARCHAR(50) | Objective metric (roc_auc, rmse, etc.) |
 | `search_space` | JSONB | Param definitions: type, low, high, log, choices |
 | `best_trial_number` | INTEGER | Index of best trial |
-| `best_value` | DECIMAL(10,6) | Best objective value |
+| `best_value` | DOUBLE PRECISION (was DECIMAL(10,6) until ml/045) | Best objective value |
 | `best_params` | JSONB | Best hyperparameters found |
 | `n_trials` | INTEGER | Total trials run |
 | `n_pruned` | INTEGER | Trials pruned early |
@@ -766,7 +766,7 @@ Individual trial records within an HPO study.
 | `trial_number` | INTEGER | Trial index |
 | `state` | VARCHAR(50) | COMPLETE, PRUNED, FAIL, WAITING, RUNNING |
 | `params` | JSONB | Hyperparameters sampled |
-| `value` | DECIMAL(10,6) | Objective function value |
+| `value` | DOUBLE PRECISION (was DECIMAL(10,6) until ml/045) | Objective function value |
 | `intermediate_values` | JSONB | Step-wise values for pruning |
 | `duration_seconds` | DECIMAL(10,3) | Trial wall-clock time |
 

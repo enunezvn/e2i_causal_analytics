@@ -7,6 +7,7 @@ Version: 1.1.0
 """
 
 import asyncio
+import enum
 import logging
 import math
 import os
@@ -69,18 +70,25 @@ def _json_native(obj: Any) -> Any:
         return obj
     if isinstance(obj, float):
         return obj if math.isfinite(obj) else None
+    if isinstance(obj, enum.Enum):
+        return _json_native(obj.value)
     if isinstance(obj, np.generic):
         return _json_native(obj.item())
+    if isinstance(obj, np.ndarray):
+        # tolist() gives Python scalars (a 0-d array becomes one scalar); recurse
+        # so nested non-finite floats still become None (codex r8).
+        return _json_native(obj.tolist())
     if hasattr(obj, "model_dump"):
-        return _json_native(obj.model_dump(mode="json"))
+        # mode="python", NOT "json": Pydantic's own JSON serialiser raises on an
+        # arbitrary-typed field (an ndarray inside a model) before this function
+        # can visit it; dumping to Python objects and recursing handles it (r8).
+        return _json_native(obj.model_dump(mode="python"))
     if isinstance(obj, dict):
         return {str(k): _json_native(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple, set, frozenset, np.ndarray)):
+    if isinstance(obj, (list, tuple, set, frozenset)):
         return [_json_native(v) for v in obj]
     if isinstance(obj, datetime):
         return obj.isoformat()
-    if hasattr(obj, "value") and hasattr(type(obj), "__members__"):  # Enum
-        return _json_native(obj.value)
     return str(obj)
 
 
