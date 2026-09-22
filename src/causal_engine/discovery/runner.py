@@ -691,14 +691,17 @@ class DiscoveryRunner:
         if n_converged == 0:
             return [], nx.DiGraph()
 
-        # Count votes for each edge, once per distinct algorithm
+        # Count votes for each edge, once per (edge, distinct algorithm): the
+        # membership check below also makes a duplicated edge inside one
+        # edge_list a single vote (a separate dedupe was planted out as
+        # redundant -- teeth_plant_d.txt in the evidence dir).
         edge_votes: Dict[Tuple[str, str], List[str]] = {}
 
         for result in results:
             if not result.converged:
                 continue
 
-            for source, target in dict.fromkeys(result.edge_list):
+            for source, target in result.edge_list:
                 edge_key = (source, target)
                 if edge_key not in edge_votes:
                     edge_votes[edge_key] = []

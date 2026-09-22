@@ -202,11 +202,19 @@ fallback (hand-built results), and three consumer tests for the single source of
 default, tool schema and input model, graph_builder's unguided branch through
 `GraphBuilderNode.execute` with a capturing runner).
 
-**Teeth.** With the old quorum planted back (`teeth_plant_a.txt`): `7 failed, 8 passed`
-(15-test file at the time). With the census not recorded (`teeth_plant_b.txt`):
-`7 failed, 8 passed`. With per-occurrence vote counting restored (`teeth_plant_c.txt`):
-see the file's last line. Green on the branch tip: `green_targeted.txt` (the new file
-plus `test_runner.py`, `test_ensemble_confidence_p12.py`, `test_gate.py`, `test_base.py`,
+**Teeth.** With the old quorum planted back: `7 failed, 8 passed`
+(`teeth_plant_a.txt:16`; 15-test file at the time). With the census not recorded:
+`7 failed, 8 passed` (`teeth_plant_b.txt:14`). With voters counted per converged
+RESULT again (the codex r1 duplicate-voter defect; its header also names
+per-occurrence edge counting, which that plant did not touch): `1 failed, 16 passed`
+(`teeth_plant_c.txt:3`, the failure being `test_the_same_algorithm_run_twice_is_one_voter`).
+Plant D then removed the separate per-edge deduplication inside one `edge_list`:
+`20 passed` (`teeth_plant_d.txt:2`) — the plant landed but nothing failed, because the
+per-algorithm membership check already makes a duplicated edge one vote; the redundant
+dedupe was therefore removed from `_build_ensemble` and the capability stays pinned by
+`test_a_duplicated_edge_inside_one_result_is_one_vote`. Green on the branch tip:
+`136 passed` (`green_targeted.txt:3`: the new file plus `test_runner.py`,
+`test_ensemble_confidence_p12.py`, `test_gate.py`, `test_base.py`,
 `test_graph_builder_discovery_bootstrap.py`, `test_causal_discovery_tool.py`); the wider
 run of every test file importing a changed module is reported in the PR body.
 
