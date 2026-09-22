@@ -25,6 +25,29 @@ logger = logging.getLogger(__name__)
 # with state key ``discovery_bootstrap_resamples``.
 DISCOVERY_BOOTSTRAP_RESAMPLES = 20
 
+# Lane D (real-data causal estimation, spec "Lane D — guided discovery on
+# claims frames"). Measured on the real Optum persistence frame
+# (docs/demos/results/2026-09-22_lane_d_guided_discovery_claims/): 77 resolved
+# covariates, correlation rank 63/79, one guided PC fit at 20 covariates 9.5 s
+# versus 230 s at 43. The DAG-learning frame is capped here; every capped or
+# pruned covariate stays in the adjustment guarantee. Override per run with
+# ``discovery_max_covariates``.
+DISCOVERY_MAX_COVARIATES = 20
+# Wall-clock budget for one guided discovery run (primary fit + bootstrap
+# resamples + latent diagnostic). Derived, not invented: the agent's hard cap
+# (``_AGENT_HARD_TIMEOUT_S`` = 900 s) minus the refutation node's cooperative
+# deadline (``_REFUTATION_COMPUTE_BUDGET_S`` = 720 s from task start), both in
+# ``src/api/routes/causal/_common.py`` — discovery runs before estimation and
+# refutation, so it may use only the headroom the graph has beyond the
+# refutation deadline. Pinned against those constants by
+# tests/unit/test_agents/test_causal_impact/test_graph_builder_preflight.py.
+# Override per run with ``discovery_time_budget_s`` (None = unbounded).
+DISCOVERY_TIME_BUDGET_S = 180.0
+# Fewer succeeded resamples than this leaves a guided run uncorroborated
+# (the gate cannot ACCEPT or AUGMENT on it). Override with
+# ``discovery_min_resamples``.
+DISCOVERY_MIN_RESAMPLES = 10
+
 from src.agents.causal_impact.state import CausalGraph, CausalImpactState, spread_safe
 from src.causal_engine import compute_dag_hash
 from src.causal_engine.discovery import (
@@ -35,6 +58,10 @@ from src.causal_engine.discovery import (
     DiscoveryGateDecision,
     DiscoveryResult,
     DiscoveryRunner,
+)
+from src.causal_engine.discovery.preflight import (
+    preflight_discovery_frame,
+    preflight_summary,
 )
 from src.utils.session_ids import coerce_session_uuid
 
@@ -179,6 +206,18 @@ class GraphBuilderNode:
                 dag = self._construct_dag(treatment, outcome, confounders)
                 augmented_edges = []
 
+            # Lane D item 1: covariates the pre-flight kept away from the
+            # structure learner are still declared confounders. On the manual
+            # paths they are already nodes; on ACCEPT the shipped DAG is the
+            # ensemble over the CAPPED frame, so add them back as isolated
+            # nodes (no structure was learned for them — drawing curated edges
+            # here would let the API's dag_source classifier read them as a
+            # data contribution) so _apply_adjustment_guarantee unions them.
+            preflight_removed = self._preflight_removed(discovery_result)
+            for covariate in preflight_removed:
+                if covariate not in dag and covariate not in (treatment, outcome):
+                    dag.add_node(covariate)
+
             # Find valid adjustment sets (backdoor criterion), then enforce the
             # adjustment guarantee: declared (modeled) confounders are unioned
             # into every set regardless of what the DAG shows (fix 4).
@@ -250,6 +289,9 @@ class GraphBuilderNode:
             # policy; see test_structural_recovery docstring item 6).
             new_warnings: List[str] = []
             if discovery_result is not None:
+                new_warnings.extend(
+                    self._discovery_honesty_warnings(discovery_result, treatment, outcome)
+                )
                 latent_diagnostic = discovery_result.metadata.get("latent_diagnostic")
                 if isinstance(latent_diagnostic, dict):
                     causal_graph["latent_diagnostic"] = latent_diagnostic
@@ -620,6 +662,60 @@ class GraphBuilderNode:
         return "\n".join(lines)
 
     @staticmethod
+    def _preflight_removed(discovery_result: Optional[DiscoveryResult]) -> List[str]:
+        """Covariates the pre-flight kept away from the learner (constant,
+        exactly collinear, capped), in the order it reported them."""
+        if discovery_result is None:
+            return []
+        payload = discovery_result.metadata.get("preflight")
+        if not isinstance(payload, dict):
+            return []
+        removed: List[str] = []
+        for key in ("constant", "collinear", "capped"):
+            removed.extend(str(c) for c in (payload.get(key) or []))
+        return removed
+
+    @staticmethod
+    def _discovery_honesty_warnings(
+        discovery_result: DiscoveryResult, treatment: str, outcome: str
+    ) -> List[str]:
+        """The two Lane D lines for the response's warnings channel: what the
+        pre-flight pruned and capped (by name), and whether the data drew the
+        estimand edge. Both are facts about the run, whatever the gate
+        decided, so they are raised on every path discovery ran on."""
+        lines: List[str] = []
+        payload = discovery_result.metadata.get("preflight")
+        if isinstance(payload, dict):
+            from src.causal_engine.discovery.preflight import PreflightResult
+
+            preflight = PreflightResult(
+                kept=list(payload.get("kept") or []),
+                constant=list(payload.get("constant") or []),
+                collinear=list(payload.get("collinear") or []),
+                capped=list(payload.get("capped") or []),
+                protected=list(payload.get("protected") or []),
+                max_covariates=int(payload.get("max_covariates") or 0),
+                n_offered=int(payload.get("n_offered") or 0),
+                n_rows=int(payload.get("n_rows") or 0),
+                n_rows_used=int(payload.get("n_rows_used") or 0),
+            )
+            # Raised only when the learner did not see everything: a line
+            # saying "nothing dropped, nothing capped" is noise in the
+            # response's prose channel.
+            if preflight.constant or preflight.collinear or preflight.capped:
+                lines.append(preflight_summary(preflight))
+        missing = discovery_result.metadata.get("required_edges_missing") or []
+        if any(list(edge) == [treatment, outcome] for edge in missing):
+            cause = discovery_result.metadata.get("required_edges_missing_cause") or ""
+            lines.append(
+                f"Discovery did not draw the estimand edge {treatment} -> {outcome} "
+                f"({cause}). The edge is asserted by the prior on the shipped DAG "
+                "(provenance required_prior when the DAG shipped through discovery); "
+                "the estimate still tests it."
+            )
+        return lines
+
+    @staticmethod
     def _resolve_anchored_confounders(state: CausalImpactState) -> List[str]:
         """Structural-prior channel (fix 4). When ``anchored_confounders`` is
         PRESENT it alone names the confounders to force as required edges (an
@@ -803,6 +899,10 @@ class GraphBuilderNode:
         # multi-algorithm ensemble default (False) so their behavior is unchanged.
         guided = bool(state.get("discovery_guided", False))
         prior_knowledge: Optional[CausalPriorKnowledge] = None
+        learning_frame = data
+        preflight = None
+        time_budget_s: Optional[float] = None
+        min_resamples: Optional[int] = None
         if guided and treatment in data.columns and outcome in data.columns:
             from src.repositories.provenance import PROVENANCE_DROP_COLS
 
@@ -811,11 +911,6 @@ class GraphBuilderNode:
                 for c in data.columns
                 if c not in (treatment, outcome) and c not in PROVENANCE_DROP_COLS
             ]
-            tiers = (
-                [covariate_cols, [treatment], [outcome]]
-                if covariate_cols
-                else [[treatment], [outcome]]
-            )
             # Seed the ANCHORED confounders (fix 4: the structural-prior channel,
             # falling back to modeled_confounders for pre-split callers) as
             # REQUIRED edges so guided PC anchors them as confounders
@@ -833,6 +928,36 @@ class GraphBuilderNode:
                 for c in self._resolve_anchored_confounders(state)
                 if c in data.columns and c not in (treatment, outcome)
             ]
+            # Lane D item 1: the pre-flight decides which covariates the
+            # structure learner sees — constant and exactly collinear columns
+            # go (a real claims frame's correlation matrix is singular
+            # otherwise and fisherz refuses it), then the frame is capped by a
+            # pre-treatment screen (PC's cost is the number of CI tests). The
+            # anchored confounders are protected: their required edges need
+            # the node in the frame. Everything removed stays in the
+            # adjustment guarantee (execute() adds it back to the shipped DAG
+            # as a node, and _apply_adjustment_guarantee unions it). The
+            # decisions travel in DiscoveryResult.metadata["preflight"].
+            if covariate_cols:
+                preflight = preflight_discovery_frame(
+                    data,
+                    treatment,
+                    outcome,
+                    covariate_cols,
+                    max_covariates=int(
+                        state.get("discovery_max_covariates", DISCOVERY_MAX_COVARIATES)
+                    ),
+                    protected=anchored,
+                )
+                covariate_cols = list(preflight.kept)
+                anchored = [c for c in anchored if c in set(preflight.kept)]
+                learning_columns = set(covariate_cols) | {treatment, outcome}
+                learning_frame = data[[c for c in data.columns if c in learning_columns]]
+            tiers = (
+                [covariate_cols, [treatment], [outcome]]
+                if covariate_cols
+                else [[treatment], [outcome]]
+            )
             required_edges: List[Tuple[str, str]] = [(treatment, outcome)]
             for conf in anchored:
                 required_edges.append((conf, treatment))
@@ -851,6 +976,12 @@ class GraphBuilderNode:
             # sufficiency — default the FCI latent-confounding diagnostic ON
             # here (opt-out via state), mirroring the bootstrap idiom above.
             latent_diagnostic = bool(state.get("discovery_latent_diagnostic", True))
+            # Lane D item 2: the run is bounded and its corroboration needs a
+            # minimum achieved resample count (the runner reports the count
+            # it achieved, never the one requested).
+            raw_budget = state.get("discovery_time_budget_s", DISCOVERY_TIME_BUDGET_S)
+            time_budget_s = None if raw_budget is None else float(raw_budget)
+            min_resamples = int(state.get("discovery_min_resamples", DISCOVERY_MIN_RESAMPLES))
         else:
             algorithms_str = state.get("discovery_algorithms", ["ges", "pc"])
             algorithms = []
@@ -876,6 +1007,9 @@ class GraphBuilderNode:
             prior_knowledge=prior_knowledge,
             bootstrap_resamples=bootstrap_resamples,
             latent_diagnostic=latent_diagnostic,
+            time_budget_s=time_budget_s,
+            min_resamples=min_resamples,
+            indep_test=state.get("discovery_indep_test"),
         )
 
         # Run discovery. The state's session is the caller's chat id RAW
@@ -892,7 +1026,7 @@ class GraphBuilderNode:
         session_uuid = coerce_session_uuid(state.get("session_id"))
 
         result = await self.discovery_runner.discover_dag(
-            data=data,
+            data=learning_frame,
             config=config,
             session_id=session_uuid,
         )
@@ -900,6 +1034,9 @@ class GraphBuilderNode:
         # Annotate the latent diagnostic with the estimand BEFORE the gate
         # evaluates, so the gate's metadata pass-through carries the flag too.
         self._annotate_latent_diagnostic(result, treatment, outcome)
+        if preflight is not None:
+            result.metadata["preflight"] = preflight.to_dict()
+        self._annotate_required_edges(result, config)
 
         # Evaluate with gate
         expected_edges = [(treatment, outcome)]  # Minimal expectation
@@ -960,6 +1097,42 @@ class GraphBuilderNode:
         payload["treatment"] = treatment
         payload["outcome"] = outcome
         payload["flag"] = flag
+
+    @staticmethod
+    def _annotate_required_edges(result: DiscoveryResult, config: DiscoveryConfig) -> None:
+        """Lane D item 3 — required-edge honesty. Record which prior-required
+        edges the ensemble does NOT carry, with the cause.
+
+        Measured (docs/demos/results/2026-09-22_lane_d_guided_discovery_claims/,
+        ``d1_required_edge_mechanism.txt``): causal-learn's PC honours a
+        required edge at ORIENTATION only — ``skeleton_discovery`` consults
+        ``is_forbidden`` and never ``is_required`` — so a required pair the
+        data finds conditionally independent is removed in the skeleton phase
+        and never returns. On the real Optum persistence frame the estimand
+        pair is marginally independent at alpha 0.05 (fisherz p = 0.21), so
+        the (T, Y) edge is absent from every guided ensemble there. Nothing
+        of ours drops it (the ensemble keeps every edge a single converged
+        algorithm draws), so the fix is honesty: the miss is recorded here,
+        surfaced as a warning by ``execute``, and the shipped DAG asserts the
+        estimand edge with provenance ``required_prior`` on the discovery
+        paths (ACCEPT appends it; AUGMENT's manual base carries it)."""
+        prior = config.prior_knowledge
+        required = list(prior.required_edges or []) if prior is not None else []
+        if not required:
+            return
+        dag = result.ensemble_dag
+        missing = [
+            [source, target]
+            for source, target in required
+            if dag is None or not dag.has_edge(source, target)
+        ]
+        result.metadata["required_edges_missing"] = missing
+        if missing:
+            result.metadata["required_edges_missing_cause"] = (
+                "removed in PC's skeleton phase: the data found the pair conditionally "
+                f"independent at alpha={config.alpha} (causal-learn applies required "
+                "edges at orientation only, to edges that survived the skeleton)"
+            )
 
     def _build_dag_with_discovery(
         self,

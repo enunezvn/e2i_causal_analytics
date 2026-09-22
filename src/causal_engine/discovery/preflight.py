@@ -31,7 +31,9 @@ timeout). Three steps, in this order:
    looks at the treatment–outcome relation: rank the surviving covariates by
    absolute Pearson association with T and, separately, with Y; take the
    largest ``k`` such that the union of the two top-``k`` lists fits under the
-   cap. Ties (at 1e-12) break by manifest order. ``protected`` covariates (the
+   cap, then fill any free slot alternating the next name from each list
+   (both effective depths are reported). Ties (at 1e-12) break by manifest
+   order. ``protected`` covariates (the
    caller's anchored confounders — their prior-required edges need the node in
    the frame) are pruned first and exempt from the cap.
 
@@ -251,17 +253,41 @@ def preflight_discovery_frame(
                 break
             chosen = union
             best_k = k
+        # The symmetric top-k union can leave slots free (the k+1-th step adds
+        # two names at once). A free slot is budget the learner would not
+        # use, so fill the remainder alternating the next name from the
+        # T-ranked list and the Y-ranked list; both lists' effective depth is
+        # reported (k_treatment / k_outcome) so the selection stays auditable.
+        k_t = k_y = best_k
+        chosen_set = set(chosen)
+        while len(chosen) < room:
+            progressed = False
+            for ranked, depth_name in ((by_t, "t"), (by_y, "y")):
+                depth = k_t if depth_name == "t" else k_y
+                while depth < len(ranked) and ranked[depth] in chosen_set:
+                    depth += 1
+                if depth < len(ranked) and len(chosen) < room:
+                    chosen.append(ranked[depth])
+                    chosen_set.add(ranked[depth])
+                    depth += 1
+                    progressed = True
+                if depth_name == "t":
+                    k_t = depth
+                else:
+                    k_y = depth
+            if not progressed:
+                break
         chosen_set = set(chosen) | set(protected_kept)
         capped = [c for c in kept if c not in chosen_set]
         kept = [c for c in kept if c in chosen_set]
         screening.update(
             {
                 "k": best_k,
-                "top_by_treatment": by_t[:best_k],
-                "top_by_outcome": by_y[:best_k],
-                "association_with_treatment": {
-                    c: float(assoc_t[position[c]]) for c in candidates
-                },
+                "k_treatment": k_t,
+                "k_outcome": k_y,
+                "top_by_treatment": by_t[:k_t],
+                "top_by_outcome": by_y[:k_y],
+                "association_with_treatment": {c: float(assoc_t[position[c]]) for c in candidates},
                 "association_with_outcome": {c: float(assoc_y[position[c]]) for c in candidates},
             }
         )

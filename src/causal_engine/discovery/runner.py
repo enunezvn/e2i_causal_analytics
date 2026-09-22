@@ -275,7 +275,9 @@ class DiscoveryRunner:
             data, config, algorithm_results, edges, ensemble_dag
         )
 
-        latent_metadata = await self._maybe_latent_diagnostic(data, config)
+        latent_metadata = await self._maybe_latent_diagnostic(
+            data, config, elapsed_s=time.time() - start_time
+        )
 
         total_runtime = time.time() - start_time
         success, outcome_metadata = self._run_outcome(algorithm_results)
@@ -338,7 +340,9 @@ class DiscoveryRunner:
                 data, config, algorithm_results, edges, ensemble_dag
             )
 
-            latent_metadata = await self._maybe_latent_diagnostic(data, config)
+            latent_metadata = await self._maybe_latent_diagnostic(
+                data, config, elapsed_s=time.time() - start_time
+            )
 
             total_runtime = time.time() - start_time
 
@@ -909,15 +913,67 @@ class DiscoveryRunner:
         self,
         data: pd.DataFrame,
         config: DiscoveryConfig,
+        elapsed_s: float = 0.0,
     ) -> Dict[str, Any]:
         """Run the FCI latent diagnostic when configured (off by default).
-        Returns extra metadata entries ({} when the diagnostic is off)."""
+        Returns extra metadata entries ({} when the diagnostic is off).
+
+        Lane D item 2: the diagnostic falls under ``config.time_budget_s``
+        like the bootstrap. Measured on the capped real Optum persistence
+        frame (22 columns, n = 15,209) one unguided FCI fit is 382.5 s —
+        more than twice the 180 s production budget — so with the budget
+        already spent it is not started (``ran=False``, the reason says
+        so), and otherwise it is bounded by the remaining budget: a timeout
+        is reported ``ran=True, converged=False`` with the reason. The
+        worker thread cannot be cancelled; its result is abandoned (the same
+        contract as the per-algorithm timeout in ``_run_algorithms``)."""
         if not config.latent_diagnostic:
             return {}
+        budget = config.time_budget_s
+        remaining: Optional[float] = None
+        if budget is not None:
+            remaining = float(budget) - float(elapsed_s)
+            if remaining <= 0.0:
+                logger.warning(
+                    f"Latent-confounding diagnostic (FCI) not started: discovery time "
+                    f"budget {budget:.0f}s exhausted after {elapsed_s:.1f}s"
+                )
+                return {
+                    "latent_diagnostic": {
+                        "ran": False,
+                        "error": (
+                            f"skipped: discovery time budget {budget:.0f}s exhausted "
+                            f"after {elapsed_s:.1f}s"
+                        ),
+                        "time_budget_s": budget,
+                        "elapsed_before_s": elapsed_s,
+                    }
+                }
         loop = asyncio.get_event_loop()
-        payload = await loop.run_in_executor(
-            None, lambda: self._run_latent_diagnostic(data, config)
-        )
+        future = loop.run_in_executor(None, lambda: self._run_latent_diagnostic(data, config))
+        try:
+            payload = await asyncio.wait_for(future, timeout=remaining)
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"Latent-confounding diagnostic (FCI) timed out after {remaining:.1f}s "
+                f"(discovery time budget {budget:.0f}s)"
+            )
+            return {
+                "latent_diagnostic": {
+                    "ran": True,
+                    "converged": False,
+                    "bidirected_edges": [],
+                    "error": (
+                        f"timeout after {remaining:.1f}s (discovery time budget "
+                        f"{budget:.0f}s, {elapsed_s:.1f}s already spent)"
+                    ),
+                    "time_budget_s": budget,
+                    "elapsed_before_s": elapsed_s,
+                }
+            }
+        if budget is not None:
+            payload["time_budget_s"] = budget
+            payload["elapsed_before_s"] = elapsed_s
         return {"latent_diagnostic": payload}
 
     def _remove_cycles(self, dag: nx.DiGraph) -> nx.DiGraph:

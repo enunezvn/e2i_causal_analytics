@@ -181,11 +181,24 @@ class TestCap:
         covs = list(frame.columns[2:])
         result = preflight_discovery_frame(frame, T, Y, covs, max_covariates=4)
         # top-2 by |assoc T| = {a_strong, ab}; top-2 by |assoc Y| = {b_strong, ab}
-        # union (k=2) = 3 <= 4; k=3 adds a_weak and b_weak -> 5 > 4, so k=2.
-        assert set(result.kept) == {"a_strong", "ab", "b_strong"}
+        # union (k=2) = 3 <= 4; k=3 adds a_weak and b_weak -> 5 > 4, so k=2,
+        # and the one free slot is filled from the T list first (a_weak).
+        assert set(result.kept) == {"a_strong", "ab", "b_strong", "a_weak"}
         assert result.screening["k"] == 2
+        assert result.screening["k_treatment"] == 3
+        assert result.screening["k_outcome"] == 2
+        assert result.screening["top_by_treatment"] == ["a_strong", "ab", "a_weak"]
+        assert result.screening["top_by_outcome"] == ["b_strong", "ab"]
         assert set(result.capped) == set(covs) - set(result.kept)
-        assert len(result.kept) <= 4
+        assert len(result.kept) == 4
+
+    def test_cap_fills_every_slot_when_candidates_remain(self) -> None:
+        frame = self._frame_with_known_ranking()
+        covs = list(frame.columns[2:])
+        for cap in (1, 2, 3, 5, 6, 7):
+            result = preflight_discovery_frame(frame, T, Y, covs, max_covariates=cap)
+            assert len(result.kept) == cap, cap
+            assert len(result.kept) + len(result.capped) == len(covs)
 
     def test_cap_preserves_manifest_order_of_the_kept_columns(self) -> None:
         frame = self._frame_with_known_ranking()

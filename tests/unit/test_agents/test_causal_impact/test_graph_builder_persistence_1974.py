@@ -283,7 +283,12 @@ async def test_persist_step_returns_only_new_warnings(monkeypatch):
     result = await node.execute(_state(warnings=["pre-existing warning"]))
 
     assert "pre-existing warning" not in result["warnings"]
-    assert len(result["warnings"]) == 1
+    # Every returned line is NEW (the persist failure, plus Lane D's
+    # pre-flight line naming the constant covariate the learner did not see);
+    # the accumulator's own entries are never echoed back.
+    assert all(w != "pre-existing warning" for w in result["warnings"])
+    persist_lines = [w for w in result["warnings"] if "NOT persisted" in w or "FAILED" in w]
+    assert len(persist_lines) == 1
 
 
 @pytest.mark.asyncio
