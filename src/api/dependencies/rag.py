@@ -5,7 +5,9 @@ used by the orchestrator's RAG context node.
 """
 
 import asyncio
+import concurrent.futures
 import logging
+import threading
 from typing import Any, Dict, Optional
 
 from src.api.dependencies.falkordb_client import get_falkordb
@@ -16,22 +18,12 @@ logger = logging.getLogger(__name__)
 _rag_deps: Optional[Dict[str, Any]] = None
 # Single-flight for the first build: a burst of first requests must not each
 # construct the retriever, embedder and extractor (lane 2: the extractor's first
-# build runs a bounded RxNav round). An asyncio.Lock binds to the loop that first
-# contends it, so the lock is kept per running loop: a cold burst on a new loop
-# (a fresh test loop after the singleton is reset) gets a fresh lock instead of
-# "is bound to a different event loop".
-_rag_deps_lock: Optional[asyncio.Lock] = None
-_rag_deps_lock_loop: Optional[asyncio.AbstractEventLoop] = None
-
-
-def _single_flight_lock() -> asyncio.Lock:
-    global _rag_deps_lock, _rag_deps_lock_loop
-    loop = asyncio.get_running_loop()
-    if _rag_deps_lock is None or _rag_deps_lock_loop is not loop:
-        # No await between the check and the assignment: race-free within one loop.
-        _rag_deps_lock = asyncio.Lock()
-        _rag_deps_lock_loop = loop
-    return _rag_deps_lock
+# build runs a bounded RxNav round). The process runs more than one event loop
+# (asyncio.run inside threadpool tools), so the flight is keyed on a thread lock
+# and a concurrent Future that ANY loop can await; an asyncio.Lock would bind to
+# one loop and let a second loop start its own build.
+_build_guard = threading.Lock()
+_build_future: Optional[concurrent.futures.Future] = None
 
 
 async def get_rag_dependencies() -> Dict[str, Any]:
@@ -42,16 +34,43 @@ async def get_rag_dependencies() -> Dict[str, Any]:
         - embedding_service: OpenAIEmbeddingClient (or None)
         - entity_extractor: EntityExtractor (or None)
     """
-    global _rag_deps
+    global _rag_deps, _build_future
 
-    if _rag_deps is not None:
-        return _rag_deps
-
-    async with _single_flight_lock():
-        if _rag_deps is not None:  # built by the request that held the lock first
+    while True:
+        if _rag_deps is not None:
             return _rag_deps
-        _rag_deps = await _build_rag_dependencies()
-        return _rag_deps
+
+        with _build_guard:
+            if _rag_deps is not None:
+                return _rag_deps
+            leader = _build_future is None
+            if leader:
+                _build_future = concurrent.futures.Future()
+            flight = _build_future
+
+        if leader:
+            try:
+                deps = await _build_rag_dependencies()
+            except BaseException:
+                # Cancelled or crashed leader: release the waiters to retry, and
+                # let the next caller lead. Never hand them our CancelledError.
+                with _build_guard:
+                    _build_future = None
+                flight.set_exception(RuntimeError("RAG dependency build aborted"))
+                raise
+            with _build_guard:
+                _rag_deps = deps
+                _build_future = None
+            flight.set_result(deps)
+            return deps
+
+        try:
+            # shield: a cancelled waiter must not cancel the shared flight.
+            return await asyncio.shield(asyncio.wrap_future(flight))
+        except asyncio.CancelledError:
+            raise
+        except RuntimeError:
+            continue  # the leader aborted; go round again
 
 
 async def _build_rag_dependencies() -> Dict[str, Any]:

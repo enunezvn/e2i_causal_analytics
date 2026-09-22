@@ -123,3 +123,89 @@ def test_the_single_flight_lock_survives_a_new_event_loop(monkeypatch):
                 rag_deps._rag_deps = None
         assert counter["n"] == 1
         assert first is second
+
+
+def test_two_concurrent_loops_share_one_cold_build(monkeypatch):
+    # Codex r3 MED: the process runs more than one event loop (asyncio.run inside
+    # threadpool tools), so single-flight must hold ACROSS loops, not only within
+    # one. Loop A's leader is held mid-build while loop B goes cold: B must wait
+    # for A's build and get the same object, not start a second one.
+    import asyncio
+    import threading
+    from contextlib import ExitStack
+
+    monkeypatch.setattr(rag_deps, "_rag_deps", None)
+    counter = {"n": 0}
+    release = threading.Event()
+    leader_inside = threading.Event()
+
+    async def _slow_falkordb():
+        leader_inside.set()
+        await asyncio.to_thread(release.wait, 5.0)
+        return MagicMock(name="falkordb")
+
+    results: dict[str, object] = {}
+
+    def _run(tag):
+        results[tag] = asyncio.run(rag_deps.get_rag_dependencies())
+
+    with ExitStack() as stack:
+        for p in _burst_patches(counter):
+            stack.enter_context(p)
+        stack.enter_context(patch.object(rag_deps, "get_falkordb", _slow_falkordb))
+        a = threading.Thread(target=_run, args=("A",))
+        b = threading.Thread(target=_run, args=("B",))
+        try:
+            a.start()
+            assert leader_inside.wait(5.0), "loop A never entered the build"
+            b.start()
+            b.join(0.3)  # B either waits on A's build (correct) or starts its own (defect)
+            release.set()
+            a.join(5.0)
+            b.join(5.0)
+        finally:
+            rag_deps._rag_deps = None
+
+    assert not a.is_alive() and not b.is_alive()
+    assert counter["n"] == 1, f"{counter['n']} cold builds across two concurrent loops"
+    assert results["A"] is results["B"]
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_leader_hands_the_flight_to_a_waiter(monkeypatch):
+    # The leader's request is cancelled mid-build (client disconnect): the waiter
+    # must not inherit that cancellation; it retries, leads, and builds once.
+    import asyncio
+
+    monkeypatch.setattr(rag_deps, "_rag_deps", None)
+    counter = {"n": 0}
+    leader_inside = asyncio.Event()
+    hold = asyncio.Event()
+
+    async def _held_falkordb():
+        if not leader_inside.is_set():
+            leader_inside.set()
+            await hold.wait()  # the leader parks here and is cancelled
+        return MagicMock(name="falkordb")
+
+    from contextlib import ExitStack
+
+    with ExitStack() as stack:
+        for p in _burst_patches(counter):
+            stack.enter_context(p)
+        stack.enter_context(patch.object(rag_deps, "get_falkordb", _held_falkordb))
+        try:
+            leader = asyncio.create_task(rag_deps.get_rag_dependencies())
+            await leader_inside.wait()
+            waiter = asyncio.create_task(rag_deps.get_rag_dependencies())
+            await asyncio.sleep(0)  # let the waiter park on the flight
+            leader.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await leader
+            deps = await asyncio.wait_for(waiter, 5.0)
+        finally:
+            rag_deps._rag_deps = None
+
+    assert deps["entity_extractor"] is not None
+    assert counter["n"] == 1
+    assert rag_deps._build_future is None, "the flight slot must be clear when idle"
