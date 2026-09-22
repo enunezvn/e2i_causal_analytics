@@ -330,12 +330,29 @@ def test_author_feature_end_to_end_with_dummy_lm():
     assert again.to_dict() == rec.to_dict()
 
 
-def test_author_expected_role_disagreement_is_recorded_but_extractor_wins():
+def test_author_expected_role_disagreement_routes_to_review_and_extractor_wins():
+    """codex r2 MED 4: a fragment whose own story contradicts what its edges
+    derive is ambiguous and a review item, not just a logged string."""
     lm = _dummy(_confounder_answer(expected_role="instrument"))
     rec = author_feature(_brief(panel=_panel()), resolver=_resolver(), lm=lm)
     assert rec.derived_role == "confounder"
     assert rec.expected_role == "instrument"
+    assert rec.ambiguous is True
+    assert rec.review_required is True
     assert any("author expected 'instrument'" in r for r in rec.review_reasons)
+
+
+def test_author_invalid_expected_role_is_rejected_to_review():
+    # The parser refuses a role outside the six (strict, codex r2 MED 4) ...
+    with pytest.raises(StructuralAuthorError, match="expected_role 'proxy' is not one of"):
+        parse_author_output(_confounder_answer(expected_role="proxy"), feature_name="baseline_uas7")
+    # ... and end to end the feature lands in review with no fragment (dspy's
+    # own Literal typing already rejects the value before the parser sees it).
+    rec = author_feature(
+        _brief(), resolver=_resolver(), lm=_dummy(_confounder_answer(expected_role="proxy"))
+    )
+    assert rec.edges == [] and rec.review_required is True
+    assert rec.review_reasons and rec.review_reasons[0].startswith("LM call failed")
 
 
 def test_panel_cross_check_disagreement_sets_ambiguous_and_review():
@@ -435,3 +452,15 @@ def test_panel_record_view_reads_lane_e_shape():
 def test_build_brief_refuses_a_panel_record_for_another_feature():
     with pytest.raises(StructuralAuthorError, match="panel record is for"):
         _brief(feature="age", panel=_panel(feature="baseline_uas7"))
+
+
+def test_tree_identity_names_the_commit_and_the_dirty_state(tmp_path):
+    """codex r2 HIGH 4: evidence captured from a dirty tree must say so. The
+    stamp is git-derived; where git or a repo is absent it is None, never a
+    fabricated identity and never a crash (the API image has no .git)."""
+    from src.data.kg.structural_author import tree_identity
+
+    ident = tree_identity(Path(__file__).resolve().parents[4])
+    assert isinstance(ident["commit"], str) and len(ident["commit"]) == 40
+    assert isinstance(ident["dirty_src_scripts_tests"], bool)
+    assert tree_identity(tmp_path) == {"commit": None, "dirty_src_scripts_tests": None}

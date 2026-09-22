@@ -41,6 +41,7 @@ import logging
 import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Literal, Mapping, Optional, Sequence
 
 import networkx as nx
@@ -73,6 +74,7 @@ __all__ = [
     "ParsedFragment",
     "StructuralAuthor",
     "StructuralAuthorError",
+    "tree_identity",
     "author_feature",
     "build_brief",
     "grade_edges",
@@ -319,6 +321,38 @@ except ImportError:  # pragma: no cover - dspy is installed on this platform
     StructuralAttestationSignature = None  # type: ignore[assignment,misc]
 
 
+def tree_identity(root: Path | str) -> dict[str, Optional[Any]]:
+    """The git tree a capture ran on: ``{"commit": <40-hex>|None,
+    "dirty_src_scripts_tests": bool|None}``.
+
+    Evidence captured from a dirty tree must say so (a probe quoted at a
+    commit whose source it did not run on is not evidence). Where git or a
+    repository is absent (the API image ships no ``.git``) both values are
+    ``None`` — never a fabricated identity, never a crash.
+    """
+    import subprocess
+
+    try:
+        commit = (
+            subprocess.check_output(
+                ["git", "-C", str(root), "rev-parse", "HEAD"], stderr=subprocess.DEVNULL
+            )
+            .decode()
+            .strip()
+        )
+        status = (
+            subprocess.check_output(
+                ["git", "-C", str(root), "status", "--porcelain", "--", "src", "scripts", "tests"],
+                stderr=subprocess.DEVNULL,
+            )
+            .decode()
+            .strip()
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return {"commit": None, "dirty_src_scripts_tests": None}
+    return {"commit": commit, "dirty_src_scripts_tests": bool(status)}
+
+
 def prompt_hash() -> str:
     """sha256 over the signature's instructions and its field names/descriptions.
 
@@ -485,7 +519,7 @@ def parse_author_output(
     expected = raw.get("expected_role")
     expected_role = str(expected).strip().lower() if expected is not None else None
     if expected_role is not None and expected_role not in ROLES:
-        expected_role = None
+        raise StructuralAuthorError(f"expected_role {expected!r} is not one of {ROLES}")
 
     amb_raw = raw.get("ambiguous", False)
     if isinstance(amb_raw, str):
@@ -806,11 +840,16 @@ def postprocess_fragment(
     ambiguous = bool(fragment.ambiguous) or agrees is False
     if agrees is False:
         reasons.append(f"derived role {derived!r} disagrees with the panel ensemble {panel_role!r}")
-    if fragment.expected_role is not None and derived is not None:
-        if fragment.expected_role != derived:
-            reasons.append(
-                f"author expected {fragment.expected_role!r}, extractor derived {derived!r}"
-            )
+    expected_mismatch = (
+        fragment.expected_role is not None
+        and derived is not None
+        and fragment.expected_role != derived
+    )
+    if expected_mismatch:
+        # The author's own story and the extractor disagree: a self-contradictory
+        # fragment is ambiguous and a review item (codex r2 MED 4).
+        ambiguous = True
+        reasons.append(f"author expected {fragment.expected_role!r}, extractor derived {derived!r}")
     if panel is not None and panel.leak_verdict:
         reasons.append(
             f"panel leak verdict ({panel.leak_source}): excluded from every adjustment set "
@@ -839,6 +878,7 @@ def postprocess_fragment(
         derived is None
         or bool(violations)
         or agrees is False
+        or expected_mismatch
         or (panel is not None and panel.review_required)
     )
     return AuthoredAttestation(

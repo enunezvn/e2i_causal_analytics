@@ -20,6 +20,15 @@ deliverable (exit 2).
 * ``real`` — the paid run. Refuses unless ``--i-accept-cost`` is given and
   prints the estimate first (an OWNER decision, spec §3 Lane B item 3).
 
+The Lane E feature-role panel is NOT an input here, by construction: the 91
+golden briefs are literature-derived fixtures (ConcertAI CSU / PNH / BC
+cohorts that exist as label sets, not as frames), so the four voters have no
+data to run on and no panel can exist for them. The benchmark measures the
+author on the label-free brief alone (``feature_role_panel`` = "no
+feature-role panel record for this feature"), which is the brief every real
+feature gets when its panel record is absent; the cohort runs
+(``scripts/author_cohort_dag.py``) are where the panel is required.
+
 Citations are verified through ``CitationResolver`` only on the real run
 (``--resolver live``); the fake run uses an offline resolver that records every
 citation as unverifiable, so every fake-run edge grades ``unsupported``.
@@ -42,6 +51,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+import networkx as nx
 from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -49,6 +59,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 load_dotenv()
+
+from src.ml.causal_role_dgp.extractor import extract_role  # noqa: E402
 
 logger = logging.getLogger("measure_structural_author")
 
@@ -97,10 +109,22 @@ class OfflineResolver:
 def _fake_answer_for(brief: dict[str, str], replay: dict[str, dict[str, Any]]) -> dict[str, Any]:
     feature = brief["feature_name"]
     entry = replay.get(feature) if brief["cohort"] == CSU_COHORT else None
+    expected = "confounder"
     if entry is not None:
         edges = [list(e) for e in entry["edges"]]
         ambiguous = bool(entry.get("ambiguous", False))
         reasoning = "fake LM (replay of the committed CSU blind authored edges)"
+        # The replayed author's expectation is what its own edges derive: a
+        # replay must not fabricate a self-contradiction the author never made.
+        try:
+            expected = extract_role(
+                entry["feature_node"],
+                entry["treatment_node"],
+                entry["outcome_node"],
+                nx.DiGraph([tuple(e) for e in entry["edges"]]),
+            )
+        except ValueError:
+            expected = "confounder"
     else:
         edges = [[feature, "T"], [feature, "Y"], ["T", "Y"]]
         ambiguous = False
@@ -110,7 +134,7 @@ def _fake_answer_for(brief: dict[str, str], replay: dict[str, dict[str, Any]]) -
         "edges": json.dumps(edges),
         "edge_rationales": "[]",
         "entity_names": "{}",
-        "expected_role": "confounder",
+        "expected_role": expected,
         "ambiguous": "true" if ambiguous else "false",
     }
 
@@ -196,7 +220,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     logging.basicConfig(level=args.log_level, format="%(levelname)s %(name)s: %(message)s")
     args.out.mkdir(parents=True, exist_ok=True)
 
-    from src.data.kg.structural_author import author_feature, build_brief
+    from src.data.kg.structural_author import author_feature, build_brief, tree_identity
     from src.data.kg.structural_author_scoring import (
         golden_briefs,
         load_golden_entries,
@@ -290,6 +314,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         "cohort": args.cohort,
         "golden": str(args.golden),
         "n_briefs": len(briefs),
+        "tree": tree_identity(PROJECT_ROOT),
     }
     (args.out / "authored.json").write_text(
         json.dumps({"meta": meta, "records": authored}, indent=2), encoding="utf-8"
@@ -304,6 +329,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         + (f" (fake source: {args.fake_source})" if args.lm == "fake" else ""),
         f"- resolver: `{resolver_mode}`; cohort: `{args.cohort}`; briefs: {len(briefs)}",
         f"- measured_at: {meta['measured_at']}",
+        f"- tree: commit {meta['tree']['commit']} "
+        f"(dirty src/scripts/tests: {meta['tree']['dirty_src_scripts_tests']})",
         "",
         "## Score",
         "",

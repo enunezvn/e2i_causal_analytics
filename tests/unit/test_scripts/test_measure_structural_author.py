@@ -51,6 +51,9 @@ def test_fake_replay_on_csu_reproduces_the_committed_record(tmp_path, monkeypatc
     assert score["exact_role_agreement"] == 28
     assert score["missed_leaks"] == [] and score["gate_passed"] is True
     assert score["meta"]["lm"] == "fake" and score["meta"]["resolver"] == "offline"
+    # codex r2 HIGH 4: every capture names the tree it ran on.
+    assert len(score["meta"]["tree"]["commit"]) == 40
+    assert isinstance(score["meta"]["tree"]["dirty_src_scripts_tests"], bool)
     authored = json.loads((out / "authored.json").read_text())
     assert len(authored["records"]) == 31
     rec = authored["records"][0]
