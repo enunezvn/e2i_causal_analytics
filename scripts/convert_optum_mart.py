@@ -330,11 +330,13 @@ def build_journey_records(
     columns the prediction cohorts must never carry: the treatment, its brand
     label, the treatment start and the secondary outcomes. Each column is
     emitted by its declared ``CAUSAL_EXTRA_COLUMNS`` kind: ``date`` ->
-    ``pd.to_datetime``, ``text`` -> ``str``, ``flag`` -> ``int`` after asserting
-    the value is in ``{0, 1}`` (a non-binary flag raises ``ValueError`` naming
-    the column and the offending value -- never truncated, never silently
-    coerced from NaN/None). The default (empty) keeps every prediction cohort
-    byte-identical.
+    ``pd.to_datetime``, ``text`` -> passed through verbatim after asserting the
+    value IS a ``str`` (a non-string, e.g. NaN/None, raises ``ValueError``
+    naming the column rather than stringifying to ``"nan"``/``"None"``), ``flag``
+    -> ``int`` after asserting the value is in ``{0, 1}`` (a non-binary flag,
+    including NA, raises ``ValueError`` naming the column and the offending
+    value -- never truncated, never silently coerced). The default (empty)
+    keeps every prediction cohort byte-identical.
     """
     raw_features = [c for c in MART_SAFE_FEATURES if c not in _DERIVED and c in df.columns]
     records: list[dict[str, Any]] = []
@@ -381,9 +383,13 @@ def build_journey_records(
             if kind == "date":
                 rec[col] = pd.to_datetime(value)
             elif kind == "text":
-                rec[col] = str(value)
+                if not isinstance(value, str):
+                    raise ValueError(
+                        f"{col} must be a string; got {value!r} for patid={row['patid']!r}"
+                    )
+                rec[col] = value
             elif kind == "flag":
-                if value not in (0, 1):
+                if pd.isna(value) or value not in (0, 1):
                     raise ValueError(
                         f"{col} must be a 0/1 flag; got {value!r} for patid={row['patid']!r}"
                     )

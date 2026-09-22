@@ -150,6 +150,30 @@ def _initiators_two_arms() -> pd.DataFrame:
                 SWITCH_FLAG: 0,
                 **base,
             },
+            # p13: XOLAIR, cov_to_end=100 (< window), gap=90 (AT the
+            #      DISCONT_GAP_DAYS boundary) -> discontinued 1; a >=-to->
+            #      mutation on the gap predicate in _discontinued flips ONLY
+            #      this row
+            {
+                "patid": 13,
+                "index_biologic_brand": "XOLAIR",
+                "treatment_start_date": ts,
+                "last_coverage_end": ts + 100 * day,
+                "max_internal_gap_days": 90,
+                SWITCH_FLAG: 0,
+                **base,
+            },
+            # p14: DUPIXENT, cov_to_end=100, gap=89 (one day BELOW the
+            #      discontinuation gap boundary) -> discontinued 0
+            {
+                "patid": 14,
+                "index_biologic_brand": "DUPIXENT",
+                "treatment_start_date": ts,
+                "last_coverage_end": ts + 100 * day,
+                "max_internal_gap_days": 89,
+                SWITCH_FLAG: 0,
+                **base,
+            },
         ]
     )
 
@@ -160,10 +184,21 @@ def test_causal_selector_truth_table_and_treatment_coding():
     )
     steps = dict(attrition)
     assert steps["excluded_arm:RHAPSIDO"] == 1  # p8, loud not silent
-    assert steps["two_arm_contrast"] == 8  # p8 excluded; p4-p7, p9-p12 kept
-    assert set(cohort["patid"]) == {4, 5, 6, 7, 9, 10, 11, 12}
+    assert steps["two_arm_contrast"] == 10  # p8 excluded; p4-p7, p9-p14 kept
+    assert set(cohort["patid"]) == {4, 5, 6, 7, 9, 10, 11, 12, 13, 14}
     by = cohort.set_index("patid")
-    assert by[TREATMENT_COL].to_dict() == {4: 0, 5: 1, 6: 0, 7: 1, 9: 0, 10: 0, 11: 1, 12: 1}
+    assert by[TREATMENT_COL].to_dict() == {
+        4: 0,
+        5: 1,
+        6: 0,
+        7: 1,
+        9: 0,
+        10: 0,
+        11: 1,
+        12: 1,
+        13: 0,
+        14: 1,
+    }
     assert by["persistent_at_180d"].to_dict() == {
         4: 1,
         5: 0,
@@ -173,6 +208,8 @@ def test_causal_selector_truth_table_and_treatment_coding():
         10: 0,
         11: 1,
         12: 0,
+        13: 0,
+        14: 0,
     }
     # p10 (cov_to_end==152) and p11 (gap==60) are the boundary cases: a
     # >=-to-> mutation on cov_to_end flips ONLY p10; a <=-to-< mutation on gap
@@ -187,7 +224,13 @@ def test_causal_selector_truth_table_and_treatment_coding():
         10: 1,
         11: 1,
         12: 0,
+        13: 0,
+        14: 0,
     }
+    # p13 (gap==90, the DISCONT_GAP_DAYS boundary) is the mutation-catching
+    # case: a >=-to-> mutation on the gap predicate in _discontinued flips
+    # ONLY p13. p14 (gap==89) is the just-below-boundary complement that must
+    # NOT flip.
     assert by["discontinued_180d"].to_dict() == {
         4: 0,
         5: 1,
@@ -197,8 +240,21 @@ def test_causal_selector_truth_table_and_treatment_coding():
         10: 0,
         11: 0,
         12: 0,
+        13: 1,
+        14: 0,
     }
-    assert by[SWITCH_FLAG].to_dict() == {4: 0, 5: 1, 6: 0, 7: 0, 9: 0, 10: 0, 11: 0, 12: 0}
+    assert by[SWITCH_FLAG].to_dict() == {
+        4: 0,
+        5: 1,
+        6: 0,
+        7: 0,
+        9: 0,
+        10: 0,
+        11: 0,
+        12: 0,
+        13: 0,
+        14: 0,
+    }
     for col in (
         TREATMENT_COL,
         "persistent_at_180d",
@@ -208,7 +264,7 @@ def test_causal_selector_truth_table_and_treatment_coding():
     ):
         assert cohort[col].dtype.kind in "iu", col
     assert steps["target_positives"] == 4  # g28 positives: p4, p7, p10, p11
-    assert steps["arm_dupixent"] == 4  # p5, p7, p11, p12
+    assert steps["arm_dupixent"] == 5  # p5, p7, p11, p12, p14
 
 
 def test_causal_selector_grace_is_28_days_and_arms_are_the_observed_pair():
@@ -345,8 +401,9 @@ def test_build_journey_records_extra_cols_are_emitted_and_default_is_unchanged()
 
 def test_build_journey_records_extra_cols_reject_non_binary_flags():
     """A flag-kind extra column (e.g. TREATMENT_COL/SWITCH_FLAG) must be exactly
-    0 or 1: a fractional value or a NaN raises ValueError naming the column,
-    never a silent truncation/coercion."""
+    0 or 1: a fractional value, a NaN, or a pd.NA raises ValueError naming the
+    column, never a silent truncation/coercion and never
+    'boolean value of NA is ambiguous'."""
     base_row = {
         "patid": 77,
         "index_date": pd.Timestamp("2020-01-01"),
@@ -363,7 +420,7 @@ def test_build_journey_records_extra_cols_reject_non_binary_flags():
         SWITCH_FLAG: 0,
         "persistent_at_180d": 0,
     }
-    for bad_value in (0.5, float("nan")):
+    for bad_value in (0.5, float("nan"), pd.NA):
         cohort = pd.DataFrame([{**base_row, SWITCH_FLAG: bad_value}])
         with pytest.raises(ValueError, match=SWITCH_FLAG):
             build_journey_records(
@@ -372,6 +429,36 @@ def test_build_journey_records_extra_cols_reject_non_binary_flags():
                 anchor_col="treatment_start_date",
                 extra_cols=CAUSAL_EXTRA_COLS,
             )
+
+
+def test_build_journey_records_extra_cols_text_kind_refuses_non_strings():
+    """A text-kind extra column (index_biologic_brand) must be a real string:
+    None must raise ValueError naming the column, never stringify to the
+    literal text 'None'."""
+    base_row = {
+        "patid": 77,
+        "index_date": pd.Timestamp("2020-01-01"),
+        "treatment_start_date": pd.Timestamp("2020-03-01"),
+        "elig_start_date": pd.Timestamp("2019-09-01"),
+        "zipcode_5": "10001",
+        "age_at_index": 50.0,
+        "charlson_score": 2,
+        "cci_hiv": 0,
+        "index_biologic_brand": None,
+        TREATMENT_COL: 1,
+        TARGET_PERSISTENT_G28: 1,
+        "discontinued_180d": 0,
+        SWITCH_FLAG: 0,
+        "persistent_at_180d": 0,
+    }
+    cohort = pd.DataFrame([base_row])
+    with pytest.raises(ValueError, match="index_biologic_brand"):
+        build_journey_records(
+            cohort,
+            target=TARGET_PERSISTENT_G28,
+            anchor_col="treatment_start_date",
+            extra_cols=CAUSAL_EXTRA_COLS,
+        )
 
 
 def test_build_journey_records_extra_cols_are_exactly_the_causal_columns():
