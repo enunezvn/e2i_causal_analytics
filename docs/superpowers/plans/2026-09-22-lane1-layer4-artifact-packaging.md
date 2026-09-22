@@ -167,7 +167,7 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ---
 
-### Task 2: Re-include the artifact in the build context
+### Task 2: NOT NEEDED — re-including the artifact in the build context (premise disproved 2026-09-22)
 
 NOT NEEDED — premise disproved 2026-09-22. Measured on the production image: a
 slash-less pattern like `*.json` matches the build-context root only (confirmed
@@ -214,6 +214,41 @@ Expected: all PASS.
 ```bash
 git add docker/Dockerfile
 git commit -m "build(layer4): COPY the classifier artifact into both app stages
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+```
+
+---
+
+### Task 3b: Register the artifact as a deploy trigger (#1783 shape)
+
+Found in code-quality review 2026-09-22: the artifact is now a production image
+input (Task 3), but `.github/workflows/deploy.yml`'s `on.push.paths` had no
+entry for it — the exact #1783 defect (`tests/unit/test_docker/test_deploy_trigger_covers_image_inputs_1783.py::test_every_production_image_input_is_a_deploy_trigger`
+fails on the branch until this step). A future recompile of the classifier
+would otherwise change what the image should contain without triggering the
+build that would produce it.
+
+- [ ] **Step 1: Add the literal trigger entry**
+
+Insert into `.github/workflows/deploy.yml`'s `on.push.paths`, immediately after
+the existing `- 'data/kg_cache/**'` entry:
+
+```yaml
+      # Layer-4 classifier artifact is a production image input (lane 1, 2026-09-22; #1783 shape).
+      # Literal, not artifacts/**: ac3_verdict_n200.json and gitignored cr_*_n200.json
+      # compile intermediates are not image inputs and must not trigger deploys.
+      - 'artifacts/dspy/causal_role_classifier.json'
+```
+
+Run: `pytest -n 0 tests/unit/test_docker -q`
+Expected: goes from 1 failed to all passed.
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add .github/workflows/deploy.yml
+git commit -m "ci(deploy): the Layer-4 artifact is a production image input, so it must be a deploy trigger (#1783 shape)
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```

@@ -80,6 +80,8 @@ Layer‑4 artifact to ship.
    `DEFAULT_ARTIFACT_PATH` is committed, survives `.dockerignore` under
    last-match-wins, and is COPYed in both Dockerfile stages. Red first: the
    test fails on `main` today.
+4. `.github/workflows/deploy.yml`: the artifact becomes an `on.push.paths`
+   entry (#1783 guard).
 
 **Behaviour once live.** `ensure_dspy_lm_configured()` configures the default
 `anthropic/claude-sonnet-4-6` because `ANTHROPIC_API_KEY` is present. One LLM
