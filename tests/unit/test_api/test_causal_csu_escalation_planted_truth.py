@@ -50,11 +50,11 @@ frame lands within 0.011 -- an estimator-side property of a linear final
 stage on a step-function CATE, not a generator defect, recorded as a
 follow-up rather than loosened here.
 
-The synthetic backing is read ONLY under the planted-truth opt-in
-(``E2I_CSU_PLANTED_TRUTH_RUN``); the deployment-wide
-``E2I_INCLUDE_SYNTHETIC`` (set on the deployed e2i_api) does not unlock it
-(verifier MED-B) -- the registry test pins that, this test sets the opt-in
-alone.
+The synthetic backing is read ONLY under the planted-truth module seam
+(``datasets.PLANTED_TRUTH_RUN``, flipped here with monkeypatch -- no
+environment variable can); the deployment-wide ``E2I_INCLUDE_SYNTHETIC`` (set
+on the deployed e2i_api) does not unlock it (verifier MED-B) -- the registry
+test pins that, this test sets the seam alone.
 
 Write-free: unit tests run with dead Supabase credentials (the refutation
 persistence fails closed with a warning), the MLflow tracker and the job store
@@ -70,7 +70,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from src.api.routes.causal import agent as causal_routes
-from src.api.routes.causal.datasets import _CAUSAL_DATASET_SPECS, PLANTED_TRUTH_RUN_ENV
+from src.api.routes.causal import datasets as datasets_mod
+from src.api.routes.causal.datasets import _CAUSAL_DATASET_SPECS
 from src.api.schemas.causal import AgentCausalAnalysisRequest
 from src.ml.synthetic.generators.csu_escalation_causal import (
     DATASET,
@@ -179,11 +180,12 @@ def _rows(frame):
 @pytest.mark.asyncio
 @pytest.mark.timeout(300)
 async def test_planted_ate_is_recovered_through_the_production_path(monkeypatch, tmp_path):
-    # The backing IS synthetic: the planted-truth opt-in is the ONLY switch
-    # that reads it; the deployment-wide showcase flag is left unset so the
-    # run proves the opt-in alone carries the whole path.
+    # The backing IS synthetic: the planted-truth module seam is the ONLY
+    # switch that reads it (no environment variable can); the deployment-wide
+    # showcase flag is left unset so the run proves the seam alone carries
+    # the whole path.
     monkeypatch.delenv("E2I_INCLUDE_SYNTHETIC", raising=False)
-    monkeypatch.setenv(PLANTED_TRUTH_RUN_ENV, "1")
+    monkeypatch.setattr(datasets_mod, "PLANTED_TRUTH_RUN", True)
     # Write-free belt and braces on top of the unit tree's dead-Supabase pin:
     # the tracker seam below is replaced, but any stray mlflow call lands in a
     # throwaway file store, and Redis (prod on this box) is a dead port.
@@ -219,7 +221,7 @@ async def test_planted_ate_is_recovered_through_the_production_path(monkeypatch,
     # covariates (the payer one-hot dummies and the __missing__ region level).
     assert pending.status == "pending" and pending.n_rows == len(frame)
     assert client.tables == [DATASET]
-    assert not any(e[0] == "eq" and e[1] == "is_synthetic" for e in client.log)
+    assert ("eq", "is_synthetic", True) in client.log  # ONLY the planted rows
     (fn, args) = bg.scheduled[0]
     task_request, task_frame, task_covariates = args[1], args[2], args[3]
     assert task_request.auto_discover is False  # the dataset default

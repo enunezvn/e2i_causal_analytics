@@ -8,7 +8,6 @@ Import rule: may import ``_common`` and non-package modules only; never
 """
 
 import logging
-import os
 from typing import Any, Callable, Dict, List, Optional
 
 from src.data.manifests import MART_SAFE_FEATURES
@@ -275,9 +274,10 @@ _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
     # real-mode predicate REGARDLESS of the deployment-wide
     # E2I_INCLUDE_SYNTHETIC (which the deployed e2i_api sets), so real mode
     # returns NO rows (503, never a synthetic estimate served as real) and
-    # only the planted-truth run (E2I_CSU_PLANTED_TRUTH_RUN=1, set by
-    # tests/unit/test_api/test_causal_csu_escalation_planted_truth.py, never
-    # by a deployment) reads the rows. The post-launch load writes
+    # only the planted-truth run (the PLANTED_TRUTH_RUN module seam, set by
+    # tests/unit/test_api/test_causal_csu_escalation_planted_truth.py with
+    # monkeypatch, never by a deployment's environment) reads the rows. The
+    # post-launch load writes
     # is_synthetic=false rows the predicate serves with no registry change.
     # Observational (no randomized_treatment); no negative control
     # declared (the per-source omitted-confounder experiment has not run).
@@ -739,15 +739,18 @@ _CAUSAL_PHYSICAL_TABLE: Dict[str, str] = {
 # the deployment flag does NOT unlock the rows: the real-mode predicate is
 # applied regardless, and only the planted-truth opt-in below reads them.
 _CAUSAL_SYNTHETIC_BACKED: frozenset = frozenset({"csu_escalation_causal"})
-# The planted-truth run's opt-in. Set by the E2E test for its own process;
-# never by a deployment (it is not in .env / the container environment, and
-# setting it on an instance would be a deliberate act, not the showcase
-# default).
-PLANTED_TRUTH_RUN_ENV = "E2I_CSU_PLANTED_TRUTH_RUN"
+# The planted-truth run's opt-in: a MODULE-LEVEL seam, not an environment
+# variable (codex r1: an env var is the same class of process-wide bypass as
+# E2I_INCLUDE_SYNTHETIC under another name -- a container manifest, config map
+# or parent process could set it). Nothing in a deployment's environment can
+# flip this; the planted-truth E2E and the registry tests set it with
+# monkeypatch.setattr for their own process, and production code never
+# assigns it.
+PLANTED_TRUTH_RUN: bool = False
 
 
 def _planted_truth_run() -> bool:
-    return os.getenv(PLANTED_TRUTH_RUN_ENV, "0").strip().lower() in ("1", "true", "yes")
+    return bool(PLANTED_TRUTH_RUN)
 
 
 def serves_synthetic_rows(dataset: str) -> bool:
@@ -764,14 +767,16 @@ def apply_dataset_provenance_filter(query: Any, dataset: str) -> Any:
     """The provenance predicate for a read of ``dataset``'s table.
 
     Synthetic-backed datasets (:data:`_CAUSAL_SYNTHETIC_BACKED`): the real-mode
-    ``.eq('is_synthetic', False)`` REGARDLESS of ``E2I_INCLUDE_SYNTHETIC``,
-    lifted only by the planted-truth opt-in. Every other dataset:
-    :func:`apply_provenance_filter` (deployment-wide behaviour, unchanged).
-    Used by every reader of a dataset's rows: the agent loader, the
-    estimation-data route and the brand dropdown.
+    ``.eq('is_synthetic', False)`` REGARDLESS of ``E2I_INCLUDE_SYNTHETIC``;
+    under the planted-truth opt-in the predicate flips to
+    ``.eq('is_synthetic', True)`` -- ONLY the planted rows, never an unfiltered
+    real/synthetic mixture labelled ``synthetic`` (codex r1). Every other
+    dataset: :func:`apply_provenance_filter` (deployment-wide behaviour,
+    unchanged). Used by every reader of a dataset's rows: the agent loader,
+    the estimation-data route, the variables probe and the brand dropdown.
     """
     if dataset in _CAUSAL_SYNTHETIC_BACKED:
-        return query if _planted_truth_run() else query.eq(PROVENANCE_COLUMN, False)
+        return query.eq(PROVENANCE_COLUMN, _planted_truth_run())
     return apply_provenance_filter(query)
 
 

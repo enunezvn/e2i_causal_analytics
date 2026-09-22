@@ -45,6 +45,7 @@ from .datasets import (
     _CAUSAL_NUMERIC_COLUMNS,
     _CAUSAL_NUMERIC_DERIVATIONS,
     _CAUSAL_PHYSICAL_TABLE,
+    _CAUSAL_SYNTHETIC_BACKED,
     _DEFAULT_CAUSAL_DATASET,
     _JOIN_DATASETS,
     _NBA_JOINED_COVARIATES,
@@ -324,12 +325,14 @@ async def list_causal_variables(
         raise HTTPException(status_code=503, detail="Causal data store unavailable")
 
     # Probe one row to learn the columns actually present in the live schema.
-    probe = (
-        await client.table(_CAUSAL_PHYSICAL_TABLE.get(dataset, dataset))
-        .select("*")
-        .limit(1)
-        .execute()
-    )
+    # For a synthetic-backed dataset the probe is provenance-guarded like every
+    # other reader (codex r1 MED): its planted row never enters the API process
+    # on the deployed instance. Every other dataset keeps the unfiltered schema
+    # probe it always had (the columns are the same on every row).
+    probe_query = client.table(_CAUSAL_PHYSICAL_TABLE.get(dataset, dataset)).select("*")
+    if dataset in _CAUSAL_SYNTHETIC_BACKED:
+        probe_query = apply_dataset_provenance_filter(probe_query, dataset)
+    probe = await probe_query.limit(1).execute()
     rows = probe.data or []
     present = set(rows[0].keys()) if rows else set()
 

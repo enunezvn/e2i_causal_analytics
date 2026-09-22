@@ -15,7 +15,8 @@ import pytest
 from fastapi import BackgroundTasks, HTTPException
 
 from src.api.routes.causal import agent as causal_routes
-from src.api.routes.causal import catalog
+from src.api.routes.causal import catalog, discovery
+from src.api.routes.causal import datasets as datasets_mod
 from src.api.routes.causal.datasets import (
     _ALL_CLINICAL_COVARIATES,
     _CAUSAL_BRAND_COLUMN,
@@ -27,7 +28,6 @@ from src.api.routes.causal.datasets import (
     _CAUSAL_PHYSICAL_TABLE,
     _CAUSAL_SYNTHETIC_BACKED,
     _JOIN_DATASETS,
-    PLANTED_TRUTH_RUN_ENV,
     _brand_scoped_covariates,
     _default_auto_discover,
     _is_randomized_treatment,
@@ -187,17 +187,19 @@ def _covariates():
 
 def _planted_truth_run(monkeypatch):
     """The ONLY switch that reads the synthetic backing: the planted-truth
-    opt-in, which no deployment sets. The deployment-wide showcase flag is
-    unset here so the tests prove the opt-in alone unlocks the rows."""
+    module seam, which no deployment's environment can set. The
+    deployment-wide showcase flag is unset here so the tests prove the seam
+    alone unlocks the rows."""
     monkeypatch.delenv("E2I_INCLUDE_SYNTHETIC", raising=False)
-    monkeypatch.setenv(PLANTED_TRUTH_RUN_ENV, "1")
+    monkeypatch.setattr(datasets_mod, "PLANTED_TRUTH_RUN", True)
 
 
 def _deployed_flag_only(monkeypatch):
     """The deployed e2i_api container's environment (docker inspect,
-    2026-09-22: E2I_INCLUDE_SYNTHETIC=true) with NO planted-truth opt-in."""
+    2026-09-22: E2I_INCLUDE_SYNTHETIC=true) with the seam at its shipped
+    value (False)."""
     monkeypatch.setenv("E2I_INCLUDE_SYNTHETIC", "true")
-    monkeypatch.delenv(PLANTED_TRUTH_RUN_ENV, raising=False)
+    monkeypatch.setattr(datasets_mod, "PLANTED_TRUTH_RUN", False)
 
 
 @pytest.mark.asyncio
@@ -265,11 +267,13 @@ def test_dataset_provenance_guard_ignores_the_deployment_flag_for_the_backing(mo
     assert apply_dataset_provenance_filter(_GuardQuery(), "optum_biologic_persistence").eqs == []
     assert serves_synthetic_rows("optum_biologic_persistence") is True
     _planted_truth_run(monkeypatch)
-    assert apply_dataset_provenance_filter(_GuardQuery(), DATASET).eqs == []
+    # Planted mode reads ONLY the planted rows -- never an unfiltered mixture.
+    assert apply_dataset_provenance_filter(_GuardQuery(), DATASET).eqs == [("is_synthetic", True)]
     assert serves_synthetic_rows(DATASET) is True
-    # Strict real-data instance: the predicate for everyone, opt-in unset.
+    # Strict real-data instance: the predicate for everyone, seam shipped.
     monkeypatch.delenv("E2I_INCLUDE_SYNTHETIC", raising=False)
-    monkeypatch.delenv(PLANTED_TRUTH_RUN_ENV, raising=False)
+    monkeypatch.setattr(datasets_mod, "PLANTED_TRUTH_RUN", False)
+    assert datasets_mod.PLANTED_TRUTH_RUN is False  # the shipped value
     assert apply_dataset_provenance_filter(_GuardQuery(), DATASET).eqs == [("is_synthetic", False)]
     assert apply_dataset_provenance_filter(_GuardQuery(), "optum_biologic_persistence").eqs == [
         ("is_synthetic", False)
@@ -288,7 +292,39 @@ async def test_brand_dropdown_hides_the_synthetic_backing_from_the_deployed_flag
     client = _FakeClient(_backing_rows())
     monkeypatch.setattr(_CLIENT_FACTORY, AsyncMock(return_value=client))
     assert await _list_dataset_brands(DATASET) == ["DUPIXENT", "RHAPSIDO", "XOLAIR"]
-    assert not any(e[0] == "eq" and e[1] == "is_synthetic" for e in client.log)
+    assert ("eq", "is_synthetic", True) in client.log
+
+
+@pytest.mark.asyncio
+async def test_variables_probe_hides_the_synthetic_backing_from_the_deployed_flag(monkeypatch):
+    """codex r1 MED: /causal/variables probes one row to learn the live
+    columns; that probe must not pull a planted row into the API process on
+    the deployed instance either."""
+    _deployed_flag_only(monkeypatch)
+    client = _FakeClient(_backing_rows())
+    monkeypatch.setattr(_CLIENT_FACTORY, AsyncMock(return_value=client))
+    resp = await catalog.list_causal_variables(
+        dataset=DATASET, brand=None, user={"role": "analyst"}
+    )
+    assert client.tables == [TABLE]
+    assert ("eq", "is_synthetic", False) in client.log
+    # The route still offers the registry's DECLARED variables (it needs no
+    # row for that); what it must never do is fetch a planted row to learn them.
+    assert resp.dataset == DATASET
+
+
+def test_every_route_labels_data_source_by_the_dataset_rule():
+    """codex r1 HIGH: the discovery leaderboard's agent results labelled
+    data_source by the deployment-wide flag, inverting the label both ways
+    for the synthetic-backed dataset. Every route that stamps data_source
+    must go through serves_synthetic_rows(dataset)."""
+    import inspect
+
+    for module in (causal_routes, discovery, catalog):
+        source = inspect.getsource(module)
+        assert "deployment_includes_synthetic(" not in source, module.__name__
+    assert "serves_synthetic_rows(dataset)" in inspect.getsource(discovery)
+    assert "serves_synthetic_rows(request.dataset)" in inspect.getsource(causal_routes)
 
 
 @pytest.mark.asyncio
@@ -324,7 +360,7 @@ async def test_planted_truth_run_loads_coerces_and_one_hots_the_backing(monkeypa
         limit=1000,
     )
     assert client.tables == [TABLE]
-    assert not any(e[0] == "eq" and e[1] == "is_synthetic" for e in client.log)
+    assert ("eq", "is_synthetic", True) in client.log  # only the planted rows
     assert len(frame) == 300
     assert set(frame[TREATMENT].unique()) == {0.0, 1.0}
     assert frame["age_at_index"].dtype.kind == "f" and frame["charlson_score"].dtype.kind == "f"
