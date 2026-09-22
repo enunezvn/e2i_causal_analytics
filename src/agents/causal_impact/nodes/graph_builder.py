@@ -148,7 +148,16 @@ class GraphBuilderNode:
                         i for i in channels.instruments if i not in existing
                     ]
                 state = cast(CausalImpactState, {**state, **narrowed})
-                panel_warnings = list(channels.warnings)
+                _pp = panel_payload if isinstance(panel_payload, dict) else {}
+                panel_warnings = [
+                    "feature_role_panel applied: manifest="
+                    f"{_pp.get('manifest_source', '?')}, question "
+                    f"{_pp.get('treatment', '?')} -> {_pp.get('outcome', '?')}, "
+                    f"{len(_pp.get('records') or {})} covariate(s) vetted, "
+                    f"{len(channels.removed)} removed from the adjustment set, "
+                    f"{len(channels.review_required)} pending temporal review; "
+                    "approved instruments are not consumed by estimation"
+                ] + list(channels.warnings)
                 logger.info(
                     "feature_role_panel applied: modeled=%s removed=%s anchored=%s instruments=%s",
                     confounders,

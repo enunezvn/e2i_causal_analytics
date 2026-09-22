@@ -72,6 +72,9 @@ def test_initialize_state_forwards_the_panel_and_approved_roles() -> None:
             "approved_structure_roles": {"insurance_access_score": "confounder"},
         }
     )
+    # The agent-level seam keeps BOTH keys: Lane B's server-side loader (an
+    # approved review resolved by id) populates approved_structure_roles; the
+    # public request carries only the panel.
     assert state["feature_role_panel"] == _PANEL
     assert state["approved_structure_roles"] == {"insurance_access_score": "confounder"}
 
@@ -84,11 +87,9 @@ def test_initialize_state_leaves_the_keys_absent_when_not_supplied() -> None:
     assert "approved_structure_roles" not in state
 
 
-@pytest.mark.asyncio
-async def test_route_task_forwards_the_request_panel_into_the_initial_state(monkeypatch) -> None:
+def _capture(monkeypatch) -> dict:
     import src.agents.causal_impact.graph as graph_mod
     import src.api.routes.causal.agent as causal_routes
-    from src.api.schemas.causal import AgentCausalAnalysisRequest
 
     captured: dict = {}
 
@@ -109,6 +110,15 @@ async def test_route_task_forwards_the_request_panel_into_the_initial_state(monk
 
     monkeypatch.setattr(graph_mod, "create_causal_impact_graph", lambda: _FakeGraph())
     monkeypatch.setattr(causal_routes, "_agent_analysis_store", _MemStore())
+    return captured
+
+
+@pytest.mark.asyncio
+async def test_route_task_forwards_the_request_panel_into_the_initial_state(monkeypatch) -> None:
+    import src.api.routes.causal.agent as causal_routes
+    from src.api.schemas.causal import AgentCausalAnalysisRequest
+
+    captured = _capture(monkeypatch)
     df = pd.DataFrame(
         {
             "copay_support": [0.0, 1.0, 1.0],
@@ -122,47 +132,26 @@ async def test_route_task_forwards_the_request_panel_into_the_initial_state(monk
         outcome_var="adherent_180d",
         dataset="patient_journeys",
         feature_role_panel=_PANEL,
-        approved_structure_roles={"insurance_access_score": "confounder"},
     )
     await causal_routes._run_agent_analysis_task(
-        "lane-e-forward",
-        req,
-        df,
-        ["insurance_access_score", "post_dx"],
-        "synthetic",
+        "lane-e-forward", req, df, ["insurance_access_score", "post_dx"], "synthetic"
     )
     assert captured["feature_role_panel"] == _PANEL
-    assert captured["approved_structure_roles"] == {"insurance_access_score": "confounder"}
     # Declared covariates are untouched at submit time: graph_builder is the
     # single place the panel narrows them (with its named warning).
     assert captured["modeled_confounders"] == ["insurance_access_score", "post_dx"]
+    # codex r2: the PUBLIC request has no "approved" channel — approval is a
+    # server-side boundary (Lane B's loader resolves an approved review by id).
+    assert "approved_structure_roles" not in captured
+    assert "approved_structure_roles" not in AgentCausalAnalysisRequest.model_fields
 
 
 @pytest.mark.asyncio
-async def test_route_task_omits_the_keys_when_the_request_has_none(monkeypatch) -> None:
-    import src.agents.causal_impact.graph as graph_mod
+async def test_route_task_omits_the_key_when_the_request_has_no_panel(monkeypatch) -> None:
     import src.api.routes.causal.agent as causal_routes
     from src.api.schemas.causal import AgentCausalAnalysisRequest
 
-    captured: dict = {}
-
-    class _FakeGraph:
-        async def ainvoke(self, state, **kwargs):
-            captured.update(state)
-            raise RuntimeError("stop after capture")
-
-    class _MemStore:
-        def __init__(self) -> None:
-            self._d: dict = {}
-
-        async def get(self, key):
-            return self._d.get(key)
-
-        async def set(self, key, value):
-            self._d[key] = value
-
-    monkeypatch.setattr(graph_mod, "create_causal_impact_graph", lambda: _FakeGraph())
-    monkeypatch.setattr(causal_routes, "_agent_analysis_store", _MemStore())
+    captured = _capture(monkeypatch)
     df = pd.DataFrame({"copay_support": [0.0, 1.0], "adherent_180d": [0.0, 1.0], "x": [0.1, 0.2]})
     req = AgentCausalAnalysisRequest(
         treatment_var="copay_support", outcome_var="adherent_180d", dataset="patient_journeys"
@@ -170,3 +159,84 @@ async def test_route_task_omits_the_keys_when_the_request_has_none(monkeypatch) 
     await causal_routes._run_agent_analysis_task("lane-e-absent", req, df, ["x"], "synthetic")
     assert "feature_role_panel" not in captured
     assert "approved_structure_roles" not in captured
+
+
+def _submit_request(**panel_overrides):
+    from src.api.schemas.causal import AgentCausalAnalysisRequest
+
+    panel = {
+        **_PANEL,
+        "treatment": "hcp_engagement_level",
+        "outcome": "patient_conversion_rate",
+        "features": ["insurance_access_score", "post_dx"],
+    }
+    panel.update(panel_overrides)
+    return AgentCausalAnalysisRequest(
+        treatment_var="hcp_engagement_level",
+        outcome_var="patient_conversion_rate",
+        dataset="patient_journeys",
+        feature_role_panel=panel,
+    )
+
+
+async def _expect_400(req, needle: str) -> None:
+    from fastapi import BackgroundTasks, HTTPException
+
+    import src.api.routes.causal.agent as causal_routes
+
+    with pytest.raises(HTTPException) as exc:
+        await causal_routes.run_causal_agent_analysis(req, BackgroundTasks())
+    assert exc.value.status_code == 400
+    assert needle in str(exc.value.detail), exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_submit_refuses_a_panel_built_for_another_question() -> None:
+    """codex r2: the panel is a trusted causal input; one built for a different
+    (treatment, outcome) must be refused at submit with a 400, not applied."""
+    await _expect_400(
+        _submit_request(treatment="copay_support", outcome="adherent_180d"), "copay_support"
+    )
+
+
+@pytest.mark.asyncio
+async def test_submit_refuses_a_malformed_panel() -> None:
+    """The payload must parse as a typed FeatureRolePanel, not any dict."""
+    await _expect_400(_submit_request(records="not-a-mapping"), "feature_role_panel")
+
+
+@pytest.mark.asyncio
+async def test_submit_refuses_a_panel_covering_none_of_the_covariates(monkeypatch) -> None:
+    """A panel over other columns cannot vet this question's covariates."""
+    await _expect_400(
+        _submit_request(
+            features=["unrelated_a"],
+            records={
+                "unrelated_a": {
+                    "feature": "unrelated_a",
+                    "layer_1": {},
+                    "layer_2": {},
+                    "layer_3": {},
+                    "layer_4": {},
+                    "ensemble": {},
+                    "leak_verdict": False,
+                    "leak_source": None,
+                }
+            },
+        ),
+        "covers none",
+    )
+
+
+@pytest.mark.asyncio
+async def test_submit_refuses_a_panel_from_another_manifest_when_the_spec_declares_one(
+    monkeypatch,
+) -> None:
+    """When the dataset spec names its manifest (Lane A's real-data entry will),
+    a panel built under a different manifest is refused."""
+    import src.api.routes.causal.agent as causal_routes
+
+    spec = dict(causal_routes._CAUSAL_DATASET_SPECS["patient_journeys"])
+    spec["feature_manifest_source"] = "optum"
+    monkeypatch.setitem(causal_routes._CAUSAL_DATASET_SPECS, "patient_journeys", spec)
+    await _expect_400(_submit_request(manifest_source="optum_mart"), "optum_mart")

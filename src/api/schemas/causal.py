@@ -529,17 +529,11 @@ class AgentCausalAnalysisRequest(BaseModel):
             "adjustment set and named in warnings."
         ),
     )
-    # Lane B's seam: feature -> role from an APPROVED structural review. Only
-    # ``confounder`` anchors; mediator / collider / descendant / instrument are
-    # kept out of the adjustment set (see derive_confounder_channels).
-    approved_structure_roles: Optional[Dict[str, str]] = Field(
-        None,
-        description=(
-            "feature -> derived role from an APPROVED structural review "
-            "(confounder anchors the DAG prior; mediator/collider/descendant/"
-            "instrument leave the adjustment set). Requires feature_role_panel."
-        ),
-    )
+    # NOTE (codex r2): there is deliberately NO public ``approved_structure_roles``
+    # field. Approval is a server-side boundary — Lane B's loader resolves an
+    # APPROVED expert review by id into the agent's ``approved_structure_roles``
+    # state channel; a caller-authored role list would be labelled "approved"
+    # without anyone having approved it.
 
 
 class EdgeProvenanceModel(BaseModel):

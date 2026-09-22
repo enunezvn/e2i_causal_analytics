@@ -67,20 +67,24 @@ def _estimate_cost_usd(n_calls: int) -> float:
     return n_calls * per_call
 
 
+# DummyLM consumes its answer list ONCE (dspy.utils.dummies: a list is popped per
+# call, then the call fails to parse) — measured on the first real-frame run:
+# 19 Layer-4 attempts, 1 answered, 18 "Layer 4 skipped". The fake must answer
+# every call or the firing count is under-reported.
+_FAKE_LM_ANSWERS = 8192
+
+
 def _configure_fake_lm() -> Any:
     import dspy
     from dspy.utils.dummies import DummyLM
 
-    lm = DummyLM(
-        [
-            {
-                "reasoning": "fake LM (measurement run): no reasoning",
-                "causal_role": "confounder",
-                "mechanism": "fake LM (measurement run): no mechanism; records which features fire",
-                "recommended_remediation": "keep_with_caveat",
-            }
-        ]
-    )
+    answer = {
+        "reasoning": "fake LM (measurement run): no reasoning",
+        "causal_role": "confounder",
+        "mechanism": "fake LM (measurement run): no mechanism; records which features fire",
+        "recommended_remediation": "keep_with_caveat",
+    }
+    lm = DummyLM([dict(answer) for _ in range(_FAKE_LM_ANSWERS)])
     dspy.configure(lm=lm)
     return lm
 
@@ -121,7 +125,7 @@ def _write_summary(path: Path, panel: dict[str, Any], *, lm_label: str, cost_not
         "",
         "## Per feature",
         "",
-        "| Feature | L1 | L2 signal | L3 z / pre-joint sev | L4 role | decided_by | final_role | conf | leak |",
+        "| Feature | L1 (temporal status) | L2 signal | L3 z / pre-joint sev | L4 role | decided_by | final_role | conf | excluded (why) |",
         "|---|---|---|---|---|---|---|---|---|",
     ]
     for name in panel["features"]:
@@ -130,25 +134,33 @@ def _write_summary(path: Path, panel: dict[str, Any], *, lm_label: str, cost_not
         z_s = f"{z:.2f}" if isinstance(z, (int, float)) else "—"
         conf = r["ensemble"].get("confidence")
         conf_s = f"{conf:.2f}" if isinstance(conf, (int, float)) else "—"
+        if r["leak_verdict"]:
+            excluded = (
+                "proven post-index leakage"
+                if r["leak_source"] == "layer_1_post_index"
+                else "excluded per 3(b), pending temporal review"
+            )
+        else:
+            excluded = ""
         lines.append(
-            f"| `{name}` | {r['layer_1']['verdict']} | {r['layer_2']['signal']} | {z_s} / {r['layer_3'].get('severity_pre_joint_check') or '—'} | "
-            f"{r['layer_4'].get('role') or '—'} | {r['ensemble'].get('decided_by') or '—'} | {r['ensemble'].get('final_role') or '—'} | {conf_s} | "
-            f"{r['leak_source'] or ''} |"
+            f"| `{name}` | {r['layer_1']['verdict']} ({r['layer_1'].get('temporal_status', '?')}) | "
+            f"{r['layer_2']['signal']} | {z_s} / {r['layer_3'].get('severity_pre_joint_check') or '—'} | "
+            f"{r['layer_4'].get('role') or '—'} | {r['ensemble'].get('decided_by') or '—'} | "
+            f"{r['ensemble'].get('final_role') or '—'} | {conf_s} | {excluded} |"
         )
     fired = [n for n in panel["features"] if recs[n]["layer_4"]["fired"]]
+    proven = [n for n in panel["features"] if recs[n]["leak_source"] == "layer_1_post_index"]
+    review = [n for n in panel["features"] if recs[n].get("review_required")]
     lines += [
         "",
         f"Layer 4 fired on {len(fired)} feature(s): {', '.join(f'`{n}`' for n in fired) or '—'}",
         "",
-        f"Leak verdicts ({la['ensemble']['leak_verdicts']}): "
-        + (
-            ", ".join(
-                f"`{n}` ({recs[n]['leak_source']})"
-                for n in panel["features"]
-                if recs[n]["leak_verdict"]
-            )
-            or "none"
-        ),
+        f"Excluded from the adjustment set — proven post-index leakage ({len(proven)}): "
+        + (", ".join(f"`{n}`" for n in proven) or "none"),
+        "",
+        f"Excluded per spec 3(b), pending temporal review ({len(review)}; Layer-3 high on a column "
+        "with no manifest contract — predictiveness of Y, NOT proven timing): "
+        + (", ".join(f"`{n}`" for n in review) or "none"),
     ]
     path.write_text("\n".join(lines) + "\n")
 

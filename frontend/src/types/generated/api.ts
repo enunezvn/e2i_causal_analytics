@@ -6039,13 +6039,6 @@ export interface components {
             feature_role_panel?: {
                 [key: string]: unknown;
             } | null;
-            /**
-             * Approved Structure Roles
-             * @description feature -> derived role from an APPROVED structural review (confounder anchors the DAG prior; mediator/collider/descendant/instrument leave the adjustment set). Requires feature_role_panel.
-             */
-            approved_structure_roles?: {
-                [key: string]: string;
-            } | null;
         };
         /**
          * AgentCausalAnalysisResponse

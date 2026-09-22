@@ -61,16 +61,15 @@ def stub_lm() -> Any:
     from dspy.utils.dummies import DummyLM
 
     prior = getattr(dspy.settings, "lm", None)
-    lm = DummyLM(
-        [
-            {
-                "reasoning": "stub",
-                "causal_role": "confounder",
-                "mechanism": "stub mechanism: baseline severity drives both T and Y",
-                "recommended_remediation": "keep_with_caveat",
-            }
-        ]
-    )
+    # DummyLM pops one answer per call and then fails to parse (measured on the
+    # real frame: 19 attempts, 1 answered); give it one answer per possible call.
+    answer = {
+        "reasoning": "stub",
+        "causal_role": "confounder",
+        "mechanism": "stub mechanism: baseline severity drives both T and Y",
+        "recommended_remediation": "keep_with_caveat",
+    }
+    lm = DummyLM([dict(answer) for _ in range(256)])
     dspy.configure(lm=lm)
     yield lm
     try:

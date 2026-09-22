@@ -66,6 +66,23 @@ def test_run_on_a_parquet_frame_with_a_fake_layer_4(tmp_path: Path, monkeypatch)
     summary = (out / "summary.md").read_text()
     assert "Layer 4" in summary and "abstain" in summary.lower()
     assert "treatment_initiated" in summary
+    # codex r2: the owner-facing summary must not present a Layer-3-only
+    # exclusion as proven leakage — it names the temporal status and the review.
+    assert "temporal" in summary
+    assert "proven post-index leakage" in summary
+    assert "pending temporal review" in summary
+    proven_line = next(
+        ln
+        for ln in summary.splitlines()
+        if ln.startswith("Excluded from the adjustment set — proven post-index leakage")
+    )
+    review_line = next(
+        ln
+        for ln in summary.splitlines()
+        if ln.startswith("Excluded per spec 3(b), pending temporal review")
+    )
+    assert "treatment_initiated" in proven_line and "leak_probe" not in proven_line
+    assert "leak_probe" in review_line and "treatment_initiated" not in review_line
 
 
 def test_real_layer_4_refuses_without_cost_acceptance(tmp_path: Path) -> None:

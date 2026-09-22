@@ -633,31 +633,43 @@ def derive_confounder_channels(
     review: List[str] = []
     for cov in declared_covariates:
         name = str(cov)
-        if name not in leaks:
+        # The agent route one-hot expands categoricals into the loader's stable
+        # ``<col>=<level>`` dummies (src/api/routes/causal/loaders.py::
+        # _one_hot_categoricals) BEFORE graph_builder runs. A dummy inherits its
+        # source column's verdict, or the expansion would launder a leak back
+        # into the adjustment set (codex r2).
+        key = name
+        via_dummy = False
+        if name not in leaks and "=" in name and name.split("=", 1)[0] in leaks:
+            key = name.split("=", 1)[0]
+            via_dummy = True
+        if key not in leaks:
             modeled.append(name)
             warnings.append(
                 f"feature_role_panel: '{name}' is not in the panel ({n_panel} covariates "
                 "evaluated); kept in modeled_confounders unvetted"
             )
             continue
-        source, _needs_review = leaks[name]
+        source, _needs_review = leaks[key]
+        suffix = f" (one-hot dummy of '{key}', which carries the verdict)" if via_dummy else ""
         if source is not None:
             removed.append((name, source))
             if source == LEAK_SOURCE_LAYER_1:
                 warnings.append(
                     f"feature_role_panel: '{name}' removed from modeled_confounders "
-                    f"(leak verdict: {source}); a post-index column is not a backdoor variable"
+                    f"(leak verdict: {source}){suffix}; a post-index column is not a "
+                    "backdoor variable"
                 )
             else:
                 review.append(name)
                 warnings.append(
                     f"feature_role_panel: '{name}' removed from modeled_confounders "
-                    f"(leak verdict: {source}); it confidently predicts the outcome and has "
-                    "no manifest contract, so its temporal status unknown — excluded per "
-                    "spec 3(b) pending temporal review, not proven leakage"
+                    f"(leak verdict: {source}){suffix}; it confidently predicts the outcome "
+                    "and has no manifest contract, so its temporal status unknown — excluded "
+                    "per spec 3(b) pending temporal review, not proven leakage"
                 )
             continue
-        role = approved.get(name)
+        role = approved.get(key)
         if role in _NON_ADJUSTMENT_ROLES:
             removed.append((name, f"approved_{role}"))
             warnings.append(
@@ -672,15 +684,25 @@ def derive_confounder_channels(
             continue
         modeled.append(name)
 
+    # An approved role names the LOGICAL feature; the frame may carry it as
+    # one-hot dummies (``<col>=<level>``). Anchoring and the instruments channel
+    # must name the columns the DAG actually has (codex r2).
+    declared_by_key: Dict[str, List[str]] = {}
+    for cov in declared_covariates:
+        name = str(cov)
+        key = name.split("=", 1)[0] if ("=" in name and name not in leaks) else name
+        declared_by_key.setdefault(key, []).append(name)
+
     anchored: Optional[List[str]] = None
     instruments: List[str] = []
     if approved_structure_roles is not None:
         anchored = []
         for name, role in approved.items():
             source, _needs_review = leaks.get(name, (None, False))
+            columns = declared_by_key.get(name, [name])
             if role == "confounder":
                 if source is None:
-                    anchored.append(name)
+                    anchored.extend(c for c in columns if c not in anchored)
                 else:
                     warnings.append(
                         f"feature_role_panel: approved confounder '{name}' not anchored "
@@ -688,7 +710,7 @@ def derive_confounder_channels(
                     )
             elif role == "instrument":
                 if source is None:
-                    instruments.append(name)
+                    instruments.extend(c for c in columns if c not in instruments)
                 else:
                     warnings.append(
                         f"feature_role_panel: approved instrument '{name}' not used "

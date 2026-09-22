@@ -163,6 +163,39 @@ class TestDeriveConfounderChannels:
         )
         assert ch1.review_required == []
 
+    def test_one_hot_dummies_inherit_their_source_columns_verdict(self) -> None:
+        """codex r2: the agent route one-hot expands categoricals into the
+        loader's stable ``<col>=<level>`` dummies BEFORE graph_builder runs, so
+        a leak verdict on ``post_dx`` must reach ``post_dx=1`` / ``post_dx=2``
+        or the expansion silently launders the leak back into the adjustment set."""
+        ch = derive_confounder_channels(
+            _panel(post_dx="layer_1_post_index"),
+            declared_covariates=["c1", "post_dx=1", "post_dx=2", "c2=b"],
+        )
+        assert ch.modeled_confounders == ["c1", "c2=b"]
+        assert ch.removed == [
+            ("post_dx=1", "layer_1_post_index"),
+            ("post_dx=2", "layer_1_post_index"),
+        ]
+        assert any("post_dx=1" in w and "post_dx" in w and "dummy" in w for w in ch.warnings), (
+            ch.warnings
+        )
+        # A dummy whose source the panel never saw is still "not in the panel".
+        assert not any("c2=b" in w for w in ch.warnings)
+
+    def test_approved_roles_fan_out_to_one_hot_dummies(self) -> None:
+        """codex r2: anchoring and role removal must reach the dummies the
+        loader derived from an approved source column."""
+        ch = derive_confounder_channels(
+            _panel(),
+            declared_covariates=["c1=a", "c1=b", "c2=x", "z"],
+            approved_structure_roles={"c1": "confounder", "c2": "mediator", "z": "instrument"},
+        )
+        assert ch.anchored_confounders == ["c1=a", "c1=b"]
+        assert ch.modeled_confounders == ["c1=a", "c1=b"]
+        assert ("c2=x", "approved_mediator") in ch.removed
+        assert ch.instruments == ["z"]
+
     def test_accepts_the_serialised_panel(self) -> None:
         payload = _panel(post_dx="layer_1_post_index").to_dict()
         ch = derive_confounder_channels(payload, declared_covariates=["c1", "post_dx"])
@@ -190,6 +223,11 @@ class TestGraphBuilderReadsThePanel:
         assert result["modeled_confounders"] == ["c1", "c2"]
         assert result["confounders"] == ["c1", "c2"]
         assert any("post_dx" in w and "layer_1_post_index" in w for w in result["warnings"])
+        # One named provenance line says WHICH panel narrowed the set.
+        assert any(
+            "feature_role_panel applied" in w and "optum_mart" in w and "t -> y" in w
+            for w in result["warnings"]
+        ), result["warnings"]
         # The guarantee channel still holds for the survivors.
         assert all({"c1", "c2"} <= set(adj) for adj in graph["adjustment_sets"])
 
@@ -205,7 +243,9 @@ class TestGraphBuilderReadsThePanel:
         assert result["anchored_confounders"] == ["c1"]
         assert result["instruments"] == ["z"]
         assert result["modeled_confounders"] == ["c1", "c2", "post_dx"]  # z was never declared
-        assert "warnings" not in result or not [w for w in result["warnings"] if "removed" in w]
+        assert not [
+            w for w in result.get("warnings", []) if "removed from modeled_confounders" in w
+        ]
 
     @pytest.mark.asyncio
     async def test_without_a_panel_nothing_changes(self) -> None:
