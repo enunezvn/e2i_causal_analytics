@@ -313,6 +313,55 @@ async def get_causal_agent_analysis(analysis_id: str) -> AgentCausalAnalysisResp
     return job
 
 
+async def _expert_review_repo_factory() -> Any:
+    """The expert-review repository the structural-prior lookup reads through
+    (mirrors ``routes/expert_review._get_expert_review_repo``: an ASYNC client,
+    fail-closed when the Supabase env is missing)."""
+    from src.memory.services.factories import get_async_supabase_client
+    from src.repositories.expert_review import ExpertReviewRepository
+
+    client = await get_async_supabase_client()
+    return ExpertReviewRepository(supabase_client=client)
+
+
+async def _apply_approved_structural_prior(
+    initial_state: Dict[str, Any],
+    request: AgentCausalAnalysisRequest,
+    covariates: List[str],
+    *,
+    repo_factory: Any = None,
+) -> None:
+    """Seed ``initial_state``'s structural-prior channels from an approved
+    structural-author review of (treatment, outcome[, brand]); no-op (with a
+    warning line on failure) otherwise. Never raises."""
+    from src.data.kg.structural_prior_loader import (
+        apply_structural_prior_to_state,
+        resolve_structural_prior_for_run,
+    )
+
+    # The run's dataset must declare the feature manifest the review was
+    # authored for; (T, Y) names alone are not a dataset identity (codex r2).
+    spec = _CAUSAL_DATASET_SPECS.get(request.dataset or "") or {}
+    declared = spec.get("feature_manifest_source")
+    prior, notes = await resolve_structural_prior_for_run(
+        treatment=request.treatment_var,
+        outcome=request.outcome_var,
+        brand=request.brand,
+        manifest=declared if isinstance(declared, str) else None,
+        repo_factory=repo_factory or _expert_review_repo_factory,
+    )
+    if prior is None:
+        if notes:
+            initial_state.setdefault("warnings", []).extend(notes)
+        return
+    apply_structural_prior_to_state(initial_state, prior, covariates=covariates)
+    logger.info(
+        "structural prior applied from review %s: anchored=%s",
+        prior.review_id,
+        initial_state.get("anchored_confounders"),
+    )
+
+
 async def _run_agent_analysis_task(
     analysis_id: str,
     request: AgentCausalAnalysisRequest,
@@ -433,6 +482,13 @@ async def _run_agent_analysis_task(
         "fallback_used": False,
         "retry_count": 0,
     }
+
+    # Lane B (real-data causal estimation): an APPROVED expert review of a
+    # structural-author cohort DAG for this (T, Y) seeds the structural-prior
+    # channel (anchored_confounders) and the approved roles. Unapproved machine
+    # attestations never do; a store outage leaves the run prior-less and says
+    # so in ``warnings`` (spec §3 Lane B item 5, §5).
+    await _apply_approved_structural_prior(initial_state, request, covariates)
 
     start = _time.time()
     try:

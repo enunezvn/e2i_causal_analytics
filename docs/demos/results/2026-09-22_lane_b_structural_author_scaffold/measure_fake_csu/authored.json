@@ -1,0 +1,2080 @@
+{
+  "meta": {
+    "measured_at": "2026-09-22T18:59:31.930653+00:00",
+    "lm": "fake",
+    "fake_source": "replay",
+    "resolver": "offline",
+    "cohort": "CSU_remibrutinib",
+    "golden": "/home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-b-structural-author-scaffold/tests/fixtures/causal_role_golden_set.json",
+    "n_briefs": 31,
+    "tree": {
+      "commit": "25b04ac334c1701c594765b109ff3743fc252e3e",
+      "dirty_src_scripts_tests": false
+    }
+  },
+  "records": [
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "childhood_eczema_history_flag",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "childhood_eczema_history_flag",
+      "edges": [
+        [
+          "childhood_eczema_history_flag",
+          "U_atopic_diathesis"
+        ],
+        [
+          "U_atopic_diathesis",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "childhood_eczema_history_flag",
+          "to_node": "U_atopic_diathesis",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "U_atopic_diathesis",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "ancestor",
+      "expected_role": "ancestor",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): childhood_eczema_history_flag->U_atopic_diathesis, U_atopic_diathesis->Y"
+      ],
+      "cross_check": {
+        "derived_role": "ancestor",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [
+        "U_atopic_diathesis"
+      ],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:27.492483+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "family_history_atopy_first_degree_relative_flag",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "family_history_atopy_first_degree_relative_flag",
+      "edges": [
+        [
+          "family_history_atopy_first_degree_relative_flag",
+          "U_heritable_atopy"
+        ],
+        [
+          "U_heritable_atopy",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "family_history_atopy_first_degree_relative_flag",
+          "to_node": "U_heritable_atopy",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "U_heritable_atopy",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "ancestor",
+      "expected_role": "ancestor",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): family_history_atopy_first_degree_relative_flag->U_heritable_atopy, U_heritable_atopy->Y"
+      ],
+      "cross_check": {
+        "derived_role": "ancestor",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [
+        "U_heritable_atopy"
+      ],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:27.635848+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "hla_drb1_autoimmune_csu_susceptibility_allele_flag",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "hla_drb1_autoimmune_csu_susceptibility_allele_flag",
+      "edges": [
+        [
+          "hla_drb1_autoimmune_csu_susceptibility_allele_flag",
+          "U_autoimmune_endotype"
+        ],
+        [
+          "U_autoimmune_endotype",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "hla_drb1_autoimmune_csu_susceptibility_allele_flag",
+          "to_node": "U_autoimmune_endotype",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "U_autoimmune_endotype",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "ancestor",
+      "expected_role": "ancestor",
+      "ambiguous": true,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): hla_drb1_autoimmune_csu_susceptibility_allele_flag->U_autoimmune_endotype, U_autoimmune_endotype->Y"
+      ],
+      "cross_check": {
+        "derived_role": "ancestor",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [
+        "U_autoimmune_endotype"
+      ],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:27.784261+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "patient_age_at_index_years",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "patient_age_at_index_years",
+      "edges": [
+        [
+          "patient_age_at_index_years",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "patient_age_at_index_years",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "ancestor",
+      "expected_role": "ancestor",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): patient_age_at_index_years->Y"
+      ],
+      "cross_check": {
+        "derived_role": "ancestor",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:27.928464+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "patient_sex_female_indicator",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "patient_sex_female_indicator",
+      "edges": [
+        [
+          "patient_sex_female_indicator",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "patient_sex_female_indicator",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "ancestor",
+      "expected_role": "ancestor",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): patient_sex_female_indicator->Y"
+      ],
+      "cross_check": {
+        "derived_role": "ancestor",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:28.078552+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "alive_and_enrolled_at_180d_post_index_flag",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "alive_and_enrolled_at_180d_post_index_flag",
+      "edges": [
+        [
+          "T",
+          "alive_and_enrolled_at_180d_post_index_flag"
+        ],
+        [
+          "Y",
+          "alive_and_enrolled_at_180d_post_index_flag"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "T",
+          "to_node": "alive_and_enrolled_at_180d_post_index_flag",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "Y",
+          "to_node": "alive_and_enrolled_at_180d_post_index_flag",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "collider",
+      "expected_role": "collider",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): T->alive_and_enrolled_at_180d_post_index_flag, Y->alive_and_enrolled_at_180d_post_index_flag"
+      ],
+      "cross_check": {
+        "derived_role": "collider",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:28.233340+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "on_treatment_persistent_180d_pdc80_flag",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "on_treatment_persistent_180d_pdc80_flag",
+      "edges": [
+        [
+          "T",
+          "on_treatment_persistent_180d_pdc80_flag"
+        ],
+        [
+          "Y",
+          "on_treatment_persistent_180d_pdc80_flag"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "T",
+          "to_node": "on_treatment_persistent_180d_pdc80_flag",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "Y",
+          "to_node": "on_treatment_persistent_180d_pdc80_flag",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "collider",
+      "expected_role": "collider",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): T->on_treatment_persistent_180d_pdc80_flag, Y->on_treatment_persistent_180d_pdc80_flag"
+      ],
+      "cross_check": {
+        "derived_role": "collider",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:28.384107+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "on_treatment_remibrutinib_at_180d_postindex_flag",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "on_treatment_remibrutinib_at_180d_postindex_flag",
+      "edges": [
+        [
+          "T",
+          "on_treatment_remibrutinib_at_180d_postindex_flag"
+        ],
+        [
+          "Y",
+          "on_treatment_remibrutinib_at_180d_postindex_flag"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "T",
+          "to_node": "on_treatment_remibrutinib_at_180d_postindex_flag",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "Y",
+          "to_node": "on_treatment_remibrutinib_at_180d_postindex_flag",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "collider",
+      "expected_role": "collider",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): T->on_treatment_remibrutinib_at_180d_postindex_flag, Y->on_treatment_remibrutinib_at_180d_postindex_flag"
+      ],
+      "cross_check": {
+        "derived_role": "collider",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:28.533204+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "patient_initiated_discontinuation_180d_flag",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "patient_initiated_discontinuation_180d_flag",
+      "edges": [
+        [
+          "T",
+          "patient_initiated_discontinuation_180d_flag"
+        ],
+        [
+          "Y",
+          "patient_initiated_discontinuation_180d_flag"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "T",
+          "to_node": "patient_initiated_discontinuation_180d_flag",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "Y",
+          "to_node": "patient_initiated_discontinuation_180d_flag",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "collider",
+      "expected_role": "collider",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): T->patient_initiated_discontinuation_180d_flag, Y->patient_initiated_discontinuation_180d_flag"
+      ],
+      "cross_check": {
+        "derived_role": "collider",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:28.690776+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "baseline_total_ige_iu_ml_preindex",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "baseline_total_ige_iu_ml_preindex",
+      "edges": [
+        [
+          "baseline_total_ige_iu_ml_preindex",
+          "T"
+        ],
+        [
+          "baseline_total_ige_iu_ml_preindex",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "baseline_total_ige_iu_ml_preindex",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "baseline_total_ige_iu_ml_preindex",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): baseline_total_ige_iu_ml_preindex->T, baseline_total_ige_iu_ml_preindex->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:28.842914+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "baseline_uas7_score_preindex_30d",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "baseline_uas7_score_preindex_30d",
+      "edges": [
+        [
+          "baseline_uas7_score_preindex_30d",
+          "T"
+        ],
+        [
+          "baseline_uas7_score_preindex_30d",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "baseline_uas7_score_preindex_30d",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "baseline_uas7_score_preindex_30d",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): baseline_uas7_score_preindex_30d->T, baseline_uas7_score_preindex_30d->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:28.985733+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "comorbid_autoimmune_thyroiditis_history_5y_preindex",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "comorbid_autoimmune_thyroiditis_history_5y_preindex",
+      "edges": [
+        [
+          "comorbid_autoimmune_thyroiditis_history_5y_preindex",
+          "T"
+        ],
+        [
+          "comorbid_autoimmune_thyroiditis_history_5y_preindex",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "comorbid_autoimmune_thyroiditis_history_5y_preindex",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "comorbid_autoimmune_thyroiditis_history_5y_preindex",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): comorbid_autoimmune_thyroiditis_history_5y_preindex->T, comorbid_autoimmune_thyroiditis_history_5y_preindex->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:29.129042+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "distinct_h1_antihistamine_count_365d_preindex",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "distinct_h1_antihistamine_count_365d_preindex",
+      "edges": [
+        [
+          "distinct_h1_antihistamine_count_365d_preindex",
+          "T"
+        ],
+        [
+          "distinct_h1_antihistamine_count_365d_preindex",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "distinct_h1_antihistamine_count_365d_preindex",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "distinct_h1_antihistamine_count_365d_preindex",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): distinct_h1_antihistamine_count_365d_preindex->T, distinct_h1_antihistamine_count_365d_preindex->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:29.275135+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "pdc_preindex_preventive_medications_score_tertile",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "pdc_preindex_preventive_medications_score_tertile",
+      "edges": [
+        [
+          "pdc_preindex_preventive_medications_score_tertile",
+          "T"
+        ],
+        [
+          "pdc_preindex_preventive_medications_score_tertile",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "pdc_preindex_preventive_medications_score_tertile",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "pdc_preindex_preventive_medications_score_tertile",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": true,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): pdc_preindex_preventive_medications_score_tertile->T, pdc_preindex_preventive_medications_score_tertile->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:29.421136+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "prior_omalizumab_use_flag_730d_preindex",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "prior_omalizumab_use_flag_730d_preindex",
+      "edges": [
+        [
+          "prior_omalizumab_use_flag_730d_preindex",
+          "T"
+        ],
+        [
+          "prior_omalizumab_use_flag_730d_preindex",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "prior_omalizumab_use_flag_730d_preindex",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "prior_omalizumab_use_flag_730d_preindex",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): prior_omalizumab_use_flag_730d_preindex->T, prior_omalizumab_use_flag_730d_preindex->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:29.563357+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "post_index_dlqi_score_150_180d",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "post_index_dlqi_score_150_180d",
+      "edges": [
+        [
+          "Y",
+          "post_index_dlqi_score_150_180d"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "Y",
+          "to_node": "post_index_dlqi_score_150_180d",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "descendant",
+      "expected_role": "descendant",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): Y->post_index_dlqi_score_150_180d"
+      ],
+      "cross_check": {
+        "derived_role": "descendant",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:29.705416+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "post_index_petechiae_event_180d_flag",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "post_index_petechiae_event_180d_flag",
+      "edges": [
+        [
+          "T",
+          "post_index_petechiae_event_180d_flag"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "T",
+          "to_node": "post_index_petechiae_event_180d_flag",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "descendant",
+      "expected_role": "descendant",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): T->post_index_petechiae_event_180d_flag"
+      ],
+      "cross_check": {
+        "derived_role": "descendant",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:29.848047+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "post_index_switch_to_alternative_biologic_180d_flag",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "post_index_switch_to_alternative_biologic_180d_flag",
+      "edges": [
+        [
+          "T",
+          "post_index_switch_to_alternative_biologic_180d_flag"
+        ],
+        [
+          "Y",
+          "post_index_switch_to_alternative_biologic_180d_flag"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "T",
+          "to_node": "post_index_switch_to_alternative_biologic_180d_flag",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "Y",
+          "to_node": "post_index_switch_to_alternative_biologic_180d_flag",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "collider",
+      "expected_role": "collider",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): T->post_index_switch_to_alternative_biologic_180d_flag, Y->post_index_switch_to_alternative_biologic_180d_flag"
+      ],
+      "cross_check": {
+        "derived_role": "collider",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:29.992025+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "post_index_thrombocytopenia_event_180d_flag",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "post_index_thrombocytopenia_event_180d_flag",
+      "edges": [
+        [
+          "T",
+          "post_index_thrombocytopenia_event_180d_flag"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "T",
+          "to_node": "post_index_thrombocytopenia_event_180d_flag",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "descendant",
+      "expected_role": "descendant",
+      "ambiguous": true,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): T->post_index_thrombocytopenia_event_180d_flag"
+      ],
+      "cross_check": {
+        "derived_role": "descendant",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:30.146476+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "uct_score_150_180d_post_index",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "uct_score_150_180d_post_index",
+      "edges": [
+        [
+          "Y",
+          "uct_score_150_180d_post_index"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "Y",
+          "to_node": "uct_score_150_180d_post_index",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "descendant",
+      "expected_role": "descendant",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): Y->uct_score_150_180d_post_index"
+      ],
+      "cross_check": {
+        "derived_role": "descendant",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:30.313089+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "calendar_time_post_remibrutinib_approval_indicator",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "calendar_time_post_remibrutinib_approval_indicator",
+      "edges": [
+        [
+          "calendar_time_post_remibrutinib_approval_indicator",
+          "T"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "calendar_time_post_remibrutinib_approval_indicator",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "instrument",
+      "expected_role": "instrument",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): calendar_time_post_remibrutinib_approval_indicator->T"
+      ],
+      "cross_check": {
+        "derived_role": "instrument",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:30.471773+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "index_prescriber_btk_inhibitor_preference_share_prior_365d",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "index_prescriber_btk_inhibitor_preference_share_prior_365d",
+      "edges": [
+        [
+          "index_prescriber_btk_inhibitor_preference_share_prior_365d",
+          "T"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "index_prescriber_btk_inhibitor_preference_share_prior_365d",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "instrument",
+      "expected_role": "instrument",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): index_prescriber_btk_inhibitor_preference_share_prior_365d->T"
+      ],
+      "cross_check": {
+        "derived_role": "instrument",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:30.638868+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "index_prescriber_csu_biologic_volume_tertile_prior_365d",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "index_prescriber_csu_biologic_volume_tertile_prior_365d",
+      "edges": [
+        [
+          "index_prescriber_csu_biologic_volume_tertile_prior_365d",
+          "T"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "index_prescriber_csu_biologic_volume_tertile_prior_365d",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "instrument",
+      "expected_role": "instrument",
+      "ambiguous": true,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): index_prescriber_csu_biologic_volume_tertile_prior_365d->T"
+      ],
+      "cross_check": {
+        "derived_role": "instrument",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:30.798629+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "index_prescriber_first_btki_initiation_within_first_year_post_approval_flag",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "index_prescriber_first_btki_initiation_within_first_year_post_approval_flag",
+      "edges": [
+        [
+          "index_prescriber_first_btki_initiation_within_first_year_post_approval_flag",
+          "T"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "index_prescriber_first_btki_initiation_within_first_year_post_approval_flag",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "instrument",
+      "expected_role": "instrument",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): index_prescriber_first_btki_initiation_within_first_year_post_approval_flag->T"
+      ],
+      "cross_check": {
+        "derived_role": "instrument",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:30.954351+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "payer_formulary_tier_change_remibrutinib_quarter",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "payer_formulary_tier_change_remibrutinib_quarter",
+      "edges": [
+        [
+          "payer_formulary_tier_change_remibrutinib_quarter",
+          "T"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "payer_formulary_tier_change_remibrutinib_quarter",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "instrument",
+      "expected_role": "instrument",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): payer_formulary_tier_change_remibrutinib_quarter->T"
+      ],
+      "cross_check": {
+        "derived_role": "instrument",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:31.103293+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "regional_zip3_quarter_remibrutinib_uptake_share",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "regional_zip3_quarter_remibrutinib_uptake_share",
+      "edges": [
+        [
+          "regional_zip3_quarter_remibrutinib_uptake_share",
+          "T"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "regional_zip3_quarter_remibrutinib_uptake_share",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "instrument",
+      "expected_role": "instrument",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): regional_zip3_quarter_remibrutinib_uptake_share->T"
+      ],
+      "cross_check": {
+        "derived_role": "instrument",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:31.252969+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "delta_anti_fcepsilon_ri_igg_titer_post_treatment_60_90d",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "delta_anti_fcepsilon_ri_igg_titer_post_treatment_60_90d",
+      "edges": [
+        [
+          "T",
+          "delta_anti_fcepsilon_ri_igg_titer_post_treatment_60_90d"
+        ],
+        [
+          "delta_anti_fcepsilon_ri_igg_titer_post_treatment_60_90d",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "T",
+          "to_node": "delta_anti_fcepsilon_ri_igg_titer_post_treatment_60_90d",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "delta_anti_fcepsilon_ri_igg_titer_post_treatment_60_90d",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "mediator",
+      "expected_role": "mediator",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): T->delta_anti_fcepsilon_ri_igg_titer_post_treatment_60_90d, delta_anti_fcepsilon_ri_igg_titer_post_treatment_60_90d->Y"
+      ],
+      "cross_check": {
+        "derived_role": "mediator",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:31.401028+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "delta_basophil_activation_test_cd63_pct_28_56d",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "delta_basophil_activation_test_cd63_pct_28_56d",
+      "edges": [
+        [
+          "T",
+          "delta_basophil_activation_test_cd63_pct_28_56d"
+        ],
+        [
+          "delta_basophil_activation_test_cd63_pct_28_56d",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "T",
+          "to_node": "delta_basophil_activation_test_cd63_pct_28_56d",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "delta_basophil_activation_test_cd63_pct_28_56d",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "mediator",
+      "expected_role": "mediator",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): T->delta_basophil_activation_test_cd63_pct_28_56d, delta_basophil_activation_test_cd63_pct_28_56d->Y"
+      ],
+      "cross_check": {
+        "derived_role": "mediator",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:31.549113+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "delta_crp_mg_l_60_120d_post_index",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "delta_crp_mg_l_60_120d_post_index",
+      "edges": [
+        [
+          "T",
+          "delta_crp_mg_l_60_120d_post_index"
+        ],
+        [
+          "Y",
+          "delta_crp_mg_l_60_120d_post_index"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "T",
+          "to_node": "delta_crp_mg_l_60_120d_post_index",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "Y",
+          "to_node": "delta_crp_mg_l_60_120d_post_index",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "collider",
+      "expected_role": "collider",
+      "ambiguous": true,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): T->delta_crp_mg_l_60_120d_post_index, Y->delta_crp_mg_l_60_120d_post_index"
+      ],
+      "cross_check": {
+        "derived_role": "collider",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:31.682017+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "delta_d_dimer_ug_ml_90_180d_post_index",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "delta_d_dimer_ug_ml_90_180d_post_index",
+      "edges": [
+        [
+          "T",
+          "delta_d_dimer_ug_ml_90_180d_post_index"
+        ],
+        [
+          "Y",
+          "delta_d_dimer_ug_ml_90_180d_post_index"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "T",
+          "to_node": "delta_d_dimer_ug_ml_90_180d_post_index",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "Y",
+          "to_node": "delta_d_dimer_ug_ml_90_180d_post_index",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "collider",
+      "expected_role": "collider",
+      "ambiguous": true,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): T->delta_d_dimer_ug_ml_90_180d_post_index, Y->delta_d_dimer_ug_ml_90_180d_post_index"
+      ],
+      "cross_check": {
+        "derived_role": "collider",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:31.808085+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    },
+    {
+      "cohort": "CSU_remibrutinib",
+      "feature_name": "delta_serum_il17_pg_ml_60_120d_post_index",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "delta_serum_il17_pg_ml_60_120d_post_index",
+      "edges": [
+        [
+          "T",
+          "delta_serum_il17_pg_ml_60_120d_post_index"
+        ],
+        [
+          "Y",
+          "delta_serum_il17_pg_ml_60_120d_post_index"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "T",
+          "to_node": "delta_serum_il17_pg_ml_60_120d_post_index",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "Y",
+          "to_node": "delta_serum_il17_pg_ml_60_120d_post_index",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "collider",
+      "expected_role": "collider",
+      "ambiguous": true,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): T->delta_serum_il17_pg_ml_60_120d_post_index, Y->delta_serum_il17_pg_ml_60_120d_post_index"
+      ],
+      "cross_check": {
+        "derived_role": "collider",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T18:59:31.930261+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
+    }
+  ]
+}

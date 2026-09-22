@@ -822,6 +822,11 @@ def _optum_attestation(feature_node: str) -> CausalStructureAttestation:
         outcome_node=y,
         feature_node=feature_node,
         edges=edges,
+        # Owner decision (real-data causal estimation spec §7, 2026-09-22): these
+        # 110 fragments are research-agent output with no human sign-off →
+        # ``machine`` = audit-only. The owner may relabel after reading the
+        # structural author's Optum diff (scripts/author_cohort_dag.py run (b)).
+        provenance="machine",
     )
 
 

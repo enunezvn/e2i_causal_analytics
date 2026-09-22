@@ -1,0 +1,329 @@
+{
+  "meta": {
+    "measured_at": "2026-09-22T18:59:56.499575+00:00",
+    "lm": "fake",
+    "fake_source": "replay",
+    "resolver": "offline",
+    "cohort": "all",
+    "golden": "/home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-b-structural-author-scaffold/tests/fixtures/causal_role_golden_set.json",
+    "n_briefs": 91,
+    "tree": {
+      "commit": "25b04ac334c1701c594765b109ff3743fc252e3e",
+      "dirty_src_scripts_tests": false
+    }
+  },
+  "n": 91,
+  "n_scored": 91,
+  "n_review": 0,
+  "exact_role_agreement": 39,
+  "exact_role_accuracy": 0.42857142857142855,
+  "leak_decision_agreement": 63,
+  "leak_decision_accuracy": 0.6923076923076923,
+  "missed_leaks": [
+    {
+      "cohort": "BC_kisqali",
+      "feature_name": "alive_at_24m_flag",
+      "ground_truth_role": "collider",
+      "derived_role": "confounder"
+    },
+    {
+      "cohort": "BC_kisqali",
+      "feature_name": "continuous_enrollment_24m_flag",
+      "ground_truth_role": "collider",
+      "derived_role": "confounder"
+    },
+    {
+      "cohort": "BC_kisqali",
+      "feature_name": "ctdna_clearance_90d_flag_given_baseline_positive",
+      "ground_truth_role": "collider",
+      "derived_role": "confounder"
+    },
+    {
+      "cohort": "BC_kisqali",
+      "feature_name": "dose_reduced_after_grade3_neutropenia_flag",
+      "ground_truth_role": "collider",
+      "derived_role": "confounder"
+    },
+    {
+      "cohort": "BC_kisqali",
+      "feature_name": "on_treatment_at_12m_flag",
+      "ground_truth_role": "collider",
+      "derived_role": "confounder"
+    },
+    {
+      "cohort": "BC_kisqali",
+      "feature_name": "gcsf_dispense_within_180d_post_index_flag",
+      "ground_truth_role": "descendant",
+      "derived_role": "confounder"
+    },
+    {
+      "cohort": "BC_kisqali",
+      "feature_name": "hepatotoxicity_grade3_post_index_flag",
+      "ground_truth_role": "descendant",
+      "derived_role": "confounder"
+    },
+    {
+      "cohort": "BC_kisqali",
+      "feature_name": "qtc_prolongation_grade2_post_index_flag",
+      "ground_truth_role": "descendant",
+      "derived_role": "confounder"
+    },
+    {
+      "cohort": "BC_kisqali",
+      "feature_name": "switch_ai_to_fulvestrant_within_365d_flag",
+      "ground_truth_role": "descendant",
+      "derived_role": "confounder"
+    },
+    {
+      "cohort": "BC_kisqali",
+      "feature_name": "best_recist_response_180d",
+      "ground_truth_role": "mediator",
+      "derived_role": "confounder"
+    },
+    {
+      "cohort": "BC_kisqali",
+      "feature_name": "ca15_3_pct_change_baseline_to_90d",
+      "ground_truth_role": "mediator",
+      "derived_role": "confounder"
+    },
+    {
+      "cohort": "BC_kisqali",
+      "feature_name": "ctdna_esr1_emergence_flag_90d",
+      "ground_truth_role": "mediator",
+      "derived_role": "confounder"
+    },
+    {
+      "cohort": "BC_kisqali",
+      "feature_name": "post_index_neutropenia_max_grade_90d",
+      "ground_truth_role": "mediator",
+      "derived_role": "confounder"
+    },
+    {
+      "cohort": "BC_kisqali",
+      "feature_name": "ribociclib_relative_dose_intensity_180d",
+      "ground_truth_role": "mediator",
+      "derived_role": "confounder"
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "feature_name": "alive_at_180d_postindex_flag",
+      "ground_truth_role": "collider",
+      "derived_role": "confounder"
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "feature_name": "any_rbc_transfusion_during_followup_flag",
+      "ground_truth_role": "collider",
+      "derived_role": "confounder"
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "feature_name": "facit_fatigue_response_180d_postindex_flag",
+      "ground_truth_role": "collider",
+      "derived_role": "confounder"
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "feature_name": "iptacopan_persistence_at_180d_flag",
+      "ground_truth_role": "collider",
+      "derived_role": "confounder"
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "feature_name": "egfr_recovery_delta_365d_postindex",
+      "ground_truth_role": "descendant",
+      "derived_role": "confounder"
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "feature_name": "hemoglobin_normalization_postindex_flag",
+      "ground_truth_role": "descendant",
+      "derived_role": "confounder"
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "feature_name": "pnh_related_hospitalizations_365d_postindex_count",
+      "ground_truth_role": "descendant",
+      "derived_role": "confounder"
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "feature_name": "post_treatment_meningococcal_infection_365d_flag",
+      "ground_truth_role": "descendant",
+      "derived_role": "confounder"
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "feature_name": "post_treatment_thrombotic_event_365d_flag",
+      "ground_truth_role": "descendant",
+      "derived_role": "confounder"
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "feature_name": "bilirubin_delta_d90_postindex",
+      "ground_truth_role": "mediator",
+      "derived_role": "confounder"
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "feature_name": "breakthrough_hemolysis_event_180d_postindex",
+      "ground_truth_role": "mediator",
+      "derived_role": "confounder"
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "feature_name": "c3_deposition_pnh_rbc_pct_d90_postindex",
+      "ground_truth_role": "mediator",
+      "derived_role": "confounder"
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "feature_name": "ldh_x_uln_d90_postindex",
+      "ground_truth_role": "mediator",
+      "derived_role": "confounder"
+    },
+    {
+      "cohort": "PNH_fabhalta",
+      "feature_name": "reticulocyte_count_delta_d90_postindex",
+      "ground_truth_role": "mediator",
+      "derived_role": "confounder"
+    }
+  ],
+  "missed_leak_rate": 0.6666666666666666,
+  "n_leak_truth": 42,
+  "n_leak_scored": 42,
+  "conservative_errors": [],
+  "review": [],
+  "per_role": [
+    {
+      "role": "ancestor",
+      "support": 13,
+      "predicted": 5,
+      "tp": 5,
+      "precision": 1.0,
+      "recall": 0.38461538461538464,
+      "f1": 0.5555555555555556
+    },
+    {
+      "role": "collider",
+      "support": 14,
+      "predicted": 8,
+      "tp": 5,
+      "precision": 0.625,
+      "recall": 0.35714285714285715,
+      "f1": 0.45454545454545453
+    },
+    {
+      "role": "confounder",
+      "support": 17,
+      "predicted": 66,
+      "tp": 17,
+      "precision": 0.25757575757575757,
+      "recall": 1.0,
+      "f1": 0.40963855421686746
+    },
+    {
+      "role": "descendant",
+      "support": 13,
+      "predicted": 4,
+      "tp": 4,
+      "precision": 1.0,
+      "recall": 0.3076923076923077,
+      "f1": 0.47058823529411764
+    },
+    {
+      "role": "instrument",
+      "support": 19,
+      "predicted": 6,
+      "tp": 6,
+      "precision": 1.0,
+      "recall": 0.3157894736842105,
+      "f1": 0.4799999999999999
+    },
+    {
+      "role": "mediator",
+      "support": 15,
+      "predicted": 2,
+      "tp": 2,
+      "precision": 1.0,
+      "recall": 0.13333333333333333,
+      "f1": 0.23529411764705882
+    }
+  ],
+  "per_cohort": {
+    "BC_kisqali": {
+      "n": 30,
+      "n_scored": 30,
+      "n_review": 0,
+      "exact_role_agreement": 5,
+      "missed_leaks": 14
+    },
+    "CSU_remibrutinib": {
+      "n": 31,
+      "n_scored": 31,
+      "n_review": 0,
+      "exact_role_agreement": 28,
+      "missed_leaks": 0
+    },
+    "PNH_fabhalta": {
+      "n": 30,
+      "n_scored": 30,
+      "n_review": 0,
+      "exact_role_agreement": 6,
+      "missed_leaks": 14
+    }
+  },
+  "confusion": {
+    "ancestor": {
+      "ancestor": 5,
+      "collider": 0,
+      "confounder": 8,
+      "descendant": 0,
+      "instrument": 0,
+      "mediator": 0
+    },
+    "collider": {
+      "ancestor": 0,
+      "collider": 5,
+      "confounder": 9,
+      "descendant": 0,
+      "instrument": 0,
+      "mediator": 0
+    },
+    "confounder": {
+      "ancestor": 0,
+      "collider": 0,
+      "confounder": 17,
+      "descendant": 0,
+      "instrument": 0,
+      "mediator": 0
+    },
+    "descendant": {
+      "ancestor": 0,
+      "collider": 0,
+      "confounder": 9,
+      "descendant": 4,
+      "instrument": 0,
+      "mediator": 0
+    },
+    "instrument": {
+      "ancestor": 0,
+      "collider": 0,
+      "confounder": 13,
+      "descendant": 0,
+      "instrument": 6,
+      "mediator": 0
+    },
+    "mediator": {
+      "ancestor": 0,
+      "collider": 3,
+      "confounder": 10,
+      "descendant": 0,
+      "instrument": 0,
+      "mediator": 2
+    }
+  },
+  "gate_passed": false,
+  "gate": "missed_leaks == 0",
+  "notes": []
+}

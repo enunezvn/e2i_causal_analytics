@@ -202,3 +202,20 @@ def derive_structural_role(
         return role, None
     except Exception as exc:  # noqa: BLE001 — author DAG errors must never crash the node
         return None, str(exc)
+
+
+def attestation_may_decide(contract: Optional[FeatureContract]) -> bool:
+    """True iff ``contract`` carries an attestation whose provenance may ACT.
+
+    Lane B (real-data causal estimation, 2026-09-22): only a reviewed or
+    human-signed ``CausalStructureAttestation`` decides in the structural
+    decider or seeds a structural prior; unreviewed ``machine`` edges (e.g. the
+    110 Optum-initiation fragments) are audit-only. Lives here, next to
+    :func:`derive_structural_role`, so the node module stays under its
+    size ratchet.
+    """
+    return (
+        contract is not None
+        and contract.causal_structure is not None
+        and contract.causal_structure.may_decide()
+    )

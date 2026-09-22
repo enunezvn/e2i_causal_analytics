@@ -122,7 +122,7 @@ from src.data.manifests import (
     SYNTHETIC_FORBIDDEN_AS_FEATURES,
     lookup_feature_contract,
 )
-from src.ml.causal_role_dgp.extractor import derive_structural_role
+from src.ml.causal_role_dgp.extractor import attestation_may_decide, derive_structural_role
 
 # ``EnsembleVoter`` and ``EnsembleVerdict`` are LAZY-imported below to
 # avoid triggering ``src.data.kg.__init__`` at module-import time. The
@@ -2149,9 +2149,8 @@ def _apply_structural_attestation(
     )
     verdict["structural_llm_disagreement"] = disagreement if llm_role is not None else None
 
-    if not structural_gate_enabled():
-        # Dark-launch: telemetry recorded, but no remediation override.
-        return
+    if not structural_gate_enabled() or not contract.causal_structure.may_decide():
+        return  # dark-launch, or a Lane B machine (audit-only) attestation: telemetry only
 
     override = apply_structural_remediation_gate(
         structural_role=structural_role,
@@ -3851,7 +3850,7 @@ async def adaptive_validity_check(state: dict[str, Any]) -> dict[str, Any]:
         contract = lookup_feature_contract(feat, data_source=manifest_source)
         structural_role: Optional[CausalRole] = None
         structural_unclassifiable = False
-        if structural_decider_enabled:
+        if structural_decider_enabled and attestation_may_decide(contract):
             _role_str, _structural_err = derive_structural_role(contract)
             structural_unclassifiable = _structural_err is not None
             # extract_role returns exactly the six CausalRole members → cast is sound.

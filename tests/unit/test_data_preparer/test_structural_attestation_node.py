@@ -21,8 +21,14 @@ from src.data.feature_contract import (
 )
 
 
-def _m_structure_contract(name: str = "on_treatment_at_12m_flag") -> FeatureContract:
-    """A contract attesting the M-structure T→V←U→Y (derived role = collider)."""
+def _m_structure_contract(
+    name: str = "on_treatment_at_12m_flag", *, provenance: str = "human"
+) -> FeatureContract:
+    """A contract attesting the M-structure T→V←U→Y (derived role = collider).
+
+    Lane B (2026-09-22): signed ``human`` by default — only a reviewed/human
+    attestation may act; ``machine`` is audit-only (its own test below).
+    """
     return FeatureContract(
         name=name,
         knowable_at=KnowableAt(reference="index_date"),
@@ -34,6 +40,7 @@ def _m_structure_contract(name: str = "on_treatment_at_12m_flag") -> FeatureCont
             outcome_node="Y",
             feature_node="V",
             edges=(("T", "V"), ("U", "V"), ("U", "Y")),
+            provenance=provenance,
         ),
     )
 
@@ -149,6 +156,7 @@ def test_structural_gate_descendant_does_not_overrestrict(monkeypatch) -> None:
             outcome_node="Y",
             feature_node="V",
             edges=(("T", "V"), ("T", "Y")),  # off-path descendant
+            provenance="human",  # Lane B: only a reviewed/human attestation acts
         ),
     )
     verdict = _base_verdict(
@@ -163,3 +171,19 @@ def test_structural_gate_descendant_does_not_overrestrict(monkeypatch) -> None:
     assert verdict["remediation"] == "transform"
     assert verdict["structural_remediation_override"] == "transform"
     assert verdict["structural_gate_fired"] == "R-STRUCT"
+
+
+def test_structural_gate_machine_provenance_is_audit_only(monkeypatch) -> None:
+    """Lane B: gate ON but the attestation is unreviewed MACHINE output →
+    telemetry (structural_role, disagreement) is recorded, the remediation is
+    NOT overridden and the gate does not fire. Machine attestations inform the
+    audit trail; they never act."""
+    monkeypatch.setenv("ADAPTIVE_VALIDITY_STRUCTURAL_GATE_ENABLED", "1")
+    verdict = _base_verdict()
+    _apply_structural_attestation(verdict, _m_structure_contract(provenance="machine"))
+
+    assert verdict["structural_role"] == "collider"
+    assert verdict["structural_llm_disagreement"] is True
+    assert verdict["remediation"] == "window"
+    assert verdict["structural_remediation_override"] is None
+    assert verdict["structural_gate_fired"] is None

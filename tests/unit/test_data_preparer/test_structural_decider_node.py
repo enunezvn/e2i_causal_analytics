@@ -31,14 +31,21 @@ from src.data.feature_contract import CausalStructureAttestation, FeatureContrac
 node_mod = sys.modules[adaptive_validity_check.__module__]
 
 
-def _contract(edges, *, name="v", role=None):
+def _contract(edges, *, name="v", role=None, provenance="human"):
+    # Lane B (2026-09-22): only a reviewed/human attestation may DECIDE; a
+    # ``machine`` one is audit-only. These fixtures are test-authored, so they
+    # sign as ``human`` — the audit-only branch has its own test below.
     return FeatureContract(
         name=name,
         knowable_at=KnowableAt(reference="index_date"),
         source="derived",
         causal_role=role,
         causal_structure=CausalStructureAttestation(
-            treatment_node="T", outcome_node="y", feature_node=name, edges=edges
+            treatment_node="T",
+            outcome_node="y",
+            feature_node=name,
+            edges=edges,
+            provenance=provenance,
         ),
     )
 
@@ -127,3 +134,37 @@ def test_short_circuit_with_attestation_still_decides_structural(monkeypatch):
     assert v["decided_by"] == "structural"
     assert v["structural_role"] == "collider"
     assert v["severity"] == "high" and v["remediation"] == "drop"
+
+
+def test_machine_provenance_attestation_is_audit_only(monkeypatch):
+    """Lane B (spec §3 Lane B item 5): an UNREVIEWED machine attestation never
+    decides. The decider is enabled and the authored edges say collider, but
+    ``provenance="machine"`` keeps the structural rule off this feature: the
+    verdict is NOT ``decided_by="structural"`` and remediation is not forced to
+    the structural ``drop``. The derived role is still recorded as telemetry
+    (``structural_role``) so the audit trail shows what the machine thought."""
+    monkeypatch.setattr(
+        node_mod,
+        "lookup_feature_contract",
+        lambda feat, data_source=None: _contract((("T", "v"), ("y", "v")), provenance="machine"),
+    )
+    v = _verdict_for(_state())
+    assert v["decided_by"] != "structural", v["decided_by"]
+    assert v.get("structural_unclassifiable") is not True
+    # Audit-only telemetry: the machine role is visible, not acted on.
+    assert v["structural_role"] == "collider"
+    assert v["structural_gate_fired"] is None
+    assert v["remediation"] != "drop", v
+
+
+def test_machine_reviewed_provenance_attestation_decides(monkeypatch):
+    monkeypatch.setattr(
+        node_mod,
+        "lookup_feature_contract",
+        lambda feat, data_source=None: _contract(
+            (("T", "v"), ("y", "v")), provenance="machine_reviewed"
+        ),
+    )
+    v = _verdict_for(_state())
+    assert v["decided_by"] == "structural"
+    assert v["structural_role"] == "collider"

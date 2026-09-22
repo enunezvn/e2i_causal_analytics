@@ -1,0 +1,4503 @@
+{
+  "meta": {
+    "authored_at": "2026-09-22T19:01:10.958682+00:00",
+    "manifest": "optum_mart",
+    "treatment": "treatment_dupixent",
+    "outcome": "persistent_at_180d_g28",
+    "treatment_label": "remibrutinib vs competitor biologic (CSU escalation therapy; rehearsed as Dupixent vs Xolair)",
+    "outcome_label": "persistent_at_180d_g28",
+    "lm": "fake",
+    "resolver": "offline",
+    "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+    "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+    "n_features": 64,
+    "panel": null,
+    "provenance": "machine",
+    "tree": {
+      "commit": "25b04ac334c1701c594765b109ff3743fc252e3e",
+      "dirty_src_scripts_tests": false
+    }
+  },
+  "records": [
+    {
+      "feature_name": "age_at_index",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "age_at_index",
+      "edges": [
+        [
+          "age_at_index",
+          "T"
+        ],
+        [
+          "age_at_index",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "age_at_index",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "age_at_index",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): age_at_index->T, age_at_index->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:00.417058+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "gdr_cd",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "gdr_cd",
+      "edges": [
+        [
+          "gdr_cd",
+          "T"
+        ],
+        [
+          "gdr_cd",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "gdr_cd",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "gdr_cd",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): gdr_cd->T, gdr_cd->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:00.579926+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "payer_category",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "payer_category",
+      "edges": [
+        [
+          "payer_category",
+          "T"
+        ],
+        [
+          "payer_category",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "payer_category",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "payer_category",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): payer_category->T, payer_category->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:00.746640+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "payer_product",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "payer_product",
+      "edges": [
+        [
+          "payer_product",
+          "T"
+        ],
+        [
+          "payer_product",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "payer_product",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "payer_product",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): payer_product->T, payer_product->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:00.921566+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "payer_bus",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "payer_bus",
+      "edges": [
+        [
+          "payer_bus",
+          "T"
+        ],
+        [
+          "payer_bus",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "payer_bus",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "payer_bus",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): payer_bus->T, payer_bus->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:01.093523+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "health_exchange_flag",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "health_exchange_flag",
+      "edges": [
+        [
+          "health_exchange_flag",
+          "T"
+        ],
+        [
+          "health_exchange_flag",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "health_exchange_flag",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "health_exchange_flag",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): health_exchange_flag->T, health_exchange_flag->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:01.257699+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "lis_dual_flag",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "lis_dual_flag",
+      "edges": [
+        [
+          "lis_dual_flag",
+          "T"
+        ],
+        [
+          "lis_dual_flag",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "lis_dual_flag",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "lis_dual_flag",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): lis_dual_flag->T, lis_dual_flag->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:01.423889+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "geographic_region",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "geographic_region",
+      "edges": [
+        [
+          "geographic_region",
+          "T"
+        ],
+        [
+          "geographic_region",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "geographic_region",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "geographic_region",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): geographic_region->T, geographic_region->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:01.632605+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "enrollment_duration_days",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "enrollment_duration_days",
+      "edges": [
+        [
+          "enrollment_duration_days",
+          "T"
+        ],
+        [
+          "enrollment_duration_days",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "enrollment_duration_days",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "enrollment_duration_days",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): enrollment_duration_days->T, enrollment_duration_days->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:01.788470+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "charlson_score",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "charlson_score",
+      "edges": [
+        [
+          "charlson_score",
+          "T"
+        ],
+        [
+          "charlson_score",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "charlson_score",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "charlson_score",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): charlson_score->T, charlson_score->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:01.941695+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "charlson_risk_band",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "charlson_risk_band",
+      "edges": [
+        [
+          "charlson_risk_band",
+          "T"
+        ],
+        [
+          "charlson_risk_band",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "charlson_risk_band",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "charlson_risk_band",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): charlson_risk_band->T, charlson_risk_band->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:02.107475+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elixhauser_van_walraven_score",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elixhauser_van_walraven_score",
+      "edges": [
+        [
+          "elixhauser_van_walraven_score",
+          "T"
+        ],
+        [
+          "elixhauser_van_walraven_score",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elixhauser_van_walraven_score",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elixhauser_van_walraven_score",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elixhauser_van_walraven_score->T, elixhauser_van_walraven_score->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:02.276303+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elixhauser_risk_band",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elixhauser_risk_band",
+      "edges": [
+        [
+          "elixhauser_risk_band",
+          "T"
+        ],
+        [
+          "elixhauser_risk_band",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elixhauser_risk_band",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elixhauser_risk_band",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elixhauser_risk_band->T, elixhauser_risk_band->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:02.446176+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "comorbidity_diag_distinct_count",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "comorbidity_diag_distinct_count",
+      "edges": [
+        [
+          "comorbidity_diag_distinct_count",
+          "T"
+        ],
+        [
+          "comorbidity_diag_distinct_count",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "comorbidity_diag_distinct_count",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "comorbidity_diag_distinct_count",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): comorbidity_diag_distinct_count->T, comorbidity_diag_distinct_count->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:02.613125+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "comorbidity_diag_claim_count",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "comorbidity_diag_claim_count",
+      "edges": [
+        [
+          "comorbidity_diag_claim_count",
+          "T"
+        ],
+        [
+          "comorbidity_diag_claim_count",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "comorbidity_diag_claim_count",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "comorbidity_diag_claim_count",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): comorbidity_diag_claim_count->T, comorbidity_diag_claim_count->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:02.782289+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "high_comorbidity_burden_flag",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "high_comorbidity_burden_flag",
+      "edges": [
+        [
+          "high_comorbidity_burden_flag",
+          "T"
+        ],
+        [
+          "high_comorbidity_burden_flag",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "high_comorbidity_burden_flag",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "high_comorbidity_burden_flag",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): high_comorbidity_burden_flag->T, high_comorbidity_burden_flag->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:02.940294+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "cci_mi",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "cci_mi",
+      "edges": [
+        [
+          "cci_mi",
+          "T"
+        ],
+        [
+          "cci_mi",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "cci_mi",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "cci_mi",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_mi->T, cci_mi->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:03.102031+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "cci_chf",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "cci_chf",
+      "edges": [
+        [
+          "cci_chf",
+          "T"
+        ],
+        [
+          "cci_chf",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "cci_chf",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "cci_chf",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_chf->T, cci_chf->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:03.260767+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "cci_pvd",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "cci_pvd",
+      "edges": [
+        [
+          "cci_pvd",
+          "T"
+        ],
+        [
+          "cci_pvd",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "cci_pvd",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "cci_pvd",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_pvd->T, cci_pvd->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:03.408031+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "cci_cerebrovascular",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "cci_cerebrovascular",
+      "edges": [
+        [
+          "cci_cerebrovascular",
+          "T"
+        ],
+        [
+          "cci_cerebrovascular",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "cci_cerebrovascular",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "cci_cerebrovascular",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_cerebrovascular->T, cci_cerebrovascular->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:03.554927+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "cci_dementia",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "cci_dementia",
+      "edges": [
+        [
+          "cci_dementia",
+          "T"
+        ],
+        [
+          "cci_dementia",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "cci_dementia",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "cci_dementia",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_dementia->T, cci_dementia->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:03.714314+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "cci_chronic_pulmonary",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "cci_chronic_pulmonary",
+      "edges": [
+        [
+          "cci_chronic_pulmonary",
+          "T"
+        ],
+        [
+          "cci_chronic_pulmonary",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "cci_chronic_pulmonary",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "cci_chronic_pulmonary",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_chronic_pulmonary->T, cci_chronic_pulmonary->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:03.874602+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "cci_rheumatic",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "cci_rheumatic",
+      "edges": [
+        [
+          "cci_rheumatic",
+          "T"
+        ],
+        [
+          "cci_rheumatic",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "cci_rheumatic",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "cci_rheumatic",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_rheumatic->T, cci_rheumatic->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:04.025850+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "cci_peptic_ulcer",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "cci_peptic_ulcer",
+      "edges": [
+        [
+          "cci_peptic_ulcer",
+          "T"
+        ],
+        [
+          "cci_peptic_ulcer",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "cci_peptic_ulcer",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "cci_peptic_ulcer",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_peptic_ulcer->T, cci_peptic_ulcer->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:04.182914+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "cci_mild_liver",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "cci_mild_liver",
+      "edges": [
+        [
+          "cci_mild_liver",
+          "T"
+        ],
+        [
+          "cci_mild_liver",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "cci_mild_liver",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "cci_mild_liver",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_mild_liver->T, cci_mild_liver->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:04.340043+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "cci_diabetes_no_complication",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "cci_diabetes_no_complication",
+      "edges": [
+        [
+          "cci_diabetes_no_complication",
+          "T"
+        ],
+        [
+          "cci_diabetes_no_complication",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "cci_diabetes_no_complication",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "cci_diabetes_no_complication",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_diabetes_no_complication->T, cci_diabetes_no_complication->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:04.509562+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "cci_diabetes_complication",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "cci_diabetes_complication",
+      "edges": [
+        [
+          "cci_diabetes_complication",
+          "T"
+        ],
+        [
+          "cci_diabetes_complication",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "cci_diabetes_complication",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "cci_diabetes_complication",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_diabetes_complication->T, cci_diabetes_complication->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:04.675161+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "cci_paraplegia",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "cci_paraplegia",
+      "edges": [
+        [
+          "cci_paraplegia",
+          "T"
+        ],
+        [
+          "cci_paraplegia",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "cci_paraplegia",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "cci_paraplegia",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_paraplegia->T, cci_paraplegia->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:04.851953+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "cci_renal",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "cci_renal",
+      "edges": [
+        [
+          "cci_renal",
+          "T"
+        ],
+        [
+          "cci_renal",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "cci_renal",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "cci_renal",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_renal->T, cci_renal->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:05.011254+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "cci_malignancy",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "cci_malignancy",
+      "edges": [
+        [
+          "cci_malignancy",
+          "T"
+        ],
+        [
+          "cci_malignancy",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "cci_malignancy",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "cci_malignancy",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_malignancy->T, cci_malignancy->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:05.168561+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "cci_severe_liver",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "cci_severe_liver",
+      "edges": [
+        [
+          "cci_severe_liver",
+          "T"
+        ],
+        [
+          "cci_severe_liver",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "cci_severe_liver",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "cci_severe_liver",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_severe_liver->T, cci_severe_liver->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:05.327357+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "cci_metastatic_cancer",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "cci_metastatic_cancer",
+      "edges": [
+        [
+          "cci_metastatic_cancer",
+          "T"
+        ],
+        [
+          "cci_metastatic_cancer",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "cci_metastatic_cancer",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "cci_metastatic_cancer",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_metastatic_cancer->T, cci_metastatic_cancer->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:05.497661+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "cci_hiv",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "cci_hiv",
+      "edges": [
+        [
+          "cci_hiv",
+          "T"
+        ],
+        [
+          "cci_hiv",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "cci_hiv",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "cci_hiv",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_hiv->T, cci_hiv->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:05.658321+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_chf",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_chf",
+      "edges": [
+        [
+          "elx_chf",
+          "T"
+        ],
+        [
+          "elx_chf",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_chf",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_chf",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_chf->T, elx_chf->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:05.824433+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_cardiac_arrhythmia",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_cardiac_arrhythmia",
+      "edges": [
+        [
+          "elx_cardiac_arrhythmia",
+          "T"
+        ],
+        [
+          "elx_cardiac_arrhythmia",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_cardiac_arrhythmia",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_cardiac_arrhythmia",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_cardiac_arrhythmia->T, elx_cardiac_arrhythmia->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:05.995429+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_valvular_disease",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_valvular_disease",
+      "edges": [
+        [
+          "elx_valvular_disease",
+          "T"
+        ],
+        [
+          "elx_valvular_disease",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_valvular_disease",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_valvular_disease",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_valvular_disease->T, elx_valvular_disease->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:06.152745+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_pulmonary_circulation",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_pulmonary_circulation",
+      "edges": [
+        [
+          "elx_pulmonary_circulation",
+          "T"
+        ],
+        [
+          "elx_pulmonary_circulation",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_pulmonary_circulation",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_pulmonary_circulation",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_pulmonary_circulation->T, elx_pulmonary_circulation->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:06.312542+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_pvd",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_pvd",
+      "edges": [
+        [
+          "elx_pvd",
+          "T"
+        ],
+        [
+          "elx_pvd",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_pvd",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_pvd",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_pvd->T, elx_pvd->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:06.498137+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_hypertension_uncomplicated",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_hypertension_uncomplicated",
+      "edges": [
+        [
+          "elx_hypertension_uncomplicated",
+          "T"
+        ],
+        [
+          "elx_hypertension_uncomplicated",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_hypertension_uncomplicated",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_hypertension_uncomplicated",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_hypertension_uncomplicated->T, elx_hypertension_uncomplicated->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:06.671304+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_hypertension_complicated",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_hypertension_complicated",
+      "edges": [
+        [
+          "elx_hypertension_complicated",
+          "T"
+        ],
+        [
+          "elx_hypertension_complicated",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_hypertension_complicated",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_hypertension_complicated",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_hypertension_complicated->T, elx_hypertension_complicated->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:06.837314+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_paralysis",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_paralysis",
+      "edges": [
+        [
+          "elx_paralysis",
+          "T"
+        ],
+        [
+          "elx_paralysis",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_paralysis",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_paralysis",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_paralysis->T, elx_paralysis->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:06.996783+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_other_neurological",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_other_neurological",
+      "edges": [
+        [
+          "elx_other_neurological",
+          "T"
+        ],
+        [
+          "elx_other_neurological",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_other_neurological",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_other_neurological",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_other_neurological->T, elx_other_neurological->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:07.159821+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_chronic_pulmonary",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_chronic_pulmonary",
+      "edges": [
+        [
+          "elx_chronic_pulmonary",
+          "T"
+        ],
+        [
+          "elx_chronic_pulmonary",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_chronic_pulmonary",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_chronic_pulmonary",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_chronic_pulmonary->T, elx_chronic_pulmonary->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:07.316669+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_diabetes_uncomplicated",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_diabetes_uncomplicated",
+      "edges": [
+        [
+          "elx_diabetes_uncomplicated",
+          "T"
+        ],
+        [
+          "elx_diabetes_uncomplicated",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_diabetes_uncomplicated",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_diabetes_uncomplicated",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_diabetes_uncomplicated->T, elx_diabetes_uncomplicated->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:07.472718+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_diabetes_complicated",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_diabetes_complicated",
+      "edges": [
+        [
+          "elx_diabetes_complicated",
+          "T"
+        ],
+        [
+          "elx_diabetes_complicated",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_diabetes_complicated",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_diabetes_complicated",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_diabetes_complicated->T, elx_diabetes_complicated->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:07.636874+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_hypothyroidism",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_hypothyroidism",
+      "edges": [
+        [
+          "elx_hypothyroidism",
+          "T"
+        ],
+        [
+          "elx_hypothyroidism",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_hypothyroidism",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_hypothyroidism",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_hypothyroidism->T, elx_hypothyroidism->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:07.829508+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_renal_failure",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_renal_failure",
+      "edges": [
+        [
+          "elx_renal_failure",
+          "T"
+        ],
+        [
+          "elx_renal_failure",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_renal_failure",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_renal_failure",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_renal_failure->T, elx_renal_failure->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:07.989792+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_liver_disease",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_liver_disease",
+      "edges": [
+        [
+          "elx_liver_disease",
+          "T"
+        ],
+        [
+          "elx_liver_disease",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_liver_disease",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_liver_disease",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_liver_disease->T, elx_liver_disease->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:08.151741+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_peptic_ulcer",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_peptic_ulcer",
+      "edges": [
+        [
+          "elx_peptic_ulcer",
+          "T"
+        ],
+        [
+          "elx_peptic_ulcer",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_peptic_ulcer",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_peptic_ulcer",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_peptic_ulcer->T, elx_peptic_ulcer->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:08.315030+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_aids_hiv",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_aids_hiv",
+      "edges": [
+        [
+          "elx_aids_hiv",
+          "T"
+        ],
+        [
+          "elx_aids_hiv",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_aids_hiv",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_aids_hiv",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_aids_hiv->T, elx_aids_hiv->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:08.465080+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_lymphoma",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_lymphoma",
+      "edges": [
+        [
+          "elx_lymphoma",
+          "T"
+        ],
+        [
+          "elx_lymphoma",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_lymphoma",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_lymphoma",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_lymphoma->T, elx_lymphoma->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:08.633664+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_metastatic_cancer",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_metastatic_cancer",
+      "edges": [
+        [
+          "elx_metastatic_cancer",
+          "T"
+        ],
+        [
+          "elx_metastatic_cancer",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_metastatic_cancer",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_metastatic_cancer",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_metastatic_cancer->T, elx_metastatic_cancer->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:08.796996+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_solid_tumor_no_metastasis",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_solid_tumor_no_metastasis",
+      "edges": [
+        [
+          "elx_solid_tumor_no_metastasis",
+          "T"
+        ],
+        [
+          "elx_solid_tumor_no_metastasis",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_solid_tumor_no_metastasis",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_solid_tumor_no_metastasis",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_solid_tumor_no_metastasis->T, elx_solid_tumor_no_metastasis->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:08.967116+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_rheumatoid_collagen",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_rheumatoid_collagen",
+      "edges": [
+        [
+          "elx_rheumatoid_collagen",
+          "T"
+        ],
+        [
+          "elx_rheumatoid_collagen",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_rheumatoid_collagen",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_rheumatoid_collagen",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_rheumatoid_collagen->T, elx_rheumatoid_collagen->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:09.136269+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_coagulopathy",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_coagulopathy",
+      "edges": [
+        [
+          "elx_coagulopathy",
+          "T"
+        ],
+        [
+          "elx_coagulopathy",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_coagulopathy",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_coagulopathy",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_coagulopathy->T, elx_coagulopathy->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:09.306162+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_obesity",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_obesity",
+      "edges": [
+        [
+          "elx_obesity",
+          "T"
+        ],
+        [
+          "elx_obesity",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_obesity",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_obesity",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_obesity->T, elx_obesity->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:09.499107+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_weight_loss",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_weight_loss",
+      "edges": [
+        [
+          "elx_weight_loss",
+          "T"
+        ],
+        [
+          "elx_weight_loss",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_weight_loss",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_weight_loss",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_weight_loss->T, elx_weight_loss->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:09.673827+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_fluid_electrolyte",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_fluid_electrolyte",
+      "edges": [
+        [
+          "elx_fluid_electrolyte",
+          "T"
+        ],
+        [
+          "elx_fluid_electrolyte",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_fluid_electrolyte",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_fluid_electrolyte",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_fluid_electrolyte->T, elx_fluid_electrolyte->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:09.847693+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_blood_loss_anemia",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_blood_loss_anemia",
+      "edges": [
+        [
+          "elx_blood_loss_anemia",
+          "T"
+        ],
+        [
+          "elx_blood_loss_anemia",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_blood_loss_anemia",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_blood_loss_anemia",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_blood_loss_anemia->T, elx_blood_loss_anemia->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:10.019312+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_deficiency_anemia",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_deficiency_anemia",
+      "edges": [
+        [
+          "elx_deficiency_anemia",
+          "T"
+        ],
+        [
+          "elx_deficiency_anemia",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_deficiency_anemia",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_deficiency_anemia",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_deficiency_anemia->T, elx_deficiency_anemia->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:10.175536+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_alcohol_abuse",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_alcohol_abuse",
+      "edges": [
+        [
+          "elx_alcohol_abuse",
+          "T"
+        ],
+        [
+          "elx_alcohol_abuse",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_alcohol_abuse",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_alcohol_abuse",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_alcohol_abuse->T, elx_alcohol_abuse->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:10.328406+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_drug_abuse",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_drug_abuse",
+      "edges": [
+        [
+          "elx_drug_abuse",
+          "T"
+        ],
+        [
+          "elx_drug_abuse",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_drug_abuse",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_drug_abuse",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_drug_abuse->T, elx_drug_abuse->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:10.508518+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_psychoses",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_psychoses",
+      "edges": [
+        [
+          "elx_psychoses",
+          "T"
+        ],
+        [
+          "elx_psychoses",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_psychoses",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_psychoses",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_psychoses->T, elx_psychoses->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:10.711232+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    },
+    {
+      "feature_name": "elx_depression",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "elx_depression",
+      "edges": [
+        [
+          "elx_depression",
+          "T"
+        ],
+        [
+          "elx_depression",
+          "Y"
+        ],
+        [
+          "T",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "elx_depression",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "elx_depression",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_depression->T, elx_depression->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "dummy",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-22T19:01:10.877430+00:00",
+      "author_schema_version": "1",
+      "reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim"
+    }
+  ]
+}
