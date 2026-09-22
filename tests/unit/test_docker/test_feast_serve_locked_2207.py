@@ -117,13 +117,50 @@ def test_lock_path_matches_the_materializer_loop_and_the_apply_lock():
 
 
 @pytest.mark.unit
-def test_entrypoint_runs_the_locked_server_with_a_plain_serve_fallback():
+def test_entrypoint_execs_the_locked_server_and_never_falls_back_to_an_unlocked_one():
+    """codex r2 HIGH-5: a fallback to plain `feast serve` would bring an UNLOCKED writer
+    up; the container must fail instead (the deploy rolls the feast recreate back)."""
     text = ENTRYPOINT.read_text()
-    locked_at = text.index("python3 /serve_locked.py")
-    plain_at = text.index("exec feast --chdir /feast serve --host 0.0.0.0 --port 6566")
-    assert locked_at < plain_at, "the locked server must be tried first"
-    # the fallback is reachable only when the wrapper exits (|| ...), never a bare second server
-    assert re.search(r"python3 /serve_locked\.py \|\| echo", text)
+    assert re.search(r"^exec python3 /serve_locked\.py\s*$", text, re.M)
+    assert "feast --chdir /feast serve" not in text.replace(
+        "flock /feast/data/.registry.lock feast --chdir /feast apply", ""
+    )
+
+
+@pytest.mark.unit
+def test_lock_wait_is_bounded(tmp_path):
+    mod = _load()
+    lock = str(tmp_path / ".registry.lock")
+    holder_ready = threading.Event()
+    release = threading.Event()
+
+    def hold():
+        with open(lock, "a") as f:
+            import fcntl
+
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            holder_ready.set()
+            release.wait(5)
+            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+    t = threading.Thread(target=hold)
+    t.start()
+    holder_ready.wait(2)
+    wrapped = mod.locked(lambda: "ran", lock, wait_seconds=0.6)
+    started = time.monotonic()
+    with pytest.raises(mod.RegistryLockTimeout):
+        wrapped()
+    assert time.monotonic() - started < 3
+    release.set()
+    t.join()
+    assert wrapped() == "ran"  # once released, the call goes through
+
+
+@pytest.mark.unit
+def test_server_uses_the_cli_defaults():
+    src = MODULE.read_text()
+    assert "keep_alive_timeout=5" in src and "registry_ttl_sec=5" in src
+    assert "no_access_log=False" in src
 
 
 @pytest.mark.unit
