@@ -372,6 +372,76 @@ class TestEstimandEdgeOnEveryGatePath:
         assert graph["adjustment_sets"] and set(covs) <= set(graph["adjustment_sets"][0])
 
 
+class TestEstimandEdgeSurvivesAKnownIndirectPath:
+    """codex r2 HIGH: ``_construct_dag`` added T -> Y only when no path from T
+    to Y existed, so for variable names with a domain-known mediated
+    relationship (KNOWN_CAUSAL_RELATIONSHIPS: marketing_spend ->
+    hcp_engagement_level -> patient_conversion_rate) every MANUAL-DAG path
+    (REJECT, REVIEW, AUGMENT's base, failed discovery, overridden ACCEPT)
+    shipped without the estimand edge. The estimate under test is the total
+    effect of T on Y, and a direct T -> Y edge beside a T -> ... -> Y path can
+    never close a cycle, so the edge is drawn unconditionally."""
+
+    T2 = "marketing_spend"
+    Y2 = "patient_conversion_rate"
+    M = "hcp_engagement_level"
+
+    def test_manual_dag_carries_the_direct_estimand_edge_beside_the_mediated_path(self) -> None:
+        node = GraphBuilderNode()
+        dag = node._construct_dag(self.T2, self.Y2, [self.M, "noise"])
+        assert dag.has_edge(self.T2, self.M) and dag.has_edge(self.M, self.Y2)  # the known path
+        assert dag.has_edge(self.T2, self.Y2)
+        assert nx.is_directed_acyclic_graph(dag)
+
+    def _frame(self, n: int = 400, seed: int = 3) -> Tuple[pd.DataFrame, List[str]]:
+        rng = np.random.default_rng(seed)
+        noise = rng.normal(size=n)
+        t = rng.normal(size=n) + 0.5 * noise
+        m = 0.8 * t + rng.normal(size=n)
+        y = 0.7 * m + 0.4 * noise + rng.normal(size=n)
+        frame = pd.DataFrame({self.T2: t, self.Y2: y, self.M: m, "noise": noise})
+        return frame, [self.M, "noise"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("decision", ["review", "reject", "augment"])
+    async def test_every_manual_path_ships_the_estimand_edge(
+        self, decision: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from src.causal_engine.discovery.base import DiscoveryGateDecision
+        from src.causal_engine.discovery.gate import GateEvaluation
+
+        frame, covs = self._frame()
+        node = GraphBuilderNode()
+        node._discovery_runner = _AcceptingRunner([(self.M, self.Y2)], draw_estimand=False)  # type: ignore[assignment]
+        monkeypatch.setattr(
+            node.discovery_gate,
+            "evaluate",
+            lambda result, expected: GateEvaluation(
+                decision=DiscoveryGateDecision(decision), confidence=0.5, reasons=["forced"]
+            ),
+        )
+        state = _state(frame, covs)
+        state["treatment_var"] = self.T2  # type: ignore[typeddict-item]
+        state["outcome_var"] = self.Y2  # type: ignore[typeddict-item]
+        state["query"] = f"effect of {self.T2} on {self.Y2}"
+        out = await node.execute(state)
+        graph = out["causal_graph"]
+        assert graph["discovery_gate_decision"] == decision
+        assert [self.T2, self.Y2] in [list(e) for e in graph["edges"]]
+        assert [self.T2, self.M] in [list(e) for e in graph["edges"]]
+
+    @pytest.mark.asyncio
+    async def test_failed_discovery_ships_the_estimand_edge(self) -> None:
+        frame, covs = self._frame()
+        node = GraphBuilderNode()
+        node._discovery_runner = _CapturingRunner()  # type: ignore[assignment]
+        state = _state(frame, covs)
+        state["treatment_var"] = self.T2  # type: ignore[typeddict-item]
+        state["outcome_var"] = self.Y2  # type: ignore[typeddict-item]
+        out = await node.execute(state)
+        assert [self.T2, self.Y2] in [list(e) for e in out["causal_graph"]["edges"]]
+
+
 class TestRequiredEdgeCauseIsEstablishedNotAssumed:
     """codex r1 finding 6: the cause of a missing required edge must name what
     actually happened — a run that did not converge, an edge PC drew that the
@@ -440,16 +510,18 @@ class TestRequiredEdgeCauseIsEstablishedNotAssumed:
 
 
 class TestIsolatedNodesAreNotBackdoorCandidates:
-    """Measured on the real frame (acceptance_runs_final.txt, phase_seconds):
-    the backdoor search took 316 s of a 502 s node wall because the 57
-    covariates the pre-flight kept away from the learner come back as
-    ISOLATED nodes of the shipped DAG (execute() adds them so the adjustment
-    guarantee can union them) and the search enumerated every combination of
-    up to 3 of all 77 candidates (76,153 criterion checks). An isolated node
+    """On the ACCEPT path the shipped DAG is the ensemble over the capped
+    frame plus every covariate the pre-flight kept away from the learner,
+    added back as an ISOLATED node (execute() does this so the adjustment
+    guarantee can union it). The backdoor search enumerates every candidate
+    set of size <= 3, so on the real frame (77 candidates) those isolates
+    would multiply the search to 76,154 criterion checks. An isolated node
     lies on no path, so it can neither block nor open one: no minimal backdoor
     set contains it and Z ∪ {isolated} is admissible iff Z is. The search must
     therefore never enumerate isolated nodes; the guarantee unions them
-    afterwards because they are declared."""
+    afterwards because they are declared. (The real frame's measured path was
+    AUGMENT, whose manual DAG has no isolates — the 242-316 s measured there
+    is the pre-existing exhaustive search, not this; see the README.)"""
 
     def _dag_with_isolates(self, n_isolated: int) -> Tuple[nx.DiGraph, List[str]]:
         dag = nx.DiGraph()

@@ -771,7 +771,7 @@ class DiscoveryRunner:
         # Under a budget each resample fit is WAITED FOR only as long as the
         # budget has left: the estimate below cannot see a fit that is slower
         # than its predecessors (measured on the real Optum persistence frame,
-        # one gsq resample fit ran 57 min after a 9 s primary fit —
+        # one gsq resample fit ran > 53 min after an 8 s primary fit —
         # docs/demos/results/2026-09-22_lane_d_guided_discovery_claims/
         # d7_gsq_arm_stopped.txt). An overrun is abandoned: the worker thread
         # cannot be cancelled and finishes on its own (the same contract as the

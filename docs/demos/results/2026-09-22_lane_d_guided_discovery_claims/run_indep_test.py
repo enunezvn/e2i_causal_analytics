@@ -103,7 +103,7 @@ async def main():
     # Optional second argument: a comma-separated subset of the tests, so ONE
     # arm can run under its own hard ``timeout`` (a resample fit that does not
     # return cannot be interrupted from inside the process; the real/gsq arm
-    # ran 57 min on one fit before it was stopped by hand -- d7_gsq_arm_stopped.txt).
+    # ran > 53 min on one fit before it was stopped by hand -- d7_gsq_arm_stopped.txt).
     tests = tuple(sys.argv[2].split(",")) if len(sys.argv) > 2 else ("fisherz", "gsq", "chisq")
     if which in ("both", "real"):
         frame, covs = resolve(list(MART_SAFE_FEATURES))

@@ -151,7 +151,7 @@ class TestBudgetBoundsTheLoop:
 
     @pytest.mark.asyncio
     async def test_a_resample_that_outlives_the_budget_is_abandoned_not_awaited(self) -> None:
-        """Measured on the real frame: one gsq resample fit ran 57 minutes
+        """Measured on the real frame: one gsq resample fit ran > 53 minutes
         (docs/demos/results/2026-09-22_lane_d_guided_discovery_claims/
         d7_gsq_arm_stopped.txt). The estimate-before-start check cannot see a
         fit that is slower than its predecessors, so every resample is also

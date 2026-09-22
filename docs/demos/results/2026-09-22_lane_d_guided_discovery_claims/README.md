@@ -91,7 +91,7 @@ then ONE unguided FCI fit on the capped frame.
 
 The 16 dropped columns are exactly the 16 the Lane A loader's own prune reports
 on this frame (`d5_prune_cross_check_lane_a.txt:1-4`: identical sets, identical
-order; Lane A source cited on line 5), which cross-validates the two
+order; Lane A source cited on line 4), which cross-validates the two
 implementations. The production
 module's decisions on the same frame: kept 20, constant 0, collinear 16,
 capped 41, screening k = 14 (`d4_fci_depth_cost.txt:2`).
@@ -133,7 +133,7 @@ arms compare the skeleton test alone; `gsq`/`chisq` need discrete data, so for
 those arms the non-binary columns are quantile-binned to ≤ 10 levels; fisherz
 runs on the unbinned frame). The real arms were first launched as one chain; the
 `gsq` arm never returned from its first bootstrap resample fit and was stopped
-by hand after 63 min holding the box lock (`d7_gsq_arm_stopped.txt`); the
+by hand after the chain had held the box lock 63 min (`d7_gsq_arm_stopped.txt`); the
 remaining arms were re-run ONE AT A TIME under a hard 300 s `timeout`.
 
 | Arm | Result | Source |
@@ -147,7 +147,7 @@ remaining arms were re-run ONE AT A TIME under a hard 300 s `timeout`.
 
 **Verdict: fisherz, for both frame types.** On the capped real frame neither
 discrete test completes a single bootstrap resample inside any budget the agent
-can afford (gsq: > 57 min on one fit; chisq: > 300 s), and on the synthetic
+can afford (gsq: > 53 min on one resample fit — 3,224 s, in a process that had run 3,484 s = 58 min; chisq: > 300 s), and on the synthetic
 control they cost 50–80× fisherz's wall while losing corroboration (1 resample)
 and, for chisq, the planted confounder role. Production keeps the wrapper's
 auto-selection (fisherz on these frames); the `discovery_indep_test` override
@@ -156,7 +156,7 @@ recorded so the pick is not mistaken for a tuning preference: (a) a bootstrap
 resample duplicates rows, which for the contingency-table tests changes the
 conditioning-set search enough that a resample fit costs orders of magnitude
 more than the primary fit on the same frame (0.1 s → > 100 s on the synthetic
-frame; 8.4 s primary vs > 57 min on the real frame); (b) a resample fit could
+frame; 8.4 s primary vs > 53 min on the real frame); (b) a resample fit could
 not be interrupted from inside the process — the budget was predictive
 (estimate-before-start) and could not see a fit slower than its predecessors.
 Mechanism (b) is fixed in this PR after codex round 1 (finding 5): each
@@ -195,13 +195,16 @@ the search now skips degree-0 nodes (commit 5a08bb89d,
 `TestIsolatedNodesAreNotBackdoorCandidates`, a correct and cheap exclusion). But
 the real frame's path is AUGMENT, whose shipped DAG is the MANUAL construction
 (every declared covariate drawn as a common cause, 155 edges) plus the
-corroborated extras — no isolated nodes — so the re-measurement recovered
-~75 s, not 316 s, and what remains is the pre-existing minimal-set search: on a
+corroborated extras — no isolated nodes — so on that path the exclusion is a
+no-op and the 316 s → 242 s difference between the two runs is run-to-run
+variance on a shared box, not the fix's effect; what the timers measure there
+is the pre-existing minimal-set search: on a
 manual DAG with 77 independent confounders no set of size ≤ 3 can d-separate T
-and Y, so the search exhausts C(77,1) + C(77,2) + C(77,3) = 76,153 criterion
-checks before its documented fallback to the full candidate set. That cost
+and Y, so the search exhausts C(77,0) + C(77,1) + C(77,2) + C(77,3) = 76,154
+criterion checks (the empty set included) before its documented fallback to
+the full candidate set (one more check). That cost
 exists on every manual-DAG path (REJECT / REVIEW / AUGMENT) for any wide claims
-frame — Lane A's post-prune 61-covariate frame pays C(61, ≤3) ≈ 37,000 checks —
+frame — Lane A's post-prune 61-covariate frame would pay C(61, ≤ 3) = 37,882 checks —
 and it is not this lane's code, so it is reported, not changed: **owner /
 follow-up item**, with the number, in the PR body.
 

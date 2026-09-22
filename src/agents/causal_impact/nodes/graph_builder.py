@@ -476,8 +476,15 @@ class GraphBuilderNode:
                 dag.add_edge(source, target)
 
         # The estimand edge: treatment -> outcome (the question under test).
-        if not nx.has_path(dag, treatment, outcome):
-            dag.add_edge(treatment, outcome)
+        # Drawn UNCONDITIONALLY (Lane D item 3, codex r2 HIGH): it used to be
+        # skipped whenever a domain-known path T -> ... -> Y already existed
+        # (e.g. marketing_spend -> hcp_engagement_level ->
+        # patient_conversion_rate), so every manual-DAG path shipped those
+        # estimands without the edge the estimate tests. The estimate is the
+        # TOTAL effect of T on Y, and a direct edge beside a mediated path can
+        # never close a cycle (a cycle would need a Y -> ... -> T path, which
+        # the existing T -> ... -> Y path already rules out in a DAG).
+        dag.add_edge(treatment, outcome)
 
         # Every curated confounder is a common cause of BOTH treatment and
         # outcome — draw both edges (acyclicity-guarded) so the graph is
@@ -572,12 +579,12 @@ class GraphBuilderNode:
         # An isolated node lies on no path, so it can neither block nor open
         # one: no minimal backdoor set contains it and Z ∪ {isolated} is
         # admissible iff Z is. Enumerating it only multiplies the search —
-        # measured on the real Optum persistence frame, the 57 covariates the
-        # discovery pre-flight keeps away from the learner come back as
-        # isolated nodes of the shipped DAG (so the adjustment guarantee can
-        # union them) and the search spent 316 s of a 502 s node wall on
-        # 76,153 criterion checks (docs/demos/results/
-        # 2026-09-22_lane_d_guided_discovery_claims/acceptance_runs_final.txt).
+        # on the real Optum persistence frame the 57 covariates the discovery
+        # pre-flight keeps away from the learner come back as isolated nodes
+        # of an ACCEPT-path DAG (so the adjustment guarantee can union them),
+        # and a size-<= 3 enumeration over 77 candidates is 76,154 criterion
+        # checks (measured 242-316 s on the same-sized manual DAG, docs/demos/
+        # results/2026-09-22_lane_d_guided_discovery_claims/README.md, item 5).
         # Declared covariates among them still reach the adjustment set through
         # _apply_adjustment_guarantee, which unions them by declaration.
         candidate_nodes = {n for n in candidate_nodes if dag.degree(n) > 0}
