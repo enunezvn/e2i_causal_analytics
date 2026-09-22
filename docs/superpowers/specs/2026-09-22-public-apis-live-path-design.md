@@ -63,8 +63,11 @@ Layer‑4 artifact to ship.
 
 ## Lane 1 — ship the Layer‑4 classifier artifact
 
-**Goal.** The compiled classifier is present in the image so Layer 4 fires on
-`ambiguous` (3σ < z ≤ 5σ) features during retrains. No runtime code changes.
+**Goal.** The compiled classifier becomes LOADABLE in the image —
+`load_compiled_classifier` returns a classifier instead of raising / the
+loader returning `None`. This does NOT activate Layer 4 and incurs no
+classifier-call cost; see "What this does and does not change" below. No
+runtime code changes.
 
 **Changes.**
 1. `docker/Dockerfile`: `COPY artifacts/dspy/causal_role_classifier.json ./artifacts/dspy/`
@@ -82,18 +85,56 @@ Layer‑4 artifact to ship.
    test fails on `main` today.
 4. `.github/workflows/deploy.yml`: the artifact becomes an `on.push.paths`
    entry (#1783 guard).
+5. `.github/workflows/deploy.yml`'s `build-and-push` job gains an in-image
+   assertion step, right after "Build and push": pulls the exact digest just
+   pushed and checks the baked inputs (this artifact, the KG caches) actually
+   exist in the IMAGE, not just the Dockerfile text — the static packaging
+   guards prove the text; this proves what the droplet will pull (#1607
+   shape).
 
-**Behaviour once live.** `ensure_dspy_lm_configured()` configures the default
-`anthropic/claude-sonnet-4-6` because `ANTHROPIC_API_KEY` is present. One LLM
-call per ambiguous feature per retrain; citation resolution bounded by
-`ADAPTIVE_CITATION_RESOLUTION_BUDGET` (default 25 resolutions per node run,
-≤ 3 PMIDs per feature). Out of scope, flagged for the owner: the platform is
-otherwise OpenAI-only; the classifier's default model is not env-overridable.
+**What this does and does not change.** This lane makes the artifact
+LOADABLE — `load_compiled_classifier(strict=True)` returns a classifier and
+`_try_load_layer_4_classifier()` is no longer `None`. It does **not** activate
+Layer 4 and incurs no classifier-call cost. Two gates still keep it dark:
 
-**Live cert.** Before control (already recorded 2026-09-22): the file is
+- The LLM-call gate defaults OFF:
+  `src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py:3776`
+  — `layer4_enabled = bool(state.get("adaptive_layer4_enabled", False))`. Set
+  deliberately by commit `d97f52dd5` (2026-05-27, "demote the LLM to
+  audit-only in the voter + gate the call") after the classifier scored 0.633
+  on hard roles (#242); `ADAPTIVE_LAYER4_LLM_DECIDES` is also OFF (audit-only
+  even when the call gate is on). Guarded by
+  `tests/unit/test_data_preparer/test_adaptive_validity_check_layer_4.py::test_layer4_llm_not_called_by_default`.
+- There is no live consumer of the retrain path at all:
+  `src/workers/celery_app.py:176` routes `execute_model_retraining` to the
+  `ml` queue, whose only consumer is `worker_heavy`, which ships at
+  `replicas: 0` (`docker/docker-compose.yml:1174`), and `HEAVY_OFFLOAD_ENABLED`
+  is unset live (measured 2026-09-22:
+  `docker exec e2i_api sh -c 'echo [$HEAVY_OFFLOAD_ENABLED]'` → `[]`).
+
+When it IS enabled, the trigger set is
+`severity_pre_joint_check == "moderate"` OR (`== "high"` AND
+`layer_1_declared_safe`) — not "ambiguous only". LLM calls run serially with
+NO per-node call budget (`ADAPTIVE_CITATION_RESOLUTION_BUDGET` bounds
+citation lookups only, not classifier calls); a provider failure returns
+`None` and the retrain continues without Layer-4 evidence (fail-open).
+
+Activating Layer 4 is a separate owner decision, not part of this lane. It
+would need: (a) declaring and propagating `adaptive_layer4_enabled` from
+`PipelineConfig` through `DataPreparerAgent` into `DataPreparerState`; (b) a
+live `ml`-queue consumer (scaling `worker_heavy` or setting
+`HEAVY_OFFLOAD_ENABLED`); (c) a per-node LLM-call budget/timeout plus
+attempted/succeeded/skipped telemetry; (d) a test that exercises the real
+retraining path, not just the loader.
+
+**Live cert.** (i) Before control (already recorded 2026-09-22): the file is
 absent and the loader returns `None`. After deploy, inside `e2i_api`:
 `load_compiled_classifier(strict=True)` returns a classifier and
 `_try_load_layer_4_classifier()` is not `None`. Record container `StartedAt`.
+(ii) Negative control — the call gate is still OFF:
+`tests/unit/test_data_preparer/test_adaptive_validity_check_layer_4.py::test_layer4_llm_not_called_by_default`
+passes, and `docker exec e2i_api sh -c 'echo [$HEAVY_OFFLOAD_ENABLED]'` prints
+`[]`.
 
 ## Lane 2 — RxNav-backed brand aliases for chat entity extraction
 

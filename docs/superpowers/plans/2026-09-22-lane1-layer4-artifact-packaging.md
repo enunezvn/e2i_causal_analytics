@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** `artifacts/dspy/causal_role_classifier.json` reaches the Docker image so Layer 4 (DSPy causal-role classifier) fires in production retrains instead of silently skipping.
+**Goal:** `artifacts/dspy/causal_role_classifier.json` reaches the Docker image so `load_compiled_classifier` can return a classifier instead of raising / the loader returning `None`. This makes Layer 4 (DSPy causal-role classifier) **loadable**, not **activated** — it does not fire in production retrains as a result of this lane alone. Two independent gates keep it dark regardless (the LLM-call gate `adaptive_layer4_enabled` defaults OFF per commit `d97f52dd5`, and there is no live consumer of the retrain path — `worker_heavy` ships at `replicas: 0`); see the spec's "What this does and does not change" for the full detail and file:line references, and Task 3c below for the in-image cert.
 
-**Architecture:** No runtime code changes. Two build files (`docker/Dockerfile`, `.dockerignore`) plus one static guard test that mirrors `tests/unit/test_data/test_kg/test_kg_cache_packaging.py`. The loader (`src/data/causal_role_classifier_loader.py`) already resolves `PROJECT_ROOT / "artifacts" / "dspy" / "causal_role_classifier.json"`, which is `/app/artifacts/dspy/...` in the image.
+**Architecture:** No runtime code changes. Three build/CI files (`docker/Dockerfile`, `.github/workflows/deploy.yml` — a deploy-trigger entry and an in-image assertion step) plus one static guard test that mirrors `tests/unit/test_data/test_kg/test_kg_cache_packaging.py`. `.dockerignore` needed no change (Task 2, premise disproved). The loader (`src/data/causal_role_classifier_loader.py`) already resolves `PROJECT_ROOT / "artifacts" / "dspy" / "causal_role_classifier.json"`, which is `/app/artifacts/dspy/...` in the image.
 
 **Tech Stack:** Docker multi-stage build, pytest, the repo's static `.dockerignore` matcher.
 
@@ -255,6 +255,59 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ---
 
+### Task 3c: Assert the baked image inputs are present in the pushed IMAGE (#1607 shape)
+
+Found in codex review round 1, 2026-09-22 (MED): the static packaging guards
+(Tasks 1–3) prove the Dockerfile TEXT is correct — they never build an image.
+Add a faithful in-image check to the `build-and-push` job so a real defect in
+the build (a bad `COPY` path, a base-image change that drops the file, a
+build-cache bug) fails CI before the droplet ever pulls the image, instead of
+surfacing as a silent no-op the way #1607 originally did.
+
+**Files:**
+- Modify: `.github/workflows/deploy.yml` — job `build-and-push`, the "Build and
+  push" step (`docker/build-push-action@v5`, ~line 172)
+
+- [ ] **Step 1: Give the build step an id, then add the assertion step directly after it**
+
+```yaml
+      - name: Assert baked image inputs are present in the pushed image (#1607 shape)
+        # The static packaging guards prove the Dockerfile TEXT; this proves the
+        # IMAGE the droplet will pull. Pull the exact digest just pushed (no target:
+        # is set, so build-push built the final `production` stage) and check every
+        # baked input the runtime loads. A failure here stops the job before deploy.
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
+          docker run --rm --entrypoint sh "$IMAGE" -c '
+            set -e
+            test -f /app/artifacts/dspy/causal_role_classifier.json
+            test -n "$(ls /app/data/kg_cache/*.json 2>/dev/null)"
+          '
+```
+
+(the "Build and push" step needs `id: build` added, if it does not already have
+one, so `steps.build.outputs.digest` resolves.)
+
+- [ ] **Step 2: Validate**
+
+```bash
+pytest -n 0 tests/unit/test_docker -q
+python3 -c "import yaml,sys; yaml.safe_load(open('.github/workflows/deploy.yml'))"
+```
+Expected: the 1783 suite (which parses `deploy.yml`) stays green; the YAML
+parses without error.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add .github/workflows/deploy.yml
+git commit -m "ci(deploy): assert the baked image inputs exist in the pushed API image
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
+```
+
+---
+
 ### Task 4: Gates, PR, review, merge
 
 - [ ] **Step 1: CI's lint commands, whole tree, no cache**
@@ -271,13 +324,13 @@ git push -u origin claude/lane1-layer4-artifact
 gh pr create --base main --title "build(layer4): ship the causal-role classifier artifact in the image" --body-file - <<'EOF'
 Part of the 2026-09-22 public-APIs-live-path design (docs/superpowers/specs/2026-09-22-public-apis-live-path-design.md), lane 1 of 3.
 
-**Problem.** `artifacts/dspy/causal_role_classifier.json` is committed and the loader resolves it, but the Dockerfile never COPYed it into either app stage. Measured 2026-09-22 inside `e2i_api`: `/app/artifacts` does not exist; `_try_load_layer_4_classifier()` returns `None`; Layer 4 silently skips in every production retrain. The artifact was absent only because no COPY existed — `.dockerignore` never excluded it (a slash-less pattern like `*.json` matches the build-context root only; confirmed via `scripts/benchmarks/routing/data/agent_contracts.json`, present in the same image under the same rule). Same #1607/#600 *symptom* as the KG cache, different cause.
+**Problem.** `artifacts/dspy/causal_role_classifier.json` is committed and the loader resolves it, but the Dockerfile never COPYed it into either app stage. Measured 2026-09-22 inside `e2i_api`: `/app/artifacts` does not exist; `_try_load_layer_4_classifier()` returns `None`; the loader cannot return a classifier. The artifact was absent only because no COPY existed — `.dockerignore` never excluded it (a slash-less pattern like `*.json` matches the build-context root only; confirmed via `scripts/benchmarks/routing/data/agent_contracts.json`, present in the same image under the same rule). Same #1607/#600 *symptom* as the KG cache, different cause.
 
-**Change.** COPY the file in both app stages; a static guard test (red on main) mirrors the KG-cache packaging guard and pins the matcher's Docker root-only semantics for slash-less patterns so it isn't mistaken for a gitignore-style any-depth match. `.dockerignore` is untouched.
+**Change.** COPY the file in both app stages; a static guard test (red on main) mirrors the KG-cache packaging guard and pins the matcher's Docker root-only semantics for slash-less patterns so it isn't mistaken for a gitignore-style any-depth match. `.dockerignore` is untouched. `deploy.yml` gains a deploy-trigger entry (#1783) and an in-image assertion that the artifact and the KG caches actually exist in the pushed image, not just the Dockerfile text (#1607 shape).
 
-**Behaviour once deployed.** Layer 4 fires for `ambiguous` (3σ<z≤5σ) features during `execute_model_retraining`, using the loader's default `anthropic/claude-sonnet-4-6` (key present in the container). Citation resolution stays bounded by `ADAPTIVE_CITATION_RESOLUTION_BUDGET` (default 25). Model-provider choice is out of scope and flagged in the spec.
+**This lane makes the artifact loadable, not activated.** `load_compiled_classifier` will return a classifier instead of raising, but Layer 4 does **not** fire in production retrains as a result. Two independent gates keep it dark: the LLM-call gate `adaptive_layer4_enabled` defaults OFF (`src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py:3776`, deliberate per commit `d97f52dd5` after the classifier scored 0.633 on hard roles in #242, guarded by `test_layer4_llm_not_called_by_default`), and there is no live consumer of the retrain path (`execute_model_retraining` routes to the `ml` queue; its only consumer `worker_heavy` ships at `replicas: 0`; `HEAVY_OFFLOAD_ENABLED` is unset live). When it IS enabled elsewhere, the trigger set is `severity_pre_joint_check == "moderate"` OR (`== "high"` AND `layer_1_declared_safe`), calls run serially with no per-node budget, and a provider failure fails open (retrain continues without Layer-4 evidence). Activation is a separate owner decision — see the spec's "What this does and does not change" for what it would take.
 
-**Live cert plan.** After deploy, inside `e2i_api`: `load_compiled_classifier(strict=True)` returns a classifier; `_try_load_layer_4_classifier()` is not None. Before control recorded 2026-09-22.
+**Live cert plan.** (i) After deploy, inside `e2i_api`: `load_compiled_classifier(strict=True)` returns a classifier; `_try_load_layer_4_classifier()` is not None. Before control recorded 2026-09-22. (ii) Negative control — the call gate is still OFF: `test_layer4_llm_not_called_by_default` passes, and `docker exec e2i_api sh -c 'echo [$HEAVY_OFFLOAD_ENABLED]'` prints `[]`.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 EOF
@@ -326,5 +379,18 @@ EOF
 docker inspect -f 'container StartedAt {{.State.StartedAt}}' e2i_api | tee -a docs/demos/results/2026-09-22_public_apis_live_path/lane1_layer4_artifact_cert.txt
 ```
 Expected: `artifact exists: True`, `strict load: <a classifier class name>`, `layer4 loader: <same class>` (not `NoneType`). Before control: `False` / `FileNotFoundError` / `NoneType` (2026-09-22).
+
+- [ ] **Step 2b: Negative control — confirm activation is STILL gated**
+
+This lane makes the artifact loadable, not activated (see the spec's "What
+this does and does not change"). Certify the gates are still closed so the
+cert does not read as "Layer 4 is now live":
+
+```bash
+pytest -n 0 tests/unit/test_data_preparer/test_adaptive_validity_check_layer_4.py::test_layer4_llm_not_called_by_default -q
+docker exec e2i_api sh -c 'echo [$HEAVY_OFFLOAD_ENABLED]'
+```
+Expected: the pytest passes; the echo prints `[]` (empty — no live retrain
+consumer).
 
 - [ ] **Step 3: Record the cert in-repo** — commit the cert file on a follow-up docs branch (a docs-only merge fires no deploy). Note in the cert that the cited before-control was measured on container started `2026-09-22T01:09:44Z`.
