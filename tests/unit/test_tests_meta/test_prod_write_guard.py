@@ -21,6 +21,7 @@ import pytest
 
 from tests.integration._prod_write_guard import (
     PER_HCP_METRIC_TYPE,
+    TERRITORY_ACTIVE_HCP_LOOKBACK_DAYS,
     CensusQuery,
     WindowCensus,
     WriteWindowSpec,
@@ -28,8 +29,35 @@ from tests.integration._prod_write_guard import (
     assess,
     census_sql,
     per_hcp_rollup_spec,
+    selected_metric_dates_sql,
+    territory_arrival_spec,
     territory_rollup_spec,
 )
+
+#: A stand-in for the ETL's ``metric_dates`` CTE, so the shape tests stay hermetic. The
+#: pin tests below use the ETL's REAL constant.
+_FAKE_METRIC_DATES_CTE = """
+metric_dates AS (
+    -- a comment, like the real one carries
+    SELECT DISTINCT bm.metric_date FROM business_metrics bm
+     WHERE bm.metric_type = %(per_hcp_metric_type)s AND bm.hcp_id IS NOT NULL
+       AND bm.created_at >= %(start_date)s AND bm.created_at < %(end_date)s
+)"""
+
+
+def _arrival_spec(cte: str = _FAKE_METRIC_DATES_CTE, **overrides: object) -> WriteWindowSpec:
+    kwargs: dict = {
+        "test_file": "arr.py",
+        "metric_dates_cte": cte,
+        "start": "2019-01-06 21:45:00+00",
+        "end": "2019-01-14 03:45:00+00",
+        "hcp_like": "hl_abc_%",
+        "trigger_like": "trlate_abc_%",
+        "territory_like": "T_LATE_abc%",
+    }
+    kwargs.update(overrides)
+    return territory_arrival_spec(**kwargs)
+
 
 ISOLATED = WindowCensus(
     source_rows_total=12,
@@ -205,6 +233,7 @@ _SPECS = (
         end="2024-01-31",
         journey_like="pj_abc_%",
     ),
+    _arrival_spec(),
 )
 
 
@@ -249,7 +278,10 @@ def test_every_counting_query_is_bounded_by_the_window_or_is_deliberately_total(
     """
     may_be_total = {"target_entities_total", "target_entities_planted"}
     for q in spec.queries:
-        bounded = "%(start)s" in q.sql and "%(end)s" in q.sql
+        # The arrival census carries the run's OWN bounds, spelled the ETL's way.
+        bounded = ("%(start)s" in q.sql and "%(end)s" in q.sql) or (
+            "%(start_date)s" in q.sql and "%(end_date)s" in q.sql
+        )
         waived = q.sql.rstrip().endswith("WHERE false")
         assert bounded or waived or q.leg in may_be_total, (spec.test_file, q.leg, q.sql)
 
@@ -430,6 +462,132 @@ def test_the_reconcile_scope_follows_the_variant_and_the_two_disagree() -> None:
 
     # And they really are different statements, not two spellings of one.
     assert re.sub(r"\s+", " ", arrival.sql) != re.sub(r"\s+", " ", windowed.sql)
+
+
+# =============================================================================
+# The territory ARRIVAL census (#2213): the run's own selection, not a date range
+# =============================================================================
+
+
+def _normalised(sql: str) -> str:
+    return re.sub(r"\s+", " ", sql).strip()
+
+
+def test_the_arrival_census_composes_the_runs_own_selection_verbatim() -> None:
+    """The gap #2213 closed: the ARRIVAL run selects dates with
+    ``_TERRITORY_METRIC_DATES_BY_ARRIVAL`` (a per-HCP date written in the window, or within
+    30 days of a trigger that ARRIVED in it), which a ``metric_date`` range cannot mirror.
+    The census therefore embeds the CTE the caller hands it -- the ETL's own constant, so
+    the two cannot drift -- in every live leg, with the run's own bounds and its
+    ``hcp_id IS NOT NULL``."""
+    from src.etl.territory_metrics_etl import _TERRITORY_METRIC_DATES_BY_ARRIVAL
+
+    spec = _arrival_spec(_TERRITORY_METRIC_DATES_BY_ARRIVAL)
+    cte = _normalised(_TERRITORY_METRIC_DATES_BY_ARRIVAL)
+    for leg in ("source_rows_total", "source_rows_planted", "teardown_reach_preexisting"):
+        sql = _normalised(_leg(spec, leg).sql)
+        assert cte in sql, leg
+        assert "hcp_id IS NOT NULL" in sql, leg
+        for name in ("start_date", "end_date", "per_hcp_metric_type"):
+            assert name in _leg(spec, leg).params, (leg, name)
+    # The selection the test records for its teardown is the SAME subquery the legs use.
+    selection = _normalised(selected_metric_dates_sql(_TERRITORY_METRIC_DATES_BY_ARRIVAL))
+    assert cte in selection
+    inner = selection[selection.index("(WITH") : selection.rindex(")") + 1]
+    for leg in ("source_rows_total", "source_rows_planted", "teardown_reach_preexisting"):
+        assert inner in _normalised(_leg(spec, leg).sql), leg
+
+
+def test_the_arrival_census_lookback_is_the_etls_active_hcp_window() -> None:
+    """A trigger contributes to a date's ``active_hcp_count`` when it falls in the ETL's
+    30-day window ending on the date (inclusive). The census reads triggers by the same
+    window; the number is pinned to the ETL's SQL by extraction, not by assertion of a
+    literal, so a widened ETL window turns this red instead of narrowing the census."""
+    from src.etl.territory_metrics_etl import (
+        _TERRITORY_METRIC_DATES_BY_ARRIVAL,
+        _TERRITORY_ROLLUP_CTES_TEMPLATE,
+    )
+
+    etl_days = {
+        int(m)
+        for m in re.findall(
+            r"t\.trigger_timestamp >= \w+\.metric_date - INTERVAL '(\d+) days'",
+            _TERRITORY_ROLLUP_CTES_TEMPLATE + _TERRITORY_METRIC_DATES_BY_ARRIVAL,
+        )
+    }
+    assert etl_days == {TERRITORY_ACTIVE_HCP_LOOKBACK_DAYS}
+    spec = _arrival_spec()
+    for leg in ("source_rows_total", "source_rows_planted"):
+        sql = _normalised(_leg(spec, leg).sql)
+        assert (
+            f"t.trigger_timestamp >= sd.metric_date - INTERVAL '{TERRITORY_ACTIVE_HCP_LOOKBACK_DAYS} days'"
+            in sql
+        ), leg
+        assert "t.trigger_timestamp < sd.metric_date + INTERVAL '1 day'" in sql, leg
+
+
+def test_the_arrival_census_counts_per_hcp_rows_and_triggers_and_owns_them_by_prefix() -> None:
+    """Leg 1 counts what the aggregate READS for a selected date: the per-HCP rows on it
+    (total_trx / total_nrx) and the triggers in its lookback (active_hcp_count). The planted
+    leg is the same two counts under the file's prefixes, so it is a subset by construction
+    and a foreign row on either side reads as unplanted."""
+    spec = _arrival_spec()
+    total = _normalised(_leg(spec, "source_rows_total").sql)
+    planted = _normalised(_leg(spec, "source_rows_planted").sql)
+    for sql in (total, planted):
+        assert "FROM business_metrics bm" in sql and "FROM triggers t" in sql
+    assert "LIKE" not in total
+    assert "bm.hcp_id LIKE %(hcp_like)s" in planted
+    assert "t.trigger_id LIKE %(trigger_like)s" in planted
+    assert _leg(spec, "source_rows_planted").params["hcp_like"] == "hl_abc_%"
+    assert _leg(spec, "source_rows_planted").params["trigger_like"] == "trlate_abc_%"
+
+
+def test_the_arrival_census_waives_the_key_space_leg_and_keeps_the_teardown_leg() -> None:
+    """Same pairing as ``territory_rollup_spec(teardown_deletes_window=True)``: the file
+    deletes ``territory_metrics`` for EVERY selected date, so the cross join's foreign rows
+    do not survive (leg 2 waived) and what matters is what pre-exists on those dates
+    (leg 3 live, on the selected set, not on a range)."""
+    spec = _arrival_spec()
+    assert _is_waived(_leg(spec, "target_entities_total"))
+    assert _is_waived(_leg(spec, "target_entities_planted"))
+    teardown = _normalised(_leg(spec, "teardown_reach_preexisting").sql)
+    assert not _is_waived(_leg(spec, "teardown_reach_preexisting"))
+    assert "FROM territory_metrics m" in teardown
+    assert "m.metric_date IN (WITH" in teardown
+    assert "m.territory_id NOT LIKE %(territory_like)s" in teardown
+    assert "m.metric_date >=" not in teardown
+
+
+def test_the_arrival_census_refuses_a_cte_that_does_not_define_metric_dates() -> None:
+    """The legs read ``FROM metric_dates``; a CTE defining anything else composes into SQL
+    that only Postgres can reject, inside the live half. Refuse at construction instead."""
+    with pytest.raises(ValueError, match="metric_dates AS"):
+        _arrival_spec("affected_dates AS (SELECT 1)")
+
+
+def test_the_disproof_counts_are_read_as_measured() -> None:
+    """Measured live 2026-09-22 with an UNCOMMITTED plant (rolled back): a foreign per-HCP
+    row dated 2019-01-30 reached by the file's own Tuesday trigger arriving 2019-01-14, and
+    one dated 2019-03-15 written inside the run's lookback. The range census read
+    0/0/0/0/0 and PERMITTED; the arrival census read 3 source rows (two foreign per-HCP
+    rows, one owned trigger), 1 planted, and refused on derivation alone."""
+    assert assess(WindowCensus(0, 0, 0, 0, 0)).refused is False  # the range census
+    verdict = assess(WindowCensus(3, 1, 0, 0, 0))  # the arrival census
+    assert verdict.refused is True
+    assert [r.split(":")[0] for r in verdict.reasons] == ["derivation"]
+
+
+def test_census_sql_strips_line_comments_before_collapsing_to_one_line() -> None:
+    """The ETL's CTE carries ``--`` comments. Collapsed onto one line, the first comment
+    would swallow the rest of the statement, and the hand-off script would run nothing
+    (or worse, something else). Comments go; the statement stays whole."""
+    rendered = census_sql(_arrival_spec())
+    statements = [line for line in rendered.splitlines() if line.startswith("SELECT ")]
+    assert len(statements) == 5
+    for statement in statements:
+        assert "--" not in statement, statement[:80]
+        assert "FROM metric_dates" in statement or statement.endswith("WHERE false;")
 
 
 def test_census_sql_renders_a_read_only_transaction_for_hand_off() -> None:

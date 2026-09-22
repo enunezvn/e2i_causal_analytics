@@ -67,11 +67,13 @@ discriminate file by file.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
 __all__ = [
     "CensusQuery",
+    "TERRITORY_ACTIVE_HCP_LOOKBACK_DAYS",
     "WindowCensus",
     "Verdict",
     "WriteWindowSpec",
@@ -80,6 +82,8 @@ __all__ = [
     "census_sql",
     "per_hcp_rollup_spec",
     "require_isolated_windows",
+    "selected_metric_dates_sql",
+    "territory_arrival_spec",
     "territory_rollup_spec",
 ]
 
@@ -87,6 +91,12 @@ __all__ = [
 #: rather than imported so the guard does not depend on the ETL it guards; a unit test
 #: pins it equal to both ETLs' constants, so a rename cannot silently widen the census.
 PER_HCP_METRIC_TYPE: str = "per_hcp_rollup"
+
+#: The territory rollup's "active HCP" window: a trigger counts towards a date when its
+#: ``trigger_timestamp`` falls in the 30 days ending on that date, inclusive
+#: (``territory_metrics_etl`` active_hcp_per_territory_date). Redeclared like the metric
+#: type; a unit test extracts the number from the ETL's SQL and pins this equal to it.
+TERRITORY_ACTIVE_HCP_LOOKBACK_DAYS: int = 30
 
 
 @dataclass(frozen=True)
@@ -223,7 +233,9 @@ def census_sql(spec: WriteWindowSpec) -> str:
     for q in spec.queries:
         lines.append(f"-- [{q.leg}] {q.label}")
         lines.append(f"--   params: {dict(q.params)!r}")
-        lines.append(" ".join(q.sql.split()) + ";")
+        # The arrival census embeds the ETL's CTE, which carries ``--`` comments; on one
+        # line the first of them would comment out the rest of the statement.
+        lines.append(" ".join(re.sub(r"--[^\n]*", "", q.sql).split()) + ";")
     lines.append("ROLLBACK;")
     return "\n".join(lines)
 
@@ -425,6 +437,136 @@ def territory_rollup_spec(
                 "territory_metrics rows a window-scoped teardown would delete, not ours",
                 teardown_sql,
                 {**window, "territory_like": territory_like} if teardown_deletes_window else {},
+            ),
+        ),
+    )
+
+
+def _selected_metric_dates_subquery(metric_dates_cte: str) -> str:
+    """The dates an ARRIVAL run would rebuild, as a parenthesised subquery over the run's
+    own ``metric_dates`` CTE (``WITH`` is legal inside a subquery in PostgreSQL)."""
+    if not re.search(r"^\s*metric_dates\s+AS\s*\(", metric_dates_cte):
+        raise ValueError(
+            "territory arrival census: the CTE must define 'metric_dates AS (...)' -- pass "
+            "territory_metrics_etl._TERRITORY_METRIC_DATES_BY_ARRIVAL"
+        )
+    return f"(WITH {metric_dates_cte}\nSELECT md.metric_date FROM metric_dates md)"
+
+
+def selected_metric_dates_sql(metric_dates_cte: str) -> str:
+    """A read-only statement listing the dates the arrival run would select, ordered.
+
+    The test records this set right before the run and its teardown deletes
+    ``territory_metrics`` for every date in it: the run writes a row for EVERY territory
+    on each selected date, and the two planted dates are not the whole selection when a
+    foreign per-HCP date sits within reach. Binds the run's own params
+    (``start_date``, ``end_date``, ``per_hcp_metric_type``).
+    """
+    return f"SELECT sel.metric_date FROM {_selected_metric_dates_subquery(metric_dates_cte)} sel ORDER BY 1"
+
+
+def territory_arrival_spec(
+    *,
+    test_file: str,
+    metric_dates_cte: str,
+    start: Any,
+    end: Any,
+    hcp_like: str,
+    trigger_like: str,
+    territory_like: str,
+) -> WriteWindowSpec:
+    """Census for a file that runs ``territory_metrics_etl`` by ARRIVAL (#2213).
+
+    A scheduled territory run selects its dates with
+    ``territory_metrics_etl._TERRITORY_METRIC_DATES_BY_ARRIVAL``: every per-HCP date
+    whose row was WRITTEN in the run window, or that lies within the 30-day active-HCP
+    lookback of a trigger that ARRIVED in the window. A ``metric_date`` range cannot
+    mirror that: the file's own Tuesday trigger arriving on 2019-01-14 reaches any
+    foreign per-HCP date up to 2019-01-31, and a foreign per-HCP row written inside the
+    lookback is selected whatever its date. Measured 2026-09-22 with an uncommitted
+    plant: ``territory_rollup_spec`` over ``[2019-01-01, 2019-01-21)`` read 0/0/0/0/0 and
+    permitted while the run would have selected 2019-01-30 and 2019-03-15.
+
+    So this census does not restate the selection -- it embeds the CTE the caller hands
+    it, which is the ETL's own constant, so the census cannot drift from the run. The
+    guard itself still imports nothing from the ETL (the module's standing rule); the
+    caller passes the constant, exactly as the late-arrival fixture derives its window
+    from the ETL's ``ARRIVAL_WINDOW_HOURS``. ``start``/``end`` are the RUN's window
+    (``arrived_before`` less ``ARRIVAL_WINDOW_HOURS``, and ``arrived_before``), not a
+    date range, and the selection depends on the rows the file has already planted, so
+    the census must run right before the territory run, not at fixture time.
+
+    Legs:
+
+    1. **Derivation** counts what the aggregate READS for the selected dates: the
+       per-HCP rows on them (``total_trx`` / ``total_nrx``) plus the triggers inside
+       each date's lookback (``active_hcp_count``). Planted is the same two counts under
+       the file's prefixes -- a subset by construction -- so one foreign row on either
+       side refuses. A date selected by a foreign trigger or a foreign per-HCP row is
+       always caught here, because whatever selected it is also read for it.
+    2. **Key space** is waived, as for a window-sweeping teardown: the file deletes
+       ``territory_metrics`` for every selected date (recorded via
+       :func:`selected_metric_dates_sql`), so the cross join's foreign rows do not
+       survive.
+    3. **Teardown reach** counts the foreign ``territory_metrics`` rows already on the
+       selected dates -- the rows that per-date DELETE would destroy.
+    """
+    selected = _selected_metric_dates_subquery(metric_dates_cte)
+    in_lookback = (
+        f"EXISTS (SELECT 1 FROM {selected} sd "
+        f" WHERE t.trigger_timestamp >= sd.metric_date"
+        f" - INTERVAL '{TERRITORY_ACTIVE_HCP_LOOKBACK_DAYS} days' "
+        "   AND t.trigger_timestamp <  sd.metric_date + INTERVAL '1 day')"
+    )
+    run_params = {"start_date": start, "end_date": end, "per_hcp_metric_type": PER_HCP_METRIC_TYPE}
+    return WriteWindowSpec(
+        test_file=test_file,
+        window_description=(
+            f"territory rollup by ARRIVAL, run window [{start}, {end}): per-HCP dates written "
+            f"in it or within {TERRITORY_ACTIVE_HCP_LOOKBACK_DAYS} days of a trigger arriving in it"
+        ),
+        queries=(
+            CensusQuery(
+                "source_rows_total",
+                "per-HCP rows on the selected dates + triggers in their active-HCP lookback",
+                "SELECT (SELECT count(*) FROM business_metrics bm "
+                "         WHERE bm.metric_type = %(per_hcp_metric_type)s AND bm.hcp_id IS NOT NULL "
+                f"          AND bm.metric_date IN {selected}) "
+                "     + (SELECT count(*) FROM triggers t "
+                f"         WHERE t.hcp_id IS NOT NULL AND {in_lookback})",
+                run_params,
+            ),
+            CensusQuery(
+                "source_rows_planted",
+                "of those, per-HCP rows on hcp_ids this run owns + triggers it planted",
+                "SELECT (SELECT count(*) FROM business_metrics bm "
+                "         WHERE bm.metric_type = %(per_hcp_metric_type)s AND bm.hcp_id IS NOT NULL "
+                f"          AND bm.metric_date IN {selected} AND bm.hcp_id LIKE %(hcp_like)s) "
+                "     + (SELECT count(*) FROM triggers t "
+                f"         WHERE t.hcp_id IS NOT NULL AND {in_lookback} "
+                "           AND t.trigger_id LIKE %(trigger_like)s)",
+                {**run_params, "hcp_like": hcp_like, "trigger_like": trigger_like},
+            ),
+            CensusQuery(
+                "target_entities_total",
+                "territories the CROSS JOIN writes a row for (waived: the teardown deletes"
+                " every selected date, which removes them again)",
+                "SELECT count(DISTINCT territory_id) FROM hcp_profiles WHERE false",
+                {},
+            ),
+            CensusQuery(
+                "target_entities_planted",
+                "of those, territories this run owns (waived with the leg above)",
+                "SELECT count(DISTINCT territory_id) FROM hcp_profiles WHERE false",
+                {},
+            ),
+            CensusQuery(
+                "teardown_reach_preexisting",
+                "territory_metrics rows already on a selected date that are not ours",
+                "SELECT count(*) FROM territory_metrics m "
+                f" WHERE m.metric_date IN {selected} "
+                "   AND m.territory_id NOT LIKE %(territory_like)s",
+                {**run_params, "territory_like": territory_like},
             ),
         ),
     )

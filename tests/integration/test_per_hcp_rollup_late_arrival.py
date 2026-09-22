@@ -25,6 +25,8 @@ from tests.integration._prod_write_guard import (
     adherence_spec,
     per_hcp_rollup_spec,
     require_isolated_windows,
+    selected_metric_dates_sql,
+    territory_arrival_spec,
     territory_rollup_spec,
 )
 
@@ -55,13 +57,17 @@ BRAND = "Kisqali"
 # EARLY_BATCH left the week before uncensused), derived in the fixture from the ETL's own
 # constant so the two cannot drift.
 #
-# KNOWN RESIDUAL (#2213): the territory census is by metric_date range only. The territory
-# ARRIVAL run selects its dates with territory_metrics_etl._TERRITORY_METRIC_DATES_BY_ARRIVAL
-# (any per-HCP date within 30 days of a trigger that arrived in its window), which can reach
-# a foreign per-HCP date outside [TUESDAY, GUARD_DATE_END) that neither the census nor the
-# teardown covers. No such row exists live (earliest per-HCP date is years later); the
-# arrival-aware territory census and a selected-date teardown are #2213's work.
+# The territory ARRIVAL run (#2213) is censused separately, and inside the test rather than
+# here: it selects its dates with territory_metrics_etl._TERRITORY_METRIC_DATES_BY_ARRIVAL
+# (every per-HCP date written in its window, or within 30 days of a trigger that ARRIVED in
+# it), so the selection depends on the triggers and per-HCP rows the earlier phases plant
+# and can reach a foreign per-HCP date well outside [TUESDAY, GUARD_DATE_END). The census
+# composes that CTE verbatim (territory_arrival_spec) right before the run, the test records
+# the selected set from the same CTE, and the teardown deletes territory_metrics for every
+# recorded date -- not just the two planted ones. The range census below still covers the
+# explicit 2019-01-20 reconcile and the per-date teardown floor.
 FIRST_ARRIVAL_RUN = "2019-01-02T03:15:00+00:00"
+TERRITORY_ARRIVAL_RUN = "2019-01-14T03:45:00+00:00"
 GUARD_ARRIVAL_END = datetime(2019, 1, 21, tzinfo=UTC)
 GUARD_DATE_END = date(2019, 1, 21)
 # The explicit per-HCP window: selected by trigger_timestamp, not by arrival, so it needs
@@ -176,11 +182,16 @@ def planted(db_conn: Any) -> Any:
                         MONDAY_BATCH,
                     ),
                 )
-    yield {"rid": rid, **hcps}
+    # The territory ARRIVAL run writes a row for EVERY territory on EVERY date it selects;
+    # the test records that set (from the run's own CTE, right before the run) here, and
+    # the teardown deletes those dates wholesale. The two planted dates are the floor.
+    territory_selected_dates: set[date] = set()
+    yield {"rid": rid, "territory_selected_dates": territory_selected_dates, **hcps}
     with db_conn:
         with db_conn.cursor() as cur:
             cur.execute(
-                "DELETE FROM territory_metrics WHERE metric_date IN (%s, %s)", (TUESDAY, MONDAY)
+                "DELETE FROM territory_metrics WHERE metric_date = ANY(%s)",
+                (sorted({TUESDAY, MONDAY} | territory_selected_dates),),
             )
             cur.execute("DELETE FROM business_metrics WHERE hcp_id LIKE %s", (f"hl_{rid}_%",))
             cur.execute("DELETE FROM triggers WHERE trigger_id LIKE %s", (f"trlate_{rid}_%",))
@@ -281,6 +292,7 @@ def test_a_late_weekly_batch_rolls_up_under_each_triggers_own_date(
     ) == (2, 0, 0, 3)
 
     # Territory (owner decision #3): the 03:45 run rebuilds both whole dates from the per-HCP rows.
+    from src.etl import territory_metrics_etl
     from src.etl.territory_metrics_etl import (
         _run_territory_rollup_impl,
         preview_territory_rollup,
@@ -288,18 +300,56 @@ def test_a_late_weekly_batch_rolls_up_under_each_triggers_own_date(
 
     # The pre-fix default (metric_date in the 24 h before Monday 03:45) reaches Sunday only: no planted date.
     assert (
-        preview_territory_rollup("2019-01-13T03:45:00+00:00", "2019-01-14T03:45:00+00:00")[
-            "metric_dates"
-        ]
+        preview_territory_rollup("2019-01-13T03:45:00+00:00", TERRITORY_ARRIVAL_RUN)["metric_dates"]
         == 0
     )
+    # #2213: census the ARRIVAL run by its OWN selection, now that the rows it selects on
+    # exist. The window is the run's (arrived_before less the ETL's lookback); the CTE is
+    # the ETL's constant, so the census cannot drift from the run. Then record the
+    # selected set from the same CTE for the teardown, and pin it: with the census green,
+    # every selected date is fully ours, and ours are exactly the two planted dates.
+    arrival_end = datetime.fromisoformat(TERRITORY_ARRIVAL_RUN)
+    arrival_start = arrival_end - timedelta(hours=territory_metrics_etl.ARRIVAL_WINDOW_HOURS)
+    metric_dates_cte = territory_metrics_etl._TERRITORY_METRIC_DATES_BY_ARRIVAL
+    (census,) = require_isolated_windows(
+        db_conn,
+        territory_arrival_spec(
+            test_file=__file__,
+            metric_dates_cte=metric_dates_cte,
+            start=arrival_start,
+            end=arrival_end,
+            hcp_like=f"hl_{rid}_%",
+            trigger_like=f"trlate_{rid}_%",
+            territory_like=f"T_LATE_{rid}%",
+        ),
+    )
+    # Positive control: the census COUNTED our rows (3 per-HCP rows on the two dates + the
+    # 4 triggers in their lookbacks), so a green verdict is a measurement, not a census
+    # that reached nothing.
+    assert (census.source_rows_total, census.source_rows_planted) == (7, 7), census
+    with db_conn:
+        with db_conn.cursor() as cur:
+            cur.execute(
+                selected_metric_dates_sql(metric_dates_cte),
+                {
+                    "start_date": arrival_start,
+                    "end_date": arrival_end,
+                    "per_hcp_metric_type": territory_metrics_etl.PER_HCP_METRIC_TYPE,
+                },
+            )
+            selected = {row[0] for row in cur.fetchall()}
+    planted["territory_selected_dates"].update(selected)
+    assert selected == {TUESDAY, MONDAY}, selected
+
     territory = _run_territory_rollup_impl(
-        arrived_before="2019-01-14T03:45:00+00:00", request_id="late-arrival-territory"
+        arrived_before=TERRITORY_ARRIVAL_RUN, request_id="late-arrival-territory"
     )
     assert territory["status"] == "completed" and territory["selected_by"] == "arrival", territory
     # (total_trx, active_hcp_count). Tuesday 01-01: a 2 + b 1 delivered. Monday 01-14: a3 delivered;
     # its 30-day lookback still holds a's and b's 01-01 triggers, so both HCPs are active.
     assert _territory(db_conn, rid) == {TUESDAY: (3, 2), MONDAY: (1, 2)}
+    # Every date the run wrote for our territory is one the teardown will sweep.
+    assert set(_territory(db_conn, rid)) <= planted["territory_selected_dates"]
     rebuilt = preview_territory_rollup("2019-01-01", "2019-01-15")
     assert (rebuilt["metric_dates"], rebuilt["rows_new"], rebuilt["rows_changed"]) == (2, 0, 0)
 
