@@ -198,6 +198,16 @@ class DiscoveryConfig:
     # unconstrained orientations from algorithms that ignore the priors.
     prior_knowledge: Optional[CausalPriorKnowledge] = None
 
+    def __post_init__(self) -> None:
+        # ``ensemble_threshold`` is a fraction of the converged voters; only
+        # the tool-registry schema bounded it before (codex r1), so a state key
+        # or a direct caller could pass 1.5 and get a quorum no vote can meet,
+        # or a negative value and get a union. Fail loud at construction.
+        if not 0.0 <= self.ensemble_threshold <= 1.0:
+            raise ValueError(
+                f"ensemble_threshold must be a fraction in [0, 1], got {self.ensemble_threshold!r}"
+            )
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "DiscoveryConfig":
         """Reconstruct a config from ``to_dict()`` output.

@@ -1,0 +1,9 @@
+# lingam availability probe, 2026-09-22 (venv = the tree's interpreter; prod image = the running e2i_api container)
+$ grep -in lingam pyproject.toml requirements.txt   # the only match is a comment on causal-learn; no lingam package is declared
+pyproject.toml:42:    "causal-learn>=0.1.3.8",          # Structure learning (GES, PC, FCI, LiNGAM)
+$ .venv/bin/python -c 'import lingam'
+ModuleNotFoundError: No module named 'lingam'
+$ docker exec e2i_api python -c "import importlib.util as u; print('lingam in prod image:', u.find_spec('lingam') is not None)"
+lingam in prod image: False
+$ docker inspect e2i_api --format '{{.Image}} {{.State.StartedAt}}'
+sha256:3139af99759bda012c62c3a2f4dbba75f61bebfac045c79b4166eab6bfc27322 2026-09-22T13:49:08.888521776Z

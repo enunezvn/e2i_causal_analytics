@@ -83,11 +83,12 @@ estimand, the feature analyzer's causal ranker).
 Two facts decide the LiNGAM question before any fit: the wrappers refuse any frame
 with a binary column (`lingam_wrapper.py:52-85`, #2009) and every causal frame here has
 a binary treatment and outcome; and the `lingam` package is not a declared dependency
-(`pyproject.toml:42` lists only `causal-learn`), is not importable from the venv
-(`ModuleNotFoundError: No module named 'lingam'`) and is absent from the prod image
-(`docker exec e2i_api python -c "import importlib.util as u; print(u.find_spec('lingam') is not None)"`
--> `False`, run 2026-09-22). Even with the refusal lifted, `from lingam import
-DirectLiNGAM` (`lingam_wrapper.py:147`) would fail.
+(`lingam_availability_probe.txt:3`: the only `lingam` match in `pyproject.toml` /
+`requirements.txt` is the comment on `causal-learn`), is not importable from the venv
+(`lingam_availability_probe.txt:5`: `ModuleNotFoundError: No module named 'lingam'`) and
+is absent from the running prod image (`lingam_availability_probe.txt:7`:
+`lingam in prod image: False`; image and start time at `:9`). Even with the refusal
+lifted, `from lingam import DirectLiNGAM` (`lingam_wrapper.py:147`) would fail.
 
 ## 4. Ensembles: union (pre-fix) vs agreement (post-fix) (deliverables a and b)
 
@@ -138,14 +139,21 @@ guided path; Lane D owns the required-edge question.
 
 ## 5. The fix (deliverable a) and its gate interaction
 
-`_build_ensemble` now uses `min_votes = max(2, ceil(n_converged * threshold - 1e-9))`
-when at least two algorithms converged, and 1 when exactly one did (its corroboration
+`_build_ensemble` now uses `min_votes = max(2, ceil(n_converged * threshold))` when at
+least two DISTINCT algorithms converged, and 1 when exactly one did (its corroboration
 stays the bootstrap path). **`ceil`, not `int`:** "at least a fraction t of the
 voters" is `votes >= n * t`, whose smallest integer solution is `ceil(n * t)`; `int`
 turned 3 voters at 0.5 into a 1-vote quorum. **Floor 2:** one voter cannot agree with
 anyone; a threshold that resolves below two votes is a union, which the config's
-documented meaning does not describe. The `- 1e-9` keeps `10 * 0.3 =
-3.0000000000000004` from rounding the quorum up to 4.
+documented meaning does not describe. **A voter is a distinct algorithm and votes once
+per edge** (codex r1): the tool registry passes caller-supplied names through
+unchanged, so `algorithms=["ges", "ges"]` used to give every GES edge two votes and a
+fake agreement rate of 1.0. **`threshold` is validated to `[0, 1]`** at
+`DiscoveryConfig` construction (codex r1: only the tool schema bounded it; a state key
+could pass 1.5). No floating-point guard is needed: with at most six distinct voters
+(`DiscoveryAlgorithmType` has six members) no product `n * (k/n)` overshoots its
+integer in floating point (checked exhaustively for `n <= 6` and every 3-decimal
+threshold; the first overshoot is `25 * 0.28 = 7.000000000000001`).
 
 **Gate interaction.** Under an agreement filter every surviving edge is agreed on by
 construction — with two voters every survivor is `2/2 = 1.0` — so the gate's former
@@ -174,19 +182,24 @@ value is the agreement rate, not a vacuous 1.0. A result built without a census 
 hand-built results) keeps the old votes-per-edge math.
 
 **Tests** (`tests/unit/test_causal_engine/test_discovery/test_ensemble_vote_rule.py`,
-15 tests, all through the real `_build_ensemble` and the real gate): agreement at the
-default threshold, `ceil` vs `int` at 3 voters, unanimity at 1.0, floor of 2 at 0.1,
-single-converged keeps every edge, failed algorithms are not voters, float rounding,
-census contents, gate reads the census (disagreement blocks ACCEPT; full agreement
-scores 1.0; the calibration identity; the no-census fallback), the `algorithm_agreement`
-property, and the single source of truth for the default ensemble (config, tool schema
-and input model, graph_builder's unguided branch).
+17 tests). Fourteen go through the real `_build_ensemble` and, where a grade is
+asserted, the real gate: agreement at the default threshold, `ceil` vs `int` at 3
+voters, unanimity at 1.0, floor of 2 at 0.1, single-converged keeps every edge, failed
+algorithms are not voters, the same algorithm twice is one voter, a duplicated edge is
+one vote, the threshold bounds, census contents, gate reads the census (disagreement
+blocks ACCEPT; full agreement scores 1.0; the calibration identity; the no-census
+fallback) and the `algorithm_agreement` property. Three are consumer tests for the
+single source of truth (config default, tool schema and input model, graph_builder's
+unguided branch through `GraphBuilderNode.execute` with a capturing runner) and do not
+exercise the ensemble.
 
-**Teeth.** With the old quorum planted back (`teeth_plant_a.txt`): `7 failed, 8 passed`.
-With the census not recorded (`teeth_plant_b.txt`): `7 failed, 8 passed`. Green on the
-branch: `131 passed` across the new file plus `test_runner.py`,
-`test_ensemble_confidence_p12.py`, `test_gate.py`, `test_base.py`,
-`test_graph_builder_discovery_bootstrap.py`, `test_causal_discovery_tool.py`.
+**Teeth.** With the old quorum planted back (`teeth_plant_a.txt`): `7 failed, 8 passed`
+(15-test file at the time). With the census not recorded (`teeth_plant_b.txt`):
+`7 failed, 8 passed`. With per-occurrence vote counting restored (`teeth_plant_c.txt`):
+see the file's last line. Green on the branch tip: `green_targeted.txt` (the new file
+plus `test_runner.py`, `test_ensemble_confidence_p12.py`, `test_gate.py`, `test_base.py`,
+`test_graph_builder_discovery_bootstrap.py`, `test_causal_discovery_tool.py`); the wider
+run of every test file importing a changed module is reported in the PR body.
 
 ## 6. Recommendation for the default voter set (deliverable b) — OWNER DECISION
 

@@ -134,14 +134,41 @@ class TestAgreementRule:
         assert edges[0].confidence == 1.0
         assert dag_census(dag)["n_converged"] == 2
 
-    def test_float_rounding_does_not_inflate_the_quorum(self):
-        """10 voters at 0.3 need 3 votes; ``ceil(10 * 0.3)`` in floating point is 4."""
+    def test_the_same_algorithm_run_twice_is_one_voter(self):
+        """The tool registry passes caller names through unchanged, so
+        ``algorithms=["ges", "ges"]`` reaches the ensemble as two GES results:
+        that is one voter, not agreement (codex r1)."""
         runner = DiscoveryRunner(enable_tracing=False)
-        voters = [GES, PC, FCI, DL, DiscoveryAlgorithmType.ICA_LINGAM] * 2
-        results = [_run(a, [("A", "B")] if i < 3 else [("C", "D")]) for i, a in enumerate(voters)]
-        edges, dag = runner._build_ensemble(results, NODES, threshold=0.3)
-        assert dag_census(dag)["min_votes"] == 3
-        assert ("A", "B") in {(e.source, e.target) for e in edges}
+        results = [_run(GES, [("A", "B")]), _run(GES, [("A", "B")])]
+        edges, dag = runner._build_ensemble(results, NODES, threshold=0.5)
+        census = dag_census(dag)
+        assert census["n_converged"] == 1
+        assert census["min_votes"] == 1
+        assert [(e.algorithm_votes, e.algorithms) for e in edges] == [(1, ["ges"])]
+        # ... and with a real second voter present, the duplicate still adds nothing.
+        results = [
+            _run(GES, [("A", "B")]),
+            _run(GES, [("A", "B"), ("B", "C")]),
+            _run(PC, [("B", "C")]),
+        ]
+        edges, dag = runner._build_ensemble(results, NODES, threshold=0.5)
+        assert dag_census(dag)["n_converged"] == 2
+        assert {(e.source, e.target): e.algorithm_votes for e in edges} == {("B", "C"): 2}
+
+    def test_a_duplicated_edge_inside_one_result_is_one_vote(self):
+        runner = DiscoveryRunner(enable_tracing=False)
+        results = [_run(GES, [("A", "B"), ("A", "B")]), _run(PC, [("B", "C")])]
+        edges, _ = runner._build_ensemble(results, NODES, threshold=0.5)
+        assert edges == []
+
+    def test_threshold_outside_the_unit_interval_is_refused_at_the_config(self):
+        """A threshold above 1 would set a quorum no vote can meet, a negative one
+        a union; neither is a fraction of the voters."""
+        for bad in (1.0000000001, 1.5, -0.1):
+            with pytest.raises(ValueError, match="ensemble_threshold"):
+                DiscoveryConfig(ensemble_threshold=bad)
+        assert DiscoveryConfig(ensemble_threshold=0.0).ensemble_threshold == 0.0
+        assert DiscoveryConfig(ensemble_threshold=1.0).ensemble_threshold == 1.0
 
 
 def dag_census(dag: nx.DiGraph) -> Dict[str, Any]:
