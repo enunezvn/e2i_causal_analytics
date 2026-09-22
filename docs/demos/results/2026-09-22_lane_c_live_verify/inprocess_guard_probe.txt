@@ -1,0 +1,9 @@
+SUPABASE_JWT_SECRET is not set. It is optional for the current Supabase get_user() verification path (which uses SUPABASE_URL + SUPABASE_ANON_KEY) and does NOT disable JWT verification. Set it only if you add local HS256 signature verification.
+E2I_INCLUDE_SYNTHETIC env: true | deployment_includes_synthetic(): True
+datasets.PLANTED_TRUTH_RUN: False
+serves_synthetic_rows(csu_escalation_causal) = False
+serves_synthetic_rows(optum_biologic_persistence) = True
+predicate csu   : [('eq', 'is_synthetic', False)]
+predicate optum : []
+csu_escalation_causal -> HTTPException 503 No usable estimation rows for the requested variables (treatment_remibrutinib -> discontinued_180d) in dataset 'csu_escalation_causal'.
+optum_biologic_persistence -> HTTPException 503 No usable estimation rows for the requested variables (treatment_dupixent -> discontinued_180d) in dataset 'optum_biologic_persistence'.
