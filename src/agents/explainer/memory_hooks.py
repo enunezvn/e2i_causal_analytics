@@ -14,6 +14,7 @@ Author: E2I Causal Analytics Team
 Version: 1.0.0
 """
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass, field
@@ -112,18 +113,23 @@ class ExplanationMemoryHooks:
                 self._semantic_memory = None
         return self._semantic_memory
 
+    def _build_entity_extractor(self):
+        """Construct the EntityExtractor (sync); None when it cannot be built."""
+        try:
+            from src.rag.entity_extractor import EntityExtractor
+
+            extractor = EntityExtractor()
+            logger.debug("Entity extractor initialized")
+            return extractor
+        except Exception as e:
+            logger.warning(f"Failed to initialize entity extractor: {e}")
+            return None
+
     @property
     def entity_extractor(self):
-        """Lazy-load EntityExtractor for query entity extraction."""
+        """Lazy-load EntityExtractor for query entity extraction (sync callers)."""
         if self._entity_extractor is None:
-            try:
-                from src.rag.entity_extractor import EntityExtractor
-
-                self._entity_extractor = EntityExtractor()
-                logger.debug("Entity extractor initialized")
-            except Exception as e:
-                logger.warning(f"Failed to initialize entity extractor: {e}")
-                self._entity_extractor = None
+            self._entity_extractor = self._build_entity_extractor()
         return self._entity_extractor
 
     # =========================================================================
@@ -252,6 +258,11 @@ class ExplanationMemoryHooks:
             # Extract entities mentioned in the query
             extracted_entities = []
             relationships = []
+
+            # Lane 2 (2026-09-22): from_default performs a bounded sync network
+            # round (RxNav) at first build; keep it off the event loop.
+            if self._entity_extractor is None:
+                self._entity_extractor = await asyncio.to_thread(self._build_entity_extractor)
 
             if self.entity_extractor:
                 entities = self.entity_extractor.extract(query)
