@@ -726,10 +726,12 @@ id; the label stays in `study_name`); the study row and its whole trial set are 
 ONE transaction by `persist_hpo_study(jsonb, jsonb)` (migration ml/045: upsert on
 `study_name`, replace the trial set — a rerun of the same study name replaces both together
 or changes nothing). Before #2207 the writer had zero call sites and both tables sat at
-0 rows, and none has landed yet: the payload the live graph builds (Pydantic search-space
-distributions, numpy scalars, a failed trial's `-inf`, a large objective) is reduced to
-JSON-native values by `OptunaOptimizer.build_persist_payload` and was verified against the
-live schema only in a rolled-back rehearsal. The first rows come from the tier-0 harness run
+0 rows, and none has landed yet: the values the live graph produces today (the Pydantic
+search-space distributions the state holds, native sampled params, a failed trial's `-inf`,
+a large objective, datetimes) are reduced to JSON-native values by
+`OptunaOptimizer.build_persist_payload` — proven by an end-to-end typed test and against the
+live schema in a rolled-back rehearsal; the serialiser is not a guarantee for inputs the
+tuner does not produce. The first rows come from the tier-0 harness run
 by hand on the host (the path that produced the 943 `ml_hpo_patterns`) once ml/045 is
 deployed — prove it with `SELECT study_name, n_trials FROM ml_hpo_studies`. The other
 host of the tuner, `execute_model_retraining`, is routed to worker_medium's `analytics`

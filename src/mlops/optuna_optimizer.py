@@ -41,11 +41,11 @@ logger = logging.getLogger(__name__)
 
 
 def _finite_or_none(value: Any) -> Optional[float]:
-    """A float that json and numeric(10,6) accept, else None (#2207, codex r6).
+    """A finite float, else None (#2207, codex r6).
 
     The objective returns ``-inf`` for a caught trial failure and a pruned/failed
     trial can report NaN; serialised as-is either invalidates the persist_hpo_study
-    payload and loses the whole study. NULL is the honest value for "no score".
+    payload (json) and loses the whole study. NULL is the honest value for "no score".
     """
     if value is None:
         return None
@@ -57,14 +57,20 @@ def _finite_or_none(value: Any) -> Optional[float]:
 
 
 def _json_native(obj: Any) -> Any:
-    """Recursively reduce ``obj`` to what the stdlib JSON encoder accepts (#2207, r7).
+    """Reduce ``obj`` to what the stdlib JSON encoder accepts, for the values the
+    live tuner currently produces (#2207, r7-r9).
 
-    The live graph (``StateGraph(ModelTrainerState)``) hands the saver Pydantic
-    ``Optuna*Distribution`` objects for the search space, Optuna params/attrs can
-    carry numpy scalars, and a failed trial carries ``-inf``: PostgREST's encoder
-    rejects all three and the RPC never runs. Pydantic -> ``model_dump(mode="json")``,
-    numpy -> Python scalars, datetimes -> ISO strings, enums -> values, non-finite
-    floats -> None, anything else unknown -> ``str``.
+    Proven scope (traced through hyperparameter_tuner.py and covered by the
+    end-to-end typed test + the rolled-back live rehearsal): the Pydantic
+    ``Optuna*Distribution`` search-space entries the graph holds
+    (``StateGraph(ModelTrainerState)``), native sampled / best params, empty user
+    attrs, JSON-native warm-start system attrs, float intermediate and objective
+    values (including a caught failure's ``-inf``), and datetimes. Beyond that the
+    function also folds numpy scalars/arrays, nested Pydantic models and Enums, and
+    stringifies anything else — a best-effort net, not a guarantee for inputs the
+    tuner does not produce today. Pydantic -> ``model_dump(mode="python")`` then
+    recurse; numpy -> Python values; datetimes -> ISO; enums -> values; non-finite
+    floats -> None.
     """
     if obj is None or isinstance(obj, (bool, int, str)):
         return obj

@@ -504,7 +504,8 @@ async def test_the_payload_built_from_the_live_typed_search_space_is_json_native
     study = optuna.create_study(study_name=f"e2i_typed_{uuid.uuid4().hex[:6]}_rf_hpo")
 
     def objective(t):
-        # numpy scalars ride into params/attrs on the real path (sklearn metrics)
+        # the live tuner sets no user attrs today (empty); numpy scalars are the kind
+        # of value a future caller could set — the serialiser must not choke on them
         t.set_user_attr("np_flag", np.bool_(True))
         t.set_user_attr("np_score", np.float64(0.5))
         return t.suggest_int("n_estimators", 10, 20) / 20.0
@@ -526,8 +527,8 @@ async def test_the_payload_built_from_the_live_typed_search_space_is_json_native
     (_, params) = db.rpc_calls[0]
     json.dumps(params, allow_nan=False)  # the exact payload survives the stdlib encoder
     space = params["p_study"]["search_space"]
-    # model_dump(mode="json") of the typed distribution: the dict literal's keys plus
-    # the variant's defaulted ones (log=None on int) — plain JSON either way.
+    # model_dump(mode="python") of the typed distribution, then recursed: the dict
+    # literal's keys plus the variant's defaulted ones (log=None on int) — plain JSON.
     assert space["n_estimators"] == {"type": "int", "low": 50, "high": 500, "step": 50, "log": None}
     assert space["learning_rate"]["log"] is True and space["learning_rate"]["low"] == 1e-4
     assert space["objective"]["choices"] == ["binary:logistic", "binary:hinge"]
