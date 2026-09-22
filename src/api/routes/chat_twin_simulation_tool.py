@@ -70,11 +70,14 @@ def resolve_intervention(phrase: Optional[str]) -> Optional[str]:
     """Map the user's phrasing onto ONE catalog intervention, or ``None``.
 
     A catalog value or its label (spaces or hyphens for underscores, any case) resolves
-    directly; otherwise a phrase resolves only when every one of its words belongs to exactly
-    one catalog entry's words ("call frequency" -> call_frequency_increase; "increase call
-    frequency" too, "increase" being a stem of that entry's "increased"). Nothing else is
-    guessed — "samples" is not "sample_distribution" — so the engine's refusal names the
-    catalog and the answer can say what it does serve.
+    directly; otherwise a phrase resolves only when it carries AT LEAST TWO meaningful words
+    and every one of them belongs to exactly one catalog entry's words ("call frequency" ->
+    call_frequency_increase; "increase call frequency" too, "increase" being a stem of that
+    entry's "increased"). One word is never enough (codex r1 #1: "increase", "quality" and
+    "distribution" each belong to one entry and would have driven a real simulation the user
+    never named), "samples" is not "sample_distribution", and an ambiguous or unrelated
+    phrase is None — so the engine's refusal names the catalog and the answer can say what
+    it does serve.
     """
     if not isinstance(phrase, str) or not phrase.strip():
         return None
@@ -85,7 +88,7 @@ def resolve_intervention(phrase: Optional[str]) -> Optional[str]:
         if wanted in (value, re.sub(r"[\s\-]+", "_", label.lower())):
             return value
     asked = _tokens(phrase)
-    if not asked:
+    if len(asked) < 2:
         return None
     matches = []
     for value, label in INTERVENTION_CATALOG:

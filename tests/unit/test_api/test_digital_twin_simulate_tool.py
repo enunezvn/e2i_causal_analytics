@@ -107,16 +107,25 @@ def test_a_non_region_target_is_refused_not_ignored():
         ("increase call frequency", "call_frequency_increase"),
         ("call frequency", "call_frequency_increase"),
         ("speaker program", "speaker_program_invitation"),
+        ("peer influence", "peer_influence_activation"),
         ("samples", None),
+        # One word is never enough, even when it belongs to exactly one entry (codex r1 #1):
+        # each of these would have driven a real simulation the user never named.
+        ("increase", None),
+        ("quality", None),
+        ("distribution", None),
+        ("email", None),
+        ("program", None),
         ("", None),
         ("lunch", None),
+        ("more calls and emails", None),
     ],
 )
 def test_user_phrasing_resolves_to_one_catalog_intervention_or_none(phrase, expected):
-    """The model passes what the user said; a catalog value, its label, or a phrase whose
-    every word belongs to exactly one catalog entry resolves. Nothing is guessed: 'samples'
-    is not 'sample_distribution' and an empty or unrelated phrase is None, so the engine's
-    own refusal names the catalog."""
+    """The model passes what the user said; a catalog value, its label, or a phrase of at
+    least two meaningful words that all belong to exactly one catalog entry resolves.
+    Nothing is guessed: a single word, 'samples', a phrase spanning two entries, and an
+    empty or unrelated phrase are None, so the engine's own refusal names the catalog."""
     assert cts.resolve_intervention(phrase) == expected
 
 

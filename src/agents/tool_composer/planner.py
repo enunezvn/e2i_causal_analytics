@@ -1270,17 +1270,35 @@ _FORECAST_RISK_RE = re.compile(
 
 
 #: A sub-question is a SIMULATION question when it asks to simulate an intervention forward
-#: (a twin, a counterfactual, a what-if), not to size or design a test (#2211). Both #2211
-#: asks decomposed into a step of this shape under the EXPERIMENTAL intent.
-_SIMULATION_RE = re.compile(
-    r"\b(?:simulat\w*|counterfactual\w*|digital[\s-]?twin|what[\s-]if|what would happen)\b",
+#: (a twin, a counterfactual, a what-if ABOUT an intervention), not to size or design a test
+#: (#2211). Both #2211 asks decomposed into a step of this shape under the EXPERIMENTAL
+#: intent. A design question wearing simulation words ("simulate statistical power for this
+#: A/B test", "what would happen to power if the sample size increased") stays with the
+#: power calculator (codex r1 #4): the twin has no notion of power or sample size as inputs.
+_TWIN_CUE_RE = re.compile(r"\b(?:counterfactual\w*|digital[\s-]?twin)\b", re.IGNORECASE)
+_SIMULATION_CUE_RE = re.compile(r"\b(?:simulat\w*|what[\s-]if|what would happen)\b", re.IGNORECASE)
+_INTERVENTION_CUE_RE = re.compile(
+    r"\b(?:intervention|campaign|call frequency|calls?|speaker|sample distribution|samples?"
+    r"|peer|engagement|patient support|rep training|treatment|lever|program|conversion"
+    r"|prescri\w*|hcps?)\b",
+    re.IGNORECASE,
+)
+_DESIGN_CUE_RE = re.compile(
+    r"\b(?:power|sample[\s-]size|per[\s-]arm|a/?b test|alpha|statistical|design|mde"
+    r"|minimum detectable)\b",
     re.IGNORECASE,
 )
 
 
 def is_simulation_question(text: str) -> bool:
-    """True when ``text`` asks to simulate / run a counterfactual / use the digital twin."""
-    return bool(_SIMULATION_RE.search(text or ""))
+    """True when ``text`` asks to run the twin: an explicit twin / counterfactual cue, or a
+    simulate / what-if cue about an intervention — and never a power / design question."""
+    text = text or ""
+    if _DESIGN_CUE_RE.search(text):
+        return False
+    if _TWIN_CUE_RE.search(text):
+        return True
+    return bool(_SIMULATION_CUE_RE.search(text) and _INTERVENTION_CUE_RE.search(text))
 
 
 def is_forecast_question(text: str) -> bool:

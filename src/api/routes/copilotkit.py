@@ -4119,9 +4119,7 @@ def create_e2i_chat_agent(
                     await copilotkit_emit_message(config, guard_note)
                     full_content += guard_note
             # #2211: same shape for a synthesis that denies the twin capability.
-            twin_note = await simulation_denial_correction(
-                full_content, tools_ran=[tr["tool"] for tr in tool_results]
-            )
+            twin_note = await simulation_denial_correction(full_content)
             if twin_note:
                 await copilotkit_emit_message(config, twin_note)
                 full_content += twin_note

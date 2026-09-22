@@ -8,9 +8,11 @@ defence; this guard is the residual one, and it is a CAPABILITY check, not a phr
 
 * the phrase family only DECIDES WHETHER TO ASK — it never asserts anything;
 * the correction is derived from the live probe that ``/digital-twin/health`` runs
-  (active twin models, brands whose cohort can identify an intervention). A dark twin gets
-  a note that says so; an unmeasurable probe still corrects the existence claim (the tool
-  IS bound) but promises nothing about running.
+  (active twin models, brands whose cohort can identify an intervention) and claims exactly
+  what that probe establishes — an active model row and usable cohort effect data — never
+  that a run would succeed (the AFTER run of 2026-09-22 had an active row and an
+  unreachable model registry). A dark twin gets a note that says so; an unmeasurable probe
+  still corrects the existence claim (the tool IS bound) but promises nothing.
 
 What would make the check pass while the condition is false? A denial phrased outside the
 family goes uncorrected — that residual is documented, and the primary defence is the
@@ -22,7 +24,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from langchain_core.messages import AIMessageChunk, HumanMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 
 from src.api.routes import chat_twin_capability as guard
 
@@ -39,23 +41,6 @@ TW2_ANSWER = (
     'frequency" for Fabhalta. There is **no causal chain linking call frequency to '
     "conversion** in the results returned."
 )
-
-
-# --------------------------------------------------------------------------- detection
-@pytest.mark.parametrize(
-    "text",
-    [
-        TW1_DENIAL,
-        "There is no digital twin simulation tool on this platform.",
-        "The platform does not have a counterfactual simulation capability.",
-        "I can't run a simulation here — no tool simulates an intervention forward.",
-        "Digital-twin simulation isn't available in this assistant.",
-        "We don't offer what-if simulation of interventions.",
-    ],
-)
-def test_a_denial_of_the_simulation_capability_is_detected(text):
-    assert guard.denies_simulation_capability(text)
-
 
 #: The two AFTER answers of 2026-09-22 (whole AG-UI graph in-process, real tools; the model
 #: registry was unreachable from that host, so the tool reported an outage). Both AFFIRM the
@@ -87,6 +72,24 @@ AFTER_TW2_OUTAGE = (
 )
 
 
+# --------------------------------------------------------------------------- detection
+@pytest.mark.parametrize(
+    "text",
+    [
+        TW1_DENIAL,
+        "There is no digital twin simulation tool on this platform.",
+        "There is not any digital twin simulation tool here.",
+        "The platform does not have a counterfactual simulation capability.",
+        "The platform lacks a digital twin simulation capability.",
+        "I can't run a simulation here — no tool simulates an intervention forward.",
+        "Digital-twin simulation isn't available in this assistant.",
+        "We don't offer what-if simulation of interventions.",
+    ],
+)
+def test_a_denial_of_the_simulation_capability_is_detected(text):
+    assert guard.denies_simulation_capability(text)
+
+
 @pytest.mark.parametrize(
     "text",
     [
@@ -94,15 +97,19 @@ AFTER_TW2_OUTAGE = (
         AFTER_TW1_OUTAGE,
         AFTER_TW2_OUTAGE,
         "No causal chain links call frequency to conversion in the registry.",
+        "There is no evidence from the digital twin simulation tool that calls improve conversion.",
         "The digital twin simulation predicts an effect of 0.135 [0.092, 0.178].",
         "The simulation could not run for Fabhalta: the cohort has no usable call_frequency "
         "channel (no_treatment_contrast). Re-run the backfill and try again.",
+        "I cannot run a simulation: the model registry is unavailable.",
+        "I cannot run the simulation because the twin model for Kisqali could not be loaded.",
         "Kisqali TRx was 12,400 last month.",
         "",
     ],
 )
 def test_a_registry_negative_or_an_honest_engine_refusal_is_not_a_denial(text):
-    """A query-scoped negative (rule 10) and the engine's own refusal are legitimate."""
+    """A query-scoped negative (rule 10), a finding phrased with 'no evidence', and the
+    engine's own refusal or outage (a stated cause) are legitimate."""
     assert not guard.denies_simulation_capability(text)
 
 
@@ -123,30 +130,9 @@ async def test_no_denial_means_no_probe_and_no_note():
         calls.append(1)
         return guard.TwinCapability(["Kisqali"], ["Kisqali"], True)
 
-    note = await guard.simulation_denial_correction(TW2_ANSWER, probe=probe)
-    assert note is None
+    for honest in (TW2_ANSWER, AFTER_TW1_OUTAGE, AFTER_TW2_OUTAGE):
+        assert await guard.simulation_denial_correction(honest, probe=probe) is None
     assert calls == [], "the probe is a database round-trip; it runs only on a denial"
-
-
-async def test_a_turn_that_ran_the_twin_tool_is_never_corrected_however_it_is_worded():
-    """The structural condition: an answer narrating the twin tool's own payload (a result, a
-    refusal, an outage) cannot be denying that the twin exists, whatever words it picks —
-    so the synthesize seam passes the turn's tool names and the guard stands down."""
-    calls = []
-
-    async def probe():
-        calls.append(1)
-        return guard.TwinCapability(["Kisqali"], ["Kisqali"], True)
-
-    note = await guard.simulation_denial_correction(
-        TW1_DENIAL, probe=probe, tools_ran=["causal_analysis_tool", guard.TWIN_TOOL_NAME]
-    )
-    assert note is None and calls == []
-    # …and a turn that ran only OTHER tools is still guarded (the 2026-09-22 shape).
-    note = await guard.simulation_denial_correction(
-        TW1_DENIAL, probe=probe, tools_ran=["causal_analysis_tool"]
-    )
-    assert note is not None and calls == [1]
 
 
 async def test_a_denial_while_the_twin_is_simulable_is_corrected_from_the_probe():
@@ -156,9 +142,12 @@ async def test_a_denial_while_the_twin_is_simulable_is_corrected_from_the_probe(
     assert note is not None
     assert "digital_twin_simulate_tool" in note
     assert "POST /api/digital-twin/simulate" in note
-    # The brands come from the probe, not from a canned sentence.
-    assert "Fabhalta" in note and "Kisqali" in note
-    assert "Remibrutinib" not in note.split("interventions")[0]
+    # The brands come from the probe, not from a canned sentence — and the claim is the
+    # probe's: an active model with usable cohort effect data, not a promised run.
+    tail = note.split("health check")[1]
+    assert "Fabhalta" in tail and "Kisqali" in tail and "Remibrutinib" not in tail
+    assert "active twin model" in note and "usable cohort effect data" in note
+    assert "can simulate" not in note and "it can run" not in note
     assert "email_campaign" in note and "call_frequency_increase" in note
 
 
@@ -171,7 +160,7 @@ async def test_a_denial_while_the_twin_is_dark_is_corrected_without_promising_a_
     assert note is not None
     assert "cannot run" in note
     assert "Fabhalta" in note and "Kisqali" in note
-    assert "can simulate" not in note
+    assert "active twin model with usable" not in note
 
 
 async def test_an_unmeasurable_probe_corrects_existence_but_claims_nothing_about_running():
@@ -180,7 +169,7 @@ async def test_an_unmeasurable_probe_corrects_existence_but_claims_nothing_about
     )
     assert note is not None
     assert "could not verify" in note
-    assert "can simulate" not in note and "cannot run" not in note
+    assert "active twin model with usable" not in note and "cannot run" not in note
 
 
 async def test_a_probe_that_raises_never_breaks_the_answer(caplog):
@@ -201,13 +190,28 @@ async def test_the_default_probe_is_the_health_endpoints_own_check():
 
 # --------------------------------------------------------------------------- graph wiring
 class _DenyingLLM:
-    """Boundary fake for get_chat_llm: streams the TW.1 denial as a direct answer."""
+    """Boundary fake for get_chat_llm: streams the TW.1 denial as its answer."""
 
     def bind_tools(self, tools, tool_choice=None):
         return self
 
     async def astream(self, messages):
         yield AIMessageChunk(content=TW1_DENIAL)
+
+
+def _graph_boundaries(copilotkit_mod, emitted):
+    async def emit(config, text):
+        emitted.append(text)
+
+    return (
+        patch.object(copilotkit_mod, "get_chat_llm", lambda **kw: _DenyingLLM()),
+        patch.object(copilotkit_mod, "_ensure_conversation_exists", AsyncMock(return_value=False)),
+        patch.object(copilotkit_mod, "_persist_message_sync", MagicMock(return_value=None)),
+        patch.object(copilotkit_mod, "_record_analytics_sync", MagicMock(return_value=None)),
+        patch.object(copilotkit_mod, "_collect_copilot_learning_signal", AsyncMock()),
+        patch.object(copilotkit_mod, "copilotkit_emit_state", AsyncMock()),
+        patch.object(copilotkit_mod, "copilotkit_emit_message", emit),
+    )
 
 
 async def test_a_direct_denial_through_the_real_agui_graph_carries_the_correction():
@@ -217,32 +221,21 @@ async def test_a_direct_denial_through_the_real_agui_graph_carries_the_correctio
     so patching it is what the node uses."""
     from src.api.routes import copilotkit as copilotkit_mod
 
-    emitted = []
-
-    async def emit(config, text):
-        emitted.append(text)
-
-    with (
-        patch.object(copilotkit_mod, "get_chat_llm", lambda **kw: _DenyingLLM()),
-        patch.object(copilotkit_mod, "_ensure_conversation_exists", AsyncMock(return_value=False)),
-        patch.object(copilotkit_mod, "_persist_message_sync", MagicMock(return_value=None)),
-        patch.object(copilotkit_mod, "_record_analytics_sync", MagicMock(return_value=None)),
-        patch.object(copilotkit_mod, "_collect_copilot_learning_signal", AsyncMock()),
-        patch.object(copilotkit_mod, "copilotkit_emit_state", AsyncMock()),
-        patch.object(copilotkit_mod, "copilotkit_emit_message", emit),
-        patch.object(guard, "twin_capability", _probe(["Kisqali"], ["Kisqali"])),
-    ):
-        graph = copilotkit_mod.create_e2i_chat_agent()
-        result = await graph.ainvoke(
-            {
-                "messages": [
-                    HumanMessage(
-                        content="Use the digital twin to simulate an email campaign for Kisqali"
-                    )
-                ]
-            },
-            config={"configurable": {"thread_id": "test-2211"}},
-        )
+    emitted: list = []
+    with patch.multiple(guard, twin_capability=_probe(["Kisqali"], ["Kisqali"])):
+        patches = _graph_boundaries(copilotkit_mod, emitted)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
+            graph = copilotkit_mod.create_e2i_chat_agent()
+            result = await graph.ainvoke(
+                {
+                    "messages": [
+                        HumanMessage(
+                            content="Use the digital twin to simulate an email campaign for Kisqali"
+                        )
+                    ]
+                },
+                config={"configurable": {"thread_id": "test-2211-direct"}},
+            )
 
     final = result["messages"][-1].content
     assert TW1_DENIAL in final
@@ -250,13 +243,46 @@ async def test_a_direct_denial_through_the_real_agui_graph_carries_the_correctio
     assert any("digital_twin_simulate_tool" in t for t in emitted), emitted
 
 
-def test_the_synthesize_seam_is_wired_too():
-    """synthesize_node is a closure inside create_e2i_chat_agent (established idiom: see
-    test_1475_bridge_fast_tool_leg); the streamed answer cannot be rewritten, so the
-    correction is appended after the #1691 superlative note, the same way."""
-    import inspect
-
+async def test_a_synthesized_denial_after_a_tool_turn_carries_the_correction_too():
+    """The synthesize seam, through the same compiled graph: the state is placed as if the
+    tools node had just run (a causal_analysis_tool turn — the 2026-09-22 shape), the graph
+    is resumed, and synthesize_node's streamed denial leaves with the correction appended
+    to the user-visible answer and emitted. No source counting: the seam runs."""
     from src.api.routes import copilotkit as copilotkit_mod
 
-    source = inspect.getsource(copilotkit_mod.create_e2i_chat_agent)
-    assert source.count("simulation_denial_correction(") == 2
+    emitted: list = []
+    with patch.multiple(guard, twin_capability=_probe(["Kisqali"], ["Kisqali"])):
+        patches = _graph_boundaries(copilotkit_mod, emitted)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6]:
+            graph = copilotkit_mod.create_e2i_chat_agent()
+            config = {"configurable": {"thread_id": "test-2211-synth"}}
+            graph.update_state(
+                config,
+                {
+                    "messages": [
+                        HumanMessage(content="Use the digital twin to simulate an email campaign"),
+                        AIMessage(
+                            content="",
+                            tool_calls=[
+                                {
+                                    "name": "causal_analysis_tool",
+                                    "args": {"kpi_name": "email campaign", "brand": "Kisqali"},
+                                    "id": "call-1",
+                                }
+                            ],
+                        ),
+                        ToolMessage(
+                            content='{"success": true, "causal_chains_found": 0}',
+                            name="causal_analysis_tool",
+                            tool_call_id="call-1",
+                        ),
+                    ]
+                },
+                as_node="tools",
+            )
+            result = await graph.ainvoke(None, config=config)
+
+    final = result["messages"][-1].content
+    assert TW1_DENIAL in final
+    assert "digital_twin_simulate_tool" in final
+    assert any("digital_twin_simulate_tool" in t for t in emitted), emitted

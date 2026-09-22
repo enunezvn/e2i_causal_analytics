@@ -10,11 +10,14 @@ platform-level negative (prompt rule 10) about simulation.
 IT IS A CAPABILITY CHECK, NOT A PHRASE LIST. The phrase family below only decides whether to
 ASK; it asserts nothing. The correction is derived from :func:`twin_capability`, the same two
 reads ``/digital-twin/health`` runs (active twin models; brands whose cohort can identify an
-intervention, via ``digital_twin_capability.simulable_brands`` and its 300-s cache). A twin
-that is dark gets a note that says it cannot run and why; a probe that cannot measure still
-corrects the EXISTENCE claim — the tool is bound, the page and the endpoint exist — and
-promises nothing about running. What the check cannot catch is a denial phrased outside the
-family; that residual is accepted because the routing is the defence, not this note.
+intervention, via ``digital_twin_capability.simulable_brands`` and its 300-s cache) — and the
+note claims exactly what those reads establish: an active model row and usable cohort effect
+data, NOT that the model artifact loads or that a given intervention is available for the
+brand (codex r1 #2: the AFTER run on 2026-09-22 had an active row and an unreachable
+registry). A twin that is dark gets a note that says it cannot run and why; a probe that
+cannot measure still corrects the EXISTENCE claim — the tool is bound, the page and the
+endpoint exist — and promises nothing about running. What the check cannot catch is a denial
+phrased outside the family; that residual is accepted because the routing is the defence.
 
 Kept out of ``copilotkit.py`` (size-ratchet pinned), which calls
 :func:`simulation_denial_correction` at its two answer seams, the way it appends the #1691
@@ -27,45 +30,46 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, List, Optional, Sequence
+from typing import Awaitable, Callable, List, Optional
 
 from src.data.per_hcp_cohort_columns import INTERVENTION_TREATMENT_MAP
 
 logger = logging.getLogger(__name__)
 
 _SUBJECT = r"(?:digital[\s-]?twin|simulat\w*|counterfactual\w*|what[\s-]if)"
-#: "no …" / "isn't a …" / "not a …", except when what follows is itself an absence word:
-#: "not a missing capability" and "not a platform limitation" affirm the capability.
+_NOUN = r"\b(?:tool|capability|feature|engine|way|function|module)s?\b"
+#: "no …" / "isn't a …" / "not a …" / "not any …", except when what follows is itself an
+#: absence word — "not a missing capability", "not a platform limitation" AFFIRM the
+#: capability (measured on the 2026-09-22 AFTER answers) — or an evidence word: "no evidence
+#: from the digital twin simulation tool" is a finding, not a denial (codex r1 #3).
 _NEG = (
-    r"(?:\bno\b|\b(?:isn'?t|is not|not)\s+an?\b)"
-    r"(?!\s+(?:missing|lack\w*|absen\w*|unavail\w*|(?:platform\s+)?limitation))"
+    r"(?:\bno\b|\b(?:isn'?t|is not|not)\s+an?\b|\bnot\s+any\b)"
+    r"(?!\s+(?:missing|lack\w*|absen\w*|unavail\w*|(?:platform\s+)?limitation"
+    r"|evidence|data|result|sign|indication|record|row|proof|support)s?\b)"
 )
 #: Shapes of a platform-level negative about simulation, each measured on 2026-09-22's
 #: answer or its obvious paraphrases. Every pattern needs a NEGATION and a SUBJECT within a
 #: short span, so "no causal chain links call frequency to conversion" (a registry negative)
-#: and "the simulation could not run for Fabhalta" (the engine's own refusal) do not match.
+#: and "the simulation could not run for Fabhalta: …" (the engine's own refusal) do not match.
 _DENIAL_PATTERNS = tuple(
     re.compile(p, re.IGNORECASE | re.DOTALL)
     for p in (
-        # "doesn't include a digital twin simulation capability" / "does not have ... simulation"
-        r"\b(?:doesn'?t|does not|don'?t|do not|didn'?t|did not)\s+"
-        r"(?:include|have|offer|provide|support|expose)\b[^.\n]{0,60}?" + _SUBJECT,
-        # "there's no tool that runs a counterfactual" / "isn't a tool that simulates" — the
-        # capability noun first, the subject after it. A negated ABSENCE ("not a missing
-        # capability", "not a platform limitation") is an affirmation — measured on the
-        # 2026-09-22 AFTER answers, where the tool's own outage text tripped a first draft.
-        _NEG + r"[^.\n]{0,40}?"
-        r"\b(?:tool|capability|feature|engine|way|function|module)s?\b[^.\n]{0,80}?" + _SUBJECT,
+        # "doesn't include a digital twin simulation capability" / "lacks a … simulation"
+        r"(?:\b(?:doesn'?t|does not|don'?t|do not|didn'?t|did not)\s+"
+        r"(?:include|have|offer|provide|support|expose)\b|\black(?:s|ing)?\b)"
+        r"[^.\n]{0,60}?" + _SUBJECT,
+        # "there's no tool that runs a counterfactual" — the capability noun first.
+        _NEG + r"[^.\n]{0,40}?" + _NOUN + r"[^.\n]{0,80}?" + _SUBJECT,
         # "no digital twin simulation tool on this platform" — the subject first.
-        _NEG + r"[^.\n]{0,40}?" + _SUBJECT + r"[^.\n]{0,40}?"
-        r"\b(?:tool|capability|feature|engine|way|function|module)s?\b",
+        _NEG + r"[^.\n]{0,40}?" + _SUBJECT + r"[^.\n]{0,40}?" + _NOUN,
         # "digital-twin simulation isn't available / supported / part of / included"
         _SUBJECT + r"[^.\n]{0,60}?\b(?:isn'?t|is not|aren'?t|are not|not)\s+"
         r"(?:available|supported|part of|included|exposed|offered|something)\b",
-        # "I can't run a simulation here" — an assistant-level inability, not an engine refusal
-        # (the engine's refusals say WHY: "could not run for <brand>: <reason>").
+        # "I can't run a simulation here" — an assistant-level inability with no stated
+        # cause. The engine's refusals and outages give one ("for <brand>", "because", or a
+        # colon before the reason), and those are honest.
         r"\b(?:can'?t|cannot|unable to|not able to)\s+(?:run|perform|execute|do)\s+"
-        r"(?:an?\s+)?(?:[\w-]+\s+){0,2}?" + _SUBJECT + r"\b(?![^.\n]*\b(?:for|because|:)\b)",
+        r"(?:an?\s+)?(?:[\w-]+\s+){0,2}?" + _SUBJECT + r"\b(?![^.\n]*(?:\bfor\b|\bbecause\b|:))",
     )
 )
 
@@ -119,6 +123,7 @@ async def twin_capability() -> TwinCapability:
 
 
 def _note(capability: TwinCapability) -> str:
+    """The correction, claiming exactly what the probe established and no more."""
     where = (
         "the Digital Twin page, `POST /api/digital-twin/simulate`, or the chat tool "
         "`digital_twin_simulate_tool`"
@@ -126,19 +131,21 @@ def _note(capability: TwinCapability) -> str:
     catalog = ", ".join(INTERVENTION_TREATMENT_MAP)
     head = (
         "\n\n**Correction — the platform does have a digital-twin simulation capability.** "
-        f"It simulates a commercial intervention forward on a brand's HCP twin cohort via {where} "
-        f"(interventions: {catalog})."
+        f"It simulates a commercial intervention forward on a brand's HCP twin cohort via {where}; "
+        f"the intervention catalog is {catalog}, and which of them a brand can run right now is "
+        "what the tool (or the page's intervention list) reports."
     )
     if not capability.measured:
         return head + (
-            " I could not verify right now whether a simulation can run; the Digital Twin "
-            "page's health readout will say."
+            " I could not verify the Digital Twin health readout right now, so I cannot say "
+            "whether a simulation would run at this moment."
         )
     if capability.simulable_brands:
         brands = ", ".join(capability.simulable_brands)
         return head + (
-            f" Right now it can simulate for {brands}. Ask me to run one — e.g. 'simulate an "
-            "email campaign for Kisqali'."
+            f" The Digital Twin health check currently reports an active twin model with "
+            f"usable cohort effect data for {brands}. Ask me to run one — e.g. 'simulate an "
+            "email campaign for Kisqali' — and I will report what the engine returns."
         )
     brands = ", ".join(capability.model_brands) or "any brand"
     return head + (
@@ -151,26 +158,17 @@ def _note(capability: TwinCapability) -> str:
 Probe = Callable[[], Awaitable[TwinCapability]]
 
 
-#: The chat tool whose presence in a turn's tool results settles the question: an answer
-#: that just ran the twin cannot be denying that the twin exists.
-TWIN_TOOL_NAME = "digital_twin_simulate_tool"
-
-
 async def simulation_denial_correction(
-    answer: Optional[str],
-    probe: Optional[Probe] = None,
-    tools_ran: Optional[Sequence[str]] = None,
+    answer: Optional[str], probe: Optional[Probe] = None
 ) -> Optional[str]:
     """The correction to append to ``answer``, or ``None`` when it denies nothing.
 
-    ``tools_ran`` are the turn's tool results: when the twin tool itself ran, the answer is
-    narrating its payload (a result, a refusal or an outage), so nothing is appended however
-    the narration is worded. ``probe`` defaults to :func:`twin_capability` resolved from this
-    module AT CALL TIME, so a test that patches ``chat_twin_capability.twin_capability``
-    patches what the graph uses. The probe runs only on a denial: it is a database round-trip.
+    ``probe`` defaults to :func:`twin_capability` resolved from this module AT CALL TIME, so a
+    test that patches ``chat_twin_capability.twin_capability`` patches what the graph uses.
+    The probe runs only on a denial: it is a database round-trip. There is deliberately no
+    "the twin tool ran this turn" bypass (codex r1 #3): an answer that repeats the denial
+    after a failed run is exactly the answer this guard exists for.
     """
-    if tools_ran and TWIN_TOOL_NAME in tools_ran:
-        return None
     if not denies_simulation_capability(answer):
         return None
     run = probe or twin_capability

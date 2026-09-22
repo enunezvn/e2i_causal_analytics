@@ -70,6 +70,10 @@ def test_a_simulation_shaped_experimental_ask_maps_to_the_simulator(question):
         "How many patients do we need per arm to detect d=0.2?",
         "What sample size gives 80% power for the pilot?",
         "Design an A/B test for the new detailing cadence",
+        # Design questions wearing simulation words (codex r1 #4).
+        "Simulate statistical power for this A/B test",
+        "What would happen to power if the sample size increased?",
+        "What if we ran the experiment with 200 per arm — what MDE could we detect?",
     ],
 )
 def test_a_design_shaped_experimental_ask_still_maps_to_the_power_calculator(question):
