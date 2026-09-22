@@ -9,6 +9,8 @@ Surface used by EntityLinker:
     - ``rxcui_for_name(name)`` — drug name → ``RxCUIMatch(rxcui, approximate)``
     - ``rxcui_for_ndc(ndc)``    — NDC → RxCUI
     - ``properties(rxcui)``      — fetch the canonical name + TTY for an RxCUI
+    - ``related_names(rxcui)``   — ingredient/brand-name aliases for an RxCUI,
+      the lookup that backs the brand-alias table for chat entity extraction
 
 ``RxCUIMatch`` distinguishes exact matches (canonical RxCUI for the name)
 from approximate matches (RxNav's normalized-match fallback that silently
@@ -181,6 +183,32 @@ class RxNavClient:
             return props
         return None
 
+    def related_names(
+        self, rxcui: str, *, ttys: tuple[str, ...] = ("IN", "BN", "PIN")
+    ) -> list[str]:
+        """Names of the concepts related to ``rxcui`` with the given term types.
+
+        ``IN`` (ingredient), ``BN`` (brand name) and ``PIN`` (precise ingredient)
+        together give every way a clinician writes one drug: Kisqali <-> ribociclib,
+        Fabhalta <-> iptacopan, Rhapsido <-> remibrutinib (measured 2026-09-22).
+        Order follows RxNav's concept groups; duplicates are dropped. Raises
+        ``RxNavError`` on transport/HTTP failure, like every other method here.
+        """
+        return list(_related_names_cached(self, rxcui, ttys))
+
+    def _related_names_uncached(self, rxcui: str, ttys: tuple[str, ...]) -> tuple[str, ...]:
+        if not rxcui:
+            return ()
+        payload = self._get(f"/rxcui/{rxcui}/related.json", {"tty": " ".join(ttys)})
+        groups = payload.get("relatedGroup", {}).get("conceptGroup") or []
+        names: list[str] = []
+        for group in groups:
+            for concept in group.get("conceptProperties") or []:
+                name = concept.get("name")
+                if isinstance(name, str) and name and name not in names:
+                    names.append(name)
+        return tuple(names)
+
 
 @lru_cache(maxsize=_LRU_MAXSIZE)
 def _rxcui_for_name_cached(client: RxNavClient, name: str) -> Optional[RxCUIMatch]:
@@ -197,8 +225,16 @@ def _properties_cached(client: RxNavClient, rxcui: str) -> Optional[dict[str, An
     return client._properties_uncached(rxcui)
 
 
+@lru_cache(maxsize=_LRU_MAXSIZE)
+def _related_names_cached(
+    client: RxNavClient, rxcui: str, ttys: tuple[str, ...]
+) -> tuple[str, ...]:
+    return client._related_names_uncached(rxcui, ttys)
+
+
 def reset_caches() -> None:
     """Clear RxNav caches (useful in tests)."""
     _rxcui_for_name_cached.cache_clear()
     _rxcui_for_ndc_cached.cache_clear()
     _properties_cached.cache_clear()
+    _related_names_cached.cache_clear()
