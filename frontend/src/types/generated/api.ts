@@ -19857,7 +19857,10 @@ export interface components {
          * @description Request to trigger model retraining.
          * @example {
          *       "auto_approve": false,
-         *       "data_source": "data/rwd/optum/initiation",
+         *       "data_source": {
+         *         "path": "data/rwd/optum/initiation",
+         *         "type": "file_dir"
+         *       },
          *       "feature_manifest_source": "optum",
          *       "notes": "Refresh on latest Optum cohort",
          *       "reason": "manual",
@@ -19880,9 +19883,11 @@ export interface components {
             auto_approve: boolean;
             /**
              * Data Source
-             * @description Committed cohort batch/table to retrain on
+             * @description Committed cohort: a table name or a file-source dict
              */
-            data_source?: string | null;
+            data_source?: string | {
+                [key: string]: unknown;
+            } | null;
             /**
              * Target Outcome
              * @description Prediction target column
