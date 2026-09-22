@@ -515,12 +515,12 @@ class AgentCausalAnalysisRequest(BaseModel):
     limit: int = Field(1500, ge=100, le=20000, description="Max rows to load")
     auto_discover: bool = Field(
         True,
-        description=(
-            "Learn the DAG from the data via GUIDED structure discovery "
-            "(PC + background-knowledge tiers anchoring treatment as cause / "
-            "outcome as effect). The data selects which covariates are "
-            "confounders. False = use the agent's domain-knowledge DAG."
-        ),
+        description="Learn the DAG from the data via GUIDED structure discovery (PC + background-knowledge tiers anchoring treatment as cause / outcome as effect). The data selects which covariates are confounders. False = use the agent's domain-knowledge DAG.",
+    )
+    # Lane E item 3(d): a serialised FeatureRolePanel (built offline by scripts/measure_feature_role_panel.py, never in-request); no public "approved roles" field — approval is resolved server-side (Lane B).
+    feature_role_panel: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Serialised feature-role panel (src.causal_engine.feature_role_panel.FeatureRolePanel.to_dict()) for this dataset's covariates. When set, covariates the panel marks as leak verdicts are removed from the adjustment set and named in warnings.",
     )
 
 

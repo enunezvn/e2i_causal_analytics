@@ -298,6 +298,17 @@ class CausalImpactState(TypedDict):
     # key is ABSENT, graph_builder falls back to anchoring
     # ``modeled_confounders`` so pre-split callers keep their exact prior shape.
     anchored_confounders: NotRequired[List[str]]
+    # Lane E (real-data causal estimation, item 3(d)): the feature-role panel
+    # (``FeatureRolePanel.to_dict()``) for this frame's covariates. When present,
+    # graph_builder removes leak-verdict covariates from ``confounders`` /
+    # ``modeled_confounders`` with a named warning and, with
+    # ``approved_structure_roles``, anchors the approved confounders. Declared
+    # so LangGraph's input filter does not drop it (wave-51 lesson).
+    feature_role_panel: NotRequired[Dict[str, Any]]
+    # Lane B's seam: feature -> role derived from an APPROVED structural review
+    # (``confounder`` / ``instrument`` / ...). Never populated from unapproved
+    # machine attestations. Read only by graph_builder together with the panel.
+    approved_structure_roles: NotRequired[Dict[str, str]]
     # #1188: pre-treatment baseline covariates for a randomized (empty-backdoor)
     # question — routed to the estimator selector's efficiency_controls channel
     # (ANCOVA-style variance reduction), NEVER merged into confounders /

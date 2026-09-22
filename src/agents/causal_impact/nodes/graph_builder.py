@@ -146,6 +146,84 @@ class GraphBuilderNode:
             if not treatment or not outcome:
                 treatment, outcome = self._infer_variables_from_query(state.get("query", ""))
 
+            # Lane E item 3(d): the feature-role panel, when the caller supplied
+            # one, decides which declared covariates may be adjusted for. Leak-
+            # verdict covariates (post-index contract / confident outcome leak)
+            # leave ``confounders`` + ``modeled_confounders`` with a NAMED
+            # warning instead of being adjusted for blind; approved structure
+            # (Lane B's ``approved_structure_roles`` seam) anchors confounders.
+            # The narrowed channels are written back so every downstream node
+            # and the API response see the same adjustment set.
+            panel_warnings: List[str] = []
+            excluded_columns: List[str] = []
+            panel_payload = state.get("feature_role_panel")
+            if panel_payload:
+                from src.causal_engine.feature_role_panel import derive_confounder_channels
+
+                _frame0 = (state.get("data_cache") or {}).get("estimation_data")
+                channels = derive_confounder_channels(
+                    panel_payload,
+                    declared_covariates=[str(c) for c in (confounders or [])],
+                    approved_structure_roles=state.get("approved_structure_roles"),
+                    frame_columns=(
+                        [str(c) for c in _frame0.columns]
+                        if _frame0 is not None and hasattr(_frame0, "columns")
+                        else None
+                    ),
+                )
+                confounders = list(channels.modeled_confounders)
+                narrowed: Dict[str, Any] = {
+                    "confounders": list(confounders),
+                    "modeled_confounders": list(confounders),
+                }
+                if channels.anchored_confounders is not None:
+                    narrowed["anchored_confounders"] = list(channels.anchored_confounders)
+                if channels.instruments:
+                    existing = [str(i) for i in (state.get("instruments") or [])]
+                    narrowed["instruments"] = existing + [
+                        i for i in channels.instruments if i not in existing
+                    ]
+                # Excluded columns must leave the FRAME, not just the declared
+                # lists: guided discovery tiers every frame column as a candidate
+                # confounder and the estimator's no-backdoor fallback adjusts on
+                # every column, so a column left in the frame can re-enter an
+                # ACCEPT/AUGMENT DAG or the adjustment set (codex r3).
+                excluded_columns = list(
+                    dict.fromkeys(
+                        [name for name, _why in channels.removed] + channels.excluded_frame_columns
+                    )
+                )
+                _cache = dict(state.get("data_cache") or {})
+                _frame = _cache.get("estimation_data")
+                if excluded_columns and _frame is not None and hasattr(_frame, "columns"):
+                    present = [c for c in excluded_columns if c in _frame.columns]
+                    if present:
+                        _cache["estimation_data"] = _frame.drop(columns=present)
+                        narrowed["data_cache"] = _cache
+                # spread_safe: the accumulator channels stay out of the rebound
+                # state (the node returns only NEW warnings; see the return).
+                state = cast(CausalImpactState, {**spread_safe(state), **narrowed})
+                _pp = panel_payload if isinstance(panel_payload, dict) else {}
+                panel_warnings = [
+                    "feature_role_panel applied (caller-supplied; submit established only: "
+                    "registered manifest, exact treatment/outcome, at least one covariate overlap, "
+                    "structural invariants, dataset-manifest binding only when the dataset declares "
+                    "one; provenance not verified): "
+                    f"manifest={_pp.get('manifest_source', '?')}, question "
+                    f"{_pp.get('treatment', '?')} -> {_pp.get('outcome', '?')}, "
+                    f"{len(_pp.get('records') or {})} covariate(s) in the panel, "
+                    f"{len(channels.removed)} removed from the adjustment set and the frame, "
+                    f"{len(channels.review_required)} pending temporal review; "
+                    "approved instruments are not consumed by estimation"
+                ] + list(channels.warnings)
+                logger.info(
+                    "feature_role_panel applied: modeled=%s removed=%s anchored=%s instruments=%s",
+                    confounders,
+                    channels.removed,
+                    channels.anchored_confounders,
+                    channels.instruments,
+                )
+
             # Check if auto-discovery is enabled
             auto_discover = state.get("auto_discover", False)
             discovery_result: Optional[DiscoveryResult] = None
@@ -227,6 +305,16 @@ class GraphBuilderNode:
             adjustment_sets = self._apply_adjustment_guarantee(
                 dag, treatment, outcome, state, adjustment_sets
             )
+            if excluded_columns:
+                # Belt and braces for the panel's exclusions: whatever DAG shipped,
+                # no excluded column is adjusted for (spec 3(b)).
+                denylist = set(excluded_columns)
+                deduped: List[List[str]] = []
+                for adj_set in adjustment_sets:
+                    kept = [c for c in adj_set if c not in denylist]
+                    if kept not in deduped:
+                        deduped.append(kept)
+                adjustment_sets = deduped
 
             # Compute confidence based on discovery results
             if (
@@ -289,7 +377,7 @@ class GraphBuilderNode:
             # warning is raised by InterpretationNode, which can corroborate
             # the flag against the E-value sensitivity result (surfacing
             # policy; see test_structural_recovery docstring item 6).
-            new_warnings: List[str] = []
+            new_warnings: List[str] = list(panel_warnings)
             if discovery_result is not None:
                 new_warnings.extend(
                     self._discovery_honesty_warnings(discovery_result, treatment, outcome)

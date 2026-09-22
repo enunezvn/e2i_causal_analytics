@@ -63,6 +63,71 @@ _agent_analysis_store: DurableJobStore["AgentCausalAnalysisResponse"] = DurableJ
 # =============================================================================
 
 
+def _normalised_panel(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """The typed round-trip of the caller's panel: exactly what was validated at
+    submit reaches the agent (unknown keys dropped, shapes normalised) — never
+    the raw caller-authored dictionary (codex r3)."""
+    from src.causal_engine.feature_role_panel import FeatureRolePanel
+
+    return FeatureRolePanel.from_dict(payload).to_dict()
+
+
+def _validate_feature_role_panel(
+    request: AgentCausalAnalysisRequest,
+    spec: Dict[str, Any],
+    covariates: List[str],
+) -> None:
+    """Refuse (400) a panel that does not answer THIS question (codex r2)."""
+    from src.causal_engine.feature_role_panel import FeatureRolePanel, validate_panel_payload
+
+    try:
+        validate_panel_payload(request.feature_role_panel or {})
+        panel = FeatureRolePanel.from_dict(request.feature_role_panel or {})
+    except Exception as exc:  # noqa: BLE001 — any malformed payload is a caller error
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "feature_role_panel does not parse as a FeatureRolePanel "
+                f"(src.causal_engine.feature_role_panel.FeatureRolePanel.to_dict()): {exc}"
+            ),
+        ) from exc
+    try:
+        panel.validate_strict()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail=f"feature_role_panel violates an invariant: {exc}"
+        ) from exc
+    if (panel.treatment, panel.outcome) != (request.treatment_var, request.outcome_var):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"feature_role_panel was built for ({panel.treatment!r} -> {panel.outcome!r}) "
+                f"but this analysis asks ({request.treatment_var!r} -> "
+                f"{request.outcome_var!r}); build the panel for this question "
+                "(scripts/measure_feature_role_panel.py) or omit it."
+            ),
+        )
+    covered = [c for c in covariates if c in panel.records or c.split("=", 1)[0] in panel.records]
+    if covariates and not covered:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"feature_role_panel covers none of this analysis' covariates "
+                f"({covariates[:8]}{'...' if len(covariates) > 8 else ''}); it evaluated "
+                f"{len(panel.records)} column(s) under manifest {panel.manifest_source!r}."
+            ),
+        )
+    declared_manifest = spec.get("feature_manifest_source")
+    if declared_manifest and declared_manifest != panel.manifest_source:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"feature_role_panel was built under manifest {panel.manifest_source!r} but "
+                f"dataset {request.dataset!r} declares {declared_manifest!r}."
+            ),
+        )
+
+
 @router.post(
     "/agent-analyze",
     response_model=AgentCausalAnalysisResponse,
@@ -146,6 +211,15 @@ async def run_causal_agent_analysis(
         )
         if c not in (request.treatment_var, request.outcome_var)
     ]
+
+    # Lane E item 3(d): a feature-role panel is a TRUSTED causal input that
+    # narrows the adjustment set, so its identity is established HERE, before
+    # scheduling (codex r2): it must parse as a typed FeatureRolePanel, answer
+    # THIS question (T, Y), cover at least one requested covariate (or the
+    # source of a one-hot dummy), and — when the dataset spec declares its
+    # manifest — come from that manifest.
+    if request.feature_role_panel is not None:
+        _validate_feature_role_panel(request, spec, covariates)
 
     # #1188: opt-in RCT baseline adjustment — resolve the flag to the curated
     # baseline list (400 on datasets without a baseline role).
@@ -329,6 +403,16 @@ async def _run_agent_analysis_task(
         # to the domain DAG if discovery is skipped or not accepted by the gate.
         "auto_discover": request.auto_discover,
         "discovery_guided": True,
+        # Lane E item 3(d): the feature-role panel, forwarded only when supplied
+        # (graph_builder keys off presence; see the state docstring). The
+        # declared covariates above stay as submitted — the panel narrows them in
+        # graph_builder, with a named warning. ``approved_structure_roles`` is
+        # NOT a request field: approval is resolved server-side (Lane B).
+        **(
+            {"feature_role_panel": _normalised_panel(request.feature_role_panel)}
+            if request.feature_role_panel is not None
+            else {}
+        ),
         "parameters": parameters,
         "interpretation_depth": "standard",
         "brand": request.brand,

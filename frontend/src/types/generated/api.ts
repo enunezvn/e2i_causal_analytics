@@ -6032,6 +6032,13 @@ export interface components {
              * @default true
              */
             auto_discover: boolean;
+            /**
+             * Feature Role Panel
+             * @description Serialised feature-role panel (src.causal_engine.feature_role_panel.FeatureRolePanel.to_dict()) for this dataset's covariates. When set, covariates the panel marks as leak verdicts are removed from the adjustment set and named in warnings.
+             */
+            feature_role_panel?: {
+                [key: string]: unknown;
+            } | null;
         };
         /**
          * AgentCausalAnalysisResponse

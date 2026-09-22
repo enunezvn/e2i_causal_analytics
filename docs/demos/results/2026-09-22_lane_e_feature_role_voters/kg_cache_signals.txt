@@ -1,0 +1,20 @@
+captured_at_utc 2026-09-22T11:54:26.387294+00:00
+==== optum_mart data/kg_cache/0b4c5fdb__214e5b23.json records=48
+status: {'queried_no_edges': 24, 'ok': 24}
+cci_chronic_pulmonary            signal=leak_drug_treats_disease   edges=4 ot=4 considered=2
+    associated_with target=302379 drug=CHEMBL1201589 (OMALIZUMAB) disease='chronic obstructive pulmonary disease' MONDO_0005002 score=None
+    associated_with target=1876376 drug=CHEMBL2108675 (DUPILUMAB) disease='chronic obstructive pulmonary disease' MONDO_0005002 score=None
+    treats     target=302379 drug=CHEMBL1201589 (OMALIZUMAB) disease='asthma' MONDO_0004979 score=None
+    treats     target=1876376 drug=CHEMBL2108675 (DUPILUMAB) disease='asthma' MONDO_0004979 score=None
+elx_chronic_pulmonary            signal=leak_drug_treats_disease   edges=4 ot=4 considered=2
+    associated_with target=302379 drug=CHEMBL1201589 (OMALIZUMAB) disease='chronic obstructive pulmonary disease' MONDO_0005002 score=None
+    associated_with target=1876376 drug=CHEMBL2108675 (DUPILUMAB) disease='chronic obstructive pulmonary disease' MONDO_0005002 score=None
+    treats     target=302379 drug=CHEMBL1201589 (OMALIZUMAB) disease='asthma' MONDO_0004979 score=None
+    treats     target=1876376 drug=CHEMBL2108675 (DUPILUMAB) disease='asthma' MONDO_0004979 score=None
+optum_mart: signalled=2/48
+==== csu data/kg_cache/2e1be83e__214e5b23.json records=1
+status: {'ok': 1}
+primary_diagnosis_code           signal=leak_drug_treats_disease   edges=2 ot=2 considered=1
+    treats     target=302379 drug=CHEMBL1201589 (OMALIZUMAB) disease='urticaria' MONDO_0005492 score=None
+    associated_with target=1876376 drug=CHEMBL2108675 (DUPILUMAB) disease='urticaria' MONDO_0005492 score=None
+csu: signalled=1/1
