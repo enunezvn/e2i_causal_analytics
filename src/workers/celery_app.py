@@ -194,6 +194,15 @@ celery_app.conf.task_routes = {
     # cgroup at concurrency 2, NOT inside worker_light's 1.5G one. Routed to
     # `analytics` (worker_medium); the name doesn't match the train_*/fit_*
     # globs, so it stays explicit.
+    # Known remaining blocker, NOT fixed here (owner decision): the pipeline's
+    # data-prep Feast gate (data_preparer/nodes/feast_registrar.py, #556) fails
+    # closed on the app/worker image, where Feast cannot be imported (#307) and
+    # freshness is therefore unverifiable — a table-sourced retrain on this
+    # worker stops at data-prep with "Feast features stale; ALLOW_STALE_FEAST not
+    # set" and is recorded as a failed job (the measurement above set that ops
+    # escape hatch to reach the training stages). Options: extend the
+    # file_dir advisory carve-out to committed-table cohorts (no pipeline data
+    # source is Feast-served), set ALLOW_STALE_FEAST on worker_medium, or fix #307.
     "src.tasks.execute_model_retraining": {"queue": "analytics"},
     # The retraining EVALUATION half (#2207): drift + performance reads per model,
     # then a fan-out of per-model evaluations — light DB work. Explicit `quick`
@@ -356,13 +365,17 @@ celery_app.conf.beat_schedule = {
         "options": {"queue": "quick"},
     },
     # Retraining evaluation sweep, daily at 01:45 UTC (#2207). Evaluates every
-    # production/staging model's drift + performance trend and records a
-    # retraining trigger (ml_retraining_history) ONLY when the decision needs no
-    # approval (drift >= auto_approve_threshold) — the routes under
-    # /monitoring/retraining/* remain the human approval path. Until now this
-    # task existed, was route-reachable and had never fired: it was in no beat
-    # entry. Slot 01:45: after drift-history-cleanup (00:45) and the interim
-    # check (01:15), clear of the 02:00 host backup window.
+    # production/staging model's drift + performance trend and logs the decision.
+    # It does NOT enqueue a job: a live retrain needs the committed cohort
+    # contract (data_source + target_outcome) that execute_model_retraining fails
+    # closed without, and no persisted model record carries one (codex r1 HIGH) —
+    # so evaluate_and_trigger_retraining refuses to trigger without it rather
+    # than write a `pending` ml_retraining_history row for a job that can only
+    # fail. Triggering (with the contract) stays on
+    # /monitoring/retraining/trigger/{model_id}. Until now this task existed, was
+    # route-reachable and had never fired: it was in no beat entry. Slot 01:45:
+    # after drift-history-cleanup (00:45) and the interim check (01:15), clear of
+    # the 02:00 host backup window.
     "retraining-evaluation-daily": {
         "task": "src.tasks.check_retraining_for_all_models",
         "schedule": crontab(hour=1, minute=45),

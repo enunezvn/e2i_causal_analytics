@@ -35,15 +35,23 @@ after #2207, per table (details in each section):
 | `ml_feast_feature_views`, `ml_feast_materialization_jobs`, `ml_feast_feature_freshness` | `src/tasks/feast_tracking.py` from the three Feast beat tasks | live — worker_medium `analytics` (6 h / 4 h / weekly) |
 | `ml_hpo_studies`, `ml_hpo_trials` | `OptunaOptimizer.save_to_database` from the HPO tuner node | live — wherever `MLFoundationPipeline` runs |
 | `estimator_evaluations` | `EnergyScoreMLflowTracker.record_evaluations` from the causal_impact estimation node | live — every energy-score selection (chat, `/api/causal`) |
-| `ml_data_quality_reports` | `DataQualityReportRepository` from data_preparer inside `MLFoundationPipeline` | scheduled — `execute_model_retraining`, re-routed to worker_medium `analytics` after measurement |
-| `ml_retraining_history` | `RetrainingHistoryRepository` via retraining_trigger / drift tasks | scheduled — daily `retraining-evaluation-daily` (quick) + routes; execution on `analytics` |
+| `ml_data_quality_reports` | `DataQualityReportRepository` from data_preparer inside `MLFoundationPipeline` | routed — `execute_model_retraining` on worker_medium `analytics` after measurement; **blocked on the worker image at the data-prep Feast gate** (see §1.5) |
+| `ml_retraining_history` | `RetrainingHistoryRepository` via retraining_trigger / drift tasks | routes only — the daily `retraining-evaluation-daily` sweep (quick) evaluates and never enqueues (no persisted cohort contract); execution on `analytics` |
 | `ml_training_runs` | `MLTrainingRunRepository` from model_trainer (real); today's rows are synthetic seed | same as the pipeline; **no real run recorded yet** |
 | `ml_feature_store` | none | roadmap stake, kept (owner decision (c)) |
 | `driver_rankings`, `feature_rankings` | none | roadmap stake, kept (owner decision (c)) |
 
 Nothing was left dark for memory: the retraining pipeline measured inside worker_medium
 at ~0.85 GB peak (n=4000, 2 HPO trials; +~75 MB at the prod cohort shape 15,209×77) —
-see the routing comment in `src/workers/celery_app.py`.
+see the routing comment in `src/workers/celery_app.py`. Two blockers the dark queue had
+hidden remain, and both are owner decisions rather than lane fixes: (1) the scheduled
+evaluation path has no committed cohort contract to trigger with — no persisted model
+record carries `data_source` + `target_outcome`, so it evaluates and logs instead of
+enqueueing a job that would fail closed; (2) the data-prep Feast gate (#556) fails closed
+on the app/worker image, where Feast cannot be imported (#307), so a table-sourced retrain
+on the worker stops at data-prep unless `ALLOW_STALE_FEAST=1` is set (the measurement set
+it) — the alternatives are extending the `file_dir` advisory carve-out to committed-table
+cohorts (no pipeline data source is Feast-served) or resolving #307.
 
 ---
 
@@ -204,10 +212,13 @@ Great Expectations validation results with six E2I quality dimensions and leakag
 data_preparer agent's Great Expectations validation inside `MLFoundationPipeline`. Its only
 scheduled executor is `execute_model_retraining`, which #2207 moved from the dark `ml` queue to
 worker_medium's `analytics` queue after measuring the pipeline inside that worker (routing
-comment in `src/workers/celery_app.py`). Rows land when a retraining job runs — an
-auto-approved critical-drift trigger from the daily `retraining-evaluation-daily` sweep, or an
-approved trigger via `/monitoring/retraining/trigger/{model_id}` — and when the tier-0 harness
-is run by hand. 0 rows on 2026-09-22.
+comment in `src/workers/celery_app.py`). Rows land when a retraining job passes data-prep:
+today that is the tier-0 harness run by hand on the host, or a trigger via
+`/monitoring/retraining/trigger/{model_id}` (with its cohort contract) once the worker image
+can pass the data-prep Feast gate — on the current image Feast is not importable (#307), the
+#556 gate fails closed, and the job is recorded as `failed` at data-prep unless
+`ALLOW_STALE_FEAST=1` is set on the worker (owner decision, see the producer census). The
+daily sweep never triggers (no cohort contract). 0 rows on 2026-09-22.
 
 ### 1.6 `ml_shap_analyses`
 
@@ -857,10 +868,14 @@ Automated retraining events triggered by monitoring alerts with before/after per
 `completed` / `failed`, real metric only). Reachable through
 `/monitoring/retraining/{evaluate,trigger}/{model_id}` and, since #2207, the daily beat
 `retraining-evaluation-daily` (01:45 UTC, `quick`), which runs `check_retraining_for_all_models`
-— evaluation only: a row is written when a decision needs no approval (drift ≥
-`auto_approve_threshold`) or a human approves via the route. The execution half runs on
-worker_medium's `analytics` queue; on the dark `ml` queue a triggered job never ran and its row
-would have stayed `pending`. 0 rows on 2026-09-22.
+— evaluation only. A row is written by a trigger, and a trigger needs the committed cohort
+contract (`data_source` + `target_outcome`) that `execute_model_retraining` fails closed
+without; no persisted model record carries one, so the daily sweep logs its decision and never
+enqueues (it used to write a `pending` row for a job that could only fail). Rows therefore land
+from `/monitoring/retraining/trigger/{model_id}` with the contract. The execution half runs on
+worker_medium's `analytics` queue (on the dark `ml` queue a triggered job never ran and its row
+stayed `pending`); on the current worker image it stops at the data-prep Feast gate and the row
+goes `failed` with that reason (see §1.5). 0 rows on 2026-09-22.
 
 ### 7.6 `health_check_history` (migration 096)
 

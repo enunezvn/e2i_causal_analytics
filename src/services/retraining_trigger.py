@@ -640,9 +640,24 @@ def get_retraining_trigger_service(
 # =============================================================================
 
 
+REQUIRED_COHORT_CONTRACT_KEYS = ("data_source", "target_outcome")
+
+
+def has_cohort_contract(cohort: Optional[Dict[str, Any]]) -> bool:
+    """True when ``cohort`` names what ``execute_model_retraining`` requires (#2207).
+
+    A live retrain must name the committed cohort batch/table (``data_source``) and
+    the prediction target (``target_outcome``) — ``_cohort_input_from_training_config``
+    in drift_monitoring_tasks fails loud without them.
+    """
+    return bool(cohort) and all(cohort.get(k) for k in REQUIRED_COHORT_CONTRACT_KEYS)
+
+
 async def evaluate_and_trigger_retraining(
     model_version: str,
     auto_approve: bool = False,
+    *,
+    cohort: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Evaluate and trigger retraining for a model (Celery task helper).
@@ -650,6 +665,15 @@ async def evaluate_and_trigger_retraining(
     Args:
         model_version: Model version/ID
         auto_approve: Skip approval requirement
+        cohort: The committed cohort contract (``data_source`` + ``target_outcome``,
+            optional ``brand`` / ``feature_manifest_source``) a triggered job retrains
+            on. #2207: without it NO job is enqueued — ``execute_model_retraining``
+            fails closed on a contract that lacks it, so triggering here used to
+            write a ``pending`` ml_retraining_history row for a job that could only
+            fail. No persisted model record carries this identity (ml_model_registry
+            has no data_source column; ml_experiments holds prediction_target/brand
+            only), so the scheduled sweep evaluates and reports; a trigger with the
+            contract comes through ``/monitoring/retraining/trigger/{model_id}``.
 
     Returns:
         Evaluation and trigger results
@@ -671,15 +695,29 @@ async def evaluate_and_trigger_retraining(
     }
 
     # Trigger if appropriate
-    if (
+    wants_trigger = bool(
         decision.should_retrain
         and (not decision.requires_approval or auto_approve)
         and decision.reason
-    ):
+    )
+    if wants_trigger and not has_cohort_contract(cohort):
+        logger.warning(
+            "Retraining recommended for %s (%s, drift=%.2f) but no committed cohort "
+            "contract is known for it — not enqueueing a job that would fail closed. "
+            "Trigger it with data_source + target_outcome via "
+            "/monitoring/retraining/trigger/{model_id}.",
+            model_version,
+            decision.reason.value if decision.reason else None,
+            decision.drift_score,
+        )
+        result["retraining_triggered"] = False
+        result["retraining_blocked_reason"] = "no_cohort_contract"
+    elif wants_trigger and decision.reason:
         job = await service.trigger_retraining(
             model_version=model_version,
             reason=decision.reason,
             approved_by="auto" if auto_approve else None,
+            cohort=cohort,
         )
         result["retraining_triggered"] = True
         result["job_id"] = job.job_id
