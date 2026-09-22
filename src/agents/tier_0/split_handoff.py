@@ -17,13 +17,17 @@ after every data_preparer node, including leakage remediation; the transformer's
 
 - the target, the caller's ``drop_columns`` (entity / date columns, the scope's
   ``excluded_features``) and datetime dtypes;
-- identifier-like columns: named ``id`` / ``*_id`` / ``*_hash`` / ``*_uuid``, the split
-  bookkeeping columns (``data_split``, ``split_config_id``, ``split_id``), and object
-  columns whose distinct-value ratio exceeds ``IDENTIFIER_CARDINALITY_RATIO`` on the
-  train frame (codex r2 HIGH-2: the trainer's preprocessor leaves high-cardinality
-  strings untouched, which fails the estimator or leaks identifiers). The scope's
-  ``required_features`` is NOT used as an allowlist: without caller-supplied
-  candidates it is a placeholder list (``scope_builder._define_required_features``).
+- identifier-like columns: named ``id`` / ``*_id`` / ``*_hash`` / ``*_uuid`` and the
+  split bookkeeping columns (``data_split``, ``split_config_id``, ``split_id``);
+- every column the trainer's preprocessor would NOT encode and would pass through raw
+  (``model_trainer.nodes.preprocessor._detect_feature_types``: numeric kept; object /
+  Categorical kept only with ``nunique <= TRAINER_MAX_CATEGORIES`` (50); anything else —
+  ``StringDtype``, high-cardinality strings, datetimes — is passthrough and fails the
+  estimator or leaks identifiers, codex r2 HIGH-2 / r3 HIGH-3). Object columns whose
+  distinct-value ratio exceeds ``IDENTIFIER_CARDINALITY_RATIO`` are dropped as
+  identifiers even under the absolute cutoff. The scope's ``required_features`` is NOT
+  used as an allowlist: without caller-supplied candidates it is a placeholder list
+  (``scope_builder._define_required_features``).
 
 Categorical columns are left in: ``model_trainer.nodes.preprocessor`` one-hot encodes
 them. Every split gets a DISJOINT RangeIndex (codex r2 MED-3): the loaders reset each
@@ -58,6 +62,9 @@ _FRAME_FOR_SPLIT = {
 _SPLIT_BOOKKEEPING = {"data_split", "split_config_id", "split_id"}
 _IDENTIFIER_SUFFIXES = ("_id", "_hash", "_uuid")
 IDENTIFIER_CARDINALITY_RATIO = 0.5
+# model_trainer.nodes.preprocessor._detect_feature_types: object/Categorical columns with
+# more distinct values than this are neither encoded nor scaled — they pass through raw.
+TRAINER_MAX_CATEGORIES = 50
 
 
 def _empty_split() -> Dict[str, Any]:
@@ -84,19 +91,29 @@ def feature_columns_to_drop(
     ]
     named_ids = [c for c in train_df.columns if _looks_like_identifier(c)]
     n = max(len(train_df), 1)
-    high_cardinality = [
-        c
-        for c in train_df.columns
-        if train_df[c].dtype == object
-        and c not in named_ids
-        and train_df[c].nunique(dropna=True) / n > IDENTIFIER_CARDINALITY_RATIO
-    ]
+    high_cardinality: List[str] = []
+    unsupported: List[str] = []
+    for c in train_df.columns:
+        if c == target_column or c in named_ids or c in datetime_cols:
+            continue
+        s = train_df[c]
+        if pd.api.types.is_bool_dtype(s) or pd.api.types.is_numeric_dtype(s):
+            continue
+        is_trainer_categorical = pd.api.types.is_object_dtype(s) or isinstance(
+            s.dtype, pd.CategoricalDtype
+        )
+        n_unique = s.nunique(dropna=True)
+        if not is_trainer_categorical:
+            unsupported.append(c)  # StringDtype & co: the preprocessor passes them through raw
+        elif n_unique > TRAINER_MAX_CATEGORIES or n_unique / n > IDENTIFIER_CARDINALITY_RATIO:
+            high_cardinality.append(c)
     return {
         "target": [target_column],
         "explicit": explicit,
         "datetime": datetime_cols,
         "identifier_named": named_ids,
         "identifier_cardinality": high_cardinality,
+        "unsupported_dtype": unsupported,
     }
 
 
@@ -173,6 +190,7 @@ def preloaded_splits(input_data: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
 __all__ = [
     "IDENTIFIER_CARDINALITY_RATIO",
     "SPLIT_KEYS",
+    "TRAINER_MAX_CATEGORIES",
     "feature_columns_to_drop",
     "frames_to_trainer_splits",
     "preloaded_splits",

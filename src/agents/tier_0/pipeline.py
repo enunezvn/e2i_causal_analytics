@@ -1023,8 +1023,9 @@ class MLFoundationPipeline:
         # retraining path pre-loads nothing, so without this the trainer received four
         # empty dicts and failed before training (see split_handoff).
         splits = preloaded_splits(input_data)
-        if splits is None and result.prepared_frames:
-            scope = result.scope_spec or {}
+        prepared = result.prepared_frames or {}
+        scope = result.scope_spec or {}
+        if splits is None and prepared.get("train") is not None and scope.get("prediction_target"):
             splits = frames_to_trainer_splits(
                 result.prepared_frames,
                 target_column=scope.get("prediction_target"),

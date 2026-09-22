@@ -24,6 +24,7 @@ from src.agents.tier_0.pipeline import (
 )
 from src.agents.tier_0.split_handoff import (
     SPLIT_KEYS,
+    feature_columns_to_drop,
     frames_to_trainer_splits,
     preloaded_splits,
 )
@@ -91,12 +92,61 @@ def test_identifier_like_and_high_cardinality_object_columns_are_dropped():
         }
     )
     frames = {"train": df, "validation": df.copy(), "test": df.copy(), "holdout": None}
-    plan = frames_to_trainer_splits.__globals__["feature_columns_to_drop"](df, "y")
+    plan = feature_columns_to_drop(df, "y")
     assert set(plan["identifier_named"]) == {"patient_hash", "id", "data_split"}
     assert plan["identifier_cardinality"] == ["zip_code"]
     splits = frames_to_trainer_splits(frames, "y")
     assert list(splits["train_data"]["X"].columns) == ["region", "f1"]
     assert list(splits["validation_data"]["X"].columns) == ["region", "f1"]
+
+
+@pytest.mark.unit
+def test_columns_the_trainer_preprocessor_would_pass_through_raw_are_dropped():
+    """codex r3 HIGH-3: the preprocessor encodes object/Categorical columns only up to 50
+    distinct values and never touches pandas StringDtype — anything else reaches the
+    estimator raw."""
+    n = 200
+    df = pd.DataFrame(
+        {
+            "sixty_codes": [f"c{i % 60}" for i in range(n)],  # object, 60 distinct (ratio 0.3)
+            "forty_codes": [f"c{i % 40}" for i in range(n)],  # object, 40 distinct -> kept
+            "string_dtype": pd.array([f"s{i % 3}" for i in range(n)], dtype="string"),
+            "flag": [bool(i % 2) for i in range(n)],  # bool -> kept
+            "f1": [float(i) for i in range(n)],
+            "y": [i % 2 for i in range(n)],
+        }
+    )
+    plan = feature_columns_to_drop(df, "y")
+    assert plan["identifier_cardinality"] == ["sixty_codes"]
+    assert plan["unsupported_dtype"] == ["string_dtype"]
+    splits = frames_to_trainer_splits(
+        {"train": df, "validation": df.copy(), "test": df.copy(), "holdout": None}, "y"
+    )
+    assert list(splits["train_data"]["X"].columns) == ["forty_codes", "flag", "f1"]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_training_stage_without_a_scope_target_behaves_as_before():
+    """A scope with no prediction_target (pre-existing pipeline tests' fakes) must not
+    make the stage raise — the trainer gets the caller's splits as before."""
+    pipeline = _pipeline()
+    result = _result()
+    result.scope_spec = {"problem_type": "binary_classification"}
+    result.prepared_frames = dict(FRAMES)
+    captured: Dict[str, Any] = {}
+    fake_trainer = MagicMock()
+
+    async def _run(trainer_input):
+        captured.update(trainer_input)
+        return {"validation_metrics": {}, "success_criteria_met": False}
+
+    fake_trainer.run = AsyncMock(side_effect=_run)
+    with patch.object(pipeline, "_get_agent", return_value=fake_trainer):
+        await pipeline._run_model_training(
+            input_data={"data_source": "x"}, result=result, obs_context=None
+        )
+    assert captured["train_data"] is None
 
 
 @pytest.mark.unit
@@ -256,3 +306,27 @@ async def test_training_stage_keeps_the_callers_preloaded_splits():
             input_data={"data_source": "x", **preloaded}, result=result, obs_context=None
         )
     assert captured["train_data"] is preloaded["train_data"]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_training_stage_without_prepared_frames_behaves_as_before():
+    """A data_preparer that produced no frames (every pre-existing pipeline test's fake
+    does this) must not make the training stage raise — the trainer gets the caller's
+    (absent) splits exactly as before."""
+    pipeline = _pipeline()
+    result = _result()
+    result.prepared_frames = {"train": None, "validation": None, "test": None, "holdout": None}
+    captured: Dict[str, Any] = {}
+    fake_trainer = MagicMock()
+
+    async def _run(trainer_input):
+        captured.update(trainer_input)
+        return {"validation_metrics": {}, "success_criteria_met": False}
+
+    fake_trainer.run = AsyncMock(side_effect=_run)
+    with patch.object(pipeline, "_get_agent", return_value=fake_trainer):
+        await pipeline._run_model_training(
+            input_data={"data_source": "x"}, result=result, obs_context=None
+        )
+    assert captured["train_data"] is None
