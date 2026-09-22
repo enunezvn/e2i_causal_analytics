@@ -156,7 +156,12 @@ def _draw_baseline_covariates(n: int, rng: np.random.Generator) -> Dict[str, np.
     for col, (levels, probs) in _CATEGORICAL_LEVELS.items():
         cov[col] = rng.choice(levels, size=n, p=probs).astype(object)
     region_null = rng.random(n) < _REGION_NULL_SHARE
-    cov["geographic_region"] = np.where(region_null, None, cov["geographic_region"])
+    # ``np.full(..., None, dtype=object)`` rather than a bare ``None``: numpy's
+    # ``where`` stub only accepts ArrayLike branches; the produced object
+    # column (None for the null share) is identical.
+    cov["geographic_region"] = np.where(
+        region_null, np.full(n, None, dtype=object), cov["geographic_region"]
+    )
     cov["health_exchange_flag"] = rng.binomial(1, 0.06, n)
     cov["lis_dual_flag"] = rng.binomial(1, 0.09, n)
     cov["enrollment_duration_days"] = rng.integers(365, 3650, n)
@@ -287,7 +292,11 @@ def generate_csu_escalation_cohort(
             "patient_id": patient_id,
             "patient_journey_id": np.array([f"PJ_SYN_{i:09d}" for i in ids]),
             "patient_hash": np.array(
-                [hashlib.sha1(p.encode()).hexdigest()[:16] for p in patient_id]
+                [
+                    # a synthetic-cohort join key, not a security hash (Bandit B324)
+                    hashlib.sha1(p.encode(), usedforsecurity=False).hexdigest()[:16]
+                    for p in patient_id
+                ]
             ),
             "index_date": index_date.date,
             "journey_start_date": index_date.date,
