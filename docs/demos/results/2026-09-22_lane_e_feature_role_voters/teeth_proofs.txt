@@ -9,3 +9,23 @@ PLANT 3  src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py
 
 restore check: sha256 (first 16 hex) before/after — feature_role_panel 53c0c7676f3f1f3d, graph_builder 17fa2dc794de12ec, adaptive_validity_check 5cab75699b5582d7 (identical)
 green state before planting: 23 passed (lane_e_green_A4_unlocked.out), 38 passed (activation/packaging/graph_builder), 98 passed of the pre-existing sidecar/byte-identity files in run A
+
+## Verifier round (after codex r4) — plants run 2026-09-22T17:05Z, one box-lock session, sha256-verified restores
+
+MED-1 reproduction on the OLD test (plant: route (T,Y) mismatch check -> 'if False and (...)'): 1 passed, 10 deselected — false green confirmed.
+
+== B: forwarding tests, rebuilt
+Tue Sep 22 16:56:00 UTC 2026
+== C: MED-1 plant (route mismatch check -> if False and)
+plant landed: 1
+FAILED tests/unit/test_agents/test_causal_impact/test_agent_forwards_feature_role_panel.py::test_submit_refuses_a_panel_built_for_another_question
+src/api/routes/causal/agent.py: OK
+== D: MED-2 plant (declared-safe pre-joint-high features also leak)
+plant landed: 1
+FAILED tests/unit/test_causal_engine/test_feature_role_panel/test_panel.py::test_declared_safe_covariates_are_never_leak_verdicts
+FAILED tests/unit/test_causal_engine/test_feature_role_panel/test_panel.py::test_layer_activity_counts_and_abstain_rate
+FAILED tests/unit/test_causal_engine/test_feature_role_panel/test_panel.py::test_raw_payload_validation_is_strict_not_coercive
+src/causal_engine/feature_role_panel.py: OK
+== done
+
+Final: test_panel.py 18 passed (run3); the nine-file confirmation set 243 passed + this file (run2).

@@ -62,8 +62,11 @@ _INDEX = KnowableAt(reference="index_date")
 # resolved live against UMLS UTS / the ICD10CM crosswalk before it was written
 # here (``docs/demos/results/2026-09-22_lane_e_feature_role_voters/
 # umls_code_verification.txt``): one candidate CUI was a UTS 404 (C0042990) and
-# two mapped to the wrong concept (C0522224 "Paralysed", a Finding; I38 ->
-# "Valvular regurgitation"); those are deliberately absent. Scores, counts,
+# two mapped to the wrong concept (C0522224 "Paralysed", a symptom, not the
+# Elixhauser paralysis disease concept; I38 -> "Valvular regurgitation"); those
+# are deliberately absent. The criterion is "names the intended concept", not the
+# UMLS semantic type (C1262477 "Weight Loss" is a Finding and is the intended
+# Elixhauser concept, so it stays). Scores, counts,
 # risk bands and demographics are not disease concepts and carry no codes.
 MART_COMORBIDITY_KG_CODES: dict[str, tuple[tuple[str, str], ...]] = {
     "cci_mi": (("ICD10CM", "I21.9"), ("UMLS", "C0027051")),
