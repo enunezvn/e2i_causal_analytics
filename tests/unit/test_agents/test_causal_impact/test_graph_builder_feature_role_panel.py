@@ -138,7 +138,7 @@ class TestDeriveConfounderChannels:
         assert ch.modeled_confounders == ["c1"]
         assert ch.anchored_confounders == ["c1"]
         assert ch.instruments == ["z"]
-        assert [r for r in ch.removed] == [
+        assert list(ch.removed) == [
             ("c2", "approved_mediator"),
             ("post_dx", "approved_collider"),
             ("z", "approved_instrument"),
