@@ -32,9 +32,15 @@ def matches(pattern: str, rel_path: str) -> bool:
     pattern = pattern.rstrip("/")
     if not pattern:
         return False
-    # `**` spans separators; `*` does not.
-    regex = re.escape(pattern).replace(r"\*\*", "\x00").replace(r"\*", "[^/]*")
-    regex = regex.replace("\x00", ".*").replace(r"\?", "[^/]")
+    # `**/` (moby's compiler) matches ZERO OR MORE whole path segments, so it must
+    # translate to an OPTIONAL group — `(.*/)?` — not a bare `.*` followed by a
+    # required literal `/`, otherwise a pattern like `**/*.json` would wrongly fail
+    # to match a root-level `root.json` (no directory to consume). A bare `**` not
+    # followed by `/` (e.g. a trailing `data/kg_cache/**`) has no such zero-segment
+    # case and stays `.*`. `*` (single star) never spans a `/`.
+    regex = re.escape(pattern)
+    regex = regex.replace(r"\*\*/", "\x00").replace(r"\*\*", "\x01").replace(r"\*", "[^/]*")
+    regex = regex.replace("\x00", "(.*/)?").replace("\x01", ".*").replace(r"\?", "[^/]")
     if re.fullmatch(regex, rel_path):
         return True
     # A directory pattern also covers everything beneath it.

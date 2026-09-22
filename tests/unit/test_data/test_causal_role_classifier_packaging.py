@@ -72,6 +72,10 @@ def test_matcher_models_docker_root_only_semantics_for_slashless_patterns() -> N
     assert not matches("*.json", "artifacts/dspy/causal_role_classifier.json")
     assert matches("**/*.json", "artifacts/dspy/causal_role_classifier.json")
     assert matches("artifacts", "artifacts/dspy/causal_role_classifier.json")
+    # `**/` (moby's compiler) matches ZERO OR MORE path segments, so it must also
+    # match a root-level file with no directory to consume — a leading `**/*.json`
+    # covers `root.json` exactly like a bare `*.json` would.
+    assert matches("**/*.json", "root.json")
 
 
 def test_dockerfile_copies_the_artifact_into_every_app_stage() -> None:
@@ -92,12 +96,22 @@ def test_dockerfile_copies_the_artifact_into_every_app_stage() -> None:
 
 
 def test_the_copy_lands_where_the_loader_looks() -> None:
-    """`COPY <src> ./artifacts/dspy/` must place the file at /app/artifacts/dspy/…"""
+    """`COPY <src> ./artifacts/dspy/` must place the file at /app/artifacts/dspy/…
+
+    Collects the matching lines FIRST and asserts the collection is non-empty before
+    checking destinations: a bare `for ln in ...: assert ...` loop passes vacuously
+    when there are zero matching lines (proven — deleting both COPY lines left only
+    the count-based test failing; see the PR description for that output)."""
     text = _DOCKERFILE.read_text()
-    for ln in text.splitlines():
-        if ln.startswith("COPY") and "causal_role_classifier.json" in ln:
-            dest = ln.split()[-1]
-            assert dest in ("./artifacts/dspy/", "./artifacts/dspy/causal_role_classifier.json"), (
-                f"COPY destination {dest!r} does not match the loader's "
-                f"PROJECT_ROOT/artifacts/dspy/ layout"
-            )
+    copies = [
+        ln
+        for ln in text.splitlines()
+        if ln.startswith("COPY") and "causal_role_classifier.json" in ln
+    ]
+    assert copies, "no COPY of the artifact found in docker/Dockerfile"
+    for ln in copies:
+        dest = ln.split()[-1]
+        assert dest in ("./artifacts/dspy/", "./artifacts/dspy/causal_role_classifier.json"), (
+            f"COPY destination {dest!r} does not match the loader's "
+            f"PROJECT_ROOT/artifacts/dspy/ layout"
+        )
