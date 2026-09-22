@@ -431,6 +431,14 @@ export const queryKeys = {
         params?.offset ?? 0,
       ] as const,
     health: () => [...queryKeys.digitalTwin.all(), 'health'] as const,
+    // The trained-model census (#2206): shared-fit + fidelity honesty fields.
+    models: (params?: { brand?: string; twin_type?: string }) =>
+      [
+        ...queryKeys.digitalTwin.all(),
+        'models',
+        params?.brand ?? 'all',
+        params?.twin_type ?? 'all',
+      ] as const,
     // Brand-aware availability is folded into the key so switching brands
     // refetches (and does not collide with another brand's cached result).
     interventionTypes: (params?: { brand?: string; twin_type?: string }) =>
@@ -440,6 +448,10 @@ export const queryKeys = {
         params?.brand ?? null,
         params?.twin_type ?? 'hcp',
       ] as const,
+    // Twin simulations proposing an experiment (#2206); brand folded in so a
+    // brand filter does not collide with the all-brands read.
+    proposedExperiments: (params?: { brand?: string }) =>
+      [...queryKeys.digitalTwin.all(), 'proposed-experiments', params?.brand ?? 'all'] as const,
   },
 
   /**

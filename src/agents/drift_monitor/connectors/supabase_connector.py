@@ -500,18 +500,34 @@ class SupabaseDataConnector(BaseDataConnector):
             # 6-hourly sweep (2026-07-04: 10,080 alerts in one morning). Drift
             # monitoring is about the operational health of REAL models; the
             # showcase env flag must not widen its scope.
-            query = (
-                self._client.table("ml_model_registry")
-                .select("id, model_name, model_version, stage, registered_at")
-                .eq("is_synthetic", False)
-            )
+            #
+            # #2207: the projection also carries the per-model cohort contract
+            # (migration 150) the retraining sweep passes to evaluate_retraining_need.
+            # The 6-hourly drift sweep shares this call, so a schema that predates
+            # 150 must not blank it: on a failed wide select, retry the narrow one.
+            def _select(columns: str) -> Any:
+                query = (
+                    self._client.table("ml_model_registry")
+                    .select(columns)
+                    .eq("is_synthetic", False)
+                )
+                if stages:
+                    query = query.in_("stage", stages)
+                elif stage:
+                    query = query.eq("stage", stage)
+                return query.order("registered_at", desc=True).execute()
 
-            if stages:
-                query = query.in_("stage", stages)
-            elif stage:
-                query = query.eq("stage", stage)
-
-            response = query.order("registered_at", desc=True).execute()
+            base = "id, model_name, model_version, stage, registered_at"
+            contract = "cohort_data_source, cohort_target_outcome, cohort_feature_manifest_source"
+            try:
+                response = _select(f"{base}, {contract}")
+            except Exception as wide_error:
+                logger.warning(
+                    "ml_model_registry cohort-contract columns unavailable (%s); "
+                    "falling back to the base projection (migration 150 not applied?)",
+                    wide_error,
+                )
+                response = _select(base)
 
             if response.data:
                 return response.data  # type: ignore[no-any-return]

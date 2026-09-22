@@ -561,13 +561,36 @@ class TestFidelityWarnings:
         assert result.fidelity_warning is False
         assert result.fidelity_warning_reason is None
 
-    def test_no_fidelity_warning_no_score(self, sample_population, email_campaign_config):
-        """Test no fidelity warning when score is not set."""
+    def test_null_fidelity_is_reported_unvalidated_not_passed(
+        self, sample_population, email_campaign_config
+    ):
+        """#2206: no score means no experiment outcome was ever compared against the
+        model. That is UNVALIDATED and must warn — it must not read as "passed"."""
+        from src.digital_twin.models.simulation_models import FidelityStatus
+
         engine = _fast_engine(sample_population)  # No fidelity score
 
         result = engine.simulate(email_campaign_config)
 
-        assert result.fidelity_warning is False
+        assert result.fidelity_status is FidelityStatus.UNVALIDATED
+        assert result.fidelity_warning is True
+        assert "unvalidated" in (result.fidelity_warning_reason or "").lower()
+        assert result.model_fidelity_score is None
+
+    def test_fidelity_status_is_explicit_on_both_sides_of_the_gate(
+        self, sample_population, email_campaign_config
+    ):
+        from src.digital_twin.models.simulation_models import FidelityStatus
+
+        low = _fast_engine(sample_population, model_fidelity_score=0.55).simulate(
+            email_campaign_config
+        )
+        assert low.fidelity_status is FidelityStatus.BELOW_THRESHOLD
+        good = _fast_engine(sample_population, model_fidelity_score=0.85).simulate(
+            email_campaign_config
+        )
+        assert good.fidelity_status is FidelityStatus.VALIDATED
+        assert good.fidelity_warning is False
 
 
 # =============================================================================
@@ -652,12 +675,19 @@ class TestConfidenceScore:
         )
 
     @staticmethod
-    def _confidence(n_twins: int, n_train: int, email_campaign_config) -> float:
+    def _confidence(
+        n_twins: int,
+        n_train: int,
+        email_campaign_config,
+        *,
+        model_fidelity_score: float | None = 0.8,
+    ) -> float:
         """simulation_confidence for ``n_twins`` twins scored by a FIXED estimate.
 
         The stub estimator returns the same ATE / CI (so the same std_error) whatever the
         twin count and reports ``n_train`` as the rows it fit on; every input to the
-        confidence heuristic except the twin count and ``n_train`` is therefore held.
+        confidence heuristic except the twin count, ``n_train`` and the model's fidelity
+        score is therefore held.
         """
         from src.digital_twin.effect.estimate import PROVENANCE_COHORT, EffectEstimate
 
@@ -682,7 +712,7 @@ class TestConfidenceScore:
             TestConfidenceScore._population(n_twins),
             effect_provider=SyntheticEffectDataProvider(n=300, true_ate=0.15, seed=42),
             effect_estimator=_FixedEstimator(),  # type: ignore[arg-type]
-            model_fidelity_score=0.8,
+            model_fidelity_score=model_fidelity_score,
         )
         result = engine.simulate(
             email_campaign_config, calculate_heterogeneity=False, use_cache=False
@@ -712,6 +742,69 @@ class TestConfidenceScore:
 
         assert at_200 < at_1000
         assert at_1000 == at_5000
+
+    # -- #2206 owner fix: an UNVALIDATED model contributes no fidelity term ----------------
+
+    def test_unvalidated_model_does_not_score_like_a_barely_validated_one(
+        self, email_campaign_config
+    ):
+        """The old blend imputed 0.7 — exactly FIDELITY_WARNING_THRESHOLD — for a NULL
+        score, so an unvalidated model was numerically indistinguishable from one that
+        had just passed validation. ``classify_fidelity`` says a NULL "must not read as
+        passed"; the number must agree with the status."""
+        unvalidated = self._confidence(100, 800, email_campaign_config, model_fidelity_score=None)
+        barely_validated = self._confidence(
+            100, 800, email_campaign_config, model_fidelity_score=0.7
+        )
+
+        assert unvalidated != barely_validated
+
+    def test_unvalidated_run_is_scored_on_its_evidence_alone(self, email_campaign_config):
+        """With no fidelity measurement the fidelity term is DROPPED and the evidence and
+        precision weights renormalised (0.5 / 0.5) — not imputed. The stub's fixed CI
+        (0.10-0.20 around 0.15) gives the precision term; n_train sets the evidence term.
+        Expected values are computed from CONFIDENCE_WEIGHTS so the pin follows the
+        weights, not a magic number."""
+        from src.digital_twin.simulation_engine import CONFIDENCE_N_SATURATION, CONFIDENCE_WEIGHTS
+
+        std_error = (0.20 - 0.10) / (2 * 1.96)
+        precision = max(0.0, 1 - std_error / (0.15 + 0.001))
+        w_e, w_p = CONFIDENCE_WEIGHTS["evidence"], CONFIDENCE_WEIGHTS["precision"]
+        for n_train in (200, 800, 5000):
+            evidence = min(1.0, n_train / CONFIDENCE_N_SATURATION)
+            expected = (w_e * evidence + w_p * precision) / (w_e + w_p)
+            observed = self._confidence(
+                100, n_train, email_campaign_config, model_fidelity_score=None
+            )
+            assert observed == pytest.approx(expected, abs=1e-9), n_train
+
+    def test_unvalidated_run_with_strong_evidence_can_exceed_the_threshold(
+        self, email_campaign_config
+    ):
+        """Scoring the missing term 0.0 would hard-cap an unvalidated run at 0.6 even with
+        perfect evidence — asserting the model is known-bad, which is as unmeasured as
+        asserting it is fine. Renormalising lets strong evidence read as strong."""
+        assert self._confidence(100, 5000, email_campaign_config, model_fidelity_score=None) > 0.6
+
+    def test_measured_score_still_uses_the_three_term_blend(self, email_campaign_config):
+        """Once fidelity IS measured it enters at its weight: a higher score raises
+        confidence, and the value is the documented 0.3 / 0.3 / 0.4 blend."""
+        from src.digital_twin.simulation_engine import CONFIDENCE_N_SATURATION, CONFIDENCE_WEIGHTS
+
+        std_error = (0.20 - 0.10) / (2 * 1.96)
+        precision = max(0.0, 1 - std_error / (0.15 + 0.001))
+        evidence = min(1.0, 800 / CONFIDENCE_N_SATURATION)
+        at_08 = self._confidence(100, 800, email_campaign_config, model_fidelity_score=0.8)
+        at_07 = self._confidence(100, 800, email_campaign_config, model_fidelity_score=0.7)
+
+        assert at_08 > at_07
+        assert at_08 == pytest.approx(
+            CONFIDENCE_WEIGHTS["evidence"] * evidence
+            + CONFIDENCE_WEIGHTS["precision"] * precision
+            + CONFIDENCE_WEIGHTS["fidelity"] * 0.8,
+            abs=1e-9,
+        )
+        assert CONFIDENCE_WEIGHTS == {"evidence": 0.3, "precision": 0.3, "fidelity": 0.4}
 
 
 # =============================================================================

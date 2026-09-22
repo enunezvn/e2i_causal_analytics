@@ -967,6 +967,7 @@ async def _persist_model_registry_row(
     registered_model_name: str,
     model_version: int,
     validation_metrics: Any,
+    cohort: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """Write (idempotently) a REAL ``ml_model_registry`` row; return its id (str).
 
@@ -976,6 +977,10 @@ async def _persist_model_registry_row(
     ``hyperparameters``. NEVER fabricates an ``algorithm`` or a registry id.
     Mirrors ``model_trainer``'s ``get_by_mlflow_id`` experiment resolution so
     the deployer and trainer agree on what "the experiment" is.
+
+    ``cohort`` (#2207, migration 150): data_source / target_outcome /
+    feature_manifest_source — written on the new row, healed onto a reused row's
+    NULL columns (never overwritten).
     """
     if client is None:
         logger.error(
@@ -989,12 +994,11 @@ async def _persist_model_registry_row(
         MLModelRegistryRepository,
         MLTrainingRunRepository,
     )
+    from src.services.cohort_contract import heal_registry_cohort_contract
 
-    # 1. Resolve the real ml_experiments UUID. The tier-0 pipeline threads the
-    #    ``mlflow_experiment_id`` STRING as ``experiment_id`` (scope_definer set
-    #    it at create_experiment time); resolve it to the UUID FK exactly as
-    #    model_trainer does (agent.py get_by_mlflow_id). Fail closed if it does
-    #    not resolve — do NOT register an experiment-less model.
+    # 1. Resolve the real ml_experiments UUID: the tier-0 pipeline threads the
+    #    ``mlflow_experiment_id`` STRING as ``experiment_id``; resolve it exactly as
+    #    model_trainer does (get_by_mlflow_id). Unresolved => fail closed.
     exp_repo = MLExperimentRepository(supabase_client=client)
     experiment = await exp_repo.get_by_mlflow_id(experiment_id_str) if experiment_id_str else None
     if not (experiment and experiment.id):
@@ -1011,13 +1015,11 @@ async def _persist_model_registry_row(
     run_repo = MLTrainingRunRepository(supabase_client=client)
 
     # 2. Validate the EXACT run a ``runs:/<run_id>/...`` URI pins — BEFORE any
-    #    idempotent reuse. The pinned run MUST exist AND belong to the resolved
-    #    experiment, else FAIL CLOSED. Running this first is what makes the
-    #    exact-run requirement unbypassable: a pre-existing same name+version row
-    #    (especially one whose ``mlflow_run_id`` is NULL) must NOT let an
-    #    absent/foreign pinned run be silently reused. A ``models:/`` URI pins no
-    #    run (``run_id`` is None) — the experiment's best run is resolved below as
-    #    the honest, experiment-scoped source.
+    #    idempotent reuse, so a pre-existing same name+version row (even one whose
+    #    ``mlflow_run_id`` is NULL) can never let an absent/foreign pinned run be
+    #    reused: it must exist AND belong to the resolved experiment, else FAIL
+    #    CLOSED. A ``models:/`` URI pins no run — the experiment's best run is
+    #    resolved below as the honest, experiment-scoped source.
     pinned_run = None
     if run_id:
         candidate = await run_repo.get_by_mlflow_run_id(run_id)
@@ -1043,18 +1045,13 @@ async def _persist_model_registry_row(
             return None
         pinned_run = candidate
 
-    # 3. Idempotency: ml_model_registry has UNIQUE(model_name, model_version). A
-    #    re-deploy of the SAME model must reuse the existing row, not crash on the
-    #    unique violation. Provenance guards, in order:
-    #      - a same-name+version row from a DIFFERENT experiment is a real
-    #        collision (NOT our row) => fail closed;
-    #      - a row in THIS experiment registered from a DIFFERENT run than the one
-    #        this deployment pins (both run ids known and unequal) is a different
-    #        model artifact under the same name+version => fail closed.
-    #    A missing run id on EITHER side is NOT a conflict (avoids false fail-close
-    #    on legitimate ``models:/`` re-deploys) — same name+version+experiment is
-    #    sufficient identity then, and the pinned-run existence was already proven
-    #    in step 2.
+    # 3. Idempotency: ml_model_registry has UNIQUE(model_name, model_version); a
+    #    re-deploy of the SAME model reuses the row. Provenance guards: a same
+    #    name+version row from a DIFFERENT experiment is a collision => fail closed;
+    #    a row in THIS experiment from a DIFFERENT run than the one pinned here
+    #    (both run ids known, unequal) is a different artifact => fail closed. A
+    #    missing run id on either side is NOT a conflict (legitimate ``models:/``
+    #    re-deploys) — name+version+experiment suffice; step 2 proved the pinned run.
     registry_repo = MLModelRegistryRepository(supabase_client=client)
     existing = await registry_repo.get_by_name_version(registered_model_name, str(model_version))
     if existing and existing.id:
@@ -1088,13 +1085,13 @@ async def _persist_model_registry_row(
             experiment.id,
             existing.id,
         )
+        if cohort:  # #2207: heal NULL contract columns on the reused row
+            await heal_registry_cohort_contract(client, str(existing.id), cohort)
         return str(existing.id)
 
     # 4. Source the NOT-NULL ``algorithm`` + ``hyperparameters`` from the REAL
-    #    training run: the validated pinned run for ``runs:/`` URIs, else the
-    #    experiment's best run for ``models:/`` URIs (no specific run was pinned).
-    #    No run / no algorithm => fail closed (refuse to invent an algorithm for a
-    #    NOT-NULL column).
+    #    training run (the pinned run for ``runs:/``, else the experiment's best run
+    #    for ``models:/``). No run / no algorithm => fail closed (never invented).
     run = pinned_run if pinned_run is not None else await run_repo.get_best_run(experiment.id)
     if run is None or not run.algorithm:
         logger.error(
@@ -1105,10 +1102,8 @@ async def _persist_model_registry_row(
         )
         return None
 
-    # 4. Write the row. ``metrics`` filtered to present values: the registry
-    #    metric columns are nullable and ``register_model`` reads
-    #    ``metrics.get(key)`` so omitted keys become NULL — this keeps the type a
-    #    clean ``dict[str, float]`` and never fabricates a metric.
+    # 4. Write the row. ``metrics`` filtered to present values (nullable columns;
+    #    omitted keys become NULL — never a fabricated metric).
     metrics = {
         k: v for k, v in _metrics_to_registry_dict(validation_metrics).items() if v is not None
     }
@@ -1122,13 +1117,14 @@ async def _persist_model_registry_row(
             algorithm=run.algorithm,
             hyperparameters=run.hyperparameters or {},
             metrics=metrics,
+            cohort_data_source=(cohort or {}).get("data_source"),
+            cohort_target_outcome=(cohort or {}).get("target_outcome"),
+            cohort_feature_manifest_source=(cohort or {}).get("feature_manifest_source"),
         )
     except Exception as e:
         # Only a genuine UNIQUE(model_name, model_version) violation is a benign
-        # race (the pre-check missed a concurrent writer). Re-resolve and reuse
-        # ONLY if the now-existing row belongs to THIS experiment. Any other
-        # insert error — or a foreign-provenance collision — fails closed; we
-        # never return a foreign row's id as success.
+        # race (the pre-check missed a concurrent writer): re-resolve and reuse ONLY
+        # a row of THIS experiment; anything else fails closed (never a foreign id).
         err = str(e).lower()
         is_unique = "23505" in err or "unique" in err or "duplicate key" in err
         if is_unique:
@@ -1169,9 +1165,8 @@ async def _persist_model_registry_row(
         )
         return None
 
-    # 4. Confirm DB-backed: register_model() returns a prebuilt in-memory
-    #    MLModelRegistry(id=uuid4()) when no row was inserted (no client / no
-    #    returned rows), so a truthy id is NOT proof of a write. Re-read it.
+    # 4. Confirm DB-backed: register_model() returns an in-memory row (id=uuid4())
+    #    when nothing was inserted, so a truthy id is NOT proof of a write. Re-read.
     confirmed = await registry_repo.get_by_id(str(model.id)) if model and model.id else None
     if confirmed is None:
         logger.error(
@@ -1189,6 +1184,20 @@ async def _persist_model_registry_row(
         experiment.id,
     )
     return str(model.id)
+
+
+def _cohort_contract_from_state(state: Any) -> Dict[str, Any]:
+    """The #2207 cohort contract the deployer state carries (None-free): the pipeline's
+    ``data_source`` / ``target_outcome`` (via ``ModelDeployerAgent.run``) and the
+    RESOLVED manifest source (flat field, else ``scope_spec``)."""
+    scope_spec = state.get("scope_spec") or {}
+    manifest = state.get("feature_manifest_source") or scope_spec.get("feature_manifest_source")
+    fields = {
+        "data_source": state.get("data_source"),
+        "target_outcome": state.get("target_outcome"),
+        "feature_manifest_source": manifest,
+    }
+    return {k: v for k, v in fields.items() if v is not None}
 
 
 async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -1224,13 +1233,9 @@ async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
             model_uri, deployment_name
         )
 
-        # F4 (audit): capture whether the REAL MLflow registration succeeded
-        # BEFORE the simulation fallback overwrites ``registered_model_name``.
-        # The prior code computed ``mlflow_available`` after the fallback (so it
-        # was always True) and hardcoded ``registration_successful=True`` even
-        # when simulated — fabricating success while ``ml_model_registry`` stayed
-        # empty. The simulation fallback is an intentional dev pattern (commit
-        # 214890aa); we KEEP its values for dev inspection but report the truth.
+        # F4 (audit): capture whether the REAL MLflow registration succeeded BEFORE
+        # the simulation fallback (an intentional dev pattern, commit 214890aa)
+        # overwrites ``registered_model_name`` — the prior code fabricated success.
         mlflow_succeeded = registered_model_name is not None
 
         # Fall back to simulation if MLflow unavailable
@@ -1245,13 +1250,10 @@ async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
             model_version = 1
             current_stage = "None"
 
-        # F4 follow-up (#829): on a REAL MLflow registration, write the
-        # ``ml_model_registry`` row and surface its id so ``_store_to_database``
-        # can FK the ``ml_deployments`` row. A SIMULATED registration is NOT a
-        # real registry write (consistent with ``registration_successful=False``)
-        # so it never produces an id. Persistence failures fail closed
-        # (``model_registry_id=None``) and never fail the node — the deployment
-        # row is then honestly skipped and ``db_persisted`` stays False.
+        # F4 follow-up (#829): on a REAL MLflow registration write the
+        # ``ml_model_registry`` row and surface its id for ``_store_to_database``'s
+        # ``ml_deployments`` FK. A SIMULATED registration never produces an id;
+        # persistence failures fail closed (None) and never fail the node.
         model_registry_id: Optional[str] = None
         if mlflow_succeeded and registered_model_name:
             try:
@@ -1263,6 +1265,7 @@ async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
                     registered_model_name=registered_model_name,
                     model_version=int(model_version) if model_version is not None else 1,
                     validation_metrics=state.get("validation_metrics"),
+                    cohort=_cohort_contract_from_state(state),
                 )
             except Exception as e:
                 logger.error("ml_model_registry persistence raised (fail-closed): %s", e)
@@ -1273,14 +1276,10 @@ async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
             "model_version": model_version,
             "current_stage": current_stage,
             "deployment_id": f"{registered_model_name}:v{model_version}",
-            # #773: "unhealthy" (NOT "degraded" — absent from the
-            # ModelDeployerState Literal, so LangGraph's pydantic validation
-            # raised literal_error and CRASHED the workflow on every
-            # failed/simulated registration, the opposite of #830's fail-closed
-            # intent). The graph ends right after a failed registration
-            # (_should_continue_after_registration -> "end"), nothing deploys,
-            # and no consumer distinguishes "degraded"; the truth is already in
-            # registration_successful/registration_simulated/mlflow_available.
+            # #773: "unhealthy", NOT "degraded" (absent from the ModelDeployerState
+            # Literal -> pydantic literal_error crashed the workflow on every
+            # failed/simulated registration); the graph ends after a failed
+            # registration and the truth is in registration_successful/_simulated.
             "deployment_status": "healthy" if mlflow_succeeded else "unhealthy",
             "deployed_at": datetime.now(tz=None).isoformat(),
             # Fail CLOSED: only a real MLflow registration counts as success.

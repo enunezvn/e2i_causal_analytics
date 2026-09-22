@@ -100,9 +100,12 @@ def mock_simulation_engine():
         }
         # Real response-domain value: route serialization must be proven against the
         # production contract, not MagicMock's unconstrained attribute shape (#2162).
-        from src.digital_twin.models.simulation_models import EffectHeterogeneity
+        from src.digital_twin.models.simulation_models import EffectHeterogeneity, FidelityStatus
 
         mock_result.effect_heterogeneity = EffectHeterogeneity()
+        # A real domain value again (#2206): the route maps result.fidelity_status.value
+        # into FidelityStatusEnum; the fixture's 0.88 score is a validated model.
+        mock_result.fidelity_status = FidelityStatus.VALIDATED
         mock_result.is_significant.return_value = True
         mock_result.effect_direction.return_value = "positive"
 
@@ -1940,3 +1943,579 @@ def test_no_bare_twin_repository_in_route_source():
     # A client-less ``repo = TwinRepository()`` assignment must be gone from every
     # handler (the docstring may still *mention* ``TwinRepository()`` as history).
     assert re.search(r"=\s*TwinRepository\(\s*\)", source) is None
+
+
+# =============================================================================
+# #2206 — honest surfacing: one shared synthetic fit, unvalidated fidelity
+# =============================================================================
+
+_ADMIN = {"user_id": "admin", "role": "admin"}
+
+
+def _shared_fit_row(brand: str, *, duration: float, fidelity_score=None, sample_count=0):
+    """A digital_twin_models row as prod holds it: the three brands are one seed-0
+    synthetic fit — identical metrics/config/features, only the wall-clock differs."""
+    return {
+        "model_id": str(uuid4()),
+        "model_name": f"hcp_twin_{brand}",
+        "twin_type": "hcp",
+        "brand": brand,
+        "is_active": True,
+        "created_at": datetime.now(timezone.utc),
+        "mlflow_model_uri": "models:/m-test",
+        "mlflow_run_id": "run-test",
+        "feature_columns": ["specialty", "region", "decile"],
+        "target_columns": ["outcome"],
+        "training_config": {
+            "algorithm": "random_forest",
+            "data_provenance": "synthetic",
+            "training_samples": 2000,
+            "n_estimators": 100,
+        },
+        "performance_metrics": {
+            "r2_score": 0.8104269688784731,
+            "rmse": 0.12,
+            "cv_scores": [0.8, 0.81, 0.82],
+            "feature_importances": {"specialty": 0.5, "region": 0.3, "decile": 0.2},
+            "training_samples": 2000,
+            "training_duration_seconds": duration,
+        },
+        "fidelity_score": fidelity_score,
+        "fidelity_sample_count": sample_count,
+    }
+
+
+@pytest.mark.asyncio
+async def test_list_models_states_shared_fit_and_synthetic_r2_basis(mock_twin_repository):
+    """The listing derives 'shared fit' from the rows' fit fingerprints (not a
+    hardcoded sentence), labels R² as a synthetic-target score, says brand is not a
+    feature, and reports a NULL fidelity as UNVALIDATED."""
+    from src.api.routes.digital_twin import list_models
+
+    rows = [
+        _shared_fit_row("Remibrutinib", duration=7.1),
+        _shared_fit_row("Fabhalta", duration=7.05),
+        _shared_fit_row("Kisqali", duration=7.69),
+    ]
+    mock_twin_repository.list_active_models = AsyncMock(return_value=rows)
+
+    result = await list_models(brand=None, twin_type=None, user=_ADMIN)
+
+    assert result.total_count == 3
+    fingerprints = {m.training_fingerprint for m in result.models}
+    assert len(fingerprints) == 1, "one fit → one fingerprint (duration is not part of the fit)"
+    for m in result.models:
+        assert m.fidelity_status.value == "unvalidated"
+        assert m.fidelity_score is None
+        assert m.fidelity_sample_count == 0
+        assert m.data_provenance == "synthetic"
+        assert m.r2_score_basis.value == "synthetic_target"
+        assert m.brand_is_feature is False
+        assert m.shared_fit_model_count == 3
+        assert set(m.shared_fit_with) == {"Remibrutinib", "Fabhalta", "Kisqali"} - {m.brand}
+
+
+@pytest.mark.asyncio
+async def test_list_models_distinct_fits_are_not_called_shared(mock_twin_repository):
+    from src.api.routes.digital_twin import list_models
+
+    a = _shared_fit_row("Remibrutinib", duration=7.1)
+    b = _shared_fit_row("Kisqali", duration=7.1)
+    b["performance_metrics"] = {**b["performance_metrics"], "r2_score": 0.61}
+    b["training_config"] = {**b["training_config"], "data_provenance": "rwd_file"}
+    b["fidelity_score"] = 0.9
+    b["fidelity_sample_count"] = 4
+    mock_twin_repository.list_active_models = AsyncMock(return_value=[a, b])
+
+    result = await list_models(brand=None, twin_type=None, user=_ADMIN)
+
+    by_brand = {m.brand: m for m in result.models}
+    assert by_brand["Remibrutinib"].training_fingerprint != by_brand["Kisqali"].training_fingerprint
+    for m in result.models:
+        assert m.shared_fit_model_count == 1
+        assert m.shared_fit_with == []
+    assert by_brand["Kisqali"].r2_score_basis.value == "rwd_target"
+    assert by_brand["Kisqali"].fidelity_status.value == "validated"
+    assert by_brand["Kisqali"].fidelity_score == 0.9
+
+
+@pytest.mark.asyncio
+async def test_list_models_brand_scoped_caller_sees_the_shared_count_not_other_brands(
+    mock_twin_repository,
+):
+    """H11 brand scoping: a Kisqali-only viewer gets Kisqali's row, and the fact
+    that its fit is shared (count over ALL active models), but not the other
+    brands' names."""
+    from src.api.routes.digital_twin import list_models
+
+    rows = [
+        _shared_fit_row("Remibrutinib", duration=7.1),
+        _shared_fit_row("Fabhalta", duration=7.05),
+        _shared_fit_row("Kisqali", duration=7.69),
+    ]
+    mock_twin_repository.list_active_models = AsyncMock(return_value=rows)
+    viewer = {"user_id": "v", "role": "viewer", "brands": ["Kisqali"]}
+
+    result = await list_models(brand=None, twin_type=None, user=viewer)
+
+    assert [m.brand for m in result.models] == ["Kisqali"]
+    only = result.models[0]
+    assert only.shared_fit_model_count == 3
+    assert only.shared_fit_with == []
+    # The census ran over every brand (brand=None), the listing was filtered after.
+    assert mock_twin_repository.list_active_models.await_args.kwargs.get("brand") is None
+
+
+@pytest.mark.asyncio
+async def test_get_model_detail_carries_the_honesty_fields(mock_twin_repository):
+    from src.api.routes.digital_twin import get_model
+
+    rows = [_shared_fit_row("Remibrutinib", duration=7.1), _shared_fit_row("Kisqali", duration=7.7)]
+    mock_twin_repository.list_active_models = AsyncMock(return_value=rows)
+    mock_twin_repository.get_model = AsyncMock(return_value=rows[1])
+
+    detail = await get_model(model_id=rows[1]["model_id"], user=_ADMIN)
+
+    assert detail.fidelity_status.value == "unvalidated"
+    assert detail.r2_score_basis.value == "synthetic_target"
+    assert detail.brand_is_feature is False
+    assert detail.shared_fit_model_count == 2
+    assert detail.shared_fit_with == ["Remibrutinib"]
+
+
+@pytest.mark.asyncio
+async def test_run_simulation_hands_the_model_fidelity_to_the_engine_and_reports_status(
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository, mock_twin_hydrate
+):
+    """The route resolved the model row but never passed its fidelity_score to the
+    engine — the gate could not fire even with a real score (#2206). It now does,
+    and the response states the fidelity status explicitly."""
+    from src.api.routes.digital_twin import (
+        BrandEnum,
+        InterventionConfigRequest,
+        SimulateRequest,
+        TwinTypeEnum,
+        run_simulation,
+    )
+    from src.digital_twin import simulation_engine as engine_mod
+    from src.digital_twin.models.simulation_models import FidelityStatus
+
+    row = mock_twin_repository.list_active_models.return_value[0]
+    row["fidelity_score"] = 0.55
+    row["fidelity_sample_count"] = 3
+    mock_simulation_engine.simulate.return_value.fidelity_status = FidelityStatus.BELOW_THRESHOLD
+
+    request = SimulateRequest(
+        intervention=InterventionConfigRequest(
+            intervention_type="email_campaign",
+            channel="email",
+            frequency="weekly",
+            duration_weeks=8,
+        ),
+        brand=BrandEnum.REMIBRUTINIB,
+        twin_type=TwinTypeEnum.HCP,
+        twin_count=1000,
+    )
+    result = await run_simulation(request, {"user_id": "test_user", "role": "operator"})
+
+    assert engine_mod.SimulationEngine.call_args.kwargs["model_fidelity_score"] == 0.55
+    assert result.fidelity_status.value == "below_threshold"
+
+
+@pytest.mark.asyncio
+async def test_run_simulation_with_a_null_model_fidelity_reports_unvalidated(
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository, mock_twin_hydrate
+):
+    from src.api.routes.digital_twin import (
+        BrandEnum,
+        InterventionConfigRequest,
+        SimulateRequest,
+        TwinTypeEnum,
+        run_simulation,
+    )
+    from src.digital_twin import simulation_engine as engine_mod
+    from src.digital_twin.models.simulation_models import FidelityStatus
+
+    row = mock_twin_repository.list_active_models.return_value[0]
+    row["fidelity_score"] = None
+    row["fidelity_sample_count"] = 0
+    mock_simulation_engine.simulate.return_value.fidelity_status = FidelityStatus.UNVALIDATED
+
+    request = SimulateRequest(
+        intervention=InterventionConfigRequest(
+            intervention_type="email_campaign",
+            channel="email",
+            frequency="weekly",
+            duration_weeks=8,
+        ),
+        brand=BrandEnum.REMIBRUTINIB,
+        twin_type=TwinTypeEnum.HCP,
+        twin_count=1000,
+    )
+    result = await run_simulation(request, {"user_id": "test_user", "role": "operator"})
+
+    assert "model_fidelity_score" in engine_mod.SimulationEngine.call_args.kwargs
+    assert engine_mod.SimulationEngine.call_args.kwargs["model_fidelity_score"] is None
+    assert result.fidelity_status.value == "unvalidated"
+
+
+@pytest.mark.asyncio
+async def test_get_simulation_stored_row_derives_fidelity_status_from_its_model(
+    mock_twin_repository,
+):
+    """twin_simulations persists only the old gate's verdict (a NULL score passed as
+    fidelity_warning=False). The stored read derives status AND warning from the
+    model row it points at, as it stands now (NULL there → unvalidated + warning)."""
+    from src.api.routes.digital_twin import get_simulation
+
+    sim_row = mock_twin_repository.get_simulation.return_value
+    sim_row["fidelity_warning"] = False  # what the silent gate recorded at run time
+    sim_row["fidelity_warning_reason"] = None
+    model_row = _shared_fit_row("Remibrutinib", duration=7.1)
+    model_row["model_id"] = str(sim_row["model_id"])
+    mock_twin_repository.get_model = AsyncMock(return_value=model_row)
+
+    detail = await get_simulation(simulation_id=str(sim_row["simulation_id"]), user=_ADMIN)
+
+    assert detail.fidelity_status.value == "unvalidated"
+    assert detail.model_fidelity_score is None
+    assert detail.fidelity_warning is True
+    assert "unvalidated" in (detail.fidelity_warning_reason or "").lower()
+    mock_twin_repository.get_model.assert_awaited_once()
+
+    model_row["fidelity_score"] = 0.91
+    model_row["fidelity_sample_count"] = 2
+    detail2 = await get_simulation(simulation_id=str(sim_row["simulation_id"]), user=_ADMIN)
+    assert detail2.fidelity_status.value == "validated"
+    assert detail2.model_fidelity_score == 0.91
+    assert detail2.fidelity_warning is False
+
+
+@pytest.mark.asyncio
+async def test_run_simulation_persists_the_experiment_link_it_was_given(
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository, mock_twin_hydrate
+):
+    """codex r1 #1: SimulateRequest accepted experiment_design_id and dropped it on
+    save, so no twin_simulations row was ever linked and the fidelity producer
+    (experiment-scoped resolution) could only skip. The link is now written."""
+    from uuid import UUID
+
+    from src.api.routes.digital_twin import (
+        BrandEnum,
+        InterventionConfigRequest,
+        SimulateRequest,
+        TwinTypeEnum,
+        run_simulation,
+    )
+
+    exp_id = uuid4()
+    saved_id = uuid4()
+    mock_twin_repository.client = _experiment_lookup([{"id": str(exp_id), "brand": "Remibrutinib"}])
+    mock_twin_repository.save_simulation = AsyncMock(return_value=saved_id)
+    mock_twin_repository.simulations.link_experiment = AsyncMock(return_value=True)
+
+    request = SimulateRequest(
+        intervention=InterventionConfigRequest(
+            intervention_type="email_campaign",
+            channel="email",
+            frequency="weekly",
+            duration_weeks=8,
+        ),
+        brand=BrandEnum.REMIBRUTINIB,
+        twin_type=TwinTypeEnum.HCP,
+        twin_count=1000,
+        experiment_design_id=str(exp_id),
+    )
+    resp = await run_simulation(request, {"user_id": "test_user", "role": "operator"})
+
+    mock_twin_repository.simulations.link_experiment.assert_awaited_once_with(
+        saved_id, UUID(str(exp_id))
+    )
+    # Read-back (#2206 item C.3): the caller can see the link it asked for.
+    assert resp.experiment_design_id == str(exp_id)
+
+
+@pytest.mark.asyncio
+async def test_run_simulation_rejects_a_malformed_experiment_link_before_simulating(
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository, mock_twin_hydrate
+):
+    from src.api.routes.digital_twin import (
+        BrandEnum,
+        InterventionConfigRequest,
+        SimulateRequest,
+        TwinTypeEnum,
+        run_simulation,
+    )
+
+    request = SimulateRequest(
+        intervention=InterventionConfigRequest(
+            intervention_type="email_campaign",
+            channel="email",
+            frequency="weekly",
+            duration_weeks=8,
+        ),
+        brand=BrandEnum.REMIBRUTINIB,
+        twin_type=TwinTypeEnum.HCP,
+        twin_count=1000,
+        experiment_design_id="not-a-uuid",
+    )
+    with pytest.raises(HTTPException) as exc:
+        await run_simulation(request, {"user_id": "test_user", "role": "operator"})
+    assert exc.value.status_code == 422
+    assert "experiment_design_id" in str(exc.value.detail)
+    mock_simulation_engine.simulate.assert_not_called()
+    mock_twin_repository.save_simulation.assert_not_called()
+
+
+def _experiment_lookup(rows):
+    """repo.client.table('ml_experiments').select(...).eq(...).limit(1).execute() (async)."""
+    chain = MagicMock()
+    chain.table.return_value.select.return_value.eq.return_value.limit.return_value.execute = (
+        AsyncMock(return_value=MagicMock(data=rows))
+    )
+    return chain
+
+
+def _linked_request(exp_id, brand=None):
+    from src.api.routes.digital_twin import (
+        BrandEnum,
+        InterventionConfigRequest,
+        SimulateRequest,
+        TwinTypeEnum,
+    )
+
+    return SimulateRequest(
+        intervention=InterventionConfigRequest(
+            intervention_type="email_campaign",
+            channel="email",
+            frequency="weekly",
+            duration_weeks=8,
+        ),
+        brand=brand or BrandEnum.REMIBRUTINIB,
+        twin_type=TwinTypeEnum.HCP,
+        twin_count=1000,
+        experiment_design_id=str(exp_id),
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_simulation_verifies_the_experiment_exists_before_simulating(
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository, mock_twin_hydrate
+):
+    """codex r2 #1: a well-formed but nonexistent experiment id would have produced a
+    permanently orphaned pre-screen. It is now a 404 before any heavy work."""
+    from src.api.routes.digital_twin import run_simulation
+
+    mock_twin_repository.client = _experiment_lookup([])
+    with pytest.raises(HTTPException) as exc:
+        await run_simulation(_linked_request(uuid4()), {"user_id": "u", "role": "operator"})
+    assert exc.value.status_code == 404
+    mock_simulation_engine.simulate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_simulation_refuses_to_link_an_experiment_of_another_brand(
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository, mock_twin_hydrate
+):
+    from src.api.routes.digital_twin import run_simulation
+
+    exp_id = uuid4()
+    mock_twin_repository.client = _experiment_lookup([{"id": str(exp_id), "brand": "Kisqali"}])
+    with pytest.raises(HTTPException) as exc:
+        await run_simulation(_linked_request(exp_id), {"user_id": "u", "role": "operator"})
+    assert exc.value.status_code == 422
+    assert "Kisqali" in str(exc.value.detail)
+    mock_simulation_engine.simulate.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_simulation_surfaces_a_failed_link_instead_of_returning_success(
+    mock_twin_generator, mock_simulation_engine, mock_twin_repository, mock_twin_hydrate
+):
+    from src.api.routes.digital_twin import run_simulation
+
+    exp_id = uuid4()
+    saved_id = uuid4()
+    mock_twin_repository.client = _experiment_lookup([{"id": str(exp_id), "brand": "Remibrutinib"}])
+    mock_twin_repository.save_simulation = AsyncMock(return_value=saved_id)
+    mock_twin_repository.simulations.link_experiment = AsyncMock(return_value=False)
+    with pytest.raises(HTTPException) as exc:
+        await run_simulation(_linked_request(exp_id), {"user_id": "u", "role": "operator"})
+    assert exc.value.status_code == 500
+    assert str(saved_id) in str(exc.value.detail)
+    assert str(exp_id) in str(exc.value.detail)
+
+
+def test_fit_fingerprint_is_stable_across_numeric_representation_and_key_order():
+    """codex r3 #2: `1` vs `1.0` (JSONB round-trips) must not split one recorded fit."""
+    from src.api.routes.digital_twin import _fit_fingerprint
+
+    a = _shared_fit_row("Remibrutinib", duration=7.1)
+    b = _shared_fit_row("Kisqali", duration=9.9)
+    b["training_config"] = {
+        "n_estimators": 100.0,
+        "algorithm": "random_forest",
+        "training_samples": 2000.0,
+        "data_provenance": "synthetic",
+    }
+    b["performance_metrics"] = {**b["performance_metrics"], "cv_scores": [0.8, 0.81, 0.82]}
+    assert _fit_fingerprint(a) == _fit_fingerprint(b)
+
+
+def test_fit_fingerprint_includes_the_recorded_training_frame():
+    """Two trainings that differ only in the recorded frame (seed) are different fits
+    even when every reported metric happens to coincide."""
+    from src.api.routes.digital_twin import _fit_fingerprint
+
+    a = _shared_fit_row("Remibrutinib", duration=7.1)
+    b = _shared_fit_row("Kisqali", duration=7.1)
+    a["training_config"] = {
+        **a["training_config"],
+        "training_frame": {"source": "synthetic", "seed": 0, "n_rows": 2000},
+    }
+    b["training_config"] = {
+        **b["training_config"],
+        "training_frame": {"source": "synthetic", "seed": 1, "n_rows": 2000},
+    }
+    assert _fit_fingerprint(a) != _fit_fingerprint(b)
+
+
+def test_fit_fingerprint_does_not_collapse_large_integers():
+    """codex r4 #2: int→float normalisation collides above 2**53; ints stay exact."""
+    from src.api.routes.digital_twin import _fit_fingerprint
+
+    a = _shared_fit_row("Remibrutinib", duration=1.0)
+    b = _shared_fit_row("Kisqali", duration=1.0)
+    a["training_config"] = {**a["training_config"], "seed": 2**53 + 1}
+    b["training_config"] = {**b["training_config"], "seed": 2**53 + 2}
+    assert _fit_fingerprint(a) != _fit_fingerprint(b)
+    # ... while an integral float still equals its int.
+    c = _shared_fit_row("Fabhalta", duration=1.0)
+    c["training_config"] = {**c["training_config"], "seed": 7.0}
+    d = _shared_fit_row("Fabhalta", duration=1.0)
+    d["training_config"] = {**d["training_config"], "seed": 7}
+    assert _fit_fingerprint(c) == _fit_fingerprint(d)
+
+
+@pytest.mark.asyncio
+async def test_list_models_says_whether_the_training_frame_was_recorded(mock_twin_repository):
+    """codex r4 #2: legacy rows carry no frame identity; the listing says so, so the
+    UI can scope its 'same frame' claim to rows that recorded one."""
+    from src.api.routes.digital_twin import list_models
+
+    legacy = _shared_fit_row("Remibrutinib", duration=7.1)
+    recorded = _shared_fit_row("Kisqali", duration=7.1)
+    recorded["training_config"] = {
+        **recorded["training_config"],
+        "training_frame": {
+            "source": "synthetic_training_frame",
+            "seed": 0,
+            "n_rows": 2000,
+            "content_sha256": "cd" * 32,
+        },
+    }
+    mock_twin_repository.list_active_models = AsyncMock(return_value=[legacy, recorded])
+
+    result = await list_models(brand=None, twin_type=None, user=_ADMIN)
+
+    by_brand = {m.brand: m for m in result.models}
+    assert by_brand["Remibrutinib"].training_frame_recorded is False
+    assert by_brand["Kisqali"].training_frame_recorded is True
+    # A recorded frame is part of the fingerprint: these two are not one recorded fit.
+    assert by_brand["Remibrutinib"].training_fingerprint != by_brand["Kisqali"].training_fingerprint
+
+
+@pytest.mark.asyncio
+async def test_shared_fit_census_counts_brands_not_active_rows(mock_twin_repository):
+    """codex r5 #2: nothing enforces one active model per brand; two active rows of
+    one brand are still ONE brand label, and shared_fit_with never names the row's
+    own brand."""
+    from src.api.routes.digital_twin import list_models
+
+    rows = [
+        _shared_fit_row("Remibrutinib", duration=7.1),
+        _shared_fit_row("Remibrutinib", duration=7.3),  # a second active version
+        _shared_fit_row("Kisqali", duration=7.7),
+    ]
+    mock_twin_repository.list_active_models = AsyncMock(return_value=rows)
+
+    result = await list_models(brand=None, twin_type=None, user=_ADMIN)
+
+    for m in result.models:
+        assert m.shared_fit_model_count == 2
+        assert m.brand not in m.shared_fit_with
+    remi = [m for m in result.models if m.brand == "Remibrutinib"]
+    assert all(m.shared_fit_with == ["Kisqali"] for m in remi)
+
+
+def test_training_frame_recorded_requires_a_content_digest():
+    from src.api.routes.digital_twin import _model_honesty_fields
+
+    row = _shared_fit_row("Kisqali", duration=1.0)
+    row["training_config"] = {
+        **row["training_config"],
+        "training_frame": {"source": "rwd_file", "path": "/x.csv"},
+    }
+    assert _model_honesty_fields(row, [row], _ADMIN)["training_frame_recorded"] is False
+    row["training_config"]["training_frame"]["content_sha256"] = "ab" * 32
+    assert _model_honesty_fields(row, [row], _ADMIN)["training_frame_recorded"] is True
+
+
+@pytest.mark.asyncio
+async def test_active_model_census_exhausts_the_repository_limit(mock_twin_repository, caplog):
+    """codex r7 #2: list_active_models defaults to 100 rows; the census must ask for
+    everything and say so when it still hits the ceiling."""
+    from src.api.routes import digital_twin as route_mod
+
+    rows = [_shared_fit_row("Kisqali", duration=1.0)]
+    mock_twin_repository.list_active_models = AsyncMock(return_value=rows)
+    census = await route_mod._active_model_census(mock_twin_repository, None)
+    assert census == rows
+    assert (
+        mock_twin_repository.list_active_models.await_args.kwargs["limit"]
+        == route_mod._CENSUS_LIMIT
+    )
+
+    full = [_shared_fit_row("Kisqali", duration=float(i)) for i in range(route_mod._CENSUS_LIMIT)]
+    mock_twin_repository.list_active_models = AsyncMock(return_value=full)
+    with caplog.at_level("WARNING"):
+        await route_mod._active_model_census(mock_twin_repository, None)
+    assert any(
+        "census" in r.message.lower() and "limit" in r.message.lower() for r in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_active_model_census_reaches_the_real_facade_with_its_limit():
+    """The route calls the REAL TwinRepository facade (not the fixture's MagicMock);
+    a limit the facade did not forward would TypeError in prod (the round-4 class
+    of bug). Only the model store is faked."""
+    from unittest.mock import create_autospec
+
+    from src.api.routes import digital_twin as route_mod
+    from src.digital_twin.twin_repository import TwinModelRepository, TwinRepository
+
+    repo = TwinRepository(supabase_client=None)
+    repo.models = create_autospec(TwinModelRepository, instance=True)
+    repo.models.list_active_models = AsyncMock(
+        return_value=[_shared_fit_row("Kisqali", duration=1.0)]
+    )
+
+    census = await route_mod._active_model_census(repo, None)
+
+    assert len(census) == 1
+    assert repo.models.list_active_models.await_args.kwargs["limit"] == route_mod._CENSUS_LIMIT
+
+
+def test_fit_fingerprint_keeps_a_float_distinct_from_its_string_form():
+    """codex r9 #2: a numeric 0.2 and the string "0.2" are different recorded values."""
+    from src.api.routes.digital_twin import _fit_fingerprint
+
+    a = _shared_fit_row("Remibrutinib", duration=1.0)
+    b = _shared_fit_row("Kisqali", duration=1.0)
+    a["training_config"] = {**a["training_config"], "validation_split": 0.2}
+    b["training_config"] = {**b["training_config"], "validation_split": "0.2"}
+    assert _fit_fingerprint(a) != _fit_fingerprint(b)
+    c = _shared_fit_row("Fabhalta", duration=1.0)
+    c["training_config"] = {**c["training_config"], "validation_split": 0.2}
+    assert _fit_fingerprint(a) == _fit_fingerprint(c)

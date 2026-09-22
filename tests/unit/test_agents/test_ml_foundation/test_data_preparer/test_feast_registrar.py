@@ -1,16 +1,27 @@
 """Unit tests for feast_registrar node."""
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 import pandas as pd
 import pytest
 
+from src.agents.ml_foundation.data_preparer.nodes import feast_registrar
 from src.agents.ml_foundation.data_preparer.nodes.feast_registrar import (
     _check_feature_freshness,
     register_features_in_feast,
 )
+
+
+def _recency(value):
+    """A #559 recency probe returning ``value`` (None = unverifiable); the gate's seam
+    since 2026-09-22 — the adapter's ``check_feature_freshness`` is no longer the probe."""
+
+    async def _q(table):
+        return value
+
+    return _q
 
 
 @pytest.fixture
@@ -149,43 +160,49 @@ async def test_register_features_with_adapter_errors(mock_state_with_train_data)
 
 @pytest.mark.asyncio
 async def test_register_features_freshness_check(mock_state_with_train_data, mock_adapter):
-    """Test that freshness check is included in registration."""
-    with patch(
-        "src.agents.ml_foundation.data_preparer.nodes.feast_registrar._get_feature_analyzer_adapter",
-        return_value=mock_adapter,
+    """Test that freshness check is included in registration.
+
+    Amended 2026-09-22 (#2207): the probe is the #559 source-table recency of the views
+    sourced from ``data_source``, not the adapter's ``check_feature_freshness``."""
+    mock_state_with_train_data["data_source"] = "business_metrics"
+    with (
+        patch(
+            "src.agents.ml_foundation.data_preparer.nodes.feast_registrar._get_feature_analyzer_adapter",
+            return_value=mock_adapter,
+        ),
+        patch.object(
+            feast_registrar,
+            "_source_recency_query",
+            _recency(datetime.now(timezone.utc) - timedelta(hours=1)),
+        ),
     ):
         result = await register_features_in_feast(mock_state_with_train_data)
 
     assert result["feast_freshness_check"] is not None
     assert result["feast_freshness_check"]["fresh"] is True
-
-    # Verify freshness check was called
-    mock_adapter.check_feature_freshness.assert_called_once()
+    assert result["feast_freshness_check"]["source_table"] == "business_metrics"
+    mock_adapter.check_feature_freshness.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_register_features_stale_features_warning(mock_state_with_train_data, monkeypatch):
-    """Stale features generate warnings AND the new hard-block contract.
+    """Stale features generate warnings AND the hard-block contract for a Feast-SERVED run.
 
     Defense-in-depth alongside ``test_qc_gate_blocks_on_stale_feast`` — this
     test exercises the same path with slightly different fixture data so we
     fail closed if either assertion regresses.
+    Amended 2026-09-22 (#2207): the block applies only when the run trains on Feast-served
+    features (``features_served_by_feast``); staleness comes from the #559 source probe.
     """
     monkeypatch.delenv("ALLOW_STALE_FEAST", raising=False)
+    mock_state_with_train_data["data_source"] = "triggers"
+    mock_state_with_train_data["features_served_by_feast"] = True
 
     adapter = MagicMock()
     adapter.register_features_from_state = AsyncMock(
         return_value={
             "features_registered": 2,
             "errors": [],
-        }
-    )
-    adapter.check_feature_freshness = AsyncMock(
-        return_value={
-            "fresh": False,
-            "stale_features": ["feature_view:feature1"],
-            "feature_ages": {"feature_view:feature1": 48.5},
-            "recommendations": ["Run materialization for feature_view"],
         }
     )
     # Without this, ``adapter._feast_client`` would be an auto-spawned
@@ -195,9 +212,16 @@ async def test_register_features_stale_features_warning(mock_state_with_train_da
     # the (correct) post-Block-2-polish direct-attribute access.
     adapter._feast_client = None
 
-    with patch(
-        "src.agents.ml_foundation.data_preparer.nodes.feast_registrar._get_feature_analyzer_adapter",
-        return_value=adapter,
+    with (
+        patch(
+            "src.agents.ml_foundation.data_preparer.nodes.feast_registrar._get_feature_analyzer_adapter",
+            return_value=adapter,
+        ),
+        patch.object(
+            feast_registrar,
+            "_source_recency_query",
+            _recency(datetime.now(timezone.utc) - timedelta(hours=48.5)),
+        ),
     ):
         result = await register_features_in_feast(mock_state_with_train_data)
 
@@ -303,41 +327,45 @@ async def test_register_features_empty_result(mock_state_with_train_data):
 
 @pytest.mark.asyncio
 async def test_check_feature_freshness_helper():
-    """Test the _check_feature_freshness helper function."""
-    adapter = MagicMock()
-    adapter.check_feature_freshness = AsyncMock(
-        return_value={
-            "fresh": True,
-            "stale_features": [],
-            "feature_ages": {},
-        }
-    )
+    """Test the _check_feature_freshness helper function.
 
-    result = await _check_feature_freshness(
-        adapter=adapter,
-        experiment_id="exp_test",
-        feature_names=["feature1", "feature2"],
-        max_staleness_hours=24.0,
-    )
+    Amended 2026-09-22 (#2207): the helper takes the run's data_source and probes the
+    #559 source-table recency (no adapter)."""
+    with patch.object(
+        feast_registrar,
+        "_source_recency_query",
+        _recency(datetime.now(timezone.utc) - timedelta(hours=2)),
+    ):
+        result = await _check_feature_freshness(
+            data_source="patient_journeys",
+            experiment_id="exp_test",
+            max_staleness_hours=24.0,
+        )
 
     assert result["fresh"] is True
-    adapter.check_feature_freshness.assert_called_once()
+    assert set(result["feature_views"]) == {
+        "patient_journey_features",
+        "patient_adherence_features",
+        "goldstd_cohort_features",
+    }
 
 
 @pytest.mark.asyncio
 async def test_check_feature_freshness_handles_exception(monkeypatch):
-    """On exception, freshness check returns stale dict (fresh=False) by default."""
+    """On exception, freshness check returns stale dict (fresh=False) by default.
+
+    Amended 2026-09-22 (#2207): the exception now comes from the #559 recency probe."""
     monkeypatch.delenv("ALLOW_STALE_FEAST", raising=False)
 
-    adapter = MagicMock()
-    adapter.check_feature_freshness = AsyncMock(side_effect=Exception("Feast not responding"))
+    async def _boom(table):
+        raise Exception("Supabase not responding")
 
-    result = await _check_feature_freshness(
-        adapter=adapter,
-        experiment_id="exp_test",
-        feature_names=["feature1"],
-        max_staleness_hours=24.0,
-    )
+    with patch.object(feast_registrar, "_source_recency_query", _boom):
+        result = await _check_feature_freshness(
+            data_source="triggers",
+            experiment_id="exp_test",
+            max_staleness_hours=24.0,
+        )
 
     # Returns a stale dict — not None — so callers can react to the failure.
     assert result is not None
@@ -347,18 +375,20 @@ async def test_check_feature_freshness_handles_exception(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_check_feature_freshness_allow_stale_on_exception(monkeypatch):
-    """ALLOW_STALE_FEAST=1 makes _check_feature_freshness return fresh=True on exception."""
+    """ALLOW_STALE_FEAST=1 makes _check_feature_freshness return fresh=True on exception.
+
+    Amended 2026-09-22 (#2207): the exception now comes from the #559 recency probe."""
     monkeypatch.setenv("ALLOW_STALE_FEAST", "1")
 
-    adapter = MagicMock()
-    adapter.check_feature_freshness = AsyncMock(side_effect=Exception("Feast not responding"))
+    async def _boom(table):
+        raise Exception("Supabase not responding")
 
-    result = await _check_feature_freshness(
-        adapter=adapter,
-        experiment_id="exp_test",
-        feature_names=["feature1"],
-        max_staleness_hours=24.0,
-    )
+    with patch.object(feast_registrar, "_source_recency_query", _boom):
+        result = await _check_feature_freshness(
+            data_source="triggers",
+            experiment_id="exp_test",
+            max_staleness_hours=24.0,
+        )
 
     assert result is not None
     assert result["fresh"] is True
@@ -389,6 +419,10 @@ async def test_register_features_timestamp_format(mock_state_with_train_data, mo
 async def test_qc_gate_blocks_on_stale_feast(mock_state_with_train_data, monkeypatch):
     """Stale features hard-block training unless ALLOW_STALE_FEAST=1."""
     monkeypatch.delenv("ALLOW_STALE_FEAST", raising=False)
+    # Amended 2026-09-22 (#2207): the block is retained for Feast-SERVED runs only;
+    # staleness is the #559 source probe (here unverifiable: recency None).
+    mock_state_with_train_data["data_source"] = "hcp_profiles"
+    mock_state_with_train_data["features_served_by_feast"] = True
 
     adapter = MagicMock()
     adapter.register_features_from_state = AsyncMock(
@@ -404,9 +438,12 @@ async def test_qc_gate_blocks_on_stale_feast(mock_state_with_train_data, monkeyp
     # Simulate adapter with no backing FeastClient so fallback flag stays False
     adapter._feast_client = None
 
-    with patch(
-        "src.agents.ml_foundation.data_preparer.nodes.feast_registrar._get_feature_analyzer_adapter",
-        return_value=adapter,
+    with (
+        patch(
+            "src.agents.ml_foundation.data_preparer.nodes.feast_registrar._get_feature_analyzer_adapter",
+            return_value=adapter,
+        ),
+        patch.object(feast_registrar, "_source_recency_query", _recency(None)),
     ):
         result = await register_features_in_feast(mock_state_with_train_data)
 
@@ -424,6 +461,9 @@ async def test_qc_gate_blocks_on_stale_feast(mock_state_with_train_data, monkeyp
 async def test_qc_gate_allows_with_allow_stale_env(mock_state_with_train_data, monkeypatch):
     """ALLOW_STALE_FEAST=1 bypasses the hard block (warnings only)."""
     monkeypatch.setenv("ALLOW_STALE_FEAST", "1")
+    # Amended 2026-09-22 (#2207): the escape hatch applies to the Feast-SERVED block branch.
+    mock_state_with_train_data["data_source"] = "hcp_profiles"
+    mock_state_with_train_data["features_served_by_feast"] = True
 
     adapter = MagicMock()
     adapter.register_features_from_state = AsyncMock(
@@ -438,9 +478,12 @@ async def test_qc_gate_allows_with_allow_stale_env(mock_state_with_train_data, m
     )
     adapter._feast_client = None
 
-    with patch(
-        "src.agents.ml_foundation.data_preparer.nodes.feast_registrar._get_feature_analyzer_adapter",
-        return_value=adapter,
+    with (
+        patch(
+            "src.agents.ml_foundation.data_preparer.nodes.feast_registrar._get_feature_analyzer_adapter",
+            return_value=adapter,
+        ),
+        patch.object(feast_registrar, "_source_recency_query", _recency(None)),
     ):
         result = await register_features_in_feast(mock_state_with_train_data)
 
@@ -459,6 +502,10 @@ async def test_stale_feast_blocks_finalize_output_gate(mock_state_with_train_dat
     from src.agents.ml_foundation.data_preparer.graph import finalize_output
 
     monkeypatch.delenv("ALLOW_STALE_FEAST", raising=False)
+    # Amended 2026-09-22 (#2207): the block is retained for Feast-SERVED runs only;
+    # staleness is the #559 source probe (here unverifiable: recency None).
+    mock_state_with_train_data["data_source"] = "hcp_profiles"
+    mock_state_with_train_data["features_served_by_feast"] = True
 
     adapter = MagicMock()
     adapter.register_features_from_state = AsyncMock(
@@ -474,9 +521,12 @@ async def test_stale_feast_blocks_finalize_output_gate(mock_state_with_train_dat
     adapter._feast_client = None
 
     # Run the registrar
-    with patch(
-        "src.agents.ml_foundation.data_preparer.nodes.feast_registrar._get_feature_analyzer_adapter",
-        return_value=adapter,
+    with (
+        patch(
+            "src.agents.ml_foundation.data_preparer.nodes.feast_registrar._get_feature_analyzer_adapter",
+            return_value=adapter,
+        ),
+        patch.object(feast_registrar, "_source_recency_query", _recency(None)),
     ):
         registrar_updates = await register_features_in_feast(mock_state_with_train_data)
 

@@ -427,7 +427,14 @@ class TestLogSelectionResult:
 
         with patch.object(tracker, "_log_to_database") as mock_log:
             tracker.log_selection_result(sample_selection_result)
-            mock_log.assert_called_once_with(sample_selection_result, "exp-1")
+            mock_log.assert_called_once()
+        args, kwargs = mock_log.call_args
+        assert args[0] is sample_selection_result
+        # #2207: "exp-1" is an MLflow experiment id, not an ml_experiments(id) uuid —
+        # the FK column gets NULL; the run id travels in the context instead.
+        assert args[1] is None
+        assert kwargs["context"]["selection_run_id"]
+        assert kwargs["context"]["mlflow_run_id"] is None  # mlflow disabled in this test
 
     def test_log_selection_result_with_additional_params(self, sample_selection_result):
         """Test logging with additional parameters."""
@@ -599,8 +606,13 @@ class TestLogToDatabase:
         ):
             tracker._log_to_database(sample_selection_result, "exp-123")
 
-        # Verify connection and cursor were used
-        mock_psycopg2.connect.assert_called_once_with("postgresql://test@host/db")
+        # Verify connection and cursor were used — bounded (#2207: the write runs
+        # inside the estimation compute slot, so connect + statements carry timeouts)
+        mock_psycopg2.connect.assert_called_once()
+        args, kwargs = mock_psycopg2.connect.call_args
+        assert args == ("postgresql://test@host/db",)
+        assert kwargs["connect_timeout"] == 5
+        assert "statement_timeout=5000" in kwargs["options"]
         mock_conn.commit.assert_called_once()
         mock_cursor.close.assert_called_once()
         mock_conn.close.assert_called_once()
@@ -667,7 +679,13 @@ class TestLogToDatabase:
             sys.modules, {"psycopg2": mock_psycopg2, "psycopg2.extras": mock_psycopg2_extras}
         ):
             tracker._log_to_database(result, "exp-123")
-        details = [call.args[1][-1] for call in mock_cursor.execute.call_args_list]
+        # The energy_details JSONB is no longer the LAST parameter: #2207 (causal/012)
+        # appends the selection context (selection_run_id ... data_source) after it, so
+        # locate it by shape (estimator_params is the other JSONB, an empty dict).
+        details = [
+            next(p for p in call.args[1] if isinstance(p, dict) and "tournament_energy_score" in p)
+            for call in mock_cursor.execute.call_args_list
+        ]
         assert len(details) == 4
         assert details[0]["served_refit"] is True and details[0]["tournament_energy_score"] == 0.42
         assert details[1]["served_refit"] is False

@@ -28,7 +28,6 @@ Version: 4.2.0
 import asyncio
 import logging
 from datetime import datetime, timezone
-from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, cast
 from uuid import UUID
 
@@ -46,12 +45,44 @@ from src.api.routes.digital_twin_capability import (
     simulable_brands,
     warn_model_without_effect_data,
 )
+from src.api.routes.digital_twin_honesty import (  # noqa: F401 — re-exported
+    _CENSUS_LIMIT,
+    _active_model_census,
+    _canonical,
+    _fit_fingerprint,
+    _model_fidelity_state,
+    _model_honesty_fields,
+    _r2_score_basis,
+    _stored_fidelity_fields,
+    _verify_experiment_link,
+)
 from src.api.routes.digital_twin_rejections import Decile, rejected_request
-from src.api.schemas.digital_twin import (
+from src.api.schemas.digital_twin import (  # noqa: F401 — re-exported
+    EXPERIMENT_LINK_DESCRIPTION,
+    FIDELITY_STATUS_DESCRIPTION,
+    SIMULATION_CONFIDENCE_DESCRIPTION,
+    BrandEnum,
     DigitalTwinHealthResponse,
     EffectHeterogeneityResponse,
+    EstimateScopeEnum,
+    FidelityGradeEnum,
+    FidelityHistoryResponse,
+    FidelityRecordResponse,
+    FidelityReportResponse,
+    FidelityStatusEnum,
     InterventionTypeItem,
     InterventionTypesResponse,
+    ModelListResponse,
+    R2ScoreBasisEnum,
+    RecommendationEnum,
+    SimulationHistoryItem,
+    SimulationHistoryResponse,
+    SimulationListItem,
+    SimulationListResponse,
+    SimulationStatusEnum,
+    TwinModelDetailResponse,
+    TwinModelSummary,
+    TwinTypeEnum,
 )
 from src.api.schemas.digital_twin import heterogeneity_response as _heterogeneity_response
 from src.api.schemas.digital_twin import live_subgroups_basis as _live_subgroups_basis
@@ -171,47 +202,6 @@ async def _load_trained_generator(
 # =============================================================================
 
 
-class TwinTypeEnum(str, Enum):
-    """Types of digital twins."""
-
-    HCP = "hcp"
-    PATIENT = "patient"
-    TERRITORY = "territory"
-
-
-class BrandEnum(str, Enum):
-    """Pharmaceutical brands."""
-
-    REMIBRUTINIB = "Remibrutinib"
-    FABHALTA = "Fabhalta"
-    KISQALI = "Kisqali"
-
-
-class SimulationStatusEnum(str, Enum):
-    """Simulation status values."""
-
-    PENDING = "pending"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-
-class RecommendationEnum(str, Enum):
-    """Simulation recommendations."""
-
-    DEPLOY = "deploy"
-    SKIP = "skip"
-    REFINE = "refine"
-
-
-class EstimateScopeEnum(str, Enum):
-    """What a simulation's effect was estimated ON (#2053)."""
-
-    COHORT = "cohort"
-    REGIONS = "regions"
-    UNKNOWN = "unknown"
-
-
 def _live_estimate_scope(target_regions: List[str]) -> EstimateScopeEnum:
     """Scope of a simulation this request just ran: it always knows its own."""
     return EstimateScopeEnum.REGIONS if target_regions else EstimateScopeEnum.COHORT
@@ -226,16 +216,6 @@ def _stored_estimate_scope(row: Dict[str, Any]) -> "StoredEstimateScope":
 
 def _round4(value: Optional[float]) -> Optional[float]:
     return None if value is None else round(float(value), 4)
-
-
-class FidelityGradeEnum(str, Enum):
-    """Fidelity grade values."""
-
-    EXCELLENT = "excellent"
-    GOOD = "good"
-    FAIR = "fair"
-    POOR = "poor"
-    UNVALIDATED = "unvalidated"
 
 
 # =============================================================================
@@ -384,10 +364,14 @@ class SimulationResponse(BaseModel):
     recommendation_rationale: str
     recommended_sample_size: Optional[int] = None
     recommended_duration_weeks: Optional[int] = None
-    simulation_confidence: float
+    simulation_confidence: float = Field(description=SIMULATION_CONFIDENCE_DESCRIPTION)
     fidelity_warning: bool
     fidelity_warning_reason: Optional[str] = None
     model_fidelity_score: Optional[float] = None
+    fidelity_status: FidelityStatusEnum = Field(description=FIDELITY_STATUS_DESCRIPTION)
+    experiment_design_id: Optional[str] = Field(
+        default=None, description=EXPERIMENT_LINK_DESCRIPTION
+    )
     status: SimulationStatusEnum
     error_message: Optional[str] = None
     execution_time_ms: int
@@ -448,64 +432,6 @@ class SimulationDetailResponse(SimulationResponse):
     completed_at: Optional[datetime] = None
 
 
-class SimulationListItem(BaseModel):
-    """Summary item for simulation list."""
-
-    simulation_id: str
-    intervention_type: str
-    brand: str
-    twin_type: str
-    twin_count: int
-    simulated_ate: float
-    recommendation: RecommendationEnum
-    status: SimulationStatusEnum
-    created_at: datetime
-    data_provenance: Optional[str] = None
-    # Scope of simulated_ate (#2053); see SimulationResponse.estimate_scope.
-    estimate_scope: EstimateScopeEnum
-    target_regions: List[str] = Field(default=[])
-    cohort_effect: Optional[float] = None
-
-
-class SimulationListResponse(BaseModel):
-    """Response for listing simulations."""
-
-    total_count: int
-    simulations: List[SimulationListItem]
-    page: int
-    page_size: int
-
-
-class SimulationHistoryItem(BaseModel):
-    """Summary row for the simulation-history view.
-
-    Matches the frontend ``SimulationHistoryResponse.simulations[]`` contract
-    (``frontend/src/types/digital-twin.ts``): note ``ate_estimate`` and
-    ``recommendation_type`` field names, distinct from ``SimulationListItem``.
-    """
-
-    simulation_id: str
-    created_at: datetime
-    intervention_type: str
-    brand: str
-    ate_estimate: float
-    recommendation_type: str
-    data_provenance: Optional[str] = None
-    # Scope of ate_estimate (#2053); see SimulationResponse.estimate_scope.
-    estimate_scope: EstimateScopeEnum
-    target_regions: List[str] = Field(default=[])
-    filter_regions: List[str] = Field(default=[])
-
-
-class SimulationHistoryResponse(BaseModel):
-    """Response for the simulation-history endpoint (frontend contract)."""
-
-    simulations: List[SimulationHistoryItem]
-    total: int
-    offset: int
-    limit: int
-
-
 class ScenarioSimulateRequest(BaseModel):
     """A single scenario in a comparison request.
 
@@ -547,91 +473,6 @@ class ScenarioComparisonResult(BaseModel):
     base_result: SimulationResponse
     alternative_results: List[SimulationResponse]
     comparison: ScenarioComparison
-
-
-class FidelityRecordResponse(BaseModel):
-    """Fidelity validation record."""
-
-    tracking_id: str
-    simulation_id: str
-    experiment_id: Optional[str] = None
-    simulated_ate: float
-    simulated_ci_lower: Optional[float] = None
-    simulated_ci_upper: Optional[float] = None
-    actual_ate: Optional[float] = None
-    actual_ci_lower: Optional[float] = None
-    actual_ci_upper: Optional[float] = None
-    actual_sample_size: Optional[int] = None
-    prediction_error: Optional[float] = None
-    absolute_error: Optional[float] = None
-    ci_coverage: Optional[bool] = None
-    fidelity_grade: FidelityGradeEnum
-    validation_notes: Optional[str] = None
-    confounding_factors: List[str] = []
-    created_at: datetime
-    validated_at: Optional[datetime] = None
-    validated_by: Optional[str] = None
-
-
-class TwinModelSummary(BaseModel):
-    """Summary of a twin generator model."""
-
-    model_id: str
-    model_name: str
-    twin_type: str
-    brand: str
-    algorithm: str
-    r2_score: Optional[float] = None
-    rmse: Optional[float] = None
-    training_samples: int
-    is_active: bool
-    created_at: datetime
-
-
-class TwinModelDetailResponse(TwinModelSummary):
-    """Detailed twin model information."""
-
-    model_description: Optional[str] = None
-    feature_columns: List[str]
-    target_column: str
-    cv_mean: Optional[float] = None
-    cv_std: Optional[float] = None
-    feature_importances: Dict[str, float]
-    top_features: List[str]
-    training_duration_seconds: float
-    config: Dict[str, Any]
-
-
-class ModelListResponse(BaseModel):
-    """Response for listing models."""
-
-    total_count: int
-    models: List[TwinModelSummary]
-
-
-class FidelityHistoryResponse(BaseModel):
-    """Fidelity history for a model."""
-
-    model_id: str
-    total_validations: int
-    average_fidelity_score: Optional[float] = None
-    grade_distribution: Dict[str, int]
-    records: List[FidelityRecordResponse]
-
-
-class FidelityReportResponse(BaseModel):
-    """Aggregated fidelity report for a model."""
-
-    model_id: str
-    total_validations: int
-    average_fidelity_score: float
-    coverage_rate: float
-    grade_distribution: Dict[str, int]
-    trend: str
-    is_degrading: bool
-    degradation_rate: Optional[float] = None
-    recommendation: str
-    generated_at: datetime
 
 
 # =============================================================================
@@ -861,11 +702,30 @@ async def run_simulation(
         twin_type = TwinType(request.twin_type.value)
         brand = Brand(request.brand.value)
 
+        # The experiment link (#2206, codex r1 #1): the request always accepted
+        # experiment_design_id and the save dropped it, so no twin_simulations row
+        # was ever linked and the post-experiment fidelity producer — which resolves
+        # the simulation experiment-scoped — could only skip. Validate it up front
+        # (before the heavy work) and write it after the save.
+        experiment_link: Optional[UUID] = None
+        if request.experiment_design_id:
+            try:
+                experiment_link = UUID(str(request.experiment_design_id))
+            except ValueError as bad_link:
+                raise HTTPException(
+                    status_code=422,
+                    detail="experiment_design_id must be a UUID (the experiment this pre-screen is for).",
+                ) from bad_link
+
         # Resolve a REAL trained model BEFORE generating: an explicit model_id, or
         # the highest-fidelity active model for this brand/twin_type. No model →
         # honest 503 (not a fresh untrained generator → opaque 500, and not a
         # UUID(int=0) sentinel → twin_simulations.model_id FK violation) (#705 H4).
         repo = await _get_twin_repo()
+        if experiment_link is not None:
+            # A well-formed id of a nonexistent or other-brand experiment would
+            # leave a permanently orphaned pre-screen (codex r2 #1): verify first.
+            await _verify_experiment_link(repo, experiment_link, request.brand.value)
         model_row = await _resolve_active_model_row(
             repo, twin_type=twin_type, brand=brand, model_id=request.model_id
         )
@@ -930,6 +790,10 @@ async def run_simulation(
                     population=population,
                     effect_provider=cohort_provider,
                     effect_estimator=CohortCausalEstimator(target_regions=target_regions),
+                    # The model's measured fidelity (NULL until an experiment outcome
+                    # has been compared against it). Never passed before, so the
+                    # engine's gate could not fire even with a real score (#2206).
+                    model_fidelity_score=model_row.get("fidelity_score"),
                 )
                 # Pin the resolved DB model id so twin_simulations.model_id FK holds
                 # (engine derives self.model_id from population otherwise) (#705 H4).
@@ -952,8 +816,23 @@ async def run_simulation(
                 detail=result.error_message or "Simulation could not be completed.",
             )
 
-        # Save simulation result (reuse the repo resolved above).
-        await repo.save_simulation(result, request.brand.value)
+        # Save simulation result (reuse the repo resolved above), then link it to
+        # its experiment so fidelity_tracking_update can find it (#2206).
+        saved_id = await repo.save_simulation(result, request.brand.value)
+        if experiment_link is not None:
+            sim_id = saved_id or result.simulation_id
+            linked = await repo.simulations.link_experiment(sim_id, experiment_link)
+            if not linked:
+                # The caller asked for a linked pre-screen and did not get one; a
+                # 200 here would hide an orphan the fidelity loop can never find.
+                raise HTTPException(
+                    status_code=500,
+                    detail=(
+                        f"Simulation {sim_id} was saved but could not be linked to "
+                        f"experiment {experiment_link}; link it before relying on "
+                        "post-experiment fidelity tracking."
+                    ),
+                )
 
         return SimulationResponse(
             simulation_id=str(result.simulation_id),
@@ -976,6 +855,8 @@ async def run_simulation(
             fidelity_warning=result.fidelity_warning,
             fidelity_warning_reason=result.fidelity_warning_reason,
             model_fidelity_score=result.model_fidelity_score,
+            fidelity_status=FidelityStatusEnum(result.fidelity_status.value),
+            experiment_design_id=str(experiment_link) if experiment_link is not None else None,
             status=SimulationStatusEnum(result.status.value),
             error_message=result.error_message,
             execution_time_ms=result.execution_time_ms,
@@ -985,13 +866,9 @@ async def run_simulation(
             data_provenance=result.data_provenance,
             estimate_scope=_live_estimate_scope(result.target_regions),
             target_regions=result.target_regions,
-            cohort_effect=(None if result.cohort_ate is None else round(result.cohort_ate, 4)),
-            cohort_ci_lower=(
-                None if result.cohort_ci_lower is None else round(result.cohort_ci_lower, 4)
-            ),
-            cohort_ci_upper=(
-                None if result.cohort_ci_upper is None else round(result.cohort_ci_upper, 4)
-            ),
+            cohort_effect=_round4(result.cohort_ate),
+            cohort_ci_lower=_round4(result.cohort_ci_lower),
+            cohort_ci_upper=_round4(result.cohort_ci_upper),
             effect_heterogeneity=_heterogeneity_response(result.effect_heterogeneity),
             subgroups_basis=_live_subgroups_basis(
                 result.data_provenance, calculated=request.calculate_heterogeneity
@@ -1071,6 +948,7 @@ async def list_simulations(
             items.append(
                 SimulationListItem(
                     simulation_id=str(sim.get("simulation_id", "")),
+                    experiment_design_id=sim.get("experiment_design_id"),
                     intervention_type=sim.get("intervention_type", "unknown"),
                     brand=sim.get("brand", "unknown"),
                     twin_type=sim.get("twin_type", "unknown"),
@@ -1151,6 +1029,7 @@ async def get_simulation_history(
             items.append(
                 SimulationHistoryItem(
                     simulation_id=str(sim.get("simulation_id", "")),
+                    experiment_design_id=sim.get("experiment_design_id"),
                     created_at=sim.get("created_at", datetime.now(timezone.utc)),
                     intervention_type=sim.get("intervention_type", "unknown"),
                     brand=sim.get("brand", "unknown"),
@@ -1275,6 +1154,7 @@ async def compare_scenarios(
             population=population,
             effect_provider=cohort_provider,
             effect_estimator=CohortCausalEstimator(),
+            model_fidelity_score=model_row.get("fidelity_score"),  # #2206
         )
         engine.model_id = model_id
         result = engine.simulate(intervention_config=intervention)
@@ -1309,6 +1189,7 @@ async def compare_scenarios(
             fidelity_warning=result.fidelity_warning,
             fidelity_warning_reason=result.fidelity_warning_reason,
             model_fidelity_score=result.model_fidelity_score,
+            fidelity_status=FidelityStatusEnum(result.fidelity_status.value),
             status=SimulationStatusEnum(result.status.value),
             error_message=result.error_message,
             execution_time_ms=result.execution_time_ms,
@@ -1422,6 +1303,17 @@ async def get_simulation(
         eh = result.get("effect_heterogeneity") or {}
         heterogeneity = _heterogeneity_response(eh)
 
+        # twin_simulations does not persist the model's fidelity; derive the explicit
+        # state (and the warning) from the model row this run points at, as it
+        # stands now (#2206). A missing model row validates nothing → unvalidated.
+        model_row = None
+        if result.get("model_id"):
+            try:
+                model_row = await repo.get_model(UUID(str(result["model_id"])))
+            except Exception as model_err:  # pragma: no cover - defensive
+                logger.warning("Model lookup failed for stored simulation: %s", model_err)
+        fidelity_fields = _stored_fidelity_fields(model_row)
+
         return SimulationDetailResponse(
             simulation_id=str(result.get("simulation_id", "")),
             model_id=str(result.get("model_id", "")),
@@ -1441,9 +1333,8 @@ async def get_simulation(
             recommended_sample_size=result.get("recommended_sample_size"),
             recommended_duration_weeks=result.get("recommended_duration_weeks"),
             simulation_confidence=round(float(result.get("simulation_confidence", 0.0) or 0.0), 3),
-            fidelity_warning=bool(result.get("fidelity_warning", False)),
-            fidelity_warning_reason=result.get("fidelity_warning_reason"),
-            model_fidelity_score=result.get("model_fidelity_score"),
+            **fidelity_fields,  # fidelity_status/_warning/_reason + model_fidelity_score
+            experiment_design_id=result.get("experiment_design_id"),
             status=SimulationStatusEnum(result.get("simulation_status", "completed")),
             error_message=result.get("error_message"),
             execution_time_ms=result.get("execution_time_ms", 0),
@@ -1634,10 +1525,12 @@ async def list_models(
         # Convert twin_type to TwinType enum if provided
         twin_type_enum = TwinType(twin_type.value) if twin_type else None
 
-        models = await repo.list_active_models(
-            twin_type=twin_type_enum,
-            brand=effective_brand,
-        )
+        # Census over ALL brands first (shared-fit fingerprints, #2206), then the
+        # brand-scoped listing is a filter over it.
+        census = await _active_model_census(repo, twin_type_enum)
+        models = [
+            m for m in census if effective_brand is None or str(m.get("brand")) == effective_brand
+        ]
 
         # save_model stores metrics nested under performance_metrics (JSONB) and
         # tuning under training_config (JSONB) — NOT as flat columns. Read from
@@ -1662,6 +1555,7 @@ async def list_models(
                     ),
                     is_active=m.get("is_active", True),
                     created_at=m.get("created_at", datetime.now(timezone.utc)),
+                    **_model_honesty_fields(m, census, user),
                 )
             )
 
@@ -1717,6 +1611,11 @@ async def get_model(
         pm = model.get("performance_metrics") or {}
         tc = model.get("training_config") or {}
         target_cols = model.get("target_columns") or []
+        from src.digital_twin.models.twin_models import TwinType
+
+        census = await _active_model_census(
+            repo, TwinType(model["twin_type"]) if model.get("twin_type") else None
+        )
         return TwinModelDetailResponse(
             model_id=str(model.get("model_id")),
             model_name=model.get("model_name", ""),
@@ -1740,6 +1639,7 @@ async def get_model(
             is_active=model.get("is_active", True),
             created_at=model.get("created_at", datetime.now(timezone.utc)),
             config=tc or model.get("config", {}),
+            **_model_honesty_fields(model, census, user),
         )
 
     except HTTPException:
@@ -1931,3 +1831,10 @@ async def get_fidelity_report(
     except Exception as e:
         logger.error(f"Failed to generate fidelity report: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate fidelity report")
+
+
+# Proposed experiments from twin simulations (#2206 item C) live in their own
+# module (this one is size-pinned) and mount under this router's prefix.
+from src.api.routes.digital_twin_proposals import router as _proposals_router  # noqa: E402
+
+router.include_router(_proposals_router)

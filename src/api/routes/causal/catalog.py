@@ -36,7 +36,6 @@ from src.causal_engine.pipeline.router import (
 from src.causal_engine.pipeline.router import (
     QuestionType as RouterQuestionType,
 )
-from src.repositories.provenance import apply_provenance_filter
 from src.utils.redaction import redact_query
 
 from .datasets import (
@@ -46,6 +45,7 @@ from .datasets import (
     _CAUSAL_NUMERIC_COLUMNS,
     _CAUSAL_NUMERIC_DERIVATIONS,
     _CAUSAL_PHYSICAL_TABLE,
+    _CAUSAL_SYNTHETIC_BACKED,
     _DEFAULT_CAUSAL_DATASET,
     _JOIN_DATASETS,
     _NBA_JOINED_COVARIATES,
@@ -53,6 +53,7 @@ from .datasets import (
     _column_label,
     _is_randomized_treatment,
     _list_dataset_brands,
+    apply_dataset_provenance_filter,
 )
 from .loaders import _coerce_estimation_row, _load_agent_estimation_frame
 
@@ -324,12 +325,14 @@ async def list_causal_variables(
         raise HTTPException(status_code=503, detail="Causal data store unavailable")
 
     # Probe one row to learn the columns actually present in the live schema.
-    probe = (
-        await client.table(_CAUSAL_PHYSICAL_TABLE.get(dataset, dataset))
-        .select("*")
-        .limit(1)
-        .execute()
-    )
+    # For a synthetic-backed dataset the probe is provenance-guarded like every
+    # other reader (codex r1 MED): its planted row never enters the API process
+    # on the deployed instance. Every other dataset keeps the unfiltered schema
+    # probe it always had (the columns are the same on every row).
+    probe_query = client.table(_CAUSAL_PHYSICAL_TABLE.get(dataset, dataset)).select("*")
+    if dataset in _CAUSAL_SYNTHETIC_BACKED:
+        probe_query = apply_dataset_provenance_filter(probe_query, dataset)
+    probe = await probe_query.limit(1).execute()
     rows = probe.data or []
     present = set(rows[0].keys()) if rows else set()
 
@@ -448,7 +451,7 @@ async def propose_causal_questions(
         per_treatment = [] if _is_randomized_treatment(dataset, t) else covariates_all
         cov = [c for c in per_treatment if c not in (t, o)]
         try:
-            df, _ = await _load_agent_estimation_frame(
+            df, select_cols = await _load_agent_estimation_frame(
                 dataset=dataset,
                 treatment_var=t,
                 outcome_var=o,
@@ -458,7 +461,14 @@ async def propose_causal_questions(
         except HTTPException:
             # A pair with no usable data is simply omitted (never fabricated).
             return None
-        pc = _adjusted_partial_corr(df, t, o, cov)
+        # Screen on the loader's EXPANDED columns, not the requested names: a
+        # categorical covariate (geographic_region; the seven Optum text
+        # baselines) leaves the frame as ``<col>=<level>`` dummies, and an
+        # all-NULL covariate is dropped — indexing ``df`` by the raw list
+        # KeyError-ed (HTTP 500) for the default dataset and for every dataset
+        # with a categorical. Same contract as discovery._prerank_signal (D5).
+        cov_expanded = [c for c in select_cols if c not in (t, o)]
+        pc = _adjusted_partial_corr(df, t, o, cov_expanded)
         if pc is None:
             return None
         return ProposedQuestion(
@@ -664,8 +674,10 @@ async def get_causal_estimation_data(
 
     query = client.table(_CAUSAL_PHYSICAL_TABLE.get(dataset, dataset)).select(",".join(select_cols))
     # Synthetic-showcase aware: on a synthetic-gold instance the synthetic rows
-    # ARE the substrate; on a strict real-data instance they are excluded.
-    query = apply_provenance_filter(query)
+    # ARE the substrate; on a strict real-data instance they are excluded --
+    # except for a synthetic-backed dataset, which keeps the real-mode
+    # predicate on every instance (see _CAUSAL_SYNTHETIC_BACKED).
+    query = apply_dataset_provenance_filter(query, dataset)
     result = await query.limit(limit).execute()
     rows = result.data or []
 

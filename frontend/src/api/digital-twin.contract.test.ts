@@ -29,6 +29,8 @@ import {
   getSimulationHistory,
   compareScenarios,
   listInterventionTypes,
+  listProposedExperiments,
+  createDraftExperiment,
 } from './digital-twin';
 import type { ScenarioComparisonRequest } from '@/types/digital-twin';
 import { InterventionType } from '@/types/digital-twin';
@@ -80,6 +82,30 @@ describe('digital-twin API contract', () => {
       const [url, body] = (post as ReturnType<typeof vi.fn>).mock.calls[0];
       expect(url).toBe('/digital-twin/simulations/compare');
       expect(body).toEqual(request);
+    });
+  });
+
+  describe('proposed experiments (#2206)', () => {
+    it('calls GET /digital-twin/proposed-experiments, brand as a query param when given', async () => {
+      await listProposedExperiments();
+      expect(get).toHaveBeenCalledTimes(1);
+      let [url, params] = (get as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(url).toBe('/digital-twin/proposed-experiments');
+      expect(params).toBeUndefined();
+
+      vi.clearAllMocks();
+      await listProposedExperiments({ brand: 'Kisqali' });
+      [url, params] = (get as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(url).toBe('/digital-twin/proposed-experiments');
+      expect(params).toEqual({ brand: 'Kisqali' });
+    });
+
+    it('calls POST /digital-twin/proposed-experiments/{id}/draft with an empty body, id encoded', async () => {
+      await createDraftExperiment('sim/with slash');
+      expect(post).toHaveBeenCalledTimes(1);
+      const [url, body] = (post as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(url).toBe('/digital-twin/proposed-experiments/sim%2Fwith%20slash/draft');
+      expect(body).toEqual({});
     });
   });
 

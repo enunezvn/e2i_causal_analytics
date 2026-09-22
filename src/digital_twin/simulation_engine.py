@@ -45,6 +45,7 @@ from .models.simulation_models import (
     SimulationResult,
     SimulationStatus,
     SubgroupAxisProvenance,
+    classify_fidelity,
 )
 from .models.twin_models import DigitalTwin, TwinPopulation
 
@@ -73,6 +74,17 @@ _NUMERIC_AXES = frozenset({"decile"})
 # frame size), the uplift model is refit on that draw and the ATE is the mean of the
 # per-twin predictions, so the precision term varies with the twin sample.
 CONFIDENCE_N_SATURATION = 1000.0
+
+# Confidence blend weights. Fidelity enters ONLY once it has been measured (#2206, owner
+# fix): for an UNVALIDATED model (NULL score) the fidelity term is dropped and the
+# remaining weights are renormalised (0.5 evidence / 0.5 precision). The previous blend
+# imputed 0.7 — exactly FIDELITY_WARNING_THRESHOLD — for a NULL score, so an unvalidated
+# model scored the same confidence as one that had just passed validation while its
+# status said "unknown". The missing measurement travels on its own channel
+# (fidelity_status / fidelity_warning / the reason string); the number carries the
+# evidence that exists. Stored rows are not backfilled — the UI states that a stored
+# confidence is the heuristic in force at the time (precedent: twin_weighted_legacy).
+CONFIDENCE_WEIGHTS: Dict[str, float] = {"evidence": 0.3, "precision": 0.3, "fidelity": 0.4}
 
 
 class SimulationEngine:
@@ -287,15 +299,12 @@ class SimulationEngine:
             rationale = f"{rationale} {size_note}"
         recommendation = SimulationRecommendation(rec.value)
 
-        # Check fidelity warnings
-        fidelity_warning = False
-        fidelity_warning_reason = None
-        if self.model_fidelity_score and self.model_fidelity_score < 0.7:
-            fidelity_warning = True
-            fidelity_warning_reason = (
-                f"Model fidelity ({self.model_fidelity_score:.2f}) "
-                "below threshold (0.70). Results may be unreliable."
-            )
+        # Fidelity gate (#2206): one rule, three explicit states. A NULL model score
+        # (no experiment outcome ever compared against the model) is UNVALIDATED and
+        # warns — the old ``if score and score < 0.7`` let NULL (and a real 0.0) pass.
+        fidelity_status, fidelity_warning, fidelity_warning_reason = classify_fidelity(
+            self.model_fidelity_score
+        )
 
         # Confidence follows the estimate's own evidence, not the twin count as such
         # (#2104; see CONFIDENCE_N_SATURATION for what each path's evidence is).
@@ -327,6 +336,7 @@ class SimulationEngine:
             fidelity_warning=fidelity_warning,
             fidelity_warning_reason=fidelity_warning_reason,
             model_fidelity_score=self.model_fidelity_score,
+            fidelity_status=fidelity_status,
             data_provenance=estimate.data_provenance,
             status=SimulationStatus.COMPLETED,
             execution_time_ms=execution_time_ms,
@@ -506,11 +516,20 @@ class SimulationEngine:
         # 2. Precision (lower std error = better)
         precision_score = max(0, 1 - std_error / (abs(ate) + 0.001))
 
-        # 3. Model fidelity
-        fidelity_score = self.model_fidelity_score or 0.7
+        # 3. Model fidelity — only when measured. An UNVALIDATED model (NULL score)
+        #    contributes no term: it is neither imputed at the threshold (which read as
+        #    "passing") nor scored 0.0 (which would assert it is known-bad and cap the
+        #    run at 0.6 regardless of evidence). The gate above already reports the
+        #    state explicitly (#2206).
+        terms = {"evidence": size_score, "precision": precision_score}
+        if self.model_fidelity_score is not None:
+            terms["fidelity"] = float(self.model_fidelity_score)
 
-        # Weighted average
-        confidence = 0.3 * size_score + 0.3 * precision_score + 0.4 * fidelity_score
+        # Weighted average over the terms that exist, weights renormalised to sum to 1
+        # (3-term: 0.3 / 0.3 / 0.4; unvalidated: 0.5 / 0.5).
+        total_weight = sum(CONFIDENCE_WEIGHTS[name] for name in terms)
+        confidence = sum(CONFIDENCE_WEIGHTS[name] * value for name, value in terms.items())
+        confidence /= total_weight
 
         return min(1.0, max(0.0, confidence))
 
@@ -528,10 +547,17 @@ class SimulationEngine:
         ``error_cause`` / ``error_details`` are the effect engine's cause and counts, when it
         named one; ``error_message`` is unchanged by them.
         """
+        fidelity_status, fidelity_warning, fidelity_warning_reason = classify_fidelity(
+            self.model_fidelity_score
+        )
         return SimulationResult(
             model_id=self.model_id or uuid4(),
             intervention_config=config,
             population_filters=filters,
+            fidelity_status=fidelity_status,
+            fidelity_warning=fidelity_warning,
+            fidelity_warning_reason=fidelity_warning_reason,
+            model_fidelity_score=self.model_fidelity_score,
             twin_count=0,
             simulated_ate=0.0,
             simulated_ci_lower=0.0,

@@ -395,7 +395,13 @@ class FeatureAnalyzerAdapter:
 
         try:
             if self._feast_client is None:
-                self._feast_client = FeastClient()
+                # #2207: through the factory, so FEAST_URL (the e2i_feast sidecar, #532)
+                # is honoured. A bare ``FeastClient()`` is embedded mode, which needs
+                # ``import feast`` — impossible on the app/worker image (#307) — so the
+                # adapter reported "Feast not available" there on every run.
+                from src.feature_store.feast_client import get_feast_client
+
+                self._feast_client = await get_feast_client()
 
             await self._feast_client.initialize()
             self._feast_initialized = True

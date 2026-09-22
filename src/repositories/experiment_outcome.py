@@ -40,6 +40,12 @@ logger = logging.getLogger(__name__)
 # (see resolve_column) — no per-HCP prescription column exists.
 _COUNT_COLUMNS = {"triggers_delivered_count", "triggers_accepted_count", "triggers_total_count"}
 _RATE_COLUMNS = {"market_share", "conversion_rate", "engagement_score", "call_frequency"}
+# The Digital Twin cohort OUTCOME (migration 147; src.data.per_hcp_cohort_columns
+# .COHORT_OUTCOME_COLUMN). A draft experiment created from a twin proposal
+# (#2206 item C) carries it as prediction_target so the final results measure the
+# SAME quantity the twin predicted an effect on. Per-HCP numeric, not a count:
+# the window collapses by MEAN.
+_TWIN_OUTCOME_COLUMN = "cohort_conversion_outcome"
 _PRESCRIPTION_SHORTHANDS = frozenset(
     {"trx", "nrx", "rx", "total_rx", "trx_count", "nrx_count", "total_rx_count"}
 )
@@ -57,6 +63,7 @@ METRIC_COLUMN_MAP: Dict[str, str] = {
     "engagement_score": "engagement_score",
     "engagement": "engagement_score",
     "call_frequency": "call_frequency",
+    _TWIN_OUTCOME_COLUMN: _TWIN_OUTCOME_COLUMN,
 }
 
 

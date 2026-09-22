@@ -19,6 +19,7 @@ never mistaken for an RWD-trained one (anti-mock discipline).
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from functools import partial
 from typing import Any, Dict, Optional, Tuple
@@ -65,6 +66,15 @@ def _resolve_training_frame(
     )
 
 
+def _frame_content_sha256(frame: pd.DataFrame) -> str:
+    """sha256 over the frame's values, column order and column names (index ignored)."""
+    row_hashes = pd.util.hash_pandas_object(frame, index=False).to_numpy()
+    h = hashlib.sha256()
+    h.update("|".join(str(c) for c in frame.columns).encode("utf-8"))
+    h.update(row_hashes.tobytes())
+    return h.hexdigest()
+
+
 async def train_and_persist_twin(
     *,
     twin_type: TwinType,
@@ -106,6 +116,28 @@ async def train_and_persist_twin(
         n_rows=n_rows,
         seed=seed,
     )
+    # The frame's identity travels with the row (#2206): the /models fit fingerprint
+    # hashes training_config, so two fits from different frames (another seed, a
+    # different file) never share a fingerprint on coinciding metrics.
+    training_frame: Dict[str, Any] = {
+        "provided": {"source": "provided", "n_rows": int(len(frame))},
+        "rwd_file": {
+            "source": "rwd_file",
+            "path": str(data_source),
+            "n_rows": int(len(frame)),
+            "target_column": target_column,
+        },
+        "synthetic": {
+            "source": "synthetic_training_frame",
+            "seed": int(seed),
+            "n_rows": int(n_rows),
+            "target_column": target_column,
+        },
+    }[provenance]
+    # Source/seed/path are metadata another frame can share (a path can be
+    # overwritten, an in-memory frame has no name): the identity that counts is
+    # the CONTENT digest (codex r5 #1), stable across runs of the same frame.
+    training_frame["content_sha256"] = _frame_content_sha256(frame)
 
     generator = TwinGenerator(twin_type=twin_type, brand=brand)
     # Training (sklearn fit + 5-fold CV) is blocking CPU work — run it off the
@@ -139,6 +171,7 @@ async def train_and_persist_twin(
         mlflow_run_id=ref.run_id,
         mlflow_model_uri=ref.model_uri,
         data_provenance=provenance,
+        training_frame=training_frame,
     )
 
     logger.info(

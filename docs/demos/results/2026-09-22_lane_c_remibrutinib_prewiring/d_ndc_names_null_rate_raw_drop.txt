@@ -1,0 +1,8 @@
+workbook: /home/enunez/Projects/e2i_causal_analytics/data/rwd/csu/csu_data.xlsx
+sheets: ['demo', 'proc', 'medication', 'provider', 'lab', 'inpatientdata']
+medication rows: 10000
+columns: ['patid', 'pat_planid', 'clmid', 'ahfsclss', 'medication_date', 'code', 'days_sup', 'quantity', 'strength', 'npi', 'indexdt', 'source_table', 'Brand_Name', 'Generic_Name', 'ndcstrength', 'Dosage_Form', 'Package_Size', 'days_from_indexdt']
+Brand_Name null: 0 Generic_Name null: 0 code null: 0
+code-only rows (Brand_Name AND Generic_Name null, code present): 0
+rows whose code starts with 00078 (Novartis labeler): 0
+distinct Brand_Name containing RHAPSIDO: 0 | Generic_Name containing remibrutinib: 0

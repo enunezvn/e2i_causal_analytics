@@ -31,6 +31,7 @@ vi.mock('@/api/digital-twin', () => ({
   getSimulation: vi.fn(),
   getSimulationHistory: vi.fn(),
   getDigitalTwinHealth: vi.fn(),
+  listModels: vi.fn(),
 }));
 
 // Mock query-client
@@ -107,6 +108,7 @@ const mockSimulationResponse: SimulationResponse = {
   simulation_confidence: 0.85,
   fidelity_warning: false,
   fidelity_warning_reason: undefined,
+  fidelity_status: 'validated',
   status: SimulationStatus.COMPLETED,
   execution_time_ms: 1500,
   is_significant: true,

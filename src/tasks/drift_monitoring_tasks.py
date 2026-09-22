@@ -784,15 +784,24 @@ def evaluate_retraining_need(
     self,
     model_id: str,
     auto_approve: bool = False,
+    cohort: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Evaluate and optionally trigger model retraining.
+    """Evaluate whether a model needs retraining and trigger it when it can.
 
-    Checks drift scores and performance metrics to determine if
-    retraining is needed, then optionally triggers it.
+    Checks drift scores and performance metrics to decide whether retraining is
+    needed. A live retrain needs the model's cohort contract (``data_source`` +
+    ``target_outcome`` — see ``_cohort_input_from_training_config``); since the
+    2026-09-22 owner decision (#2207 follow-up) the sweep reads it off the
+    ``ml_model_registry`` row (migration 150) and passes it as ``cohort``.
+    Without one, ``evaluate_and_trigger_retraining`` refuses to enqueue a job that
+    would fail closed: the decision is logged and returned with
+    ``retraining_blocked_reason="no_cohort_contract"``; triggering by hand is
+    ``POST /monitoring/retraining/trigger/{model_id}`` (which heals the row).
 
     Args:
         model_id: Model version/ID to evaluate
         auto_approve: Skip approval requirement if True
+        cohort: The model's persisted cohort contract (None-free), if any
 
     Returns:
         Evaluation results and trigger status
@@ -806,6 +815,7 @@ def evaluate_retraining_need(
             result = await evaluate_and_trigger_retraining(
                 model_version=model_id,
                 auto_approve=auto_approve,
+                cohort=cohort,
             )
             return result
 
@@ -964,6 +974,31 @@ async def _execute_real_retraining(
         performance_after=performance_after,
         success=True,
     )
+    # #2207: THIS contract just produced a promotable model — heal the retrained
+    # model's registry row (NULL columns only, as a consistent unit; never at
+    # trigger time) so the scheduled sweep can retrain it next time. Only once the
+    # history row reads `completed`, and exactly the row's persisted model_id FK
+    # (set at trigger; None for an unregistered handle) — never a re-resolved
+    # name/version lookup (codex r2 MED-6). Best-effort.
+    try:
+        from src.services.cohort_contract import (
+            contract_from_training_config,
+            heal_registry_cohort_contract,
+        )
+
+        completed = await repo.get_by_id(retraining_id)
+        if completed is not None and completed.status == "completed" and completed.model_id:
+            await heal_registry_cohort_contract(
+                repo.client, completed.model_id, contract_from_training_config(training_config)
+            )
+        else:
+            logger.info(
+                f"Retraining {retraining_id}: cohort contract not healed "
+                f"(status={getattr(completed, 'status', None)!r}, "
+                f"model_id={getattr(completed, 'model_id', None)!r})"
+            )
+    except Exception as e:  # noqa: BLE001 — the retrain succeeded; healing is a side channel
+        logger.warning(f"Retraining {retraining_id}: cohort contract not healed ({e})")
     deployment = getattr(result, "deployment_result", None) or {}
     return {
         "status": "completed",
@@ -990,8 +1025,12 @@ def execute_model_retraining(
     Loads the committed cohort named in ``training_config`` (data_source +
     target_outcome + optional feature_manifest_source), runs scope → data-prep
     (QC gate) → train → deploy (gated), and records the real validation metric.
-    Fails closed — never writes a simulated metric. Routed to the ``ml`` queue
-    (worker_heavy) since it runs a full training pipeline.
+    Fails closed — never writes a simulated metric. Routed to the ``analytics`` queue
+    (worker_medium, 4G cgroup) since #2207 — the ``ml`` queue has no consumer on this
+    box (worker_heavy replicas: 0, #705); measurement in ``src/workers/celery_app.py``.
+    On the current worker image the run stops at data-prep's Feast gate (#556, Feast
+    not importable there per #307) and is recorded ``failed`` with that reason unless
+    ``ALLOW_STALE_FEAST=1`` is set — an owner decision documented in the routing comment.
 
     Args:
         retraining_id: Retraining history record ID
@@ -1015,9 +1054,14 @@ def check_retraining_for_all_models(
     self,
     auto_approve: bool = False,
 ) -> Dict[str, Any]:
-    """Check retraining needs for all production models.
+    """Check retraining needs for all production/staging models.
 
-    Evaluates each production model and triggers retraining if needed.
+    Fans out one ``evaluate_retraining_need`` per production/staging model. Since
+    #2207 this runs daily from the ``retraining-evaluation-daily`` beat on the
+    ``quick`` queue. Each model's persisted cohort contract (``ml_model_registry``
+    migration-150 columns, projected by the connector) travels with the evaluation
+    so a model that carries one can be retrained; one that does not is evaluated
+    and blocked with ``no_cohort_contract`` (see ``evaluate_retraining_need``).
 
     Args:
         auto_approve: Skip approval requirement for all models
@@ -1026,6 +1070,7 @@ def check_retraining_for_all_models(
         Summary of evaluations and triggered retraining jobs
     """
     from src.agents.drift_monitor.connectors import get_connector
+    from src.services.cohort_contract import contract_from_registry_row
 
     logger.info(f"Checking retraining for all production models: task {self.request.id}")
 
@@ -1052,11 +1097,14 @@ def check_retraining_for_all_models(
             # #894: the registry projection uses the live column names
             # (model_name, not name)
             model_id = model.get("id") or model.get("model_name")
+            # #2207: the row's cohort contract (None-free; {} -> None = unknown)
+            cohort = contract_from_registry_row(model) or None
             try:
                 # Queue evaluation task
                 task = evaluate_retraining_need.delay(
                     model_id=model_id,
                     auto_approve=auto_approve,
+                    cohort=cohort,
                 )
                 results.append(
                     {

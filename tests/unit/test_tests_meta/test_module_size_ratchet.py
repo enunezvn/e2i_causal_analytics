@@ -23,16 +23,17 @@ LIMIT = 1500
 
 # path (relative to repo) -> pinned line count. Measured, not guessed. Only shrinks.
 ALLOWLIST: dict[str, int] = {
-    # 1560: MEASURED on the Lane B merge with origin/main 44d310f0f. The file
-    # crossed LIMIT on main itself at e3fb21186 (Lane D #2227 1478 -> Lane E
-    # #2226 1566) and main pinned it at 1566 in #2229; Lane B's delegation of
-    # the backdoor criterion to src/ml/causal_role_dgp/backdoor.py saves 6 of
-    # those lines, so the pin shrinks. The split by concern is an owner decision.
+    # 1566: MEASURED on main e3fb21186. The file crossed LIMIT on main itself:
+    # Lane D (#2227) took it to 1478 and Lane E (#2226) to 1566 — each PR was
+    # under the limit alone, and E's PR CI ran on a merge ref computed before D
+    # landed, so neither gate saw the sum. Pinned so the ratchet forbids further
+    # growth; Lane B lowers it (delegates the backdoor criterion out of the file)
+    # and the split by concern is an owner decision.
     "src/agents/causal_impact/nodes/graph_builder.py": 1560,
     "src/agents/causal_impact/nodes/refutation.py": 2519,
     "src/agents/feedback_learner/dspy_integration.py": 1836,
     "src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py": 4224,
-    "src/agents/ml_foundation/model_deployer/nodes/registry_manager.py": 1670,
+    "src/agents/ml_foundation/model_deployer/nodes/registry_manager.py": 1669,
     "src/agents/ml_foundation/model_trainer/nodes/evaluator.py": 4026,
     # 3710: MEASURED from the merged tree, not either side's pin. The lane's
     # value-lookup mask (#2114) and main's #2139 structural guard both run here,
@@ -52,12 +53,12 @@ ALLOWLIST: dict[str, int] = {
     # refutation-evidence shaping into src/api/routes/chat_causal_evidence.py.
     "src/api/routes/chatbot_tools.py": 2907,
     "src/api/routes/copilotkit.py": 6140,
-    "src/api/routes/digital_twin.py": 1933,
+    "src/api/routes/digital_twin.py": 1840,
     "src/api/routes/experiments.py": 1595,
     "src/api/routes/explain.py": 2822,
     "src/api/routes/feedback.py": 2041,
     "src/api/routes/health_score.py": 2379,
-    "src/api/routes/monitoring.py": 2154,
+    "src/api/routes/monitoring.py": 2153,
     "src/api/routes/predictions.py": 1519,
     "src/api/routes/resource_optimizer.py": 1549,
     "src/api/routes/segments.py": 2934,
@@ -65,7 +66,7 @@ ALLOWLIST: dict[str, int] = {
     "src/causal_engine/energy_score/estimator_selector.py": 1858,
     "src/causal_engine/refutation_runner.py": 3166,
     "src/data/causal_role_classifier.py": 6525,
-    "src/feature_store/feast_client.py": 1711,
+    "src/feature_store/feast_client.py": 1682,
     "src/memory/lifecycle/consolidator.py": 1954,
     "src/memory/semantic_memory.py": 1795,
     "src/ml/data_generator.py": 1759,

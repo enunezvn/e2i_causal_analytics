@@ -37,8 +37,11 @@ def _model(brand: str) -> dict:
 
 
 def _repo_with_model(brand: str) -> SimpleNamespace:
+    row = _model(brand)
     return SimpleNamespace(
-        get_model=AsyncMock(return_value=_model(brand)),
+        get_model=AsyncMock(return_value=row),
+        # The detail runs the shared-fit census over the active models (#2206).
+        list_active_models=AsyncMock(return_value=[row]),
         get_model_fidelity_records=AsyncMock(return_value=[]),
     )
 

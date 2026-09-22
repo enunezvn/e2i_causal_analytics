@@ -839,14 +839,20 @@ class TestHelperFunctions:
             mock_service.trigger_retraining = AsyncMock(return_value=mock_job)
             mock_get.return_value = mock_service
 
+            # #2207: a trigger needs the committed cohort contract
+            # (execute_model_retraining fails closed without data_source +
+            # target_outcome); without one the helper refuses to enqueue.
+            cohort = {"data_source": "cohort_propensity", "target_outcome": "converted_90d"}
             result = await evaluate_and_trigger_retraining(
                 model_version="propensity_v2.1.0",
                 auto_approve=True,
+                cohort=cohort,
             )
 
             assert result["should_retrain"] is True
             assert result["retraining_triggered"] is True
             assert result["job_id"] == "job-129"
+            assert mock_service.trigger_retraining.await_args.kwargs["cohort"] == cohort
 
 
 # =============================================================================
