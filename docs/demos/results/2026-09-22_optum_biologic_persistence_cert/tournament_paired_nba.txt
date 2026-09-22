@@ -1,0 +1,4 @@
+{"pair": ["nba_triggers", "Fabhalta", "control_group_flag", "action_taken"], "k": 0, "win": ["ols", "ols"], "ate_same": true, "dE": 0.0}
+{"pair": ["nba_triggers", "Fabhalta", "acceptance_status", "conversion_flag"], "k": 2, "win": ["linear_dml", "linear_dml"], "ate_same": true, "dE": 1.9281755639366516e-05}
+{"pair": ["nba_triggers", "Kisqali", "control_group_flag", "action_taken"], "k": 0, "win": ["ols", "ols"], "ate_same": true, "dE": 0.0}
+{"pair": ["nba_triggers", "Kisqali", "acceptance_status", "conversion_flag"], "k": 2, "win": ["linear_dml", "linear_dml"], "ate_same": true, "dE": 0.002538633977535565}

@@ -1,0 +1,14 @@
+{"pair": ["patient_journeys", "Fabhalta", "treatment_arm", "treatment_initiated"], "k": 2, "win": ["linear_dml", "linear_dml"], "ate_same": true, "ci_same": true, "review_same": true, "rank": 2, "dE": 0.01965295807184758}
+{"pair": ["patient_journeys", "Fabhalta", "psp_enrolled", "persistent_180d"], "k": 3, "win": ["linear_dml", "linear_dml"], "ate_same": true, "ci_same": true, "review_same": true, "rank": 3, "dE": 3.6641297842865406e-05}
+{"pair": ["patient_journeys", "Fabhalta", "rep_detailing_high", "treatment_initiated"], "k": 2, "win": ["linear_dml", "linear_dml"], "ate_same": true, "ci_same": true, "review_same": true, "rank": 2, "dE": 7.596337810034104e-05}
+{"pair": ["patient_journeys", "Kisqali", "disease_stage", "persistent_180d"], "k": 1, "win": ["linear_dml", "linear_dml"], "ate_same": true, "ci_same": true, "review_same": true, "rank": 1, "dE": 9.43501610606301e-05}
+{"pair": ["patient_journeys", "Kisqali", "copay_support", "adherent_180d"], "k": 2, "win": ["linear_dml", "linear_dml"], "ate_same": true, "ci_same": true, "review_same": true, "rank": 2, "dE": 2.9499592016257736e-05}
+{"pair": ["patient_journeys", "Kisqali", "copay_support", "low_gap_180d"], "k": 2, "win": ["linear_dml", "linear_dml"], "ate_same": true, "ci_same": true, "review_same": true, "rank": 2, "dE": 2.9920771832225856e-05}
+{"pair": ["hcp_adoption", "Fabhalta", "treatment_arm", "adopted"], "k": 1, "win": ["linear_dml", "linear_dml"], "ate_same": true, "ci_same": true, "review_same": true, "rank": 1, "dE": 0.0}
+{"pair": ["hcp_adoption", "Fabhalta", "peer_influence_score", "adopted"], "k": 0, "win": ["ols", "ols"], "ate_same": true, "ci_same": true, "review_same": true, "rank": 0, "dE": 0.0}
+{"pair": ["hcp_adoption", "Kisqali", "peer_influence_score", "adopted"], "k": 0, "win": ["ols", "ols"], "ate_same": true, "ci_same": true, "review_same": true, "rank": 0, "dE": 0.0}
+{"pair": ["hcp_adoption", "Kisqali", "treatment_arm", "adopted"], "k": 1, "win": ["linear_dml", "linear_dml"], "ate_same": true, "ci_same": true, "review_same": true, "rank": 1, "dE": 5.551115123125783e-17}
+{"pair": ["nba_triggers", "Fabhalta", "control_group_flag", "action_taken"], "k": 0, "win": ["ols", "ols"], "ate_same": true, "ci_same": true, "review_same": true, "rank": 0, "dE": 0.0}
+{"pair": ["nba_triggers", "Fabhalta", "acceptance_status", "conversion_flag"], "k": 2, "win": ["linear_dml", "linear_dml"], "ate_same": true, "ci_same": true, "review_same": true, "rank": 2, "dE": 0.0012862738394646134}
+{"pair": ["nba_triggers", "Kisqali", "control_group_flag", "action_taken"], "k": 0, "win": ["ols", "ols"], "ate_same": true, "ci_same": true, "review_same": true, "rank": 0, "dE": 0.0}
+{"pair": ["nba_triggers", "Kisqali", "acceptance_status", "conversion_flag"], "k": 2, "win": ["linear_dml", "linear_dml"], "ate_same": true, "ci_same": true, "review_same": true, "rank": 2, "dE": 0.0001070187050125071}

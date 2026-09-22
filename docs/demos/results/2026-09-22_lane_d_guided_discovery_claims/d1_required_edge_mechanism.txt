@@ -1,0 +1,6 @@
+converged: True | edges: [('c', 't'), ('c', 'y')]
+required (t,y) present in PC output: False
+skeleton_discovery consults is_required: False | consults is_forbidden: True
+orient_by_background_knowledge consults is_required: True
+causal-learn version: ?
+control (real t->y effect): (t,y) present: True | edges: [('c', 't'), ('c', 'y'), ('t', 'y')]

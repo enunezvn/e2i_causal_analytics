@@ -62,6 +62,13 @@ logger = logging.getLogger(__name__)
 # LLM verdict cited were actually verified against the abstracts behind them.
 # Emitted unconditionally by every verdict path so the schema stays uniform;
 # absent on pre-1.8 sidecars (surface as None/[] without a warning). MAJOR=1.
+# 1.9 (Lane E, real-data causal estimation): four additive per-verdict keys
+# (``final_role`` / ``confidence`` / ``llm_mechanism`` / ``citation_verdicts``)
+# surfacing the ensemble role + confidence, the LLM mechanism and the
+# per-citation verification records the legacy adapter used to drop, so the
+# causal feature-role panel reads them instead of re-deriving the voter. Emitted
+# on every producer path (None / [] on the bypasses); absent on pre-1.9 sidecars
+# (surface as None without a warning). MAJOR=1.
 #: THE sidecar schema version. Single source of truth for both sides of the
 #: contract (#1620): the producer
 #: ``src/agents/ml_foundation/data_preparer/graph.py::write_adaptive_verdicts_sidecar``
@@ -74,7 +81,7 @@ logger = logging.getLogger(__name__)
 #: function is to fail on a change and force an explicit, reviewed confirmation
 #: that the new keyset is additive and MAJOR-preserving. Do NOT derive them from
 #: this constant; that would make them ``assert X == X``.
-SIDECAR_SCHEMA_VERSION = "1.8"
+SIDECAR_SCHEMA_VERSION = "1.9"
 
 #: Deprecated alias. Prefer ``SIDECAR_SCHEMA_VERSION``.
 _READER_SCHEMA_VERSION = SIDECAR_SCHEMA_VERSION
@@ -114,6 +121,11 @@ _KNOWN_VERDICT_KEYS: frozenset[str] = frozenset(
         "contract_window_days",
         "llm_role",
         "llm_remediation",
+        # Lane E (schema 1.9): ensemble role/confidence + LLM mechanism.
+        "final_role",
+        "confidence",
+        "llm_mechanism",
+        "citation_verdicts",
         # Phase 2.6 citation channel (#1608). Registered in lockstep with the
         # writer's 1.8 bump so a current sidecar does not trip the
         # unknown-verdict-key WARN on every file.

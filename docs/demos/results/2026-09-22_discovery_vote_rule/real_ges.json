@@ -1,0 +1,190 @@
+{
+ "frame": "real",
+ "algorithm": "ges",
+ "n": 15209,
+ "columns": [
+  "treatment_dupixent",
+  "persistent_at_180d_g28",
+  "age_at_index",
+  "lis_dual_flag",
+  "enrollment_duration_days",
+  "charlson_score",
+  "elixhauser_van_walraven_score",
+  "comorbidity_diag_distinct_count",
+  "comorbidity_diag_claim_count",
+  "high_comorbidity_burden_flag",
+  "cci_dementia",
+  "cci_chronic_pulmonary"
+ ],
+ "wall_seconds": 10.9,
+ "runtime_seconds": 10.89,
+ "converged": true,
+ "error": null,
+ "edge_list": [
+  [
+   "treatment_dupixent",
+   "enrollment_duration_days"
+  ],
+  [
+   "age_at_index",
+   "treatment_dupixent"
+  ],
+  [
+   "age_at_index",
+   "lis_dual_flag"
+  ],
+  [
+   "age_at_index",
+   "enrollment_duration_days"
+  ],
+  [
+   "lis_dual_flag",
+   "persistent_at_180d_g28"
+  ],
+  [
+   "enrollment_duration_days",
+   "persistent_at_180d_g28"
+  ],
+  [
+   "enrollment_duration_days",
+   "comorbidity_diag_claim_count"
+  ],
+  [
+   "charlson_score",
+   "age_at_index"
+  ],
+  [
+   "charlson_score",
+   "lis_dual_flag"
+  ],
+  [
+   "charlson_score",
+   "elixhauser_van_walraven_score"
+  ],
+  [
+   "charlson_score",
+   "comorbidity_diag_distinct_count"
+  ],
+  [
+   "charlson_score",
+   "comorbidity_diag_claim_count"
+  ],
+  [
+   "charlson_score",
+   "high_comorbidity_burden_flag"
+  ],
+  [
+   "elixhauser_van_walraven_score",
+   "comorbidity_diag_distinct_count"
+  ],
+  [
+   "elixhauser_van_walraven_score",
+   "comorbidity_diag_claim_count"
+  ],
+  [
+   "elixhauser_van_walraven_score",
+   "high_comorbidity_burden_flag"
+  ],
+  [
+   "comorbidity_diag_distinct_count",
+   "treatment_dupixent"
+  ],
+  [
+   "comorbidity_diag_distinct_count",
+   "persistent_at_180d_g28"
+  ],
+  [
+   "comorbidity_diag_distinct_count",
+   "age_at_index"
+  ],
+  [
+   "comorbidity_diag_distinct_count",
+   "lis_dual_flag"
+  ],
+  [
+   "comorbidity_diag_distinct_count",
+   "enrollment_duration_days"
+  ],
+  [
+   "comorbidity_diag_distinct_count",
+   "comorbidity_diag_claim_count"
+  ],
+  [
+   "comorbidity_diag_claim_count",
+   "lis_dual_flag"
+  ],
+  [
+   "high_comorbidity_burden_flag",
+   "elixhauser_van_walraven_score"
+  ],
+  [
+   "cci_dementia",
+   "treatment_dupixent"
+  ],
+  [
+   "cci_dementia",
+   "age_at_index"
+  ],
+  [
+   "cci_dementia",
+   "charlson_score"
+  ],
+  [
+   "cci_dementia",
+   "comorbidity_diag_distinct_count"
+  ],
+  [
+   "cci_dementia",
+   "comorbidity_diag_claim_count"
+  ],
+  [
+   "cci_chronic_pulmonary",
+   "age_at_index"
+  ],
+  [
+   "cci_chronic_pulmonary",
+   "enrollment_duration_days"
+  ],
+  [
+   "cci_chronic_pulmonary",
+   "charlson_score"
+  ],
+  [
+   "cci_chronic_pulmonary",
+   "elixhauser_van_walraven_score"
+  ],
+  [
+   "cci_chronic_pulmonary",
+   "comorbidity_diag_distinct_count"
+  ],
+  [
+   "cci_chronic_pulmonary",
+   "comorbidity_diag_claim_count"
+  ],
+  [
+   "cci_chronic_pulmonary",
+   "high_comorbidity_burden_flag"
+  ]
+ ],
+ "edge_types": null,
+ "n_bidirected": null,
+ "n_undirected": null,
+ "indep_test": null,
+ "summary": {
+  "n_edges": 36,
+  "n_pairs": 35,
+  "reciprocal_pairs": 1,
+  "T->Y": false,
+  "Y->T": false,
+  "into_T": [
+   "age_at_index",
+   "cci_dementia",
+   "comorbidity_diag_distinct_count"
+  ],
+  "into_Y": [
+   "comorbidity_diag_distinct_count",
+   "enrollment_duration_days",
+   "lis_dual_flag"
+  ]
+ }
+}

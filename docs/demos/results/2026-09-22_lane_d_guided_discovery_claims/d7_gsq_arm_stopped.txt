@@ -1,0 +1,12 @@
+captured 2026-09-22T13:11:11Z before the arm was stopped by hand (box lock held ~63 min, six waiters queued)
+chain: flock PID 2907538 -> bash 2951628 -> python PID 2951629 ('python -u - real' < run_indep_test.py, arms fisherz -> gsq -> chisq)
+python PID 2951629 elapsed seconds (ps -o etimes=): 3484
+python PID 2951629 cumulative CPU (ps -o time=): 00:55:11
+argv: /home/enunez/Projects/e2i_causal_analytics/.venv/bin/python -u - real
+real/fisherz arm (completed, indep_test_runs.txt line 12): wall 199.8 s, primary fit 8.4 s, AUGMENT 0.797, 16/20 resamples attempted, 16 succeeded, budget_exhausted=true, T->Y in ensemble=false
+real/gsq arm: primary fit converged (cycle-removal lines at 12:17:27 = indep_test_runs.txt mtime), then the bootstrap loop entered a resample fit that had not returned when stopped; the arm config is the production node path with discovery_indep_test='gsq', latent diagnostic off, budget 180 s, B=20, min_resamples 10, non-binary columns quantile-binned to <=10 levels (run_indep_test.py)
+seconds since the gsq arm's cycle-removal lines were written: 3224
+top thread state at capture:
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+2954753 enunez    20   0 3679988 298144 173784 R  90.0   1.8  52:57.06 python
+2951629 enunez    20   0 3679988 298144 173784 S   0.0   1.8   0:29.29 python

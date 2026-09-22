@@ -712,6 +712,12 @@ class EstimationNode:
                     "success": r.success,
                     "skipped": bool(getattr(r, "skipped", False)),
                     "energy_score": float(r.energy_score) if r.success else None,
+                    # codex r5: explicit fields -- the tournament score survives a
+                    # refused served refit; ``served_refit`` says what happened.
+                    "tournament_energy_score": (
+                        float(r.energy_score) if np.isfinite(r.energy_score) else None
+                    ),
+                    "served_refit": getattr(r, "served_refit", None),
                     "ate": float(r.ate) if r.ate is not None else None,
                     "error": r.error_message if not r.success else None,
                 }

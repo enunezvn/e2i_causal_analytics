@@ -27,6 +27,8 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional
 from uuid import uuid4
 
+import numpy as np
+
 if TYPE_CHECKING:
     from .estimator_selector import SelectionResult
 
@@ -464,9 +466,24 @@ class EnergyScoreMLflowTracker:
                         eval_result.error_type,
                         Json({}),  # estimator_params
                         Json(
-                            eval_result.energy_score_result.details
-                            if eval_result.energy_score_result
-                            else {}
+                            {
+                                **(
+                                    eval_result.energy_score_result.details
+                                    if eval_result.energy_score_result
+                                    else {}
+                                ),
+                                # codex r5: the tournament score and the served-refit
+                                # outcome travel explicitly; ``energy_score`` above
+                                # stays success-gated.
+                                # finite filter matches to_dict / agent state / API;
+                                # JSONB cannot take NaN/Inf (codex r6)
+                                "tournament_energy_score": (
+                                    float(eval_result.energy_score)
+                                    if np.isfinite(eval_result.energy_score)
+                                    else None
+                                ),
+                                "served_refit": getattr(eval_result, "served_refit", None),
+                            }
                         ),
                         selection_run_id,
                         ctx.get("query_id"),
