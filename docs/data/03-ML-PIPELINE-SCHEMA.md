@@ -1,6 +1,6 @@
 # 03 --- ML Pipeline Schema
 
-> **E2I Causal Analytics** | Schema Version 4.2.1 | Last Updated: 2026-09-07
+> **E2I Causal Analytics** | Schema Version 4.2.1 | Last Updated: 2026-09-22
 
 | Navigation | |
 |---|---|
@@ -22,12 +22,35 @@ ls database/ml | sort | tail -1          # highest database/ml file
 ls database/migrations | sort | tail -1  # highest shared migration
 ```
 
+### Producer census (#2207, 2026-09-22)
+
+A documented table is not a populated one. The census behind #2207 found ten tables in
+this document whose writers were never called or ran only on the dark heavy worker
+(`worker_heavy` `replicas: 0`, owner decision #705), and that the **1,440
+`ml_training_runs` rows are synthetic seed rows** (shard 09), not real runs. The state
+after #2207, per table (details in each section):
+
+| Table | Producer after #2207 | Runs where |
+|-------|----------------------|------------|
+| `ml_feast_feature_views`, `ml_feast_materialization_jobs`, `ml_feast_feature_freshness` | `src/tasks/feast_tracking.py` from the three Feast beat tasks | live — worker_medium `analytics` (6 h / 4 h / weekly) |
+| `ml_hpo_studies`, `ml_hpo_trials` | `OptunaOptimizer.save_to_database` from the HPO tuner node | live — wherever `MLFoundationPipeline` runs |
+| `estimator_evaluations` | `EnergyScoreMLflowTracker.record_evaluations` from the causal_impact estimation node | live — every energy-score selection (chat, `/api/causal`) |
+| `ml_data_quality_reports` | `DataQualityReportRepository` from data_preparer inside `MLFoundationPipeline` | scheduled — `execute_model_retraining`, re-routed to worker_medium `analytics` after measurement |
+| `ml_retraining_history` | `RetrainingHistoryRepository` via retraining_trigger / drift tasks | scheduled — daily `retraining-evaluation-daily` (quick) + routes; execution on `analytics` |
+| `ml_training_runs` | `MLTrainingRunRepository` from model_trainer (real); today's rows are synthetic seed | same as the pipeline; **no real run recorded yet** |
+| `ml_feature_store` | none | roadmap stake, kept (owner decision (c)) |
+| `driver_rankings`, `feature_rankings` | none | roadmap stake, kept (owner decision (c)) |
+
+Nothing was left dark for memory: the retraining pipeline measured inside worker_medium
+at ~0.85 GB peak (n=4000, 2 HPO trials; +~75 MB at the prod cohort shape 15,209×77) —
+see the routing comment in `src/workers/celery_app.py`.
+
 ---
 
 ## Table of Contents
 
 1. [MLOps Core](#1-mlops-core) --- 8 tables
-2. [Causal Validation](#2-causal-validation) --- 2 tables
+2. [Causal Validation](#2-causal-validation) --- 3 tables
 3. [Digital Twin](#3-digital-twin) --- 3 tables
 4. [Tool Composer](#4-tool-composer) --- 6 tables
 5. [ROI Calculations](#5-roi-calculations) --- 3 tables
@@ -127,6 +150,16 @@ Individual training run records with hyperparameters, per-split metrics, and Opt
 | `optuna_study_name` | VARCHAR(255) | Linked HPO study (if any) |
 | `is_best_trial` | BOOLEAN | Best trial in HPO study |
 
+**State (2026-09-22, #2207).** All 1,440 rows are **synthetic seed rows**: `is_synthetic = true`,
+`started_at` 2026-07-03..07-21, none with an `optuna_study_name`, emitted by
+`src/ml/synthetic/generators/mlops_generator.py` (which seeds only `ml_model_registry`,
+`ml_training_runs`, `ml_deployments`) through `scripts/load_synthetic_data.py` shard 09.
+**No real training run has been recorded in this table.** The real writer is
+`MLTrainingRunRepository` from `model_trainer/agent.py`, which persists a run once its
+experiment label resolves to an `ml_experiments` row; it runs wherever `MLFoundationPipeline`
+runs (the tier-0 harness by hand; `execute_model_retraining` on worker_medium's `analytics`
+queue since #2207).
+
 ### 1.4 `ml_feature_store`
 
 Feature metadata with statistics computed on the train split only, to prevent data leakage.
@@ -145,6 +178,11 @@ Feature metadata with statistics computed on the train split only, to prevent da
 
 **Key constraints**: `UNIQUE(feature_name, feature_version)`
 
+**Producer: none — roadmap stake (2026-09-22, #2207, owner decision (c)).** No code writes
+this table (its only mention in `src/` is a docstring); feature metadata lives in
+`feature_groups` / `features` / `feature_values` plus the Feast registry (§12). Kept as
+documented: no migration, no drop, 0 rows.
+
 ### 1.5 `ml_data_quality_reports`
 
 Great Expectations validation results with six E2I quality dimensions and leakage detection.
@@ -161,6 +199,15 @@ Great Expectations validation results with six E2I quality dimensions and leakag
 | `leakage_detected` | BOOLEAN | Whether train/test leakage was found |
 | `data_split` | data_split_type | Which split was validated |
 | `training_run_id` | UUID FK | Linked training run |
+
+**Producer (2026-09-22, #2207).** `DataQualityReportRepository.store_result`, called by the
+data_preparer agent's Great Expectations validation inside `MLFoundationPipeline`. Its only
+scheduled executor is `execute_model_retraining`, which #2207 moved from the dark `ml` queue to
+worker_medium's `analytics` queue after measuring the pipeline inside that worker (routing
+comment in `src/workers/celery_app.py`). Rows land when a retraining job runs — an
+auto-approved critical-drift trigger from the daily `retraining-evaluation-daily` sweep, or an
+approved trigger via `/monitoring/retraining/trigger/{model_id}` — and when the tier-0 harness
+is run by hand. 0 rows on 2026-09-22.
 
 ### 1.6 `ml_shap_analyses`
 
@@ -330,6 +377,43 @@ Migration 119 pins that column three ways:
 
 `'refuted'` / `'overturned'` mark demoted paths; `'needs_review'` awaits
 adjudication.
+
+### 2.5 `estimator_evaluations`
+
+**Source**: `database/causal/011_energy_score_enhancement.sql`, extended by
+`database/causal/012_estimator_evaluations_selection_context.sql` (#2207)
+
+Per-estimator record of one energy-score selection: every estimator the `EstimatorSelector`
+evaluated for a query (success or failure), its ATE / CI, energy-score components, timing,
+and which one was selected.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `evaluation_id` | UUID PK | Row identifier |
+| `selection_run_id` | UUID (012) | Groups the N rows of one `select()` call |
+| `experiment_id` | UUID FK → `ml_experiments(id)` | Nullable since 012; NULL on the query-time path |
+| `query_id`, `session_id` | VARCHAR(255) (012) | The query / working-memory session that ran the selection |
+| `estimator_type` | VARCHAR(50) CHECK | `causal_forest`, `linear_dml`, `dml_learner`, `drlearner`, `ortho_forest`, `s_learner`, `t_learner`, `x_learner`, `ols` |
+| `estimator_priority` | INTEGER | Legacy first-success order |
+| `success` | BOOLEAN | Whether the estimator produced an estimate |
+| `ate`, `ate_std`, `ate_ci_lower`, `ate_ci_upper` | DOUBLE | The estimate |
+| `energy_score`, `treatment_balance_score`, `outcome_fit_score`, `propensity_calibration`, `energy_ci_lower`, `energy_ci_upper`, `energy_bootstrap_std` | DOUBLE | Energy-score components (NULL on failure) |
+| `n_samples`, `n_treated`, `n_control` | INTEGER | Frame size |
+| `estimation_time_ms`, `energy_computation_time_ms` | DOUBLE | Timing |
+| `was_selected`, `selection_reason` | BOOLEAN, TEXT | The pick |
+| `error_message`, `error_type` | TEXT, VARCHAR(100) | Why a failed estimator failed |
+| `treatment_variable`, `outcome_variable`, `brand`, `region`, `data_source`, `mlflow_run_id` | (012) | Selection context and frame provenance |
+
+**Producer (2026-09-22, #2207).** `EnergyScoreMLflowTracker.record_evaluations`, called by the
+causal_impact estimation node (`_select_estimator_with_energy_score`) after every selection —
+chat and `/api/causal` — over psycopg2 on `DATABASE_URL` / `SUPABASE_DB_URL`, DB-only (no MLflow
+run is opened on a request). Before #2207 the tracker was never instantiated outside its module
+and, as written, could not have inserted a row: `experiment_id` was `NOT NULL` against an MLflow
+experiment id / `uuid4()` that no `ml_experiments` row carries. 0 rows on 2026-09-22; rows land
+from the first energy-score selection after the deploy that applies 012. Readers:
+`v_estimator_performance`, `v_energy_score_trends`, `v_selection_comparison` (re-keyed on
+`selection_run_id` by 012) — the per-query estimator census the estimator-calibration work
+(#2031) had to collect by hand.
 
 ### Notable Functions
 
@@ -622,6 +706,15 @@ Itemized cost breakdown with one-time vs. recurring cost distinction.
 
 Tracks Optuna hyperparameter optimization studies and their individual trial results.
 
+**Producer (2026-09-22, #2207).** `OptunaOptimizer.save_to_database`, called at the end of every
+HPO run in `model_trainer/nodes/hyperparameter_tuner.py` — the same live path that writes
+`ml_hpo_patterns` (943 rows). `experiment_id` is resolved from the pipeline's experiment label
+through `ml_experiments.mlflow_experiment_id` (NULL when no row exists — never a fabricated
+id; the label stays in `study_name`); the study upserts on `study_name`, trials on
+`(study_id, trial_number)`. Before #2207 the writer had zero call sites and both tables sat at
+0 rows. Rows land wherever `MLFoundationPipeline` runs (tier-0 harness by hand;
+`execute_model_retraining` on worker_medium's `analytics` queue).
+
 ### 6.1 `ml_hpo_studies`
 
 Optuna study metadata including search space, sampler, pruner, and best results.
@@ -757,6 +850,17 @@ Automated retraining events triggered by monitoring alerts with before/after per
 | `auto_deployed` | BOOLEAN | Whether auto-promoted to production |
 
 **Retention (migration 093)**: the `alert_id → ml_monitoring_alerts(id)` FK is `ON DELETE SET NULL` — resolving/purging alerts keeps retraining history intact.
+
+**Producer (2026-09-22, #2207).** `RetrainingHistoryRepository`, via
+`services/retraining_trigger.py` (a trigger writes the `pending` row) and
+`tasks/drift_monitoring_tasks.py` (`execute_model_retraining` moves it to `training` →
+`completed` / `failed`, real metric only). Reachable through
+`/monitoring/retraining/{evaluate,trigger}/{model_id}` and, since #2207, the daily beat
+`retraining-evaluation-daily` (01:45 UTC, `quick`), which runs `check_retraining_for_all_models`
+— evaluation only: a row is written when a decision needs no approval (drift ≥
+`auto_approve_threshold`) or a human approves via the route. The execution half runs on
+worker_medium's `analytics` queue; on the dark `ml` queue a triggered job never ran and its row
+would have stayed `pending`. 0 rows on 2026-09-22.
 
 ### 7.6 `health_check_history` (migration 096)
 
@@ -1199,6 +1303,20 @@ Time-series serving performance metrics collected periodically.
 
 Tracks Feast feature view configurations, materialization jobs, and feature freshness for the feature store.
 
+**Producer (2026-09-22, #2207).** `src/tasks/feast_tracking.py`, called from the three scheduled
+tasks in `src/tasks/feast_tasks.py` — `feast-materialize-incremental` (6 h),
+`feast-check-freshness` (4 h) and `feast-materialize-full-weekly` — all on worker_medium's
+`analytics` queue (the weekly entry had been pinned to the unconsumed `ml` queue: 15 undelivered
+weekly messages were found in Redis). What lands is the **real outcome on this box**: the
+app/worker image cannot `import feast` (#307), so every scheduled materialize returns
+`Failed to initialize Feast client` and is recorded as a `failed` job row per targeted view,
+and every scheduled freshness run records each view as `unknown` (#556: unverifiable is not
+fresh). The e2i_feast_materializer sidecar (`docker/feast/materializer-entrypoint.sh`) does the
+actual materialize and has no database client, so its runs are not in these tables.
+`ml_feast_feature_views` rows are created on first use from `FEAST_FEATURE_VIEW_SOURCE_TABLES`
+(`src/feature_store/feast_client.py` — the nine real Feast views and their source tables). All
+three tables were at 0 rows on 2026-09-22.
+
 ### 12.1 `ml_feast_feature_views`
 
 Feast feature view configurations and metadata.
@@ -1445,7 +1563,8 @@ the payload; the RPC rejects a payload without it.
 (the run id), provenance-filtered by default (`HAS_PROVENANCE = True`, opt in with
 `include_synthetic=True`). `discovered_dags` is in `PROVENANCE_TAGGED_TABLES`.
 
-**Still writer-less (scoped out of #1974's lane).** `driver_rankings` /
+**Still writer-less — kept as a roadmap stake (owner decision (c), #2207, 2026-09-22; scoped
+out of #1974's lane; no migration, no drop, 0 rows each).** `driver_rankings` /
 `feature_rankings`: `DriverRanker` does not run on the causal_impact path that writes
 `discovered_dags`. It runs in two other places — the feature_analyzer agent's
 `causal_ranker` node (`rank_from_discovery_result`) and the tool-registry
