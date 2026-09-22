@@ -64,9 +64,12 @@ non-`no_signal` KG voice is indication evidence. The first fake run (before the
 `DummyLM` exhaustion fix) under-reported Layer 4 as "fired 1"; `lane_e_panel_real_fake.out`
 shows the 18 `Layer 4 skipped` lines that exposed it.
 
-`promotion_eligibility` (`panel.json`): `passes: true` on the node's metrics
-(n = 15,209 ≥ 200, non-abstain 0.98 over the 57 scored, kg_decided 2, disagreement 0.0)
-— recorded for the owner; nothing was promoted.
+`promotion_eligibility` (`summary.md:17`, from `panel.json`): **`passes: false`** —
+n = 15,209 ≥ 200 and kg_decided 2 and disagreement 0.0 pass, but `non_abstain_pct`
+is 0.667 over the 57 scored features against the ≥ 0.95 gate: the 19 LLM-informed
+features abstain under the audit-only profile. (The first, under-reporting fake run
+had read 0.98 / `passes: true` because Layer 4 fired only once there — codex r4
+caught the stale number.) Recorded for the owner; nothing was promoted.
 
 The real Layer-4 run (19 calls) was queued once under the lock at the measured
 ≈ US$4 and was refused by the session's permission system as a real-world
