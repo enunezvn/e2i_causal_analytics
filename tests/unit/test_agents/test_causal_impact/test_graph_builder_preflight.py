@@ -439,6 +439,65 @@ class TestRequiredEdgeCauseIsEstablishedNotAssumed:
         assert "post-processing" in cause
 
 
+class TestIsolatedNodesAreNotBackdoorCandidates:
+    """Measured on the real frame (acceptance_runs_final.txt, phase_seconds):
+    the backdoor search took 316 s of a 502 s node wall because the 57
+    covariates the pre-flight kept away from the learner come back as
+    ISOLATED nodes of the shipped DAG (execute() adds them so the adjustment
+    guarantee can union them) and the search enumerated every combination of
+    up to 3 of all 77 candidates (76,153 criterion checks). An isolated node
+    lies on no path, so it can neither block nor open one: no minimal backdoor
+    set contains it and Z ∪ {isolated} is admissible iff Z is. The search must
+    therefore never enumerate isolated nodes; the guarantee unions them
+    afterwards because they are declared."""
+
+    def _dag_with_isolates(self, n_isolated: int) -> Tuple[nx.DiGraph, List[str]]:
+        dag = nx.DiGraph()
+        dag.add_edges_from(
+            [("c1", T), ("c1", Y), ("c2", T), ("c2", Y), ("c3", T), ("c4", Y), (T, Y)]
+        )
+        isolates = [f"iso_{i}" for i in range(n_isolated)]
+        dag.add_nodes_from(isolates)
+        return dag, isolates
+
+    def test_isolated_nodes_never_enter_the_search(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        node = GraphBuilderNode()
+        seen: List[frozenset] = []
+        original = GraphBuilderNode._satisfies_backdoor_criterion
+
+        def spy(self_, dag, adjustment_set, treatment, outcome):  # type: ignore[no-untyped-def]
+            seen.append(frozenset(adjustment_set))
+            return original(self_, dag, adjustment_set, treatment, outcome)
+
+        monkeypatch.setattr(GraphBuilderNode, "_satisfies_backdoor_criterion", spy)
+        connected, _ = self._dag_with_isolates(0)
+        sets_without = node._find_adjustment_sets(connected, T, Y)
+        checks_without = len(seen)
+        seen.clear()
+        with_isolates, isolates = self._dag_with_isolates(40)
+        sets_with = node._find_adjustment_sets(with_isolates, T, Y)
+        assert sets_with == sets_without
+        assert len(seen) == checks_without  # the isolates added zero checks
+        assert not any(set(isolates) & z for z in seen)
+
+    @pytest.mark.asyncio
+    async def test_removed_covariates_are_still_unioned_into_the_shipped_adjustment_set(
+        self,
+    ) -> None:
+        """The guarantee, not the search, is what keeps a capped covariate in
+        the adjustment set — the search change above must not weaken it."""
+        frame, covs = _frame()
+        node = GraphBuilderNode()
+        node._discovery_runner = _AcceptingRunner([("sev", T), ("sev", Y)], draw_estimand=False)  # type: ignore[assignment]
+        out = await node.execute(_state(frame, covs, discovery_max_covariates=3))
+        graph = out["causal_graph"]
+        assert graph["discovery_gate_decision"] == "accept"
+        capped = out["discovery_result"]["metadata"]["preflight"]["capped"]
+        assert capped
+        assert set(covs) <= set(graph["adjustment_sets"][0])
+        assert set(capped) <= set(graph["nodes"])
+
+
 class TestRealPCRunsOnACollinearFrame:
     @pytest.mark.asyncio
     async def test_singular_frame_now_yields_a_converged_run(self) -> None:

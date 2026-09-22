@@ -569,6 +569,18 @@ class GraphBuilderNode:
         # This excludes colliders (and their descendants) and prevents M-bias.
         descendants = nx.descendants(dag, treatment)
         candidate_nodes = (set(dag.nodes()) - {treatment, outcome}) - descendants
+        # An isolated node lies on no path, so it can neither block nor open
+        # one: no minimal backdoor set contains it and Z ∪ {isolated} is
+        # admissible iff Z is. Enumerating it only multiplies the search —
+        # measured on the real Optum persistence frame, the 57 covariates the
+        # discovery pre-flight keeps away from the learner come back as
+        # isolated nodes of the shipped DAG (so the adjustment guarantee can
+        # union them) and the search spent 316 s of a 502 s node wall on
+        # 76,153 criterion checks (docs/demos/results/
+        # 2026-09-22_lane_d_guided_discovery_claims/acceptance_runs_final.txt).
+        # Declared covariates among them still reach the adjustment set through
+        # _apply_adjustment_guarantee, which unions them by declaration.
+        candidate_nodes = {n for n in candidate_nodes if dag.degree(n) > 0}
 
         adjustment_sets: List[List[str]] = []
         max_set_size = min(3, len(candidate_nodes))

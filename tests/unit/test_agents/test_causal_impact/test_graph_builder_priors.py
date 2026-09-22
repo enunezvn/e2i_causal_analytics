@@ -14,13 +14,18 @@ from src.causal_engine.discovery.gate import GateEvaluation
 async def test_run_discovery_seeds_confounder_edges_from_modeled_confounders(monkeypatch):
     node = GraphBuilderNode()
 
+    # Twelve rows, five linearly independent columns: the Lane D pre-flight
+    # prunes a covariate that is exactly dependent on the treatment, the
+    # outcome or an earlier covariate (the four-row fixture this replaced had
+    # academic_hcp value-identical to treatment_arm, and with n = 4 no five
+    # columns can be independent), which is not what this test is about.
     df = pd.DataFrame(
         {
-            "treatment_arm": [1.0, 0.0, 1.0, 0.0],
-            "persistent_180d": [1.0, 0.0, 1.0, 1.0],
-            "disease_severity": [2.0, 1.0, 3.0, 2.0],
-            "academic_hcp": [1.0, 0.0, 1.0, 0.0],
-            "geographic_region=south": [1.0, 0.0, 0.0, 1.0],
+            "treatment_arm": [1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0],
+            "persistent_180d": [1.0, 0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0],
+            "disease_severity": [2.0, 1.0, 3.0, 2.0, 1.0, 3.0, 2.0, 1.0, 3.0, 3.0, 1.0, 2.0],
+            "academic_hcp": [1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0],
+            "geographic_region=south": [1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0],
         }
     )
 
