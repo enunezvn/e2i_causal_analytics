@@ -174,6 +174,9 @@ async def test_feast_client_remote_mode_materializes_over_http(fake_http):
 
     assert [c["path"] for c in fake_http.calls] == ["/materialize", "/materialize-incremental"]
     assert full["status"] == "completed" and inc["status"] == "completed"
+    # codex r3 MED-4: the HTTP timeout must exceed the sidecar's bounded lock wait (600 s)
+    assert all(c["timeout"] == 900.0 for c in fake_http.calls)
+    assert client.config.timeout_seconds == 30.0  # online reads keep the short one
     assert fake_http.calls[1]["json"] == {"end_ts": END.isoformat(), "feature_views": None}
     # a None target resolves to the ENABLED views of config/feast_materialization.yaml
     assert "hcp_profile_features" in inc["feature_views"]

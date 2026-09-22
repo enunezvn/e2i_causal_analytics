@@ -26,7 +26,7 @@ import logging
 import math
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
@@ -1564,14 +1564,13 @@ class TriggerRetrainingRequest(BaseModel):
     notes: Optional[str] = Field(None, description="Additional notes")
     auto_approve: bool = Field(default=False, description="Auto-approve retraining")
 
-    # Cohort identity for a REAL retrain (Phase D). The live trigger runs the
-    # MLFoundationPipeline on a committed cohort, so it needs to know which
-    # cohort batch/table (``data_source``) and what to predict
-    # (``target_outcome``); ``feature_manifest_source`` opts into Layer-5
-    # contracts. Optional at the schema layer so drift/scheduled callers still
-    # validate — execute_model_retraining fails closed if data_source is absent.
-    data_source: Optional[str] = Field(
-        None, description="Committed cohort batch/table to retrain on"
+    # Cohort identity for a REAL retrain (Phase D): ``data_source`` is a Supabase
+    # table name OR the loader's file-source dict ({"type": "file_dir"|"files", ...}
+    # — a bare path string is read as a TABLE, #2207); ``target_outcome`` the target
+    # column; ``feature_manifest_source`` opts into Layer-5 contracts. Optional at the
+    # schema layer so drift/scheduled callers still validate — the job fails closed.
+    data_source: Optional[Union[str, Dict[str, Any]]] = Field(
+        None, description="Committed cohort: a table name or a file-source dict"
     )
     target_outcome: Optional[str] = Field(None, description="Prediction target column")
     brand: Optional[str] = Field(None, description="Brand context")
@@ -1585,7 +1584,7 @@ class TriggerRetrainingRequest(BaseModel):
                 "reason": "manual",
                 "notes": "Refresh on latest Optum cohort",
                 "auto_approve": False,
-                "data_source": "data/rwd/optum/initiation",
+                "data_source": {"type": "file_dir", "path": "data/rwd/optum/initiation"},
                 "target_outcome": "initiated_biologic_180d",
                 "feature_manifest_source": "optum",
             }

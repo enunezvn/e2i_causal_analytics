@@ -182,17 +182,11 @@ class FeastConfig(BaseModel):
     cache_ttl_seconds: int = Field(default=300, description="Cache TTL for feature statistics")
     timeout_seconds: float = Field(default=30.0, description="Request timeout")
     max_retries: int = Field(default=3, description="Max retries for failed requests")
-    server_url: Optional[str] = Field(
-        default=None,
-        description=(
-            "Feast feature-server base URL (e.g. http://feast:6566). When set, "
-            "online features are fetched over HTTP from the e2i_feast sidecar "
-            "instead of an embedded FeatureStore — required in the app image, "
-            "where `import feast` is unavailable (feast 0.43.0 pins tenacity<9, "
-            "irreconcilable with the prod tenacity==9.1.2). Wired from FEAST_URL "
-            "by get_feast_client(). See #532."
-        ),
-    )
+    # Feature-server base URL (http://feast:6566): remote mode over the e2i_feast
+    # sidecar, required where `import feast` is unavailable (#307); from FEAST_URL. #532
+    server_url: Optional[str] = Field(default=None, description="Feast feature-server URL")
+    # #2207: > the sidecar's bounded registry-lock wait (600 s) + a materialize run.
+    materialize_timeout_seconds: float = Field(default=900.0, description="Remote materialize")
 
 
 class FeatureStatistics(BaseModel):
@@ -707,7 +701,7 @@ class FeastClient:
                 start_date=start_date,
                 end_date=end_date,
                 feature_views=feature_views,
-                timeout=self.config.timeout_seconds,
+                timeout=self.config.materialize_timeout_seconds,
                 default_feature_views=self._enabled_feature_view_names(),
             )
             return self._record_remote_materialization(result)
@@ -773,7 +767,7 @@ class FeastClient:
                 self._remote_base_url,
                 end_date=end_date,
                 feature_views=feature_views,
-                timeout=self.config.timeout_seconds,
+                timeout=self.config.materialize_timeout_seconds,
                 default_feature_views=self._enabled_feature_view_names(),
             )
             return self._record_remote_materialization(result)

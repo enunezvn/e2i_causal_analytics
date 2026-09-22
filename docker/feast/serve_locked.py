@@ -21,6 +21,9 @@ The two handlers are sync ``def`` routes (Starlette threadpool); the online read
 BOUNDED (``FEAST_REGISTRY_LOCK_WAIT_SECONDS``, default 600 s — longer than any loop
 cycle): a caller that cannot get the lock in time gets an error (HTTP 500), which the
 worker records as a failed job and fails loud on, instead of a thread parked forever.
+The worker's HTTP timeout for these calls (``FeastConfig.materialize_timeout_seconds``,
+900 s) exceeds this wait plus a materialize run, so the worker never records a failure
+for a call the server later completes (codex r3 MED-4).
 
 There is deliberately NO fallback to an unlocked server: if this cannot start, the
 container fails and the deploy's feast recreate step rolls back and fails loud
