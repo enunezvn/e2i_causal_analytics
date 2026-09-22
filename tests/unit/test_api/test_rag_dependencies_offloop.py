@@ -1,8 +1,9 @@
 """``get_rag_dependencies`` must build the EntityExtractor off the event loop.
 
 Lane 2 (2026-09-22): ``EntityVocabulary.from_default`` performs a bounded sync
-RxNav round at first build (up to ~6 calls x 2 s when RxNav is slow but under
-its timeout). ``get_rag_dependencies`` is ``async def``; constructing the
+RxNav round at first build (up to 9 calls x 2 s when RxNav is slow but under
+its timeout: two rxcui stages when the exact one misses, plus one related.json
+call, per brand). ``get_rag_dependencies`` is ``async def``; constructing the
 extractor inline would stall every other request on the loop for that long.
 """
 
@@ -18,11 +19,14 @@ from src.api.dependencies import rag as rag_deps
 
 @pytest.mark.asyncio
 async def test_entity_extractor_is_constructed_off_the_main_thread(monkeypatch):
-    seen: dict[str, bool] = {}
+    seen: dict[str, int] = {}
 
     def _recording_extractor():
-        seen["on_main_thread"] = threading.current_thread() is threading.main_thread()
+        seen["constructed_on"] = threading.get_ident()
         return MagicMock(name="entity_extractor")
+
+    # The loop's own thread, captured here rather than assumed to be the main one.
+    loop_thread = threading.get_ident()
 
     monkeypatch.setattr(rag_deps, "_rag_deps", None)
     with (
@@ -40,7 +44,7 @@ async def test_entity_extractor_is_constructed_off_the_main_thread(monkeypatch):
             rag_deps._rag_deps = None  # never leak the patched singleton
 
     assert deps["entity_extractor"] is not None
-    assert seen["on_main_thread"] is False, (
+    assert seen["constructed_on"] != loop_thread, (
         "EntityExtractor() ran on the event-loop thread; from_default's RxNav round "
         "would block every other request"
     )
