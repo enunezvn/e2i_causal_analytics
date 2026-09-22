@@ -45,6 +45,11 @@ from dotenv import load_dotenv
 from tests.stall_watchdog import install as _install_stall_watchdog
 from tests.xdist_crash_guard import install as _install_xdist_crash_guard
 
+# Lane 2 (2026-09-22): EntityVocabulary.from_default() asks RxNav for brand
+# aliases at first build. Unit tests must never reach the network, so the
+# lookup is off for the whole suite; the live integration test opts back in.
+os.environ.setdefault("RXNAV_BRAND_ALIASES", "0")
+
 # =============================================================================
 # LOAD ENVIRONMENT VARIABLES from .env file IMMEDIATELY
 # =============================================================================
