@@ -83,6 +83,7 @@ from typing import Any, Dict, Optional
 # stay valid post-extraction. The helpers themselves moved to ``_common.py``
 # in fix-up for 6B-infra-2b so a third ETL (6B-infra-2c) can import the same
 # code without creating a third duplicate copy.
+from src.data.per_hcp_cohort_columns import PLANTED_COLUMNS
 from src.etl._common import (  # noqa: F401 — re-exported for backward compatibility
     _connect_to_db,
     _resolve_db_connection_string,
@@ -345,11 +346,27 @@ SELECT
         AND o.metric_date >= %(start_date)s::DATE AND o.metric_date < %(end_date)s::DATE
         AND NOT EXISTS (SELECT 1 FROM rollup r2 WHERE r2.metric_id = o.metric_id))
                                                          AS rows_obsolete,
+    -- Of the obsolete rows, those still carrying the Digital Twin's planted channels or
+    -- outcome (columns this ETL never writes; 2026-09-21 a full-window reconcile deleted
+    -- them wholesale and the twin went dark). The operator sees this before --execute.
+    (SELECT count(*) FROM business_metrics o
+      WHERE o.metric_type = %(metric_type)s AND o.hcp_id IS NOT NULL
+        AND o.metric_date >= %(start_date)s::DATE AND o.metric_date < %(end_date)s::DATE
+        AND NOT EXISTS (SELECT 1 FROM rollup r2 WHERE r2.metric_id = o.metric_id)
+        AND (__COHORT_DATA_PREDICATE__))
+                                                         AS rows_obsolete_with_cohort_data,
     MIN(r.metric_date)                                   AS first_date,
     MAX(r.metric_date)                                   AS last_date
 FROM rollup r
 LEFT JOIN business_metrics b ON b.metric_id = r.metric_id
 """
+
+#: Every column the twin's plant writes and this ETL never does (one shared list; the
+#: single-writer tests pin it against the plant script). Named in the preview only.
+COHORT_DATA_COLUMNS: tuple[str, ...] = PLANTED_COLUMNS
+_PREVIEW_COUNTS_SQL = _PREVIEW_COUNTS_SQL.replace(
+    "__COHORT_DATA_PREDICATE__", " OR ".join(f"o.{col} IS NOT NULL" for col in COHORT_DATA_COLUMNS)
+)
 
 _PER_HCP_RECONCILE_SCOPE_BY_ARRIVAL: str = (
     "b.metric_date IN (SELECT metric_date FROM affected_dates)"
@@ -448,8 +465,11 @@ def preview_per_hcp_rollup(start_date: str, end_date: str) -> Dict[str, Any]:
     """Read-only readout of what an explicit-window rollup would write.
 
     Runs ``PREVIEW_PER_HCP_ROLLUP_SQL`` inside a ``READ ONLY`` transaction (Postgres refuses
-    any write in it) and counts the touched dates and the new / changed / existing rows.
-    It is the dry-run before an owner-gated backfill.
+    any write in it) and counts the touched dates, the new / changed / existing rows, the
+    obsolete rows the reconcile would delete and, of those, the ones still carrying the
+    Digital Twin's planted cohort data (``rows_obsolete_with_cohort_data``). It is the
+    dry-run before an owner-gated backfill; a non-zero cohort count means the backfill must
+    be followed by the plant (``scripts/backfill_segment_engagement.py --execute``).
     """
     start_dt, end_dt = _resolve_window(start_date, end_date)
     params = {
@@ -475,6 +495,7 @@ def preview_per_hcp_rollup(start_date: str, end_date: str) -> Dict[str, Any]:
         "rows_changed",
         "rows_existing",
         "rows_obsolete",
+        "rows_obsolete_with_cohort_data",
         "first_date",
         "last_date",
     )

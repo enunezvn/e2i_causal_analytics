@@ -677,7 +677,7 @@ def test_preview_reads_the_insert_text_and_writes_nothing() -> None:
 def test_preview_runs_in_a_read_only_transaction() -> None:
     conn = _make_mock_conn()
     cur = conn.cursor.return_value
-    cur.fetchone.return_value = (7, 120, 3, 40, 5, date(2026, 5, 1), date(2026, 9, 14))
+    cur.fetchone.return_value = (7, 120, 3, 40, 5, 0, date(2026, 5, 1), date(2026, 9, 14))
     with patch.object(etl, "_connect_to_db", return_value=conn):
         result = etl.preview_per_hcp_rollup("2026-05-01", "2026-09-16")
     first, second = cur.execute.call_args_list
@@ -726,3 +726,53 @@ def test_impl_reconciles_in_the_same_transaction_as_the_upsert() -> None:
         etl.RECONCILE_PER_HCP_ROLLUP_BY_ARRIVAL_SQL,
     ]
     assert result["status"] == "completed" and result["rows_deleted"] == 2
+
+
+# --- the preview names the cohort data an obsolete row still carries (2026-09-22) -----------
+
+
+def test_preview_reports_obsolete_rows_that_still_carry_cohort_data() -> None:
+    """2026-09-21: a full-window backfill's reconcile deleted rows whose planted twin channels
+    and outcome the ETL does not own, and the twin went dark. The preview counts those rows
+    separately, so the operator sees the cohort data the reconcile would take with it."""
+    conn = _make_mock_conn()
+    cur = conn.cursor.return_value
+    cur.fetchone.return_value = (7, 120, 3, 40, 5, 2, date(2026, 5, 1), date(2026, 9, 14))
+    with patch.object(etl, "_connect_to_db", return_value=conn):
+        result = etl.preview_per_hcp_rollup("2026-05-01", "2026-09-16")
+    assert result["rows_obsolete"] == 5
+    assert result["rows_obsolete_with_cohort_data"] == 2
+    assert (result["first_date"], result["last_date"]) == (date(2026, 5, 1), date(2026, 9, 14))
+
+
+def test_the_cohort_data_count_names_every_planted_column_and_only_obsolete_rows() -> None:
+    from src.data.per_hcp_cohort_columns import PLANTED_COLUMNS
+
+    sql = etl._PREVIEW_COUNTS_SQL
+    body = sql.split("AS rows_obsolete,", 1)[1].split("AS rows_obsolete_with_cohort_data", 1)[0]
+    for col in PLANTED_COLUMNS:
+        assert re.search(rf"\bo\.{col} IS NOT NULL", body), col
+    # the same obsolete predicate as rows_obsolete and the reconcile: no rollup row produces it
+    assert "NOT EXISTS (SELECT 1 FROM rollup r2 WHERE r2.metric_id = o.metric_id)" in body
+    assert "o.metric_type = %(metric_type)s" in body
+    assert tuple(etl.COHORT_DATA_COLUMNS) == PLANTED_COLUMNS
+
+
+def test_the_etl_module_does_not_import_the_twin_package() -> None:
+    """The premise of the light contract module: importing the ETL must stay cheap."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    code = (
+        "import sys; import src.etl.business_metrics_per_hcp_etl; "
+        "print(sorted(m for m in sys.modules if m in ('src.digital_twin', 'sklearn', 'dowhy', 'shap')))"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=Path(__file__).resolve().parents[3],
+    ).stdout.strip()
+    assert out == "[]", out

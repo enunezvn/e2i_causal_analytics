@@ -131,3 +131,11 @@ def test_the_plant_refuses_a_frame_that_holds_a_row_not_marked_synthetic():
     with pytest.raises(SystemExit):
         script.require_synthetic_only(nullable)
     script.require_synthetic_only(pd.DataFrame([{"is_synthetic": True}]))
+
+
+def test_the_etl_preview_guards_exactly_the_columns_the_plant_writes():
+    """A channel added to the plant must reach the preview's obsolete-with-cohort-data count,
+    or the reconcile can again delete planted data the readout never mentioned."""
+    script = _plant_script()
+    assert set(etl.COHORT_DATA_COLUMNS) == set(script.PLANTED_WRITE_COLUMNS)
+    assert set(etl.COHORT_DATA_COLUMNS).isdisjoint(_etl_upsert_set_columns())
