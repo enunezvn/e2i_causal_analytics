@@ -32,15 +32,29 @@ CI run. The marker is 300 s: the unit lane's stall window is 600 s and
 tests/unit/test_tests_meta/test_session_stall_watchdog_1655.py requires
 window >= 2x the largest literal marker it collects.
 
-What is asserted: the POINT estimate lands within the generator's tolerance
-(0.10) of the planted RD-scale ATE, as the spec says. The 95% CI is NOT
-asserted to cover the truth: measured, the tournament's winner (LinearDML)
-sits +0.04..+0.05 above the truth with a CI that excludes it (D2), while a
-correctly specified g-computation on the same frame lands within 0.011 -- an
-estimator-side property of a linear final stage on a step-function CATE, not
-a generator defect, recorded as a follow-up rather than loosened here. The
-test still discriminates: the naive contrast misses by 0.13, the adjusted
-estimate by ~0.04.
+What is asserted: the POINT estimate recovers the planted RD-scale ATE as a
+CAPABILITY, not a column-presence proxy (verifier MED-A, 2026-09-22): the
+error must be inside ``RECOVERY_TOLERANCE`` (0.06) AND below half the naive
+contrast's error (``PlantedTruth.is_recovery_convincing``). The spec's
+sidecar tolerance (0.10) is still asserted but is NOT the discriminating
+check -- measured through this graph (evidence README, D2b) the full
+adjustment lands at 0.406 (error 0.042) while dropping ``payer_category``
+from the adjustment set lands at 0.436 (error 0.072 -- inside 0.10, outside
+0.06), and a plain OLS without payer errs 0.070; the naive contrast errs
+0.134. 0.06 is the midpoint of the two measured outcomes (0.057 rounded up),
+so both sides keep a >= 0.012 margin against a measured run-to-run spread of
+~0.001. The 95% CI is NOT asserted to cover the truth: measured, the
+tournament's winner (LinearDML) sits +0.04 above the truth with a CI that
+excludes it (D2), while a correctly specified g-computation on the same
+frame lands within 0.011 -- an estimator-side property of a linear final
+stage on a step-function CATE, not a generator defect, recorded as a
+follow-up rather than loosened here.
+
+The synthetic backing is read ONLY under the planted-truth opt-in
+(``E2I_CSU_PLANTED_TRUTH_RUN``); the deployment-wide
+``E2I_INCLUDE_SYNTHETIC`` (set on the deployed e2i_api) does not unlock it
+(verifier MED-B) -- the registry test pins that, this test sets the opt-in
+alone.
 
 Write-free: unit tests run with dead Supabase credentials (the refutation
 persistence fails closed with a warning), the MLflow tracker and the job store
@@ -56,7 +70,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from src.api.routes.causal import agent as causal_routes
-from src.api.routes.causal.datasets import _CAUSAL_DATASET_SPECS
+from src.api.routes.causal.datasets import _CAUSAL_DATASET_SPECS, PLANTED_TRUTH_RUN_ENV
 from src.api.schemas.causal import AgentCausalAnalysisRequest
 from src.ml.synthetic.generators.csu_escalation_causal import (
     DATASET,
@@ -165,7 +179,11 @@ def _rows(frame):
 @pytest.mark.asyncio
 @pytest.mark.timeout(300)
 async def test_planted_ate_is_recovered_through_the_production_path(monkeypatch, tmp_path):
-    monkeypatch.setenv("E2I_INCLUDE_SYNTHETIC", "true")  # the backing IS synthetic
+    # The backing IS synthetic: the planted-truth opt-in is the ONLY switch
+    # that reads it; the deployment-wide showcase flag is left unset so the
+    # run proves the opt-in alone carries the whole path.
+    monkeypatch.delenv("E2I_INCLUDE_SYNTHETIC", raising=False)
+    monkeypatch.setenv(PLANTED_TRUTH_RUN_ENV, "1")
     # Write-free belt and braces on top of the unit tree's dead-Supabase pin:
     # the tracker seam below is replaced, but any stray mlflow call lands in a
     # throwaway file store, and Redis (prod on this box) is a dead port.
@@ -221,13 +239,11 @@ async def test_planted_ate_is_recovered_through_the_production_path(monkeypatch,
     assert result.status in ("completed", "needs_review"), result.warnings
     assert result.dag_source == "domain_knowledge"  # discovery off -> curated DAG
     assert result.ate is not None
-    assert truth.is_estimate_valid(result.ate), {
-        "ate": result.ate,
-        "true_ate": truth.true_ate,
-        "tolerance": truth.tolerance,
-        "naive_diff": truth.naive_diff,
-        "estimator": result.selected_estimator,
-    }
+    report = {**truth.recovery_report(result.ate), "estimator": result.selected_estimator}
+    assert truth.is_estimate_valid(result.ate), report  # the spec's sidecar tolerance
+    # The capability: inside RECOVERY_TOLERANCE AND well below the naive error
+    # -- losing the payer backdoor (error 0.072 measured) fails here.
+    assert truth.is_recovery_convincing(result.ate), report
     # The agent's own naive-vs-adjusted surfacing agrees the backdoor was real.
     if result.naive_ate is not None:
         assert abs(result.naive_ate - truth.naive_diff) < 0.03

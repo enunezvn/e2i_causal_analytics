@@ -69,6 +69,17 @@ DEFAULT_SEED = 20260922
 # The tolerance the ground-truth sidecar of the synthetic CSU set uses
 # (data/rwd/synthetic_CSU/ground_truth_*.json: 0.10 at n = 8,420 per brand).
 TOLERANCE = 0.10
+# The planted-truth E2E's DISCRIMINATING check (verifier MED-A, 2026-09-22):
+# at this DGP the 0.10 sidecar window admits losing the whole payer backdoor,
+# so recovery is asserted as a capability -- the error must be inside
+# RECOVERY_TOLERANCE AND below NAIVE_ERROR_FRACTION of the naive contrast's
+# error. Measured through the real graph on the default frame (evidence
+# README D2b): full adjustment 0.406 (error 0.042), payer_category dropped
+# 0.436 (error 0.072), naive 0.498 (error 0.134); run-to-run spread ~0.001.
+# 0.06 is the midpoint of the two measured outcomes (0.057, rounded up), so
+# each side keeps a >= 0.012 margin.
+RECOVERY_TOLERANCE = 0.06
+NAIVE_ERROR_FRACTION = 0.5
 
 IDENTITY_COLUMNS: Tuple[str, ...] = (
     "patient_id",
@@ -132,6 +143,29 @@ class PlantedTruth:
 
     def get_error(self, estimated_ate: float) -> float:
         return abs(float(estimated_ate) - self.true_ate)
+
+    def naive_error(self) -> float:
+        return abs(self.naive_diff - self.true_ate)
+
+    def is_recovery_convincing(self, estimated_ate: float) -> bool:
+        """The capability check: inside ``RECOVERY_TOLERANCE`` AND below
+        ``NAIVE_ERROR_FRACTION`` of the naive contrast's error, so an estimate
+        that lost a planted confounder (or never adjusted) fails."""
+        err = self.get_error(estimated_ate)
+        return err < RECOVERY_TOLERANCE and err < NAIVE_ERROR_FRACTION * self.naive_error()
+
+    def recovery_report(self, estimated_ate: float) -> Dict[str, float]:
+        """The numbers behind :meth:`is_recovery_convincing`, for an assertion message."""
+        return {
+            "ate": float(estimated_ate),
+            "true_ate": self.true_ate,
+            "error": self.get_error(estimated_ate),
+            "recovery_tolerance": RECOVERY_TOLERANCE,
+            "naive_diff": self.naive_diff,
+            "naive_error": self.naive_error(),
+            "naive_error_ceiling": NAIVE_ERROR_FRACTION * self.naive_error(),
+            "sidecar_tolerance": self.tolerance,
+        }
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

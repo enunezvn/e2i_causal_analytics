@@ -53,6 +53,19 @@ mu1, mu0 = m.predict(design(ones)), m.predict(design(zeros))
 print("g-comp probit (DGP-structured) ATE", round(float((mu1 - mu0).mean()), 4))
 ols = sm.OLS(y, np.column_stack([ones, T, age, ch, com, dep])).fit()
 print("OLS constant-effect ATE", round(float(ols.params[1]), 4))
+# D2b (verifier MED-A): what does losing ONE planted confounder cost? The
+# recovery check must fail when the payer backdoor is dropped, so the
+# tolerance has to sit between the full-adjustment error and this one.
+ols_no_payer = sm.OLS(y, np.column_stack([ones, T, age, ch, dep])).fit()
+print("OLS without payer_category ATE", round(float(ols_no_payer.params[1]), 4))
+print(
+    "errors vs truth: naive",
+    round(abs(t.naive_diff - t.true_ate), 4),
+    "OLS full",
+    round(abs(float(ols.params[1]) - t.true_ate), 4),
+    "OLS no payer",
+    round(abs(float(ols_no_payer.params[1]) - t.true_ate), 4),
+)
 ps = np.clip(sm.Logit(T, np.column_stack([ones, age, ch, com])).fit(disp=0).predict(), 0.01, 0.99)
 print("IPW ATE", round(float((T * y / ps).mean() - ((1 - T) * y / (1 - ps)).mean()), 4))
 aipw = (mu1 - mu0 + T * (y - mu1) / ps - (1 - T) * (y - mu0) / (1 - ps)).mean()
