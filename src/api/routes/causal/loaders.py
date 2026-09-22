@@ -806,4 +806,82 @@ async def _load_agent_estimation_frame(
     expanded_cols = [
         c for c in select_cols if c not in categorical_cols and c not in passthrough_only
     ] + dummy_names
+
+    # Exactly collinear covariates carry no information and make econml's
+    # statsmodels final stage warn "Co-variance matrix is underdetermined.
+    # Inference will be invalid!" (the wrappers now REFUSE such a fit). Prune
+    # them ONCE here, on the full loaded frame, in registry order (an earlier
+    # column wins), so the estimation node and the refutation rebuild -- which
+    # takes its ``common_causes`` from this same resolved list -- see the SAME
+    # design. Measured 2026-09-22 on optum_biologic_persistence (n=15,209):
+    # 16 of 77 resolved columns were exact linear combinations of earlier ones
+    # (Elixhauser flags duplicating Charlson flags, a risk band implied by its
+    # score, payer dummies implied by a coarser payer axis); dropping them left
+    # the ATE at 0.03353 (was 0.03353) and the SE at 0.00858 (was 0.00855),
+    # warning gone. A full-rank frame (every synthetic dataset) is untouched.
+    covariate_only = [c for c in expanded_cols if c not in (treatment_var, outcome_var)]
+    kept, dropped_collinear = _prune_exactly_collinear(frame, covariate_only)
+    if dropped_collinear:
+        logger.warning(
+            "causal loader: dropping exactly collinear covariate(s) %s for dataset "
+            "'%s' brand=%s (linear combinations of earlier registry columns; design "
+            "rank %d of %d)",
+            dropped_collinear,
+            dataset,
+            brand,
+            len(kept),
+            len(covariate_only),
+        )
+        keep_set = set(kept)
+        expanded_cols = [
+            c for c in expanded_cols if c in (treatment_var, outcome_var) or c in keep_set
+        ]
     return frame, expanded_cols
+
+
+_COLLINEARITY_REL_TOL = 1e-8
+
+
+def _prune_exactly_collinear(
+    frame: "pd.DataFrame",  # type: ignore[name-defined] # noqa: F821
+    columns: List[str],
+) -> tuple[List[str], List[str]]:
+    """Return ``(kept, dropped)``: ``columns`` minus those that are exact linear
+    combinations of the intercept and the EARLIER kept columns (order preserved).
+
+    Incremental Gram-Schmidt against the intercept: a column whose residual after
+    projection onto the current basis is below ``_COLLINEARITY_REL_TOL`` of its
+    own norm adds no rank. Exact redundancy sits at the 1e-15 level and any real
+    near-collinear pair far above 1e-8, so the tolerance separates the two.
+
+    Skipped (nothing dropped) when the frame cannot rank the columns
+    (``n <= k + 1`` -- every such design is rank-deficient, which says nothing
+    about the columns) or when a column is non-finite (the estimators' own
+    guards own NaN). A constant column is collinear with the intercept and is
+    dropped like any other.
+    """
+    if not columns or len(frame) <= len(columns) + 1:
+        return list(columns), []
+    import numpy as np
+
+    X = frame[columns].to_numpy(dtype=float)
+    if not np.isfinite(X).all():
+        return list(columns), []
+    n = X.shape[0]
+    basis = [np.full(n, 1.0 / np.sqrt(n))]  # the intercept, unit norm
+    kept: List[str] = []
+    dropped: List[str] = []
+    for j, name in enumerate(columns):
+        x = X[:, j]
+        x_norm = float(np.linalg.norm(x))
+        resid = x.copy()
+        for _ in range(2):  # re-orthogonalise once for numerical stability
+            for q in basis:
+                resid = resid - q * float(q @ resid)
+        r_norm = float(np.linalg.norm(resid))
+        if x_norm == 0.0 or r_norm <= _COLLINEARITY_REL_TOL * x_norm:
+            dropped.append(name)
+            continue
+        basis.append(resid / r_norm)
+        kept.append(name)
+    return kept, dropped

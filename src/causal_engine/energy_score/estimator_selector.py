@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
@@ -237,6 +238,31 @@ def _stratified_subsample_indices(
         else:
             chosen.append(rng.choice(members, size=k, replace=False))
     return np.sort(np.concatenate(chosen)).astype(np.intp)
+
+
+def _refuse_invalid_final_stage_inference(estimator_label: str, fit_warnings: Any) -> None:
+    """Raise when econml's statsmodels final stage declared its own inference invalid.
+
+    On a rank-deficient design econml warns "Co-variance matrix is underdetermined.
+    Inference will be invalid!" (and "Using biased variance calculation!" when
+    n <= p) yet still returns a CI. Serving that CI is a plausible-but-fake number
+    (codex r2 HIGH, measured 2026-09-22 on the real Optum frame: rank 61 of 77,
+    p=8.4e-5 served with an empty warnings list). ``DMLLearnerWrapper`` already
+    refused; LinearDML and DRLearner share the same final stage, so they refuse
+    too -- the tournament skips the estimator, a forced run fails closed on the
+    missing CI. The agent loader prunes exactly collinear columns so a real
+    frame does not trip this (``_prune_exactly_collinear``).
+    """
+    invalid = [
+        str(w.message)
+        for w in fit_warnings
+        if "inference will be invalid" in str(w.message).lower()
+        or "biased variance calculation" in str(w.message).lower()
+    ]
+    if invalid:
+        raise ValueError(
+            f"{estimator_label} final-stage inference is not identified: " + "; ".join(invalid)
+        )
 
 
 def _honest_ate_ci(
@@ -642,7 +668,10 @@ class LinearDMLWrapper(BaseEstimatorWrapper):
                 random_state=42,
             )
             X = covariates.values
-            model.fit(outcome, treatment, X=X, W=X)
+            with warnings.catch_warnings(record=True) as fit_warnings:
+                warnings.simplefilter("always")
+                model.fit(outcome, treatment, X=X, W=X)
+            _refuse_invalid_final_stage_inference("LinearDML", fit_warnings)
 
             # Get estimates
             cate = model.effect(X)
@@ -717,7 +746,10 @@ class DRLearnerWrapper(BaseEstimatorWrapper):
             # shared with the refutation rebuild via nuisance_config.
             model = DRLearner(**drlearner_init_params(), random_state=42)
             X = covariates.values
-            model.fit(outcome, treatment, X=X, W=X)
+            with warnings.catch_warnings(record=True) as fit_warnings:
+                warnings.simplefilter("always")
+                model.fit(outcome, treatment, X=X, W=X)
+            _refuse_invalid_final_stage_inference("DRLearner", fit_warnings)
 
             cate = model.effect(X)
             ate = float(np.mean(cate))
