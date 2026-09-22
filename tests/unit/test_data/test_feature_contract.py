@@ -643,3 +643,50 @@ def test_causal_structure_attestation_is_frozen_and_hashable():
     assert attestation.edges == (("T", "V"), ("U", "V"), ("U", "Y"))
     # hashable (frozen + tuple edges)
     assert isinstance(hash(attestation), int)
+
+
+# ---------------------------------------------------------------------------
+# Lane B (real-data causal estimation, 2026-09-22) — attestation provenance.
+# ---------------------------------------------------------------------------
+
+
+def test_causal_structure_attestation_provenance_defaults_to_machine():
+    """An attestation that does not say who signed it is MACHINE output: the
+    safe default is audit-only (never a prior, never a decider)."""
+    from src.data.feature_contract import CausalStructureAttestation
+
+    att = CausalStructureAttestation(
+        treatment_node="T", outcome_node="Y", feature_node="V", edges=(("V", "T"), ("V", "Y"))
+    )
+    assert att.provenance == "machine"
+    assert att.may_decide() is False
+
+
+def test_causal_structure_attestation_reviewed_and_human_may_decide():
+    from src.data.feature_contract import CausalStructureAttestation
+
+    for prov in ("machine_reviewed", "human"):
+        att = CausalStructureAttestation(
+            treatment_node="T",
+            outcome_node="Y",
+            feature_node="V",
+            edges=(("V", "T"), ("V", "Y")),
+            provenance=prov,
+        )
+        assert att.provenance == prov
+        assert att.may_decide() is True
+
+
+def test_causal_structure_attestation_rejects_unknown_provenance():
+    import pytest
+
+    from src.data.feature_contract import CausalStructureAttestation
+
+    with pytest.raises(ValueError, match="provenance"):
+        CausalStructureAttestation(
+            treatment_node="T",
+            outcome_node="Y",
+            feature_node="V",
+            edges=(("V", "T"),),
+            provenance="approved",  # not a member of the closed set
+        )

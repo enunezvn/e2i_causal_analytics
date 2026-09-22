@@ -129,6 +129,12 @@ class KnowableAt:
         return f"{self.reference}{sign}{self.offset_days}d"
 
 
+#: Closed set of attestation signers (see ``CausalStructureAttestation.provenance``).
+ATTESTATION_PROVENANCES: tuple[str, ...] = ("machine", "machine_reviewed", "human")
+#: The subset that may ACT (decide / seed a structural prior).
+ATTESTATION_DECIDING_PROVENANCES: frozenset[str] = frozenset({"machine_reviewed", "human"})
+
+
 @dataclass(frozen=True)
 class CausalStructureAttestation:
     """Authored DAG-fragment attestation for one feature (Issue #501).
@@ -165,6 +171,20 @@ class CausalStructureAttestation:
     outcome_node: str
     feature_node: str
     edges: tuple[tuple[str, str], ...] = ()
+    # Lane B of the real-data causal estimation program (spec
+    # docs/superpowers/specs/2026-09-22-real-data-causal-estimation-design.md
+    # §3 Lane B item 1 / item 5; owner decision §7). WHO signed the edges:
+    #   * ``machine``          — research-agent / LLM output, no human sign-off.
+    #                             Audit-only: never a structural prior, never
+    #                             decides in the structural decider (its derived
+    #                             role is recorded as telemetry only).
+    #   * ``machine_reviewed`` — machine-authored, approved by a human in the
+    #                             expert-review queue (review id on the record).
+    #   * ``human``            — authored by a domain expert.
+    # The default is the SAFE one: an attestation that does not say who signed
+    # it is treated as unreviewed machine output. The 110 Optum-initiation
+    # attestations are labelled ``machine`` explicitly (owner decision §7).
+    provenance: str = "machine"
 
     def __post_init__(self) -> None:
         # Normalize edges to tuple-of-tuples so the frozen dataclass stays
@@ -176,6 +196,22 @@ class CausalStructureAttestation:
                 "edges",
                 tuple(tuple(e) for e in self.edges),
             )
+        if self.provenance not in ATTESTATION_PROVENANCES:
+            raise ValueError(
+                f"CausalStructureAttestation.provenance must be one of "
+                f"{ATTESTATION_PROVENANCES}, got {self.provenance!r} "
+                f"(feature {self.feature_node!r})"
+            )
+
+    def may_decide(self) -> bool:
+        """True iff this attestation may ACT (decide a role, seed a prior).
+
+        Only a human-signed or human-reviewed attestation acts; unreviewed
+        ``machine`` output is audit-only (spec §3 Lane B item 5: "unapproved
+        machine attestations are never used as priors and the structural
+        decider treats them as audit-only").
+        """
+        return self.provenance in ATTESTATION_DECIDING_PROVENANCES
 
 
 @dataclass(frozen=True)

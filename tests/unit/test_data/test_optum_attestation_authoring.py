@@ -107,3 +107,16 @@ def test_attested_contracts_remain_frozen_and_replaceable() -> None:
     assert c is not None
     again = dataclasses.replace(c)
     assert again == c
+
+
+def test_every_optum_attestation_is_labelled_machine_and_audit_only() -> None:
+    """Spec §7 (2026-09-22, owner decision): the 110 existing Optum attestations
+    are research-agent output with no human sign-off → ``provenance="machine"``.
+    A machine attestation is audit-only: it never decides in the structural
+    decider and is never a structural prior."""
+    attested = [c for c in _safe_features() if c.causal_structure is not None]
+    assert len(attested) == 110, len(attested)
+    not_machine = [c.name for c in attested if c.causal_structure.provenance != "machine"]
+    assert not_machine == [], not_machine
+    deciding = [c.name for c in attested if c.causal_structure.may_decide()]
+    assert deciding == [], deciding
