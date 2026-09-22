@@ -43,5 +43,11 @@ echo "[entrypoint] feast apply (skip source validation)..."
 # (Feast's local registry is not safe for concurrent writers).
 flock /feast/data/.registry.lock feast --chdir /feast apply --skip-source-validation
 
-echo "[entrypoint] starting feast serve on 0.0.0.0:6566"
+# #2207: the feature server's POST /materialize and /materialize-incremental (driven by
+# the worker's beats since 2026-09-22) write the file registry in place; serve_locked.py
+# is the same server with those two store methods under the SAME registry flock the
+# materializer loop and the `apply` above use. If the wrapper fails to START (a defect
+# in it must never take online serving down), fall back to the plain server.
+echo "[entrypoint] starting feast serve (materialize endpoints registry-locked) on 0.0.0.0:6566"
+python3 /serve_locked.py || echo "[entrypoint] WARNING: serve_locked.py exited ($?) — falling back to plain feast serve (materialize endpoints UNLOCKED)"
 exec feast --chdir /feast serve --host 0.0.0.0 --port 6566

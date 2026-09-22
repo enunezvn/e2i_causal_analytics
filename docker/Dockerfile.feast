@@ -39,6 +39,10 @@ COPY --chmod=755 feast/entrypoint.sh /entrypoint.sh
 COPY --chmod=755 feast/_populate_feast.sh /_populate_feast.sh
 COPY --chmod=755 feast/materializer-entrypoint.sh /materializer-entrypoint.sh
 COPY --chmod=755 feast/materialize_windows.py /materialize_windows.py
+# #2207: `feast serve` with the registry lock around the materialize endpoints
+# (docker/feast/serve_locked.py); the serve entrypoint runs it, falling back to the
+# plain server if it cannot start.
+COPY --chmod=755 feast/serve_locked.py /serve_locked.py
 
 # Set environment variables
 ENV FEAST_USAGE=false \
