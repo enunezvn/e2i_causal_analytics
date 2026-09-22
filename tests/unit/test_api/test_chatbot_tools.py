@@ -1360,6 +1360,9 @@ class TestToolExports:
 
     def test_tool_count(self):
         """Test expected number of tools."""
-        # #1354 added predict_hcp_segment_likelihood_tool; #2115 added forecast_kpi_tool
-        assert len(E2I_CHATBOT_TOOLS) == 11
-        assert {"forecast_kpi_tool", "kpi_calculate_tool"} <= {t.name for t in E2I_CHATBOT_TOOLS}
+        # #1354 added predict_hcp_segment_likelihood_tool; #2115 added forecast_kpi_tool;
+        # #2211 added digital_twin_simulate_tool
+        assert len(E2I_CHATBOT_TOOLS) == 12
+        assert {"forecast_kpi_tool", "kpi_calculate_tool", "digital_twin_simulate_tool"} <= {
+            t.name for t in E2I_CHATBOT_TOOLS
+        }

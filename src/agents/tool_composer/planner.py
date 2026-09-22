@@ -1139,6 +1139,22 @@ class ToolPlanner:
                     reasoning="Auto-mapped: a PREDICTIVE ask about a KPI's future level",
                 )
 
+        # #2211: the decomposer's EXPERIMENTAL intent is "test design OR simulation", and the
+        # map below answers both with power_calculator. Measured 2026-09-22: both #2211 asks
+        # decomposed with their simulation step labelled EXPERIMENTAL ("Simulate the email
+        # campaign intervention on Kisqali HCPs using the digital twin model"), so a planner
+        # LLM miss would have sized an experiment instead of running one. A simulation-shaped
+        # ask goes to the twin simulator; unregistered, it falls through exactly as before.
+        if intent == "EXPERIMENTAL" and is_simulation_question(question_lower):
+            if self.registry.validate_tool_exists("counterfactual_simulator"):
+                return ToolMapping(
+                    sub_question_id=sq.id,
+                    tool_name="counterfactual_simulator",
+                    source_agent="experiment_designer",
+                    confidence=0.6,
+                    reasoning="Auto-mapped: an EXPERIMENTAL ask to simulate an intervention",
+                )
+
         # Keyword-based fallbacks (when intent doesn't match well)
         keyword_mappings = [
             # Forecast cues come FIRST: "forecast TRx risk" contains 'risk', and the
@@ -1251,6 +1267,20 @@ _FORECAST_RISK_RE = re.compile(
     r"(forecast|projection|outlook|trajectory|number|numbers|estimate)\b",
     re.IGNORECASE,
 )
+
+
+#: A sub-question is a SIMULATION question when it asks to simulate an intervention forward
+#: (a twin, a counterfactual, a what-if), not to size or design a test (#2211). Both #2211
+#: asks decomposed into a step of this shape under the EXPERIMENTAL intent.
+_SIMULATION_RE = re.compile(
+    r"\b(?:simulat\w*|counterfactual\w*|digital[\s-]?twin|what[\s-]if|what would happen)\b",
+    re.IGNORECASE,
+)
+
+
+def is_simulation_question(text: str) -> bool:
+    """True when ``text`` asks to simulate / run a counterfactual / use the digital twin."""
+    return bool(_SIMULATION_RE.search(text or ""))
 
 
 def is_forecast_question(text: str) -> bool:

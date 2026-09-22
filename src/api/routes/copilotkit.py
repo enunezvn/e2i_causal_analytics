@@ -341,6 +341,7 @@ from src.api.dependencies.auth import (
 from src.api.middleware.tracing import get_request_id  # Phase 1 G08
 from src.api.routes import chat_identity
 from src.api.routes.chat_session_binding import SessionBoundToolNode
+from src.api.routes.chat_twin_capability import simulation_denial_correction
 from src.api.routes.chatbot_tools import E2I_CHATBOT_TOOLS, set_raw_user_query
 from src.api.routes.chatbot_tools import chat_session_id_context as _session_id_context
 from src.api.routes.synthesis_guard import (
@@ -3701,18 +3702,8 @@ def create_e2i_chat_agent(
                 f"[CopilotKit] Invoking {provider} LLM with {len(llm_messages)} messages and {len(E2I_CHATBOT_TOOLS)} tools bound"
             )
 
-            # STREAMING IMPLEMENTATION (v1.24.0)
-            # FIX: Don't emit content during streaming if tool calls may follow.
-            # Previously (v1.22.0), we emitted each chunk immediately, but if the LLM
-            # decides to call tools, this creates a partial message that gets its own
-            # action bar, and then synthesize_node creates another message with ANOTHER
-            # action bar. Root cause of "multiple action bars" bug.
-            #
-            # New approach:
-            # 1. Accumulate ALL content and tool_calls during streaming
-            # 2. After streaming completes, check if tool_calls exist
-            # 3. Only emit content if NO tool calls (direct response)
-            # 4. If tool calls exist, don't emit - synthesize_node will handle final response
+            # STREAMING (v1.24.0, see the module changelog): accumulate content and tool
+            # calls; emit content only when NO tool call follows (else synthesize_node does).
             full_content = ""
             accumulated_tool_calls: list[dict[str, Any]] = []
             content_chunks = []  # Buffer chunks for potential later emission
@@ -3770,10 +3761,7 @@ def create_e2i_chat_agent(
                     tool_calls=parsed_tool_calls if parsed_tool_calls else [],
                 )
 
-            # FIX (v1.25.1): Strengthen tool_call detection to prevent race condition
-            # Previously only checked response.tool_calls, but due to streaming this can be
-            # empty [] even when accumulated_tool_calls has entries (name comes before args).
-            # Now we also check accumulated_tool_calls directly as a fallback.
+            # v1.25.1 (changelog): streaming can leave response.tool_calls empty; check both.
             has_tool_calls = (getattr(response, "tool_calls", None) and response.tool_calls) or any(  # type: ignore[union-attr]
                 tc.get("name") or tc.get("id") for tc in accumulated_tool_calls
             )
@@ -3860,8 +3848,13 @@ def create_e2i_chat_agent(
 
                 return {"messages": [response]}
 
-            # FIX (v1.24.0): NOW emit buffered content since we confirmed no tool calls
-            # This is a direct text response, so stream the accumulated chunks
+            # #2211: a direct answer denying the twin capability gets the live correction appended.
+            twin_note = await simulation_denial_correction(full_content)
+            if twin_note:
+                content_chunks.append(twin_note)
+                full_content += twin_note
+                response = AIMessage(content=full_content)
+            # v1.24.0: no tool calls confirmed — stream the buffered chunks (a direct answer)
             if full_content and content_chunks:
                 logger.debug(
                     f"[CopilotKit] Emitting {len(content_chunks)} buffered chunks (no tool calls)"
@@ -4125,6 +4118,13 @@ def create_e2i_chat_agent(
                 if guard_note:
                     await copilotkit_emit_message(config, guard_note)
                     full_content += guard_note
+            # #2211: same shape for a synthesis that denies the twin capability.
+            twin_note = await simulation_denial_correction(
+                full_content, tools_ran=[tr["tool"] for tr in tool_results]
+            )
+            if twin_note:
+                await copilotkit_emit_message(config, twin_note)
+                full_content += twin_note
 
             response = AIMessage(content=full_content)
 
