@@ -240,8 +240,16 @@ def _stratified_subsample_indices(
     return np.sort(np.concatenate(chosen)).astype(np.intp)
 
 
-def _refuse_invalid_final_stage_inference(estimator_label: str, fit_warnings: Any) -> None:
-    """Raise when econml's statsmodels final stage declared its own inference invalid.
+def _refuse_invalid_final_stage_inference(
+    estimator_label: str, fit_warnings: Any, *, served_fit: bool = True
+) -> bool:
+    """Refuse a SERVED fit whose statsmodels final stage declared its inference invalid.
+
+    Returns True when the inference is invalid but the fit is NOT served (a
+    subsampled tournament fit, #1392: it only ranks estimators and its CI is never
+    reported) -- the caller keeps the point estimate and carries NO interval.
+    Raises when the fit is served (the full-frame refit, a non-subsampled
+    selection, a direct caller: ``served_fit`` defaults to True).
 
     On a rank-deficient design econml warns "Co-variance matrix is underdetermined.
     Inference will be invalid!" (and "Using biased variance calculation!" when
@@ -259,10 +267,19 @@ def _refuse_invalid_final_stage_inference(estimator_label: str, fit_warnings: An
         if "inference will be invalid" in str(w.message).lower()
         or "biased variance calculation" in str(w.message).lower()
     ]
-    if invalid:
+    if not invalid:
+        return False
+    if served_fit:
         raise ValueError(
             f"{estimator_label} final-stage inference is not identified: " + "; ".join(invalid)
         )
+    logger.info(
+        "%s: final-stage inference not identified on an unserved (tournament) fit; "
+        "keeping the point estimate for ranking, no interval: %s",
+        estimator_label,
+        "; ".join(invalid),
+    )
+    return True
 
 
 def _honest_ate_ci(
@@ -671,14 +688,16 @@ class LinearDMLWrapper(BaseEstimatorWrapper):
             with warnings.catch_warnings(record=True) as fit_warnings:
                 warnings.simplefilter("always")
                 model.fit(outcome, treatment, X=X, W=X)
-            _refuse_invalid_final_stage_inference("LinearDML", fit_warnings)
+            inference_invalid = _refuse_invalid_final_stage_inference(
+                "LinearDML", fit_warnings, served_fit=bool(kwargs.get("served_fit", True))
+            )
 
             # Get estimates
             cate = model.effect(X)
             ate = float(np.mean(cate))
 
             # Population ATE SAMPLING interval (honest; #1188).
-            inference = _honest_ate_ci(model, X)
+            inference = None if inference_invalid else _honest_ate_ci(model, X)
             if inference is not None:
                 ate_ci_lower, ate_ci_upper, ate_std = inference
             else:
@@ -749,14 +768,16 @@ class DRLearnerWrapper(BaseEstimatorWrapper):
             with warnings.catch_warnings(record=True) as fit_warnings:
                 warnings.simplefilter("always")
                 model.fit(outcome, treatment, X=X, W=X)
-            _refuse_invalid_final_stage_inference("DRLearner", fit_warnings)
+            inference_invalid = _refuse_invalid_final_stage_inference(
+                "DRLearner", fit_warnings, served_fit=bool(kwargs.get("served_fit", True))
+            )
 
             cate = model.effect(X)
             ate = float(np.mean(cate))
 
             # Population ATE SAMPLING interval (honest; #1188). The previous
             # ate ± 1.96·std(cate)/sqrt(n) was a heterogeneity spread, not a CI.
-            inference = _honest_ate_ci(model, X)
+            inference = None if inference_invalid else _honest_ate_ci(model, X)
             if inference is not None:
                 ate_ci_lower, ate_ci_upper, ate_std = inference
             else:
@@ -1513,7 +1534,11 @@ class EstimatorSelector:
             if efficiency_mode and wrapper.estimator_type not in _EMPTY_BACKDOOR_CAPABLE:
                 fit_frame = sel_efficiency  # type: ignore[assignment]
 
-            result = wrapper.fit(sel_treatment, sel_outcome, fit_frame, **kwargs)
+            # A subsampled tournament fit only RANKS; its CI is never served, so
+            # the wrappers may keep an underdetermined point estimate there.
+            result = wrapper.fit(
+                sel_treatment, sel_outcome, fit_frame, **{**kwargs, "served_fit": not subsampled}
+            )
             # #1392 (codex iter-1 MED): the tournament ranks wrapper INSTANCES.
             # Record which instance produced each result so the full-frame
             # refit fits the EXACT winner — a first-match-by-type lookup would
@@ -1675,7 +1700,7 @@ class EstimatorSelector:
             wrapper.estimator_type.value,
             len(treatment),
         )
-        full_result = wrapper.fit(treatment, outcome, fit_frame, **kwargs)
+        full_result = wrapper.fit(treatment, outcome, fit_frame, **{**kwargs, "served_fit": True})
         if full_result.success:
             full_result.energy_score_result = selection.energy_score_result
         else:
