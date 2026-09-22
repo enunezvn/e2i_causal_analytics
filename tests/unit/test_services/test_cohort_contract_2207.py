@@ -200,8 +200,9 @@ async def test_heal_refuses_to_compose_a_mixed_pair_on_any_conflict():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_heal_is_a_compare_and_set_per_column():
-    """A concurrent healer that filled the column first wins; ours writes nothing."""
+async def test_heal_is_one_all_or_nothing_compare_and_set():
+    """codex r2 HIGH-4: a concurrent healer that filled ANY of the columns we would write
+    makes our whole multi-column update match nothing — no mixed pair, nothing written."""
     rid = str(uuid4())
 
     class _RacingSupabase(FakeAsyncSupabase):
@@ -231,10 +232,13 @@ async def test_heal_is_a_compare_and_set_per_column():
             ]
         }
     )
-    written = await heal_registry_cohort_contract(db, rid, {"data_source": "ours"})
+    written = await heal_registry_cohort_contract(
+        db, rid, {"data_source": "ours", "target_outcome": "our_target"}
+    )
     assert written == {}
     (row,) = db.rows("ml_model_registry")
     assert row["cohort_data_source"] == "theirs"
+    assert row["cohort_target_outcome"] is None  # our target was NOT written alone
 
 
 @pytest.mark.unit

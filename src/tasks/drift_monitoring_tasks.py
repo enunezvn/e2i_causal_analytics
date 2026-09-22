@@ -976,18 +976,27 @@ async def _execute_real_retraining(
     )
     # #2207: THIS contract just produced a promotable model — heal the retrained
     # model's registry row (NULL columns only, as a consistent unit; never at
-    # trigger time) so the scheduled sweep can retrain it next time. Best-effort.
+    # trigger time) so the scheduled sweep can retrain it next time. Only once the
+    # history row reads `completed`, and exactly the row's persisted model_id FK
+    # (set at trigger; None for an unregistered handle) — never a re-resolved
+    # name/version lookup (codex r2 MED-6). Best-effort.
     try:
-        from src.repositories.drift_monitoring import _resolve_model_id
         from src.services.cohort_contract import (
             contract_from_training_config,
             heal_registry_cohort_contract,
         )
 
-        registry_model_id = await _resolve_model_id(repo.client, model_version)
-        await heal_registry_cohort_contract(
-            repo.client, registry_model_id, contract_from_training_config(training_config)
-        )
+        completed = await repo.get_by_id(retraining_id)
+        if completed is not None and completed.status == "completed" and completed.model_id:
+            await heal_registry_cohort_contract(
+                repo.client, completed.model_id, contract_from_training_config(training_config)
+            )
+        else:
+            logger.info(
+                f"Retraining {retraining_id}: cohort contract not healed "
+                f"(status={getattr(completed, 'status', None)!r}, "
+                f"model_id={getattr(completed, 'model_id', None)!r})"
+            )
     except Exception as e:  # noqa: BLE001 — the retrain succeeded; healing is a side channel
         logger.warning(f"Retraining {retraining_id}: cohort contract not healed ({e})")
     deployment = getattr(result, "deployment_result", None) or {}

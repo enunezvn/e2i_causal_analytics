@@ -149,11 +149,13 @@ async def heal_registry_cohort_contract(
 
     Rules: (1) if any column the row already carries disagrees with the contract's
     value for it, NOTHING is written — a half-filled pair ``{row's target, contract's
-    source}`` would be a contract nobody ever ran; (2) each NULL column is filled with an
-    atomic compare-and-set (``UPDATE ... WHERE id = ? AND <column> IS NULL``) so two
-    concurrent healers cannot overwrite each other; (3) a persisted value is never
-    overwritten. Returns the ``{column: value}`` actually written (``{}`` when nothing
-    was, including the conflict case, which is logged).
+    source}`` would be a contract nobody ever ran; (2) every NULL column the contract
+    can fill is written in ONE compare-and-set statement (``UPDATE ... SET <all> WHERE
+    id = ? AND <each column> IS NULL``) — all or nothing, so two concurrent healers with
+    different contracts cannot interleave into a mixed pair (codex r2 HIGH-4); (3) a
+    persisted value is never overwritten. Returns the ``{column: value}`` actually
+    written (``{}`` when nothing was, including the conflict and lost-race cases, which
+    are logged).
     """
     if client is None or not model_id or not contract:
         return {}
@@ -192,24 +194,25 @@ async def heal_registry_cohort_contract(
                 return {}
             continue
         candidates[column] = encoded
-    written: Dict[str, Any] = {}
-    for column, value in candidates.items():
-        try:
-            result = await (
-                client.table("ml_model_registry")
-                .update({column: value})
-                .eq("id", model_id)
-                .is_(column, "null")
-                .execute()
-            )
-        except Exception as e:  # noqa: BLE001 — healing is best-effort
-            logger.warning("Cohort contract for %s: %s not persisted (%s)", model_id, column, e)
-            continue
-        if getattr(result, "data", None):
-            written[column] = value
-    if written:
-        logger.info("Healed cohort contract on ml_model_registry %s: %s", model_id, sorted(written))
-    return written
+    if not candidates:
+        return {}
+    try:
+        query = client.table("ml_model_registry").update(dict(candidates)).eq("id", model_id)
+        for column in candidates:
+            query = query.is_(column, "null")
+        result = await query.execute()
+    except Exception as e:  # noqa: BLE001 — healing is best-effort
+        logger.warning("Cohort contract for %s not persisted (%s)", model_id, e)
+        return {}
+    if not getattr(result, "data", None):
+        logger.warning(
+            "Cohort contract for %s NOT healed: a concurrent writer filled %s first",
+            model_id,
+            sorted(candidates),
+        )
+        return {}
+    logger.info("Healed cohort contract on ml_model_registry %s: %s", model_id, sorted(candidates))
+    return dict(candidates)
 
 
 __all__ = [

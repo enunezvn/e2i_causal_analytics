@@ -55,7 +55,16 @@ async def _run(db: FakeAsyncSupabase, result: Any, training_config: Dict[str, An
     pipeline = MagicMock()
     pipeline.run = AsyncMock(return_value=result)
     service = MagicMock()
-    service.complete_retraining = AsyncMock()
+
+    async def _complete(job_id, performance_after, success=True, **_k):
+        # what RetrainingHistoryRepository.complete_retraining does to the row
+        for h in db.rows("ml_retraining_history"):
+            if h["id"] == job_id:
+                h["status"] = "completed" if success else "failed"
+                h["new_metric_value"] = performance_after
+        return None
+
+    service.complete_retraining = AsyncMock(side_effect=_complete)
     with (
         patch("src.agents.tier_0.pipeline.MLFoundationPipeline", MagicMock(return_value=pipeline)),
         patch(
@@ -106,6 +115,31 @@ async def test_failed_retrain_heals_nothing():
     service.complete_retraining.assert_not_awaited()
     (row,) = db.rows("ml_model_registry")
     assert row["cohort_data_source"] is None and row["cohort_target_outcome"] is None
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_completion_that_did_not_land_heals_nothing():
+    """codex r2 MED-6: heal only once the persisted history row reads `completed`."""
+    db, _ = _db()
+    pipeline = MagicMock()
+    pipeline.run = AsyncMock(return_value=GOOD)
+    service = MagicMock()
+    service.complete_retraining = AsyncMock(return_value=None)  # row stays `pending`
+    with (
+        patch("src.agents.tier_0.pipeline.MLFoundationPipeline", MagicMock(return_value=pipeline)),
+        patch(
+            "src.repositories.drift_monitoring.get_drift_monitoring_client",
+            AsyncMock(return_value=db),
+        ),
+        patch(
+            "src.services.retraining_trigger.get_retraining_trigger_service", return_value=service
+        ),
+    ):
+        out = await _execute_real_retraining("rt-1", MODEL, "v2", dict(CONTRACT))
+    assert out["status"] == "completed"
+    (row,) = db.rows("ml_model_registry")
+    assert row["cohort_data_source"] is None
 
 
 @pytest.mark.unit
