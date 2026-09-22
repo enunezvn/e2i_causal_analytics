@@ -23,6 +23,8 @@ And the contract every writer in this lane shares: persistence never fails the p
 
 from __future__ import annotations
 
+import copy
+import math
 import uuid
 from types import SimpleNamespace
 from typing import Any, Dict, List
@@ -119,23 +121,33 @@ class _AsyncRpc:
 
     async def execute(self):
         assert self._name == "persist_hpo_study", self._name
-        if self._db.rpc_error is not None:
-            raise self._db.rpc_error
         study, trials = self._params["p_study"], self._params["p_trials"]
-        if len({t["trial_number"] for t in trials}) != len(trials):
-            raise RuntimeError(
-                'duplicate key value violates unique constraint "unique_trial_in_study"'
-            )
-        studies = self._db.store.setdefault("ml_hpo_studies", [])
+        # Postgres rejects a non-finite numeric the way json does: the whole call fails.
+        for v in [study.get("best_value"), *(t.get("value") for t in trials)]:
+            if v is not None and not math.isfinite(v):
+                raise RuntimeError(f"invalid input syntax for type numeric: {v}")
+        # Stage every mutation on a COPY (the transaction's private view) ...
+        staged = copy.deepcopy(self._db.store)
+        studies = staged.setdefault("ml_hpo_studies", [])
         existing = next((r for r in studies if r["study_name"] == study["study_name"]), None)
         if existing is None:
             existing = {"id": str(uuid.uuid4())}
             studies.append(existing)
         existing.update(study)
         sid = existing["id"]
-        rows = self._db.store.setdefault("ml_hpo_trials", [])
+        rows = staged.setdefault("ml_hpo_trials", [])
         rows[:] = [r for r in rows if r["study_id"] != sid]
         rows.extend({"id": str(uuid.uuid4()), "study_id": sid, **t} for t in trials)
+        if len({t["trial_number"] for t in trials}) != len(trials):
+            raise RuntimeError(
+                'duplicate key value violates unique constraint "unique_trial_in_study"'
+            )
+        # ... and a failure injected AFTER the parent + trial mutations, before commit,
+        # discards the staged copy: the committed store is untouched.
+        if self._db.fail_before_commit is not None:
+            raise self._db.fail_before_commit
+        self._db.store.clear()
+        self._db.store.update(staged)
         self._db.rpc_calls.append((self._name, self._params))
         return SimpleNamespace(data=sid)
 
@@ -144,7 +156,7 @@ class FakeAsyncSupabase:
     def __init__(self):
         self.store: Dict[str, List[Dict[str, Any]]] = {}
         self.rpc_calls: List[tuple] = []
-        self.rpc_error: Any = None
+        self.fail_before_commit: Any = None
 
     def table(self, name):
         return _AsyncQuery(self.store, name)
@@ -376,8 +388,10 @@ async def test_a_shorter_rerun_removes_the_previous_runs_trailing_trials():
 
 @pytest.mark.asyncio
 async def test_a_failure_mid_way_leaves_the_previous_run_intact_and_reports_failure():
-    """Codex r5: the study + trial set must be one transaction — a failure while
-    writing the new set leaves the parent AND the children exactly as they were."""
+    """Codex r5/r6: the study + trial set must be one transaction — a failure AFTER
+    the parent and the new trials have been written (before commit) leaves the
+    committed parent AND children exactly as they were. The fake stages every
+    mutation on a copy and injects the failure after it, like Postgres does."""
     db = FakeAsyncSupabase()
     name = f"e2i_atomic_{uuid.uuid4().hex[:6]}_rf_hpo"
     first = optuna.create_study(study_name=name)
@@ -397,7 +411,7 @@ async def test_a_failure_mid_way_leaves_the_previous_run_intact_and_reports_fail
         before = {k: [dict(r) for r in v] for k, v in db.store.items()}
         second = optuna.create_study(study_name=name)
         second.optimize(lambda t: t.suggest_int("n_estimators", 10, 20) / 20.0, n_trials=1)
-        db.rpc_error = RuntimeError("statement timeout")
+        db.fail_before_commit = RuntimeError("statement timeout")
         failed = await opt.save_to_database(second, _results(second))
 
     assert ok["success"] is True and failed["success"] is False
@@ -408,3 +422,47 @@ async def test_a_failure_mid_way_leaves_the_previous_run_intact_and_reports_fail
     assert "ml_hpo_studies" in db.store and all(
         r["study_name"] == name for r in db.store["ml_hpo_studies"]
     )
+
+
+@pytest.mark.asyncio
+async def test_a_failed_trial_with_a_non_finite_value_does_not_lose_the_study():
+    """Codex r6: the live objective returns -inf on a caught trial failure
+    (OptunaOptimizer.create_objective) — one such trial made the payload invalid
+    (json / numeric(10,6)) and lost the whole study. Non-finite values go to NULL."""
+    db = FakeAsyncSupabase()
+    study = optuna.create_study(study_name=f"e2i_inf_{uuid.uuid4().hex[:6]}_rf_hpo")
+
+    def objective(t):
+        n = t.suggest_int("n_estimators", 10, 20)
+        t.report(float("nan"), step=0)
+        return float("-inf") if t.number == 1 else n / 20.0
+
+    study.optimize(objective, n_trials=3)
+    assert any(t.value == float("-inf") for t in study.trials)
+    results = _results(study)
+    results["best_value"] = float("-inf")  # the worst case: the run itself was degenerate
+    opt = OptunaOptimizer(experiment_id="unknown", mlflow_tracking=False)
+    with (
+        patch(
+            "src.memory.services.factories.get_async_supabase_client",
+            new=AsyncMock(return_value=db),
+        ),
+        patch(
+            "src.repositories.ml_experiment.MLExperimentRepository.get_by_mlflow_id",
+            new=AsyncMock(return_value=None),
+        ),
+    ):
+        out = await opt.save_to_database(study, results)
+
+    assert out["success"] is True, out
+    (_, params) = db.rpc_calls[0]
+    assert params["p_study"]["best_value"] is None
+    values = {t["trial_number"]: t["value"] for t in params["p_trials"]}
+    assert values[1] is None
+    assert all(v is not None and math.isfinite(v) for k, v in values.items() if k != 1)
+    assert all(
+        v is None or math.isfinite(v)
+        for t in params["p_trials"]
+        for v in t["intermediate_values"].values()
+    )
+    assert len(db.store["ml_hpo_trials"]) == 3

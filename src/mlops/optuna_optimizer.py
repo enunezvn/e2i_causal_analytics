@@ -8,6 +8,7 @@ Version: 1.1.0
 
 import asyncio
 import logging
+import math
 import os
 import time
 import uuid
@@ -36,6 +37,23 @@ from sklearn.model_selection import KFold, StratifiedKFold, cross_val_score
 from src.mlops.lr_solver_policy import reconcile_lr_solver
 
 logger = logging.getLogger(__name__)
+
+
+def _finite_or_none(value: Any) -> Optional[float]:
+    """A float that json and numeric(10,6) accept, else None (#2207, codex r6).
+
+    The objective returns ``-inf`` for a caught trial failure and a pruned/failed
+    trial can report NaN; serialised as-is either invalidates the persist_hpo_study
+    payload and loses the whole study. NULL is the honest value for "no score".
+    """
+    if value is None:
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
 
 # Default config path
 DEFAULT_CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "optuna_config.yaml"
@@ -794,9 +812,9 @@ class OptunaOptimizer:
                 - optimization_results["n_completed"]
                 - optimization_results["n_pruned"],
                 "best_trial_number": optimization_results["best_trial_number"],
-                "best_value": float(optimization_results["best_value"])
-                if optimization_results["best_value"] is not None
-                else None,
+                # Non-finite -> NULL (codex r6): the objective returns -inf on a caught
+                # trial failure; json/numeric(10,6) reject it and the study would be lost.
+                "best_value": _finite_or_none(optimization_results["best_value"]),
                 "best_params": optimization_results["best_params"],
                 "duration_seconds": optimization_results["duration_seconds"],
                 "status": "completed",
@@ -884,9 +902,11 @@ class OptunaOptimizer:
                     "trial_number": trial.number,
                     "state": trial.state.name,
                     "params": trial.params,
-                    "value": float(trial.value) if trial.value is not None else None,
+                    # Non-finite -> NULL (codex r6): a failed trial's -inf (or a NaN
+                    # report) must not invalidate the whole study's payload.
+                    "value": _finite_or_none(trial.value),
                     "intermediate_values": {
-                        str(k): float(v) for k, v in trial.intermediate_values.items()
+                        str(k): _finite_or_none(v) for k, v in trial.intermediate_values.items()
                     }
                     if trial.intermediate_values
                     else {},

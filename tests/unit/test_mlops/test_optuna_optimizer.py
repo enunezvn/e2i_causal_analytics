@@ -977,26 +977,36 @@ class TestSaveToDatabase:
             "duration_seconds": 10.0,
         }
 
-        # Mock Supabase client - the code uses `await ... .execute()` so execute must be AsyncMock
+        # Mock Supabase client. #2207: the study + its trial set go through ONE
+        # `client.rpc("persist_hpo_study", ...)` call (migration ml/045) whose
+        # `.execute()` is awaited and returns the study id as scalar data.
         mock_execute_result = MagicMock()
-        mock_execute_result.data = [{"id": "study-uuid-123"}]
+        mock_execute_result.data = "study-uuid-123"
 
-        mock_insert = MagicMock()
-        mock_insert.execute = AsyncMock(return_value=mock_execute_result)
-
-        mock_table = MagicMock()
-        mock_table.insert = MagicMock(return_value=mock_insert)
+        mock_rpc_builder = MagicMock()
+        mock_rpc_builder.execute = AsyncMock(return_value=mock_execute_result)
 
         mock_client = MagicMock()
-        mock_client.table = MagicMock(return_value=mock_table)
+        mock_client.rpc = MagicMock(return_value=mock_rpc_builder)
+        # "test_exp" is a label, not an ml_experiments uuid: the saver looks it up
+        # and writes NULL when there is no row.
+        mock_client.table = MagicMock(
+            side_effect=AssertionError("no table-level writes: the RPC is the only write")
+        )
 
         # Patch the async factory at the location where it's imported.
         # The code does: from src.memory.services.factories import
         # get_async_supabase_client (issue #821 — was the SYNC get_supabase_client,
         # awaited, which raised TypeError; the await-on-sync bug this test missed).
-        with patch(
-            "src.memory.services.factories.get_async_supabase_client",
-            new=AsyncMock(return_value=mock_client),
+        with (
+            patch(
+                "src.memory.services.factories.get_async_supabase_client",
+                new=AsyncMock(return_value=mock_client),
+            ),
+            patch(
+                "src.repositories.ml_experiment.MLExperimentRepository.get_by_mlflow_id",
+                new=AsyncMock(return_value=None),
+            ),
         ):
             result = await optimizer.save_to_database(
                 study=mock_study,
@@ -1006,6 +1016,18 @@ class TestSaveToDatabase:
 
         assert result["success"] is True
         assert result["study_id"] == "study-uuid-123"
+        assert result["trials_saved"] == 1
+        mock_client.rpc.assert_called_once()
+        name, params = mock_client.rpc.call_args.args
+        assert name == "persist_hpo_study"
+        study = params["p_study"]
+        assert study["study_name"] == "test_study"
+        assert study["algorithm_name"] == "XGBoost"
+        assert study["experiment_id"] is None
+        assert study["best_value"] == 0.85 and study["n_trials"] == 1
+        (trial,) = params["p_trials"]
+        assert trial["trial_number"] == 0 and trial["state"] == "COMPLETE"
+        assert trial["value"] == 0.85 and trial["params"] == {"n_estimators": 100, "max_depth": 5}
 
 
 # ============================================================================
