@@ -19,6 +19,8 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
 from src.digital_twin.effect import cohort_causal_estimator, cohort_loader, provider
 from src.etl import business_metrics_per_hcp_etl as etl
 
@@ -131,3 +133,70 @@ def test_the_plant_refuses_a_frame_that_holds_a_row_not_marked_synthetic():
     with pytest.raises(SystemExit):
         script.require_synthetic_only(nullable)
     script.require_synthetic_only(pd.DataFrame([{"is_synthetic": True}]))
+
+
+def test_the_etl_preview_guards_exactly_the_columns_the_plant_writes():
+    """A channel added to the plant must reach the preview's obsolete-with-cohort-data count,
+    or the reconcile can again delete planted data the readout never mentioned."""
+    script = _plant_script()
+    assert set(etl.COHORT_DATA_COLUMNS) == set(script.PLANTED_WRITE_COLUMNS)
+    assert set(etl.COHORT_DATA_COLUMNS).isdisjoint(_etl_upsert_set_columns())
+
+
+def test_the_plant_derives_every_channel_column_from_the_shared_map():
+    """codex r1 (2026-09-22): a second intervention->column map in the plant would let a
+    swap in the shared map plant one channel's DGP under another's name while every
+    set-based check stayed green. The plant may name interventions; it may not name columns."""
+    from src.data.per_hcp_cohort_columns import INTERVENTION_TREATMENT_MAP
+
+    script = _plant_script()
+    assert script.ChannelSpec.__dataclass_fields__["column"].init is False
+    derived = {spec.intervention: spec.column for spec in script.CHANNEL_SPECS}
+    derived["digital_engagement"] = script.LEGACY_ENGAGEMENT_COLUMN
+    assert derived == INTERVENTION_TREATMENT_MAP
+    with pytest.raises(KeyError):
+        script.ChannelSpec(
+            intervention="not_an_intervention",
+            kind="poisson",
+            intercept=0.0,
+            beta_market=0.0,
+            beta_volume=0.0,
+            region_offset={},
+            noise_std=0.0,
+            tau_by_region={},
+        )
+
+
+def test_the_dgp_generator_writes_the_legacy_channel_under_the_shared_maps_name(monkeypatch):
+    """codex r2 (2026-09-22): generate_dgp still spelled the legacy channel as a literal, so a
+    change to the shared map would leave the generator writing the old name while every
+    structural test stayed green. Simulate that change faithfully: patch the shared map's
+    entry, re-execute the script so every derived constant follows, and generate."""
+    import numpy as np
+    import pandas as pd
+
+    from src.data import per_hcp_cohort_columns as columns
+
+    rng = np.random.default_rng(0)
+    n = 48
+    rows = pd.DataFrame(
+        {
+            "metric_id": [f"m{i}" for i in range(n)],
+            "brand": np.tile(["Kisqali", "Fabhalta", "Remibrutinib"], n // 3),
+            "region": np.tile(["northeast", "west", "south", "midwest"], n // 4),
+            "market_share": rng.uniform(0.05, 0.6, n),
+            "triggers_total_count": rng.integers(0, 40, n),
+        }
+    )
+    script = _plant_script()
+    out = script.generate_dgp(rows, seed=1)
+    assert set(script.PLANTED_WRITE_COLUMNS) <= set(out.columns)
+
+    monkeypatch.setitem(columns.INTERVENTION_TREATMENT_MAP, "digital_engagement", "legacy_renamed")
+    renamed_script = _plant_script()
+    assert renamed_script.LEGACY_ENGAGEMENT_COLUMN == "legacy_renamed"
+    renamed = renamed_script.generate_dgp(rows, seed=1)
+    assert set(renamed_script.PLANTED_WRITE_COLUMNS) <= set(renamed.columns)
+    assert "legacy_renamed" in renamed.columns and "engagement_score" not in renamed.columns
+    # the values are the map-independent revision-1 stream: same numbers under either name
+    assert np.array_equal(out["engagement_score"].to_numpy(), renamed["legacy_renamed"].to_numpy())

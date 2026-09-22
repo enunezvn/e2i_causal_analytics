@@ -83,6 +83,7 @@ from typing import Any, Dict, Optional
 # stay valid post-extraction. The helpers themselves moved to ``_common.py``
 # in fix-up for 6B-infra-2b so a third ETL (6B-infra-2c) can import the same
 # code without creating a third duplicate copy.
+from src.data.per_hcp_cohort_columns import PLANTED_COLUMNS
 from src.etl._common import (  # noqa: F401 — re-exported for backward compatibility
     _connect_to_db,
     _resolve_db_connection_string,
@@ -327,6 +328,41 @@ INSERT_PER_HCP_ROLLUP_SQL: str = _compose_rollup_insert("trigger_timestamp")
 #: recomputed whole.
 INSERT_PER_HCP_ROLLUP_BY_ARRIVAL_SQL: str = _compose_rollup_insert("created_at")
 
+#: The reconcile's WHERE clause, alias-parameterised: ``__A__`` is the business_metrics
+#: alias, ``__R__`` the rollup CTE alias, ``__SCOPE__`` the date scope on ``__A__``. The
+#: explicit-window reconcile, the arrival reconcile and BOTH preview obsolete counts are
+#: composed from this one template (codex r1/r2, 2026-09-22), so "a stored row on a scoped
+#: date that no recomputed row reproduces" has exactly one definition.
+_PER_HCP_OBSOLETE_WHERE_TEMPLATE: str = """__A__.metric_type = %(metric_type)s
+   AND __A__.hcp_id IS NOT NULL
+   AND __SCOPE__
+   AND NOT EXISTS (SELECT 1 FROM rollup __R__ WHERE __R__.metric_id = __A__.metric_id)"""
+_PER_HCP_SCOPE_BY_ARRIVAL_TEMPLATE: str = (
+    "__A__.metric_date IN (SELECT metric_date FROM affected_dates)"
+)
+_PER_HCP_SCOPE_BY_WINDOW_TEMPLATE: str = (
+    "__A__.metric_date >= %(start_date)s::DATE AND __A__.metric_date <  %(end_date)s::DATE"
+)
+
+
+def _obsolete_where(alias: str, rollup_alias: str, scope_template: str) -> str:
+    """The obsolete-row predicate on the given aliases. ``scope_template`` is one of the
+    two ``_PER_HCP_SCOPE_BY_*_TEMPLATE`` strings."""
+    return (
+        _PER_HCP_OBSOLETE_WHERE_TEMPLATE.replace("__SCOPE__", scope_template)
+        .replace("__A__", alias)
+        .replace("__R__", rollup_alias)
+    )
+
+
+#: Named forms of the two scopes on the reconcile's alias (referenced by the integration
+#: prod-write guard's docs).
+_PER_HCP_RECONCILE_SCOPE_BY_ARRIVAL: str = _PER_HCP_SCOPE_BY_ARRIVAL_TEMPLATE.replace("__A__", "b")
+_PER_HCP_RECONCILE_SCOPE_BY_WINDOW: str = _PER_HCP_SCOPE_BY_WINDOW_TEMPLATE.replace("__A__", "b")
+
+#: Both preview obsolete counts use the explicit-window predicate on the preview's alias.
+_PREVIEW_OBSOLETE_WHERE: str = _obsolete_where("o", "r2", _PER_HCP_SCOPE_BY_WINDOW_TEMPLATE)
+
 _PREVIEW_COUNTS_SQL: str = """
 SELECT
     COUNT(DISTINCT r.metric_date)                        AS metric_dates,
@@ -341,22 +377,30 @@ SELECT
     )                                                    AS rows_changed,
     COUNT(*) FILTER (WHERE b.metric_id IS NOT NULL)      AS rows_existing,
     (SELECT count(*) FROM business_metrics o
-      WHERE o.metric_type = %(metric_type)s AND o.hcp_id IS NOT NULL
-        AND o.metric_date >= %(start_date)s::DATE AND o.metric_date < %(end_date)s::DATE
-        AND NOT EXISTS (SELECT 1 FROM rollup r2 WHERE r2.metric_id = o.metric_id))
+      WHERE __OBSOLETE_WHERE__)
                                                          AS rows_obsolete,
+    -- Of the obsolete rows, those still carrying the Digital Twin's planted channels or
+    -- outcome (columns this ETL never writes; 2026-09-21 a full-window reconcile deleted
+    -- them wholesale and the twin went dark). The operator sees this before --execute.
+    (SELECT count(*) FROM business_metrics o
+      WHERE __OBSOLETE_WHERE__
+        AND (__COHORT_DATA_PREDICATE__))
+                                                         AS rows_obsolete_with_cohort_data,
     MIN(r.metric_date)                                   AS first_date,
     MAX(r.metric_date)                                   AS last_date
 FROM rollup r
 LEFT JOIN business_metrics b ON b.metric_id = r.metric_id
 """
 
-_PER_HCP_RECONCILE_SCOPE_BY_ARRIVAL: str = (
-    "b.metric_date IN (SELECT metric_date FROM affected_dates)"
+#: Every column the twin's plant writes and this ETL never does (one shared list; the
+#: single-writer tests pin it against the plant script). Named in the preview only.
+COHORT_DATA_COLUMNS: tuple[str, ...] = PLANTED_COLUMNS
+_PREVIEW_COUNTS_SQL = _PREVIEW_COUNTS_SQL.replace(
+    "__OBSOLETE_WHERE__", _PREVIEW_OBSOLETE_WHERE
+).replace(
+    "__COHORT_DATA_PREDICATE__", " OR ".join(f"o.{col} IS NOT NULL" for col in COHORT_DATA_COLUMNS)
 )
-_PER_HCP_RECONCILE_SCOPE_BY_WINDOW: str = (
-    "b.metric_date >= %(start_date)s::DATE AND b.metric_date <  %(end_date)s::DATE"
-)
+
 
 #: codex r13-08: an upsert cannot delete. A row whose (hcp, brand, date) lost its last
 #: trigger must go, or that date's market shares exceed 1.
@@ -364,17 +408,14 @@ _PER_HCP_RECONCILE_TAIL: str = """
 , rollup AS (__ROWS_SELECT__
 )
 DELETE FROM business_metrics b
- WHERE b.metric_type = %(metric_type)s
-   AND b.hcp_id IS NOT NULL
-   AND __SCOPE__
-   AND NOT EXISTS (SELECT 1 FROM rollup r WHERE r.metric_id = b.metric_id);
+ WHERE __WHERE__;
 """
 
 
-def _compose_rollup_reconcile(window_column: str, scope: str) -> str:
+def _compose_rollup_reconcile(window_column: str, scope_template: str) -> str:
     return _PER_HCP_ROLLUP_CTES_TEMPLATE.replace("__WINDOW_COLUMN__", window_column) + (
         _PER_HCP_RECONCILE_TAIL.replace("__ROWS_SELECT__", _PER_HCP_ROLLUP_ROWS_SELECT).replace(
-            "__SCOPE__", scope
+            "__WHERE__", _obsolete_where("b", "r", scope_template)
         )
     )
 
@@ -382,12 +423,12 @@ def _compose_rollup_reconcile(window_column: str, scope: str) -> str:
 #: Explicit window: reconcile the WHOLE calendar range, so a date that lost every trigger
 #: (and is therefore unselectable by arrival) is cleaned too.
 RECONCILE_PER_HCP_ROLLUP_SQL: str = _compose_rollup_reconcile(
-    "trigger_timestamp", _PER_HCP_RECONCILE_SCOPE_BY_WINDOW
+    "trigger_timestamp", _PER_HCP_SCOPE_BY_WINDOW_TEMPLATE
 )
 
 #: Scheduled run: reconcile the dates this run touched.
 RECONCILE_PER_HCP_ROLLUP_BY_ARRIVAL_SQL: str = _compose_rollup_reconcile(
-    "created_at", _PER_HCP_RECONCILE_SCOPE_BY_ARRIVAL
+    "created_at", _PER_HCP_SCOPE_BY_ARRIVAL_TEMPLATE
 )
 
 #: Read-only readout of an explicit-window run: the same CTE text and row SELECT as
@@ -448,8 +489,11 @@ def preview_per_hcp_rollup(start_date: str, end_date: str) -> Dict[str, Any]:
     """Read-only readout of what an explicit-window rollup would write.
 
     Runs ``PREVIEW_PER_HCP_ROLLUP_SQL`` inside a ``READ ONLY`` transaction (Postgres refuses
-    any write in it) and counts the touched dates and the new / changed / existing rows.
-    It is the dry-run before an owner-gated backfill.
+    any write in it) and counts the touched dates, the new / changed / existing rows, the
+    obsolete rows the reconcile would delete and, of those, the ones still carrying the
+    Digital Twin's planted cohort data (``rows_obsolete_with_cohort_data``). It is the
+    dry-run before an owner-gated backfill; a non-zero cohort count means the backfill must
+    be followed by the plant (``scripts/backfill_segment_engagement.py --execute``).
     """
     start_dt, end_dt = _resolve_window(start_date, end_date)
     params = {
@@ -475,6 +519,7 @@ def preview_per_hcp_rollup(start_date: str, end_date: str) -> Dict[str, Any]:
         "rows_changed",
         "rows_existing",
         "rows_obsolete",
+        "rows_obsolete_with_cohort_data",
         "first_date",
         "last_date",
     )

@@ -677,7 +677,7 @@ def test_preview_reads_the_insert_text_and_writes_nothing() -> None:
 def test_preview_runs_in_a_read_only_transaction() -> None:
     conn = _make_mock_conn()
     cur = conn.cursor.return_value
-    cur.fetchone.return_value = (7, 120, 3, 40, 5, date(2026, 5, 1), date(2026, 9, 14))
+    cur.fetchone.return_value = (7, 120, 3, 40, 5, 0, date(2026, 5, 1), date(2026, 9, 14))
     with patch.object(etl, "_connect_to_db", return_value=conn):
         result = etl.preview_per_hcp_rollup("2026-05-01", "2026-09-16")
     first, second = cur.execute.call_args_list
@@ -726,3 +726,95 @@ def test_impl_reconciles_in_the_same_transaction_as_the_upsert() -> None:
         etl.RECONCILE_PER_HCP_ROLLUP_BY_ARRIVAL_SQL,
     ]
     assert result["status"] == "completed" and result["rows_deleted"] == 2
+
+
+# --- the preview names the cohort data an obsolete row still carries (2026-09-22) -----------
+
+
+def test_preview_reports_obsolete_rows_that_still_carry_cohort_data() -> None:
+    """2026-09-21: a full-window backfill's reconcile deleted rows whose planted twin channels
+    and outcome the ETL does not own, and the twin went dark. The preview counts those rows
+    separately, so the operator sees the cohort data the reconcile would take with it."""
+    conn = _make_mock_conn()
+    cur = conn.cursor.return_value
+    cur.fetchone.return_value = (7, 120, 3, 40, 5, 2, date(2026, 5, 1), date(2026, 9, 14))
+    with patch.object(etl, "_connect_to_db", return_value=conn):
+        result = etl.preview_per_hcp_rollup("2026-05-01", "2026-09-16")
+    assert result["rows_obsolete"] == 5
+    assert result["rows_obsolete_with_cohort_data"] == 2
+    assert (result["first_date"], result["last_date"]) == (date(2026, 5, 1), date(2026, 9, 14))
+
+
+def test_the_cohort_data_count_names_every_planted_column_and_only_obsolete_rows() -> None:
+    from src.data.per_hcp_cohort_columns import PLANTED_COLUMNS
+
+    sql = etl._PREVIEW_COUNTS_SQL
+    assert "__COHORT_DATA_PREDICATE__" not in sql
+    body = sql.split("AS rows_obsolete,", 1)[1].split("AS rows_obsolete_with_cohort_data", 1)[0]
+    for col in PLANTED_COLUMNS:
+        assert re.search(rf"\bo\.{col} IS NOT NULL", body), col
+    assert tuple(etl.COHORT_DATA_COLUMNS) == PLANTED_COLUMNS
+
+
+def test_both_obsolete_counts_and_the_reconcile_come_from_one_alias_parameterised_predicate() -> (
+    None
+):
+    """codex r1/r2 (2026-09-22): naming two of the predicate's four conditions was a proxy, and
+    comparing normalised text could hide a semantic difference. Production composes the
+    reconcile's WHERE clause and both preview aggregates from ONE alias-parameterised
+    template, so the three texts are the same predicate by construction; this test pins
+    that construction and the template's four conditions."""
+    template = etl._PER_HCP_OBSOLETE_WHERE_TEMPLATE
+    for cond in (
+        "__A__.metric_type = %(metric_type)s",
+        "__A__.hcp_id IS NOT NULL",
+        "__SCOPE__",
+        "NOT EXISTS (SELECT 1 FROM rollup __R__ WHERE __R__.metric_id = __A__.metric_id)",
+    ):
+        assert cond in template, cond
+    preview = etl._obsolete_where("o", "r2", etl._PER_HCP_SCOPE_BY_WINDOW_TEMPLATE)
+    assert etl._PREVIEW_COUNTS_SQL.count(preview) == 2
+    reconcile = etl._obsolete_where("b", "r", etl._PER_HCP_SCOPE_BY_WINDOW_TEMPLATE)
+    assert (
+        f"DELETE FROM business_metrics b\n WHERE {reconcile};" in etl.RECONCILE_PER_HCP_ROLLUP_SQL
+    )
+    arrival = etl._obsolete_where("b", "r", etl._PER_HCP_SCOPE_BY_ARRIVAL_TEMPLATE)
+    assert (
+        f"DELETE FROM business_metrics b\n WHERE {arrival};"
+        in etl.RECONCILE_PER_HCP_ROLLUP_BY_ARRIVAL_SQL
+    )
+    for sql in (
+        etl._PREVIEW_COUNTS_SQL,
+        etl.RECONCILE_PER_HCP_ROLLUP_SQL,
+        etl.PREVIEW_PER_HCP_ROLLUP_SQL,
+    ):
+        for marker in (
+            "__A__",
+            "__R__",
+            "__SCOPE__",
+            "__OBSOLETE_WHERE__",
+            "__COHORT_DATA_PREDICATE__",
+        ):
+            assert marker not in sql, marker
+    params = lambda text: set(re.findall(r"%\((\w+)\)s", text))  # noqa: E731
+    assert params(preview) == params(reconcile) == {"metric_type", "start_date", "end_date"}
+
+
+def test_the_etl_module_does_not_import_the_twin_package() -> None:
+    """The premise of the light contract module: importing the ETL must stay cheap."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    code = (
+        "import sys; import src.etl.business_metrics_per_hcp_etl; "
+        "print(sorted(m for m in sys.modules if m in ('src.digital_twin', 'sklearn', 'dowhy', 'shap')))"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=Path(__file__).resolve().parents[3],
+    ).stdout.strip()
+    assert out == "[]", out
