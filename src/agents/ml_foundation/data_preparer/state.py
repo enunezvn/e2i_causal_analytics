@@ -226,8 +226,22 @@ class DataPreparerState(BaseAgentSchema):
 
     # Feast registration
     feast_registration_status: Optional[
-        Literal["completed", "empty", "skipped", "error", "blocked_stale_features"]
+        Literal[
+            "completed",
+            "empty",
+            "skipped",
+            "error",
+            "blocked_stale_features",
+            # The Feast views sourced from the run's table are stale/unverifiable but the
+            # run does not train on Feast-served features — recorded, not blocking (#2207).
+            "advisory_stale_features",
+        ]
     ] = None
+    # True when the run trains on features read FROM the Feast store (a Feast-read
+    # training path). Nothing sets it today (data_loader reads a table / files / the
+    # synthetic sample); it is the condition under which the freshness gate hard-blocks.
+    # Declared here because LangGraph drops undeclared keys at channel boundaries.
+    features_served_by_feast: Optional[bool] = None
     feast_features_registered: Optional[int] = None  # Count of features registered
     feast_freshness_check: Optional[Dict[str, Any]] = None  # Freshness check result
     feast_warnings: Optional[List[str]] = None  # Non-blocking warnings
