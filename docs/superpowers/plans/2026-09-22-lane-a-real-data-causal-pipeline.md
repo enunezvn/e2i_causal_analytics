@@ -2607,6 +2607,12 @@ scales by a power of two before subtracting the reference (float-max safe); the 
 each refusal alone and one closing served/none sentence; `tournament_energy_score` + `served_refit` are
 explicit fields on every serialisation surface including the API candidate (api.ts regenerated).
 
+**Amendment 6 (codex r6 → REVISE: 4 HIGH + 1 MED):** the prune's guarantee is "numerically collinear at
+machine precision" (a one-ULP variant IS dropped; test pins it); every refusal is recorded including the
+last one and the subsample sentence never claims a reported ATE/CI on failure; the hand-written frontend
+`EstimatorCandidate` type and the comparison panel carry `tournament_energy_score` / `served_refit` and
+rank by the tournament score; the MLflow DB logger applies the finite filter to `energy_details`.
+
 ---
 
 ### Task 10: Codex review rounds to ACCEPT

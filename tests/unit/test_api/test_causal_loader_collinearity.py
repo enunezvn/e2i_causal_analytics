@@ -226,6 +226,18 @@ def test_prune_drops_only_the_exact_duplicate_when_both_carry_a_large_offset():
     assert _prune(df, ["a", "b"]) == (["a"], ["b"])
 
 
+def test_prune_drops_a_one_ulp_variant_as_numerically_collinear():
+    # codex r6: the tolerance is max(n,k)*eps, so a column that differs from an
+    # earlier one by ONE ULP in one element is numerically collinear and IS
+    # dropped -- the guarantee is "collinear at machine precision", not
+    # "bitwise-distinct columns are always kept".
+    a = np.arange(8, dtype=float)
+    b = a.copy()
+    b[-1] = np.nextafter(b[-1], np.inf)
+    assert not np.array_equal(a, b)
+    assert _prune(pd.DataFrame({"a": a, "b": b}), ["a", "b"]) == (["a"], ["b"])
+
+
 def test_prune_is_finite_safe_at_float_max():
     # codex r5 MED: [-1e308, 1e308] overflowed the reference subtraction to inf and
     # floor(log2(inf)) raised. Scale by a power of two BEFORE subtracting.

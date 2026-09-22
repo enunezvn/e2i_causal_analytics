@@ -911,11 +911,15 @@ def _prune_exactly_collinear(
     the intercept and the kept basis; the column is dropped when its residual
     is below ``max(n, k) * eps`` of its centered norm
     (``_collinearity_rel_tol``). Exact redundancy measures ~1e-15 on the real
-    frame; the smallest kept ratio there is 0.047. What is guaranteed: exact
-    linear combinations of earlier resolved columns are dropped and nothing
-    informative is; what is NOT guaranteed: that econml's global-tolerance
-    rank check on its own raw final-stage matrix agrees on every pathological
-    input -- where it does not, the wrappers refuse the served fit.
+    frame; the smallest kept ratio there is 0.047. What is guaranteed: a
+    column that is numerically collinear with the intercept and earlier
+    resolved columns AT MACHINE PRECISION is dropped -- an exact linear
+    combination, and also a column whose independent variation is at or
+    below ``max(n, k) * eps`` of its centered norm (one ULP in one element
+    of an otherwise identical column is dropped; codex r6). What is NOT
+    guaranteed: that econml's global-tolerance rank check on its own raw
+    final-stage matrix agrees on every pathological input -- where it does
+    not, the wrappers refuse the served fit.
 
     Skipped (nothing dropped) when the frame cannot rank the columns
     (``n < k + 1``: fewer rows than intercept-plus-columns) or when a column

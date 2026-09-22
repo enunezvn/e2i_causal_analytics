@@ -1640,6 +1640,15 @@ class EstimatorSelector:
             if refit.success:
                 selection = refit
                 break
+            # Record EVERY refusal, including the last one when no candidate is
+            # left (codex r6); whether the NEXT candidate is served is known
+            # only when its own refit returns (codex r5: never "served B"
+            # before B's refit ran).
+            fallback_notes.append(
+                f"Tournament winner {refit.estimator_type.value} (energy score "
+                f"{refit.energy_score:.4f}) refused its served full-frame refit: "
+                f"{refit.error_message}."
+            )
             remaining = [r for r in results if r.success]
             if not remaining:
                 selection = refit
@@ -1649,14 +1658,6 @@ class EstimatorSelector:
                 "ranked candidate on the full frame.",
                 refit.estimator_type.value,
                 refit.error_message,
-            )
-            # Record the refusal only; whether the NEXT candidate is served is
-            # known when its own refit returns (codex r5: never "served B"
-            # before B's refit ran).
-            fallback_notes.append(
-                f"Tournament winner {refit.estimator_type.value} (energy score "
-                f"{refit.energy_score:.4f}) refused its served full-frame refit: "
-                f"{refit.error_message}."
             )
             selection = self._select_best_energy(remaining)
         if fallback_notes:
@@ -1817,8 +1818,13 @@ class EstimatorSelector:
             # the reported estimate is the full-frame winner fit.
             selection_reason += (
                 f" Tournament ranked on a deterministic stratified subsample of "
-                f"{selection_n_rows:,}/{n_rows_total:,} rows; the reported "
-                f"ATE/CI come from the winner refit on the full frame."
+                f"{selection_n_rows:,}/{n_rows_total:,} rows; "
+                + (
+                    "the reported ATE/CI come from the winner refit on the full frame."
+                    if selection.success
+                    # codex r6: never claim a reported ATE/CI when no refit succeeded
+                    else "no full-frame refit succeeded, so no ATE/CI is reported."
+                )
             )
         if fallback_notes:
             # codex r4 MED: the served estimator is NOT the tournament winner;

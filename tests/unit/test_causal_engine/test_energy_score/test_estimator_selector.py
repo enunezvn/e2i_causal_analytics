@@ -1821,6 +1821,24 @@ class TestSubsampledSelection:
         assert by_type[EstimatorType.OLS].to_dict()["served_refit"] is True
         assert set(sel.energy_scores) == {"linear_dml", "causal_forest", "ols"}
 
+    def test_single_tournament_success_whose_refit_is_refused_is_narrated(self):
+        """codex r6 HIGH: when the ONLY successful tournament candidate refuses
+        its served refit there is no next candidate; the refusal must still be
+        named and the reason must say nothing is served -- and must not claim
+        a reported ATE/CI from a refit."""
+        treatment, outcome, covariates = _subsample_frame(n=1_000)
+        selector, loser, winner = _two_wrapper_selector(max_rows=200, winner_fail_above=200)
+        loser._fail_above_rows = 100  # fails already in the 200-row tournament
+
+        sel = selector.select(treatment, outcome, covariates)
+
+        assert sel.selected.success is False
+        assert loser.fit_row_counts == [200] and winner.fit_row_counts == [200, 1_000]
+        reason = sel.selection_reason
+        assert "linear_dml" in reason and "refused its served full-frame refit" in reason
+        assert "no estimate is served" in reason.lower()
+        assert "reported ATE/CI come from" not in reason
+
     def test_every_full_frame_refit_failing_fails_closed(self):
         """When NO candidate survives its full-frame refit the selection FAILS
         CLOSED (estimation.py raises EstimationError): no subsample fit is
@@ -1839,6 +1857,9 @@ class TestSubsampledSelection:
         # codex r5 HIGH: nothing may be described as served when nothing was
         assert "served the next" not in sel.selection_reason.lower()
         assert "every full-frame refit" in sel.selection_reason.lower()
+        # codex r6: every refusal is named, including the last one
+        assert sel.selection_reason.count("refused its served full-frame refit") == 2
+        assert "reported ATE/CI come from" not in sel.selection_reason
 
     def test_real_wrappers_end_to_end_subsampled(self):
         """Real OLS + LinearDML wrappers on a >cap frame: the pipeline

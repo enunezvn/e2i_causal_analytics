@@ -139,9 +139,8 @@ Standalone attribution of the pre-fix budget on this frame (`timing_probe*.py/js
   withdrawn: econml runs `lstsq` on its own unscaled, residualised final-stage matrix with a global
   tolerance, so it can still call a design underdetermined that the prune keeps (`[1, 1e14+arange]`
   has lstsq rank 1). That case is not a wrong served value: the wrappers refuse the served fit
-  (fail-closed) and Auto falls back. What the prune guarantees is now stated exactly (exact linear
-  combinations of earlier resolved columns dropped, nothing informative dropped, translation- and
-  scale-invariant on the resolved frame); the same 16 columns on the real frame are unchanged.
+  (fail-closed) and Auto falls back. What the prune guarantees is stated exactly (see Round 6 for the
+  final wording); the same 16 columns on the real frame are unchanged.
   Standardising the estimators' own final-stage inputs is filed as a follow-up (engine-wide,
   owner-visible). (2) MED — `[-1e308, 1e308]` overflowed the reference subtraction and
   `floor(log2(inf))` raised: the column is now scaled by a power of two FIRST (`frexp`), then the
@@ -149,14 +148,34 @@ Standalone attribution of the pre-fix budget on this frame (`timing_probe*.py/js
   (test at float max, with an exact half-scale duplicate dropped). (3) HIGH — the fallback narration
   said "served B" before B's refit ran; now each refusal is recorded alone and exactly one closing
   sentence names the served candidate ("Served the next ranked candidate ols … after 2 refused") or
-  states that every full-frame refit was refused (test: A and B refused, C served; all-fail wording).
+  states that every full-frame refit was refused (test: A and B refused, C served; all-fail wording) —
+  Round 6 closed the last-refusal gap.
   (4) HIGH — the per-candidate `energy_score: None` for a refused winner contradicted
-  `energy_scores`: every serialisation surface now carries two EXPLICIT fields,
+  `energy_scores`: the backend serialisation surfaces now carry two EXPLICIT fields,
   `tournament_energy_score` (the ranking score whenever scored) and `served_refit` (True / False /
   None), on `EstimatorResult`, `to_dict()`, the agent's `all_estimators_evaluated`, the MLflow DB
   logger's `energy_details`, and the API `EstimatorCandidate` (additive; `frontend/src/types/generated/api.ts`
   regenerated with CI's own command — 10 added lines). `energy_score` keeps its documented
   "None if the fit failed" meaning.
+- **Round 6 (codex r6 → REVISE: 4 HIGH + 1 MED; all addressed).** (1) HIGH — "nothing informative
+  dropped" was still too strong: a column that differs from an earlier one by ONE ULP in one element
+  is numerically collinear at `max(n,k)·eps` and IS dropped. The guarantee now reads "numerically
+  collinear at machine precision" (exact combinations, and independent variation at or below the
+  tolerance); a one-ULP regression test pins it. (2) HIGH — when the ONLY successful tournament
+  candidate refused its served refit, the loop exited before recording the refusal, so the reason
+  named nobody and still said "the reported ATE/CI come from the winner refit". Every refusal is now
+  recorded before the next-candidate check (the last one included), the closing sentence is always
+  appended after any refit attempt, and the subsample sentence claims a reported ATE/CI only when a
+  refit succeeded (tests: single-success refused; all-fail names both refusals). (3) HIGH — the REAL
+  frontend consumer is the hand-written `frontend/src/types/causal.ts` `EstimatorCandidate` and the
+  panel in `CausalAnalysisDetail.tsx`, not the generated type: both fields added; the panel ranks and
+  displays by `tournament_energy_score` (falling back to `energy_score`) so a refused winner keeps its
+  rank and score, and its status reads "served refit refused: …" instead of "failed" with a dash
+  (vitest: the fallback case; tsc + eslint clean). (4) MED — the MLflow DB logger emitted a raw
+  `energy_score` into `energy_details`, where NaN/Inf would break the JSONB insert and disagree with
+  the finite-filtered surfaces; it now applies the same finite filter (test captures the cursor
+  parameters: served True/0.42, refused False/finite, NaN → None, unscored None/None). (5) HIGH — the
+  Round 5 account above is corrected accordingly.
 
 Final-code node timeline of the primary run (from the run's own INFO log; the graph itself started
 at ~09:22:30 after imports):
