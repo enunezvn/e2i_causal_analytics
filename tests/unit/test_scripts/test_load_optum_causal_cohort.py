@@ -189,6 +189,11 @@ def test_load_frame_accepts_the_export(tmp_path):
         # a dropped baseline confounder must refuse loud, never upsert as a silent NULL
         (lambda d: d.drop(columns=["cci_mi"]), "cci_mi"),
         (lambda d: d.assign(unexpected_extra_column="oops"), "unexpected_extra_column"),
+        # no contrast to estimate: an empty export, or one arm only (codex r3 MED) --
+        # refused BEFORE any write, never a VERIFIED on a table the API would 400 on
+        (lambda d: d.iloc[0:0], "empty"),
+        (lambda d: d[d["index_biologic_brand"] == "XOLAIR"], "DUPIXENT"),
+        (lambda d: d[d["index_biologic_brand"] == "DUPIXENT"], "XOLAIR"),
     ],
 )
 def test_load_frame_fails_loud(tmp_path, mutate, match):

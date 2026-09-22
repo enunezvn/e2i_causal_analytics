@@ -24,6 +24,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from src.api.routes.causal.datasets import _CAUSAL_DATASET_SPECS
@@ -137,3 +138,81 @@ async def test_loader_does_not_prune_when_rows_cannot_rank_the_columns(monkeypat
         limit=100,
     )
     assert cols == [TREATMENT, OUTCOME, "age_at_index", "cci_hiv", "elx_chf", "elx_aids_hiv"]
+
+
+# --- The criterion itself (codex r3 HIGH): translation- and unit-invariant, exact only ---------
+
+
+def _prune(df, cols):
+    from src.api.routes.causal.loaders import _prune_exactly_collinear
+
+    return _prune_exactly_collinear(df, cols)
+
+
+def test_prune_keeps_a_large_offset_column():
+    # x = 1e10 + arange: a genuinely varying column whose raw norm dwarfs its
+    # variation -- a residual-vs-raw-norm test dropped it (codex r3 HIGH).
+    n = 100
+    rng = np.random.default_rng(1)
+    df = pd.DataFrame({"a": 1e10 + np.arange(n, dtype=float), "b": rng.normal(size=n)})
+    assert _prune(df, ["a", "b"]) == (["a", "b"], [])
+
+
+def test_prune_decision_is_invariant_to_column_units():
+    n = 120
+    rng = np.random.default_rng(2)
+    base = pd.DataFrame({"a": rng.normal(size=n), "b": rng.normal(size=n)})
+    base["dup"] = base["a"]
+    kept, dropped = _prune(base, ["a", "b", "dup"])
+    scaled = base.copy()
+    scaled["a"] = scaled["a"] * 1e6
+    scaled["dup"] = scaled["dup"] * 1e-9
+    assert _prune(scaled, ["a", "b", "dup"]) == (kept, dropped) == (["a", "b"], ["dup"])
+
+
+def test_prune_leaves_a_near_collinear_column_to_the_estimator_guard():
+    n = 200
+    rng = np.random.default_rng(3)
+    df = pd.DataFrame({"a": rng.normal(size=n)})
+    df["almost"] = df["a"] + 1e-4 * rng.normal(size=n)  # informative, not exact
+    assert _prune(df, ["a", "almost"]) == (["a", "almost"], [])
+
+
+def test_prune_runs_at_n_equal_to_k_plus_one_and_skips_below():
+    rng = np.random.default_rng(4)
+    df = pd.DataFrame({"a": rng.normal(size=5), "b": rng.normal(size=5), "c": rng.normal(size=5)})
+    df["dup"] = df["a"]
+    # k=4 columns offered: n = k+1 = 5 rows can rank intercept + 4 columns
+    assert _prune(df.iloc[:5], ["a", "b", "c", "dup"]) == (["a", "b", "c"], ["dup"])
+    # n=4 < k+1: skipped, nothing dropped
+    assert _prune(df.iloc[:4], ["a", "b", "c", "dup"]) == (["a", "b", "c", "dup"], [])
+
+
+def test_prune_drops_a_constant_column_as_collinear_with_the_intercept():
+    df = pd.DataFrame({"a": np.arange(10, dtype=float), "k": np.full(10, 7.0)})
+    assert _prune(df, ["a", "k"]) == (["a"], ["k"])
+
+
+@pytest.mark.asyncio
+async def test_loader_evaluates_numeric_columns_before_one_hot_dummies(monkeypatch):
+    """The resolved order is numeric registry columns first, then the one-hot
+    dummies (in their categoricals' registry order): a dummy that exactly equals
+    an earlier NUMERIC column is the one dropped, whatever the two columns'
+    registry positions. Documented, not reordered -- reordering the design would
+    change every dataset's feature-index-dependent forest fits."""
+    rows = _rows()
+    # payer_category has two levels; make cci_hiv an exact copy of the 'medicare' dummy
+    for i, r in enumerate(rows):
+        r["payer_category"] = "medicare" if i % 3 == 0 else "commercial"
+        r["cci_hiv"] = 1 if i % 3 == 0 else 0
+        r["elx_aids_hiv"] = int(i % 5 == 0)
+    monkeypatch.setattr(_CLIENT_FACTORY, AsyncMock(return_value=_FakeClient(rows)))
+    _frame, cols = await _load_agent_estimation_frame(
+        dataset=DATASET,
+        treatment_var=TREATMENT,
+        outcome_var=OUTCOME,
+        covariates=["age_at_index", "payer_category", "cci_hiv", "elx_chf", "elx_aids_hiv"],
+        limit=100,
+    )
+    assert "cci_hiv" in cols
+    assert not any(c.startswith("payer_category=") for c in cols)

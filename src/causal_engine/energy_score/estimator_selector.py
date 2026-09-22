@@ -1604,8 +1604,16 @@ class EstimatorSelector:
         # and enforces a reconstructed-vs-reported ATE tolerance). On refit
         # failure the failed result propagates so the consumer fail-closes;
         # the subsample fit is never promoted to the reported estimate.
-        if subsampled and selection.success:
-            selection = self._refit_winner_on_full_frame(
+        # A tournament fit may rank on an underdetermined subsample (its CI is
+        # not served -- ``served_fit=False``) and then REFUSE its served
+        # full-frame refit. Auto must not fail while an honest candidate
+        # exists (codex r3 MED): walk the remaining successful tournament
+        # results in ranking order and refit the next one, until a served fit
+        # succeeds or none is left. Every refused candidate stays in
+        # ``results`` as a failed entry, so the report shows what was tried.
+        # A forced single estimator never subsamples and still fails closed.
+        while subsampled and selection.success:
+            refit = self._refit_winner_on_full_frame(
                 selection,
                 results,
                 winner_wrapper=result_wrappers.get(id(selection)),
@@ -1616,6 +1624,20 @@ class EstimatorSelector:
                 efficiency_controls=efficiency_controls,
                 **kwargs,
             )
+            if refit.success:
+                selection = refit
+                break
+            remaining = [r for r in results if r.success]
+            if not remaining:
+                selection = refit
+                break
+            logger.warning(
+                "Served refit of tournament winner %s refused (%s); trying the next "
+                "ranked candidate on the full frame.",
+                refit.estimator_type.value,
+                refit.error_message,
+            )
+            selection = self._select_best_energy(remaining)
 
         # Build energy score comparison
         energy_scores = {r.estimator_type.value: r.energy_score for r in results if r.success}

@@ -841,8 +841,9 @@ def _resolve_agent_estimation_frame(
     # Exactly collinear covariates carry no information and make econml's
     # statsmodels final stage warn "Co-variance matrix is underdetermined.
     # Inference will be invalid!" (the wrappers now REFUSE such a fit). Prune
-    # them ONCE here, on the full loaded frame, in registry order (an earlier
-    # column wins), so the estimation node and the refutation rebuild -- which
+    # them ONCE here, on the full loaded frame, in the resolved column order
+    # (numerics first, then dummies; an earlier column wins), so the estimation
+    # node and the refutation rebuild -- which
     # takes its ``common_causes`` from this same resolved list -- see the SAME
     # design. Measured 2026-09-22 on optum_biologic_persistence (n=15,209):
     # 16 of 77 resolved columns were exact linear combinations of earlier ones
@@ -871,6 +872,10 @@ def _resolve_agent_estimation_frame(
 
 
 _COLLINEARITY_REL_TOL = 1e-8
+# A column is CONSTANT when its centered norm is at machine rounding of its raw
+# norm -- a far tighter bar than the collinearity tolerance, so a large-offset
+# column (1e10 + arange: centered/raw 2.9e-9) is never mistaken for a constant.
+_CONSTANT_REL_TOL = 1e-12
 
 
 def _prune_exactly_collinear(
@@ -880,18 +885,29 @@ def _prune_exactly_collinear(
     """Return ``(kept, dropped)``: ``columns`` minus those that are exact linear
     combinations of the intercept and the EARLIER kept columns (order preserved).
 
-    Incremental Gram-Schmidt against the intercept: a column whose residual after
-    projection onto the current basis is below ``_COLLINEARITY_REL_TOL`` of its
-    own norm adds no rank. Exact redundancy sits at the 1e-15 level and any real
-    near-collinear pair far above 1e-8, so the tolerance separates the two.
+    Order = the resolved covariate order the estimators fit on: the numeric
+    registry columns first, then the one-hot dummies in their categoricals'
+    registry order. So a dummy that exactly equals an earlier numeric column is
+    the one dropped, whatever the registry positions of the two names. The
+    design is NOT reordered -- every dataset's forest fits subsample features by
+    column index, so a new order would be a new fit.
+
+    Criterion (translation- and unit-invariant): incremental Gram-Schmidt
+    against the intercept and the kept basis; a column is dropped when its
+    residual is below ``_COLLINEARITY_REL_TOL`` of its CENTERED norm (the norm
+    left after the intercept is removed). Comparing against the raw norm would
+    drop a genuinely varying column with a large offset (``1e10 + arange``:
+    residual / raw norm 2.9e-9 -- codex r3). Exact redundancy sits at the 1e-15
+    level and any informative near-collinear column (1e-4 relative noise) far
+    above 1e-8, so the tolerance separates the two and leaves near-collinearity
+    to the estimators' own invalid-inference refusal. A constant column has a
+    zero centered norm and is dropped (collinear with the intercept).
 
     Skipped (nothing dropped) when the frame cannot rank the columns
-    (``n <= k + 1`` -- every such design is rank-deficient, which says nothing
-    about the columns) or when a column is non-finite (the estimators' own
-    guards own NaN). A constant column is collinear with the intercept and is
-    dropped like any other.
+    (``n < k + 1``: fewer rows than intercept-plus-columns) or when a column
+    is non-finite (the estimators' own guards own NaN).
     """
-    if not columns or len(frame) <= len(columns) + 1:
+    if not columns or len(frame) < len(columns) + 1:
         return list(columns), []
     import numpy as np
 
@@ -899,18 +915,24 @@ def _prune_exactly_collinear(
     if not np.isfinite(X).all():
         return list(columns), []
     n = X.shape[0]
-    basis = [np.full(n, 1.0 / np.sqrt(n))]  # the intercept, unit norm
+    intercept = np.full(n, 1.0 / np.sqrt(n))
+    basis = [intercept]
     kept: List[str] = []
     dropped: List[str] = []
     for j, name in enumerate(columns):
         x = X[:, j]
         x_norm = float(np.linalg.norm(x))
-        resid = x.copy()
+        centered = x - intercept * float(intercept @ x)
+        c_norm = float(np.linalg.norm(centered))
+        if x_norm == 0.0 or c_norm <= _CONSTANT_REL_TOL * x_norm:
+            dropped.append(name)  # constant (to machine rounding): collinear with the intercept
+            continue
+        resid = centered.copy()
         for _ in range(2):  # re-orthogonalise once for numerical stability
-            for q in basis:
+            for q in basis[1:]:
                 resid = resid - q * float(q @ resid)
         r_norm = float(np.linalg.norm(resid))
-        if x_norm == 0.0 or r_norm <= _COLLINEARITY_REL_TOL * x_norm:
+        if r_norm <= _COLLINEARITY_REL_TOL * c_norm:
             dropped.append(name)
             continue
         basis.append(resid / r_norm)

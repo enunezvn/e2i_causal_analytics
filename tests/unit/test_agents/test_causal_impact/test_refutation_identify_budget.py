@@ -153,3 +153,53 @@ def test_identifier_choice_matches_the_default_identifier_on_every_shape(shape, 
     assert list(est_new.get_backdoor_variables()) == list(est_old.get_backdoor_variables()), shape
     # ... and be the same number.
     assert float(e_new.value) == float(e_old.value), shape
+
+
+# --- The rebuild's preprocessing the equivalence cases do not pin (codex r3 MED) --------
+
+
+def test_continuous_treatment_is_median_binarised_in_the_rebuilt_model():
+    df, cov = _shape_frames()["continuous_treatment"]
+    model, _est, e, _ = _build_dowhy_estimate(
+        data=df,
+        treatment="t",
+        outcome="y",
+        common_causes=cov,
+        estimation_result={"selected_estimator": "ols", "ate": 0.4},
+    )
+    fitted = model._data["t"].to_numpy()
+    expected = (df["t"].to_numpy() > np.median(df["t"].to_numpy())).astype(int)
+    assert set(np.unique(fitted)) == {0, 1}
+    assert np.array_equal(fitted, expected)
+    assert np.isfinite(float(e.value))
+
+
+def test_effect_modifiers_are_the_encoded_common_causes_on_a_forest_family_rebuild(monkeypatch):
+    """OLS needs no effect modifiers, so the equivalence cases cannot see them
+    dropped; a LinearDML rebuild (RF nuisances, n=300) does -- and its estimate
+    must still match the default identifier."""
+    df, cov = _shape_frames()["categorical"]
+    result = {"selected_estimator": "LinearDML", "ate": 0.4}
+    _m, est_new, e_new, method = _build_dowhy_estimate(
+        data=df, treatment="t", outcome="y", common_causes=cov, estimation_result=result
+    )
+    assert method == "backdoor.econml.dml.LinearDML"
+    encoded = list(est_new.get_backdoor_variables())
+    assert "c0" in encoded and any(c.startswith("region_") for c in encoded)
+    assert "region" not in encoded
+    assert list(e_new.estimator._effect_modifier_names) == encoded
+
+    import dowhy
+
+    real_identify = dowhy.CausalModel.identify_effect
+
+    def default_only(self, *args, **kwargs):
+        kwargs["optimize_backdoor"] = False
+        return real_identify(self, *args, **kwargs)
+
+    monkeypatch.setattr(dowhy.CausalModel, "identify_effect", default_only)
+    _m, est_old, e_old, _ = _build_dowhy_estimate(
+        data=df, treatment="t", outcome="y", common_causes=cov, estimation_result=result
+    )
+    assert list(est_old.get_backdoor_variables()) == encoded
+    assert float(e_new.value) == float(e_old.value)

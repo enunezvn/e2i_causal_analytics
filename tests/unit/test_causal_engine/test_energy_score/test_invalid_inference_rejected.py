@@ -121,3 +121,44 @@ def test_selector_marks_only_the_full_frame_refit_as_served(monkeypatch, designs
     )
     # no subsample: every tournament fit IS a served fit
     assert len(calls) == 2 and all(c[1] == len(t) and c[2] is True for c in calls), calls
+
+
+def test_auto_falls_back_to_the_next_ranked_candidate_when_the_served_refit_refuses(
+    monkeypatch, designs
+):
+    """codex r3 MED: on a subsampled tournament a warned LinearDML fit may still
+    rank first; if its served full-frame refit refuses, Auto must try the next
+    ranked candidate on the full frame rather than fail while an honest fit
+    exists. A forced estimator (single-estimator chain, never subsampled) still
+    fails closed."""
+    from src.causal_engine.energy_score.estimator_selector import (
+        EstimatorResult,
+        EstimatorSelector,
+        EstimatorSelectorConfig,
+    )
+
+    t, y, full_rank, _ = designs
+    real_fit = LinearDMLWrapper.fit
+
+    def refuse_when_served(self, treatment, outcome, covariates, **kw):
+        if kw.get("served_fit", True):
+            return EstimatorResult(
+                estimator_type=EstimatorType.LINEAR_DML,
+                success=False,
+                error_message="LinearDML final-stage inference is not identified: test plant",
+                error_type="ValueError",
+            )
+        return real_fit(self, treatment, outcome, covariates, **kw)
+
+    monkeypatch.setattr(LinearDMLWrapper, "fit", refuse_when_served)
+    chain = [EstimatorConfig(EstimatorType.LINEAR_DML), EstimatorConfig(EstimatorType.OLS)]
+    sel = EstimatorSelector(
+        EstimatorSelectorConfig(estimators=chain, selection_max_rows=100)
+    ).select(t, y, full_rank)
+    assert sel.selection_subsampled
+    assert sel.selected.success, sel.selected.error_message
+    assert sel.selected.estimator_type == EstimatorType.OLS
+    assert sel.selected.ate_ci_lower is not None
+    # the refused winner stays visible as a failed candidate
+    failed = [r for r in sel.all_results if not r.success]
+    assert [r.estimator_type for r in failed] == [EstimatorType.LINEAR_DML]

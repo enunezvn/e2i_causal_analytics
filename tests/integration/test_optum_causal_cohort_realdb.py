@@ -43,4 +43,6 @@ def test_live_arm_split_equals_the_export():
     if live is None:
         pytest.skip("optum_biologic_persistence_causal unreachable (migration 148 not applied?)")
     assert live["n"] > 0, "live table is empty — the owner-GO load has not run"
+    for arm, n_arm in live["arms"].items():
+        assert n_arm > 0, f"live table has no {arm} rows — no causal contrast is estimable"
     assert verify(expected, live) == []

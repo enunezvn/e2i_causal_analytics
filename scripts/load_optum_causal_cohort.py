@@ -142,6 +142,18 @@ def load_frame(path: Path | str) -> pd.DataFrame:
     expected = df[BRAND].eq("DUPIXENT").astype(int)
     if not df[TREATMENT].astype(int).eq(expected).all():
         raise ValueError(f"{TREATMENT} disagrees with index_biologic_brand on some rows")
+    # A causal contrast needs BOTH arms (the API refuses a constant treatment with
+    # a 400): an empty or one-arm export must be refused BEFORE any write -- never
+    # loaded and then reported VERIFIED against an equally empty/one-arm table.
+    if df.empty:
+        raise ValueError("export is empty: no rows to load, no contrast to estimate")
+    arm_counts = {arm: int((df[BRAND] == arm).sum()) for arm in ARMS}
+    absent = [arm for arm, n in arm_counts.items() if n == 0]
+    if absent:
+        raise ValueError(
+            f"export has no {' / '.join(absent)} rows ({arm_counts}); a causal contrast "
+            "needs both arms"
+        )
     for col in OUTCOME_COLUMNS:
         values = set(pd.unique(df[col].dropna()))
         if not values <= {0, 1}:
