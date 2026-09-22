@@ -14,6 +14,10 @@ from typing import Protocol, runtime_checkable
 import numpy as np
 import pandas as pd
 
+from src.data.per_hcp_cohort_columns import (  # one list, shared with the ETL preview
+    COHORT_OUTCOME_COLUMN,
+    INTERVENTION_TREATMENT_MAP,
+)
 from src.digital_twin.effect.errors import EffectCause, EffectDataUnavailable
 
 # Canonical intervention taxonomy — the single source of truth for the
@@ -60,16 +64,6 @@ SUPPORTED_INTERVENTIONS = {value for value, _label in INTERVENTION_CATALOG}
 # usable rows (see cohort_loader.cohort_treatment_availability), so a substrate
 # without a channel (e.g. pre-backfill, or future RWD with partial channels)
 # degrades to an honest 422, never a fabricated effect.
-INTERVENTION_TREATMENT_MAP: dict[str, str] = {
-    "email_campaign": "email_campaign_count",
-    "call_frequency_increase": "call_frequency",
-    "speaker_program_invitation": "speaker_program_count",
-    "sample_distribution": "sample_volume",
-    "peer_influence_activation": "peer_influence_score",
-    "digital_engagement": "engagement_score",
-    "patient_support_program": "patient_support_enrollment",
-    "rep_training_quality": "rep_training_score",
-}
 COHORT_ESTIMABLE_INTERVENTIONS = frozenset(INTERVENTION_TREATMENT_MAP)
 
 # Pre-treatment confounder controls for the direct cohort estimate (present subset used).
@@ -82,7 +76,6 @@ COHORT_CONFOUNDERS: tuple[str, ...] = ("market_share", "triggers_total_count")
 # 2026-09-19 a full-window backfill replaced the rows wholesale and the twin went dark for every
 # brand. ``tests/unit/test_digital_twin/effect/test_cohort_columns_single_writer.py`` pins the
 # separation: no column the plant writes may appear in the ETL's upsert SET arm.
-COHORT_OUTCOME_COLUMN = "cohort_conversion_outcome"
 _COHORT_OUTCOME = COHORT_OUTCOME_COLUMN
 _COHORT_REGION = "region"
 # Minimum usable cohort rows for a stable region-standardized estimate.

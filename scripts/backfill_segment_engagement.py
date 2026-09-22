@@ -3,9 +3,10 @@
 
 WHY THIS SCRIPT EXISTS
 ----------------------
-``POST /api/segments/analyze`` (Heterogeneous Optimizer agent, Tier 2) and the
-Digital Twin ``/simulate`` cohort path both estimate causal effects from the
-``business_metrics`` rows with ``metric_type='per_hcp_rollup'`` (~12k rows).
+The Digital Twin ``/simulate`` cohort path estimates causal effects from the
+``business_metrics`` rows with ``metric_type='per_hcp_rollup'`` (~13.8k rows).
+(``POST /api/segments/analyze`` read this substrate when revision 1 was written; since
+2026-06-20 it reads the ``patient_journeys`` gold standard -- see BLAST RADIUS below.)
 The substrate originally had NO usable treatment signal (engagement_score /
 call_frequency entirely NULL); revision 1 of this script planted a single
 engagement-score treatment with a known per-region CATE. Revision 2 (this
@@ -35,8 +36,8 @@ Per per_hcp_rollup row i (one (hcp_id, brand, metric_date) cell):
     adjusting for (market_share, log-volume, region) identifies every channel's
     effect; the other channels contribute conditionally-independent outcome
     variance (wider CIs, no bias). engagement_score keeps the EXACT revision-1
-    generation stream (same seed -> identical values), so the /segments/analyze
-    treatment assignment is unchanged.
+    generation stream (same seed -> identical values), kept for reproducibility of
+    the revision-1 estimates.
 
   OUTCOME  cohort_conversion_outcome_i  (the column we REGENERATE; migration 147)
     Its OWN column since 2026-09-21. It used to be written into conversion_rate, which the
@@ -64,8 +65,8 @@ PLANTED TRUE PER-REGION CATE PER CHANNEL (verifiable; effect of above-median T)
   sample_volume                sample_distribution          +0.18  +0.12  +0.07  +0.02
   rep_training_score           rep_training_quality         +0.16  +0.10  +0.05  +0.01
 
-engagement_score taus are UNCHANGED from revision 1 (/segments/analyze
-coherence). All channels are monotone in the region-richness ordering
+engagement_score taus are UNCHANGED from revision 1 (reproducibility of the
+earlier estimates). All channels are monotone in the region-richness ordering
 (northeast > west > south > midwest, mirroring
 BusinessMetricsGenerator.REGION_FACTORS — the brand-independent MARKET-SIZE
 factor, unchanged by #1833; the #1833 brand x region execution matrix and
@@ -145,7 +146,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -161,7 +162,10 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(_PROJECT_ROOT / ".env")
 
-from src.digital_twin.effect.provider import COHORT_OUTCOME_COLUMN  # noqa: E402
+from src.data.per_hcp_cohort_columns import (  # noqa: E402
+    COHORT_OUTCOME_COLUMN,
+    INTERVENTION_TREATMENT_MAP,
+)
 from src.ml.synthetic.config import RegionEnum  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -211,10 +215,15 @@ _OUT_MIN: float = 0.0  # the outcome is kept non-negative
 
 @dataclass(frozen=True)
 class ChannelSpec:
-    """A confounded treatment channel with a planted per-region true CATE."""
+    """A confounded treatment channel with a planted per-region true CATE.
 
-    column: str
-    intervention: str  # canonical intervention value (docs/reporting only)
+    ``column`` is not an input: it is looked up from the shared intervention -> column
+    contract (``src/data/per_hcp_cohort_columns.py``), the same object the twin's cohort
+    reader and the per-HCP ETL preview use. One map, so a channel cannot be planted under
+    one name and estimated under another (codex r1, 2026-09-22).
+    """
+
+    intervention: str  # canonical intervention value
     kind: str  # "sigmoid10" | "poisson" | "share01"
     intercept: float
     beta_market: float
@@ -224,6 +233,10 @@ class ChannelSpec:
     tau_by_region: Dict[str, float]
     lam_base: float = 0.0  # poisson only
     lam_scale: float = 0.0  # poisson only
+    column: str = field(init=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "column", INTERVENTION_TREATMENT_MAP[self.intervention])
 
 
 # Revision-2 channels (engagement_score is handled by the legacy stream above).
@@ -231,7 +244,6 @@ class ChannelSpec:
 # channel for realism. Taus: monotone NE > W > S > MW, distinct magnitudes.
 CHANNEL_SPECS: tuple[ChannelSpec, ...] = (
     ChannelSpec(
-        column="call_frequency",
         intervention="call_frequency_increase",
         kind="poisson",
         intercept=0.0,
@@ -244,7 +256,6 @@ CHANNEL_SPECS: tuple[ChannelSpec, ...] = (
         tau_by_region={_NE: 0.20, _W: 0.14, _S: 0.08, _MW: 0.03},
     ),
     ChannelSpec(
-        column="email_campaign_count",
         intervention="email_campaign",
         kind="poisson",
         intercept=0.0,
@@ -257,7 +268,6 @@ CHANNEL_SPECS: tuple[ChannelSpec, ...] = (
         tau_by_region={_NE: 0.24, _W: 0.16, _S: 0.09, _MW: 0.03},
     ),
     ChannelSpec(
-        column="speaker_program_count",
         intervention="speaker_program_invitation",
         kind="poisson",
         intercept=0.0,
@@ -270,7 +280,6 @@ CHANNEL_SPECS: tuple[ChannelSpec, ...] = (
         tau_by_region={_NE: 0.36, _W: 0.25, _S: 0.15, _MW: 0.06},
     ),
     ChannelSpec(
-        column="sample_volume",
         intervention="sample_distribution",
         kind="poisson",
         intercept=0.0,
@@ -283,7 +292,6 @@ CHANNEL_SPECS: tuple[ChannelSpec, ...] = (
         tau_by_region={_NE: 0.18, _W: 0.12, _S: 0.07, _MW: 0.02},
     ),
     ChannelSpec(
-        column="peer_influence_score",
         intervention="peer_influence_activation",
         kind="sigmoid10",
         intercept=0.0,
@@ -294,7 +302,6 @@ CHANNEL_SPECS: tuple[ChannelSpec, ...] = (
         tau_by_region={_NE: 0.30, _W: 0.21, _S: 0.13, _MW: 0.05},
     ),
     ChannelSpec(
-        column="patient_support_enrollment",
         intervention="patient_support_program",
         kind="share01",
         intercept=-0.2,
@@ -305,7 +312,6 @@ CHANNEL_SPECS: tuple[ChannelSpec, ...] = (
         tau_by_region={_NE: 0.26, _W: 0.18, _S: 0.11, _MW: 0.05},
     ),
     ChannelSpec(
-        column="rep_training_score",
         intervention="rep_training_quality",
         kind="sigmoid10",
         intercept=0.2,
@@ -318,8 +324,9 @@ CHANNEL_SPECS: tuple[ChannelSpec, ...] = (
 )
 
 # Every planted channel, engagement first (legacy), for reporting/probing.
+LEGACY_ENGAGEMENT_COLUMN: str = INTERVENTION_TREATMENT_MAP["digital_engagement"]
 ALL_CHANNEL_TAUS: Dict[str, Dict[str, float]] = {
-    "engagement_score": TRUE_CATE_BY_REGION,
+    LEGACY_ENGAGEMENT_COLUMN: TRUE_CATE_BY_REGION,
     **{spec.column: spec.tau_by_region for spec in CHANNEL_SPECS},
 }
 _TREATMENT_COLUMNS: tuple[str, ...] = tuple(ALL_CHANNEL_TAUS)
@@ -450,10 +457,10 @@ def generate_dgp(rows: pd.DataFrame, *, seed: int = DEFAULT_SEED) -> pd.DataFram
     out_noise = rng.normal(0.0, _OUT_NOISE_STD, n)
 
     result = df[[KEY, "brand", "region"]].copy()
-    result["engagement_score"] = np.round(engagement, 4)
+    result[LEGACY_ENGAGEMENT_COLUMN] = np.round(engagement, 4)
 
     tbin_by_col: Dict[str, np.ndarray] = {
-        "engagement_score": _within_brand_tbin(engagement, brands)
+        LEGACY_ENGAGEMENT_COLUMN: _within_brand_tbin(engagement, brands)
     }
 
     # --- Revision-2 channels: per-channel child RNGs (order-independent,

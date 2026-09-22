@@ -53,6 +53,15 @@ from tests.xdist_crash_guard import install as _install_xdist_crash_guard
 # over any placeholder test keys that may have been set earlier.
 load_dotenv(override=True)
 
+# Lane 2 (2026-09-22): EntityVocabulary.from_default() asks RxNav for brand
+# aliases at first build. Unit tests must never reach the network, so the
+# lookup is pinned off for the whole suite. Hard assignment (not setdefault),
+# AFTER load_dotenv(override=True), so a developer .env or shell export of
+# RXNAV_BRAND_ALIASES=1 cannot put unit runs on the network; re-pinned in
+# pytest_configure after the second load_dotenv. The live integration test
+# opts back in with a function-scoped monkeypatch, which runs after configure.
+os.environ["RXNAV_BRAND_ALIASES"] = "0"
+
 # =============================================================================
 # ASYNCIO POLLUTION PROBE (issue #218 — follow-up to #215)
 # =============================================================================
@@ -669,6 +678,8 @@ def pytest_configure(config: pytest.Config) -> None:
     # ran at import time; this catches the case where a parent conftest
     # mutated os.environ between import and configure).
     _load_dotenv_at_configure()
+    # Lane 2: re-pin after the second load_dotenv (see the top-of-file comment).
+    os.environ["RXNAV_BRAND_ALIASES"] = "0"
 
     # Issue #221 codex pass-1 HIGH-1 (re-located here by codex pass-2
     # HIGH so the hook is not shadowed by the duplicate-definition bug):

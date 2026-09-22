@@ -734,3 +734,64 @@ class TestConstructDagConnectsCuratedConfounders:
         dag = node._construct_dag("treatment_arm", "persistent_180d", covs)
         adjustment_sets = node._find_adjustment_sets(dag, "treatment_arm", "persistent_180d")
         assert set(adjustment_sets[0]) == set(covs)
+
+
+class TestDiscoveryThatCouldNotRunIsSurfaced:
+    """When every discovery algorithm failed (``DiscoveryResult.success=False``),
+    the node must say so -- ``discovery_skip_reason`` naming the error plus a
+    warning -- exactly as it already does when discovery is skipped for want of
+    data (M-gb1). Measured 2026-09-22 on the real Optum persistence cohort in
+    production shape: PC fails on a singular correlation matrix, and before this
+    the API answered ``dag_source='domain_knowledge'`` with no reason at all.
+    """
+
+    @pytest.mark.asyncio
+    async def test_failed_discovery_is_surfaced_as_a_skip_not_an_empty_structure(self):
+        from unittest.mock import AsyncMock, MagicMock
+
+        import pandas as pd
+
+        from src.causal_engine.discovery import DiscoveryConfig, DiscoveryResult
+
+        node = GraphBuilderNode()
+        df = pd.DataFrame(
+            {
+                "t": [0.0, 1.0, 0.0, 1.0, 1.0, 0.0],
+                "y": [1.0, 2.0, 1.5, 2.5, 2.0, 1.0],
+                "c": [0.1, 0.9, 0.2, 0.8, 0.7, 0.3],
+            }
+        )
+        failed = DiscoveryResult(
+            success=False,
+            config=DiscoveryConfig(),
+            metadata={"error": "pc: Data correlation matrix is singular. Cannot run fisherz test."},
+        )
+        node._discovery_runner = MagicMock()
+        node._discovery_runner.discover_dag = AsyncMock(return_value=failed)
+
+        state: CausalImpactState = {
+            "query": "does t affect y",
+            "query_id": "test-failed-discovery",
+            "treatment_var": "t",
+            "outcome_var": "y",
+            "confounders": ["c"],
+            "auto_discover": True,
+            "discovery_guided": True,
+            "data_cache": {"estimation_data": df},
+            "status": "pending",
+            "warnings": [],
+        }
+
+        result = await node.execute(state)
+
+        graph = result["causal_graph"]
+        assert graph["discovery_gate_decision"] == "reject"
+        # The reason names the cause, and reaches the warnings the API surfaces.
+        assert "singular" in result.get("discovery_skip_reason", ""), result.get(
+            "discovery_skip_reason"
+        )
+        assert any("singular" in w for w in result.get("warnings", [])), result.get("warnings")
+        # Graceful degradation is unchanged: the manual DAG ships.
+        edges = {tuple(e) for e in graph["edges"]}
+        assert ("t", "y") in edges
+        assert ("c", "t") in edges and ("c", "y") in edges

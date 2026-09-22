@@ -28,6 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from src.agents.tool_composer import compose_query
 from src.api.routes.chat_forecast_tool import forecast_kpi_tool
 from src.api.routes.chat_identity import _composer_context, owned_conversation, resolve_tool_user_id
+from src.api.routes.chat_twin_simulation_tool import digital_twin_simulate_tool
 from src.api.routes.chatbot_dspy import (
     CHATBOT_DSPY_ROUTING_ENABLED,
     VALID_AGENTS,
@@ -1827,11 +1828,6 @@ async def tool_composer_tool(
 
 
 # =============================================================================
-# TOOL EXPORTS
-# =============================================================================
-
-
-# =============================================================================
 # KPI ENGINE TOOL — compute a DEFINED KPI on demand (the registry's calculable KPIs)
 # =============================================================================
 
@@ -2881,6 +2877,7 @@ E2I_CHATBOT_TOOLS = [
     tool_composer_tool,
     predict_hcp_segment_likelihood_tool,
     forecast_kpi_tool,
+    digital_twin_simulate_tool,
 ]
 
 # Tool name to function mapping
@@ -2896,6 +2893,7 @@ E2I_TOOL_MAP = {
     "tool_composer_tool": tool_composer_tool,
     "predict_hcp_segment_likelihood_tool": predict_hcp_segment_likelihood_tool,
     "forecast_kpi_tool": forecast_kpi_tool,
+    "digital_twin_simulate_tool": digital_twin_simulate_tool,
 }
 
 

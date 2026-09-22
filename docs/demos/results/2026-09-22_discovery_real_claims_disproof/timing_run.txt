@@ -1,0 +1,4 @@
+# run_timing.py — 2026-09-22T00:38:32Z — NOTE: run BY PATH (src from the MAIN checkout, pre-fix); the timing does not depend on the fix
+kept k= 43 | dropped (linearly dependent): ['cci_hiv', 'elx_chf', 'elx_pvd', 'elx_paralysis', 'elx_chronic_pulmonary', 'elx_diabetes_uncomplicated', 'elx_diabetes_complicated', 'elx_renal_failure', 'elx_liver_disease', 'elx_peptic_ulcer', 'elx_aids_hiv', 'elx_metastatic_cancer', 'elx_rheumatoid_collagen', 'elx_depression']
+bootstrap=0: wall=230.3s edges=130 gate=reject conf=0.00 reasons=['Corroboration (uncorroborated_single_run): 0.00%', 'Average edge confidence: 100.00%']
+T->Y: False | parents(T): ['age_at_index', 'cci_diabetes_complication', 'cci_pvd', 'comorbidity_diag_claim_count', 'elx_cardiac_arrhythmia', 'elx_hypertension_uncomplicated', 'enrollment_duration_days']

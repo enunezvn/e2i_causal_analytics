@@ -1,0 +1,12 @@
+# A0 (production shape) re-run on the FIXED tree — 2026-09-22T00:44:13Z — worktree HEAD cbe7b14d8; cwd-first import
+Causal discovery could not run (pc: Data correlation matrix is singular. Cannot run fisherz test. Please check your data.) after 0.24s
+Causal discovery could not run (pc: Data correlation matrix is singular. Cannot run fisherz test. Please check your data.) after 0.19s
+auto-discovery could not run, falling back to manual DAG: pc: Data correlation matrix is singular. Cannot run fisherz test. Please check your data.
+Discovered DAG NOT persisted (Supabase unavailable): [Supabase] SUPABASE_URL environment variable is not set [dag_version_hash=d05278c5bdb46cb613bcb8e22b985a247d33b0f75447eac20363e5a67c31f27b session_id=None query_id=None]
+src resolves to: /home/enunez/Projects/e2i_causal_analytics/.worktrees/discovery-failure-surfacing/src/__init__.py
+A0 k=57 success=False edges=0
+gate: reject | reasons: ['Discovery failed', 'Discovery could not run: pc: Data correlation matrix is singular. Cannot run fisherz test. Please check your data.']
+metadata.error: pc: Data correlation matrix is singular. Cannot run fisherz test. Please check your data.
+execute -> discovery_skip_reason: auto-discovery could not run, falling back to manual DAG: pc: Data correlation matrix is singular. Cannot run fisherz test. Please check your data.
+execute -> discovery warnings: ['auto-discovery could not run, falling back to manual DAG: pc: Data correlation matrix is singular. Cannot run fisherz test. Please check your data.']
+execute -> manual DAG edges: 115 | gate decision: reject

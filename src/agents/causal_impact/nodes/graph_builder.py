@@ -133,6 +133,18 @@ class GraphBuilderNode:
                         state, treatment, outcome
                     )
                     discovery_latency_ms = (time.time() - discovery_start) * 1000
+                    # A run in which no algorithm converged (runner: success=False)
+                    # is a skip with a cause, not a discovered-empty structure:
+                    # surface it exactly like the exception path below, so the
+                    # reason reaches the state's warnings and the API response.
+                    # The gate still evaluates it (REJECT) and the manual DAG
+                    # ships, unchanged.
+                    if discovery_result is not None and not discovery_result.success:
+                        discovery_skip_reason = (
+                            "auto-discovery could not run, falling back to manual DAG: "
+                            f"{discovery_result.metadata.get('error') or 'no algorithm converged'}"
+                        )
+                        logger.warning(discovery_skip_reason)
                 except Exception as e:
                     # M-gb1: surface the skip as a distinct, non-swallowed signal
                     # instead of only logging. The pipeline still degrades

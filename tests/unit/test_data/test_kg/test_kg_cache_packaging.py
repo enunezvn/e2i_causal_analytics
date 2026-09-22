@@ -20,12 +20,12 @@ inert.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import pytest
 
 from src.data.kg.activation import KG_ACTIVATIONS
+from tests.unit.test_docker.dockerignore_semantics import dockerignore_excludes
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 _DOCKERIGNORE = _REPO_ROOT / ".dockerignore"
@@ -35,36 +35,12 @@ _DOCKERFILE = _REPO_ROOT / "docker" / "Dockerfile"
 def _dockerignore_excludes(rel_path: str) -> bool:
     """Resolve `rel_path` against .dockerignore with last-match-wins semantics.
 
-    Docker evaluates every pattern in order and the LAST match decides, which is
-    exactly the rule this bug turned on: an un-ignore placed next to `data/`
-    reads correctly but is silently undone by the later `*.json` and `*.md`
-    lines. A simplified matcher is enough here because we only ask about the
-    handful of concrete cache paths, and it keeps the guard dependency-free.
+    Thin wrapper around the shared matcher (extracted 2026-09-22 after this file's
+    copy and the Layer-4 classifier packaging test's copy started to drift —
+    tests/unit/test_docker/dockerignore_semantics.py is now the one copy) so the
+    call sites below don't need to thread `_DOCKERIGNORE` through individually.
     """
-    excluded = False
-    for raw in _DOCKERIGNORE.read_text().splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        negate = line.startswith("!")
-        pattern = line[1:] if negate else line
-        if _matches(pattern, rel_path):
-            excluded = not negate
-    return excluded
-
-
-def _matches(pattern: str, rel_path: str) -> bool:
-    """True when a .dockerignore pattern matches `rel_path` or a parent dir."""
-    pattern = pattern.rstrip("/")
-    if not pattern:
-        return False
-    # `**` spans separators; `*` does not.
-    regex = re.escape(pattern).replace(r"\*\*", "\x00").replace(r"\*", "[^/]*")
-    regex = regex.replace("\x00", ".*").replace(r"\?", "[^/]")
-    # A directory pattern also covers everything beneath it.
-    if re.fullmatch(regex, rel_path):
-        return True
-    return bool(re.fullmatch(regex + "(/.*)?", rel_path))
+    return dockerignore_excludes(_DOCKERIGNORE, rel_path)
 
 
 @pytest.mark.parametrize("activation_key", sorted(KG_ACTIVATIONS))
