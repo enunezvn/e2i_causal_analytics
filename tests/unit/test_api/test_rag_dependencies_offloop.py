@@ -79,3 +79,47 @@ async def test_a_burst_of_first_requests_builds_the_dependencies_once(monkeypatc
 
     assert factory_calls["n"] == 1, "two concurrent first requests must build once"
     assert first is second
+
+
+def _burst_patches(counter):
+    def _counting_extractor():
+        counter["n"] += 1
+        return MagicMock(name="entity_extractor")
+
+    return (
+        patch.object(rag_deps, "get_supabase", return_value=MagicMock(name="supabase")),
+        patch.object(rag_deps, "get_falkordb", AsyncMock(return_value=MagicMock(name="falkordb"))),
+        patch("src.rag.config.RAGConfig.from_env", return_value=MagicMock(name="rag_config")),
+        patch("src.rag.config.EmbeddingConfig.from_env", return_value=MagicMock(name="emb_config")),
+        patch("src.rag.embeddings.OpenAIEmbeddingClient", return_value=MagicMock(name="embedder")),
+        patch("src.rag.hybrid_retriever.HybridRetriever", return_value=MagicMock(name="retriever")),
+        patch("src.rag.entity_extractor.EntityExtractor", _counting_extractor),
+    )
+
+
+def test_the_single_flight_lock_survives_a_new_event_loop(monkeypatch):
+    # Codex r2 LOW: a module-level asyncio.Lock binds to the loop that first
+    # contends it; after the singleton is reset, a cold burst on a NEW loop
+    # (function-scoped test loops, one per test) raised "bound to a different
+    # event loop". Two bursts on two loops in one process must both build once.
+    import asyncio
+    from contextlib import ExitStack
+
+    monkeypatch.setattr(rag_deps, "_rag_deps", None)
+
+    async def _burst():
+        return await asyncio.gather(
+            rag_deps.get_rag_dependencies(), rag_deps.get_rag_dependencies()
+        )
+
+    for _loop_no in (1, 2):
+        counter = {"n": 0}
+        with ExitStack() as stack:
+            for p in _burst_patches(counter):
+                stack.enter_context(p)
+            try:
+                first, second = asyncio.run(_burst())
+            finally:
+                rag_deps._rag_deps = None
+        assert counter["n"] == 1
+        assert first is second

@@ -16,9 +16,22 @@ logger = logging.getLogger(__name__)
 _rag_deps: Optional[Dict[str, Any]] = None
 # Single-flight for the first build: a burst of first requests must not each
 # construct the retriever, embedder and extractor (lane 2: the extractor's first
-# build runs a bounded RxNav round). Module-level asyncio.Lock is loop-agnostic
-# on Python 3.10+.
-_rag_deps_lock = asyncio.Lock()
+# build runs a bounded RxNav round). An asyncio.Lock binds to the loop that first
+# contends it, so the lock is kept per running loop: a cold burst on a new loop
+# (a fresh test loop after the singleton is reset) gets a fresh lock instead of
+# "is bound to a different event loop".
+_rag_deps_lock: Optional[asyncio.Lock] = None
+_rag_deps_lock_loop: Optional[asyncio.AbstractEventLoop] = None
+
+
+def _single_flight_lock() -> asyncio.Lock:
+    global _rag_deps_lock, _rag_deps_lock_loop
+    loop = asyncio.get_running_loop()
+    if _rag_deps_lock is None or _rag_deps_lock_loop is not loop:
+        # No await between the check and the assignment: race-free within one loop.
+        _rag_deps_lock = asyncio.Lock()
+        _rag_deps_lock_loop = loop
+    return _rag_deps_lock
 
 
 async def get_rag_dependencies() -> Dict[str, Any]:
@@ -34,7 +47,7 @@ async def get_rag_dependencies() -> Dict[str, Any]:
     if _rag_deps is not None:
         return _rag_deps
 
-    async with _rag_deps_lock:
+    async with _single_flight_lock():
         if _rag_deps is not None:  # built by the request that held the lock first
             return _rag_deps
         _rag_deps = await _build_rag_dependencies()
