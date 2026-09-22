@@ -464,3 +464,55 @@ def test_tree_identity_names_the_commit_and_the_dirty_state(tmp_path):
     assert isinstance(ident["commit"], str) and len(ident["commit"]) == 40
     assert isinstance(ident["dirty_src_scripts_tests"], bool)
     assert tree_identity(tmp_path) == {"commit": None, "dirty_src_scripts_tests": None}
+
+
+@pytest.mark.parametrize(
+    "over,match",
+    [
+        ({"edge_rationales": 42}, "edge_rationales"),
+        (
+            {
+                "edge_rationales": [
+                    {"from": "baseline_uas7", "to": "T", "rationale": "x", "citations": 7}
+                ]
+            },
+            "citations",
+        ),
+        ({"entity_names": [1, 2]}, "entity_names"),
+        ({"ambiguous": None}, "ambiguous"),
+        ({"ambiguous": "maybe"}, "ambiguous"),
+    ],
+    ids=[
+        "rationales_int",
+        "citations_int",
+        "entity_names_list",
+        "ambiguous_missing",
+        "ambiguous_word",
+    ],
+)
+def test_parser_refuses_malformed_containers_and_an_unreadable_ambiguous(over, match):
+    """codex r3 MED 3: every malformed model output is a StructuralAuthorError
+    (-> review), never a TypeError/ValueError that aborts the cohort CLI; and
+    ``ambiguous`` must be a real boolean, not defaulted to False."""
+    ans = _confounder_answer()
+    ans.update(over)
+    if over.get("ambiguous", "x") is None:
+        del ans["ambiguous"]
+    with pytest.raises(StructuralAuthorError, match=match):
+        parse_author_output(ans, feature_name="baseline_uas7")
+
+
+def test_post_processing_failure_routes_to_review_not_an_exception(monkeypatch):
+    """codex r3 MED 3: a failure AFTER parsing (grading / extraction) must yield a
+    review-only record like an LM failure does (spec §5), not abort the run."""
+    import src.data.kg.structural_author as mod
+
+    def _boom(*a, **k):
+        raise RuntimeError("grader exploded")
+
+    monkeypatch.setattr(mod, "postprocess_fragment", _boom)
+    rec = author_feature(_brief(), resolver=_resolver(), lm=_dummy(_confounder_answer()))
+    assert rec.edges == [] and rec.review_required is True
+    assert rec.review_reasons and rec.review_reasons[0].startswith(
+        "post-processing failed: RuntimeError"
+    )

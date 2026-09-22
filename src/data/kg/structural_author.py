@@ -118,6 +118,11 @@ class StructuralAuthorError(ValueError):
 # ---------------------------------------------------------------------------
 
 
+#: Lane E contract values the author's constraints read (feature_role_panel.py).
+_PANEL_L1_VERDICTS = ("pre_index", "post_index", "no_contract")
+_PANEL_LEAK_SOURCES = (None, "layer_1_post_index", "layer_3_high")
+
+
 @dataclass(frozen=True)
 class PanelRecordView:
     """The slice of a Lane E ``FeatureRoleRecord`` the author and its post-
@@ -144,11 +149,26 @@ class PanelRecordView:
 
     @classmethod
     def from_record(cls, record: Mapping[str, Any]) -> "PanelRecordView":
+        """Typed view of one record. Raises ``ValueError`` when a value the
+        author's constraints READ is outside its contract — a verdict, role or
+        leak source it would otherwise consume blind (codex r3 HIGH 1)."""
         l1 = dict(record.get("layer_1") or {})
         l2 = dict(record.get("layer_2") or {})
         l3 = dict(record.get("layer_3") or {})
         l4 = dict(record.get("layer_4") or {})
         ens = dict(record.get("ensemble") or {})
+        if l1.get("verdict") not in _PANEL_L1_VERDICTS:
+            raise ValueError(
+                f"layer_1.verdict={l1.get('verdict')!r} is not one of {_PANEL_L1_VERDICTS}"
+            )
+        if "final_role" not in ens or "decided_by" not in ens:
+            raise ValueError("ensemble lacks final_role/decided_by")
+        if ens["final_role"] is not None and ens["final_role"] not in ROLES:
+            raise ValueError(f"ensemble.final_role={ens['final_role']!r} is not a role")
+        if record.get("leak_source") not in _PANEL_LEAK_SOURCES:
+            raise ValueError(
+                f"leak_source={record.get('leak_source')!r} is not one of {_PANEL_LEAK_SOURCES}"
+            )
         signal = l2.get("signal")
         return cls(
             feature=str(record["feature"]),
@@ -442,6 +462,27 @@ def parse_author_output(
     DAG over the allowed nodes, omits the ``T -> Y`` estimand edge (guide §1
     convention 6), or leaves the feature out of the diagram.
     """
+    try:
+        return _parse_author_output(
+            raw, feature_name=feature_name, treatment_node=treatment_node, outcome_node=outcome_node
+        )
+    except StructuralAuthorError:
+        raise
+    except (TypeError, ValueError, KeyError, AttributeError) as exc:
+        # A malformed container the field checks above did not anticipate is
+        # still a rejected output, never an exception that aborts a cohort run.
+        raise StructuralAuthorError(
+            f"malformed author output: {type(exc).__name__}: {exc}"
+        ) from exc
+
+
+def _parse_author_output(
+    raw: Mapping[str, Any],
+    *,
+    feature_name: str,
+    treatment_node: str,
+    outcome_node: str,
+) -> ParsedFragment:
     edges_raw = raw.get("edges")
     if isinstance(edges_raw, str):
         try:
@@ -494,6 +535,10 @@ def parse_author_output(
             rat_raw = json.loads(rat_raw)
         except json.JSONDecodeError as exc:
             raise StructuralAuthorError(f"edge_rationales is not JSON: {exc}") from exc
+    if not isinstance(rat_raw, Sequence) or isinstance(rat_raw, (str, bytes)):
+        raise StructuralAuthorError(
+            f"edge_rationales must be a list of objects, got {type(rat_raw).__name__}"
+        )
     for item in rat_raw:
         if hasattr(item, "model_dump"):
             item = item.model_dump()
@@ -506,26 +551,38 @@ def parse_author_output(
         cits = item.get("citations") or []
         if isinstance(cits, str):
             cits = [c for c in re.split(r"[;,\s]+", cits) if c]
+        if not isinstance(cits, Sequence) or isinstance(cits, (bytes,)):
+            raise StructuralAuthorError(
+                f"citations for edge {e!r} must be a list or a string, got {type(cits).__name__}"
+            )
         citations[e] = tuple(parse_citation(c) for c in cits if str(c).strip())
 
     names_raw = raw.get("entity_names") or {}
     if isinstance(names_raw, str):
         try:
             names_raw = json.loads(names_raw)
-        except json.JSONDecodeError:
-            names_raw = {}
-    entity_names = {str(k): str(v) for k, v in dict(names_raw).items() if str(v).strip()}
+        except json.JSONDecodeError as exc:
+            raise StructuralAuthorError(f"entity_names is not JSON: {exc}") from exc
+    if not isinstance(names_raw, Mapping):
+        raise StructuralAuthorError(
+            f"entity_names must be an object of node -> name, got {type(names_raw).__name__}"
+        )
+    entity_names = {str(k): str(v) for k, v in names_raw.items() if str(v).strip()}
 
     expected = raw.get("expected_role")
     expected_role = str(expected).strip().lower() if expected is not None else None
     if expected_role is not None and expected_role not in ROLES:
         raise StructuralAuthorError(f"expected_role {expected!r} is not one of {ROLES}")
 
-    amb_raw = raw.get("ambiguous", False)
-    if isinstance(amb_raw, str):
-        ambiguous = amb_raw.strip().lower() in ("true", "1", "yes")
+    # ``ambiguous`` is a REQUIRED boolean: a missing or unreadable value is a
+    # rejected output (-> review), never a silent False (codex r3 MED 3).
+    amb_raw = raw.get("ambiguous")
+    if isinstance(amb_raw, bool):
+        ambiguous = amb_raw
+    elif isinstance(amb_raw, str) and amb_raw.strip().lower() in ("true", "false"):
+        ambiguous = amb_raw.strip().lower() == "true"
     else:
-        ambiguous = bool(amb_raw)
+        raise StructuralAuthorError(f"ambiguous must be true/false, got {amb_raw!r}")
 
     return ParsedFragment(
         feature_node=feature_name,
@@ -940,7 +997,7 @@ def author_feature(
         "edge_rationales": getattr(pred, "edge_rationales", None),
         "entity_names": getattr(pred, "entity_names", None),
         "expected_role": getattr(pred, "expected_role", None),
-        "ambiguous": getattr(pred, "ambiguous", False),
+        "ambiguous": getattr(pred, "ambiguous", None),
     }
     reasoning = getattr(pred, "reasoning", None)
     try:
@@ -953,10 +1010,21 @@ def author_feature(
             lm=active_lm,
             reasoning=str(reasoning) if reasoning is not None else None,
         )
-    return postprocess_fragment(
-        brief,
-        fragment,
-        resolver=resolver,
-        lm=active_lm,
-        reasoning=str(reasoning) if reasoning is not None else None,
-    )
+    try:
+        return postprocess_fragment(
+            brief,
+            fragment,
+            resolver=resolver,
+            lm=active_lm,
+            reasoning=str(reasoning) if reasoning is not None else None,
+        )
+    except Exception as exc:  # noqa: BLE001 — a post-processing failure routes the feature to review (§5)
+        logger.warning(
+            "structural author post-processing failed for %s: %s", brief.feature_name, exc
+        )
+        return _review_record(
+            brief,
+            reasons=[f"post-processing failed: {type(exc).__name__}: {exc}"],
+            lm=active_lm,
+            reasoning=str(reasoning) if reasoning is not None else None,
+        )
