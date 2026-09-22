@@ -71,8 +71,15 @@ def _write(tmp_path: Path, df: pd.DataFrame) -> Path:
 
 
 class _FakeQuery:
-    def __init__(self, table: "_FakeTable", op: str):
+    """A faithful-enough PostgREST query stub: nothing happens until ``.execute()``
+    is called, and ``.execute().count`` is only a real integer when the select
+    actually asked for ``count="exact"`` — otherwise it is ``None``, exactly like a
+    real client, so ``int(...)`` on a dropped ``count="exact"`` fails loudly instead
+    of silently returning a filtered row count."""
+
+    def __init__(self, table: "_FakeTable", op: str, batch=None, on_conflict=None):
         self._t, self._op, self._filters, self._count = table, op, [], None
+        self._batch, self._on_conflict = batch, on_conflict
 
     def select(self, cols, count=None):
         self._count = count
@@ -83,8 +90,14 @@ class _FakeQuery:
         return self
 
     def execute(self):
+        if self._op == "upsert":
+            for rec in self._batch:
+                self._t.rows[rec["patient_id"]] = rec
+            self._t.upserts.append((list(self._batch), self._on_conflict))
+            return type("R", (), {"data": list(self._batch), "count": None})()
         rows = [r for r in self._t.rows.values() if all(r.get(c) == v for c, v in self._filters)]
-        return type("R", (), {"data": rows, "count": len(rows)})()
+        count = len(rows) if self._count == "exact" else None
+        return type("R", (), {"data": rows, "count": count})()
 
 
 class _FakeTable:
@@ -99,10 +112,20 @@ class _FakeTable:
         return _FakeQuery(self, "select").select(cols, count=count)
 
     def upsert(self, batch, on_conflict=None):
-        self.upserts.append((list(batch), on_conflict))
-        for rec in batch:
-            self.rows[rec["patient_id"]] = rec
-        return _FakeQuery(self, "upsert")
+        # Building the query must not write anything -- only .execute() on the
+        # returned object may (mutation-proof for a dropped .execute() call).
+        return _FakeQuery(self, "upsert", batch=batch, on_conflict=on_conflict)
+
+
+class _FakeTableIgnoresExactCount(_FakeTable):
+    """Simulates a live select where ``count="exact"`` has no effect -- the shape
+    fetch_live_split would see if it (or a client regression) stopped actually
+    requesting exact counts. Upserts behave normally so the table can be populated."""
+
+    def select(self, cols, count=None):
+        if self.missing:
+            raise RuntimeError('relation "optum_biologic_persistence_causal" does not exist')
+        return _FakeQuery(self, "select").select(cols, count=None)
 
 
 class _FakeClient:
@@ -157,6 +180,7 @@ def test_arm_split_counts_and_rates():
     assert split["arms"] == {"XOLAIR": 3, "DUPIXENT": 2}
     assert split["outcome_positives"]["persistent_at_180d_g28"] == {"XOLAIR": 2, "DUPIXENT": 1}
     assert set(split["outcome_positives"]) == set(OUTCOME_COLUMNS)
+    assert split["treatment"] == {"0": 3, "1": 2}
 
 
 def test_to_records_is_json_safe_and_deterministic():
@@ -185,16 +209,37 @@ def test_upsert_batches_on_patient_id():
     assert len(client.t.rows) == 700
 
 
+def test_upsert_only_writes_when_the_query_is_executed():
+    """Mutation-proof for dropping .execute() from the upsert chain: building the
+    query alone must not write; only calling .execute() on it may."""
+    client = _FakeClient()
+    batch = to_records(_frame(n_x=1, n_d=0))
+    client.table(TABLE).upsert(batch, on_conflict=ON_CONFLICT)  # note: no .execute()
+    assert client.t.rows == {}
+    assert client.t.upserts == []
+
+
 def test_fetch_live_split_counts_by_arm_and_outcome():
     client = _FakeClient()
     upsert(client, to_records(_frame(n_x=3, n_d=2)))
     live = fetch_live_split(client)
     assert live["n"] == 5 and live["arms"] == {"XOLAIR": 3, "DUPIXENT": 2}
     assert live["outcome_positives"]["persistent_at_180d_g28"] == {"XOLAIR": 2, "DUPIXENT": 1}
+    assert live["treatment"] == {"0": 3, "1": 2}
 
 
 def test_fetch_live_split_reports_a_missing_table_as_none():
     assert fetch_live_split(_FakeClient(missing=True)) is None
+
+
+def test_fetch_live_split_degrades_to_none_when_exact_counts_are_unavailable():
+    """Mutation-proof for dropping count="exact" from the live selects: when an exact
+    count is unavailable, execute().count comes back None and int(None) is caught --
+    the honest "unreachable" verdict, never a silently wrong split."""
+    client = _FakeClient()
+    client.t = _FakeTableIgnoresExactCount()
+    upsert(client, to_records(_frame(n_x=3, n_d=2)))
+    assert fetch_live_split(client) is None
 
 
 def test_verify_verdicts():
@@ -203,6 +248,7 @@ def test_verify_verdicts():
     b = arm_split(_frame(n_x=3, n_d=1))
     problems = verify(a, b)
     assert any("DUPIXENT" in p for p in problems) and any("n" in p for p in problems)
+    assert any("treatment=1" in p for p in problems)
 
 
 def test_main_dry_run_writes_nothing(tmp_path, monkeypatch, capsys):
@@ -215,6 +261,24 @@ def test_main_dry_run_writes_nothing(tmp_path, monkeypatch, capsys):
     assert client.t.upserts == []
     out = capsys.readouterr().out
     assert "DRY RUN" in out and "XOLAIR" in out
+
+
+def test_main_dry_run_flag_is_an_explicit_alias(tmp_path, monkeypatch, capsys):
+    path = _write(tmp_path, _frame())
+    client = _FakeClient()
+    import scripts.load_optum_causal_cohort as mod
+
+    monkeypatch.setattr(mod, "_client", lambda: client)
+    assert main(["--input", str(path), "--dry-run"]) == 0
+    assert client.t.upserts == []
+    assert "DRY RUN" in capsys.readouterr().out
+
+
+def test_main_rejects_dry_run_and_execute_together(tmp_path):
+    path = _write(tmp_path, _frame())
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--input", str(path), "--dry-run", "--execute"])
+    assert exc_info.value.code == 2
 
 
 def test_main_execute_loads_then_verifies(tmp_path, monkeypatch, capsys):

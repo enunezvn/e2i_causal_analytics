@@ -11,15 +11,17 @@ Lane A (spec docs/superpowers/specs/2026-09-22-real-data-causal-estimation-desig
 Fail-loud validation BEFORE any write: required columns present, every row
 ``is_synthetic == False``, ``patient_id`` unique, the treatment coding agrees with
 ``index_biologic_brand`` and only the observed two-arm contrast is present, every
-outcome is 0/1. After ``--execute`` the live table's arm split and per-outcome
-positives are re-read and compared with the parquet; a disagreement is printed as
-MISMATCH and the exit code is 1 — the load is never reported as verified on the
-strength of the write call alone.
+outcome is 0/1. After ``--execute`` the live table's arm split, treatment-column
+counts, and per-outcome positives are re-read and compared with the parquet; a
+disagreement is printed as MISMATCH and the exit code is 1 — the load is never
+reported as verified on the strength of the write call alone.
 
 USAGE
 -----
     # DEFAULT: dry run. Validates the parquet, prints the arm split it WOULD
     # write and (if reachable) the live table's current split. Writes nothing.
+    # --dry-run is an explicit alias for this default (mutually exclusive with
+    # --execute).
     python -m scripts.load_optum_causal_cohort --input data/rwd/mart/persistence_causal/e2i_causal_v1_biologic_persistence.parquet
 
     # WRITE PATH — owner-GO step (spec §7 records the GO for the production load).
@@ -117,13 +119,16 @@ def load_frame(path: Path | str) -> pd.DataFrame:
 
 
 def arm_split(df: pd.DataFrame) -> Dict[str, Any]:
-    """Counts by arm and per-outcome positives by arm — the verification unit."""
+    """Counts by arm, by the treatment column the causal run reads, and per-outcome
+    positives by arm — the verification unit."""
     arms = {arm: int((df[BRAND] == arm).sum()) for arm in ARMS}
     positives = {
         col: {arm: int(df.loc[df[BRAND] == arm, col].astype(int).sum()) for arm in ARMS}
         for col in OUTCOME_COLUMNS
     }
-    return {"n": int(len(df)), "arms": arms, "outcome_positives": positives}
+    treatment_int = df[TREATMENT].astype(int)
+    treatment = {str(v): int((treatment_int == v).sum()) for v in (0, 1)}
+    return {"n": int(len(df)), "arms": arms, "outcome_positives": positives, "treatment": treatment}
 
 
 # ---------------------------------------------------------------------------
@@ -203,8 +208,17 @@ def fetch_live_split(client: Any) -> Optional[Dict[str, Any]]:
                     .execute()
                     .count
                 )
+        treatment: Dict[str, int] = {}
+        for v in (0, 1):
+            treatment[str(v)] = int(
+                client.table(TABLE)
+                .select("patient_id", count="exact")
+                .eq(TREATMENT, v)
+                .execute()
+                .count
+            )
         total = int(client.table(TABLE).select("patient_id", count="exact").execute().count)
-        return {"n": total, "arms": arms, "outcome_positives": positives}
+        return {"n": total, "arms": arms, "outcome_positives": positives, "treatment": treatment}
     except Exception as e:  # noqa: BLE001 — a missing relation / store hiccup is reported, not hidden
         logger.warning("Could not read live %s: %s", TABLE, e)
         return None
@@ -215,6 +229,10 @@ def verify(expected: Dict[str, Any], live: Dict[str, Any]) -> List[str]:
     problems: List[str] = []
     if expected["n"] != live["n"]:
         problems.append(f"n: parquet {expected['n']} vs live {live['n']}")
+    for v in ("0", "1"):
+        e, l = expected["treatment"][v], live["treatment"][v]
+        if e != l:
+            problems.append(f"treatment={v}: parquet {e} vs live {l}")
     for arm in ARMS:
         if expected["arms"][arm] != live["arms"][arm]:
             problems.append(
@@ -248,10 +266,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("--input", default=DEFAULT_INPUT, help="causal export parquet")
-    parser.add_argument(
+    run_mode = parser.add_mutually_exclusive_group()
+    run_mode.add_argument(
         "--execute",
         action="store_true",
         help="WRITE PATH: upsert the rows into the live table. Omit (default) for a dry run.",
+    )
+    run_mode.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Explicit dry run (the default when neither flag is given). "
+        "Mutually exclusive with --execute.",
     )
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     args = parser.parse_args(argv)
