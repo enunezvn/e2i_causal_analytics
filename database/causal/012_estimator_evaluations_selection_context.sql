@@ -34,7 +34,11 @@ ALTER TABLE estimator_evaluations
     ADD COLUMN IF NOT EXISTS outcome_variable VARCHAR(255),
     ADD COLUMN IF NOT EXISTS brand VARCHAR(100),
     ADD COLUMN IF NOT EXISTS region VARCHAR(100),
-    ADD COLUMN IF NOT EXISTS data_source VARCHAR(50);
+    -- TEXT, not VARCHAR(n): data_source is the estimation node's frame identity — a
+    -- table name, 'synthetic', or an arbitrary label / parquet / S3 path the API
+    -- contract accepts (codex r4). A bound here would fail the whole selection's
+    -- insert batch on a valid long source.
+    ADD COLUMN IF NOT EXISTS data_source TEXT;
 
 COMMENT ON COLUMN estimator_evaluations.experiment_id IS
     'ml_experiments(id) when the selection ran inside an ML experiment; NULL for a query-time selection (the causal_impact agent), whose key is query_id / selection_run_id (#2207).';

@@ -258,6 +258,10 @@ def test_migration_012_is_what_the_writer_now_depends_on():
         assert f"ADD COLUMN IF NOT EXISTS {col}" in body, col
     assert "PARTITION BY selection_run_id" in body
     assert "PARTITION BY experiment_id" not in body
+    # codex r4: data_source is an unbounded frame identity (table, label, parquet/S3
+    # path) — a VARCHAR(n) bound would fail the whole selection's insert batch.
+    assert "ADD COLUMN IF NOT EXISTS data_source TEXT" in body
+    assert "data_source VARCHAR" not in body
     # the writer's INSERT names exactly those columns
     import inspect
 

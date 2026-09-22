@@ -46,6 +46,7 @@ class _AsyncQuery:
     def __init__(self, store: Dict[str, List[Dict[str, Any]]], table: str):
         self._store, self._table = store, table
         self._op, self._payload, self._on_conflict = "select", None, None
+        self._filters: List[tuple] = []
 
     def insert(self, data):
         self._op, self._payload = "insert", data
@@ -58,14 +59,35 @@ class _AsyncQuery:
     def select(self, *_a, **_k):
         return self
 
-    def eq(self, *_a):
+    def delete(self):
+        self._op = "delete"
+        return self
+
+    def eq(self, col, val):
+        self._filters.append(("eq", col, val))
+        return self
+
+    def gt(self, col, val):
+        self._filters.append(("gt", col, val))
         return self
 
     def limit(self, *_a):
         return self
 
+    def _match(self, row):
+        for kind, col, val in self._filters:
+            if kind == "eq" and str(row.get(col)) != str(val):
+                return False
+            if kind == "gt" and not (row.get(col) is not None and row[col] > val):
+                return False
+        return True
+
     async def execute(self):
         rows = self._store.setdefault(self._table, [])
+        if self._op == "delete":
+            gone = [r for r in rows if self._match(r)]
+            rows[:] = [r for r in rows if not self._match(r)]
+            return SimpleNamespace(data=gone)
         payload = self._payload if isinstance(self._payload, list) else [self._payload]
         out = []
         for p in payload:
@@ -281,3 +303,35 @@ async def test_rerunning_the_same_study_name_upserts_instead_of_failing_unique()
     assert len(db.store["ml_hpo_studies"]) == 1
     assert first["study_id"] == second["study_id"]
     assert len(db.store["ml_hpo_trials"]) == 2  # (study_id, trial_number) unique
+
+
+@pytest.mark.asyncio
+async def test_a_shorter_rerun_removes_the_previous_runs_trailing_trials():
+    """Codex r4: in-memory Optuna reruns reuse the study name; the parent row is
+    replaced but trial rows beyond the new run's count used to linger, so n_trials
+    disagreed with the child rows."""
+    db = FakeAsyncSupabase()
+    name = f"e2i_rerun_{uuid.uuid4().hex[:6]}_rf_hpo"
+    longer = optuna.create_study(study_name=name)
+    longer.optimize(lambda t: t.suggest_int("n_estimators", 10, 20) / 20.0, n_trials=4)
+    shorter = optuna.create_study(study_name=name)
+    shorter.optimize(lambda t: t.suggest_int("n_estimators", 10, 20) / 20.0, n_trials=2)
+    opt = OptunaOptimizer(experiment_id="unknown", mlflow_tracking=False)
+    with (
+        patch(
+            "src.memory.services.factories.get_async_supabase_client",
+            new=AsyncMock(return_value=db),
+        ),
+        patch(
+            "src.repositories.ml_experiment.MLExperimentRepository.get_by_mlflow_id",
+            new=AsyncMock(return_value=None),
+        ),
+    ):
+        first = await opt.save_to_database(longer, _results(longer))
+        second = await opt.save_to_database(shorter, _results(shorter))
+    assert first["study_id"] == second["study_id"]
+    (row,) = db.store["ml_hpo_studies"]
+    assert row["n_trials"] == 2
+    trials = [t for t in db.store["ml_hpo_trials"] if t["study_id"] == row["id"]]
+    assert sorted(t["trial_number"] for t in trials) == [0, 1]
+    assert second["trials_saved"] == 2

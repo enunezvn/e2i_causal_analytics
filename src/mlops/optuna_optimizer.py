@@ -921,6 +921,23 @@ class OptunaOptimizer:
             except Exception as e:
                 logger.warning(f"Failed to save trial {trial.number}: {e}")
 
+        # Reconcile the child rows to THIS run's trial set (codex r4): an in-memory
+        # Optuna rerun reuses the study name, so the parent row is replaced by the
+        # upsert above while trial rows beyond the new run's count would linger and
+        # make n_trials disagree with ml_hpo_trials. The upsert-then-delete order
+        # never leaves the study without its current trials.
+        try:
+            max_trial = max((t.number for t in trials), default=-1)
+            await (
+                client.table("ml_hpo_trials")
+                .delete()
+                .eq("study_id", study_id)
+                .gt("trial_number", max_trial)
+                .execute()
+            )
+        except Exception as e:  # noqa: BLE001 — stale rows are a warning, not a failure
+            logger.warning(f"Failed to reconcile stale trials for study {study_id}: {e}")
+
         logger.info(f"Saved {saved_count}/{len(trials)} trials to database")
         return saved_count
 
