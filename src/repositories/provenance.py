@@ -59,6 +59,8 @@ PROVENANCE_TAGGED_TABLES: frozenset[str] = frozenset(
         "feature_values",
         # ml/036 (#1974)
         "discovered_dags",
+        # migrations/149 (Lane C, 2026-09-22)
+        "csu_escalation_causal",
     }
 )
 

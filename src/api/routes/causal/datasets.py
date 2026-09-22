@@ -10,6 +10,8 @@ Import rule: may import ``_common`` and non-package modules only; never
 import logging
 from typing import Any, Callable, Dict, List, Optional
 
+from src.data.manifests import MART_SAFE_FEATURES
+
 # Re-exported under the historical names (segments.py + six test modules import
 # them from this route) — see the pointer comment where the dicts used to live.
 from src.insights.column_labels import (  # noqa: F401 — re-export
@@ -211,9 +213,63 @@ _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
         # E-value gate + sensitivity/interpretation wording.
         "randomized_treatment": ["control_group_flag"],
     },
+    # ------------------------------------------------------------------
+    # Lane C (spec 2026-09-22 §3C.2): remibrutinib PRE-WIRING. The CSU
+    # escalation-therapy causal question the program exists for -- remibrutinib
+    # (Rhapsido) vs a competitor biologic (Xolair / Dupixent) -> persistence --
+    # registered NOW with the same outcome + covariate contract as Lane A's
+    # optum_biologic_persistence so it becomes live with no registry change
+    # when post-launch claims arrive (remibrutinib is absent from every real
+    # drop to date; FDA CSU approval 2025-09-30, the drops' last day).
+    #   * treatment_remibrutinib: 1 = RHAPSIDO, 0 = XOLAIR / DUPIXENT
+    #     (index_biologic_brand, canonicalised by scripts/convert_optum_mart.py
+    #     select_csu_escalation_contrast via src/data/csu_biologics.py).
+    #   * outcomes, PRIMARY first, as Lane A: persistent_at_180d_g28,
+    #     discontinued_180d, biologic_switch_180d_flag, persistent_at_180d.
+    #   * covariates: the 64 pre-index baseline features (MART_SAFE_FEATURES);
+    #     seven are text and one-hot (see _CAUSAL_CATEGORICAL_COLUMNS).
+    # Physical table csu_escalation_causal (migration 149). Until the real
+    # table exists it is backed by the SYNTHETIC CSU cohort
+    # (scripts/build_csu_escalation_synthetic_cohort.py, every row
+    # is_synthetic=true, planted truth in its ground-truth sidecar): the
+    # real-mode provenance filter therefore returns NO rows (503, never a
+    # synthetic estimate served as real) and only the planted-truth run
+    # (tests/unit/test_api/test_causal_csu_escalation_planted_truth.py) reads
+    # the rows. Observational (no randomized_treatment); no negative control
+    # declared (the per-source omitted-confounder experiment has not run).
+    # Structure discovery is OFF by default (_CAUSAL_DISCOVERY_DEFAULT_OFF):
+    # same claims-frame shape Lane A measured singular.
+    # ------------------------------------------------------------------
+    "csu_escalation_causal": {
+        "treatment": ["treatment_remibrutinib"],
+        "outcome": [
+            "persistent_at_180d_g28",
+            "discontinued_180d",
+            "biologic_switch_180d_flag",
+            "persistent_at_180d",
+        ],
+        "covariate": list(MART_SAFE_FEATURES),
+    },
 }
 
 _DEFAULT_CAUSAL_DATASET = "patient_journeys"
+
+# Lane A: datasets whose API default is auto_discover=False. Guided discovery
+# was MEASURED to fail on the real claims frame (singular correlation matrix,
+# rank 45/59; ~230 s per PC fit on 43 covariates —
+# docs/demos/results/2026-09-22_discovery_real_claims_disproof/). Until Lane D's
+# pre-flight lands, the default run uses the curated common-cause DAG. A caller
+# that sets auto_discover=True explicitly is honored (PR #2203 then reports
+# "could not run: singular…" instead of an empty DAG). The request schema's
+# field default stays True (changing it would alter the generated api.ts).
+# Lane C: csu_escalation_causal carries the same 64-feature claims contract.
+_CAUSAL_DISCOVERY_DEFAULT_OFF: frozenset = frozenset({"csu_escalation_causal"})
+
+
+def _default_auto_discover(dataset: Optional[str]) -> bool:
+    """The ``auto_discover`` value a request gets when the caller did not set it."""
+    return (dataset or _DEFAULT_CAUSAL_DATASET) not in _CAUSAL_DISCOVERY_DEFAULT_OFF
+
 
 # #1872: every nba_triggers covariate is JOINED from patient_journeys via
 # triggers.patient_id (the triggers table itself carries NO covariate columns).
@@ -407,6 +463,20 @@ def _brand_scoped_covariates(covariates: List[str], brand: Optional[str]) -> Lis
 # these (P3 adds its grain here if it is also non-single-table).
 _JOIN_DATASETS: frozenset = frozenset({"hcp_adoption"})
 
+# Lane A: the seven TEXT baseline columns of the Optum mart (payer / geography /
+# gender / the two comorbidity risk bands), one-hot encoded by the loader.
+_OPTUM_BASELINE_CATEGORICALS: frozenset = frozenset(
+    {
+        "gdr_cd",
+        "payer_category",
+        "payer_product",
+        "payer_bus",
+        "charlson_risk_band",
+        "elixhauser_risk_band",
+        "geographic_region",
+    }
+)
+
 # Columns coerced to float before handing the frame to the executors. Every
 # curated candidate above is numeric, so all are coerced; a value that cannot
 # be coerced becomes None and (for treatment/outcome) drops the row.
@@ -464,6 +534,18 @@ _CAUSAL_NUMERIC_COLUMNS: Dict[str, set] = {
         "disease_severity",
         "engagement_score",
     },
+    # Lane C: the treatment, the four outcomes and every NON-text baseline
+    # feature float-coerce; test_causal_csu_escalation_registry locks
+    # numeric ∪ categorical == MART_SAFE_FEATURES so a manifest change cannot
+    # silently null-coerce a text column.
+    "csu_escalation_causal": {
+        "treatment_remibrutinib",
+        "persistent_at_180d_g28",
+        "discontinued_180d",
+        "biologic_switch_180d_flag",
+        "persistent_at_180d",
+        *(c for c in MART_SAFE_FEATURES if c not in _OPTUM_BASELINE_CATEGORICALS),
+    },
 }
 
 # Per-dataset brand-filter column. The triggers table has NO `brand` column — it
@@ -471,6 +553,11 @@ _CAUSAL_NUMERIC_COLUMNS: Dict[str, set] = {
 # (patient_journeys). Used by _list_dataset_brands + the loaders' brand filter.
 _CAUSAL_BRAND_COLUMN: Dict[str, str] = {
     "nba_triggers": "brand_id",
+    # Lane C: the brand filter IS the treatment label (RHAPSIDO vs XOLAIR /
+    # DUPIXENT). Scoping to one brand makes treatment_remibrutinib constant;
+    # the loader's constant-treatment guard refuses that with a 400 before
+    # DoWhy can return a finite-but-meaningless estimate.
+    "csu_escalation_causal": "index_biologic_brand",
 }
 
 
@@ -579,6 +666,7 @@ _CAUSAL_PHYSICAL_TABLE: Dict[str, str] = {"nba_triggers": "triggers"}
 # confounder: an unordered 4-level region (midwest/south/northeast/west).
 _CAUSAL_CATEGORICAL_COLUMNS: Dict[str, set] = {
     "patient_journeys": {"geographic_region"},
+    "csu_escalation_causal": set(_OPTUM_BASELINE_CATEGORICALS),
 }
 
 
