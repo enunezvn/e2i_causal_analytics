@@ -169,6 +169,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -184,6 +185,23 @@ jobs:
           # never paid for itself and is the variance that pushed the job over
           # timeout-minutes, skipping the deploy.
           cache-from: type=gha
+
+      - name: Assert baked image inputs are present in the pushed image (#1607 shape)
+        # The static packaging guards (tests/unit/test_data/test_causal_role_classifier_packaging.py,
+        # tests/unit/test_data/test_kg/test_kg_cache_packaging.py) prove the Dockerfile
+        # TEXT; this proves the IMAGE the droplet will actually pull. Pull the exact
+        # digest just pushed (no target: is set above, so build-push built the final
+        # `production` stage) and check every baked input the runtime loads. A failure
+        # here stops the job before deploy — the #1607 shape (committed + loader-
+        # resolvable + absent from the built image) caught structurally instead of
+        # discovered live.
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
+          docker run --rm --entrypoint sh "$IMAGE" -c '
+            set -e
+            test -f /app/artifacts/dspy/causal_role_classifier.json
+            test -n "$(ls /app/data/kg_cache/*.json 2>/dev/null)"
+          '
 
   # #528-B: build + push the frontend nginx production image so the droplet can pull
   # it instead of building Vite/nginx on the box. Mirrors build-and-push (api).
