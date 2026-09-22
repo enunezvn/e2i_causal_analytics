@@ -21,6 +21,7 @@ from src.insights.column_labels import (  # noqa: F401 — re-export
 from src.insights.column_labels import (  # noqa: F401 — re-export
     column_label as _column_label,
 )
+from src.data.manifests import MART_SAFE_FEATURES
 from src.repositories.provenance import apply_provenance_filter
 
 logger = logging.getLogger(__name__)
@@ -211,9 +212,58 @@ _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
         # E-value gate + sensitivity/interpretation wording.
         "randomized_treatment": ["control_group_flag"],
     },
+    # Lane A (spec 2026-09-22 §3A.3): the REAL Optum claims causal cohort —
+    # Dupixent vs Xolair CSU escalation-therapy initiators (n = 15,209; XOLAIR
+    # 11,009 / DUPIXENT 4,200), migration 148, loaded by
+    # scripts/load_optum_causal_cohort.py from the persistence_causal export.
+    # Observational (no randomized_treatment): the unmeasured-confounding gate,
+    # the E-value and the refutation suite run unchanged.
+    #   * treatment_dupixent: 1 = DUPIXENT, 0 = XOLAIR — the only contrast the
+    #     drop observes (remibrutinib absent).
+    #   * outcomes, PRIMARY first: persistent_at_180d_g28 (covered through day
+    #     152 AND no gap > 60 d; brand-invariant across a 28-60 d grace),
+    #     discontinued_180d (brand-robust secondary), biologic_switch_180d_flag,
+    #     and the SHIPPED persistent_at_180d — days-supply sensitive per brand
+    #     (14-d Dupixent vs 28-45-d Xolair fills; the -17.6 pp raw gap is a
+    #     measurement artefact), reported only alongside the grace sweep
+    #     (docs/demos/results/2026-09-22_persistence_definition_disproof/).
+    #   * covariates: the 64 pre-index baseline features the mart manifest
+    #     allow-lists (measured at the diagnosis index, which precedes treatment
+    #     start). Seven are text and one-hot (see _CAUSAL_CATEGORICAL_COLUMNS).
+    # No negative control is declared: the omitted-confounder experiment the
+    # _CAUSAL_NEGATIVE_CONTROL_OUTCOMES note mandates per data source has not
+    # been run here, so the runner emits SKIPPED no_negative_control_declared.
+    # Structure discovery is OFF by default (_CAUSAL_DISCOVERY_DEFAULT_OFF):
+    # measured singular on this frame (rank 45/59) and ~230 s per PC fit; the
+    # curated common-cause DAG is the run shape until Lane D lands.
+    "optum_biologic_persistence": {
+        "treatment": ["treatment_dupixent"],
+        "outcome": [
+            "persistent_at_180d_g28",
+            "discontinued_180d",
+            "biologic_switch_180d_flag",
+            "persistent_at_180d",
+        ],
+        "covariate": list(MART_SAFE_FEATURES),
+    },
 }
 
 _DEFAULT_CAUSAL_DATASET = "patient_journeys"
+
+# Lane A: datasets whose API default is auto_discover=False. Guided discovery
+# was MEASURED to fail on the real claims frame (singular correlation matrix,
+# rank 45/59; ~230 s per PC fit on 43 covariates —
+# docs/demos/results/2026-09-22_discovery_real_claims_disproof/). Until Lane D's
+# pre-flight lands, the default run uses the curated common-cause DAG. A caller
+# that sets auto_discover=True explicitly is honored (PR #2203 then reports
+# "could not run: singular…" instead of an empty DAG). The request schema's
+# field default stays True (changing it would alter the generated api.ts).
+_CAUSAL_DISCOVERY_DEFAULT_OFF: frozenset = frozenset({"optum_biologic_persistence"})
+
+
+def _default_auto_discover(dataset: Optional[str]) -> bool:
+    """The ``auto_discover`` value a request gets when the caller did not set it."""
+    return (dataset or _DEFAULT_CAUSAL_DATASET) not in _CAUSAL_DISCOVERY_DEFAULT_OFF
 
 # #1872: every nba_triggers covariate is JOINED from patient_journeys via
 # triggers.patient_id (the triggers table itself carries NO covariate columns).
@@ -407,6 +457,20 @@ def _brand_scoped_covariates(covariates: List[str], brand: Optional[str]) -> Lis
 # these (P3 adds its grain here if it is also non-single-table).
 _JOIN_DATASETS: frozenset = frozenset({"hcp_adoption"})
 
+# Lane A: the seven TEXT baseline columns of the Optum mart (payer / geography /
+# gender / the two comorbidity risk bands), one-hot encoded by the loader.
+_OPTUM_BASELINE_CATEGORICALS: frozenset = frozenset(
+    {
+        "gdr_cd",
+        "payer_category",
+        "payer_product",
+        "payer_bus",
+        "charlson_risk_band",
+        "elixhauser_risk_band",
+        "geographic_region",
+    }
+)
+
 # Columns coerced to float before handing the frame to the executors. Every
 # curated candidate above is numeric, so all are coerced; a value that cannot
 # be coerced becomes None and (for treatment/outcome) drops the row.
@@ -464,6 +528,18 @@ _CAUSAL_NUMERIC_COLUMNS: Dict[str, set] = {
         "disease_severity",
         "engagement_score",
     },
+    # Lane A: the treatment, the four outcomes and every NON-text baseline feature
+    # float-coerce (ints / 0-1 flags / the age). test_causal_optum_dataset_registry
+    # locks numeric ∪ categorical == MART_SAFE_FEATURES so a manifest change
+    # cannot silently null-coerce a text column.
+    "optum_biologic_persistence": {
+        "treatment_dupixent",
+        "persistent_at_180d_g28",
+        "discontinued_180d",
+        "biologic_switch_180d_flag",
+        "persistent_at_180d",
+        *(c for c in MART_SAFE_FEATURES if c not in _OPTUM_BASELINE_CATEGORICALS),
+    },
 }
 
 # Per-dataset brand-filter column. The triggers table has NO `brand` column — it
@@ -471,6 +547,11 @@ _CAUSAL_NUMERIC_COLUMNS: Dict[str, set] = {
 # (patient_journeys). Used by _list_dataset_brands + the loaders' brand filter.
 _CAUSAL_BRAND_COLUMN: Dict[str, str] = {
     "nba_triggers": "brand_id",
+    # Lane A: the brand filter IS the treatment label. Scoping to one brand makes
+    # the treatment constant and the run fails loudly at estimation — the
+    # dropdown offers it because the table has it; the analyst's all-brands
+    # default is the causal contrast.
+    "optum_biologic_persistence": "index_biologic_brand",
 }
 
 
@@ -568,7 +649,11 @@ _CAUSAL_FILL_ZERO_OUTCOMES: Dict[str, set] = {
 
 # Logical-dataset -> physical-table name. Datasets whose dataset key differs from
 # their real table go here (nba_triggers -> the triggers table). Absent => itself.
-_CAUSAL_PHYSICAL_TABLE: Dict[str, str] = {"nba_triggers": "triggers"}
+_CAUSAL_PHYSICAL_TABLE: Dict[str, str] = {
+    "nba_triggers": "triggers",
+    # Lane A: migration 148.
+    "optum_biologic_persistence": "optum_biologic_persistence_causal",
+}
 
 
 # Categorical covariates ONE-HOT ENCODED before the frame reaches the executors
@@ -579,6 +664,7 @@ _CAUSAL_PHYSICAL_TABLE: Dict[str, str] = {"nba_triggers": "triggers"}
 # confounder: an unordered 4-level region (midwest/south/northeast/west).
 _CAUSAL_CATEGORICAL_COLUMNS: Dict[str, set] = {
     "patient_journeys": {"geographic_region"},
+    "optum_biologic_persistence": set(_OPTUM_BASELINE_CATEGORICALS),
 }
 
 
