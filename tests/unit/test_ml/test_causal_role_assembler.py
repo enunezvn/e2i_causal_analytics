@@ -288,3 +288,35 @@ def test_duplicate_feature_or_anchor_collision_is_rejected():
         assemble_cohort_dag([_ancestor(), _ancestor()], treatment=T, outcome=Y)
     with pytest.raises(ValueError, match="collides"):
         assemble_cohort_dag([_att(T, [(T, "Y"), ("T", "Y")])], treatment=T, outcome=Y)
+
+
+def test_full_candidate_set_failure_means_no_observed_subset_is_admissible():
+    """codex r2 MED 1 asked for a fallback search on the grounds that
+    d-separation is not monotone. In the fragment vocabulary the case cannot
+    arise (enumerated: docs/demos/results/2026-09-22_lane_b_structural_author_scaffold/
+    nonmonotone_search.txt, 19,521 unions, 0 counter-examples): an ancestor
+    candidate that two latents point into (one reaching T) needs itself to
+    block the chain T <- U1 -> F -> Y, and conditioning on it opens a path only
+    latents could block. The assembler must report that honestly rather than
+    an empty set that reads as "nothing to adjust"."""
+    c = _att("severity", [("severity", "T"), ("severity", "Y"), ("T", "Y")])
+    f = _att(
+        "atopy_marker",
+        [
+            ("U1", "T"),
+            ("U1", "atopy_marker"),
+            ("U2", "atopy_marker"),
+            ("U2", "Y"),
+            ("atopy_marker", "Y"),
+            ("T", "Y"),
+        ],
+    )
+    dag = assemble_cohort_dag([c, f], treatment=T, outcome=Y)
+    g = nx.DiGraph(dag.active_edges())
+    assert satisfies_backdoor_criterion(g, ["severity", "atopy_marker"], T, Y) is False
+    assert satisfies_backdoor_criterion(g, ["severity"], T, Y) is False
+    assert satisfies_backdoor_criterion(g, [], T, Y) is False
+    assert dag.adjustment_valid is False
+    assert dag.adjustment_set == [] and dag.minimal_adjustment_set == []
+    assert any("no admissible OBSERVED adjustment set" in w for w in dag.warnings)
+    assert dag.dag_structure_json()["adjustment_sets"] == []

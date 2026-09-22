@@ -376,12 +376,22 @@ def assemble_cohort_dag(
             full_set = list(candidates)
             minimal = _greedy_minimal(graph, candidates, treatment, outcome)
         else:
+            # Within the fragment vocabulary ({feature, T, Y, U_*}) and the
+            # candidate filter (confounder / ancestor) a full set that fails
+            # has NO admissible observed subset: every candidate has a directed
+            # path to Y, so a latent parent that also reaches T forms a chain
+            # only the candidate can block, and the collider path conditioning
+            # on it opens runs through latents. Enumerated over 19,521 fragment
+            # unions with zero counter-examples (evidence:
+            # docs/demos/results/2026-09-22_lane_b_structural_author_scaffold/
+            # nonmonotone_search.txt); the message below is therefore honest.
             warnings.append(
                 "no admissible OBSERVED adjustment set: the full candidate set "
                 f"{candidates} does not block every backdoor path (a latent "
                 f"{sorted(latent_set)} reaches both T and Y with no observed child on "
                 "the path, or a required feature was excluded) — a finding for the reviewer"
             )
+
     features: list[FeatureAssembly] = []
     for r in records:
         feat = r.feature_name

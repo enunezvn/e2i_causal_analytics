@@ -1,0 +1,3 @@
+n=2 max_edges=3 classified fragments per feature: {'A': 117, 'B': 117}
+n=3 max_edges=2 classified fragments per feature: {'A': 18, 'B': 18, 'C': 18}
+unions checked: 19521; full-fails-but-subset-passes cases: 0
