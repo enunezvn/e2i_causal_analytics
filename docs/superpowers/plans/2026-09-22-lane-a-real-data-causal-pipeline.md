@@ -2562,6 +2562,18 @@ assert caught it). Follow-ups NOT in this lane: the same default identifier in
 (`max_depth=None` TypeError); `_load_agent_estimation_frame`'s `.limit()` has no ORDER BY (nba_triggers
 serves a different 5,000-row subset per run).
 
+**Amendment 2 (codex r2 → REVISE, resolved the same day):** (1) `optimize_backdoor` gated on a
+non-empty adjustment set (the path search returns no set for `[]`; `value=None` silently). (2) The
+real design is rank 61 of 77 and the round-1 run served a CI econml had declared invalid → the loader
+prunes exactly collinear columns once at load (`_prune_exactly_collinear`; ATE 0.03353→0.03353, SE
+0.00855→0.00858, warning gone) and LinearDML/DRLearner refuse a warned SERVED fit (a subsampled
+tournament fit is unserved and keeps its point estimate — two outcomes' 5,000-row subsamples are rank
+61/62 without any constant column). (3) The pre-flight had re-implemented the loader's path and
+silently skipped the prune (k stayed 77; runs fell to CausalForest at 600 s) → the loader's post-fetch
+path is now one function, `_resolve_agent_estimation_frame`, and the pre-flight calls it. Final runs:
+257.6 s / 221.3 s / 185.3 s, LinearDML, k=61, refutation 4/5 proceed on all three (`preflight.md`).
+(4) The 6 + 1 incident rows were deleted after the owner's explicit approval; the MLflow run was left.
+
 ---
 
 ### Task 10: Codex review rounds to ACCEPT
