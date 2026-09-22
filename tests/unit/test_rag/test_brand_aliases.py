@@ -141,3 +141,24 @@ def test_a_stale_negative_never_overwrites_a_fresh_positive(monkeypatch):
     assert late.calls == ["Kisqali"]
     assert rxnav_brand_aliases(["Kisqali"], client=late) == {}
     assert late.calls == ["Kisqali"]  # negative TTL now in force
+
+
+def test_a_non_rxnav_exception_is_a_failed_round_and_is_remembered():
+    # e.g. a schema-malformed payload surfacing as AttributeError/ValueError:
+    # gathered aliases are kept, the round stops, and the negative TTL applies so
+    # every extractor build does not retry immediately.
+    class _Boom(_FakeRxNav):
+        def rxcui_for_name(self, name):
+            if name == "Fabhalta":
+                self.calls.append(name)
+                raise ValueError("malformed payload")
+            return super().rxcui_for_name(name)
+
+    fake = _Boom()
+    out = rxnav_brand_aliases(["Kisqali", "Fabhalta", "Remibrutinib"], client=fake)
+    assert out == {"Kisqali": ["ribociclib"]}
+    assert fake.calls == ["Kisqali", "Fabhalta"]
+    assert rxnav_brand_aliases(["Kisqali", "Fabhalta", "Remibrutinib"], client=fake) == {
+        "Kisqali": ["ribociclib"]
+    }
+    assert fake.calls == ["Kisqali", "Fabhalta"]  # remembered: no retry

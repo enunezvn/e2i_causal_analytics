@@ -305,3 +305,29 @@ def test_related_names_is_cached_per_client_and_cleared_by_reset() -> None:
     reset_caches()
     client.related_names("1873916")
     assert calls["n"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Schema-malformed payloads: an explicit null where an object is expected must
+# read as "no data", not raise AttributeError (which is not an RxNavError and
+# so escapes every caller's degrade path).
+# ---------------------------------------------------------------------------
+
+
+def test_related_names_treats_a_null_related_group_as_empty() -> None:
+    reset_caches()
+    client = RxNavClient(client=httpx.Client(transport=_related_transport({"relatedGroup": None})))
+    assert client.related_names("1873916") == []
+
+
+def test_rxcui_for_name_treats_a_null_id_group_as_no_match() -> None:
+    reset_caches()
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.params.get("search") or "")
+        return httpx.Response(200, json={"idGroup": None})
+
+    with _client_with_handler(handler) as client:
+        assert client.rxcui_for_name("nonesuch") is None
+    assert calls == ["0", "2"]  # both stages saw the null and neither raised

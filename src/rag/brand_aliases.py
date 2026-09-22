@@ -8,8 +8,9 @@ Lane 2 of docs/superpowers/specs/2026-09-22-public-apis-live-path-design.md.
 once per process and hands back lowercase aliases per canonical brand.
 
 Degrade rules (the point of this module):
-- any ``RxNavError`` returns what was gathered so far and STOPS the round, so an
-  outage costs one timeout, not one per brand;
+- any exception (``RxNavError`` or, say, a schema-malformed payload) returns
+  what was gathered so far and STOPS the round, so an outage costs one timeout,
+  not one per brand;
 - an APPROXIMATE RxCUI match (RxNav's typo-corrected ``search=2`` fallback) is
   skipped: it can land on a different drug, whose names must not become ours;
 - a failed round is remembered for ``NEGATIVE_TTL_S`` before RxNav is asked
@@ -104,6 +105,15 @@ def _fetch_round(brands: tuple[str, ...], client: _RxNavLike) -> tuple[dict[str,
                 "keeping curated aliases only for the remaining brands",
                 brand,
                 exc,
+            )
+            return gathered, False
+        except Exception as exc:  # noqa: BLE001 — a malformed payload must still be a FAILED round
+            logger.warning(
+                "brand_aliases: unexpected %s while resolving %r via RxNav; "
+                "keeping curated aliases only for the remaining brands",
+                type(exc).__name__,
+                brand,
+                exc_info=True,
             )
             return gathered, False
         if aliases:

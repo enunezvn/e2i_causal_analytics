@@ -146,12 +146,12 @@ class RxNavClient:
             return None
         # Stage 1: exact match only (search=0).
         payload = self._get("/rxcui.json", {"name": name, "search": 0})
-        ids = payload.get("idGroup", {}).get("rxnormId") or []
+        ids = (payload.get("idGroup") or {}).get("rxnormId") or []
         if isinstance(ids, list) and ids:
             return RxCUIMatch(rxcui=str(ids[0]), approximate=False)
         # Stage 2: fall back to normalized match (search=2).
         payload = self._get("/rxcui.json", {"name": name, "search": 2})
-        ids = payload.get("idGroup", {}).get("rxnormId") or []
+        ids = (payload.get("idGroup") or {}).get("rxnormId") or []
         if isinstance(ids, list) and ids:
             return RxCUIMatch(rxcui=str(ids[0]), approximate=True)
         return None
@@ -164,7 +164,7 @@ class RxNavClient:
         if not ndc:
             return None
         payload = self._get("/ndcstatus.json", {"ndc": ndc})
-        status = payload.get("ndcStatus", {})
+        status = payload.get("ndcStatus") or {}
         rxcui = status.get("rxcui")
         if isinstance(rxcui, str) and rxcui:
             return rxcui
@@ -200,7 +200,8 @@ class RxNavClient:
         if not rxcui:
             return ()
         payload = self._get(f"/rxcui/{rxcui}/related.json", {"tty": " ".join(ttys)})
-        groups = payload.get("relatedGroup", {}).get("conceptGroup") or []
+        # `or {}`: RxNav can send an explicit null where an object is expected.
+        groups = (payload.get("relatedGroup") or {}).get("conceptGroup") or []
         names: list[str] = []
         for group in groups:
             for concept in group.get("conceptProperties") or []:
