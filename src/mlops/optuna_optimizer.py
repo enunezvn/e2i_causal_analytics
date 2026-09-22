@@ -751,7 +751,9 @@ class OptunaOptimizer:
     ) -> Dict[str, Any]:
         """Save optimization results to database.
 
-        Stores in ml_hpo_studies table with trial history in ml_hpo_trials.
+        Stores in ml_hpo_studies with trial history in ml_hpo_trials — the study row and
+        its whole trial set in ONE transaction via the persist_hpo_study SQL function
+        (migration ml/045, #2207).
 
         Args:
             study: Optuna Study object
@@ -801,29 +803,34 @@ class OptunaOptimizer:
                 "completed_at": datetime.now(timezone.utc).isoformat(),
             }
 
-            # Upsert on the UNIQUE study_name (#2207): a re-run of the same experiment
-            # label re-creates the same Optuna study name (create_study loads it), so
-            # a plain insert would fail the second time; the latest run wins.
-            result = (
-                await client.table("ml_hpo_studies")
-                .upsert(study_record, on_conflict="study_name")
-                .execute()
+            # ONE transaction (#2207, codex r5): persist_hpo_study (migration ml/045)
+            # upserts the study on its UNIQUE study_name — an in-memory Optuna rerun
+            # re-creates the same name, so the latest run replaces the parent — and
+            # REPLACES its trial set in the same SQL function. Separate PostgREST
+            # statements could not promise that: a reader could have seen the new
+            # parent with the old run's trials, or a half-written set. Now the parent
+            # and its trials change together or not at all.
+            trial_records = self._trial_records(study.trials)
+            result = await client.rpc(
+                "persist_hpo_study",
+                {"p_study": study_record, "p_trials": trial_records},
+            ).execute()
+
+            study_id = result.data if isinstance(result.data, str) else None
+            if not study_id and isinstance(result.data, list) and result.data:
+                study_id = result.data[0]
+            if not study_id:
+                logger.error("persist_hpo_study returned no study id")
+                return {"success": False, "error": "persist_hpo_study returned no id"}
+
+            logger.info(
+                f"Saved HPO study {study.study_name} with ID {study_id} "
+                f"({len(trial_records)} trials, atomically)"
             )
-
-            if not result.data:
-                logger.error("Failed to insert HPO study record")
-                return {"success": False, "error": "Insert failed"}
-
-            study_id = result.data[0]["id"]
-            logger.info(f"Saved HPO study {study.study_name} with ID {study_id}")
-
-            # Save individual trials
-            trials_saved = await self._save_trials_to_database(client, study_id, study.trials)
-
             return {
                 "success": True,
-                "study_id": study_id,
-                "trials_saved": trials_saved,
+                "study_id": str(study_id),
+                "trials_saved": len(trial_records),
             }
 
         except ImportError as e:
@@ -867,28 +874,13 @@ class OptunaOptimizer:
             return None
         return str(experiment.id)
 
-    async def _save_trials_to_database(
-        self,
-        client: Any,
-        study_id: str,
-        trials: List[optuna.trial.FrozenTrial],
-    ) -> int:
-        """Save individual trial records to database.
-
-        Args:
-            client: Supabase client
-            study_id: Parent study ID
-            trials: List of frozen trials
-
-        Returns:
-            Number of trials saved
-        """
-        saved_count = 0
-
+    @staticmethod
+    def _trial_records(trials: List[optuna.trial.FrozenTrial]) -> List[Dict[str, Any]]:
+        """The ml_hpo_trials rows for ``trials``, as the persist_hpo_study payload."""
+        records: List[Dict[str, Any]] = []
         for trial in trials:
-            try:
-                trial_record = {
-                    "study_id": study_id,
+            records.append(
+                {
                     "trial_number": trial.number,
                     "state": trial.state.name,
                     "params": trial.params,
@@ -908,38 +900,8 @@ class OptunaOptimizer:
                     "user_attrs": trial.user_attrs or {},
                     "system_attrs": trial.system_attrs or {},
                 }
-
-                # (study_id, trial_number) is UNIQUE — upsert so a re-run of the same
-                # study (see save_to_database) refreshes rather than fails (#2207).
-                await (
-                    client.table("ml_hpo_trials")
-                    .upsert(trial_record, on_conflict="study_id,trial_number")
-                    .execute()
-                )
-                saved_count += 1
-
-            except Exception as e:
-                logger.warning(f"Failed to save trial {trial.number}: {e}")
-
-        # Reconcile the child rows to THIS run's trial set (codex r4): an in-memory
-        # Optuna rerun reuses the study name, so the parent row is replaced by the
-        # upsert above while trial rows beyond the new run's count would linger and
-        # make n_trials disagree with ml_hpo_trials. The upsert-then-delete order
-        # never leaves the study without its current trials.
-        try:
-            max_trial = max((t.number for t in trials), default=-1)
-            await (
-                client.table("ml_hpo_trials")
-                .delete()
-                .eq("study_id", study_id)
-                .gt("trial_number", max_trial)
-                .execute()
             )
-        except Exception as e:  # noqa: BLE001 — stale rows are a warning, not a failure
-            logger.warning(f"Failed to reconcile stale trials for study {study_id}: {e}")
-
-        logger.info(f"Saved {saved_count}/{len(trials)} trials to database")
-        return saved_count
+        return records
 
 
 class PrunerFactory:

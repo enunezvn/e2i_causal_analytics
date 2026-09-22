@@ -108,12 +108,49 @@ class _AsyncQuery:
         return SimpleNamespace(data=out)
 
 
+class _AsyncRpc:
+    """In-memory stand-in for the persist_hpo_study SQL function (migration ml/045):
+    upsert the study on study_name and REPLACE its trial set — atomically, i.e. on
+    any error nothing changes. The real atomicity is Postgres's; this fake keeps the
+    same all-or-nothing contract so a partial-failure test means what it says."""
+
+    def __init__(self, db, name, params):
+        self._db, self._name, self._params = db, name, params
+
+    async def execute(self):
+        assert self._name == "persist_hpo_study", self._name
+        if self._db.rpc_error is not None:
+            raise self._db.rpc_error
+        study, trials = self._params["p_study"], self._params["p_trials"]
+        if len({t["trial_number"] for t in trials}) != len(trials):
+            raise RuntimeError(
+                'duplicate key value violates unique constraint "unique_trial_in_study"'
+            )
+        studies = self._db.store.setdefault("ml_hpo_studies", [])
+        existing = next((r for r in studies if r["study_name"] == study["study_name"]), None)
+        if existing is None:
+            existing = {"id": str(uuid.uuid4())}
+            studies.append(existing)
+        existing.update(study)
+        sid = existing["id"]
+        rows = self._db.store.setdefault("ml_hpo_trials", [])
+        rows[:] = [r for r in rows if r["study_id"] != sid]
+        rows.extend({"id": str(uuid.uuid4()), "study_id": sid, **t} for t in trials)
+        self._db.rpc_calls.append((self._name, self._params))
+        return SimpleNamespace(data=sid)
+
+
 class FakeAsyncSupabase:
     def __init__(self):
         self.store: Dict[str, List[Dict[str, Any]]] = {}
+        self.rpc_calls: List[tuple] = []
+        self.rpc_error: Any = None
 
     def table(self, name):
         return _AsyncQuery(self.store, name)
+
+    def rpc(self, name, params):
+        return _AsyncRpc(self, name, params)
 
 
 def _study_with_trials(n: int = 3) -> optuna.Study:
@@ -335,3 +372,39 @@ async def test_a_shorter_rerun_removes_the_previous_runs_trailing_trials():
     trials = [t for t in db.store["ml_hpo_trials"] if t["study_id"] == row["id"]]
     assert sorted(t["trial_number"] for t in trials) == [0, 1]
     assert second["trials_saved"] == 2
+
+
+@pytest.mark.asyncio
+async def test_a_failure_mid_way_leaves_the_previous_run_intact_and_reports_failure():
+    """Codex r5: the study + trial set must be one transaction — a failure while
+    writing the new set leaves the parent AND the children exactly as they were."""
+    db = FakeAsyncSupabase()
+    name = f"e2i_atomic_{uuid.uuid4().hex[:6]}_rf_hpo"
+    first = optuna.create_study(study_name=name)
+    first.optimize(lambda t: t.suggest_int("n_estimators", 10, 20) / 20.0, n_trials=3)
+    opt = OptunaOptimizer(experiment_id="unknown", mlflow_tracking=False)
+    with (
+        patch(
+            "src.memory.services.factories.get_async_supabase_client",
+            new=AsyncMock(return_value=db),
+        ),
+        patch(
+            "src.repositories.ml_experiment.MLExperimentRepository.get_by_mlflow_id",
+            new=AsyncMock(return_value=None),
+        ),
+    ):
+        ok = await opt.save_to_database(first, _results(first))
+        before = {k: [dict(r) for r in v] for k, v in db.store.items()}
+        second = optuna.create_study(study_name=name)
+        second.optimize(lambda t: t.suggest_int("n_estimators", 10, 20) / 20.0, n_trials=1)
+        db.rpc_error = RuntimeError("statement timeout")
+        failed = await opt.save_to_database(second, _results(second))
+
+    assert ok["success"] is True and failed["success"] is False
+    assert db.store == before  # parent unchanged, trial set unchanged: no mixed state
+    assert len(db.store["ml_hpo_trials"]) == 3
+    # and every write went through the single RPC — no table-level inserts/upserts
+    assert len(db.rpc_calls) == 1
+    assert "ml_hpo_studies" in db.store and all(
+        r["study_name"] == name for r in db.store["ml_hpo_studies"]
+    )

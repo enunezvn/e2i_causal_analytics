@@ -722,8 +722,10 @@ Tracks Optuna hyperparameter optimization studies and their individual trial res
 HPO run in `model_trainer/nodes/hyperparameter_tuner.py` — the same live path that writes
 `ml_hpo_patterns` (943 rows). `experiment_id` is resolved from the pipeline's experiment label
 through `ml_experiments.mlflow_experiment_id` (NULL when no row exists — never a fabricated
-id; the label stays in `study_name`); the study upserts on `study_name`, trials on
-`(study_id, trial_number)`. Before #2207 the writer had zero call sites and both tables sat at
+id; the label stays in `study_name`); the study row and its whole trial set are written in
+ONE transaction by `persist_hpo_study(jsonb, jsonb)` (migration ml/045: upsert on
+`study_name`, replace the trial set — a rerun of the same study name replaces both together
+or changes nothing). Before #2207 the writer had zero call sites and both tables sat at
 0 rows. Rows land from the tier-0 harness run by hand on the host (the path that produced
 the 943 `ml_hpo_patterns`; a run there now also writes its studies and trials). The other
 host of the tuner, `execute_model_retraining`, is routed to worker_medium's `analytics`
