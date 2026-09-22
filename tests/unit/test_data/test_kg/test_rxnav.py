@@ -235,3 +235,99 @@ def test_explicit_base_kwarg_overrides_env_var(
     assert captured, "handler must have been invoked"
     assert captured[0].startswith("https://example.test/REST/"), captured[0]
     assert "localhost:4000" not in captured[0]
+
+
+# --------------------------------------------------------------- related_names
+
+
+def _related_transport(payload: dict, *, status: int = 200) -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/rxcui/1873916/related.json")
+        assert request.url.params.get("tty") == "IN BN PIN"
+        return httpx.Response(status, json=payload)
+
+    return httpx.MockTransport(handler)
+
+
+_RELATED_PAYLOAD = {
+    "relatedGroup": {
+        "rxcui": "1873916",
+        "conceptGroup": [
+            {
+                "tty": "BN",
+                "conceptProperties": [{"rxcui": "1873984", "name": "Kisqali", "tty": "BN"}],
+            },
+            {
+                "tty": "IN",
+                "conceptProperties": [{"rxcui": "1873916", "name": "ribociclib", "tty": "IN"}],
+            },
+            {"tty": "PIN"},  # RxNav omits conceptProperties when a group is empty
+        ],
+    }
+}
+
+
+def test_related_names_returns_every_name_across_the_requested_ttys() -> None:
+    reset_caches()
+    client = RxNavClient(client=httpx.Client(transport=_related_transport(_RELATED_PAYLOAD)))
+    assert client.related_names("1873916") == ["Kisqali", "ribociclib"]
+
+
+def test_related_names_is_empty_for_an_empty_rxcui_without_a_request() -> None:
+    reset_caches()
+
+    def boom(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no request expected")
+
+    client = RxNavClient(client=httpx.Client(transport=httpx.MockTransport(boom)))
+    assert client.related_names("") == []
+
+
+def test_related_names_raises_rxnav_error_on_http_failure() -> None:
+    reset_caches()
+    client = RxNavClient(client=httpx.Client(transport=_related_transport({}, status=503)))
+    with pytest.raises(RxNavError):
+        client.related_names("1873916")
+
+
+def test_related_names_is_cached_per_client_and_cleared_by_reset() -> None:
+    reset_caches()
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(200, json=_RELATED_PAYLOAD)
+
+    client = RxNavClient(client=httpx.Client(transport=httpx.MockTransport(handler)))
+    client.related_names("1873916")
+    client.related_names("1873916")
+    assert calls["n"] == 1
+    reset_caches()
+    client.related_names("1873916")
+    assert calls["n"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Schema-malformed payloads: an explicit null where an object is expected must
+# read as "no data", not raise AttributeError (which is not an RxNavError and
+# so escapes every caller's degrade path).
+# ---------------------------------------------------------------------------
+
+
+def test_related_names_treats_a_null_related_group_as_empty() -> None:
+    reset_caches()
+    client = RxNavClient(client=httpx.Client(transport=_related_transport({"relatedGroup": None})))
+    assert client.related_names("1873916") == []
+
+
+def test_rxcui_for_name_treats_a_null_id_group_as_no_match() -> None:
+    reset_caches()
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.params.get("search") or "")
+        return httpx.Response(200, json={"idGroup": None})
+
+    with _client_with_handler(handler) as client:
+        assert client.rxcui_for_name("nonesuch") is None
+    assert calls == ["0", "2"]  # both stages saw the null and neither raised

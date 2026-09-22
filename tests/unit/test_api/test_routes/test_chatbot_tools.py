@@ -42,8 +42,9 @@ from src.api.routes.chatbot_tools import (
     agent_routing_tool,
     causal_analysis_tool,
     conversation_memory_tool,
-    document_retrieval_tool,
     # Tools
+    digital_twin_simulate_tool,
+    document_retrieval_tool,
     e2i_data_query_tool,
     forecast_kpi_tool,
     get_e2i_chatbot_tools,
@@ -1846,10 +1847,11 @@ class TestToolExports:
         NOTE (#1354): the pre-existing count here was a stale ``== 7`` — it was
         never bumped when kpi_calculate_tool + clinical_context_tool landed
         (actual was 9). Corrected to 10 with that lane's addition; 11 with
-        #2115's forecast_kpi_tool. Membership below is a non-exhaustive
-        "contains" set.
+        #2115's forecast_kpi_tool; 12 with #2211's digital_twin_simulate_tool.
+        Membership below is a non-exhaustive "contains" set.
         """
-        assert len(E2I_CHATBOT_TOOLS) == 11
+        assert len(E2I_CHATBOT_TOOLS) == 12
+        assert digital_twin_simulate_tool in E2I_CHATBOT_TOOLS
         assert forecast_kpi_tool in E2I_CHATBOT_TOOLS
         assert e2i_data_query_tool in E2I_CHATBOT_TOOLS
         assert causal_analysis_tool in E2I_CHATBOT_TOOLS
@@ -1862,7 +1864,8 @@ class TestToolExports:
 
     def test_e2i_tool_map(self):
         """Test E2I_TOOL_MAP contains all tools."""
-        assert len(E2I_TOOL_MAP) == 11
+        assert len(E2I_TOOL_MAP) == 12
+        assert E2I_TOOL_MAP["digital_twin_simulate_tool"] == digital_twin_simulate_tool
         assert E2I_TOOL_MAP["e2i_data_query_tool"] == e2i_data_query_tool
         assert E2I_TOOL_MAP["causal_analysis_tool"] == causal_analysis_tool
         assert E2I_TOOL_MAP["agent_routing_tool"] == agent_routing_tool
@@ -1880,7 +1883,7 @@ class TestToolExports:
         """Test get_e2i_chatbot_tools function."""
         tools = get_e2i_chatbot_tools()
         assert tools == E2I_CHATBOT_TOOLS
-        assert len(tools) == 11
+        assert len(tools) == 12
 
     def test_get_tool_by_name_valid(self):
         """Test get_tool_by_name with valid names."""
