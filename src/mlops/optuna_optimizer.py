@@ -10,6 +10,7 @@ import asyncio
 import logging
 import os
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -774,7 +775,9 @@ class OptunaOptimizer:
             # Prepare study record
             study_record = {
                 "study_name": study.study_name,
-                "experiment_id": self.experiment_id,
+                # #2207: the FK target is ml_experiments(id); self.experiment_id is the
+                # pipeline's LABEL (ml_experiments.mlflow_experiment_id), so resolve it.
+                "experiment_id": await self._resolve_experiment_uuid(client),
                 "algorithm_name": algorithm_name,
                 "problem_type": problem_type,
                 "direction": study.direction.name.lower(),
@@ -798,8 +801,14 @@ class OptunaOptimizer:
                 "completed_at": datetime.now(timezone.utc).isoformat(),
             }
 
-            # Insert study record
-            result = await client.table("ml_hpo_studies").insert(study_record).execute()
+            # Upsert on the UNIQUE study_name (#2207): a re-run of the same experiment
+            # label re-creates the same Optuna study name (create_study loads it), so
+            # a plain insert would fail the second time; the latest run wins.
+            result = (
+                await client.table("ml_hpo_studies")
+                .upsert(study_record, on_conflict="study_name")
+                .execute()
+            )
 
             if not result.data:
                 logger.error("Failed to insert HPO study record")
@@ -824,6 +833,39 @@ class OptunaOptimizer:
         except Exception as e:
             logger.error(f"Failed to save study to database: {e}")
             return {"success": False, "error": str(e)}
+
+    async def _resolve_experiment_uuid(self, client: Any) -> Optional[str]:
+        """Map ``self.experiment_id`` onto an ``ml_experiments.id`` UUID, or None (#2207).
+
+        The tuner hands the optimizer the pipeline's experiment LABEL (e.g.
+        ``tier0_e2e_dd343e1e`` / ``exp_kisq_us_...``), which scope_definer stores in
+        ``ml_experiments.mlflow_experiment_id`` — not the row UUID that
+        ``ml_hpo_studies.experiment_id`` references. Writing the label raised
+        ``invalid input syntax for type uuid`` on every attempt. A real UUID is
+        passed through; a label is looked up the same way ``model_trainer/agent.py``
+        resolves ``ml_training_runs.experiment_id``; no row means NULL — never a
+        fabricated id (the study_name still carries the label).
+        """
+        label = self.experiment_id
+        if not label:
+            return None
+        try:
+            return str(uuid.UUID(str(label)))
+        except (ValueError, AttributeError, TypeError):
+            pass
+        try:
+            from src.repositories.ml_experiment import MLExperimentRepository
+
+            experiment = await MLExperimentRepository(supabase_client=client).get_by_mlflow_id(
+                str(label), include_synthetic=True
+            )
+        except Exception as e:  # noqa: BLE001 — a failed lookup degrades to NULL
+            logger.warning(f"HPO study: could not resolve experiment {label!r}: {e}")
+            return None
+        if experiment is None or not getattr(experiment, "id", None):
+            logger.info(f"HPO study: no ml_experiments row for label {label!r}; experiment_id=NULL")
+            return None
+        return str(experiment.id)
 
     async def _save_trials_to_database(
         self,
@@ -867,7 +909,13 @@ class OptunaOptimizer:
                     "system_attrs": trial.system_attrs or {},
                 }
 
-                await client.table("ml_hpo_trials").insert(trial_record).execute()
+                # (study_id, trial_number) is UNIQUE — upsert so a re-run of the same
+                # study (see save_to_database) refreshes rather than fails (#2207).
+                await (
+                    client.table("ml_hpo_trials")
+                    .upsert(trial_record, on_conflict="study_id,trial_number")
+                    .execute()
+                )
                 saved_count += 1
 
             except Exception as e:
