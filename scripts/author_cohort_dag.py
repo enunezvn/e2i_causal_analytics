@@ -66,6 +66,31 @@ DEFAULT_OUT_ROOT = PROJECT_ROOT / "docs" / "layer4" / "generated"
 MANIFESTS = ("optum_mart", "optum")
 OPTUM_RESEARCH_DOC = "docs/layer4/optum_initiation_attestation_research.md"
 
+#: Lane E FeatureRoleRecord contract (PR #2226): the fields the author's
+#: constraints read, all REQUIRED on every panel record.
+_PANEL_RECORD_REQUIRED = (
+    "feature",
+    "layer_1",
+    "layer_2",
+    "layer_3",
+    "layer_4",
+    "ensemble",
+    "leak_verdict",
+    "leak_source",
+    "review_required",
+)
+_PANEL_L1_VERDICTS = ("pre_index", "post_index", "no_contract")
+_PANEL_ROLES_OR_NONE = (
+    None,
+    "ancestor",
+    "confounder",
+    "instrument",
+    "mediator",
+    "collider",
+    "descendant",
+)
+_PANEL_LEAK_SOURCES = (None, "layer_1_post_index", "layer_3_high")
+
 #: The stated assumption of run (a), confirmed by the reviewer as a checklist item.
 ESCALATION_ASSUMPTION = (
     "Remibrutinib enters at the same decision point as the biologics (second line "
@@ -180,12 +205,37 @@ def _load_panel(path: Path, *, manifest: str, treatment: str, outcome: str) -> d
             raise ValueError(f"panel {path}: record {key!r} is not an object")
         if rec.get("feature") != key:
             raise ValueError(f"panel {path}: record {key!r} carries feature={rec.get('feature')!r}")
+        # Every safety-critical field must be PRESENT with the right type: a
+        # missing field would silently default the Layer-1 veto, the leak
+        # exclusion or the cross-check away (codex r2 HIGH 2).
+        for field_name in _PANEL_RECORD_REQUIRED:
+            if field_name not in rec:
+                raise ValueError(f"panel {path}: record {key!r} lacks {field_name!r}")
         for flag in ("leak_verdict", "review_required"):
-            if not isinstance(rec.get(flag, False), bool):
+            if not isinstance(rec[flag], bool):
                 raise ValueError(f"panel {path}: record {key!r}.{flag} is not a bool")
         for layer in ("layer_1", "layer_2", "layer_3", "layer_4", "ensemble"):
-            if not isinstance(rec.get(layer, {}), dict):
+            if not isinstance(rec[layer], dict):
                 raise ValueError(f"panel {path}: record {key!r}.{layer} is not an object")
+        if rec["layer_1"].get("verdict") not in _PANEL_L1_VERDICTS:
+            raise ValueError(
+                f"panel {path}: record {key!r}.layer_1.verdict={rec['layer_1'].get('verdict')!r} "
+                f"is not one of {_PANEL_L1_VERDICTS}"
+            )
+        if not isinstance(rec["layer_3"].get("ran"), bool):
+            raise ValueError(f"panel {path}: record {key!r}.layer_3.ran is not a bool")
+        if "final_role" not in rec["ensemble"] or "decided_by" not in rec["ensemble"]:
+            raise ValueError(f"panel {path}: record {key!r}.ensemble lacks final_role/decided_by")
+        if rec["ensemble"]["final_role"] not in _PANEL_ROLES_OR_NONE:
+            raise ValueError(
+                f"panel {path}: record {key!r}.ensemble.final_role="
+                f"{rec['ensemble']['final_role']!r} is not a role"
+            )
+        if rec["leak_source"] not in _PANEL_LEAK_SOURCES:
+            raise ValueError(
+                f"panel {path}: record {key!r}.leak_source={rec['leak_source']!r} is not one of "
+                f"{_PANEL_LEAK_SOURCES}"
+            )
     return payload
 
 
@@ -421,6 +471,7 @@ def render_review_md(
     guide_hash: str,
     assumption: Optional[str],
     diff: Optional[dict[str, Any]],
+    tree: Optional[dict[str, Any]] = None,
 ) -> str:
     by_feat = {r.feature_name: r for r in records}
     lines = [
@@ -429,6 +480,8 @@ def render_review_md(
         f"- treatment `{treatment}` = {treatment_label}",
         f"- outcome `{outcome}` = {outcome_label}",
         f"- author LM: `{lm_label}`; prompt hash `{prompt_hash}`; guide hash `{guide_hash}`",
+        f"- tree: commit {(tree or {}).get('commit')} "
+        f"(dirty src/scripts/tests: {(tree or {}).get('dirty_src_scripts_tests')})",
         "- provenance: `machine` on every fragment (audit-only until this review is approved)",
         f"- features authored: {len(records)}; latents: {', '.join(dag.latent_nodes) or 'none'}",
         f"- is a DAG: {dag.is_dag}; admissible observed adjustment set: {dag.adjustment_valid}",
@@ -556,7 +609,12 @@ def main(argv: Optional[list[str]] = None) -> int:
     outcome_label = args.outcome_label or args.outcome
     features = [f.strip() for f in args.features.split(",") if f.strip()] if args.features else None
 
-    from src.data.kg.structural_author import GUIDE_HASH, author_feature, prompt_hash
+    from src.data.kg.structural_author import (
+        GUIDE_HASH,
+        author_feature,
+        prompt_hash,
+        tree_identity,
+    )
     from src.ml.causal_role_dgp.assembler import assemble_cohort_dag
 
     panel = None
@@ -661,6 +719,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         "n_features": len(records),
         "panel": str(args.panel) if args.panel else None,
         "provenance": "machine",
+        "tree": tree_identity(PROJECT_ROOT),
     }
     attestations_path = out_dir / "attestations.json"
     attestations_path.write_text(
@@ -691,6 +750,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             lm_label=lm_label,
             prompt_hash=meta["prompt_hash"],
             guide_hash=GUIDE_HASH,
+            tree=meta["tree"],
             assumption=assumption,
             diff=diff,
         ),

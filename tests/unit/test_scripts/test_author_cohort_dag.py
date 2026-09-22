@@ -63,6 +63,9 @@ def test_fake_dry_run_on_optum_writes_artefacts_and_diffs_the_manifest(tmp_path,
 
     att = json.loads((out / "attestations.json").read_text())
     assert att["meta"]["lm"] == "fake" and att["meta"]["provenance"] == "machine"
+    # codex r2 HIGH 4: every capture names the tree it ran on.
+    assert len(att["meta"]["tree"]["commit"]) == 40
+    assert isinstance(att["meta"]["tree"]["dirty_src_scripts_tests"], bool)
     assert [r["feature_name"] for r in att["records"]] == ["age_at_index", "zip3"]
     assert all(r["model_id"] == "dummy" and r["provenance"] == "machine" for r in att["records"])
     # The brief is the Layer-4 input pair with the causal treatment appended.
@@ -250,7 +253,7 @@ def _record(feature, **over):
         "layer_2": {},
         "layer_3": {"ran": False},
         "layer_4": {"fired": False},
-        "ensemble": {"final_role": None},
+        "ensemble": {"final_role": None, "decided_by": "abstain"},
         "leak_verdict": False,
         "leak_source": None,
         "review_required": False,
@@ -275,6 +278,36 @@ def test_panel_records_are_validated_strictly(tmp_path):
         mod._load_panel(panel, manifest="optum", treatment=OPTUM_T, outcome=OPTUM_Y)
     panel.write_text(json.dumps(_panel_payload({"age_at_index": "nope"})))
     with pytest.raises(ValueError, match="is not an object"):
+        mod._load_panel(panel, manifest="optum", treatment=OPTUM_T, outcome=OPTUM_Y)
+    # codex r2 HIGH 2: a record that OMITS a safety-critical field is refused,
+    # never defaulted (that would drop the veto / leak exclusion / cross-check).
+    for missing in (
+        "layer_1",
+        "layer_3",
+        "ensemble",
+        "leak_verdict",
+        "leak_source",
+        "review_required",
+    ):
+        rec = _record("age_at_index")
+        del rec[missing]
+        panel.write_text(json.dumps(_panel_payload({"age_at_index": rec})))
+        with pytest.raises(ValueError, match=f"lacks '{missing}'"):
+            mod._load_panel(panel, manifest="optum", treatment=OPTUM_T, outcome=OPTUM_Y)
+    panel.write_text(
+        json.dumps(_panel_payload({"age_at_index": _record("age_at_index", layer_1={})}))
+    )
+    with pytest.raises(ValueError, match="layer_1.verdict=None is not one of"):
+        mod._load_panel(panel, manifest="optum", treatment=OPTUM_T, outcome=OPTUM_Y)
+    panel.write_text(
+        json.dumps(_panel_payload({"age_at_index": _record("age_at_index", ensemble={})}))
+    )
+    with pytest.raises(ValueError, match="ensemble lacks final_role/decided_by"):
+        mod._load_panel(panel, manifest="optum", treatment=OPTUM_T, outcome=OPTUM_Y)
+    panel.write_text(
+        json.dumps(_panel_payload({"age_at_index": _record("age_at_index", leak_source="layer_9")}))
+    )
+    with pytest.raises(ValueError, match="leak_source='layer_9' is not one of"):
         mod._load_panel(panel, manifest="optum", treatment=OPTUM_T, outcome=OPTUM_Y)
     # Valid panel, but it does not cover every requested feature → refused.
     panel.write_text(json.dumps(_panel_payload({"age_at_index": _record("age_at_index")})))
