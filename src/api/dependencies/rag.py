@@ -4,6 +4,7 @@ Provides the HybridRetriever, embedding service, and entity extractor
 used by the orchestrator's RAG context node.
 """
 
+import asyncio
 import logging
 from typing import Any, Dict, Optional
 
@@ -49,7 +50,9 @@ async def get_rag_dependencies() -> Dict[str, Any]:
 
         config = RAGConfig.from_env()
         embedding_service = OpenAIEmbeddingClient(EmbeddingConfig.from_env())
-        entity_extractor = EntityExtractor()
+        # Lane 2 (2026-09-22): from_default performs a bounded sync RxNav round at
+        # first build; keep it off the event loop so other requests are not stalled.
+        entity_extractor = await asyncio.to_thread(EntityExtractor)
         retriever = HybridRetriever(
             supabase_client=supabase_client,
             falkordb_client=falkordb_client,
