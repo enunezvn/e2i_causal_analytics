@@ -365,7 +365,10 @@ describe('ExperimentRecommendations (Proposed experiments, #2206)', () => {
 
     mockProposals(proposalsResponse([], { total_linked: 4 }));
     render(<ExperimentRecommendations />, { wrapper: createWrapper() });
-    expect(screen.getByText(/already linked to an experiment \(4 linked\)/i)).toBeInTheDocument();
+    // codex r2 #4: total_linked counts the linked half of the PROPOSAL population only.
+    expect(
+      screen.getByText(/All 4 deploy\/refine simulations are already linked to an experiment/i)
+    ).toBeInTheDocument();
   });
 
   it('shows a labeled error state when the proposals request failed', () => {

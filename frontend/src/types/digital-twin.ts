@@ -1010,7 +1010,7 @@ export interface ProposedExperimentsResponse {
   outcome_measurable_in_real_mode: boolean;
   /** Unlinked deploy/refine simulations the caller may see. */
   total_proposed: number;
-  /** Completed simulations that already have an experiment. */
+  /** Completed deploy/refine simulations that already have an experiment (the linked half of the proposal population). */
   total_linked: number;
   /** Real (non-synthetic) ml_experiments running with an intervention channel — 0 today. */
   real_experiments_running: number;

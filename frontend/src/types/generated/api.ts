@@ -16070,7 +16070,7 @@ export interface components {
             total_proposed: number;
             /**
              * Total Linked
-             * @description Completed simulations that already have an experiment (the closed half).
+             * @description Completed deploy/refine simulations that already have an experiment — the linked half of the same population total_proposed counts the unlinked half of.
              */
             total_linked: number;
             /**

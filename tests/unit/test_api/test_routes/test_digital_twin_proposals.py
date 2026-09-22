@@ -62,7 +62,9 @@ def _model_row(model_id, fidelity_score=None):
     }
 
 
-def _client(running_count=0, insert_rows=None, insert_error=None, measurable_count=0):
+def _client(
+    running_count=0, insert_rows=None, insert_error=None, measurable_count=0, delete_rows=None
+):
     """repo.client: the count chains (running experiments, then real rows carrying the
     twin outcome — in the order the route issues them), the insert chain and the
     delete chain, all async."""
@@ -70,14 +72,28 @@ def _client(running_count=0, insert_rows=None, insert_error=None, measurable_cou
     for name in ("select", "eq", "limit", "order", "delete"):
         getattr(chain, name).return_value = chain
     chain.not_.is_.return_value = chain
-    counts = iter([running_count, measurable_count] + [0] * 10)
-    chain.execute = AsyncMock(side_effect=lambda: MagicMock(data=[], count=next(counts)))
+
+    # Count results by TABLE, not by call order: the route reads business_metrics
+    # (measurability) and ml_experiments (running count) in whatever order.
+    def _execute():
+        table = client.table.call_args.args[0] if client.table.call_args else ""
+        count = measurable_count if table == "business_metrics" else running_count
+        return MagicMock(data=[], count=count)
+
+    chain.execute = AsyncMock(side_effect=_execute)
     insert_chain = MagicMock()
     if insert_error is not None:
         insert_chain.execute = AsyncMock(side_effect=insert_error)
     else:
         insert_chain.execute = AsyncMock(return_value=MagicMock(data=insert_rows or []))
     chain.insert.return_value = insert_chain
+    # The compensating delete after a lost claim returns the deleted row(s).
+    delete_chain = MagicMock()
+    delete_chain.eq.return_value = delete_chain
+    delete_chain.execute = AsyncMock(
+        return_value=MagicMock(data=delete_rows if delete_rows is not None else [{"id": "deleted"}])
+    )
+    chain.delete.return_value = delete_chain
     client = MagicMock()
     client.table.return_value = chain
     return client, chain
@@ -89,8 +105,9 @@ def _repo(proposed, *, linked=0, models=None, sim=None, link_ok=True, client=Non
         client=client or _client()[0],
         list_proposed_experiments=AsyncMock(return_value=proposed),
         count_linked_simulations=AsyncMock(return_value=linked),
-        get_model=AsyncMock(side_effect=lambda mid: models.get(str(mid))),
-        get_simulation=AsyncMock(return_value=sim),
+        # The routes use the STRICT reads (codex r2 #2): None = no row; failures raise.
+        require_model=AsyncMock(side_effect=lambda mid: models.get(str(mid))),
+        require_simulation=AsyncMock(return_value=sim),
         claim_experiment_link=AsyncMock(
             side_effect=link_ok if isinstance(link_ok, Exception) else None,
             return_value=None if isinstance(link_ok, Exception) else link_ok,
@@ -263,6 +280,33 @@ class TestListProposedExperiments:
             asyncio.run(list_proposed_experiments(brand=None, user=ADMIN))
         assert ei.value.status_code == 500
 
+    def test_real_mode_counts_exclude_synthetic_even_on_a_showcase_deployment(self):
+        """codex r2 #1: apply_provenance_filter deliberately drops the is_synthetic
+        predicate when E2I_INCLUDE_SYNTHETIC is set. These two diagnostics are
+        explicitly REAL-mode statements, so they filter is_synthetic=false themselves."""
+        from src.api.routes.digital_twin_proposals import list_proposed_experiments
+
+        client, chain = _client(running_count=0, measurable_count=0)
+        repo = _repo([_sim()], client=client)
+        with (
+            _patched(repo),
+            patch("src.repositories.provenance.deployment_includes_synthetic", return_value=True),
+        ):
+            resp = asyncio.run(list_proposed_experiments(brand=None, user=ADMIN))
+        assert resp.real_experiments_running == 0
+        assert resp.outcome_measurable_in_real_mode is False
+        assert [c.args for c in chain.eq.call_args_list].count(("is_synthetic", False)) >= 2
+
+    def test_a_failed_model_lookup_is_a_500_not_an_unvalidated_label(self):
+        """codex r2 #2: a database failure must not read as 'unvalidated'."""
+        from src.api.routes.digital_twin_proposals import list_proposed_experiments
+
+        repo = _repo([_sim()])
+        repo.require_model = AsyncMock(side_effect=RuntimeError("connection reset"))
+        with _patched(repo), pytest.raises(HTTPException) as ei:
+            asyncio.run(list_proposed_experiments(brand=None, user=ADMIN))
+        assert ei.value.status_code == 500
+
     def test_one_model_lookup_per_distinct_model(self):
         from src.api.routes.digital_twin_proposals import list_proposed_experiments
 
@@ -271,7 +315,7 @@ class TestListProposedExperiments:
         repo = _repo(rows)
         with _patched(repo):
             asyncio.run(list_proposed_experiments(brand=None, user=ADMIN))
-        assert repo.get_model.await_count == 2
+        assert repo.require_model.await_count == 2
 
 
 # =============================================================================
@@ -287,6 +331,43 @@ class TestCreateDraftExperiment:
         with _patched(repo), pytest.raises(HTTPException) as ei:
             asyncio.run(create_draft_experiment(str(uuid4()), user=ADMIN))
         assert ei.value.status_code == 404
+
+    def test_a_failed_simulation_lookup_is_a_500_not_a_404(self):
+        """codex r2 #2: a database failure must not read as 'no such simulation'."""
+        from src.api.routes.digital_twin_proposals import create_draft_experiment
+
+        repo = _repo([], sim=None)
+        repo.require_simulation = AsyncMock(side_effect=RuntimeError("connection reset"))
+        with _patched(repo), pytest.raises(HTTPException) as ei:
+            asyncio.run(create_draft_experiment(str(uuid4()), user=ADMIN))
+        assert ei.value.status_code == 500
+
+    def test_the_measurability_read_happens_before_the_insert(self):
+        """codex r2 #5: a diagnostic read that fails AFTER the committed draft would
+        turn a success into a 500 (and the retry into a 409). It runs first."""
+        from src.api.routes.digital_twin_proposals import create_draft_experiment
+
+        sim = _sim()
+        client, _chain = _client(insert_rows=[{"id": str(uuid4())}])
+        repo = _repo([], sim=sim, client=client)
+        with _patched(repo):
+            asyncio.run(create_draft_experiment(sim["simulation_id"], user=ADMIN))
+        tables = [c.args[0] for c in client.table.call_args_list]
+        assert tables.index("business_metrics") < tables.index("ml_experiments")
+        assert tables.count("business_metrics") == 1
+
+    def test_a_failing_measurability_read_is_a_500_before_any_mutation(self):
+        from src.api.routes.digital_twin_proposals import create_draft_experiment
+
+        sim = _sim()
+        client, chain = _client(insert_rows=[{"id": str(uuid4())}])
+        chain.execute = AsyncMock(side_effect=RuntimeError("connection reset"))
+        repo = _repo([], sim=sim, client=client)
+        with _patched(repo), pytest.raises(HTTPException) as ei:
+            asyncio.run(create_draft_experiment(sim["simulation_id"], user=ADMIN))
+        assert ei.value.status_code == 500
+        chain.insert.assert_not_called()
+        repo.claim_experiment_link.assert_not_awaited()
 
     def test_out_of_grant_simulation_is_404_not_403(self):
         """Do not leak another tenant's simulation."""
@@ -387,13 +468,45 @@ class TestCreateDraftExperiment:
         client, chain = _client(insert_rows=[{"id": exp_id}])
         repo = _repo([], sim=sim, client=client, link_ok=False)
         # After the lost claim the route re-reads the simulation: it is linked now.
-        repo.get_simulation = AsyncMock(side_effect=[sim, {**sim, "experiment_design_id": winner}])
+        repo.require_simulation = AsyncMock(
+            side_effect=[sim, {**sim, "experiment_design_id": winner}]
+        )
         with _patched(repo), pytest.raises(HTTPException) as ei:
             asyncio.run(create_draft_experiment(sim["simulation_id"], user=ADMIN))
         assert ei.value.status_code == 409
         assert winner in str(ei.value.detail)
         chain.delete.assert_called_once()
-        chain.eq.assert_any_call("id", exp_id)
+        chain.delete.return_value.eq.assert_any_call("id", exp_id)
+        chain.delete.return_value.eq.assert_any_call("status", "draft")
+
+    def test_a_lost_claim_whose_cleanup_removed_nothing_is_a_500_naming_the_draft(self):
+        """codex r2 #3: the 409 must PROVE the orphan is gone; a delete that removed no
+        row (or raised) leaves a draft the caller must be told about."""
+        from src.api.routes.digital_twin_proposals import create_draft_experiment
+
+        sim = _sim()
+        exp_id = str(uuid4())
+        client, _chain = _client(insert_rows=[{"id": exp_id}], delete_rows=[])
+        repo = _repo([], sim=sim, client=client, link_ok=False)
+        with _patched(repo), pytest.raises(HTTPException) as ei:
+            asyncio.run(create_draft_experiment(sim["simulation_id"], user=ADMIN))
+        assert ei.value.status_code == 500
+        assert exp_id in str(ei.value.detail)
+
+    def test_a_lost_claim_with_no_visible_winner_is_a_500_not_a_409_naming_none(self):
+        from src.api.routes.digital_twin_proposals import create_draft_experiment
+
+        sim = _sim()
+        exp_id = str(uuid4())
+        client, _chain = _client(insert_rows=[{"id": exp_id}])
+        repo = _repo([], sim=sim, client=client, link_ok=False)
+        repo.require_simulation = AsyncMock(
+            side_effect=[sim, {**sim, "experiment_design_id": None}]
+        )
+        with _patched(repo), pytest.raises(HTTPException) as ei:
+            asyncio.run(create_draft_experiment(sim["simulation_id"], user=ADMIN))
+        assert ei.value.status_code == 500
+        assert "None" not in str(ei.value.detail)
 
     def test_a_claim_that_raises_is_a_500_naming_both_ids_never_a_200(self):
         from src.api.routes.digital_twin_proposals import create_draft_experiment

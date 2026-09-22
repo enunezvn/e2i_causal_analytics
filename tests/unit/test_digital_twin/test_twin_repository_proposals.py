@@ -71,6 +71,10 @@ async def test_count_linked_counts_completed_simulations_with_an_experiment():
     chain.eq.assert_any_call("simulation_status", "completed")
     chain.not_.is_.assert_called_once_with("experiment_design_id", "null")
     chain.eq.assert_any_call("brand", "Fabhalta")
+    # codex r2 #4: the linked count is the linked half of the PROPOSAL population
+    # (deploy/refine), so "N linked" and "0 proposed" describe one set; a linked
+    # 'skip' run is not counted as a proposal that got its experiment.
+    chain.in_.assert_called_once_with("recommendation", ["deploy", "refine"])
 
 
 @pytest.mark.asyncio
@@ -144,3 +148,53 @@ async def test_facade_forwards_claim_experiment_link():
     sim_id, exp_id = uuid4(), uuid4()
     assert await repo.claim_experiment_link(sim_id, exp_id) is True
     store.claim_experiment_link.assert_awaited_once_with(sim_id, exp_id)
+
+
+@pytest.mark.asyncio
+async def test_require_simulation_and_require_model_propagate_failures_and_distinguish_no_row():
+    """codex r2 #2: get_simulation / get_model swallow every query failure into None,
+    which the proposals routes would label 'unvalidated' or 404. The strict reads
+    return None ONLY for "no such row" and let a failure propagate."""
+    from uuid import uuid4
+
+    from src.digital_twin.twin_repository import TwinModelRepository
+
+    sim_id, model_id = uuid4(), uuid4()
+    client, chain = _chain([{"simulation_id": str(sim_id)}])
+    sims = SimulationRepository(supabase_client=client)
+    assert await sims.require_simulation(sim_id) == {"simulation_id": str(sim_id)}
+    chain.eq.assert_any_call("simulation_id", str(sim_id))
+
+    chain.execute = AsyncMock(return_value=MagicMock(data=[]))
+    assert await sims.require_simulation(sim_id) is None
+
+    chain.execute = AsyncMock(side_effect=RuntimeError("connection reset"))
+    with pytest.raises(RuntimeError):
+        await sims.require_simulation(sim_id)
+
+    mclient, mchain = _chain([{"model_id": str(model_id), "fidelity_score": None}])
+    models = TwinModelRepository(supabase_client=mclient)
+    assert (await models.require_model(model_id))["model_id"] == str(model_id)
+    mchain.eq.assert_any_call("model_id", str(model_id))
+    mchain.execute = AsyncMock(side_effect=RuntimeError("connection reset"))
+    with pytest.raises(RuntimeError):
+        await models.require_model(model_id)
+
+
+@pytest.mark.asyncio
+async def test_facade_forwards_the_strict_reads():
+    from uuid import uuid4
+
+    from src.digital_twin.twin_repository import TwinModelRepository
+
+    repo = TwinRepository(supabase_client=MagicMock())
+    sims = create_autospec(SimulationRepository, instance=True)
+    models = create_autospec(TwinModelRepository, instance=True)
+    sims.require_simulation = AsyncMock(return_value={"simulation_id": "s"})
+    models.require_model = AsyncMock(return_value={"model_id": "m"})
+    repo.simulations, repo.models = sims, models
+    sim_id, model_id = uuid4(), uuid4()
+    assert await repo.require_simulation(sim_id) == {"simulation_id": "s"}
+    assert await repo.require_model(model_id) == {"model_id": "m"}
+    sims.require_simulation.assert_awaited_once_with(sim_id)
+    models.require_model.assert_awaited_once_with(model_id)

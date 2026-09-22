@@ -99,19 +99,21 @@ async def _twin_repo() -> Any:
 
 
 async def _count_real_running_experiments(client: Any, brand: Optional[str]) -> int:
-    """The real A/B portfolio: the Home tile's own predicate, real mode, scoped to the
-    caller's brand grant like the other counts (codex r1 #6)."""
-    from src.repositories.provenance import apply_provenance_filter
-
+    """The real A/B portfolio: the Home tile's predicate, scoped to the caller's brand
+    grant like the other counts (codex r1 #6). REAL means is_synthetic=false here
+    regardless of deployment mode — apply_provenance_filter drops that predicate on a
+    showcase instance (E2I_INCLUDE_SYNTHETIC), which would count the 360 synthetic
+    running rows as real (codex r2 #1)."""
     query = (
         client.table("ml_experiments")
         .select("id", count="exact")
         .eq("status", "running")
         .not_.is_("intervention_channel", "null")
+        .eq("is_synthetic", False)
     )
     if brand:
         query = query.eq("brand", brand)
-    result = await apply_provenance_filter(query).execute()
+    result = await query.execute()
     return int(result.count or 0)
 
 
@@ -123,16 +125,17 @@ async def _outcome_measurable_in_real_mode(client: Any) -> bool:
     outcome feed (ExperimentOutcomeRepository.load_arrays) excludes synthetic rows —
     so a real draft's final analysis cannot measure it today. Counted, never assumed.
     """
-    from src.repositories.provenance import apply_provenance_filter
-
+    # is_synthetic=false stated directly, not via apply_provenance_filter, which
+    # skips the predicate on a showcase deployment (codex r2 #1).
     query = (
         client.table("business_metrics")
         .select("hcp_id", count="exact")
         .eq("metric_type", "per_hcp_rollup")
         .not_.is_(COHORT_OUTCOME_COLUMN, "null")
+        .eq("is_synthetic", False)
         .limit(1)
     )
-    result = await apply_provenance_filter(query).execute()
+    result = await query.execute()
     return int(result.count or 0) > 0
 
 
@@ -166,16 +169,13 @@ async def list_proposed_experiments(
         running = await _count_real_running_experiments(repo.client, effective_brand)
         measurable = await _outcome_measurable_in_real_mode(repo.client)
 
-        # One model lookup per distinct model; a missing row validates nothing.
+        # One STRICT model lookup per distinct model (codex r2 #2): a missing row
+        # validates nothing; a failed lookup is a 500, never an 'unvalidated' label.
         model_rows: Dict[str, Optional[Dict[str, Any]]] = {}
         for row in rows:
             model_id = str(row.get("model_id") or "")
             if model_id and model_id not in model_rows:
-                try:
-                    model_rows[model_id] = await repo.get_model(UUID(model_id))
-                except Exception as model_err:  # pragma: no cover - defensive
-                    logger.warning("Model lookup failed for proposal: %s", model_err)
-                    model_rows[model_id] = None
+                model_rows[model_id] = await repo.require_model(UUID(model_id))
 
         items: List[ProposedExperimentItem] = []
         for row in sorted(rows, key=_proposal_sort_key):
@@ -242,7 +242,13 @@ async def create_draft_experiment(
         raise HTTPException(status_code=422, detail="simulation_id must be a UUID.") from bad
 
     repo = await _twin_repo()
-    sim = await repo.get_simulation(sim_uuid)
+    # Strict read (codex r2 #2): None only when there is no such row; a failure
+    # is a 500, never a false 404.
+    try:
+        sim = await repo.require_simulation(sim_uuid)
+    except Exception as e:
+        logger.error(f"Simulation lookup failed for {simulation_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to read the simulation")
     if not sim:
         raise HTTPException(status_code=404, detail=f"Simulation {simulation_id} not found")
 
@@ -273,9 +279,17 @@ async def create_draft_experiment(
 
     intervention_type = str(sim.get("intervention_type") or "unknown")
     weeks = sim.get("recommended_duration_weeks")
-    fidelity = _stored_fidelity_fields(
-        await repo.get_model(UUID(str(sim["model_id"]))) if sim.get("model_id") else None
-    )
+    # Every diagnostic read happens BEFORE the mutation (codex r2 #5): a read that
+    # fails after the committed draft would turn a success into a 500.
+    try:
+        model_row = (
+            await repo.require_model(UUID(str(sim["model_id"]))) if sim.get("model_id") else None
+        )
+        measurable = await _outcome_measurable_in_real_mode(repo.client)
+    except Exception as e:
+        logger.error(f"Pre-draft reads failed for simulation {simulation_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to read the model / outcome state")
+    fidelity = _stored_fidelity_fields(model_row)
     ate = float(sim.get("simulated_ate") or 0.0)
     ci_lo, ci_hi = sim.get("simulated_ci_lower"), sim.get("simulated_ci_upper")
     experiment_name = f"twin_proposal_{sim_brand}_{intervention_type}_{str(sim_uuid)[:8]}"
@@ -336,9 +350,30 @@ async def create_draft_experiment(
             ),
         )
     if not claimed:
-        await _delete_orphan_draft(repo.client, experiment_id)
-        current = await repo.get_simulation(sim_uuid)
+        # The 409 must PROVE both halves (codex r2 #3): the orphan is gone AND the
+        # winner is visible. Anything less is a 500 naming the unresolved draft.
+        try:
+            removed = await _delete_orphan_draft(repo.client, experiment_id)
+            current = await repo.require_simulation(sim_uuid)
+        except Exception as e:
+            logger.error(f"Post-lost-claim cleanup failed for draft {experiment_id}: {e}")
+            removed, current = False, None
         winner = (current or {}).get("experiment_design_id")
+        if not removed or not winner:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"Simulation {simulation_id} was claimed by a concurrent request, and the "
+                    f"draft {experiment_id} created here "
+                    + ("could not be removed" if not removed else "was removed")
+                    + (
+                        "; the winning experiment could not be read"
+                        if not winner
+                        else f"; it is linked to experiment {winner}"
+                    )
+                    + ". Resolve the draft by hand."
+                ),
+            )
         raise HTTPException(
             status_code=409,
             detail=(
@@ -347,7 +382,6 @@ async def create_draft_experiment(
             ),
         )
 
-    measurable = await _outcome_measurable_in_real_mode(repo.client)
     return DraftExperimentResponse(
         experiment_id=str(experiment_id),
         simulation_id=str(sim_uuid),
@@ -366,19 +400,18 @@ async def create_draft_experiment(
     )
 
 
-async def _delete_orphan_draft(client: Any, experiment_id: UUID) -> None:
-    """Best effort: remove the draft a lost claim just inserted. A draft is never
-    counted as running anywhere, so a failure here is logged, not raised."""
-    try:
-        await (
-            client.table("ml_experiments")
-            .delete()
-            .eq("id", str(experiment_id))
-            .eq("status", DRAFT_STATUS)
-            .execute()
-        )
-    except Exception as e:  # pragma: no cover - defensive
-        logger.warning("Could not remove orphan draft %s after a lost claim: %s", experiment_id, e)
+async def _delete_orphan_draft(client: Any, experiment_id: UUID) -> bool:
+    """Remove the draft a lost claim just inserted. True only when a row was deleted
+    (PostgREST returns the deleted representation); a failure propagates to the
+    caller, which reports the unresolved draft (codex r2 #3)."""
+    result = await (
+        client.table("ml_experiments")
+        .delete()
+        .eq("id", str(experiment_id))
+        .eq("status", DRAFT_STATUS)
+        .execute()
+    )
+    return bool(getattr(result, "data", None))
 
 
 def _round4(value: Any) -> Optional[float]:

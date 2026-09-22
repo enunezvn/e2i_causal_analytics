@@ -550,7 +550,10 @@ class ProposedExperimentsResponse(BaseModel):
         description="Unlinked deploy/refine simulations the caller may see."
     )
     total_linked: int = Field(
-        description="Completed simulations that already have an experiment (the closed half)."
+        description=(
+            "Completed deploy/refine simulations that already have an experiment — the "
+            "linked half of the same population total_proposed counts the unlinked half of."
+        ),
     )
     real_experiments_running: int = Field(
         description=(

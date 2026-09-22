@@ -232,6 +232,21 @@ class TwinModelRepository(BaseRepository):
             logger.error(f"Failed to list active models: {e}")
             return []
 
+    async def require_model(self, model_id: UUID) -> Optional[Dict[str, Any]]:
+        """The model row from the database (no cache), or None ONLY when no such row
+        exists; a query failure propagates (codex r2 #2). ``get_model`` swallows
+        failures into None, which a fidelity derivation would label 'unvalidated'."""
+        if not self.client:
+            return None
+        result = await (
+            self.client.table(self.table_name)
+            .select("*")
+            .eq("model_id", str(model_id))
+            .limit(1)
+            .execute()
+        )
+        return result.data[0] if result.data else None
+
     async def deactivate_model(
         self,
         model_id: UUID,
@@ -641,16 +656,35 @@ class SimulationRepository(BaseRepository):
         A query failure propagates (codex r1 #3)."""
         if not self.client:
             return 0
+        # The linked half of the PROPOSAL population (deploy/refine) — so "N linked"
+        # and "0 proposed" describe one set (codex r2 #4); a linked 'skip' run is not
+        # a proposal that got its experiment.
         query = (
             self.client.table(self.table_name)
             .select("simulation_id", count="exact")
             .eq("simulation_status", "completed")
+            .in_("recommendation", list(self.PROPOSAL_RECOMMENDATIONS))
             .not_.is_("experiment_design_id", "null")
         )
         if brand:
             query = query.eq("brand", brand)
         result = await query.execute()
         return int(result.count or 0)
+
+    async def require_simulation(self, simulation_id: UUID) -> Optional[Dict[str, Any]]:
+        """The raw row, or None ONLY when no such row exists; a query failure
+        propagates (codex r2 #2). ``get_simulation`` swallows failures into None,
+        which a route would misreport as 404."""
+        if not self.client:
+            return None
+        result = await (
+            self.client.table(self.table_name)
+            .select("*")
+            .eq("simulation_id", str(simulation_id))
+            .limit(1)
+            .execute()
+        )
+        return result.data[0] if result.data else None
 
     async def claim_experiment_link(self, simulation_id: UUID, experiment_design_id: UUID) -> bool:
         """Link a simulation to an experiment ONLY if it is still unlinked (codex r1 #2).
@@ -1202,6 +1236,16 @@ class TwinRepository:
         return await self.simulations.claim_experiment_link(  # type: ignore[no-any-return]
             simulation_id, experiment_design_id
         )
+
+    async def require_simulation(self, simulation_id: UUID) -> Optional[Dict[str, Any]]:
+        """Strict read: None only for no row; failures propagate (#2206 item C)."""
+        return await self.simulations.require_simulation(  # type: ignore[no-any-return]
+            simulation_id
+        )
+
+    async def require_model(self, model_id: UUID) -> Optional[Dict[str, Any]]:
+        """Strict read: None only for no row; failures propagate (#2206 item C)."""
+        return await self.models.require_model(model_id)  # type: ignore[no-any-return]
 
     async def save_fidelity_record(self, record: FidelityRecord) -> UUID:
         """Save fidelity tracking record."""

@@ -521,7 +521,7 @@ export function ExperimentRecommendations({ className }: ExperimentRecommendatio
               title="No proposed experiments"
               description={
                 totalLinked > 0
-                  ? `Every completed simulation is already linked to an experiment (${totalLinked} linked).`
+                  ? `All ${totalLinked} deploy/refine simulations are already linked to an experiment.`
                   : 'No completed digital-twin simulation recommends deploy or refine yet. Run one on the Digital Twin page.'
               }
             />
