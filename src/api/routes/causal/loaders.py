@@ -37,6 +37,7 @@ from .datasets import (
     _CAUSAL_NUMERIC_DERIVATIONS,
     _CAUSAL_PHYSICAL_TABLE,
     _NBA_JOINED_COVARIATES,
+    apply_dataset_provenance_filter,
 )
 
 logger = logging.getLogger(__name__)
@@ -708,7 +709,9 @@ async def _load_agent_estimation_frame(
     if brand:
         fetch_cols = list(dict.fromkeys([*select_cols, brand_col]))
     query = client.table(_CAUSAL_PHYSICAL_TABLE.get(dataset, dataset)).select(",".join(fetch_cols))
-    query = apply_provenance_filter(query)
+    # Dataset-aware: a synthetic-backed dataset keeps the real-mode predicate
+    # even on the synthetic-gold deployment (see _CAUSAL_SYNTHETIC_BACKED).
+    query = apply_dataset_provenance_filter(query, dataset)
     if brand:
         query = query.eq(brand_col, brand)
     result = await query.limit(limit).execute()

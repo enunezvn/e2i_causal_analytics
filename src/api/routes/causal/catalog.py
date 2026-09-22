@@ -36,7 +36,6 @@ from src.causal_engine.pipeline.router import (
 from src.causal_engine.pipeline.router import (
     QuestionType as RouterQuestionType,
 )
-from src.repositories.provenance import apply_provenance_filter
 from src.utils.redaction import redact_query
 
 from .datasets import (
@@ -53,6 +52,7 @@ from .datasets import (
     _column_label,
     _is_randomized_treatment,
     _list_dataset_brands,
+    apply_dataset_provenance_filter,
 )
 from .loaders import _coerce_estimation_row, _load_agent_estimation_frame
 
@@ -671,8 +671,10 @@ async def get_causal_estimation_data(
 
     query = client.table(_CAUSAL_PHYSICAL_TABLE.get(dataset, dataset)).select(",".join(select_cols))
     # Synthetic-showcase aware: on a synthetic-gold instance the synthetic rows
-    # ARE the substrate; on a strict real-data instance they are excluded.
-    query = apply_provenance_filter(query)
+    # ARE the substrate; on a strict real-data instance they are excluded --
+    # except for a synthetic-backed dataset, which keeps the real-mode
+    # predicate on every instance (see _CAUSAL_SYNTHETIC_BACKED).
+    query = apply_dataset_provenance_filter(query, dataset)
     result = await query.limit(limit).execute()
     rows = result.data or []
 

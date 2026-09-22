@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from src.api.routes.causal import catalog
-from src.api.routes.causal.datasets import _CAUSAL_DATASET_SPECS
+from src.api.routes.causal.datasets import _CAUSAL_DATASET_SPECS, PLANTED_TRUTH_RUN_ENV
 from src.ml.synthetic.generators.csu_escalation_causal import generate_csu_escalation_cohort
 
 pytestmark = pytest.mark.unit
@@ -127,6 +127,9 @@ async def test_default_dataset_with_its_categorical_covariate_is_screened(monkey
 
 @pytest.mark.asyncio
 async def test_csu_escalation_dataset_with_seven_categoricals_is_screened(monkeypatch):
+    # The synthetic backing is read ONLY under the planted-truth opt-in (the
+    # deployment-wide E2I_INCLUDE_SYNTHETIC the helper sets does not unlock it).
+    monkeypatch.setenv(PLANTED_TRUTH_RUN_ENV, "1")
     frame, _ = generate_csu_escalation_cohort(n=300, seed=5)
     rows = frame.astype(object).where(frame.notna(), None).to_dict(orient="records")
     resp = await _propose(monkeypatch, "csu_escalation_causal", rows)

@@ -15,6 +15,7 @@ import pytest
 from fastapi import BackgroundTasks, HTTPException
 
 from src.api.routes.causal import agent as causal_routes
+from src.api.routes.causal import catalog
 from src.api.routes.causal.datasets import (
     _ALL_CLINICAL_COVARIATES,
     _CAUSAL_BRAND_COLUMN,
@@ -24,11 +25,16 @@ from src.api.routes.causal.datasets import (
     _CAUSAL_NEGATIVE_CONTROL_OUTCOMES,
     _CAUSAL_NUMERIC_COLUMNS,
     _CAUSAL_PHYSICAL_TABLE,
+    _CAUSAL_SYNTHETIC_BACKED,
     _JOIN_DATASETS,
+    PLANTED_TRUTH_RUN_ENV,
     _brand_scoped_covariates,
     _default_auto_discover,
     _is_randomized_treatment,
+    _list_dataset_brands,
     _negative_control_outcome,
+    apply_dataset_provenance_filter,
+    serves_synthetic_rows,
 )
 from src.api.routes.causal.loaders import _load_agent_estimation_frame
 from src.api.schemas.causal import AgentCausalAnalysisRequest
@@ -179,6 +185,21 @@ def _covariates():
     return ["age_at_index", "charlson_score", "payer_category", "gdr_cd", "geographic_region"]
 
 
+def _planted_truth_run(monkeypatch):
+    """The ONLY switch that reads the synthetic backing: the planted-truth
+    opt-in, which no deployment sets. The deployment-wide showcase flag is
+    unset here so the tests prove the opt-in alone unlocks the rows."""
+    monkeypatch.delenv("E2I_INCLUDE_SYNTHETIC", raising=False)
+    monkeypatch.setenv(PLANTED_TRUTH_RUN_ENV, "1")
+
+
+def _deployed_flag_only(monkeypatch):
+    """The deployed e2i_api container's environment (docker inspect,
+    2026-09-22: E2I_INCLUDE_SYNTHETIC=true) with NO planted-truth opt-in."""
+    monkeypatch.setenv("E2I_INCLUDE_SYNTHETIC", "true")
+    monkeypatch.delenv(PLANTED_TRUTH_RUN_ENV, raising=False)
+
+
 @pytest.mark.asyncio
 async def test_real_mode_returns_no_rows_from_the_synthetic_backing(monkeypatch):
     """Spec §3C.2: the backing rows are is_synthetic=true, so the real-mode
@@ -201,8 +222,98 @@ async def test_real_mode_returns_no_rows_from_the_synthetic_backing(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_synthetic_mode_loads_coerces_and_one_hots_the_backing(monkeypatch):
-    monkeypatch.setenv("E2I_INCLUDE_SYNTHETIC", "true")
+async def test_deployed_include_synthetic_flag_does_not_unlock_the_synthetic_backing(monkeypatch):
+    """Verifier MED-B (2026-09-22): the deployed e2i_api sets
+    E2I_INCLUDE_SYNTHETIC=true, which makes apply_provenance_filter a no-op
+    for every reader -- so on the deployment the flag alone would have served
+    the planted rows as if real once loaded. The dataset-level guard applies
+    the real-mode predicate REGARDLESS of that flag: 503, never a synthetic
+    estimate served as real."""
+    _deployed_flag_only(monkeypatch)
+    assert DATASET in _CAUSAL_SYNTHETIC_BACKED
+    client = _FakeClient(_backing_rows())
+    monkeypatch.setattr(_CLIENT_FACTORY, AsyncMock(return_value=client))
+    with pytest.raises(HTTPException) as exc:
+        await _load_agent_estimation_frame(
+            dataset=DATASET,
+            treatment_var=TREATMENT,
+            outcome_var=OUTCOMES[0],
+            covariates=_covariates(),
+            limit=1000,
+        )
+    assert exc.value.status_code == 503
+    assert client.tables == [TABLE]
+    assert ("eq", "is_synthetic", False) in client.log
+    assert serves_synthetic_rows(DATASET) is False
+
+
+class _GuardQuery:
+    def __init__(self):
+        self.eqs: list = []
+
+    def eq(self, col, value):
+        self.eqs.append((col, value))
+        return self
+
+
+def test_dataset_provenance_guard_ignores_the_deployment_flag_for_the_backing(monkeypatch):
+    """The guard's truth table: for the synthetic-backed dataset only the
+    planted-truth opt-in reads the rows; every other dataset keeps the
+    deployment-wide behaviour of apply_provenance_filter."""
+    _deployed_flag_only(monkeypatch)
+    assert apply_dataset_provenance_filter(_GuardQuery(), DATASET).eqs == [("is_synthetic", False)]
+    assert apply_dataset_provenance_filter(_GuardQuery(), "optum_biologic_persistence").eqs == []
+    assert serves_synthetic_rows("optum_biologic_persistence") is True
+    _planted_truth_run(monkeypatch)
+    assert apply_dataset_provenance_filter(_GuardQuery(), DATASET).eqs == []
+    assert serves_synthetic_rows(DATASET) is True
+    # Strict real-data instance: the predicate for everyone, opt-in unset.
+    monkeypatch.delenv("E2I_INCLUDE_SYNTHETIC", raising=False)
+    monkeypatch.delenv(PLANTED_TRUTH_RUN_ENV, raising=False)
+    assert apply_dataset_provenance_filter(_GuardQuery(), DATASET).eqs == [("is_synthetic", False)]
+    assert apply_dataset_provenance_filter(_GuardQuery(), "optum_biologic_persistence").eqs == [
+        ("is_synthetic", False)
+    ]
+    assert serves_synthetic_rows(DATASET) is False
+
+
+@pytest.mark.asyncio
+async def test_brand_dropdown_hides_the_synthetic_backing_from_the_deployed_flag(monkeypatch):
+    _deployed_flag_only(monkeypatch)
+    client = _FakeClient(_backing_rows())
+    monkeypatch.setattr(_CLIENT_FACTORY, AsyncMock(return_value=client))
+    assert await _list_dataset_brands(DATASET) == []
+    assert ("eq", "is_synthetic", False) in client.log
+    _planted_truth_run(monkeypatch)
+    client = _FakeClient(_backing_rows())
+    monkeypatch.setattr(_CLIENT_FACTORY, AsyncMock(return_value=client))
+    assert await _list_dataset_brands(DATASET) == ["DUPIXENT", "RHAPSIDO", "XOLAIR"]
+    assert not any(e[0] == "eq" and e[1] == "is_synthetic" for e in client.log)
+
+
+@pytest.mark.asyncio
+async def test_estimation_data_route_hides_the_synthetic_backing_from_the_deployed_flag(
+    monkeypatch,
+):
+    _deployed_flag_only(monkeypatch)
+    client = _FakeClient(_backing_rows())
+    monkeypatch.setattr(_CLIENT_FACTORY, AsyncMock(return_value=client))
+    with pytest.raises(HTTPException) as exc:
+        await catalog.get_causal_estimation_data(
+            treatment_var=TREATMENT,
+            outcome_var=OUTCOMES[0],
+            dataset=DATASET,
+            covariates="age_at_index",
+            limit=1000,
+            user={"role": "analyst"},
+        )
+    assert exc.value.status_code == 503
+    assert ("eq", "is_synthetic", False) in client.log
+
+
+@pytest.mark.asyncio
+async def test_planted_truth_run_loads_coerces_and_one_hots_the_backing(monkeypatch):
+    _planted_truth_run(monkeypatch)
     client = _FakeClient(_backing_rows())
     monkeypatch.setattr(_CLIENT_FACTORY, AsyncMock(return_value=client))
     frame, cols = await _load_agent_estimation_frame(
@@ -229,7 +340,7 @@ async def test_synthetic_mode_loads_coerces_and_one_hots_the_backing(monkeypatch
 
 @pytest.mark.asyncio
 async def test_loader_rejects_an_outcome_in_the_covariate_slot(monkeypatch):
-    monkeypatch.setenv("E2I_INCLUDE_SYNTHETIC", "true")
+    _planted_truth_run(monkeypatch)
     monkeypatch.setattr(_CLIENT_FACTORY, AsyncMock(return_value=_FakeClient(_backing_rows())))
     with pytest.raises(HTTPException) as exc:
         await _load_agent_estimation_frame(
@@ -246,7 +357,7 @@ async def test_loader_rejects_an_outcome_in_the_covariate_slot(monkeypatch):
 async def test_brand_scope_makes_the_treatment_constant_and_is_refused(monkeypatch):
     """The brand filter IS the treatment label: brand=RHAPSIDO leaves one arm
     -> 400 at load, never a finite-but-meaningless estimate."""
-    monkeypatch.setenv("E2I_INCLUDE_SYNTHETIC", "true")
+    _planted_truth_run(monkeypatch)
     client = _FakeClient(_backing_rows())
     monkeypatch.setattr(_CLIENT_FACTORY, AsyncMock(return_value=client))
     with pytest.raises(HTTPException) as exc:

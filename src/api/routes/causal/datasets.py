@@ -8,6 +8,7 @@ Import rule: may import ``_common`` and non-package modules only; never
 """
 
 import logging
+import os
 from typing import Any, Callable, Dict, List, Optional
 
 from src.data.manifests import MART_SAFE_FEATURES
@@ -23,7 +24,11 @@ from src.insights.column_labels import (  # noqa: F401 — re-export
 from src.insights.column_labels import (  # noqa: F401 — re-export
     column_label as _column_label,
 )
-from src.repositories.provenance import apply_provenance_filter
+from src.repositories.provenance import (
+    PROVENANCE_COLUMN,
+    apply_provenance_filter,
+    deployment_includes_synthetic,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -265,11 +270,16 @@ _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
     # Physical table csu_escalation_causal (migration 149). Until the real
     # table exists it is backed by the SYNTHETIC CSU cohort
     # (scripts/build_csu_escalation_synthetic_cohort.py, every row
-    # is_synthetic=true, planted truth in its ground-truth sidecar): the
-    # real-mode provenance filter therefore returns NO rows (503, never a
-    # synthetic estimate served as real) and only the planted-truth run
-    # (tests/unit/test_api/test_causal_csu_escalation_planted_truth.py) reads
-    # the rows. Observational (no randomized_treatment); no negative control
+    # is_synthetic=true, planted truth in its ground-truth sidecar). The
+    # dataset is in _CAUSAL_SYNTHETIC_BACKED: every reader applies the
+    # real-mode predicate REGARDLESS of the deployment-wide
+    # E2I_INCLUDE_SYNTHETIC (which the deployed e2i_api sets), so real mode
+    # returns NO rows (503, never a synthetic estimate served as real) and
+    # only the planted-truth run (E2I_CSU_PLANTED_TRUTH_RUN=1, set by
+    # tests/unit/test_api/test_causal_csu_escalation_planted_truth.py, never
+    # by a deployment) reads the rows. The post-launch load writes
+    # is_synthetic=false rows the predicate serves with no registry change.
+    # Observational (no randomized_treatment); no negative control
     # declared (the per-source omitted-confounder experiment has not run).
     # Structure discovery is OFF by default (_CAUSAL_DISCOVERY_DEFAULT_OFF):
     # same claims-frame shape Lane A measured singular.
@@ -720,6 +730,51 @@ _CAUSAL_PHYSICAL_TABLE: Dict[str, str] = {
 }
 
 
+# Datasets whose ONLY rows today are synthetic (Lane C: the planted CSU cohort
+# backing csu_escalation_causal until the post-launch real load). The deployed
+# e2i_api is a synthetic-gold showcase instance (E2I_INCLUDE_SYNTHETIC=true,
+# docker inspect 2026-09-22), which makes apply_provenance_filter a no-op for
+# every reader -- so on the deployment that flag alone would serve the planted
+# rows as if real once loaded (verifier MED-B, 2026-09-22). For these datasets
+# the deployment flag does NOT unlock the rows: the real-mode predicate is
+# applied regardless, and only the planted-truth opt-in below reads them.
+_CAUSAL_SYNTHETIC_BACKED: frozenset = frozenset({"csu_escalation_causal"})
+# The planted-truth run's opt-in. Set by the E2E test for its own process;
+# never by a deployment (it is not in .env / the container environment, and
+# setting it on an instance would be a deliberate act, not the showcase
+# default).
+PLANTED_TRUTH_RUN_ENV = "E2I_CSU_PLANTED_TRUTH_RUN"
+
+
+def _planted_truth_run() -> bool:
+    return os.getenv(PLANTED_TRUTH_RUN_ENV, "0").strip().lower() in ("1", "true", "yes")
+
+
+def serves_synthetic_rows(dataset: str) -> bool:
+    """Whether a read of ``dataset`` in THIS process returns synthetic rows --
+    the ``data_source`` label the response carries. Synthetic-backed datasets
+    follow the planted-truth opt-in only; every other dataset follows the
+    deployment-wide flag."""
+    if dataset in _CAUSAL_SYNTHETIC_BACKED:
+        return _planted_truth_run()
+    return deployment_includes_synthetic()
+
+
+def apply_dataset_provenance_filter(query: Any, dataset: str) -> Any:
+    """The provenance predicate for a read of ``dataset``'s table.
+
+    Synthetic-backed datasets (:data:`_CAUSAL_SYNTHETIC_BACKED`): the real-mode
+    ``.eq('is_synthetic', False)`` REGARDLESS of ``E2I_INCLUDE_SYNTHETIC``,
+    lifted only by the planted-truth opt-in. Every other dataset:
+    :func:`apply_provenance_filter` (deployment-wide behaviour, unchanged).
+    Used by every reader of a dataset's rows: the agent loader, the
+    estimation-data route and the brand dropdown.
+    """
+    if dataset in _CAUSAL_SYNTHETIC_BACKED:
+        return query if _planted_truth_run() else query.eq(PROVENANCE_COLUMN, False)
+    return apply_provenance_filter(query)
+
+
 # Categorical covariates ONE-HOT ENCODED before the frame reaches the executors
 # (DoWhy/EconML require numeric inputs). DELIBERATELY absent from
 # _CAUSAL_NUMERIC_COLUMNS so the loader does NOT float-coerce them to None;
@@ -756,7 +811,7 @@ async def _list_dataset_brands(dataset: str) -> List[str]:
         )
         brand_col = _CAUSAL_BRAND_COLUMN.get(dataset, "brand")
         query = client.table(brand_table).select(brand_col)
-        query = apply_provenance_filter(query)
+        query = apply_dataset_provenance_filter(query, dataset)
         result = await query.limit(20000).execute()
     except Exception as e:  # noqa: BLE001 — missing column / store hiccup => no brands
         logger.warning(f"causal brands: could not enumerate brands for '{dataset}': {e}")
