@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT) not in sys.path:
@@ -29,8 +30,22 @@ ROLLBACK = _REPO_ROOT / "database/migrations/rollback_148_optum_biologic_persist
 TABLE = "optum_biologic_persistence_causal"
 # Server-defaulted bookkeeping the loader never writes.
 _SERVER_COLUMNS = {"created_at", "updated_at"}
+# The types this table is allowed to use. The regex below deliberately matches
+# ANY bare word (so it never silently skips a column whose type it doesn't
+# recognise, e.g. DOUBLE PRECISION / BIGINT / JSONB / TIMESTAMP) — that parsed
+# type is then checked against this allow-list in ``_sql_columns``.
+_KNOWN_TYPES = {
+    "TEXT",
+    "VARCHAR",
+    "INTEGER",
+    "SMALLINT",
+    "NUMERIC",
+    "DATE",
+    "BOOLEAN",
+    "TIMESTAMPTZ",
+}
 _COLUMN_RE = re.compile(
-    r"^\s*([a-z_][a-z0-9_]*)\s+(TEXT|VARCHAR|INTEGER|SMALLINT|NUMERIC|DATE|BOOLEAN|TIMESTAMPTZ)\b",
+    r"^\s*([a-z_][a-z0-9_]*)\s+([A-Za-z]+(?:\s+PRECISION)?)\b",
     re.IGNORECASE,
 )
 
@@ -49,7 +64,10 @@ def _sql_columns(sql: str) -> dict[str, str]:
     for line in body[:end].splitlines():
         m = _COLUMN_RE.match(line)
         if m and m.group(1).upper() != "CONSTRAINT":
-            columns[m.group(1)] = m.group(2).upper()
+            col_type = m.group(2).upper()
+            if col_type not in _KNOWN_TYPES:
+                raise AssertionError(f"unrecognised column type {col_type!r} on line {line!r}")
+            columns[m.group(1)] = col_type
     return columns
 
 
@@ -129,3 +147,12 @@ def test_rollback_148_drops_only_the_new_table():
     sql = ROLLBACK.read_text()
     assert f"DROP TABLE IF EXISTS public.{TABLE};" in sql
     assert sql.count("DROP") == 1
+
+
+def test_sql_columns_rejects_an_unrecognised_type():
+    """A type outside ``_KNOWN_TYPES`` (e.g. DOUBLE PRECISION, BIGINT, JSONB) must
+    fail loud, never be silently skipped — a skipped column would pass the "no
+    more" half of the contract test unnoticed."""
+    sql = "CREATE TABLE IF NOT EXISTS public.t (\n    foo DOUBLE PRECISION,\n);\n"
+    with pytest.raises(AssertionError, match="foo"):
+        _sql_columns(sql)
