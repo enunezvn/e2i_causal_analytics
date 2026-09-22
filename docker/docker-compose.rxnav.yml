@@ -60,6 +60,12 @@
 # continues to hit the public NLM endpoint at ``https://rxnav.nlm.nih.gov/REST``.
 # See ``docs/ARCHITECTURE.md`` §4.7 for the full operator runbook.
 #
+# Related switch — RXNAV_BRAND_ALIASES (default on). Chat entity extraction
+# (``src/rag/brand_aliases.py``) asks RxNav once per process for each brand's
+# ingredient/marketed names ("iptacopan", "Rhapsido") and merges them after the
+# curated aliases. ``RXNAV_BRAND_ALIASES=0`` disables that lookup entirely
+# (operator rollback; the unit suite sets it). The curated table is unaffected.
+#
 # Storage budget warning (per NLM README): ~15-20 GB on disk, ~12 GB RAM
 # steady-state once data tarballs ingest. Plan host capacity accordingly.
 #

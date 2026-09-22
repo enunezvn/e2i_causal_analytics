@@ -396,10 +396,14 @@ class TestSchemaModelFollowsTheExpandContractPair:
             "the per_hcp_rollup contract is not in the forward-migration scan at all — "
             "the end state this class asserts is not being derived from it"
         )
-        re_adder = next((p for p in every if p.name.startswith("033_")), None)
+        # By exact name: ``rglob`` yields directories in filesystem order and the
+        # tree also has ``database/ml/033_ragas_persistence_semantics.sql``, which
+        # sorts AFTER the contract ("ml" > "migrations") — a ``startswith("033_")``
+        # pick failed the deploy gate on 2026-09-22 by finding that one first.
+        re_adder = next((p for p in every if p.name == "033_feast_canonical_schema.sql"), None)
         assert re_adder is not None, (
-            "no migration 033 in the scan — it is the file that re-ADDs trx_count and "
-            "the reason this ordering rule exists"
+            "no migrations/033_feast_canonical_schema.sql in the scan — it is the file that "
+            "re-ADDs trx_count and the reason this ordering rule exists"
         )
         assert str(re_adder) < str(contract), (
             "033 no longer sorts before the contract; the trap has moved again — "

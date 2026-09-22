@@ -1,0 +1,35 @@
+cert recorded 2026-09-22T13:51:46Z main HEAD fecda0be9
+e2i_api container image = the ghcr e2i backend image tagged with main commit fecda0be9
+full commit sha of that image tag: fecda0be98618238fcdf4be4dd89066bc017cb97
+e2i_api StartedAt: 2026-09-22T13:49:08.888521776Z
+deploy run: 35729582120 (success)
+
+===== A. production EntityExtractor (RxNav on) + single-flight smoke
+RXNAV_BRAND_ALIASES = <unset → on>
+RXNAV_BASE_URL      = <unset → public NLM>
+has brand_aliases module: True
+EntityExtractor() built in 0.75s
+'iptacopan TRx in the northeast'         -> ['Fabhalta']
+'Rhapsido NBRx last quarter'             -> ['Remibrutinib']
+'ribociclib share trend'                 -> ['Kisqali']
+'Show overall market trends'             -> []
+Fabhalta aliases: ['fabhalta', 'factor b', 'factor b inhibitor', 'iptacopan']
+Remibrutinib aliases: ['remibrutinib', 'remi', 'btk inhibitor', 'rhapsido']
+Kisqali aliases: ['kisqali', 'ribociclib', 'cdk4/6', 'cdk4', 'cdk6', 'ribociclib succinate']
+second EntityExtractor() built in 0.000s (cache)
+single-flight: 6 concurrent cold from_default() -> RxNav rounds = 1 (expect 1)
+
+===== C. degrade probe: RxNav unreachable (throwaway process only)
+RXNAV_BASE_URL      = <unset → public NLM>
+degrade: first round -> {} in 0.11s, rxcui calls=1 (expect 1: first failure stops the round)
+degrade: second round -> {}, rxcui calls=1 (expect unchanged: negative-cached)
+degrade: from_default == curated table (no iptacopan): True
+
+===== B. negative control: RXNAV_BRAND_ALIASES=0 in the same container (13:53:16Z)
+RXNAV_BRAND_ALIASES = 0
+'iptacopan TRx in the northeast'         -> []
+'Rhapsido NBRx last quarter'             -> []
+'ribociclib share trend'                 -> ['Kisqali']
+'Show overall market trends'             -> []
+Fabhalta aliases: ['fabhalta', 'factor b', 'factor b inhibitor']
+Remibrutinib aliases: ['remibrutinib', 'remi', 'btk inhibitor']
