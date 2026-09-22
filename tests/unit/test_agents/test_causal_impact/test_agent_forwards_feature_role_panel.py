@@ -21,8 +21,17 @@ import pytest
 from src.agents.causal_impact.agent import CausalImpactAgent
 
 
-def _make_panel(treatment: str = "copay_support", outcome: str = "adherent_180d") -> dict:
-    """A strict-valid serialised panel (codex r3: the route validates invariants)."""
+def _make_panel(
+    treatment: str = "copay_support",
+    outcome: str = "adherent_180d",
+    covariate: str = "insurance_access_score",
+) -> dict:
+    """A strict-valid serialised panel (codex r3: the route validates invariants).
+
+    ``covariate`` is the panel's one pre-index record; the submit tests pass a
+    curated ``patient_journeys`` covariate so the coverage check is satisfied
+    and only the check under test can refuse the request (verifier MED-1).
+    """
     from src.causal_engine.feature_role_panel import FeatureRolePanel, FeatureRoleRecord
 
     def rec(name: str, *, post: bool) -> FeatureRoleRecord:
@@ -46,9 +55,9 @@ def _make_panel(treatment: str = "copay_support", outcome: str = "adherent_180d"
         treatment=treatment,
         outcome=outcome,
         n_rows=3,
-        features=("insurance_access_score", "post_dx"),
+        features=(covariate, "post_dx"),
         records={
-            "insurance_access_score": rec("insurance_access_score", post=False),
+            covariate: rec(covariate, post=False),
             "post_dx": rec("post_dx", post=True),
         },
         layer_activity={},
@@ -172,50 +181,98 @@ async def test_route_task_omits_the_key_when_the_request_has_no_panel(monkeypatc
     assert "approved_structure_roles" not in captured
 
 
+# The submit tests ask a question the dataset PERMITS (curated patient_journeys
+# treatment / outcome / covariate columns), so the dataset column allow-list can
+# never be the source of the 400 they observe (verifier MED-1: the previous
+# request used columns the dataset does not offer, and its "Allowed: [...]"
+# refusal happened to contain the needle — a false green that survived the
+# question-mismatch check being planted out).
+_T, _Y, _COV = "copay_support", "adherent_180d", "disease_severity"
+
+
 def _submit_request(**panel_overrides):
     from src.api.schemas.causal import AgentCausalAnalysisRequest
 
-    panel = _make_panel("hcp_engagement_level", "patient_conversion_rate")
+    panel = _make_panel(_T, _Y, _COV)
     panel.update(panel_overrides)
     return AgentCausalAnalysisRequest(
-        treatment_var="hcp_engagement_level",
-        outcome_var="patient_conversion_rate",
-        dataset="patient_journeys",
-        feature_role_panel=panel,
+        treatment_var=_T, outcome_var=_Y, dataset="patient_journeys", feature_role_panel=panel
     )
 
 
-async def _expect_400(req, needle: str) -> None:
-    from fastapi import BackgroundTasks, HTTPException
+def _stub_loader(monkeypatch) -> dict:
+    """Route the submit past the panel checks WITHOUT a database: the frame
+    loader returns a tiny valid frame and the job store is in memory, so a
+    request that clears every submit-time check returns the pending handle.
+    Under a planted-out check the refusal tests therefore FAIL (the submit
+    succeeds) instead of passing on a later, unrelated 400."""
+    import src.api.routes.causal.agent as causal_routes
+
+    captured = _capture(monkeypatch)
+
+    async def _fake_load(**kwargs):
+        df = pd.DataFrame({_T: [0.0, 1.0, 1.0], _Y: [0.0, 1.0, 0.0], _COV: [0.2, 0.9, 0.5]})
+        return df, [_T, _Y, _COV]
+
+    monkeypatch.setattr(causal_routes, "_load_agent_estimation_frame", _fake_load)
+    return captured
+
+
+async def _submit(req):
+    from fastapi import BackgroundTasks
 
     import src.api.routes.causal.agent as causal_routes
 
+    return await causal_routes.run_causal_agent_analysis(req, BackgroundTasks())
+
+
+async def _expect_400(req, needle: str) -> None:
+    from fastapi import HTTPException
+
     with pytest.raises(HTTPException) as exc:
-        await causal_routes.run_causal_agent_analysis(req, BackgroundTasks())
+        await _submit(req)
     assert exc.value.status_code == 400
     assert needle in str(exc.value.detail), exc.value.detail
 
 
 @pytest.mark.asyncio
-async def test_submit_refuses_a_panel_built_for_another_question() -> None:
+async def test_submit_accepts_a_panel_built_for_this_question(monkeypatch) -> None:
+    """Positive control for the refusal tests below: the SAME request with a
+    panel built for its own (T, Y) clears every submit-time check and is
+    scheduled — so a refusal in those tests can only come from the check under
+    test, never from the dataset allow-list or the loader."""
+    _stub_loader(monkeypatch)
+    pending = await _submit(_submit_request())
+    assert pending.status == "pending"
+    assert (pending.treatment_var, pending.outcome_var) == (_T, _Y)
+
+
+@pytest.mark.asyncio
+async def test_submit_refuses_a_panel_built_for_another_question(monkeypatch) -> None:
     """codex r2: the panel is a trusted causal input; one built for a different
-    (treatment, outcome) must be refused at submit with a 400, not applied."""
+    (treatment, outcome) must be refused at submit with a 400, not applied.
+    Both questions use permitted columns and the loader is stubbed (MED-1): with
+    the mismatch check planted out this request is SCHEDULED and the test fails."""
+    _stub_loader(monkeypatch)
     await _expect_400(
-        _submit_request(treatment="copay_support", outcome="adherent_180d"), "copay_support"
+        _submit_request(treatment="psp_enrolled", outcome=_Y),
+        f"was built for ('psp_enrolled' -> {_Y!r}) but this analysis asks ({_T!r} -> {_Y!r})",
     )
 
 
 @pytest.mark.asyncio
-async def test_submit_refuses_a_malformed_panel() -> None:
+async def test_submit_refuses_a_malformed_panel(monkeypatch) -> None:
     """The payload must parse as a typed FeatureRolePanel, not any dict."""
+    _stub_loader(monkeypatch)
     await _expect_400(_submit_request(records="not-a-mapping"), "feature_role_panel")
 
 
 @pytest.mark.asyncio
 async def test_submit_refuses_a_panel_covering_none_of_the_covariates(monkeypatch) -> None:
     """A panel over other columns cannot vet this question's covariates."""
-    base = _make_panel("hcp_engagement_level", "patient_conversion_rate")
-    rec = dict(base["records"]["insurance_access_score"])
+    _stub_loader(monkeypatch)
+    base = _make_panel(_T, _Y, _COV)
+    rec = dict(base["records"][_COV])
     rec["feature"] = "unrelated_a"
     await _expect_400(
         _submit_request(features=["unrelated_a"], records={"unrelated_a": rec}), "covers none"
@@ -223,14 +280,15 @@ async def test_submit_refuses_a_panel_covering_none_of_the_covariates(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_submit_refuses_a_panel_that_violates_the_strict_invariants() -> None:
+async def test_submit_refuses_a_panel_that_violates_the_strict_invariants(monkeypatch) -> None:
     """codex r3: a sparse caller-authored record asserting leak_verdict=true
     without the evidence behind it is refused, not applied."""
-    base = _make_panel("hcp_engagement_level", "patient_conversion_rate")
-    rec = dict(base["records"]["insurance_access_score"])
+    _stub_loader(monkeypatch)
+    base = _make_panel(_T, _Y, _COV)
+    rec = dict(base["records"][_COV])
     rec["leak_verdict"] = True  # no leak_source, no post-index contract, no Layer-3 high
     await _expect_400(
-        _submit_request(records={**base["records"], "insurance_access_score": rec}),
+        _submit_request(records={**base["records"], _COV: rec}),
         "leak_source",
     )
     await _expect_400(_submit_request(schema_version="0"), "schema_version")
@@ -244,6 +302,7 @@ async def test_submit_refuses_a_panel_from_another_manifest_when_the_spec_declar
     a panel built under a different manifest is refused."""
     import src.api.routes.causal.agent as causal_routes
 
+    _stub_loader(monkeypatch)
     spec = dict(causal_routes._CAUSAL_DATASET_SPECS["patient_journeys"])
     spec["feature_manifest_source"] = "optum"
     monkeypatch.setitem(causal_routes._CAUSAL_DATASET_SPECS, "patient_journeys", spec)
