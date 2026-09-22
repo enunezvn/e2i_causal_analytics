@@ -73,3 +73,26 @@ async def test_train_and_persist_requires_a_data_source(file_tracking):
         # No data, no data_source, synthetic not set → fail loud, train nothing.
         await train_and_persist_twin(twin_type=TwinType.HCP, brand=Brand.KISQALI, repo=repo)
     repo.save_model.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_train_and_persist_records_the_training_frame_identity(file_tracking):
+    """codex r3 #2: the fit fingerprint hashes training_config; the frame that produced
+    the fit (source + seed + rows) is recorded there so two fits from different
+    frames cannot share a fingerprint on coinciding metrics."""
+    from src.digital_twin.training_job import train_and_persist_twin
+
+    repo = AsyncMock()
+    repo.save_model = AsyncMock(return_value=uuid4())
+
+    await train_and_persist_twin(
+        twin_type=TwinType.HCP, brand=Brand.KISQALI, repo=repo, synthetic=True, n_rows=1100, seed=2
+    )
+
+    kwargs = repo.save_model.await_args.kwargs
+    assert kwargs["training_frame"] == {
+        "source": "synthetic_training_frame",
+        "seed": 2,
+        "n_rows": 1100,
+        "target_column": "outcome",
+    }

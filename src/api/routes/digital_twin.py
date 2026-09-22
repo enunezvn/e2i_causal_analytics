@@ -271,21 +271,40 @@ def _round4(value: Optional[float]) -> Optional[float]:
 _FIT_FINGERPRINT_EXCLUDED_METRICS = frozenset({"training_duration_seconds"})
 
 
-def _fit_fingerprint(row: Dict[str, Any]) -> str:
-    """A content hash of what defines the fit: config, features, target, metrics.
+def _canonical(value: Any) -> Any:
+    """JSONB round-trips ``1`` and ``1.0`` interchangeably; hash them the same."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return repr(float(value))
+    if isinstance(value, dict):
+        return {str(k): _canonical(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_canonical(v) for v in value]
+    return value
 
-    Two models with the same fingerprint are the same fit under different labels
-    (prod: three brand rows, one seed-0 synthetic frame, identical R²/CV/importances).
+
+def _fit_fingerprint(row: Dict[str, Any]) -> str:
+    """A content hash of the RECORDED fit: training_config (including the
+    ``training_frame`` identity — source/seed/rows — when the trainer recorded it),
+    feature/target columns, and every reported metric except wall-clock.
+
+    Equal fingerprints = the same recorded fit. It does not hash the artifact
+    itself; rows trained before ``training_frame`` was recorded are compared on
+    config + columns + full-precision metrics (prod: three brand rows, one seed-0
+    synthetic frame, identical R²/CV/importances to 16 digits).
     """
     pm = dict(row.get("performance_metrics") or {})
     for key in _FIT_FINGERPRINT_EXCLUDED_METRICS:
         pm.pop(key, None)
-    payload = {
-        "training_config": row.get("training_config") or {},
-        "feature_columns": list(row.get("feature_columns") or []),
-        "target_columns": list(row.get("target_columns") or []),
-        "performance_metrics": pm,
-    }
+    payload = _canonical(
+        {
+            "training_config": row.get("training_config") or {},
+            "feature_columns": list(row.get("feature_columns") or []),
+            "target_columns": list(row.get("target_columns") or []),
+            "performance_metrics": pm,
+        }
+    )
     canonical = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
@@ -811,14 +830,16 @@ class TwinModelSummary(BaseModel):
     )
     training_fingerprint: str = Field(
         description=(
-            "Content hash of the fit (training_config, feature/target columns, metrics "
-            "minus wall-clock). Equal fingerprints = one shared fit under several labels."
+            "Content hash of the RECORDED fit: training_config (with the training_frame "
+            "source/seed/rows when the trainer recorded it), feature/target columns, and "
+            "every reported metric except wall-clock. Equal fingerprints = the same "
+            "recorded fit under several labels; the artifact itself is not hashed."
         ),
     )
     shared_fit_model_count: int = Field(
         description=(
             "Active models of this twin_type (all brands) with the same training_fingerprint, "
-            "including this one. >1 means brand is a label over ONE shared fit."
+            "including this one. >1 means brand is a label over ONE recorded fit."
         ),
     )
     shared_fit_with: List[str] = Field(

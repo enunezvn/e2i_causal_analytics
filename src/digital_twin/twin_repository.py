@@ -70,9 +70,15 @@ class TwinModelRepository(BaseRepository):
         mlflow_run_id: Optional[str] = None,
         mlflow_model_uri: Optional[str] = None,
         data_provenance: Optional[str] = None,
+        training_frame: Optional[Dict[str, Any]] = None,
     ) -> UUID:
         """
         Save a trained twin model's metadata row.
+
+        ``training_frame`` (#2206): the identity of the frame that produced the fit
+        (``source`` / ``seed`` / ``n_rows`` …), recorded under
+        ``training_config.training_frame`` so the /models fit fingerprint tells
+        fits from different frames apart. Omitted → not recorded (never fabricated).
 
         MLflow artifact persistence is owned by
         :mod:`src.digital_twin.twin_persistence` (``save_twin_artifacts``), which
@@ -115,6 +121,7 @@ class TwinModelRepository(BaseRepository):
                 # Structured provenance so a synthetic-trained model is never
                 # mistaken for an RWD-trained one (#705 H4 anti-mock).
                 "data_provenance": data_provenance,
+                **({"training_frame": dict(training_frame)} if training_frame else {}),
             },
             "feature_columns": config.feature_columns,
             "target_columns": [config.target_column],

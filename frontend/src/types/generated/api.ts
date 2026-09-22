@@ -19963,12 +19963,12 @@ export interface components {
             brand_is_feature: boolean;
             /**
              * Training Fingerprint
-             * @description Content hash of the fit (training_config, feature/target columns, metrics minus wall-clock). Equal fingerprints = one shared fit under several labels.
+             * @description Content hash of the RECORDED fit: training_config (with the training_frame source/seed/rows when the trainer recorded it), feature/target columns, and every reported metric except wall-clock. Equal fingerprints = the same recorded fit under several labels; the artifact itself is not hashed.
              */
             training_fingerprint: string;
             /**
              * Shared Fit Model Count
-             * @description Active models of this twin_type (all brands) with the same training_fingerprint, including this one. >1 means brand is a label over ONE shared fit.
+             * @description Active models of this twin_type (all brands) with the same training_fingerprint, including this one. >1 means brand is a label over ONE recorded fit.
              */
             shared_fit_model_count: number;
             /**
@@ -20054,12 +20054,12 @@ export interface components {
             brand_is_feature: boolean;
             /**
              * Training Fingerprint
-             * @description Content hash of the fit (training_config, feature/target columns, metrics minus wall-clock). Equal fingerprints = one shared fit under several labels.
+             * @description Content hash of the RECORDED fit: training_config (with the training_frame source/seed/rows when the trainer recorded it), feature/target columns, and every reported metric except wall-clock. Equal fingerprints = the same recorded fit under several labels; the artifact itself is not hashed.
              */
             training_fingerprint: string;
             /**
              * Shared Fit Model Count
-             * @description Active models of this twin_type (all brands) with the same training_fingerprint, including this one. >1 means brand is a label over ONE shared fit.
+             * @description Active models of this twin_type (all brands) with the same training_fingerprint, including this one. >1 means brand is a label over ONE recorded fit.
              */
             shared_fit_model_count: number;
             /**

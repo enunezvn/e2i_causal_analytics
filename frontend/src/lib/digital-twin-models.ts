@@ -130,8 +130,8 @@ export function explainModelCensus(models: readonly TwinModelSummary[]): string 
     const lead = c.brandIsFeature ? '' : 'Brand is routing metadata: ';
     const feature = c.brandIsFeature ? 'brand is a model feature.' : 'brand is not a model feature.';
     parts.push(
-      `${lead}${c.sharedBrands.join(', ')}${hidden} share one identical fit ` +
-        `(same training config, features and metrics); ${feature}`
+      `${lead}${c.sharedBrands.join(', ')}${hidden} share one identical recorded fit ` +
+        `(same training config and frame, features, and every reported metric); ${feature}`
     );
   }
   if (c.allSynthetic) {

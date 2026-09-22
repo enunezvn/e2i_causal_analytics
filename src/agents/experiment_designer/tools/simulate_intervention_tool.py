@@ -15,6 +15,7 @@ skipping the experiment, saving resources on tests unlikely to succeed.
 import asyncio
 import logging
 from typing import Annotated, Any, Dict, Optional
+from uuid import UUID
 
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
@@ -126,29 +127,30 @@ class SimulateInterventionOutput(BaseModel):
 _twin_cache: Dict[str, Any] = {}
 
 
-def _read_active_model_fidelity(twin_type: TwinType, brand: Brand) -> Optional[float]:
-    """The active model's measured fidelity, read fresh on every call (#2206).
+def _read_model_fidelity(model_id: Optional[UUID]) -> Optional[float]:
+    """The measured fidelity of THE model that produced the population, read fresh
+    on every call (#2206).
 
-    The population cache above is indefinite, but a model's fidelity changes
-    without retraining (the post-experiment loop rolls comparisons up into it), so
-    the state must not be pinned to the cached population (codex r1 #4). Any
-    failure to read is ``None`` → 'unvalidated' with a warning, never a pass.
+    The population cache is indefinite, but a model's fidelity changes without
+    retraining (the post-experiment loop rolls comparisons up into it), so the
+    state must not be pinned to the cached population (codex r1 #4) — and it must
+    be that population's own model, not whichever model is active now (codex r3
+    #1). Any failure to read is ``None`` → 'unvalidated' with a warning, never a pass.
     """
+    if model_id is None:
+        return None
     from src.memory.services.factories import loop_scoped_async_supabase_client
 
     async def _read() -> Optional[float]:
         async with loop_scoped_async_supabase_client() as client:
-            repo = TwinRepository(supabase_client=client)
-            actives = await repo.list_active_models(twin_type=twin_type, brand=brand.value)
-        if not actives:
-            return None
-        score = actives[0].get("fidelity_score")
+            row = await TwinRepository(supabase_client=client).get_model(model_id)
+        score = (row or {}).get("fidelity_score")
         return None if score is None else float(score)
 
     try:
         return asyncio.run(_read())
     except Exception as exc:
-        logger.warning("Could not read the active twin model's fidelity: %s", exc)
+        logger.warning("Could not read twin model %s fidelity: %s", model_id, exc)
         return None
 
 
@@ -192,7 +194,11 @@ def _get_or_create_twins(
             raise RuntimeError(
                 f"Trained twin model for {brand.value}/{twin_type.value} could not be loaded."
             )
-        return generator.generate(n=n)
+        population = generator.generate(n=n)
+        # generate() stamps a fresh random model_id; pin the DB model the population
+        # came from so its fidelity is read for THIS model (#2206, codex r3 #1).
+        population.model_id = UUID(str(row["model_id"]))
+        return population
 
     population = asyncio.run(_resolve_and_hydrate())
     _twin_cache[cache_key] = population
@@ -324,7 +330,7 @@ def simulate_intervention(
             effect_estimator=CohortCausalEstimator(target_regions=target_regions or []),
             # The active model's measured fidelity, read fresh per call; NULL → the
             # result states 'unvalidated' explicitly instead of passing the gate (#2206).
-            model_fidelity_score=_read_active_model_fidelity(twin_type, brand_enum),
+            model_fidelity_score=_read_model_fidelity(twins.model_id),
         )
 
         result = engine.simulate(

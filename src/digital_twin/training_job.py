@@ -106,6 +106,24 @@ async def train_and_persist_twin(
         n_rows=n_rows,
         seed=seed,
     )
+    # The frame's identity travels with the row (#2206): the /models fit fingerprint
+    # hashes training_config, so two fits from different frames (another seed, a
+    # different file) never share a fingerprint on coinciding metrics.
+    training_frame: Dict[str, Any] = {
+        "provided": {"source": "provided", "n_rows": int(len(frame))},
+        "rwd_file": {
+            "source": "rwd_file",
+            "path": str(data_source),
+            "n_rows": int(len(frame)),
+            "target_column": target_column,
+        },
+        "synthetic": {
+            "source": "synthetic_training_frame",
+            "seed": int(seed),
+            "n_rows": int(n_rows),
+            "target_column": target_column,
+        },
+    }[provenance]
 
     generator = TwinGenerator(twin_type=twin_type, brand=brand)
     # Training (sklearn fit + 5-fold CV) is blocking CPU work — run it off the
@@ -139,6 +157,7 @@ async def train_and_persist_twin(
         mlflow_run_id=ref.run_id,
         mlflow_model_uri=ref.model_uri,
         data_provenance=provenance,
+        training_frame=training_frame,
     )
 
     logger.info(

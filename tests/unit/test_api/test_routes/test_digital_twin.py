@@ -2342,3 +2342,37 @@ async def test_run_simulation_surfaces_a_failed_link_instead_of_returning_succes
     assert exc.value.status_code == 500
     assert str(saved_id) in str(exc.value.detail)
     assert str(exp_id) in str(exc.value.detail)
+
+
+def test_fit_fingerprint_is_stable_across_numeric_representation_and_key_order():
+    """codex r3 #2: `1` vs `1.0` (JSONB round-trips) must not split one recorded fit."""
+    from src.api.routes.digital_twin import _fit_fingerprint
+
+    a = _shared_fit_row("Remibrutinib", duration=7.1)
+    b = _shared_fit_row("Kisqali", duration=9.9)
+    b["training_config"] = {
+        "n_estimators": 100.0,
+        "algorithm": "random_forest",
+        "training_samples": 2000.0,
+        "data_provenance": "synthetic",
+    }
+    b["performance_metrics"] = {**b["performance_metrics"], "cv_scores": [0.8, 0.81, 0.82]}
+    assert _fit_fingerprint(a) == _fit_fingerprint(b)
+
+
+def test_fit_fingerprint_includes_the_recorded_training_frame():
+    """Two trainings that differ only in the recorded frame (seed) are different fits
+    even when every reported metric happens to coincide."""
+    from src.api.routes.digital_twin import _fit_fingerprint
+
+    a = _shared_fit_row("Remibrutinib", duration=7.1)
+    b = _shared_fit_row("Kisqali", duration=7.1)
+    a["training_config"] = {
+        **a["training_config"],
+        "training_frame": {"source": "synthetic", "seed": 0, "n_rows": 2000},
+    }
+    b["training_config"] = {
+        **b["training_config"],
+        "training_frame": {"source": "synthetic", "seed": 1, "n_rows": 2000},
+    }
+    assert _fit_fingerprint(a) != _fit_fingerprint(b)

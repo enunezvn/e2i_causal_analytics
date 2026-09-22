@@ -570,7 +570,8 @@ export interface TwinModelSummary {
   r2_score_basis: R2ScoreBasis | `${R2ScoreBasis}`;
   /** Whether 'brand' is a feature column (false: brand is routing metadata). */
   brand_is_feature: boolean;
-  /** Content hash of the fit; equal hashes = one shared fit under several labels. */
+  /** Content hash of the RECORDED fit (config incl. training frame, columns, metrics);
+   *  equal hashes = one shared recorded fit under several labels. */
   training_fingerprint: string;
   /** Active models (all brands) sharing this fingerprint, including this one. */
   shared_fit_model_count: number;

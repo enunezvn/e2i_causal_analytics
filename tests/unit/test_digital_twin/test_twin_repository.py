@@ -157,6 +157,35 @@ class TestTwinModelRepository:
         assert "/latest" not in (row["mlflow_model_uri"] or "")
 
     @pytest.mark.asyncio
+    async def test_save_model_persists_the_training_frame_identity(
+        self, mock_supabase, twin_model_config, twin_model_metrics
+    ):
+        """#2206: training_config carries the frame that produced the fit so the
+        /models fit fingerprint distinguishes fits from different frames."""
+        repo = TwinModelRepository(mock_supabase)
+        mock_supabase.execute.return_value = MagicMock(
+            data=[{"model_id": str(twin_model_metrics.model_id)}]
+        )
+
+        await repo.save_model(
+            twin_model_config,
+            twin_model_metrics,
+            data_provenance="synthetic",
+            training_frame={"source": "synthetic_training_frame", "seed": 0, "n_rows": 2000},
+        )
+
+        row = mock_supabase.insert.call_args.args[0]
+        assert row["training_config"]["training_frame"] == {
+            "source": "synthetic_training_frame",
+            "seed": 0,
+            "n_rows": 2000,
+        }
+        # Legacy callers that pass nothing record nothing (no fabricated frame identity).
+        mock_supabase.insert.reset_mock()
+        await repo.save_model(twin_model_config, twin_model_metrics)
+        assert "training_frame" not in mock_supabase.insert.call_args.args[0]["training_config"]
+
+    @pytest.mark.asyncio
     async def test_save_model_no_mlflow_refs_stores_null_not_fabricated(
         self, mock_supabase, twin_model_config, twin_model_metrics
     ):

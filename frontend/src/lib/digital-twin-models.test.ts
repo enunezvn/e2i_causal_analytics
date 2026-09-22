@@ -81,7 +81,7 @@ describe('digital-twin model census (#2206)', () => {
     ];
     const why = explainModelCensus(rows) ?? '';
     expect(why).toMatch(/brand is a model feature\./);
-    expect(why).toMatch(/Remibrutinib, Kisqali share one identical fit/);
+    expect(why).toMatch(/Remibrutinib, Kisqali share one identical recorded fit/);
     expect(why).not.toMatch(/routing metadata/);
   });
 

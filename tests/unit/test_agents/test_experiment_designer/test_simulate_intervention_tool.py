@@ -472,15 +472,17 @@ class TestSimulateInterventionEstimatesOnTheCohort:
             "src.memory.services.factories.loop_scoped_async_supabase_client",
             _scoped_client(MagicMock()),
         )
-        monkeypatch.setattr(
-            tool_module, "_get_or_create_twins", lambda *a, **k: _region_population()
-        )
+        from uuid import uuid4
+
+        population = _region_population()
+        population.model_id = uuid4()  # the DB model this population was generated from
+        monkeypatch.setattr(tool_module, "_get_or_create_twins", lambda *a, **k: population)
         reads: list = []
         fidelity = {"value": None}
         monkeypatch.setattr(
             tool_module,
-            "_read_active_model_fidelity",
-            lambda *a, **k: reads.append(a) or fidelity["value"],
+            "_read_model_fidelity",
+            lambda model_id: reads.append(model_id) or fidelity["value"],
         )
         ask = {"intervention_type": "email_campaign", "brand": "Kisqali"}
 
@@ -497,7 +499,9 @@ class TestSimulateInterventionEstimatesOnTheCohort:
         third = tool_module.simulate_intervention.invoke(ask)
         assert third["fidelity_status"] == "validated"
         assert third["fidelity_warning"] is False
-        assert len(reads) == 3, "one fresh fidelity read per call"
+        # One fresh read per call, and always for the model that PRODUCED the cached
+        # population — never "whichever model is active now" (codex r3 #1).
+        assert reads == [population.model_id] * 3
 
     def test_refuses_without_generating_twins_when_the_cohort_is_unusable(
         self, monkeypatch, tool_module
