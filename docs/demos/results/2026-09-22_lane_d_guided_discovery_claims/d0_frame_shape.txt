@@ -1,0 +1,8 @@
+src resolves to: /home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-d-guided-discovery-claims/src/__init__.py
+resolved frame n=15209 columns=79 k=77
+NaN cells total: 0 | columns with NaN: []
+constant covariates: []
+binary covariates: 71 of 77; non-binary: ['age_at_index', 'enrollment_duration_days', 'charlson_score', 'elixhauser_van_walraven_score', 'comorbidity_diag_distinct_count', 'comorbidity_diag_claim_count']
+corr-matrix rank (all columns incl T,Y): 63 of 79
+fisherz depth-0 p-value T-Y: 0.2100 (alpha=0.05 -> INDEPENDENT: skeleton removes T-Y)
+raw Y rate by T: {0.0: 0.734, 1.0: 0.744}

@@ -1,0 +1,31 @@
+Removing cycle edge comorbidity_diag_distinct_count -> charlson_score (confidence: 1.00)
+Removing cycle edge comorbidity_diag_distinct_count -> charlson_risk_band=3 to 4 (confidence: 1.00)
+Removing cycle edge enrollment_duration_days -> gdr_cd=M (confidence: 1.00)
+Removing cycle edge charlson_score -> elixhauser_van_walraven_score (confidence: 1.00)
+Removing cycle edge cci_chronic_pulmonary -> charlson_score (confidence: 1.00)
+Removing cycle edge cci_chronic_pulmonary -> elixhauser_van_walraven_score (confidence: 1.00)
+Removing cycle edge charlson_score -> high_comorbidity_burden_flag (confidence: 1.00)
+Removing cycle edge charlson_risk_band=1 to 2 -> elixhauser_risk_band=1 to 5 (confidence: 1.00)
+prune: kept 61 dropped 16 -> ['cci_hiv', 'elx_chf', 'elx_pvd', 'elx_paralysis', 'elx_chronic_pulmonary', 'elx_diabetes_uncomplicated', 'elx_diabetes_complicated', 'elx_peptic_ulcer', 'elx_aids_hiv', 'elx_metastatic_cancer', 'elx_rheumatoid_collagen', 'elx_depression', 'payer_category=commercial_exchange', 'payer_category=medicare_lis_dual', 'payer_bus=MCR', 'charlson_risk_band=5 plus']
+corr rank of [T,Y]+kept: 63 of 63
+cap 20: k=20 selected: ['enrollment_duration_days', 'comorbidity_diag_distinct_count', 'gdr_cd=M', 'comorbidity_diag_claim_count', 'charlson_score', 'elixhauser_van_walraven_score', 'cci_chronic_pulmonary', 'charlson_risk_band=1 to 2', 'cci_dementia', 'elx_fluid_electrolyte', 'age_at_index', 'elixhauser_risk_band=1 to 5', 'high_comorbidity_burden_flag', 'elx_cardiac_arrhythmia', 'lis_dual_flag', 'payer_product=POS', 'payer_product=OTH', 'cci_chf', 'cci_pvd', 'charlson_risk_band=3 to 4']
+|corr T| of selected: {'enrollment_duration_days': 0.2, 'comorbidity_diag_distinct_count': 0.13, 'gdr_cd=M': 0.108, 'comorbidity_diag_claim_count': 0.091, 'charlson_score': 0.082, 'elixhauser_van_walraven_score': 0.076, 'cci_chronic_pulmonary': 0.072, 'charlson_risk_band=1 to 2': 0.057, 'cci_dementia': 0.056, 'elx_fluid_electrolyte': 0.055, 'age_at_index': 0.052, 'elixhauser_risk_band=1 to 5': 0.052, 'high_comorbidity_burden_flag': 0.052, 'elx_cardiac_arrhythmia': 0.051, 'lis_dual_flag': 0.002, 'payer_product=POS': 0.009, 'payer_product=OTH': 0.003, 'cci_chf': 0.047, 'cci_pvd': 0.042, 'charlson_risk_band=3 to 4': 0.022}
+|corr Y| of selected: {'enrollment_duration_days': 0.046, 'comorbidity_diag_distinct_count': 0.075, 'gdr_cd=M': 0.003, 'comorbidity_diag_claim_count': 0.067, 'charlson_score': 0.048, 'elixhauser_van_walraven_score': 0.042, 'cci_chronic_pulmonary': 0.017, 'charlson_risk_band=1 to 2': 0.01, 'cci_dementia': 0.019, 'elx_fluid_electrolyte': 0.033, 'age_at_index': 0.049, 'elixhauser_risk_band=1 to 5': 0.011, 'high_comorbidity_burden_flag': 0.044, 'elx_cardiac_arrhythmia': 0.042, 'lis_dual_flag': 0.075, 'payer_product=POS': 0.062, 'payer_product=OTH': 0.057, 'cci_chf': 0.044, 'cci_pvd': 0.042, 'charlson_risk_band=3 to 4': 0.041}
+ONE guided PC fit on n=15209 k=20: wall=9.5s pc.runtime=9.5s converged=True edges=61 n_ci_tests=None indep_test=fisherz
+gate (B=0): reject conf=0.00 ['Corroboration (uncorroborated_single_run): 0.00%', 'Average edge confidence: 100.00%']
+T->Y in ensemble: False | parents(T): ['age_at_index', 'cci_dementia', 'comorbidity_diag_distinct_count', 'enrollment_duration_days', 'gdr_cd=M'] | parents(Y): ['comorbidity_diag_distinct_count', 'enrollment_duration_days', 'lis_dual_flag']
+projection (hypothesis, to be measured): 1 + 20 fits ~= 199s; resamples in 180 s ~= 17
+gdr_cd=M --> treatment_dupixent
+comorbidity_diag_claim_count --> comorbidity_diag_distinct_count
+elx_fluid_electrolyte --> comorbidity_diag_claim_count
+charlson_score --> elixhauser_van_walraven_score
+charlson_score --> high_comorbidity_burden_flag
+cci_pvd --> charlson_score
+charlson_risk_band=1 to 2 --> cci_chronic_pulmonary
+elixhauser_risk_band=1 to 5 --> charlson_risk_band=1 to 2
+age_at_index --> cci_dementia
+lis_dual_flag --> age_at_index
+lis_dual_flag --> payer_product=POS
+lis_dual_flag --> payer_product=OTH
+lis_dual_flag --> cci_pvd
+ONE unguided FCI fit on the capped frame: wall=382.5s converged=True n_edges=95 err=None

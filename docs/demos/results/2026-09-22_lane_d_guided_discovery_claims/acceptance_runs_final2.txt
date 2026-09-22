@@ -1,0 +1,22 @@
+=== ACCEPT_START real FINAL CODE 2 (5a08bb89d: + backdoor search skips isolated nodes) 15:14:50Z hard timeout 600 s ===
+src resolves to: /home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-d-guided-discovery-claims/src/__init__.py
+defaults: cap=20 budget_s=180.0 min_resamples=10
+REAL frame n=15209 k=77
+Removing cycle edge charlson_score -> high_comorbidity_burden_flag (confidence: 1.00)
+Removing cycle edge age_at_index -> lis_dual_flag (confidence: 1.00)
+Removing cycle edge age_at_index -> payer_product=POS (confidence: 1.00)
+Removing cycle edge lis_dual_flag -> comorbidity_diag_claim_count (confidence: 1.00)
+Removing cycle edge lis_dual_flag -> cci_pvd (confidence: 1.00)
+Removing cycle edge lis_dual_flag -> payer_product=POS (confidence: 1.00)
+Removing cycle edge enrollment_duration_days -> gdr_cd=M (confidence: 1.00)
+Removing cycle edge charlson_risk_band=1 to 2 -> elixhauser_risk_band=1 to 5 (confidence: 1.00)
+Bootstrap stopped by the time budget (180s): 16/20 resamples attempted, 16 succeeded
+Latent-confounding diagnostic (FCI) timed out after 8.8s (discovery time budget 180s)
+Discovered DAG NOT persisted (Supabase unavailable): [Supabase] SUPABASE_URL environment variable is not set [dag_version_hash=d745db6f67f9e1aa09ec296925d3d1f3d1acd46439d89afaf8512299fce53e58 session_id=None query_id=None]
+RUN {"run": "real/persistence_g28/defaults", "n": 15209, "k_declared": 77, "wall_s": 424.0, "discovery_latency_s": 182.0, "gate": "augment", "gate_confidence": 0.797, "dag_overridden": false, "n_edges_ensemble": 63, "shipped_edges": 176, "shipped_nodes": 79, "preflight": {"kept": 20, "constant": 0, "collinear": 16, "capped": 41, "protected": 0, "protected_capped": 0, "max_covariates": 20, "n_offered": 77, "n_kept": 20, "n_rows": 15209, "n_rows_used": 15209}, "preflight_k": 14, "bootstrap": {"n_resamples": 20, "n_attempted": 16, "n_succeeded": 16, "n_abandoned": 0, "min_resamples": 10, "corroborated": true, "time_budget_s": 180.0, "elapsed_s": 171.2245209198445, "budget_exhausted": true}, "latent_diagnostic": {"ran": true, "converged": false, "error": "timeout after 8.8s (discovery time budget 180s, 171.2s already spent)", "time_budget_s": 180.0, "elapsed_before_s": 171.24723625183105, "treatment": "treatment_dupixent", "outcome": "persistent_at_180d_g28", "flag": false}, "required_edges_missing": [["treatment_dupixent", "persistent_at_180d_g28"]], "adjustment_set_size": 77, "declared_covariates_in_adjustment_set": 77, "declared_missing_from_adjustment_set": [], "estimand_edge_shipped": true, "estimand_provenance": "required_prior", "skip_reason": null, "phase_seconds": {"_find_adjustment_sets": 241.9, "_apply_adjustment_guarantee": 0.0, "_compute_edge_provenance": 0.0}}
+WARNINGS:
+  - Discovery pre-flight: 77 covariates offered, 20 handed to structure learning (cap 20); dropped 0 constant [none], 16 exactly collinear [cci_hiv, elx_chf, elx_pvd, elx_paralysis, elx_chronic_pulmonary, elx_diabetes_uncomplicated, elx_diabetes_complicated, elx_peptic_ulcer, elx_aids_hiv, elx_metastatic_cancer, elx_rheumatoid_collagen, elx_depression, payer_category=commercial_exchange, payer_category=medicare_lis_dual, payer_bus=MCR, charlson_risk_band=5 plus], 41 capped by pre-treatment screening [health_exchange_flag, cci_mi, cci_cerebrovascular, cci_rheumatic, cci_peptic_ulcer, cci_mild_liver
+  - Discovery did not draw the estimand edge treatment_dupixent -> persistent_at_180d_g28 (removed in PC's skeleton phase: the data found the pair conditionally independent at alpha=0.05 (causal-learn applies required edges at orientation only, to edges that survived the skeleton)). The edge is asserted by the prior on the shipped DAG (provenance required_prior when the DAG shipped through discovery); the estimate still tests it.
+  - Discovered DAG NOT persisted (Supabase unavailable): [Supabase] SUPABASE_URL environment variable is not set [dag_version_hash=d745db6f67f9e1aa09ec296925d3d1f3d1acd46439d89afaf8512299fce53e58 session_id=None query_id=None]
+rc=124 (124 = did not complete in 600 s) real 15:45:53Z
+ALLDONE

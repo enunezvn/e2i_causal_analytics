@@ -1,0 +1,14 @@
+src resolves to: /home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-d-guided-discovery-claims/src/__init__.py
+preflight: kept=20 constant=0 collinear=16 capped=41 k=14
+treatment_dupixent --> comorbidity_diag_distinct_count
+lis_dual_flag --> payer_product=OTH
+lis_dual_flag --> payer_product=POS
+charlson_score --> elixhauser_van_walraven_score
+charlson_score --> high_comorbidity_burden_flag
+charlson_score --> cci_dementia
+comorbidity_diag_claim_count --> comorbidity_diag_distinct_count
+elx_fluid_electrolyte --> comorbidity_diag_claim_count
+elixhauser_risk_band=1 to 5 --> charlson_risk_band=1 to 2
+FCI depth=1: wall=356.7s converged=True n_edges=100 bidirected=44 estimand_pair_bidirected=False err=None
+  bidirected pairs: [('treatment_dupixent', 'age_at_index'), ('treatment_dupixent', 'enrollment_duration_days'), ('treatment_dupixent', 'cci_dementia'), ('treatment_dupixent', 'gdr_cd=M'), ('persistent_at_180d_g28', 'lis_dual_flag'), ('persistent_at_180d_g28', 'enrollment_duration_days'), ('persistent_at_180d_g28', 'comorbidity_diag_distinct_count'), ('age_at_index', 'lis_dual_flag'), ('age_at_index', 'charlson_score'), ('age_at_index', 'comorbidity_diag_distinct_count'), ('age_at_index', 'cci_pvd'), ('age_at_index', 'cci_dementia')]
+D4 STOPPED BY HAND at 396 s total wall (probe started 11:50:24): the depth=1 fit above had finished at 356.7 s; the depth=2 fit was in progress and was not allowed to complete (other lanes were queued on the box lock). Finding: even the cheapest conditioning depth (1) costs 356.7 s on the capped frame versus 382.5 s unlimited (d3_budget_premise.txt) -- FCI's cost here is not driven by the conditioning depth, and no depth limit brings the latent diagnostic under the 180 s budget.
