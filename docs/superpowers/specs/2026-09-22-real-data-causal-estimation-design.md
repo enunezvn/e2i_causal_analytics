@@ -59,8 +59,9 @@ challenge that prior; Lane C is pre-wiring.
    `convert_optum_mart.py` (registry entries `COHORT_TARGETS`, `_SELECTOR_BY_COHORT`,
    `_ANCHOR_BY_COHORT`, `_OUTPUT_BY_COHORT`): the persistence selector's rows, the 64
    `MART_SAFE_FEATURES`, the ids, **plus** `index_biologic_brand` (as-is) and a binary
-   `treatment_dupixent` (1 = DUPIXENT, 0 = XOLAIR), `treatment_start_date`, and the
-   three outcomes `persistent_at_180d`, `discontinued_180d`, `biologic_switch_180d_flag`.
+   `treatment_dupixent` (1 = DUPIXENT, 0 = XOLAIR), `treatment_start_date`, and four
+   outcomes: `persistent_at_180d_g28` (primary; see §7), `discontinued_180d`,
+   `biologic_switch_180d_flag`, and the shipped `persistent_at_180d`.
    Output `data/rwd/mart/persistence_causal/e2i_causal_v1_biologic_persistence.parquet`
    with `is_synthetic = false` on every row. The prediction cohorts are untouched; the
    manifest's forbidden list still applies to them. A unit test asserts the causal
@@ -73,7 +74,8 @@ challenge that prior; Lane C is pre-wiring.
    after the load. Loading production is an owner-GO step; the migration rides the
    deploy as usual (`scripts/run_migrations.sh`).
 3. **Registry.** `datasets.py`: `optum_biologic_persistence` in `_CAUSAL_DATASET_SPECS`
-   (treatment `treatment_dupixent`; outcomes the three above; covariates the 64
+   (treatment `treatment_dupixent`; outcomes the four above, `persistent_at_180d_g28`
+   first; covariates the 64
    baseline features), `_CAUSAL_PHYSICAL_TABLE`, `_CAUSAL_NUMERIC_COLUMNS`,
    `_CAUSAL_CATEGORICAL_COLUMNS` (payer/geography/gender), `_CAUSAL_BRAND_COLUMN`
    (`index_biologic_brand`), `_CAUSAL_NEGATIVE_CONTROL_OUTCOMES`: **none declared**
@@ -308,14 +310,23 @@ screening rule determinism and manifest-order tie-break, budgeted bootstrap with
 slow algorithm, required-edge assertion, and the fisherz-vs-gsq measurement recorded as
 evidence with the planted synthetic frame as its control.
 
-## 7. Open items for the owner
+## 7. Owner decisions (2026-09-22, approved)
 
-- GO for migration 148 apply and the production table load (Lane A step 2).
-- Whether the existing 110 Optum attestations should be relabelled `machine` now
-  (they are research-agent output with no human sign-off).
-- KG promotion from shadow to promoted for the causal cohorts, on Lane E's measurement.
-- Layer 4 stays audit-only (`ADAPTIVE_LAYER4_LLM_DECIDES` off): under this design the
-  LLM's role is evidence to the author and the reviewer, not a decider. Say so if you
-  want it to decide.
-- The persistence definition per brand (60-day gap vs dosing interval) before any
-  estimate is quoted externally.
+- **GO** for migration 148 apply and the production table load (Lane A step 2).
+- The 110 existing Optum attestations are relabelled `provenance="machine"` (Lane B).
+- KG stays in shadow and Layer 4 stays audit-only until Lane E's measurement on the
+  causal cohorts; promotion of either is decided on that measurement.
+- Persistence definition, ascertained by the cheapest disproof
+  (`docs/demos/results/2026-09-22_persistence_definition_disproof/`): the shipped
+  `persistent_at_180d` is days-supply sensitive (14-day Dupixent fills vs 28–45-day
+  Xolair fills; the −17.6 pp raw gap collapses to 3.5 pp with a 14-day grace and inverts
+  from 28 d). Lane A's primary outcome is `persistent_at_180d_g28` (covered through day
+  152 and no internal gap > 60 d), exported as a new column; `discontinued_180d` is the
+  brand-robust secondary; the shipped persistence is reported only alongside the sweep.
+
+## 8. Still open
+
+- Whether the raw Dupixent fills are 14-day pens or 28-day packs recorded as 14 days
+  (needs the claim-level feed); the grace definition is the honest one until then.
+- Layer 4 as a decider (`ADAPTIVE_LAYER4_LLM_DECIDES`): off under this design; the
+  LLM informs the author and the reviewer. Say so if you want it to decide.
