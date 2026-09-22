@@ -516,3 +516,15 @@ def test_post_processing_failure_routes_to_review_not_an_exception(monkeypatch):
     assert rec.review_reasons and rec.review_reasons[0].startswith(
         "post-processing failed: RuntimeError"
     )
+
+
+def test_missing_expected_role_is_rejected_to_review():
+    """codex r4 MED 2: expected_role is a required output (the author/extractor
+    cross-check depends on it); an omitted value is a rejected output, not a
+    silent None that disables the check."""
+    ans = _confounder_answer()
+    del ans["expected_role"]
+    with pytest.raises(StructuralAuthorError, match="expected_role is required"):
+        parse_author_output(ans, feature_name="baseline_uas7")
+    rec = author_feature(_brief(), resolver=_resolver(), lm=_dummy(ans))
+    assert rec.edges == [] and rec.review_required is True and rec.expected_role is None

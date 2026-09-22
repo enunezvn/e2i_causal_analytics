@@ -569,9 +569,14 @@ def _parse_author_output(
         )
     entity_names = {str(k): str(v) for k, v in names_raw.items() if str(v).strip()}
 
+    # ``expected_role`` is a REQUIRED output: the author/extractor cross-check
+    # depends on it, so an omitted value is a rejected output (codex r4 MED 2);
+    # ``None`` is reserved for generated review-only records.
     expected = raw.get("expected_role")
-    expected_role = str(expected).strip().lower() if expected is not None else None
-    if expected_role is not None and expected_role not in ROLES:
+    if expected is None or not str(expected).strip():
+        raise StructuralAuthorError("expected_role is required")
+    expected_role: Optional[str] = str(expected).strip().lower()
+    if expected_role not in ROLES:
         raise StructuralAuthorError(f"expected_role {expected!r} is not one of {ROLES}")
 
     # ``ambiguous`` is a REQUIRED boolean: a missing or unreadable value is a
