@@ -79,6 +79,10 @@ on:
       # data/kg_cache/** and not data/**: the rest of data/ is .dockerignore'd and
       # never reaches any image, so triggering on it would be a pure false deploy.
       - 'data/kg_cache/**'
+      # Layer-4 classifier artifact is a production image input (lane 1, 2026-09-22; #1783 shape).
+      # Literal, not artifacts/**: ac3_verdict_n200.json and gitignored cr_*_n200.json
+      # compile intermediates are not image inputs and must not trigger deploys.
+      - 'artifacts/dspy/causal_role_classifier.json'
       # #2167: the #1783 family, one layer over. Every entry above is an IMAGE input;
       # this one is a path the deploy CONSUMES AT DEPLOY TIME out of the droplet
       # checkout. The rollout runs `bash scripts/run_migrations.sh` (below), which
