@@ -722,6 +722,7 @@ def compute_experiment_results(
 
     async def execute_computation():
         from src.repositories import get_supabase_client
+        from src.repositories.ab_results import FinalResultAlreadyPersisted
         from src.repositories.experiment_outcome import ExperimentOutcomeRepository
         from src.services.results_analysis import AnalysisType, ResultsAnalysisService
 
@@ -782,9 +783,10 @@ def compute_experiment_results(
             # lost after persisting the final row gets this task again. The interim
             # producer's existence check cannot see that; check here too and skip
             # the recompute. The fidelity enqueue still fires — the comparison is
-            # an upsert on (experiment, simulation, type). Residual: two deliveries
-            # racing within one round-trip; ab_experiment_results has no unique key
-            # on (experiment_id, analysis_type) to make the claim atomic.
+            # an upsert on (experiment, simulation, type). Two deliveries racing
+            # within one round-trip both pass this check; ml/046's partial unique
+            # index then arbitrates at the INSERT and the loser lands in the
+            # FinalResultAlreadyPersisted branch below (owner fix, #2206).
             if analysis_type == "final":
                 from src.repositories.ab_results import ABResultsRepository
 
@@ -860,6 +862,22 @@ def compute_experiment_results(
                 "duration_ms": duration_ms,
             }
 
+        except FinalResultAlreadyPersisted as raced:
+            # The other delivery won the INSERT (ml/046). Same skip as the
+            # pre-check branch: nothing to persist, but the fidelity hop must
+            # still fire so the loop closes whichever delivery got here last.
+            logger.info(
+                "Final results for %s persisted by a concurrent delivery; skipping recompute",
+                experiment_id,
+            )
+            _enqueue_fidelity_tracking()
+            return {
+                "status": "skipped",
+                "experiment_id": experiment_id,
+                "analysis_type": analysis_type,
+                "reason": "final results persisted by a concurrent delivery",
+                "results_id": str(raced.existing.id) if raced.existing else None,
+            }
         except Exception as e:
             logger.error(f"Results computation failed for {experiment_id}: {e}")
             return {

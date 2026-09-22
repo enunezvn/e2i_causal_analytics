@@ -6,9 +6,10 @@ enqueue it as the post-experiment producer on a FINAL analysis."""
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import numpy as np
 
@@ -385,6 +386,106 @@ class TestFinalResultsAreIdempotent:
         outcome_repo.load_arrays.assert_not_called()
         names = [c.args[0] for c in mock_send.call_args_list if c.args]
         assert names.count("src.tasks.fidelity_tracking_update") == 1
+
+    @staticmethod
+    def _race_patches(exp_id, *, compute_raises):
+        """Two deliveries racing within one round-trip: the pre-check sees no final
+        row (both pass it), the loser's INSERT then trips ml/046's partial unique
+        index inside compute_itt_results."""
+        outcome_repo = MagicMock()
+        outcome_repo.load_arrays = AsyncMock(
+            return_value=(np.array([1.0, 2.0]), np.array([2.0, 3.0]))
+        )
+        client = MagicMock()
+        (
+            client.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value
+        ).data = [{"brand": "Fabhalta", "prediction_target": "triggers_total_count"}]
+        results_repo = MagicMock()
+        results_repo.get_results = AsyncMock(return_value=[])
+        svc = MagicMock()
+        svc.compute_itt_results = AsyncMock(side_effect=compute_raises)
+        send = MagicMock()
+        stack = ExitStack()
+        for p in (
+            patch("src.repositories.get_supabase_client", return_value=client),
+            patch(
+                "src.repositories.experiment_outcome.ExperimentOutcomeRepository",
+                return_value=outcome_repo,
+            ),
+            patch("src.repositories.ab_results.ABResultsRepository", return_value=results_repo),
+            patch("src.services.results_analysis.ResultsAnalysisService", return_value=svc),
+            patch("src.tasks.ab_testing_tasks.celery_app.send_task", send),
+        ):
+            stack.enter_context(p)
+        return stack, outcome_repo, svc, send
+
+    def test_a_delivery_that_loses_the_insert_race_skips_and_still_fires_the_producer(self):
+        """Owner fix (#2206): ml/046 makes the FINAL claim atomic. The delivery whose
+        INSERT loses is told so by the repository (FinalResultAlreadyPersisted with the
+        winner's row) and must report ``skipped`` — not ``failed`` — and still enqueue
+        fidelity tracking, exactly like the pre-check branch above."""
+        from src.repositories.ab_results import ExperimentResultRecord, FinalResultAlreadyPersisted
+        from src.tasks.ab_testing_tasks import compute_experiment_results
+
+        exp_id = str(uuid4())
+        winner = ExperimentResultRecord(
+            id=uuid4(),
+            experiment_id=UUID(exp_id),
+            analysis_type="final",
+            analysis_method="itt",
+            computed_at=datetime.now(timezone.utc),
+            primary_metric="triggers_total_count",
+            control_mean=1.0,
+            treatment_mean=1.2,
+            effect_estimate=0.2,
+            effect_ci_lower=0.1,
+            effect_ci_upper=0.3,
+            p_value=0.01,
+            sample_size_control=2,
+            sample_size_treatment=2,
+            statistical_power=0.8,
+            is_significant=True,
+        )
+        stack, outcome_repo, svc, mock_send = self._race_patches(
+            exp_id, compute_raises=FinalResultAlreadyPersisted(UUID(exp_id), winner)
+        )
+        with stack:
+            result = compute_experiment_results.run(experiment_id=exp_id, analysis_type="final")
+
+        assert result["status"] == "skipped"
+        assert "concurrent" in result["reason"]
+        assert result["results_id"] == str(winner.id)
+        # It got past the pre-check (the race is real) and only lost at the INSERT.
+        outcome_repo.load_arrays.assert_awaited_once()
+        svc.compute_itt_results.assert_awaited_once()
+        names = [c.args[0] for c in mock_send.call_args_list if c.args]
+        assert names.count("src.tasks.fidelity_tracking_update") == 1
+
+    def test_an_interim_unique_violation_is_still_a_failure(self):
+        """Any other 23505 (an interim never hits the partial index) propagates as
+        today: the task reports ``failed`` and never fires the fidelity producer."""
+        from postgrest.exceptions import APIError
+
+        from src.tasks.ab_testing_tasks import compute_experiment_results
+
+        exp_id = str(uuid4())
+        stack, _outcome_repo, _svc, mock_send = self._race_patches(
+            exp_id,
+            compute_raises=APIError(
+                {
+                    "message": 'duplicate key value violates unique constraint "x"',
+                    "code": "23505",
+                    "hint": None,
+                    "details": None,
+                }
+            ),
+        )
+        with stack:
+            result = compute_experiment_results.run(experiment_id=exp_id, analysis_type="interim")
+
+        assert result["status"] == "failed"
+        assert "duplicate key" in result["error"]
+        assert not mock_send.called
 
 
 class TestFinalAnalysisIsReconciledIndependentlyOfMilestones:
