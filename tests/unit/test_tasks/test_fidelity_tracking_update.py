@@ -340,7 +340,7 @@ class TestProducerPathResolvesTheLinkedSimulation:
 
         assert result["status"] == "completed"
         svc.compare_experiment_to_twin.assert_awaited_once_with(
-            experiment_id=exp_id, twin_simulation_id=None
+            experiment_id=exp_id, twin_simulation_id=None, analysis_type="final"
         )
         assert result["twin_simulation_id"] == str(sim_id)
 

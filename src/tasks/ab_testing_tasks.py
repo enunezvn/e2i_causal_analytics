@@ -953,7 +953,8 @@ def fidelity_tracking_update(
             try:
                 comparison = await results_service.compare_experiment_to_twin(
                     experiment_id=exp_uuid,
-                    twin_simulation_id=sim_uuid,  # None → resolves the latest sim
+                    twin_simulation_id=sim_uuid,  # None → resolves the linked sim
+                    analysis_type="final",  # never an interim row (#2206)
                 )
             except ValueError as ve:
                 return {

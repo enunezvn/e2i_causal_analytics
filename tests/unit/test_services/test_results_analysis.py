@@ -969,7 +969,9 @@ class TestCompareWithTwinPrediction:
         experiment_id: UUID,
         twin_simulation_id: UUID,
     ):
-        """Test fidelity with zero predicted effect."""
+        """A zero prediction against a real 0.01 effect is a 100% miss whose CI still
+        covers the actual (#2206, codex r6): the old contract scored it 0% "to avoid
+        division by zero", i.e. a perfect prediction."""
         actual_results = ExperimentResults(
             experiment_id=experiment_id,
             analysis_type=AnalysisType.FINAL,
@@ -1001,7 +1003,9 @@ class TestCompareWithTwinPrediction:
                 predicted_ci_upper=0.01,
             )
 
-            assert result.prediction_error_percent == 0.0  # Avoid division by zero
+            assert result.prediction_error_percent == pytest.approx(100.0)
+            assert result.ci_coverage is True  # 0.01 lies inside [-0.01, 0.01]
+            assert result.fidelity_score < 0.7
 
 
 # =============================================================================
@@ -1398,3 +1402,115 @@ class TestEdgeCases:
 
         # Should skip incomplete segment
         assert "incomplete" not in results
+
+
+def _actual(experiment_id: UUID, effect: float, lo: float, hi: float) -> ExperimentResults:
+    return ExperimentResults(
+        experiment_id=experiment_id,
+        analysis_type=AnalysisType.FINAL,
+        analysis_method=AnalysisMethod.ITT,
+        computed_at=datetime.now(timezone.utc),
+        primary_metric="conversion_rate",
+        control_mean=0.10,
+        treatment_mean=0.10 + effect,
+        effect_estimate=effect,
+        effect_ci_lower=lo,
+        effect_ci_upper=hi,
+        relative_lift=0.0,
+        relative_lift_ci_lower=0.0,
+        relative_lift_ci_upper=0.0,
+        p_value=0.5,
+        is_significant=False,
+        sample_size_control=500,
+        sample_size_treatment=500,
+        statistical_power=0.5,
+    )
+
+
+class TestZeroPredictionIsNotAPerfectPrediction:
+    """codex r6 #1 (#2206): a predicted effect of exactly 0.0 used to score
+    prediction_error_percent = 0.0 whatever the actual effect — fidelity 1.0 for a
+    complete miss — and the new roll-up would promote that into the model's score."""
+
+    @pytest.mark.asyncio
+    async def test_zero_prediction_against_a_real_effect_is_a_miss(
+        self, service: ResultsAnalysisService, experiment_id: UUID, twin_simulation_id: UUID
+    ):
+        with patch.object(service, "_persist_fidelity_comparison", new_callable=AsyncMock):
+            result = await service.compare_with_twin_prediction(
+                experiment_id=experiment_id,
+                twin_simulation_id=twin_simulation_id,
+                actual_results=_actual(experiment_id, 0.06, 0.04, 0.08),
+                predicted_effect=0.0,
+                predicted_ci_lower=-0.01,
+                predicted_ci_upper=0.01,
+            )
+        assert result.prediction_error_percent == pytest.approx(100.0)
+        assert result.ci_coverage is False
+        assert result.fidelity_score < 0.7
+        assert result.fidelity_grade == "F"
+
+    @pytest.mark.asyncio
+    async def test_zero_prediction_against_a_zero_effect_is_exact(
+        self, service: ResultsAnalysisService, experiment_id: UUID, twin_simulation_id: UUID
+    ):
+        with patch.object(service, "_persist_fidelity_comparison", new_callable=AsyncMock):
+            result = await service.compare_with_twin_prediction(
+                experiment_id=experiment_id,
+                twin_simulation_id=twin_simulation_id,
+                actual_results=_actual(experiment_id, 0.0, -0.01, 0.01),
+                predicted_effect=0.0,
+                predicted_ci_lower=-0.01,
+                predicted_ci_upper=0.01,
+            )
+        assert result.prediction_error_percent == 0.0
+        assert result.fidelity_grade == "A"
+
+    @pytest.mark.asyncio
+    async def test_symmetric_error_is_the_same_formula_off_zero(
+        self, service: ResultsAnalysisService, experiment_id: UUID, twin_simulation_id: UUID
+    ):
+        """|actual - predicted| / max(|predicted|, |actual|): 0.05 vs 0.04 → 20%."""
+        with patch.object(service, "_persist_fidelity_comparison", new_callable=AsyncMock):
+            result = await service.compare_with_twin_prediction(
+                experiment_id=experiment_id,
+                twin_simulation_id=twin_simulation_id,
+                actual_results=_actual(experiment_id, 0.04, 0.02, 0.06),
+                predicted_effect=0.05,
+                predicted_ci_lower=0.03,
+                predicted_ci_upper=0.07,
+            )
+        assert result.prediction_error_percent == pytest.approx(20.0)
+
+
+class TestCompareExperimentToTwinSelectsTheAnalysisType:
+    """codex r6 #2 (#2206): the FINAL-results producer must compare against a FINAL
+    result row, never whichever row is newest (an interim one)."""
+
+    @pytest.mark.asyncio
+    async def test_final_selector_is_passed_to_the_results_read_and_no_final_row_raises(
+        self, service: ResultsAnalysisService, experiment_id: UUID
+    ):
+        from unittest.mock import MagicMock
+
+        repo = MagicMock()
+        repo.get_results = AsyncMock(return_value=[])
+        with patch("src.repositories.ab_results.ABResultsRepository", return_value=repo):
+            with pytest.raises(ValueError, match="final"):
+                await service.compare_experiment_to_twin(
+                    experiment_id=experiment_id, analysis_type="final"
+                )
+        repo.get_results.assert_awaited_once_with(experiment_id, analysis_type="final")
+
+    @pytest.mark.asyncio
+    async def test_no_selector_keeps_the_general_endpoint_behaviour(
+        self, service: ResultsAnalysisService, experiment_id: UUID
+    ):
+        from unittest.mock import MagicMock
+
+        repo = MagicMock()
+        repo.get_results = AsyncMock(return_value=[])
+        with patch("src.repositories.ab_results.ABResultsRepository", return_value=repo):
+            with pytest.raises(ValueError):
+                await service.compare_experiment_to_twin(experiment_id=experiment_id)
+        repo.get_results.assert_awaited_once_with(experiment_id, analysis_type=None)
