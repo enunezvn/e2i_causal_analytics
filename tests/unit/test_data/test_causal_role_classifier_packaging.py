@@ -76,6 +76,25 @@ def test_matcher_models_docker_root_only_semantics_for_slashless_patterns() -> N
     # match a root-level file with no directory to consume — a leading `**/*.json`
     # covers `root.json` exactly like a bare `*.json` would.
     assert matches("**/*.json", "root.json")
+    # Go's `filepath.Match` (what Docker's pattern matcher is built on) supports
+    # bracket character classes; the real .dockerignore has `*.py[cod]`.
+    assert matches("*.py[cod]", "root.pyc")
+    assert not matches("*.py[cod]", "root.py")
+    assert not matches("*.py[cod]", "sub/x.pyc")
+
+
+def test_every_real_dockerignore_pattern_compiles_through_the_matcher() -> None:
+    """Conformance: no pattern currently in .dockerignore raises inside `matches`.
+
+    Guards the tokenizer itself (character classes, `**` forms, escaping) against a
+    FUTURE .dockerignore edit that adds a glob shape the translator cannot handle —
+    such a pattern should fail a match, never raise, in the guards above."""
+    for raw in _DOCKERIGNORE.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        pattern = line[1:] if line.startswith("!") else line
+        matches(pattern, "x")  # must not raise
 
 
 def _own_copy_sources(dockerfile_text: str, stage_name: str) -> set[str]:

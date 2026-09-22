@@ -27,20 +27,70 @@ import re
 from pathlib import Path
 
 
+def _translate(pattern: str) -> str:
+    """Translate one `.dockerignore` glob into a Python regex, TOKEN BY TOKEN.
+
+    Walking the pattern (rather than `re.escape`-then-substitute, the previous
+    approach) is what lets a bracket expression survive as a REGEX CHARACTER
+    CLASS instead of being escaped into a literal `\\[cod\\]`. Docker's matcher is
+    built on Go's `filepath.Match`, and the real `.dockerignore` here has
+    `*.py[cod]` (line 19) — `filepath.Match`'s `[abc]` / `[^abc]` / `[a-z]` syntax
+    is the same as POSIX/regex character classes (including `^`-negation), so a
+    well-formed bracket expression is copied through near-verbatim.
+
+    Token rules, in priority order:
+      * `**/` — zero or more WHOLE path segments (moby's compiler); `(?:.*/)?`.
+      * `**` (not followed by `/`) — matches anything, including `/`; `.*`.
+      * `*` — one path segment, never crosses `/`; `[^/]*`.
+      * `?` — one character, never a `/`; `[^/]`.
+      * `[...]` (well-formed: closes with a `]`) — copied through as a regex
+        character class. An unterminated `[` (no closing `]`) is Go's own
+        fallback case — treated as a literal `[`, not a class.
+      * anything else — a literal character, `re.escape`d individually.
+    """
+    out: list[str] = []
+    i, n = 0, len(pattern)
+    while i < n:
+        if pattern.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif pattern[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif pattern[i] == "?":
+            out.append("[^/]")
+            i += 1
+        elif pattern[i] == "[":
+            # A literal `]` may immediately follow `[` or `[^` without closing the
+            # class (both Go and POSIX/regex convention) — skip past it before
+            # searching for the real closing bracket.
+            j = i + 1
+            if j < n and pattern[j] == "^":
+                j += 1
+            if j < n and pattern[j] == "]":
+                j += 1
+            end = pattern.find("]", j)
+            if end == -1:
+                out.append(re.escape(pattern[i]))
+                i += 1
+            else:
+                out.append(f"[{pattern[i + 1 : end]}]")
+                i = end + 1
+        else:
+            out.append(re.escape(pattern[i]))
+            i += 1
+    return "".join(out)
+
+
 def matches(pattern: str, rel_path: str) -> bool:
     """True when a .dockerignore `pattern` matches `rel_path` or a parent dir."""
     pattern = pattern.rstrip("/")
     if not pattern:
         return False
-    # `**/` (moby's compiler) matches ZERO OR MORE whole path segments, so it must
-    # translate to an OPTIONAL group — `(.*/)?` — not a bare `.*` followed by a
-    # required literal `/`, otherwise a pattern like `**/*.json` would wrongly fail
-    # to match a root-level `root.json` (no directory to consume). A bare `**` not
-    # followed by `/` (e.g. a trailing `data/kg_cache/**`) has no such zero-segment
-    # case and stays `.*`. `*` (single star) never spans a `/`.
-    regex = re.escape(pattern)
-    regex = regex.replace(r"\*\*/", "\x00").replace(r"\*\*", "\x01").replace(r"\*", "[^/]*")
-    regex = regex.replace("\x00", "(.*/)?").replace("\x01", ".*").replace(r"\?", "[^/]")
+    regex = _translate(pattern)
     if re.fullmatch(regex, rel_path):
         return True
     # A directory pattern also covers everything beneath it.
