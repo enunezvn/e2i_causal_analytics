@@ -824,6 +824,8 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ### Task 3: Migration 148 + the "one column per exported field" contract test
 
+> **Amended after review (commit `c9be0e9a5`):** the contract test's SQL parser captures ANY type word and raises `AssertionError` for a type outside `_KNOWN_TYPES` instead of silently skipping the column (a `DOUBLE PRECISION` / `BIGINT` / `JSONB` column could otherwise pass the "no more" half of the contract unnoticed); one extra test feeds such a line to `_sql_columns`.
+
 **Files:**
 - Create: `database/migrations/148_optum_biologic_persistence_causal.sql`
 - Create: `database/migrations/rollback_148_optum_biologic_persistence_causal.sql`
@@ -1140,6 +1142,8 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ---
 
 ### Task 4: The idempotent loader (`--dry-run` default, arm-split verification)
+
+> **Amended after review (commit `6332934d6`):** `--dry-run` is an explicit flag (mutually exclusive with `--execute`; neither = dry run) so the spec's literal command works; `arm_split` / `fetch_live_split` / `verify` also carry `"treatment": {"0": n, "1": n}` keyed on `treatment_dupixent` (the column the causal run reads); the fake client writes only on `.execute()` and returns `count=None` unless `count="exact"` was requested (both regressions mutation-proven caught). The review also established from postgrest 2.27.0's `execute()` that a PostgREST 4xx raises `APIError`, so a partial write aborts with a traceback and never prints VERIFIED.
 
 **Files:**
 - Create: `scripts/load_optum_causal_cohort.py`
@@ -1761,6 +1765,8 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ---
 
 ### Task 5: Register `optum_biologic_persistence` in the causal dataset registry
+
+> **Amended after review (commits `fc2f68e8f`, `b6096abf0`, `d47a16525`):** the closed-list pin `tests/unit/test_repositories/test_has_provenance_family_894.py` gained the new table (27 → 28); `datasets.py`'s manifest import sits where ruff's isort wants it; **two behaviour fixes in `loaders.py`**: (1) `_load_agent_estimation_frame` refuses a constant treatment with a 400 right after the frame is built (a one-brand scope on this dataset would otherwise reach DoWhy, which returns a finite estimate on a constant treatment while `refutation.py`'s `nunique()==2` check silently switches to the continuous path), and the registry comment describes that guard; (2) `_one_hot_categoricals` emits a `<col>=__missing__` dummy when a categorical has NULLs (8.1 % of the real cohort's `geographic_region`) instead of collapsing NULL into the drop_first reference level — so the real run resolves 77 covariates, not 76; synthetic datasets have no NULL categoricals and are unchanged. Known, not fixed here: the discovery leaderboard's `_DISCOVERY_ROW_CAP` (5,000) would subsample this 15,209-row cohort if a `causal_paths` row ever names `treatment_dupixent` (none does today).
 
 **Files:**
 - Modify: `src/api/routes/causal/datasets.py` (`_CAUSAL_DATASET_SPECS` line 60 block end ~line 217; `_CAUSAL_NUMERIC_COLUMNS` line 413; `_CAUSAL_BRAND_COLUMN` line 472; `_CAUSAL_PHYSICAL_TABLE` line 571; `_CAUSAL_CATEGORICAL_COLUMNS` line 580)
