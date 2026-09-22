@@ -25,10 +25,30 @@ def _frame():
 
 
 @pytest.fixture
-def panel(_frame, stub_lm) -> FeatureRolePanel:
+def panel(_frame, stub_lm, reviewed_optum_attestations) -> FeatureRolePanel:
+    # The optum attestations are re-signed ``human`` here (conftest): the
+    # deciding path needs a reviewed attestation (Lane B, spec §7 / item 5).
     return build_feature_role_panel_sync(
         _frame, manifest_source="optum", treatment=TREATMENT, outcome=OUTCOME, seed=7
     )
+
+
+def test_machine_attestations_are_audit_only_on_the_real_manifest(_frame, stub_lm) -> None:
+    """Lane B (spec §7 / Lane B item 5): WITHOUT the re-signing, the optum
+    manifest's attestations are ``provenance="machine"`` and the structural
+    decider treats them as audit-only — the attested features are NOT decided
+    structurally; Layer 4 fires and informs, the ensemble abstains for human
+    review. Characterises the merged behaviour on the real manifest today."""
+    real = build_feature_role_panel_sync(
+        _frame, manifest_source="optum", treatment=TREATMENT, outcome=OUTCOME, seed=7
+    )
+    for name in ("age_at_index", "dx_total_csu"):
+        rec = real.records[name]
+        assert rec.ensemble["decided_by"] != "structural", (name, rec.ensemble)
+    rec = real.records["age_at_index"]
+    assert rec.ensemble["decided_by"] == "abstain", rec.ensemble
+    assert rec.ensemble["final_role"] is None
+    assert rec.layer_4["fired"] is True  # informs only; the LLM never decides
 
 
 def test_profile_is_per_run_and_flips_no_global(panel: FeatureRolePanel) -> None:

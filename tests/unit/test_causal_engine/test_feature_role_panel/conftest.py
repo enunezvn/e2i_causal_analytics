@@ -94,3 +94,41 @@ def _no_paid_llm(monkeypatch: pytest.MonkeyPatch) -> None:
     for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "AZURE_API_KEY", "AZURE_OPENAI_API_KEY"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.delenv("ADAPTIVE_LAYER4_LLM_DECIDES", raising=False)
+
+
+@pytest.fixture
+def reviewed_optum_attestations(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Sign the ``optum`` manifest's attestations ``human`` for this test.
+
+    Lane B (spec §7 / Lane B item 5): the 110 Optum attestations are
+    ``provenance="machine"`` — research-agent output with no human sign-off —
+    and the structural decider treats a machine attestation as AUDIT-ONLY, so
+    on the real manifest it abstains and Layer 4 informs. The tests that
+    exercise the DECIDING path need a reviewed attestation; re-signing keeps
+    the real contracts and the real authored edges, only the signature moves.
+    """
+    import dataclasses
+    import importlib
+
+    from src.data import manifests as manifests_mod
+
+    # The nodes package re-exports a FUNCTION named adaptive_validity_check;
+    # the module (which binds lookup_feature_contract at import) is fetched
+    # by its full name.
+    avc = importlib.import_module(
+        "src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check"
+    )
+
+    real = manifests_mod.lookup_feature_contract
+
+    def _signed(*args: Any, **kwargs: Any) -> Any:
+        contract = real(*args, **kwargs)
+        att = getattr(contract, "causal_structure", None)
+        if att is not None and att.provenance == "machine":
+            return dataclasses.replace(
+                contract, causal_structure=dataclasses.replace(att, provenance="human")
+            )
+        return contract
+
+    monkeypatch.setattr(manifests_mod, "lookup_feature_contract", _signed)
+    monkeypatch.setattr(avc, "lookup_feature_contract", _signed)
