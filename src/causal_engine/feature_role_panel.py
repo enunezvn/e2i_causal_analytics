@@ -84,6 +84,12 @@ class FeatureRoleRecord:
     ensemble: Dict[str, Any]
     leak_verdict: bool
     leak_source: Optional[str] = None
+    #: True when the leak verdict rests on Layer 3 alone for a column with NO
+    #: contract: Layer 3 measures predictiveness of Y, not timing, so the
+    #: column's temporal status is unknown. It is excluded from adjustment per
+    #: spec 3(b) but must be presented as a review item, never as proven
+    #: leakage (codex r1). A post-index contract IS proven: no review flag.
+    review_required: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -99,6 +105,7 @@ class FeatureRoleRecord:
             ensemble=dict(payload.get("ensemble") or {}),
             leak_verdict=bool(payload.get("leak_verdict", False)),
             leak_source=payload.get("leak_source"),
+            review_required=bool(payload.get("review_required", False)),
         )
 
 
@@ -298,6 +305,7 @@ async def build_feature_role_panel(
             layer_1: Dict[str, Any] = {
                 "contract_present": False,
                 "verdict": "no_contract",
+                "temporal_status": "unknown",
                 "declared_safe": False,
                 "knowable_at": None,
                 "source": None,
@@ -311,6 +319,7 @@ async def build_feature_role_panel(
             layer_1 = {
                 "contract_present": True,
                 "verdict": "pre_index" if declared_safe else "post_index",
+                "temporal_status": "pre_index" if declared_safe else "post_index",
                 "declared_safe": declared_safe,
                 "knowable_at": str(contract.knowable_at),
                 "source": contract.source,
@@ -369,6 +378,7 @@ async def build_feature_role_panel(
                 "verified": v.get("citations_verified") if v else None,
                 "unverified": v.get("citations_unverified") if v else None,
                 "verified_ids": list((v.get("verified_citation_ids") if v else None) or []),
+                "verdicts": list((v.get("citation_verdicts") if v else None) or []),
             },
             "evaluator": {
                 key: (v.get(f"evaluator_{key}") if v else None)
@@ -430,6 +440,7 @@ async def build_feature_role_panel(
             ensemble=ensemble,
             leak_verdict=leak_source is not None,
             leak_source=leak_source,
+            review_required=(leak_source == LEAK_SOURCE_LAYER_3 and contract is None),
         )
 
     layer_activity = _summarise(
@@ -526,6 +537,7 @@ def _summarise(
             "abstain_rate": (n_abstain / n) if n else 0.0,
             "leak_verdicts": sum(1 for r in recs if r.leak_verdict),
             "leak_sources": dict(Counter(str(r.leak_source) for r in recs if r.leak_verdict)),
+            "review_required": sum(1 for r in recs if r.review_required),
         },
     }
 
@@ -550,26 +562,38 @@ class ConfounderChannels:
     modeled_confounders: List[str]
     anchored_confounders: Optional[List[str]]
     instruments: List[str]
+    #: ``(feature, why)`` for every declared covariate taken OUT of the modeled
+    #: set: a leak source (``layer_1_post_index`` / ``layer_3_high``) or an
+    #: approved non-confounder role (``approved_mediator`` / ``approved_collider``
+    #: / ``approved_descendant`` / ``approved_instrument``).
     removed: List[Tuple[str, str]]
     warnings: List[str]
+    #: Removed covariates whose exclusion rests on Layer 3 alone (temporal
+    #: status unknown): excluded per spec 3(b), but a human must confirm.
+    review_required: List[str] = field(default_factory=list)
 
 
-def _leak_map(panel: PanelLike) -> Tuple[Dict[str, Optional[str]], int]:
-    """feature -> leak_source (None when no leak) for panel features, + panel size."""
+#: Approved roles that are NOT backdoor variables and leave the modeled set.
+_NON_ADJUSTMENT_ROLES = ("mediator", "collider", "descendant", "instrument")
+
+
+def _leak_map(panel: PanelLike) -> Tuple[Dict[str, Tuple[Optional[str], bool]], int]:
+    """feature -> (leak_source or None, review_required) for panel features, + size."""
     if isinstance(panel, FeatureRolePanel):
         return (
             {
-                name: (rec.leak_source if rec.leak_verdict else None)
+                name: ((rec.leak_source if rec.leak_verdict else None), bool(rec.review_required))
                 for name, rec in panel.records.items()
             },
             len(panel.records),
         )
     records = panel.get("records") or {}
-    out: Dict[str, Optional[str]] = {}
+    out: Dict[str, Tuple[Optional[str], bool]] = {}
     for name, rec in records.items():
         rec = rec or {}
         leak = bool(rec.get("leak_verdict"))
-        out[str(name)] = (rec.get("leak_source") or LEAK_SOURCE_LAYER_3) if leak else None
+        source = (rec.get("leak_source") or LEAK_SOURCE_LAYER_3) if leak else None
+        out[str(name)] = (source, bool(rec.get("review_required")))
     return out, len(records)
 
 
@@ -582,17 +606,31 @@ def derive_confounder_channels(
     """Apply the panel to the agent's confounder channels (spec item 3(d)).
 
     * ``modeled_confounders`` = the declared covariates minus those carrying a
-      leak verdict; each removal is a NAMED warning (the response's only prose
-      channel), never a silent drop.
+      leak verdict and minus those whose APPROVED role is not a backdoor
+      variable (mediator / collider / descendant / instrument); each removal is
+      a NAMED warning (the response's only prose channel), never a silent drop.
     * ``anchored_confounders`` = approved ``confounder`` features with no leak
       verdict (None when ``approved_structure_roles`` is None — Lane B's seam).
+    * ``instruments`` = approved instruments with no leak verdict, for the
+      state's ``instruments`` channel. They are NOT adjusted for and NOT
+      anchored: graph_builder forces ``conf -> outcome`` for every anchored
+      confounder and an instrument must not have that edge.
+    * A Layer-3-only exclusion of an uncontracted column is listed in
+      ``review_required``: Layer 3 measures predictiveness of Y, not timing, so
+      the warning says the temporal status is unknown (codex r1).
     * A declared covariate the panel never saw is kept and named: the panel
       cannot vouch for a column it did not evaluate.
     """
     leaks, n_panel = _leak_map(panel)
+    approved: Dict[str, str] = (
+        {str(k): str(v) for k, v in approved_structure_roles.items()}
+        if approved_structure_roles is not None
+        else {}
+    )
     modeled: List[str] = []
     removed: List[Tuple[str, str]] = []
     warnings: List[str] = []
+    review: List[str] = []
     for cov in declared_covariates:
         name = str(cov)
         if name not in leaks:
@@ -602,28 +640,44 @@ def derive_confounder_channels(
                 "evaluated); kept in modeled_confounders unvetted"
             )
             continue
-        source = leaks[name]
-        if source is None:
-            modeled.append(name)
+        source, _needs_review = leaks[name]
+        if source is not None:
+            removed.append((name, source))
+            if source == LEAK_SOURCE_LAYER_1:
+                warnings.append(
+                    f"feature_role_panel: '{name}' removed from modeled_confounders "
+                    f"(leak verdict: {source}); a post-index column is not a backdoor variable"
+                )
+            else:
+                review.append(name)
+                warnings.append(
+                    f"feature_role_panel: '{name}' removed from modeled_confounders "
+                    f"(leak verdict: {source}); it confidently predicts the outcome and has "
+                    "no manifest contract, so its temporal status unknown — excluded per "
+                    "spec 3(b) pending temporal review, not proven leakage"
+                )
             continue
-        removed.append((name, source))
-        reason = (
-            "a post-index column is not a backdoor variable"
-            if source == LEAK_SOURCE_LAYER_1
-            else "an uncontracted covariate that confidently leaks the outcome is not a backdoor variable"
-        )
-        warnings.append(
-            f"feature_role_panel: '{name}' removed from modeled_confounders "
-            f"(leak verdict: {source}); {reason}"
-        )
+        role = approved.get(name)
+        if role in _NON_ADJUSTMENT_ROLES:
+            removed.append((name, f"approved_{role}"))
+            warnings.append(
+                f"feature_role_panel: '{name}' removed from modeled_confounders "
+                f"(approved structure derives {role}); a {role} is not a backdoor variable"
+                + (
+                    " — routed to the instruments channel, not adjusted for and not anchored"
+                    if role == "instrument"
+                    else ""
+                )
+            )
+            continue
+        modeled.append(name)
 
     anchored: Optional[List[str]] = None
     instruments: List[str] = []
     if approved_structure_roles is not None:
         anchored = []
-        for feat, role in approved_structure_roles.items():
-            name = str(feat)
-            source = leaks.get(name)
+        for name, role in approved.items():
+            source, _needs_review = leaks.get(name, (None, False))
             if role == "confounder":
                 if source is None:
                     anchored.append(name)
@@ -640,13 +694,16 @@ def derive_confounder_channels(
                         f"feature_role_panel: approved instrument '{name}' not used "
                         f"(leak verdict: {source})"
                     )
-            # mediator / collider / descendant / ancestor: not adjustment inputs.
+            # mediator / collider / descendant / ancestor: handled in the loop
+            # above (never adjustment inputs; an ancestor of T alone is neither
+            # anchored nor removed).
     return ConfounderChannels(
         modeled_confounders=modeled,
         anchored_confounders=anchored,
         instruments=instruments,
         removed=removed,
         warnings=warnings,
+        review_required=review,
     )
 
 

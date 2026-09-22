@@ -1585,6 +1585,20 @@ _DECIDED_BY_TO_LAYER: dict[str, str] = {
 }
 
 
+def _citation_verdict_to_dict(verdict: "CitationVerdict", *, verified: bool) -> dict[str, Any]:
+    """Serialise one ``CitationVerdict`` for the legacy dict / sidecar (JSON-safe)."""
+    return {
+        "identifier": verdict.identifier,
+        "identifier_kind": verdict.identifier_kind,
+        "verified": bool(verified),
+        "abstract_resolved": bool(verdict.abstract_resolved),
+        "entities_found": list(verdict.entities_found or ()),
+        "causal_cue_found": verdict.causal_cue_found,
+        "overall_confidence": float(verdict.overall_confidence),
+        "error": verdict.error,
+    }
+
+
 def _ensemble_to_legacy_dict(
     verdict: EnsembleVerdict,
     *,
@@ -1732,6 +1746,12 @@ def _ensemble_to_legacy_dict(
         "final_role": verdict.final_role,
         "confidence": verdict.confidence,
         "llm_mechanism": (getattr(llm_in, "mechanism", None) if llm_in is not None else None),
+        # Lane E (sidecar 1.9): the per-citation records behind the counts, so a
+        # reviewer can see WHY a cited PMID passed or failed (codex r1 MED).
+        "citation_verdicts": [
+            _citation_verdict_to_dict(c, verified=True) for c in verdict.verified_citations
+        ]
+        + [_citation_verdict_to_dict(c, verified=False) for c in verdict.unverified_citations],
         # Layer-4 evaluator audit-only fields (Plan
         # .claude/plans/layer4_evaluator_audit_signal.md). All five
         # keys are None when the evaluator is disabled, the evaluator
@@ -1875,6 +1895,7 @@ def _legacy_adversarial_alone_verdict(
         "final_role": None,
         "confidence": None,
         "llm_mechanism": None,
+        "citation_verdicts": [],
         # Layer-4 evaluator audit-only fields (Plan
         # .claude/plans/layer4_evaluator_audit_signal.md). Adversarial-only
         # bypass has no LLM verdict, so the evaluator never runs.
@@ -1987,6 +2008,7 @@ def _legacy_info_verdict(
         "final_role": None,
         "confidence": None,
         "llm_mechanism": None,
+        "citation_verdicts": [],
         # Layer-4 evaluator audit-only fields (Plan
         # .claude/plans/layer4_evaluator_audit_signal.md). Info-only
         # bypass has no LLM verdict.
@@ -2088,6 +2110,7 @@ def _legacy_short_circuit_verdict(feature: str, *, evidence: str) -> dict[str, A
         "final_role": None,
         "confidence": None,
         "llm_mechanism": None,
+        "citation_verdicts": [],
         # Layer-4 evaluator audit-only fields (Plan
         # .claude/plans/layer4_evaluator_audit_signal.md). Short-circuit
         # bypass (too-few-rows / scoring-error) has no LLM verdict.

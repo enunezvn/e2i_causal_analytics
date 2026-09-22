@@ -62,11 +62,12 @@ logger = logging.getLogger(__name__)
 # LLM verdict cited were actually verified against the abstracts behind them.
 # Emitted unconditionally by every verdict path so the schema stays uniform;
 # absent on pre-1.8 sidecars (surface as None/[] without a warning). MAJOR=1.
-# 1.9 (Lane E, real-data causal estimation): three additive per-verdict keys
-# (``final_role`` / ``confidence`` / ``llm_mechanism``) surfacing the ensemble
-# role + confidence and the LLM mechanism the legacy adapter used to drop, so the
+# 1.9 (Lane E, real-data causal estimation): four additive per-verdict keys
+# (``final_role`` / ``confidence`` / ``llm_mechanism`` / ``citation_verdicts``)
+# surfacing the ensemble role + confidence, the LLM mechanism and the
+# per-citation verification records the legacy adapter used to drop, so the
 # causal feature-role panel reads them instead of re-deriving the voter. Emitted
-# on every producer path (None on the bypasses); absent on pre-1.9 sidecars
+# on every producer path (None / [] on the bypasses); absent on pre-1.9 sidecars
 # (surface as None without a warning). MAJOR=1.
 #: THE sidecar schema version. Single source of truth for both sides of the
 #: contract (#1620): the producer
@@ -124,6 +125,7 @@ _KNOWN_VERDICT_KEYS: frozenset[str] = frozenset(
         "final_role",
         "confidence",
         "llm_mechanism",
+        "citation_verdicts",
         # Phase 2.6 citation channel (#1608). Registered in lockstep with the
         # writer's 1.8 bump so a current sidecar does not trip the
         # unknown-verdict-key WARN on every file.

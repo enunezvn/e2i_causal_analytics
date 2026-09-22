@@ -26,7 +26,7 @@ from src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check import
 from src.data.feature_contract import FeatureContract, KnowableAt
 from src.data.kg.types import EnsembleVerdict, LLMVerdict
 
-_NEW_KEYS = ("final_role", "confidence", "llm_mechanism")
+_NEW_KEYS = ("final_role", "confidence", "llm_mechanism", "citation_verdicts")
 
 
 def _post_index_contract() -> FeatureContract:
@@ -73,6 +73,55 @@ def test_llm_mechanism_is_the_llm_verdicts_mechanism() -> None:
     assert legacy["confidence"] == 0.4
 
 
+def test_per_citation_verdicts_cross_the_legacy_boundary() -> None:
+    """codex r1 MED: counts alone cannot tell a reviewer WHY a citation passed or
+    failed; the serialised CitationVerdict records must survive the adapter."""
+    from src.data.kg.types import CitationVerdict
+
+    ok = CitationVerdict(
+        identifier="12345678",
+        identifier_kind="pmid",
+        abstract_resolved=True,
+        entities_found=("omalizumab", "urticaria"),
+        causal_cue_found="reduces",
+        overall_confidence=0.9,
+    )
+    bad = CitationVerdict(
+        identifier="99999999",
+        identifier_kind="pmid",
+        abstract_resolved=False,
+        error="Europe PMC: 404",
+    )
+    verdict = EnsembleVerdict(
+        feature_name="f",
+        severity="info",
+        remediation="keep",
+        decided_by="adversarial",
+        confidence=0.4,
+        verified_citations=(ok,),
+        unverified_citations=(bad,),
+        llm_input=LLMVerdict(
+            causal_role="confounder",
+            mechanism="m (PMID:12345678, PMID:99999999)",
+            recommended_remediation="keep_with_caveat",
+            cited_pmids=("12345678", "99999999"),
+        ),
+    )
+    legacy = _ensemble_to_legacy_dict(verdict, adversarial_input=None)
+    assert legacy["citations_checked"] == 2 and legacy["citations_verified"] == 1
+    records = {r["identifier"]: r for r in legacy["citation_verdicts"]}
+    assert records["12345678"]["verified"] is True
+    assert records["12345678"]["entities_found"] == ["omalizumab", "urticaria"]
+    assert records["12345678"]["causal_cue_found"] == "reduces"
+    assert records["12345678"]["overall_confidence"] == 0.9
+    assert records["99999999"]["verified"] is False
+    assert records["99999999"]["abstract_resolved"] is False
+    assert records["99999999"]["error"] == "Europe PMC: 404"
+    from src.data.audit_sidecar_reader import _KNOWN_VERDICT_KEYS
+
+    assert "citation_verdicts" in _KNOWN_VERDICT_KEYS
+
+
 def test_bypass_paths_emit_the_keys_as_nulls() -> None:
     """Schema uniformity: the sidecar and the panel must never KeyError."""
     adv = {
@@ -91,7 +140,7 @@ def test_bypass_paths_emit_the_keys_as_nulls() -> None:
     ):
         for key in _NEW_KEYS:
             assert key in legacy, (key, legacy.get("decided_by"))
-            assert legacy[key] is None
+            assert legacy[key] in (None, []), (key, legacy[key])
 
 
 def test_reader_knows_the_keys_and_the_schema_is_1_9() -> None:

@@ -66,13 +66,27 @@ def test_layer_1_post_index_is_a_leak_verdict(panel: FeatureRolePanel) -> None:
     assert rec.ensemble["confidence"] == 1.0
 
 
-def test_layer_3_high_without_a_contract_is_a_leak_verdict(panel: FeatureRolePanel) -> None:
+def test_layer_3_high_without_a_contract_is_a_leak_verdict_needing_review(
+    panel: FeatureRolePanel,
+) -> None:
+    """Spec 3(b) excludes a Layer-3 high from adjustment; codex r1: absence of a
+    contract is not evidence of timing, so the record says ``unknown`` and
+    ``review_required`` rather than presenting it as proven leakage."""
     rec = panel.records["leak_probe"]
     assert rec.layer_1["verdict"] == "no_contract"
+    assert rec.layer_1["temporal_status"] == "unknown"
     assert rec.layer_3["ran"] is True
     assert rec.layer_3["z_score"] > 5.0
     assert rec.leak_verdict is True
     assert rec.leak_source == "layer_3_high"
+    assert rec.review_required is True
+    # Proven leakage (post-index contract) needs no review; a declared-safe
+    # covariate is neither.
+    assert panel.records["treatment_initiated"].layer_1["temporal_status"] == "post_index"
+    assert panel.records["treatment_initiated"].review_required is False
+    assert panel.records["age_at_index"].layer_1["temporal_status"] == "pre_index"
+    assert panel.records["age_at_index"].review_required is False
+    assert panel.layer_activity["ensemble"]["review_required"] == 1
 
 
 def test_declared_safe_covariates_are_never_leak_verdicts(panel: FeatureRolePanel) -> None:
@@ -138,6 +152,7 @@ def test_layer_4_fires_under_the_profile_but_only_informs(panel: FeatureRolePane
         "verified": 0,
         "unverified": 0,
         "verified_ids": [],
+        "verdicts": [],
     }
     # Audit-only: with the Layer-3 signal joint-clamped to info and the LLM not
     # allowed to decide, no precedence rule fires and the voter ABSTAINS — the

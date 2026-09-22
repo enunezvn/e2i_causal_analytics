@@ -514,6 +514,32 @@ class AgentCausalAnalysisRequest(BaseModel):
             "confounders. False = use the agent's domain-knowledge DAG."
         ),
     )
+    # Lane E (real-data causal estimation, item 3(d)): the feature-role panel
+    # for this dataset's covariates, as ``FeatureRolePanel.to_dict()`` (built
+    # by scripts/measure_feature_role_panel.py and recorded as evidence — it is
+    # NOT built inside the request: Layer 3 runs minutes on a real frame and
+    # Layer 4 is a paid LLM). When present, graph_builder removes leak-verdict
+    # covariates from the adjustment set with a named warning in ``warnings``.
+    feature_role_panel: Optional[Dict[str, Any]] = Field(
+        None,
+        description=(
+            "Serialised feature-role panel (src.causal_engine.feature_role_panel."
+            "FeatureRolePanel.to_dict()) for this dataset's covariates. When set, "
+            "covariates the panel marks as leak verdicts are removed from the "
+            "adjustment set and named in warnings."
+        ),
+    )
+    # Lane B's seam: feature -> role from an APPROVED structural review. Only
+    # ``confounder`` anchors; mediator / collider / descendant / instrument are
+    # kept out of the adjustment set (see derive_confounder_channels).
+    approved_structure_roles: Optional[Dict[str, str]] = Field(
+        None,
+        description=(
+            "feature -> derived role from an APPROVED structural review "
+            "(confounder anchors the DAG prior; mediator/collider/descendant/"
+            "instrument leave the adjustment set). Requires feature_role_panel."
+        ),
+    )
 
 
 class EdgeProvenanceModel(BaseModel):

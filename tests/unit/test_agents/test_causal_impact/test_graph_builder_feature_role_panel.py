@@ -114,9 +114,54 @@ class TestDeriveConfounderChannels:
         )
         assert ch.anchored_confounders == ["c1"]
         assert ch.instruments == ["z"]
-        assert ch.modeled_confounders == ["c1", "z"]
+        # The approved instrument leaves the modeled set (codex r1 HIGH): it is
+        # neither adjusted for nor anchored.
+        assert ch.modeled_confounders == ["c1"]
         assert ("c2", "layer_3_high") in ch.removed
+        assert ("z", "approved_instrument") in ch.removed
         assert any("c2" in w and "not anchored" in w for w in ch.warnings), ch.warnings
+
+    def test_approved_non_confounder_roles_leave_the_modeled_set(self) -> None:
+        """codex r1 HIGH: an approved mediator / collider / descendant is not a
+        backdoor variable and must NOT be adjusted for; an approved instrument
+        leaves the modeled set too and goes to the ``instruments`` channel."""
+        ch = derive_confounder_channels(
+            _panel(),
+            declared_covariates=["c1", "c2", "post_dx", "z"],
+            approved_structure_roles={
+                "c1": "confounder",
+                "c2": "mediator",
+                "post_dx": "collider",
+                "z": "instrument",
+            },
+        )
+        assert ch.modeled_confounders == ["c1"]
+        assert ch.anchored_confounders == ["c1"]
+        assert ch.instruments == ["z"]
+        assert [r for r in ch.removed] == [
+            ("c2", "approved_mediator"),
+            ("post_dx", "approved_collider"),
+            ("z", "approved_instrument"),
+        ]
+        assert any("c2" in w and "mediator" in w for w in ch.warnings), ch.warnings
+        assert any("z" in w and "instrument" in w and "not adjusted" in w for w in ch.warnings)
+
+    def test_uncontracted_layer_3_exclusion_is_marked_for_temporal_review(self) -> None:
+        """codex r1 HIGH: Layer 3 measures predictiveness of Y, not timing. An
+        uncontracted Layer-3-high covariate is excluded per spec 3(b) but the
+        warning must say its temporal status is UNKNOWN and needs review — never
+        present it as proven leakage."""
+        ch = derive_confounder_channels(_panel(c2="layer_3_high"), declared_covariates=["c1", "c2"])
+        assert ch.modeled_confounders == ["c1"]
+        assert ch.removed == [("c2", "layer_3_high")]
+        w = ch.warnings[0]
+        assert "c2" in w and "temporal status unknown" in w and "review" in w, w
+        assert ch.review_required == ["c2"]
+        # A post-index contract IS proven leakage: no review flag.
+        ch1 = derive_confounder_channels(
+            _panel(post_dx="layer_1_post_index"), declared_covariates=["post_dx"]
+        )
+        assert ch1.review_required == []
 
     def test_accepts_the_serialised_panel(self) -> None:
         payload = _panel(post_dx="layer_1_post_index").to_dict()
@@ -159,6 +204,7 @@ class TestGraphBuilderReadsThePanel:
         )
         assert result["anchored_confounders"] == ["c1"]
         assert result["instruments"] == ["z"]
+        assert result["modeled_confounders"] == ["c1", "c2", "post_dx"]  # z was never declared
         assert "warnings" not in result or not [w for w in result["warnings"] if "removed" in w]
 
     @pytest.mark.asyncio

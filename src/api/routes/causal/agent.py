@@ -311,6 +311,20 @@ async def _run_agent_analysis_task(
         # to the domain DAG if discovery is skipped or not accepted by the gate.
         "auto_discover": request.auto_discover,
         "discovery_guided": True,
+        # Lane E item 3(d): the feature-role panel + approved roles, forwarded
+        # only when supplied (graph_builder keys off presence; see the state
+        # docstring). The declared covariates above stay as submitted — the
+        # panel narrows them in graph_builder, with a named warning.
+        **(
+            {"feature_role_panel": request.feature_role_panel}
+            if request.feature_role_panel is not None
+            else {}
+        ),
+        **(
+            {"approved_structure_roles": request.approved_structure_roles}
+            if request.approved_structure_roles is not None
+            else {}
+        ),
         "parameters": parameters,
         "interpretation_depth": "standard",
         "brand": request.brand,
