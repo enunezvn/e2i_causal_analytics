@@ -280,6 +280,32 @@ def test_causal_selector_fails_loud_without_the_switch_flag():
         select_persistence_causal_cohort(df, window_days=180, min_claim_count=2)
 
 
+def test_causal_selector_fails_loud_on_null_brand_initiator():
+    """A row with a treatment_start_date but a NULL index_biologic_brand is an
+    initiator per _initiator_eligible (NaN.ne('no_treatment') is True) but is
+    NOT a nameable excluded arm (value_counts() drops NaN) -- it must raise,
+    never disappear as a silent drop."""
+    ts = pd.Timestamp("2020-01-01")
+    day = pd.Timedelta(days=1)
+    df = pd.DataFrame(
+        [
+            {
+                "patid": 20,
+                "index_biologic_brand": None,
+                "treatment_start_date": ts,
+                "last_coverage_end": ts + 220 * day,
+                "max_internal_gap_days": 0,
+                SWITCH_FLAG: 0,
+                "claim_record_count": 10,
+                "last_observed_date": ts + 400 * day,
+                "terminal_gap_days": 0,
+            }
+        ]
+    )
+    with pytest.raises(ValueError, match="index_biologic_brand"):
+        select_persistence_causal_cohort(df, window_days=180, min_claim_count=2)
+
+
 def _entity_mart_rows_two_arms() -> list[dict]:
     """A tiny entity-stacked mart with both arms + an untreated patient + an HCP row."""
     idx = pd.Timestamp("2020-01-01")

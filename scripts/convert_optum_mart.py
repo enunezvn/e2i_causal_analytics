@@ -274,6 +274,20 @@ def select_persistence_causal_cohort(
     df, attrition = _initiator_eligible(
         df, window_days=window_days, min_claim_count=min_claim_count
     )
+    # A row with a treatment_start_date but no brand is not an "unknown arm" to
+    # exclude quietly -- ``_initiator_eligible``'s initiated-filter treats a
+    # null brand as initiated (``NaN.ne("no_treatment")`` is True), and
+    # ``value_counts()`` drops NaN, so the isin-based exclusion below would
+    # never count it. This IS a data-integrity failure: fail loud, not silent.
+    null_brand = df["index_biologic_brand"].isna()
+    if null_brand.any():
+        n = int(null_brand.sum())
+        sample_patids = df.loc[null_brand, "patid"].head(5).tolist()
+        raise ValueError(
+            f"{n} initiator row(s) have a treatment_start_date but a null "
+            f"index_biologic_brand -- a data-integrity failure, not a silent "
+            f"drop; first patids: {sample_patids}"
+        )
     if SWITCH_FLAG not in df.columns:
         raise KeyError(
             f"{SWITCH_FLAG} is not in the input frame; the causal cohort carries it as "
@@ -282,7 +296,11 @@ def select_persistence_causal_cohort(
     in_contrast = df["index_biologic_brand"].isin(CAUSAL_ARMS)
     # Every brand outside the observed pair gets its OWN loud attrition step
     # (never silently folded into the reference arm or dropped uncounted).
-    excluded_counts = df.loc[~in_contrast, "index_biologic_brand"].value_counts().sort_index()
+    # dropna=False is defensive: by this point a null brand has already raised
+    # above, but the exclusion count must never silently drop a NaN either.
+    excluded_counts = (
+        df.loc[~in_contrast, "index_biologic_brand"].value_counts(dropna=False).sort_index()
+    )
     for brand, n in excluded_counts.items():
         attrition.append((f"excluded_arm:{brand}", int(n)))
     df = df.loc[in_contrast].copy()
