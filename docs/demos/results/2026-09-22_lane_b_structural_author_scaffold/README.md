@@ -3,11 +3,13 @@
 Spec: `docs/superpowers/specs/2026-09-22-real-data-causal-estimation-design.md`
 (worktree `real-data-causal`), "### Lane B — structural author with human
 validation" items 1–5, §5, §6 (Lane B line), §7. Branch
-`claude/lane-b-structural-author-scaffold`, base `31a4c5b6d` (origin/main).
+`claude/lane-b-structural-author-scaffold`, branched from `31a4c5b6d`; HEAD merges
+`origin/main` `e3fb21186` (Lanes A, D and E landed upstream during the lane), so
+Lane E's panel, validators and `approved_structure_roles` consumer are on this tree.
 
 No paid LLM call and no prod write was made. Every number below cites the
 captured file:line in this directory. Every capture was regenerated on the
-clean committed tree `edb96fbd2` (codex r2 HIGH 4): `disproofs.txt:1` says
+clean committed tree `25b04ac33` (codex r2 HIGH 4, r3 MED 4): `disproofs.txt:1` says
 `dirty_src_scripts_tests=no`, and every `score.json` / `authored.json` /
 `attestations.json` / `dag.json` carries `meta.tree` = `{commit, dirty_src_scripts_tests}`
 (`summary.md:6` and `review.md:6` repeat it), so a capture from a dirty tree
@@ -22,7 +24,7 @@ or `tests/` were dirty at that moment — the committed capture says `no`).
 | # | Assumption the deliverable rests on | Result (cited) |
 |---|---|---|
 | 1 | A DSPy signature with typed list / bool outputs can be driven by `dspy.utils.dummies.DummyLM` (so the parser and CLIs are testable without a paid LM) | `disproofs.txt:2` — dspy 3.1.0 parsed `[['f','T'],['f','Y'],['T','Y']]` as `list`, `False` as `bool` — survives |
-| 2 | The graph builder's backdoor finder can be reused by the assembler | `disproofs.txt:3` — importing the node costs 13.1 s (the whole agent package); `disproofs.txt:4` — the extracted `src/ml/causal_role_dgp/backdoor.py` imports in 0.000 s → the node now delegates to it (pinned by `tests/unit/test_agents/test_causal_impact/test_graph_builder_backdoor_shared.py`) |
+| 2 | The graph builder's backdoor finder can be reused by the assembler | `disproofs.txt:3` — importing the node costs 12.7 s at this capture (the whole agent package); `disproofs.txt:4` — the extracted `src/ml/causal_role_dgp/backdoor.py` imports in 0.000 s → the node now delegates to it (pinned by `tests/unit/test_agents/test_causal_impact/test_graph_builder_backdoor_shared.py`) |
 | 3 | `CitationResolver.verify_citation` can be exercised offline | `disproofs.txt:5` — `__init__(*, europe_pmc=None, crossref=None, umls=None)`: clients are injectable; the grader takes any object with `verify_citation` |
 | 4 | Under the unit tree's dead-Supabase pin a `--review` cannot silently succeed | `disproofs.txt:6` — `repo.client=None`, `create_review -> None` in 0.0 s → the CLI treats `None` as failure (exit 3, files kept), pinned by `tests/unit/test_scripts/test_author_cohort_dag.py::test_review_under_the_dead_supabase_pin_fails_loudly_and_keeps_files` |
 | 5 | The guide can be read from `docs/` at runtime inside the API container | `disproofs.txt:7` — `.dockerignore:76 == 'docs/'`: the docs tree is NOT in the image → sections 0–6 are embedded (`src/data/kg/_structural_author_guide.py`) and pinned byte-for-byte by `test_guide_sections_are_verbatim`; likewise the item-5 loader reads the approved DAG from the review row, not from `docs/layer4/generated/` |
@@ -84,6 +86,14 @@ Run (a) shape, `--manifest optum_mart --treatment treatment_dupixent --outcome p
 - `author_fake/optum_mart_treatment_dupixent_persistent_at_180d_g28/dag.json:9,13,25,26` — `lm "fake"`, 64 features, `is_dag true`, `adjustment_valid true`.
 - `.../review.md` — the reviewer checklist item `escalation_decision_point` (the stated assumption), the per-feature table, `## Review items (0)` at line 86 (a stand-in author has nothing ambiguous to say).
 
+Run (a) through the INTEGRATED path on the merged tree (codex r3 MED 4), the
+same command plus `--panel docs/demos/results/2026-09-22_lane_e_feature_role_voters/panel_layer4_fake/panel.json`
+(Lane E's committed panel for exactly this manifest / T / Y, PR #2226; real
+15,209-row frame, Layer 4 fake) and `--out-root author_fake_merged_panel`:
+
+- `author_fake_merged_panel/optum_mart_treatment_dupixent_persistent_at_180d_g28/dag.json:13,14,17,25,26` — 64 features, the panel path, `commit 25b04ac33`, `is_dag true`, `adjustment_valid true`. The panel passed Lane E's `validate_panel_payload` + `validate_strict` and every record loaded through `PanelRecordView` (pinned by `test_lane_e_committed_panel_loads_for_run_a`).
+- What the panel could and could not exercise, stated plainly: this committed panel carries **no leak verdict and abstains on every ensemble role** for the 64 baseline features (`attestations.json`: `leak_verdict false` ×64, `panel_final_role null` ×64), so the Layer-1 veto, the leak exclusion and the ensemble cross-check had nothing to fire on — `review.md:86` `## Review items (0)`, the same as the panel-less run. The path proven here is validation + adapter + brief composition on a real panel; the constraints themselves are proven on hand-built records in `tests/unit/test_data/test_kg/test_structural_author.py` (post-index veto, cross-check disagreement, leak exclusion) and `tests/unit/test_ml/test_causal_role_assembler.py`.
+
 Commands for the real runs (not executed; paid LLM + a prod `expert_reviews` write each):
 
     python -m scripts.author_cohort_dag --manifest optum_mart --treatment treatment_dupixent \
@@ -116,7 +126,8 @@ exact brand.
 - No real-LM authored fragments, no benchmark on the real author (owner
   decision, spec §3 Lane B item 3).
 - No `expert_reviews` row (owner decision, item 4).
-- No Lane E panel: its branch (`claude/lane-e-feature-role-voters`) is not on
-  main; the author consumes its `FeatureRoleRecord.to_dict()` shape through
-  the typed adapter `PanelRecordView` (field names copied from the Lane E
-  interface report) and the CLI takes `--panel panel.json`.
+- No real-LM run with the Lane E panel. Lane E (PR #2226) IS on this tree:
+  the CLI validates `--panel panel.json` with Lane E's own
+  `validate_panel_payload` + `validate_strict` and reads records through the
+  author's typed adapter `PanelRecordView`; the integrated path is exercised
+  with the fake LM in `author_fake_merged_panel/` below.

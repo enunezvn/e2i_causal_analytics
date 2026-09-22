@@ -1,6 +1,6 @@
 {
   "meta": {
-    "measured_at": "2026-09-22T18:21:22.262348+00:00",
+    "measured_at": "2026-09-22T18:59:31.930653+00:00",
     "lm": "fake",
     "fake_source": "replay",
     "resolver": "offline",
@@ -8,7 +8,7 @@
     "golden": "/home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-b-structural-author-scaffold/tests/fixtures/causal_role_golden_set.json",
     "n_briefs": 31,
     "tree": {
-      "commit": "edb96fbd24ddb63ca6b2e3bb93fa619c86df9af1",
+      "commit": "25b04ac334c1701c594765b109ff3743fc252e3e",
       "dirty_src_scripts_tests": false
     }
   },
@@ -82,7 +82,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:17.964319+00:00",
+      "authored_at": "2026-09-22T18:59:27.492483+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -155,7 +155,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:18.104034+00:00",
+      "authored_at": "2026-09-22T18:59:27.635848+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -228,7 +228,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:18.237027+00:00",
+      "authored_at": "2026-09-22T18:59:27.784261+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -287,7 +287,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:18.365717+00:00",
+      "authored_at": "2026-09-22T18:59:27.928464+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -346,7 +346,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:18.501544+00:00",
+      "authored_at": "2026-09-22T18:59:28.078552+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -417,7 +417,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:18.635080+00:00",
+      "authored_at": "2026-09-22T18:59:28.233340+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -488,7 +488,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:18.774496+00:00",
+      "authored_at": "2026-09-22T18:59:28.384107+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -559,7 +559,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:18.905761+00:00",
+      "authored_at": "2026-09-22T18:59:28.533204+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -630,7 +630,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:19.039339+00:00",
+      "authored_at": "2026-09-22T18:59:28.690776+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -701,7 +701,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:19.171976+00:00",
+      "authored_at": "2026-09-22T18:59:28.842914+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -772,7 +772,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:19.306612+00:00",
+      "authored_at": "2026-09-22T18:59:28.985733+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -843,7 +843,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:19.436322+00:00",
+      "authored_at": "2026-09-22T18:59:29.129042+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -914,7 +914,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:19.571506+00:00",
+      "authored_at": "2026-09-22T18:59:29.275135+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -985,7 +985,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:19.706241+00:00",
+      "authored_at": "2026-09-22T18:59:29.421136+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -1056,7 +1056,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:19.835281+00:00",
+      "authored_at": "2026-09-22T18:59:29.563357+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -1115,7 +1115,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:19.971680+00:00",
+      "authored_at": "2026-09-22T18:59:29.705416+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -1174,7 +1174,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:20.109212+00:00",
+      "authored_at": "2026-09-22T18:59:29.848047+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -1245,7 +1245,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:20.247366+00:00",
+      "authored_at": "2026-09-22T18:59:29.992025+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -1304,7 +1304,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:20.390591+00:00",
+      "authored_at": "2026-09-22T18:59:30.146476+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -1363,7 +1363,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:20.605458+00:00",
+      "authored_at": "2026-09-22T18:59:30.313089+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -1422,7 +1422,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:20.751991+00:00",
+      "authored_at": "2026-09-22T18:59:30.471773+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -1481,7 +1481,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:20.897224+00:00",
+      "authored_at": "2026-09-22T18:59:30.638868+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -1540,7 +1540,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:21.052662+00:00",
+      "authored_at": "2026-09-22T18:59:30.798629+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -1599,7 +1599,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:21.198308+00:00",
+      "authored_at": "2026-09-22T18:59:30.954351+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -1658,7 +1658,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:21.349059+00:00",
+      "authored_at": "2026-09-22T18:59:31.103293+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -1717,7 +1717,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:21.504177+00:00",
+      "authored_at": "2026-09-22T18:59:31.252969+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -1788,7 +1788,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:21.661565+00:00",
+      "authored_at": "2026-09-22T18:59:31.401028+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -1859,7 +1859,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:21.812719+00:00",
+      "authored_at": "2026-09-22T18:59:31.549113+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -1930,7 +1930,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:21.965719+00:00",
+      "authored_at": "2026-09-22T18:59:31.682017+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -2001,7 +2001,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:22.116316+00:00",
+      "authored_at": "2026-09-22T18:59:31.808085+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -2072,7 +2072,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T18:21:22.261908+00:00",
+      "authored_at": "2026-09-22T18:59:31.930261+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     }

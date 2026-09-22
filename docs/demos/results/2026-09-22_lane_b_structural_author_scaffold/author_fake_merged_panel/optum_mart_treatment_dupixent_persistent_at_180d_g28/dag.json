@@ -1,6 +1,6 @@
 {
   "meta": {
-    "authored_at": "2026-09-22T19:01:10.958682+00:00",
+    "authored_at": "2026-09-22T19:02:01.460580+00:00",
     "manifest": "optum_mart",
     "treatment": "treatment_dupixent",
     "outcome": "persistent_at_180d_g28",
@@ -11,7 +11,7 @@
     "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
     "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
     "n_features": 64,
-    "panel": null,
+    "panel": "/home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-b-structural-author-scaffold/docs/demos/results/2026-09-22_lane_e_feature_role_voters/panel_layer4_fake/panel.json",
     "provenance": "machine",
     "tree": {
       "commit": "25b04ac334c1701c594765b109ff3743fc252e3e",
