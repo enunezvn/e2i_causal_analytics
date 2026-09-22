@@ -37,7 +37,12 @@ from src.data.per_hcp_cohort_columns import INTERVENTION_TREATMENT_MAP
 logger = logging.getLogger(__name__)
 
 _SUBJECT = r"(?:digital[\s-]?twin|simulat\w*|counterfactual\w*|what[\s-]if)"
-_NOUN = r"\b(?:tool|capability|feature|engine|way|function|module)s?\b"
+#: A capability noun — but not "tool result" / "tool output": "no tool result was returned
+#: by the digital-twin simulation because …" reports a failed call (codex r3 #2).
+_NOUN = (
+    r"\b(?:tool|capability|feature|engine|way|function|module|ability|means|option)s?\b"
+    r"(?!\s+(?:result|output|payload|response|call)s?\b)"
+)
 #: "no …" / "isn't a …" / "not a …" / "not any …", except when what follows is itself an
 #: absence word — "not a missing capability", "not a platform limitation" AFFIRM the
 #: capability (measured on the 2026-09-22 AFTER answers) — or an evidence word: "no evidence
@@ -58,10 +63,13 @@ _DENIAL_PATTERNS = tuple(
         # simulation". "lacks" needs a platform-level subject: "the model lacks a region
         # column, so the simulation cannot report regional effects" is a data limitation
         # (codex r2 #4).
-        r"(?:\b(?:doesn'?t|does not|don'?t|do not|didn'?t|did not)\s+"
-        r"(?:include|have|offer|provide|support|expose)\b"
-        r"|\b(?:platform|assistant|system|e2i|toolbox|we|i)\s+lack(?:s|ing)?\b)"
-        r"[^.\n]{0,60}?" + _SUBJECT,
+        r"\b(?:doesn'?t|does not|don'?t|do not|didn'?t|did not)\s+"
+        r"(?:include|have|offer|provide|support|expose)\b[^.\n]{0,60}?" + _SUBJECT,
+        # "the platform lacks a digital twin simulation capability" — the lacked thing is
+        # the subject itself (at most two words away); "we lack enough usable cohort rows to
+        # run the digital-twin simulation" lacks DATA (codex r3 #2).
+        r"\b(?:platform|assistant|system|e2i|toolbox|we|i)\s+lack(?:s|ing)?\s+"
+        r"(?:an?\s+|any\s+)?(?:[\w-]+\s+){0,2}?" + _SUBJECT,
         # "there's no tool that runs a counterfactual" — the capability noun first.
         _NEG + r"[^.\n]{0,40}?" + _NOUN + r"[^.\n]{0,80}?" + _SUBJECT,
         # "no digital twin simulation tool on this platform" — the subject first.

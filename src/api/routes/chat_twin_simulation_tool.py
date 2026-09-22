@@ -160,7 +160,10 @@ async def run_twin_simulation(
             "reason_code": exc.reason_code.value,
             "details": dict(exc.details),
             "retryable": False,
-            "interventions_available": intervention_names(),
+            # The engine's CATALOG — the names it recognises — not what this brand can run
+            # right now; per-brand availability is what a refusal's reason code states
+            # (codex r3 #1).
+            "intervention_catalog": intervention_names(),
         }
     except SyncToolTimeout as exc:
         logger.warning("digital_twin_simulate_tool timed out: %s", exc)

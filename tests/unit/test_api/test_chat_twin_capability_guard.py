@@ -85,6 +85,7 @@ AFTER_TW2_OUTAGE = (
         "Digital-twin simulation isn't available in this assistant.",
         "We don't offer what-if simulation of interventions.",
         "No data-driven simulation tool exists on this platform.",
+        "This assistant has no ability to run digital-twin simulations.",
     ],
 )
 def test_a_denial_of_the_simulation_capability_is_detected(text):
@@ -128,6 +129,9 @@ TOOL_REFUSAL_TEXT = (
         "The model lacks a region column, so the digital-twin simulation cannot report "
         "regional effects.",
         "The digital twin simulation lacks a confidence interval for region effects.",
+        "We lack enough usable cohort rows to run the digital-twin simulation.",
+        "No tool result was returned by the digital-twin simulation because the model "
+        "registry is unavailable.",
         AFTER_TW1_SUCCESS,
         TOOL_OUTAGE_TEXT,
         TOOL_REFUSAL_TEXT,

@@ -79,7 +79,10 @@ def test_a_non_catalog_intervention_is_refused_by_name_with_no_numbers():
     assert payload["success"] is False
     assert "free lunch for oncologists" in payload["error"]
     assert payload["reason_code"] == "invalid_input_value"
-    assert set(payload["interventions_available"]) == set(cts.intervention_names())
+    # The engine's catalog, named as such — never "available" (codex r3 #1): a brand with no
+    # usable channel gets the same list, and it must not read as what it can run.
+    assert set(payload["intervention_catalog"]) == set(cts.intervention_names())
+    assert "interventions_available" not in payload
     for key in ("effect", "ci_lower", "ci_upper", "recommendation"):
         assert key not in payload
 
