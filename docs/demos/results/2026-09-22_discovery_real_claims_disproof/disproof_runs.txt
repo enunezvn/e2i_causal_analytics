@@ -1,0 +1,49 @@
+# run_disproof.py — 2026-09-22T00:29:54Z — NOTE: run BY PATH, so `src` resolved from the MAIN checkout (0d1730255, PRE-fix code): this is the defect as shipped. Post-fix capture of A0: a0_postfix_run.txt
+A0 k= 57
+A0 corr-matrix rank 45 of 59
+
+===== A0_REAL_production_shape_all_numeric: n=4000 T=lis_dual_flag Y=persistent_at_180d k=57 wall=0.5s
+gate: reject conf=0.000 | reasons: ['Too few edges discovered: 0 < 1']
+ensemble edges: 0 | shipped DAG edges: 115 | overridden: False | augmented: []
+edges into T: None
+edges into Y: None
+T->Y in ensemble: False | Y->T: False
+role histogram (discovered DAG): {'absent': 57}
+adjustment sets (shipped DAG, pre-guarantee): [['age_at_index', 'cci_cerebrovascular', 'cci_chf', 'cci_chronic_pulmonary', 'cci_dementia', 'cci_diabetes_complication', 'cci_diabetes_no_complication', 'cci_hiv', 'cci_malignancy', 'cci_metastatic_cancer', 'cci_mi', 'cci_mild_liver', 'cci_paraplegia', 'cci_peptic_ulcer', 'cci_pvd', 'cci_renal', 'cci_rheumatic', 'cci_severe_liver', 'charlson_score', 'comorbidity_diag_claim_count', 'comorbidity_diag_distinct_count', 'data_quality_score', 'elixhauser_van_walraven_score', 'elx_aids_hiv', 'elx_alcohol_abuse', 'elx_blood_loss_anemia', 'elx_cardiac_arrhythmia', 'elx_chf', 'elx_chronic_pulmonary', 'elx_coagulopathy', 'elx_deficiency_anemia', 'elx_depression', 'elx_diabetes_complicated', 'elx_diabetes_uncomplicated', 'elx_drug_abuse', 'elx_fluid_electrolyte', 'elx_hypertension_complicated', 'elx_hypertension_uncomplicated', 'elx_hypothyroidism', 'elx_liver_disease', 'elx_lymphoma', 'elx_metastatic_cancer', 'elx_obesity', 'elx_other_neurological', 'elx_paralysis', 'elx_peptic_ulcer', 'elx_psychoses', 'elx_pulmonary_circulation', 'elx_pvd', 'elx_renal_failure', 'elx_rheumatoid_collagen', 'elx_solid_tumor_no_metastasis', 'elx_valvular_disease', 'elx_weight_loss', 'enrollment_duration_days', 'health_exchange_flag', 'high_comorbidity_burden_flag']]
+latent_diagnostic: {"ran": true, "converged": false, "runtime_seconds": 0.20717859268188477, "bidirected_edges": [], "error": "Data correlation matrix is singular. Cannot run fisherz test. Please check your data.", "treatment": "lis_dual_flag", "outcome": "persistent_at_180d", "flag": false}
+A1 covs ['age_at_index', 'enrollment_duration_days', 'comorbidity_diag_distinct_count', 'charlson_score', 'cci_chf', 'cci_pvd', 'cci_cerebrovascular', 'cci_chronic_pulmonary', 'cci_rheumatic', 'cci_mild_liver', 'cci_diabetes_no_complication', 'cci_diabetes_complication', 'cci_renal', 'cci_malignancy'] | corr rank 16 of 16
+
+===== A1_REAL_pruned_cci_family: n=4000 T=lis_dual_flag Y=persistent_at_180d k=14 wall=180.6s
+gate: augment conf=0.739 | reasons: ['Corroboration (bootstrap_stability): 67.35%', 'Average edge confidence: 67.35%', 'Structure score: 100.00%', 'Edge recall: 0.00%, precision: 0.00%', 'Medium confidence but 14 high-confidence edges available for augmentation']
+ensemble edges: 34 | shipped DAG edges: 40 | overridden: False | augmented: [('cci_chf', 'charlson_score'), ('cci_pvd', 'charlson_score'), ('cci_cerebrovascular', 'comorbidity_diag_distinct_count'), ('cci_cerebrovascular', 'charlson_score'), ('cci_chronic_pulmonary', 'charlson_score'), ('cci_rheumatic', 'charlson_score'), ('cci_mild_liver', 'charlson_score'), ('cci_diabetes_no_complication', 'charlson_score'), ('cci_diabetes_complication', 'charlson_score'), ('cci_renal', 'charlson_score'), ('cci_malignancy', 'charlson_score')]
+edges into T: ['age_at_index', 'cci_diabetes_complication', 'cci_pvd', 'enrollment_duration_days']
+edges into Y: ['comorbidity_diag_distinct_count']
+T->Y in ensemble: False | Y->T: False
+role histogram (discovered DAG): {'unrelated': 6, 'instrument': 1, 'ancestor': 7}
+adjustment sets (shipped DAG, pre-guarantee): [['age_at_index', 'cci_cerebrovascular', 'cci_chf', 'cci_chronic_pulmonary', 'cci_diabetes_complication', 'cci_diabetes_no_complication', 'cci_malignancy', 'cci_mild_liver', 'cci_pvd', 'cci_renal', 'cci_rheumatic', 'charlson_score', 'comorbidity_diag_distinct_count', 'enrollment_duration_days']]
+latent_diagnostic: {"ran": true, "converged": true, "runtime_seconds": 22.50324273109436, "bidirected_edges": [["lis_dual_flag", "enrollment_duration_days"], ["lis_dual_flag", "cci_pvd"], ["lis_dual_flag", "cci_diabetes_complication"], ["age_at_index", "comorbidity_diag_distinct_count"], ["age_at_index", "cci_pvd"], [
+A2 corr rank 15 of 15
+
+===== A2_REAL_pruned_no_composite: n=4000 T=lis_dual_flag Y=persistent_at_180d k=13 wall=289.4s
+gate: augment conf=0.734 | reasons: ['Corroboration (bootstrap_stability): 66.81%', 'Average edge confidence: 66.81%', 'Structure score: 100.00%', 'Edge recall: 0.00%, precision: 0.00%', 'Medium confidence but 11 high-confidence edges available for augmentation']
+ensemble edges: 36 | shipped DAG edges: 35 | overridden: False | augmented: [('cci_chf', 'comorbidity_diag_distinct_count'), ('cci_pvd', 'comorbidity_diag_distinct_count'), ('cci_cerebrovascular', 'comorbidity_diag_distinct_count'), ('cci_rheumatic', 'comorbidity_diag_distinct_count'), ('cci_mild_liver', 'comorbidity_diag_distinct_count'), ('cci_diabetes_no_complication', 'comorbidity_diag_distinct_count'), ('cci_diabetes_complication', 'comorbidity_diag_distinct_count'), ('cci_malignancy', 'comorbidity_diag_distinct_count')]
+edges into T: ['age_at_index', 'cci_diabetes_complication', 'cci_pvd', 'enrollment_duration_days']
+edges into Y: ['comorbidity_diag_distinct_count']
+T->Y in ensemble: False | Y->T: False
+role histogram (discovered DAG): {'ancestor': 13}
+adjustment sets (shipped DAG, pre-guarantee): [['age_at_index', 'cci_cerebrovascular', 'cci_chf', 'cci_chronic_pulmonary', 'cci_diabetes_complication', 'cci_diabetes_no_complication', 'cci_malignancy', 'cci_mild_liver', 'cci_pvd', 'cci_renal', 'cci_rheumatic', 'comorbidity_diag_distinct_count', 'enrollment_duration_days']]
+latent_diagnostic: {"ran": true, "converged": true, "runtime_seconds": 10.34281611442566, "bidirected_edges": [["lis_dual_flag", "enrollment_duration_days"], ["lis_dual_flag", "cci_pvd"], ["lis_dual_flag", "cci_diabetes_complication"], ["age_at_index", "cci_pvd"], ["age_at_index", "cci_cerebrovascular"], ["age_at_inde
+B covariates: ['data_lag_hours', 'egfr', 'age_at_diagnosis', 'urticaria_severity_uas7', 'disease_severity', 'proteinuria_g_day', 'ldh_ratio', 'engagement_score', 'ecog_performance_status', 'academic_hcp']
+
+===== B_SYNTH_patient_journeys_planted: n=4000 T=treatment_arm Y=treatment_initiated k=10 wall=1.7s
+gate: accept conf=0.818 | reasons: ['Corroboration (bootstrap_stability): 98.00%', 'Average edge confidence: 98.33%', 'Structure score: 16.34%', 'Edge recall: 100.00%, precision: 16.67%', 'High confidence - accepting discovered structure']
+ensemble edges: 6 | shipped DAG edges: 6 | overridden: False | augmented: []
+edges into T: ['academic_hcp', 'disease_severity']
+edges into Y: ['disease_severity', 'treatment_arm']
+T->Y in ensemble: True | Y->T: False
+role histogram (discovered DAG): {'unrelated': 8, 'confounder': 1, 'instrument': 1}
+adjustment sets (shipped DAG, pre-guarantee): [['disease_severity']]
+latent_diagnostic: {"ran": true, "converged": true, "runtime_seconds": 0.05907392501831055, "bidirected_edges": [], "treatment": "treatment_arm", "outcome": "treatment_initiated", "flag": false}
+PLANTED confounders: {'disease_severity': 'confounder', 'academic_hcp': 'instrument'}
+
+SUMMARY: A0(prod shape)= reject  A1(pruned)= augment  A2(pruned,no composite)= augment  B(synthetic)= accept
