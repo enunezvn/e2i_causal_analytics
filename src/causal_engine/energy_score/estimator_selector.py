@@ -258,8 +258,8 @@ def _refuse_invalid_final_stage_inference(
     p=8.4e-5 served with an empty warnings list). ``DMLLearnerWrapper`` already
     refused; LinearDML and DRLearner share the same final stage, so they refuse
     too -- the tournament skips the estimator, a forced run fails closed on the
-    missing CI. The agent loader prunes exactly collinear columns so a real
-    frame does not trip this (``_prune_exactly_collinear``).
+    missing CI. The agent loader prunes numerically collinear columns so a real
+    frame does not trip this (``_prune_numerically_collinear``).
     """
     invalid = [
         str(w.message)
@@ -1625,6 +1625,9 @@ class EstimatorSelector:
         # ``results`` as a failed entry, so the report shows what was tried.
         # A forced single estimator never subsamples and still fails closed.
         fallback_notes: list[str] = []
+        # codex r7: only the FIRST refused candidate was the tournament winner;
+        # every later one was the next-ranked candidate.
+        refused_label = "Tournament winner"
         while subsampled and selection.success:
             refit = self._refit_winner_on_full_frame(
                 selection,
@@ -1645,10 +1648,11 @@ class EstimatorSelector:
             # only when its own refit returns (codex r5: never "served B"
             # before B's refit ran).
             fallback_notes.append(
-                f"Tournament winner {refit.estimator_type.value} (energy score "
+                f"{refused_label} {refit.estimator_type.value} (energy score "
                 f"{refit.energy_score:.4f}) refused its served full-frame refit: "
                 f"{refit.error_message}."
             )
+            refused_label = "Next-ranked candidate"
             remaining = [r for r in results if r.success]
             if not remaining:
                 selection = refit
@@ -1759,7 +1763,24 @@ class EstimatorSelector:
             wrapper.estimator_type.value,
             len(treatment),
         )
-        full_result = wrapper.fit(treatment, outcome, fit_frame, **{**kwargs, "served_fit": True})
+        try:
+            full_result = wrapper.fit(
+                treatment, outcome, fit_frame, **{**kwargs, "served_fit": True}
+            )
+        except Exception as exc:  # noqa: BLE001 -- codex r7: a raising injected wrapper must not
+            # escape the fallback; it is a refused served refit like any other
+            logger.warning(
+                "Served refit of %s raised %s: %s",
+                wrapper.estimator_type.value,
+                type(exc).__name__,
+                exc,
+            )
+            full_result = EstimatorResult(
+                estimator_type=wrapper.estimator_type,
+                success=False,
+                error_message=str(exc),
+                error_type=type(exc).__name__,
+            )
         full_result.served_refit = bool(full_result.success)
         if full_result.success:
             full_result.energy_score_result = selection.energy_score_result
@@ -1822,8 +1843,14 @@ class EstimatorSelector:
                 + (
                     "the reported ATE/CI come from the winner refit on the full frame."
                     if selection.success
-                    # codex r6: never claim a reported ATE/CI when no refit succeeded
-                    else "no full-frame refit succeeded, so no ATE/CI is reported."
+                    # codex r6/r7: never claim a reported ATE/CI when no refit
+                    # succeeded, and say when none was even attempted
+                    else (
+                        "no full-frame refit succeeded, so no ATE/CI is reported."
+                        if fallback_notes
+                        else "no candidate succeeded in the tournament, so no full-frame "
+                        "refit was attempted and no ATE/CI is reported."
+                    )
                 )
             )
         if fallback_notes:

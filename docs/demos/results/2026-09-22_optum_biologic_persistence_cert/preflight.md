@@ -67,7 +67,7 @@ Standalone attribution of the pre-fix budget on this frame (`timing_probe*.py/js
   14/14 identical ATE and CI, 14/14 identical `exceeded_max_energy_score` / `requires_review`,
   max |Δ energy score| 0.020** (one pair; all others ≤ 0.0013); every synthetic design is full rank.
 
-- **Fix 3 — `loaders.py` `_prune_exactly_collinear` + the shared post-fetch resolver** (codex r2
+- **Fix 3 — `loaders.py` `_prune_exactly_collinear` (renamed `_prune_numerically_collinear` in Round 7) + the shared post-fetch resolver** (codex r2
   HIGH). The real design is rank 61 of 77: 16 columns are exact linear combinations of earlier
   registry columns (Elixhauser flags duplicating Charlson flags, a risk band implied by its score,
   payer dummies implied by a coarser payer axis — `collinearity_probe.json`). econml's final stage
@@ -173,9 +173,28 @@ Standalone attribution of the pre-fix budget on this frame (`timing_probe*.py/js
   rank and score, and its status reads "served refit refused: …" instead of "failed" with a dash
   (vitest: the fallback case; tsc + eslint clean). (4) MED — the MLflow DB logger emitted a raw
   `energy_score` into `energy_details`, where NaN/Inf would break the JSONB insert and disagree with
-  the finite-filtered surfaces; it now applies the same finite filter (test captures the cursor
+  the finite-filtered `tournament_energy_score` on the other surfaces; it now applies the same
+  finite filter to that field (test captures the cursor
   parameters: served True/0.42, refused False/finite, NaN → None, unscored None/None). (5) HIGH — the
   Round 5 account above is corrected accordingly.
+- **Round 7 (codex r7 → REVISE: 6 HIGH; 3 fixed, 3 pre-existing and filed).** Fixed: (1) the prune
+  is renamed `_prune_numerically_collinear` and its opening sentence and loader warning say
+  "numerically collinear at machine precision" (behaviour unchanged, same 16 columns); (2) a served
+  refit that RAISES instead of returning a failed result is caught inside the refit, recorded as a
+  refused candidate with its tournament score and `served_refit=False`, and the fallback continues
+  (test: an injected wrapper raising on the served refit → next candidate served); (3) only the first
+  refused candidate is called "Tournament winner", later ones "Next-ranked candidate", and when no
+  candidate succeeded in the tournament the reason says no refit was attempted (tests). Filed as
+  follow-ups, NOT fixed here, with reasoning: (a) two configurations of the SAME estimator type
+  collapse to one `energy_scores` key, one `is_selected` match and one React key — pre-existing
+  since #1392 (which added identity-based refit for exactly that reason); the fix is a stable
+  candidate id through selector → API → frontend, a contract change outside this lane; (b) a
+  successful fit with a non-finite energy score is still rankable and is not caught by the review
+  gate — pre-existing `_select_best_energy` semantics; the fix (treat non-finite as unscored, fail or
+  review when none is finite) is a ranking decision to make once, engine-wide; (c) `energy_score_gap`
+  is 0.0 with fewer than two scores — pre-existing contract typed `float` in state, DSPy and the API;
+  making it `None` ripples through every consumer. The caveat section now states that §3A's two
+  reviewer caveats are Task 12 data, not carried by this pre-flight.
 
 Final-code node timeline of the primary run (from the run's own INFO log; the graph itself started
 at ~09:22:30 after imports):
@@ -204,6 +223,11 @@ at ~09:22:30 after imports):
   logs). They are point estimates compared against the reported ATE — no CI from them is served — and
   the ATE of an exactly collinear design is estimable (measured: 0.03353 vs 0.03353 above). Not
   touched in this lane; noted for the refutation rebuild.
+- **Reviewer evidence PENDING (Task 12, post-deploy `caveats.py`)**: spec §3A asks for two caveats
+  as DATA — `treatment_response` counts by arm (expected 4,109 "controlled" on Xolair vs 30 on
+  Dupixent; brand-coupled, never an outcome) and the `max_consecutive_biologic_coverage_days`
+  quartiles by arm (14 vs 28–45). They are read from the raw drop, not from this cohort export, and
+  are produced by the post-deploy cert script per the plan; this pre-flight does NOT carry them.
 - **Rare dummies**: six dummies have 15–56 supporting rows of 15,209 (`health_exchange_flag`,
   `cci_severe_liver`, `cci_paraplegia`, `payer_product=IND`, `elx_lymphoma`, `cci_metastatic_cancer`);
   they are why subsamples can lose rank without any column being constant.

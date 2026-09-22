@@ -2613,6 +2613,14 @@ last one and the subsample sentence never claims a reported ATE/CI on failure; t
 `EstimatorCandidate` type and the comparison panel carry `tournament_energy_score` / `served_refit` and
 rank by the tournament score; the MLflow DB logger applies the finite filter to `energy_details`.
 
+**Amendment 7 (codex r7 → REVISE: 6 HIGH — 3 fixed, 3 pre-existing filed):** prune renamed
+`_prune_numerically_collinear`; a raising served refit is a recorded refusal and the fallback continues;
+"Tournament winner" only for the first refusal, "no refit attempted" wording for zero tournament successes.
+Filed (pre-existing, outside the lane): duplicate estimator-type identity (since #1392), non-finite energy
+scores rankable, `energy_score_gap` 0.0 with < 2 scores. §3A's two reviewer caveats are Task 12 data.
+Codex rounds stop here: r7's findings were pre-existing contracts or wording, the signal that the loop
+now generates its own work (memory 2026-09-18); residuals are reported to the owner in the PR.
+
 ---
 
 ### Task 10: Codex review rounds to ACCEPT

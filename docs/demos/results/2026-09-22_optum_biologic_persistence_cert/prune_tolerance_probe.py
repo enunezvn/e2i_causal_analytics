@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path.cwd())); sys.path.insert(0, "docs/demos/results/2026
 logging.basicConfig(level=logging.ERROR)
 import numpy as np, pandas as pd
 import src; assert ".worktrees/real-data-causal" in src.__file__
-from src.api.routes.causal.loaders import _prune_exactly_collinear as current
+from src.api.routes.causal.loaders import _prune_numerically_collinear as current
 
 EPS = np.finfo(float).eps
 
@@ -43,7 +43,7 @@ def candidate(frame, columns, tol=None):
 
 out = {}
 from src.api.routes.causal import loaders as L
-L._prune_exactly_collinear = lambda f, c: (list(c), [])   # recover the pre-prune 77-column design
+L._prune_numerically_collinear = lambda f, c: (list(c), [])   # recover the pre-prune 77-column design
 from preflight_agent import build_frame
 frame, cov = build_frame("persistent_at_180d_g28")
 print("pre-prune resolved cov:", len(cov), "n", len(frame))

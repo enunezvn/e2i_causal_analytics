@@ -852,12 +852,12 @@ def _resolve_agent_estimation_frame(
     # the ATE at 0.03353 (was 0.03353) and the SE at 0.00858 (was 0.00855),
     # warning gone. A full-rank frame (every synthetic dataset) is untouched.
     covariate_only = [c for c in expanded_cols if c not in (treatment_var, outcome_var)]
-    kept, dropped_collinear = _prune_exactly_collinear(frame, covariate_only)
+    kept, dropped_collinear = _prune_numerically_collinear(frame, covariate_only)
     if dropped_collinear:
         logger.warning(
-            "causal loader: dropping exactly collinear covariate(s) %s for dataset "
-            "'%s' brand=%s (linear combinations of earlier registry columns; design "
-            "rank %d of %d)",
+            "causal loader: dropping numerically collinear covariate(s) %s for dataset "
+            "'%s' brand=%s (collinear at machine precision with the intercept and "
+            "earlier resolved columns; design rank %d of %d)",
             dropped_collinear,
             dataset,
             brand,
@@ -886,12 +886,13 @@ def _collinearity_rel_tol(n_rows: int, n_cols: int) -> float:
     return float(max(n_rows, n_cols) * np.finfo(float).eps)
 
 
-def _prune_exactly_collinear(
+def _prune_numerically_collinear(
     frame: "pd.DataFrame",  # type: ignore[name-defined] # noqa: F821
     columns: List[str],
 ) -> tuple[List[str], List[str]]:
-    """Return ``(kept, dropped)``: ``columns`` minus those that are exact linear
-    combinations of the intercept and the EARLIER kept columns (order preserved).
+    """Return ``(kept, dropped)``: ``columns`` minus those that are NUMERICALLY
+    collinear -- at machine precision -- with the intercept and the EARLIER
+    kept columns (order preserved).
 
     Order = the resolved covariate order the estimators fit on: the numeric
     registry columns first, then the one-hot dummies in their categoricals'

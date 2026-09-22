@@ -1810,7 +1810,11 @@ class TestSubsampledSelection:
         assert reason.index("linear_dml") < reason.index("causal_forest") < reason.rindex("ols")
         assert reason.count("Served the next ranked candidate") == 1, reason
         assert "Served the next ranked candidate ols" in reason
-        assert "candidate causal_forest" not in reason and "candidate linear_dml" not in reason
+        # codex r7: only the FIRST refused candidate is the tournament winner;
+        # the second was the next-ranked candidate, never a winner
+        assert reason.count("Tournament winner") == 1
+        assert "Tournament winner linear_dml" in reason
+        assert "Next-ranked candidate causal_forest" in reason
         by_type = {r.estimator_type: r for r in sel.all_results}
         assert by_type[EstimatorType.LINEAR_DML].served_refit is False
         assert by_type[EstimatorType.CAUSAL_FOREST].served_refit is False
@@ -1838,6 +1842,53 @@ class TestSubsampledSelection:
         assert "linear_dml" in reason and "refused its served full-frame refit" in reason
         assert "no estimate is served" in reason.lower()
         assert "reported ATE/CI come from" not in reason
+
+    def test_zero_tournament_successes_is_narrated_as_no_refit_attempted(self):
+        """codex r7: when NO candidate succeeds in the subsampled tournament no
+        full-frame refit is attempted; the reason must say so, not "no refit
+        succeeded"."""
+        treatment, outcome, covariates = _subsample_frame(n=1_000)
+        selector, loser, winner = _two_wrapper_selector(max_rows=200, winner_fail_above=100)
+        loser._fail_above_rows = 100
+
+        sel = selector.select(treatment, outcome, covariates)
+
+        assert sel.selected.success is False
+        assert loser.fit_row_counts == [200] and winner.fit_row_counts == [200]
+        reason = sel.selection_reason
+        assert "no candidate succeeded in the tournament" in reason.lower()
+        assert "refit succeeded" not in reason.lower()
+        assert "refused" not in reason.lower()
+
+    def test_served_refit_that_raises_is_a_recorded_refusal_and_falls_back(self):
+        """codex r7 HIGH: an injected wrapper whose served refit RAISES (instead
+        of returning success=False) must not escape the selector: the refusal
+        is recorded with the tournament score and served_refit=False, and the
+        next ranked candidate is served."""
+        treatment, outcome, covariates = _subsample_frame(n=1_000)
+        selector, loser, winner = _two_wrapper_selector(max_rows=200)
+
+        real_fit = winner.fit
+
+        def raising_fit(t, y, x, **kw):
+            if kw.get("served_fit"):
+                raise RuntimeError("boom on the served refit")
+            return real_fit(t, y, x, **kw)
+
+        winner.fit = raising_fit  # type: ignore[method-assign]
+
+        sel = selector.select(treatment, outcome, covariates)
+
+        assert sel.selected.success is True
+        assert sel.selected.estimator_type == EstimatorType.CAUSAL_FOREST
+        assert loser.fit_row_counts == [200, 1_000]
+        refused = next(r for r in sel.all_results if r.estimator_type == EstimatorType.LINEAR_DML)
+        assert refused.success is False and refused.served_refit is False
+        assert "boom on the served refit" in (refused.error_message or "")
+        assert refused.error_type == "RuntimeError"
+        assert np.isfinite(refused.energy_score)
+        assert "Tournament winner linear_dml" in sel.selection_reason
+        assert "Served the next ranked candidate causal_forest" in sel.selection_reason
 
     def test_every_full_frame_refit_failing_fails_closed(self):
         """When NO candidate survives its full-frame refit the selection FAILS

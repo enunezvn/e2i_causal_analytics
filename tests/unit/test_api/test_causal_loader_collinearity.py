@@ -144,9 +144,9 @@ async def test_loader_does_not_prune_when_rows_cannot_rank_the_columns(monkeypat
 
 
 def _prune(df, cols):
-    from src.api.routes.causal.loaders import _prune_exactly_collinear
+    from src.api.routes.causal.loaders import _prune_numerically_collinear
 
-    return _prune_exactly_collinear(df, cols)
+    return _prune_numerically_collinear(df, cols)
 
 
 def test_prune_keeps_a_large_offset_column():
