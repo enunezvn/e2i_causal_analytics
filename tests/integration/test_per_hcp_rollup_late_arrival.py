@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import os
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -44,11 +44,17 @@ EARLY_BATCH = datetime(2019, 1, 2, 3, 0, 55, tzinfo=UTC)
 MONDAY_BATCH = datetime(2019, 1, 14, 3, 0, 55, tzinfo=UTC)
 BRAND = "Kisqali"
 # Guard windows: wide enough to cover every window any phase of this file uses -- the
-# two arrival runs (03:15 and 03:45 on 2019-01-14), the explicit 2019-01-20 territory
-# reconcile of test_the_reconcile_deletes_our_obsolete_row_and_spares_a_foreign_one, and
-# the explicit per-HCP window [EXPLICIT_START, EXPLICIT_END) the #2210 guard tests run.
-# Deliberately the UNION of the file's windows, not one of them: a guard that censuses a
-# narrower range than the test writes over cannot fail for the reason it exists.
+# arrival runs (the first at 03:15 on 2019-01-02, then 03:15 / 03:30 / 03:45 on 2019-01-14,
+# each looking back the ETL's ARRIVAL_WINDOW_HOURS from its arrived_before), the explicit
+# 2019-01-20 territory reconcile of
+# test_the_reconcile_deletes_our_obsolete_row_and_spares_a_foreign_one, and the explicit
+# per-HCP window [EXPLICIT_START, EXPLICIT_END) the #2210 guard tests run. Deliberately the
+# UNION of the file's windows, not one of them: a guard that censuses a narrower range than
+# the test writes over cannot fail for the reason it exists. The arrival census therefore
+# starts where the FIRST run's lookback starts (codex r3 on #2212: starting it at
+# EARLY_BATCH left the week before uncensused), derived in the fixture from the ETL's own
+# constant so the two cannot drift.
+FIRST_ARRIVAL_RUN = "2019-01-02T03:15:00+00:00"
 GUARD_ARRIVAL_END = datetime(2019, 1, 21, tzinfo=UTC)
 GUARD_DATE_END = date(2019, 1, 21)
 # The explicit per-HCP window: selected by trigger_timestamp, not by arrival, so it needs
@@ -77,14 +83,20 @@ def planted(db_conn: Any) -> Any:
     # the derivation leg (no unplanted trigger on an affected date) and the key-space
     # leg (the territory CROSS JOIN reaching real territories), and it FAILS rather than
     # raising a bare AssertionError, so the message names the window and the counts.
-    # The arrival phases census on created_at; the explicit per-HCP runs of the #2210 guard
-    # tests select by trigger_timestamp and get their own census, so a trigger dated in the
-    # explicit window but created outside the arrival window cannot pass the gate.
+    # The arrival phases census on created_at from the first run's own lookback start; the
+    # explicit per-HCP runs of the #2210 guard tests select by trigger_timestamp and get
+    # their own census, so a trigger dated in the explicit window but created outside the
+    # arrival window cannot pass the gate.
+    from src.etl.business_metrics_per_hcp_etl import ARRIVAL_WINDOW_HOURS
+
+    guard_arrival_start = datetime.fromisoformat(FIRST_ARRIVAL_RUN) - timedelta(
+        hours=ARRIVAL_WINDOW_HOURS
+    )
     require_isolated_windows(
         db_conn,
         per_hcp_rollup_spec(
             test_file=__file__,
-            start=EARLY_BATCH,
+            start=guard_arrival_start,
             end=GUARD_ARRIVAL_END,
             hcp_like=f"hl_{rid}_%",
             trigger_like=f"trlate_{rid}_%",
@@ -107,7 +119,7 @@ def planted(db_conn: Any) -> Any:
         ),
         adherence_spec(
             test_file=__file__,
-            start=EARLY_BATCH,
+            start=guard_arrival_start,
             end=GUARD_ARRIVAL_END,
             journey_like=f"pj_hl_{rid}_%",
             window_column="created_at",
@@ -224,9 +236,7 @@ def test_a_late_weekly_batch_rolls_up_under_each_triggers_own_date(
     rid, a, b = planted["rid"], planted["a"], planted["b"]
 
     _land_batch(db_conn, rid, EARLY_BATCH, [("b1", b, TUESDAY)])
-    first = _run_per_hcp_rollup_impl(
-        arrived_before="2019-01-02T03:15:00+00:00", request_id="late-arrival-1"
-    )
+    first = _run_per_hcp_rollup_impl(arrived_before=FIRST_ARRIVAL_RUN, request_id="late-arrival-1")
     assert first["status"] == "completed" and first["selected_by"] == "arrival", first
     assert _rows(db_conn, rid) == {(b, TUESDAY): (1, 1.0)}
 
