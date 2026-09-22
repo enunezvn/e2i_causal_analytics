@@ -242,6 +242,39 @@ class TestMinResamples:
         assert evaluation.confidence == 0.0
 
     @pytest.mark.asyncio
+    async def test_all_prior_edges_with_too_few_resamples_reports_both_facts(self) -> None:
+        """codex r3 MED, rebutted by design: a single-algorithm run whose every
+        edge is prior-REQUIRED is ``prior_determined`` whether or not the
+        bootstrap achieved ``min_resamples`` — a required edge is forced into
+        every resample, so resampling can neither confirm nor refute it and
+        the corroboration axis is not applicable (gate docstring; the
+        ordering was a deliberate decision of the calibration round). The
+        run still reports the achieved count and ``corroborated = False``,
+        and the gate never labels the basis ``bootstrap_stability``, so
+        nothing claims a corroboration that did not happen."""
+        from src.causal_engine.discovery.base import CausalPriorKnowledge
+
+        algorithm = _SlowAlgorithm(0.05)
+        runner = _runner(algorithm)
+        config = DiscoveryConfig(
+            algorithms=[DiscoveryAlgorithmType.PC],
+            bootstrap_resamples=20,
+            time_budget_s=0.12,
+            min_resamples=10,
+            prior_knowledge=CausalPriorKnowledge(
+                tiers=[["a", "c"], ["b", "d"]], required_edges=[("a", "b"), ("c", "d")]
+            ),
+        )
+        result = await runner.discover_dag(_frame(), config)
+        summary = result.metadata["bootstrap"]
+        assert summary["n_succeeded"] == 1
+        assert summary["corroborated"] is False
+        assert all(e.bootstrap_stability is None for e in result.edges)
+        evaluation = DiscoveryGate().evaluate(result, [("a", "b")])
+        assert evaluation.metadata["corroboration_basis"] == "prior_determined"
+        assert evaluation.metadata["corroboration_basis"] != "bootstrap_stability"
+
+    @pytest.mark.asyncio
     async def test_min_resamples_met_is_corroborated(self) -> None:
         algorithm = _SlowAlgorithm(0.0)
         runner = _runner(algorithm)
