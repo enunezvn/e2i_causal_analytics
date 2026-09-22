@@ -62,6 +62,8 @@ All in `gates_summary.txt` (line cites below); every pytest `-n 0 -p no:cachepro
 | teeth: the `<col>=__missing__` dummy disabled in the loader | `test_causal_csu_escalation_registry.py` RED: `test_synthetic_mode_loads_coerces_and_one_hots_the_backing` | `gates_summary.txt:16` |
 | teeth: `confounders` / `modeled_confounders` emptied in the agent task state | E2E RED: the graph served the unadjusted 0.4976 (== the generator's naive_diff) and the tolerance assertion failed — the test fails exactly when the adjustment set is lost | `gates_summary.txt:17-19` |
 
+| codex r1 MED: `propose_causal_questions` screened on RAW covariate names after the loader one-hot-expanded them (KeyError -> 500; pre-existing on main for the default dataset, newly reachable for csu_escalation_causal) | red-first test `test_causal_propose_categorical_covariates.py` RED before (KeyError on `geographic_region` / the seven Optum categoricals), GREEN after the fix; the candidate set equals the route's own loadable-pair enumeration (9/9 default, 4/4 csu) | `gates_codex_r1_fix.txt` |
+
 Every plant was restored by `cp` from a backup and sha256-verified (`gates_teeth_results.json` `restored_sha_ok`); `git status` after the run shows only the lane's own changes.
 
 ## Not done here (owner decisions, stated in the PR)

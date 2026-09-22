@@ -448,7 +448,7 @@ async def propose_causal_questions(
         per_treatment = [] if _is_randomized_treatment(dataset, t) else covariates_all
         cov = [c for c in per_treatment if c not in (t, o)]
         try:
-            df, _ = await _load_agent_estimation_frame(
+            df, select_cols = await _load_agent_estimation_frame(
                 dataset=dataset,
                 treatment_var=t,
                 outcome_var=o,
@@ -458,7 +458,14 @@ async def propose_causal_questions(
         except HTTPException:
             # A pair with no usable data is simply omitted (never fabricated).
             return None
-        pc = _adjusted_partial_corr(df, t, o, cov)
+        # Screen on the loader's EXPANDED columns, not the requested names: a
+        # categorical covariate (geographic_region; the seven Optum text
+        # baselines) leaves the frame as ``<col>=<level>`` dummies, and an
+        # all-NULL covariate is dropped — indexing ``df`` by the raw list
+        # KeyError-ed (HTTP 500) for the default dataset and for every dataset
+        # with a categorical. Same contract as discovery._prerank_signal (D5).
+        cov_expanded = [c for c in select_cols if c not in (t, o)]
+        pc = _adjusted_partial_corr(df, t, o, cov_expanded)
         if pc is None:
             return None
         return ProposedQuestion(
