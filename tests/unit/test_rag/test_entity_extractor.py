@@ -620,6 +620,9 @@ class TestRxNavAliases:
         with_raise = EntityExtractor().vocabulary.brands
         assert with_none == with_raise
         assert "iptacopan" not in with_none["Fabhalta"]
+        # ... and equal to the curated table itself, not merely to another patched run.
+        assert with_none["Fabhalta"] == ["fabhalta", "factor b", "factor b inhibitor"]
+        assert with_none["Kisqali"] == ["kisqali", "ribociclib", "cdk4/6", "cdk4", "cdk6"]
 
     def test_curated_wins_on_conflict(self, monkeypatch):
         # RxNav (hypothetically) returning another brand's curated alias must not steal it.
@@ -639,3 +642,38 @@ class TestRxNavAliases:
         )
         vocab = EntityVocabulary.from_default()
         assert asked["brands"] == sorted(vocab.brands)
+
+    def test_production_seam_builds_a_short_timeout_client_and_closes_it(self, monkeypatch):
+        """The only test through the real from_default -> rxnav_brand_aliases -> RxNavClient chain."""
+        from src.data.kg.rxnav import RxCUIMatch
+        from src.rag import brand_aliases
+
+        known = {"Fabhalta": ("2671075", ["iptacopan", "Fabhalta"])}
+        made = {}
+
+        class _FakeRxNav:
+            def __init__(self, **kwargs):
+                made["kwargs"] = kwargs
+                made["client"] = self
+                self.closed = False
+
+            def rxcui_for_name(self, name):
+                hit = known.get(name)
+                return RxCUIMatch(rxcui=hit[0], approximate=False) if hit else None
+
+            def related_names(self, rxcui, *, ttys=("IN", "BN", "PIN")):
+                return [names for cui, names in known.values() if cui == rxcui][0]
+
+            def close(self):
+                self.closed = True
+
+        monkeypatch.setattr("src.rag.brand_aliases.RxNavClient", _FakeRxNav)
+        monkeypatch.setenv("RXNAV_BRAND_ALIASES", "1")
+        brand_aliases.reset_cache()
+        try:
+            extractor = EntityExtractor()
+            assert extractor.extract("iptacopan TRx in the northeast").brands == ["Fabhalta"]
+        finally:
+            brand_aliases.reset_cache()  # do not leak a primed round into other tests
+        assert made["kwargs"] == {"timeout": 2.0}
+        assert made["client"].closed is True

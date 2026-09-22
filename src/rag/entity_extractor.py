@@ -113,7 +113,7 @@ class EntityVocabulary:
         try:
             live = rxnav_brand_aliases(canonical_brands)
         except Exception as exc:  # noqa: BLE001 — belt and braces over a never-raises contract
-            logger.warning("RxNav brand aliases unavailable: %s", exc)
+            logger.warning("RxNav brand aliases unavailable: %s", exc, exc_info=True)
             live = {}
         claimed = {alias for aliases in brands.values() for alias in aliases}
         for brand, aliases in live.items():
