@@ -252,7 +252,7 @@ def _make_mock_conn(rowcount: int = 7) -> MagicMock:
     cur.execute = MagicMock()
     # #2210: the explicit-window preflight reads one count; a MagicMock would cast to 1 and
     # make every explicit run refuse. Default to "no planted cohort data at stake".
-    cur.fetchone.return_value = (0,)
+    cur.fetchone.return_value = (0, [])
     cur.__enter__ = MagicMock(return_value=cur)
     cur.__exit__ = MagicMock(return_value=False)
 
@@ -288,9 +288,9 @@ def test_impl_completed_path() -> None:
     # `call_args[0][0] is INSERT` is False. The old assertion would therefore have failed
     # because of a statement it was never about, while this one keeps its subject (the
     # upsert and its bound params) and additionally pins that the reconcile follows it.
-    args, _ = cur.execute.call_args_list[1]  # [0] is the #2210 preflight
+    args, _ = cur.execute.call_args_list[2]  # [0] SET REPEATABLE READ, [1] the #2210 preflight
     assert args[0] is etl.INSERT_PER_HCP_ROLLUP_SQL
-    assert cur.execute.call_args_list[2].args[0] is etl.RECONCILE_PER_HCP_ROLLUP_SQL
+    assert cur.execute.call_args_list[3].args[0] is etl.RECONCILE_PER_HCP_ROLLUP_SQL
     params = args[1]
     assert params["metric_id_prefix"] == etl.METRIC_ID_PREFIX
     assert params["metric_type"] == etl.METRIC_TYPE
@@ -651,8 +651,8 @@ def test_impl_explicit_dates_keep_trigger_timestamp_selection() -> None:
     conn = _make_mock_conn(rowcount=3)
     with patch.object(etl, "_connect_to_db", return_value=conn):
         result = etl._run_per_hcp_rollup_impl(start_date="2026-05-01", end_date="2026-09-16")
-    # [0] is the #2210 preflight, [2] the reconcile
-    args, _ = conn.cursor.return_value.execute.call_args_list[1]
+    # [0] SET REPEATABLE READ, [1] the #2210 preflight, [3] the reconcile
+    args, _ = conn.cursor.return_value.execute.call_args_list[2]
     assert args[0] is etl.INSERT_PER_HCP_ROLLUP_SQL
     assert result["selected_by"] == "trigger_timestamp"
 
@@ -826,21 +826,32 @@ def test_the_etl_module_does_not_import_the_twin_package() -> None:
 
 # --- #2210: an explicit-window run fails closed before deleting planted cohort data ---------
 
+_SET_RR = "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"
+_BASE_RUN_KEYS = {
+    "status",
+    "rows_affected",
+    "window_start",
+    "window_end",
+    "selected_by",
+    "rows_deleted",
+}
 
-def _conn_with_preflight(count: int, rowcount: int = 7) -> MagicMock:
+
+def _conn_with_preflight(count: int, ids: list | None = None, rowcount: int = 7) -> MagicMock:
     conn = _make_mock_conn(rowcount=rowcount)
-    conn.cursor.return_value.fetchone.return_value = (count,)
+    conn.cursor.return_value.fetchone.return_value = (count, list(ids or []))
     return conn
 
 
 def test_the_preflight_counts_exactly_what_the_preview_reports_as_cohort_data() -> None:
     """The preflight is the preview's ``rows_obsolete_with_cohort_data`` aggregate, composed
     from the same CTEs, the same obsolete predicate and the same planted-column list -- one
-    definition, so the two cannot disagree. It reads only."""
+    definition, so the two cannot disagree -- plus the first five affected ids. It reads only."""
     sql = etl.PREFLIGHT_COHORT_DATA_SQL
     cte_text = etl.INSERT_PER_HCP_ROLLUP_SQL.split("INSERT INTO business_metrics", 1)[0]
     assert sql.startswith(cte_text.rstrip())
-    tail = sql.split(")\nSELECT count(*) FROM business_metrics o\n WHERE ", 1)[1]
+    head = ")\nSELECT count(*), (array_agg(o.metric_id ORDER BY o.metric_id))[1:5]\n  FROM business_metrics o\n WHERE "
+    tail = sql.split(head, 1)[1]
     assert tail.startswith(etl._PREVIEW_OBSOLETE_WHERE)
     predicate = " OR ".join(f"o.{c} IS NOT NULL" for c in etl.COHORT_DATA_COLUMNS)
     assert tail.rstrip().endswith(f"AND ({predicate})")
@@ -850,56 +861,109 @@ def test_the_preflight_counts_exactly_what_the_preview_reports_as_cohort_data() 
 
 
 def test_explicit_window_run_refuses_when_obsolete_rows_carry_cohort_data() -> None:
-    conn = _conn_with_preflight(3)
+    conn = _conn_with_preflight(3, ["per_hcp_a", "per_hcp_b", "per_hcp_c"])
     with patch.object(etl, "_connect_to_db", return_value=conn):
         result = etl._run_per_hcp_rollup_impl(start_date="2026-05-01", end_date="2026-09-16")
     cur = conn.cursor.return_value
-    assert [c.args[0] for c in cur.execute.call_args_list] == [etl.PREFLIGHT_COHORT_DATA_SQL]
+    assert [c.args[0] for c in cur.execute.call_args_list] == [
+        _SET_RR,
+        etl.PREFLIGHT_COHORT_DATA_SQL,
+    ]
     assert result["status"] == "refused"
     assert result["rows_obsolete_with_cohort_data"] == 3
+    assert result["rows_obsolete_with_cohort_data_sample"] == [
+        "per_hcp_a",
+        "per_hcp_b",
+        "per_hcp_c",
+    ]
     assert (result["rows_affected"], result["rows_deleted"]) == (0, 0)
-    assert "allow_cohort_data_loss" in result["error"]
+    assert "allow_cohort_data_loss" in result["error"] and "per_hcp_a" in result["error"]
     conn.close.assert_called_once()
 
 
-def test_explicit_window_run_proceeds_in_one_transaction_when_no_cohort_data_is_at_stake() -> None:
+def test_explicit_window_run_takes_one_snapshot_for_preflight_insert_and_reconcile() -> None:
+    """codex r1 (#2212): one ``with conn:`` is not one snapshot under READ COMMITTED. The run
+    sets REPEATABLE READ before its first statement, so the preflight, the INSERT and the
+    DELETE see the same rows, and a concurrent write to those rows fails the run instead of
+    slipping past the guard."""
     conn = _conn_with_preflight(0)
     with patch.object(etl, "_connect_to_db", return_value=conn):
         result = etl._run_per_hcp_rollup_impl(start_date="2026-05-01", end_date="2026-09-16")
     cur = conn.cursor.return_value
     assert [c.args[0] for c in cur.execute.call_args_list] == [
+        _SET_RR,
         etl.PREFLIGHT_COHORT_DATA_SQL,
         etl.INSERT_PER_HCP_ROLLUP_SQL,
         etl.RECONCILE_PER_HCP_ROLLUP_SQL,
     ]
-    assert conn.__enter__.call_count == 1  # preflight, insert and reconcile share one transaction
+    assert conn.__enter__.call_count == 1
     assert result["status"] == "completed"
-    assert result["rows_obsolete_with_cohort_data"] == 0
-    assert result["cohort_data_loss_acknowledged"] is False
+    # zero at stake: the payload is exactly what it was before #2210
+    assert set(result) == _BASE_RUN_KEYS
 
 
-def test_explicit_window_override_proceeds_and_names_the_loss(caplog) -> None:
-    conn = _conn_with_preflight(2)
+def test_a_serialization_failure_fails_closed_without_a_second_attempt() -> None:
+    import psycopg2
+
+    conn = _conn_with_preflight(0)
+    cur = conn.cursor.return_value
+
+    def _execute(statement, *_a):
+        if statement is etl.RECONCILE_PER_HCP_ROLLUP_SQL:
+            raise psycopg2.errors.SerializationFailure("could not serialize access")
+
+    cur.execute.side_effect = _execute
+    with patch.object(etl, "_connect_to_db", return_value=conn):
+        result = etl._run_per_hcp_rollup_impl(start_date="2026-05-01", end_date="2026-09-16")
+    assert result["status"] == "failed" and "serialize" in result["error"]
+    assert cur.execute.call_count == 4
+    conn.close.assert_called_once()
+
+
+def test_a_missing_preflight_row_fails_before_any_write() -> None:
+    """codex r1 (#2212): an aggregate always returns one row; ``None`` is a protocol fault,
+    not a zero, and must never authorise the DELETE."""
+    conn = _make_mock_conn()
+    conn.cursor.return_value.fetchone.return_value = None
+    with patch.object(etl, "_connect_to_db", return_value=conn):
+        result = etl._run_per_hcp_rollup_impl(start_date="2026-05-01", end_date="2026-09-16")
+    cur = conn.cursor.return_value
+    assert [c.args[0] for c in cur.execute.call_args_list] == [
+        _SET_RR,
+        etl.PREFLIGHT_COHORT_DATA_SQL,
+    ]
+    assert result["status"] == "failed" and "preflight" in result["error"]
+    assert (result["rows_affected"], result["rows_deleted"]) == (0, 0)
+
+
+def test_explicit_window_override_proceeds_and_names_the_loss_and_the_replant(caplog) -> None:
+    conn = _conn_with_preflight(2, ["per_hcp_a", "per_hcp_b"])
     with patch.object(etl, "_connect_to_db", return_value=conn), caplog.at_level("WARNING"):
         result = etl._run_per_hcp_rollup_impl(
             start_date="2026-05-01", end_date="2026-09-16", allow_cohort_data_loss=True
         )
     cur = conn.cursor.return_value
     assert [c.args[0] for c in cur.execute.call_args_list] == [
+        _SET_RR,
         etl.PREFLIGHT_COHORT_DATA_SQL,
         etl.INSERT_PER_HCP_ROLLUP_SQL,
         etl.RECONCILE_PER_HCP_ROLLUP_SQL,
     ]
     assert result["status"] == "completed"
     assert result["rows_obsolete_with_cohort_data"] == 2
+    assert result["rows_obsolete_with_cohort_data_sample"] == ["per_hcp_a", "per_hcp_b"]
     assert result["cohort_data_loss_acknowledged"] is True
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
     assert any(
-        "allow_cohort_data_loss" in r.getMessage() and "2" in r.getMessage() for r in caplog.records
-    )
+        "allow_cohort_data_loss" in m
+        and "2" in m
+        and "backfill_segment_engagement.py --execute" in m
+        for m in warnings
+    ), warnings
 
 
-def test_the_arrival_run_has_no_preflight_and_its_sql_is_unchanged() -> None:
-    conn = _conn_with_preflight(99)
+def test_the_arrival_run_is_untouched_by_the_guard() -> None:
+    conn = _conn_with_preflight(99, ["would_be_refused"])
     with patch.object(etl, "_connect_to_db", return_value=conn):
         result = etl._run_per_hcp_rollup_impl(arrived_before="2026-09-14T03:15:00+00:00")
     cur = conn.cursor.return_value
@@ -908,7 +972,12 @@ def test_the_arrival_run_has_no_preflight_and_its_sql_is_unchanged() -> None:
         etl.RECONCILE_PER_HCP_ROLLUP_BY_ARRIVAL_SQL,
     ]
     assert result["status"] == "completed"
-    assert "rows_obsolete_with_cohort_data" not in result
+    assert set(result) == _BASE_RUN_KEYS
+    for statement in (
+        etl.INSERT_PER_HCP_ROLLUP_BY_ARRIVAL_SQL,
+        etl.RECONCILE_PER_HCP_ROLLUP_BY_ARRIVAL_SQL,
+    ):
+        assert "REPEATABLE READ" not in statement and "array_agg" not in statement
 
 
 def test_the_override_is_refused_on_the_arrival_path() -> None:
@@ -920,9 +989,16 @@ def test_the_override_is_refused_on_the_arrival_path() -> None:
     connect.assert_not_called()
 
 
-def test_the_celery_task_exposes_the_override() -> None:
-    import inspect
-
-    params = inspect.signature(etl.run_per_hcp_rollup.run).parameters
-    assert "allow_cohort_data_loss" in params
-    assert params["allow_cohort_data_loss"].default is False
+def test_the_celery_task_forwards_the_override_to_the_implementation() -> None:
+    with patch.object(
+        etl, "_run_per_hcp_rollup_impl", return_value={"status": "completed"}
+    ) as impl:
+        etl.run_per_hcp_rollup(
+            start_date="2026-05-01", end_date="2026-09-16", allow_cohort_data_loss=True
+        )
+    assert impl.call_args.kwargs["allow_cohort_data_loss"] is True
+    with patch.object(
+        etl, "_run_per_hcp_rollup_impl", return_value={"status": "completed"}
+    ) as impl:
+        etl.run_per_hcp_rollup()
+    assert impl.call_args.kwargs["allow_cohort_data_loss"] is False

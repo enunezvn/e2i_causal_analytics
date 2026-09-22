@@ -475,3 +475,64 @@ def test_an_explicit_window_run_refuses_to_delete_planted_cohort_data_unless_ack
     assert acknowledged["cohort_data_loss_acknowledged"] is True
     assert acknowledged["rows_deleted"] >= 1, acknowledged
     assert not _row_exists(), "the acknowledged run's reconcile deletes the obsolete row"
+
+
+def test_the_guard_snapshot_hides_a_row_planted_after_the_preflight(
+    db_conn: Any, planted: dict
+) -> None:
+    """codex r1 on #2212: one transaction is not one snapshot under READ COMMITTED. Prove on
+    the real database that the run's REPEATABLE READ snapshot, taken by the preflight, hides
+    a cohort-bearing row another connection commits afterwards: the reconcile in the same
+    transaction deletes nothing, the row survives, and the next run refuses on it."""
+    import os
+
+    import psycopg2
+
+    from src.etl import business_metrics_per_hcp_etl as etl
+
+    rid, a = planted["rid"], planted["a"]
+    metric_id = f"per_hcp_snap_{rid}"
+    params = {
+        "start_date": date(2019, 1, 1),
+        "end_date": date(2019, 1, 15),
+        "metric_id_prefix": etl.METRIC_ID_PREFIX,
+        "metric_type": etl.METRIC_TYPE,
+    }
+    runner = psycopg2.connect(os.environ["SUPABASE_DB_URL"])
+    try:
+        with runner:
+            with runner.cursor() as cur:
+                cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+                cur.execute(etl.PREFLIGHT_COHORT_DATA_SQL, params)
+                at_stake, sample = cur.fetchone()
+                assert (at_stake, sample) == (0, None), (at_stake, sample)
+                # another connection lands a cohort-bearing obsolete row and commits
+                with db_conn:
+                    with db_conn.cursor() as other:
+                        other.execute(
+                            """
+                            INSERT INTO business_metrics (
+                                metric_id, metric_date, metric_type, brand, region, hcp_id,
+                                triggers_delivered_count, triggers_accepted_count,
+                                triggers_total_count, market_share, conversion_rate,
+                                is_synthetic, rep_training_score
+                            ) VALUES (
+                                %s, %s, 'per_hcp_rollup', %s::brand_type,
+                                'northeast'::region_type, %s, 1, 0, 1, 1.0, 0.0, true, 0.7
+                            )
+                            """,
+                            (metric_id, date(2019, 1, 5), BRAND, a),
+                        )
+                cur.execute(etl.RECONCILE_PER_HCP_ROLLUP_SQL, params)
+                assert cur.rowcount == 0, "the snapshot must hide the row planted after it"
+    finally:
+        runner.close()
+    with db_conn:
+        with db_conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM business_metrics WHERE metric_id = %s", (metric_id,))
+            assert cur.fetchone() is not None, "the concurrently planted row must survive"
+    refused = etl._run_per_hcp_rollup_impl(
+        start_date="2019-01-01", end_date="2019-01-15", request_id="late-arrival-snapshot"
+    )
+    assert refused["status"] == "refused", refused
+    assert metric_id in refused["rows_obsolete_with_cohort_data_sample"], refused

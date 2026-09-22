@@ -449,7 +449,7 @@ PREFLIGHT_COHORT_DATA_SQL: str = (
     _PER_HCP_ROLLUP_CTES_TEMPLATE.replace("__WINDOW_COLUMN__", "trigger_timestamp")
     + ",\nrollup AS ("
     + _PER_HCP_ROLLUP_ROWS_SELECT
-    + ")\nSELECT count(*) FROM business_metrics o\n WHERE "
+    + ")\nSELECT count(*), (array_agg(o.metric_id ORDER BY o.metric_id))[1:5]\n  FROM business_metrics o\n WHERE "
     + _PREVIEW_OBSOLETE_WHERE
     + "\n   AND ("
     + " OR ".join(f"o.{col} IS NOT NULL" for col in COHORT_DATA_COLUMNS)
@@ -577,17 +577,20 @@ def _run_per_hcp_rollup_impl(
         the reconcile removed in the same transaction), ``selected_by``
         (``"arrival"`` for a scheduled run, ``"trigger_timestamp"`` for an
         explicit window), ``window_start``, ``window_end``, and on failure an
-        ``error`` field. An explicit-window run also reports
-        ``rows_obsolete_with_cohort_data`` and ``cohort_data_loss_acknowledged``.
+        ``error`` field. An explicit-window run that found cohort data at stake also
+        reports ``rows_obsolete_with_cohort_data``, its ``_sample`` of ids and
+        ``cohort_data_loss_acknowledged``.
 
     #2210 -- fail closed. An explicit-window run's reconcile deletes every stored row on the
     window's dates that the recompute no longer produces. On 2026-09-21 those rows carried the
     Digital Twin's planted cohort data (columns this ETL never writes) and the twin went dark.
-    So the run first counts, in its own transaction, the obsolete rows still carrying that
-    data (``PREFLIGHT_COHORT_DATA_SQL`` -- the preview's own aggregate); a positive count is
-    refused (status ``refused``, nothing written) unless ``allow_cohort_data_loss=True``, in
-    which case the loss is logged by name and the caller owns the replant. The scheduled
-    arrival run is untouched: its ``affected_dates`` scope is the beat's own contract.
+    So the run first counts, under REPEATABLE READ in the same transaction as the DELETE,
+    the obsolete rows still carrying that data (``PREFLIGHT_COHORT_DATA_SQL`` -- the
+    preview's own aggregate, plus the first five ids); a positive count is refused (status
+    ``refused``, nothing written) unless ``allow_cohort_data_loss=True``, in which case the
+    loss and the replant are logged by name and the caller owns the replant. A zero count
+    leaves the result payload exactly as before. The scheduled arrival run is untouched: its
+    ``affected_dates`` scope is the beat's own contract.
     """
     by_arrival = start_date is None and end_date is None
     selected_by = "arrival" if by_arrival else "trigger_timestamp"
@@ -640,22 +643,36 @@ def _run_per_hcp_rollup_impl(
         with conn:  # transactional: commits on exit, rolls back on exception
             with conn.cursor() as cur:
                 if not by_arrival:
-                    # #2210: same transaction as the DELETE below, so the count cannot go
-                    # stale between the check and the write.
+                    # #2210: one snapshot for the preflight, the INSERT and the DELETE. Under
+                    # READ COMMITTED (the connection default) each statement would see its
+                    # own snapshot and a concurrent plant could land a cohort-bearing row
+                    # between the count and the DELETE. Under REPEATABLE READ a row written
+                    # after the snapshot is invisible to the DELETE, and a row the DELETE
+                    # touches that another transaction changed fails the run (serialization
+                    # failure -> status "failed", nothing committed): closed either way.
+                    cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
                     cur.execute(PREFLIGHT_COHORT_DATA_SQL, params)
-                    at_stake = int((cur.fetchone() or (0,))[0])
-                    cohort_extra = {
-                        "rows_obsolete_with_cohort_data": at_stake,
-                        "cohort_data_loss_acknowledged": bool(allow_cohort_data_loss),
-                    }
+                    row = cur.fetchone()
+                    if row is None or row[0] is None:
+                        raise RuntimeError(
+                            "cohort-data preflight returned no aggregate row; refusing to write"
+                        )
+                    at_stake = int(row[0])
+                    sample = [str(m) for m in (row[1] or [])]
+                    if at_stake > 0:
+                        cohort_extra = {
+                            "rows_obsolete_with_cohort_data": at_stake,
+                            "rows_obsolete_with_cohort_data_sample": sample,
+                            "cohort_data_loss_acknowledged": bool(allow_cohort_data_loss),
+                        }
                     if at_stake > 0 and not allow_cohort_data_loss:
                         message = (
                             f"refused: {at_stake} obsolete per_hcp_rollup rows in "
                             f"[{start_dt.isoformat()}, {end_dt.isoformat()}) still carry the "
                             "Digital Twin's planted cohort data and the reconcile would delete "
-                            "them; run preview_per_hcp_rollup, plan the replant "
-                            "(scripts/backfill_segment_engagement.py --execute), then re-run "
-                            "with allow_cohort_data_loss=True"
+                            f"them (first ids: {', '.join(sample)}); run preview_per_hcp_rollup, "
+                            "plan the replant (scripts/backfill_segment_engagement.py --execute), "
+                            "then re-run with allow_cohort_data_loss=True"
                         )
                         logger.error("Per-HCP business_metrics rollup %s [%s]", message, request_id)
                         return {
@@ -671,10 +688,13 @@ def _run_per_hcp_rollup_impl(
                     if at_stake > 0:
                         logger.warning(
                             "Per-HCP business_metrics rollup [%s]: allow_cohort_data_loss=True "
-                            "-- %d obsolete rows carrying planted cohort data will be deleted; "
-                            "the caller owns the replant",
+                            "-- %d obsolete rows carrying planted cohort data will be deleted "
+                            "(first ids: %s); the replant is "
+                            "scripts/backfill_segment_engagement.py --execute and the caller "
+                            "owns running it",
                             request_id,
                             at_stake,
+                            ", ".join(sample),
                         )
                 cur.execute(sql, params)
                 rows_affected = cur.rowcount
