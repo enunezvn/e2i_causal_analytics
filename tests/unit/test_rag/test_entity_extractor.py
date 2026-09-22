@@ -585,3 +585,57 @@ class TestParseConfigRegionAliases:
         assert "competitor" not in vocab.brands
         assert "other" not in vocab.brands
         assert "Kisqali" in vocab.brands
+
+
+# ============================================================================
+# RxNav-backed aliases (lane 2, 2026-09-22)
+# ============================================================================
+
+
+class TestRxNavAliases:
+    def test_rxnav_aliases_are_merged_after_curated_ones(self, monkeypatch):
+        monkeypatch.setattr(
+            "src.rag.entity_extractor.rxnav_brand_aliases",
+            lambda brands: {"Fabhalta": ["iptacopan"], "Remibrutinib": ["rhapsido"]},
+        )
+        extractor = EntityExtractor()
+        assert extractor.extract("iptacopan TRx in the northeast").brands == ["Fabhalta"]
+        assert extractor.extract("Rhapsido NBRx last quarter").brands == ["Remibrutinib"]
+        # curated entries are still first and intact
+        assert extractor.vocabulary.brands["Fabhalta"][:3] == [
+            "fabhalta",
+            "factor b",
+            "factor b inhibitor",
+        ]
+
+    def test_without_rxnav_the_vocabulary_is_identical_to_the_curated_table(self, monkeypatch):
+        monkeypatch.setattr("src.rag.entity_extractor.rxnav_brand_aliases", lambda brands: {})
+        with_none = EntityExtractor().vocabulary.brands
+        monkeypatch.setattr(
+            "src.rag.entity_extractor.rxnav_brand_aliases",
+            lambda brands: (_ for _ in ()).throw(RuntimeError("must not be raised by design")),
+        )
+        # The function contract is "never raises"; if it ever did, from_default must
+        # still build the curated table.
+        with_raise = EntityExtractor().vocabulary.brands
+        assert with_none == with_raise
+        assert "iptacopan" not in with_none["Fabhalta"]
+
+    def test_curated_wins_on_conflict(self, monkeypatch):
+        # RxNav (hypothetically) returning another brand's curated alias must not steal it.
+        monkeypatch.setattr(
+            "src.rag.entity_extractor.rxnav_brand_aliases",
+            lambda brands: {"Fabhalta": ["ribociclib", "iptacopan"]},
+        )
+        extractor = EntityExtractor()
+        assert extractor.extract("ribociclib share trend").brands == ["Kisqali"]
+        assert "ribociclib" not in extractor.vocabulary.brands["Fabhalta"]
+
+    def test_from_default_asks_for_exactly_the_canonical_brands(self, monkeypatch):
+        asked = {}
+        monkeypatch.setattr(
+            "src.rag.entity_extractor.rxnav_brand_aliases",
+            lambda brands: asked.setdefault("brands", sorted(brands)) and {},
+        )
+        vocab = EntityVocabulary.from_default()
+        assert asked["brands"] == sorted(vocab.brands)

@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from src.rag.brand_aliases import rxnav_brand_aliases
 from src.rag.exceptions import EntityExtractionError
 from src.rag.types import ExtractedEntities
 
@@ -101,9 +102,28 @@ class EntityVocabulary:
             "Kisqali": ["kisqali", "ribociclib", "cdk4/6", "cdk4", "cdk6"],
         }
         # Ensure all canonical brands are included
-        brands = {}
+        brands: Dict[str, List[str]] = {}
         for brand in canonical_brands:
-            brands[brand] = brand_aliases.get(brand, [brand.lower()])
+            brands[brand] = list(brand_aliases.get(brand, [brand.lower()]))
+
+        # RxNav-backed aliases (lane 2, 2026-09-22): ingredient and marketed names
+        # the curated table does not carry ("iptacopan", "Rhapsido"). Curated
+        # entries stay first and win any conflict; the lookup never raises and is
+        # empty when RxNav is down or RXNAV_BRAND_ALIASES=0.
+        try:
+            live = rxnav_brand_aliases(canonical_brands)
+        except Exception as exc:  # noqa: BLE001 — belt and braces over a never-raises contract
+            logger.warning("RxNav brand aliases unavailable: %s", exc)
+            live = {}
+        claimed = {alias for aliases in brands.values() for alias in aliases}
+        for brand, aliases in live.items():
+            if brand not in brands:
+                continue
+            for alias in aliases:
+                if alias in claimed:
+                    continue
+                brands[brand].append(alias)
+                claimed.add(alias)
 
         # Region aliases for NLP matching (module-level REGION_ALIASES, #1501);
         # list() copies keep each vocabulary instance's lists independently
