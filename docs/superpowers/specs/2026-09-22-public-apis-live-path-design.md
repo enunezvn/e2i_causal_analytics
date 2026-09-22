@@ -22,8 +22,13 @@ request:
 
 Separately, the Layer‑4 causal-role classifier artifact
 `artifacts/dspy/causal_role_classifier.json` is committed but absent from the
-image (`.dockerignore` `*.json`), so Layer 4 silently skips in production.
-That is the #1607 / #600 shape already fixed once for the KG cache.
+image. The artifact was absent only because no COPY existed; `.dockerignore`
+never excluded it (a slash-less pattern like `*.json` matches the
+build-context root only — measured on the production image 2026-09-22 via
+`scripts/benchmarks/routing/data/agent_contracts.json`, present in that same
+image under that same rule). So Layer 4 silently skips in production. That is
+the #1607 / #600 shape already fixed once for the KG cache, minus the
+`.dockerignore` part of that fix — this artifact never needed one.
 
 The owner asked for all three APIs in the live request path and for the
 Layer‑4 artifact to ship.
@@ -66,10 +71,10 @@ Layer‑4 artifact to ship.
    in **both** the `development` and `production` stages, beside the existing
    `COPY data/kg_cache/` lines. The loader's `PROJECT_ROOT` resolves to `/app`
    in the image, so the path lands at `DEFAULT_ARTIFACT_PATH`.
-2. `.dockerignore`: `!artifacts/dspy/causal_role_classifier.json` placed
-   **after** the `*.json` rule (last match wins), with a comment naming this
-   spec and the #1607 precedent. `ac3_verdict_n200.json` (a measurement
-   record) is not shipped.
+2. `.dockerignore`: NOT NEEDED — premise disproved 2026-09-22. Measured on the
+   production image: a slash-less pattern like `*.json` matches the
+   build-context root only, so it never excluded the artifact; the only cause
+   of the missing file was the absent `COPY` in item 1.
 3. Guard test `tests/unit/test_data/test_causal_role_classifier_packaging.py`,
    mirroring `test_kg_cache_packaging.py`: the artifact at
    `DEFAULT_ARTIFACT_PATH` is committed, survives `.dockerignore` under

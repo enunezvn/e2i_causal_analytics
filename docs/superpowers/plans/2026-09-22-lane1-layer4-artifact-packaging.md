@@ -38,11 +38,17 @@ Every `pytest` below runs with `-n 0` from this directory, and every python invo
 ```python
 """The Layer-4 classifier artifact must actually reach the Docker image.
 
-Same shape as #1607 / #600 (see test_kg_cache_packaging.py): the artifact is
-committed, the loader resolves a path under PROJECT_ROOT, and yet the deployed
-container had no /app/artifacts at all because `.dockerignore`'s `*.json` rule
-dropped it from the build context and the Dockerfile never COPYed it. Layer 4
-then "skips" — a loud log line, but still a no-op in production.
+Same shape as #1607 / #600: the artifact is committed and the loader resolves a
+path under PROJECT_ROOT, yet the deployed container had no /app/artifacts at
+all. Measured 2026-09-22 on the production image: the cause was ONLY a missing
+COPY — `.dockerignore` never excluded it, because a slash-less pattern such as
+`*.json` matches at the build-context root only (nested
+scripts/benchmarks/routing/data/agent_contracts.json is present in the same
+image under the same rule; Docker docs: "markdown files under subdirectories
+are still included"). The dockerignore check below is therefore a guard against
+a FUTURE exclusion (`artifacts/`, `**/*.json`), and `_matches` deliberately
+models Docker's root-only semantics for slash-less patterns — do not "fix" it
+to gitignore semantics.
 
 Static checks only: they read `.dockerignore` and the Dockerfile, so they run in
 the normal unit lane. Spec: docs/superpowers/specs/2026-09-22-public-apis-live-path-design.md.
@@ -99,10 +105,20 @@ def test_the_classifier_artifact_is_committed() -> None:
 
 def test_the_classifier_artifact_survives_dockerignore() -> None:
     assert not _dockerignore_excludes(_ARTIFACT_REL), (
-        f"{_ARTIFACT_REL} is excluded from the Docker build context by .dockerignore "
-        "(the `*.json` rule); re-include it AFTER that rule (last-match-wins), "
-        "otherwise Layer 4 silently skips in production."
+        f"{_ARTIFACT_REL} is excluded from the Docker build context by .dockerignore; "
+        "remove or narrow the rule that excludes it (a slash-less pattern only matches "
+        "the root, so look for a directory or `**/` rule), otherwise Layer 4 silently "
+        "skips in production."
     )
+
+
+def test_matcher_models_docker_root_only_semantics_for_slashless_patterns() -> None:
+    """Measured on the production image 2026-09-22: `*.json` did not drop nested
+    scripts/benchmarks/routing/data/agent_contracts.json. `**/*.json` would."""
+    assert _matches("*.json", "root.json")
+    assert not _matches("*.json", "artifacts/dspy/causal_role_classifier.json")
+    assert _matches("**/*.json", "artifacts/dspy/causal_role_classifier.json")
+    assert _matches("artifacts", "artifacts/dspy/causal_role_classifier.json")
 
 
 def test_dockerfile_copies_the_artifact_into_every_app_stage() -> None:
@@ -134,7 +150,7 @@ def test_the_copy_lands_where_the_loader_looks() -> None:
 - [ ] **Step 2: Run it to verify it fails**
 
 Run: `python -c "import src; assert src.__file__.startswith('$PWD')" && pytest -n 0 tests/unit/test_data/test_causal_role_classifier_packaging.py -v`
-Expected: `test_the_classifier_artifact_survives_dockerignore` FAILS (excluded by `*.json`), `test_dockerfile_copies_the_artifact_into_every_app_stage` FAILS (found 0). The other three PASS.
+Expected: only `test_dockerfile_copies_the_artifact_into_every_app_stage` FAILS (found 0 COPY lines). The other five PASS — including `test_the_classifier_artifact_survives_dockerignore`, which passes immediately: `.dockerignore` was never the cause (measured 2026-09-22).
 
 - [ ] **Step 3: Commit the red test**
 
@@ -142,8 +158,9 @@ Expected: `test_the_classifier_artifact_survives_dockerignore` FAILS (excluded b
 git add tests/unit/test_data/test_causal_role_classifier_packaging.py
 git commit -m "test(layer4): guard that the classifier artifact reaches the image (red)
 
-Same #1607 shape as the KG cache: committed, loader-resolvable, absent from
-the deployed container. Fails on main.
+Measured on the production image 2026-09-22: .dockerignore never excluded it
+(slash-less `*.json` matches the root only); the only defect is the missing
+COPY. The matcher deliberately models Docker's root-only semantics.
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 ```
@@ -152,38 +169,12 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ### Task 2: Re-include the artifact in the build context
 
-**Files:**
-- Modify: `.dockerignore` (immediately after the `!data/kg_cache/**` line, before `# ML artifacts`)
-
-- [ ] **Step 1: Add the un-ignore after the `*.json` rule**
-
-Insert after the line `!data/kg_cache/**`:
-
-```
-# The compiled Layer-4 causal-role classifier (DSPy). Same #1607 shape as the
-# KG caches above: src/data/causal_role_classifier_loader.py resolves
-# PROJECT_ROOT/artifacts/dspy/causal_role_classifier.json, the file is
-# committed, and the blanket `*.json` rule dropped it from the build context —
-# so Layer 4 "skipped" in production while looking merely quiet. Must sit AFTER
-# `*.json` (last-match-wins). Guarded by
-# tests/unit/test_data/test_causal_role_classifier_packaging.py. Spec:
-# docs/superpowers/specs/2026-09-22-public-apis-live-path-design.md.
-!artifacts/dspy/causal_role_classifier.json
-```
-
-- [ ] **Step 2: Run the guard**
-
-Run: `pytest -n 0 tests/unit/test_data/test_causal_role_classifier_packaging.py -v`
-Expected: `test_the_classifier_artifact_survives_dockerignore` now PASSES; the Dockerfile test still FAILS.
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add .dockerignore
-git commit -m "build(layer4): let the classifier artifact into the Docker build context
-
-Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
-```
+NOT NEEDED — premise disproved 2026-09-22. Measured on the production image: a
+slash-less pattern like `*.json` matches the build-context root only (confirmed
+via `scripts/benchmarks/routing/data/agent_contracts.json`, present in that
+same image under that same rule), so `.dockerignore` never excluded the
+artifact. `.dockerignore` is left untouched; the only defect was the missing
+`COPY`, fixed in Task 3.
 
 ---
 
@@ -245,9 +236,9 @@ git push -u origin claude/lane1-layer4-artifact
 gh pr create --base main --title "build(layer4): ship the causal-role classifier artifact in the image" --body-file - <<'EOF'
 Part of the 2026-09-22 public-APIs-live-path design (docs/superpowers/specs/2026-09-22-public-apis-live-path-design.md), lane 1 of 3.
 
-**Problem.** `artifacts/dspy/causal_role_classifier.json` is committed and the loader resolves it, but `.dockerignore`'s `*.json` rule dropped it from the build context and the Dockerfile never COPYed it. Measured 2026-09-22 inside `e2i_api`: `/app/artifacts` does not exist; `_try_load_layer_4_classifier()` returns `None`; Layer 4 silently skips in every production retrain. Same shape as #1607 / #600.
+**Problem.** `artifacts/dspy/causal_role_classifier.json` is committed and the loader resolves it, but the Dockerfile never COPYed it into either app stage. Measured 2026-09-22 inside `e2i_api`: `/app/artifacts` does not exist; `_try_load_layer_4_classifier()` returns `None`; Layer 4 silently skips in every production retrain. The artifact was absent only because no COPY existed — `.dockerignore` never excluded it (a slash-less pattern like `*.json` matches the build-context root only; confirmed via `scripts/benchmarks/routing/data/agent_contracts.json`, present in the same image under the same rule). Same #1607/#600 *symptom* as the KG cache, different cause.
 
-**Change.** Un-ignore the one file after the `*.json` rule; COPY it in both app stages; a static guard test (red on main) mirrors the KG-cache packaging guard.
+**Change.** COPY the file in both app stages; a static guard test (red on main) mirrors the KG-cache packaging guard and pins the matcher's Docker root-only semantics for slash-less patterns so it isn't mistaken for a gitignore-style any-depth match. `.dockerignore` is untouched.
 
 **Behaviour once deployed.** Layer 4 fires for `ambiguous` (3σ<z≤5σ) features during `execute_model_retraining`, using the loader's default `anthropic/claude-sonnet-4-6` (key present in the container). Citation resolution stays bounded by `ADAPTIVE_CITATION_RESOLUTION_BUDGET` (default 25). Model-provider choice is out of scope and flagged in the spec.
 
