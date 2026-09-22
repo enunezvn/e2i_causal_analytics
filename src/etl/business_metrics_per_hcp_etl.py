@@ -602,6 +602,15 @@ def _run_per_hcp_rollup_impl(
     try:
         if arrived_before is not None and not by_arrival:
             raise ValueError("arrived_before cannot be combined with start_date/end_date")
+        # codex r5 (#2212): the Celery kwarg arrives from a serialized payload with no runtime
+        # validation. The override is the boolean True and nothing else -- a truthiness check
+        # would let the string "false" (or 1) authorise the deletion. Anything that is not a
+        # bool fails the run here, before a connection is opened.
+        if not isinstance(allow_cohort_data_loss, bool):
+            raise ValueError(
+                "allow_cohort_data_loss must be a bool (True acknowledges the loss); got "
+                f"{allow_cohort_data_loss!r}"
+            )
         if allow_cohort_data_loss and by_arrival:
             raise ValueError("allow_cohort_data_loss applies to explicit windows only")
         if by_arrival:
@@ -671,9 +680,9 @@ def _run_per_hcp_rollup_impl(
                         cohort_extra = {
                             "rows_obsolete_with_cohort_data": at_stake,
                             "rows_obsolete_with_cohort_data_sample": sample,
-                            "cohort_data_loss_acknowledged": bool(allow_cohort_data_loss),
+                            "cohort_data_loss_acknowledged": allow_cohort_data_loss is True,
                         }
-                    if at_stake > 0 and not allow_cohort_data_loss:
+                    if at_stake > 0 and allow_cohort_data_loss is not True:
                         message = (
                             f"refused: {at_stake} obsolete per_hcp_rollup rows in "
                             f"[{start_dt.isoformat()}, {end_dt.isoformat()}) still carry the "

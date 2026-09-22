@@ -24,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import re
 from datetime import date, datetime
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -938,6 +939,35 @@ def test_a_serialization_failure_fails_closed_without_a_second_attempt(
     assert (result["rows_affected"], result["rows_deleted"]) == (0, 0)
     assert cur.execute.call_count == statements_run
     conn.close.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param("false", id="str-false"),
+        pytest.param("True", id="str-True"),
+        pytest.param(1, id="int-1"),
+        pytest.param(None, id="none"),
+        pytest.param([], id="empty-list"),
+    ],
+)
+def test_the_override_is_only_the_boolean_true_and_anything_else_fails_before_connecting(
+    value: Any,
+) -> None:
+    """codex r5 (#2212): the Celery task's kwarg arrives from a serialized payload with no
+    runtime validation, so a truthiness check would let the string "false" (or 1, or a
+    list) authorise the deletion and report it as acknowledged. The override is the boolean
+    True and nothing else; any other value -- including None -- fails the run before a
+    connection is opened, so a mis-typed payload can never reach the DELETE."""
+    with patch.object(etl, "_connect_to_db") as connect:
+        result = etl._run_per_hcp_rollup_impl(
+            start_date="2026-05-01", end_date="2026-09-16", allow_cohort_data_loss=value
+        )
+    connect.assert_not_called()
+    assert result["status"] == "failed", result
+    assert "allow_cohort_data_loss" in result["error"] and "bool" in result["error"], result
+    assert result["rows_affected"] == 0
+    assert "cohort_data_loss_acknowledged" not in result
 
 
 def test_a_missing_preflight_row_fails_before_any_write() -> None:
