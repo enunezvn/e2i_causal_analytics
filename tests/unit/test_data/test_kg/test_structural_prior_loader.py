@@ -438,3 +438,35 @@ async def test_find_row_filters_on_manifest_and_resolver_refuses_undeclared_data
         treatment=T, outcome=Y, brand=None, manifest="optum_mart", repo_factory=factory
     )
     assert prior is not None and notes == []
+
+
+def test_apply_to_state_expands_an_approved_root_to_its_declared_dummies():
+    """codex r3 MED 2: the estimation loader one-hot encodes categoricals, so
+    the run's covariates are ``root=level`` columns. An approved confounder
+    named by its root must anchor every declared dummy of that root — the
+    root itself is not a frame column and graph_builder drops it silently."""
+    import pandas as pd
+
+    from src.agents.causal_impact.nodes.graph_builder import GraphBuilderNode
+
+    prior = structural_prior_from_review_row(_row())
+    covariates = [
+        "age_at_index=young",
+        "age_at_index=old",
+        "charlson_score",
+        "payer_category=commercial",
+    ]
+    state = {"anchored_confounders": [], "warnings": []}
+    lines = apply_structural_prior_to_state(state, prior, covariates=covariates)
+    assert state["anchored_confounders"] == [
+        "age_at_index=young",
+        "age_at_index=old",
+        "charlson_score",
+    ]
+    assert not any("not anchored" in line for line in lines)
+    # Through the graph builder's channel resolver and its frame-column
+    # predicate (graph_builder: ``c in data.columns``): nothing is dropped.
+    frame = pd.DataFrame(columns=[T, Y, *covariates])
+    resolved = GraphBuilderNode._resolve_anchored_confounders(state)
+    assert [c for c in resolved if c in frame.columns and c not in (T, Y)] == resolved
+    assert resolved == state["anchored_confounders"]

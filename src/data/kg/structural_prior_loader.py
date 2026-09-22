@@ -402,15 +402,25 @@ def apply_structural_prior_to_state(
     ``anchored_confounders`` (graph_builder forces ``conf -> T`` and
     ``conf -> Y`` for each) is restricted to the run's declared covariates —
     an approved confounder the caller did not offer cannot be adjusted for and
-    is named in the returned warnings. ``approved_structure_roles`` carries
-    every approved role (Lane E's ``derive_confounder_channels`` maps dummies
-    ``<col>=<level>`` back to their root column, so roles are passed unfiltered).
+    is named in the returned warnings; a confounder approved by its root name
+    anchors each declared ``root=level`` dummy. ``approved_structure_roles``
+    carries every approved role (Lane E's ``derive_confounder_channels`` maps
+    dummies back to their root column, so roles are passed unfiltered).
     Returns the provenance lines appended to ``state["warnings"]``.
     """
-    declared = {str(c) for c in covariates}
-    roots = {c.split("=", 1)[0] for c in declared}
-    anchored = [c for c in prior.anchored_confounders if c in declared or c in roots]
-    missing = [c for c in prior.anchored_confounders if c not in declared and c not in roots]
+    # The estimation loader one-hot encodes categoricals, so a run's covariate
+    # may be ``root=level``; an approved confounder named by its root anchors
+    # every declared dummy of that root (the root itself is not a frame column
+    # and graph_builder would drop it silently — codex r3 MED 2).
+    declared = [str(c) for c in covariates]
+    anchored: list[str] = []
+    missing: list[str] = []
+    for conf in prior.anchored_confounders:
+        matches = [c for c in declared if c == conf or c.split("=", 1)[0] == conf]
+        if matches:
+            anchored.extend(m for m in matches if m not in anchored)
+        else:
+            missing.append(conf)
     state["anchored_confounders"] = anchored
     state["approved_structure_roles"] = dict(prior.roles)
     lines = [
