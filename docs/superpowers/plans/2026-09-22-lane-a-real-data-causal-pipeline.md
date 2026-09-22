@@ -59,7 +59,7 @@
 - Interpreter: `PY=/home/enunez/Projects/e2i_causal_analytics/.venv/bin/python` (the worktree has no `.venv`). Always run tests as `$PY -m pytest -n 0 …` from the worktree dir so `src` resolves to the WORKTREE (a file run by path imports `src` from main via the editable `.pth`).
 - Every pytest invocation carries `-n 0` and `-p no:cacheprovider`.
 - Data lives only in the main checkout (`data/` is gitignored): `DATA=/home/enunez/Projects/e2i_causal_analytics/data`.
-- Do NOT run mypy on this box (CI is the arbiter). Before each commit run ruff whole-tree exactly as CI does: `$PY -m ruff check --no-cache src/ scripts/ tests/ && $PY -m ruff format --check src/ scripts/ tests/`.
+- Do NOT run mypy on this box (CI is the arbiter). Before each commit run ruff whole-tree exactly as CI does: `$PY -m ruff check --no-cache src/ tests/ && $PY -m ruff format --check src/ tests/   # CI lints src/ and tests/ only (backend-tests.yml:120-123); lint changed scripts/ files individually`.
 - Commit messages end with `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`.
 
 ---
@@ -2258,7 +2258,7 @@ Run: `$PY -c "import sys; sys.path.insert(0,'.'); from src.api.main import app; 
 - [ ] **Step 6: Ruff whole-tree (as CI), then commit**
 
 ```bash
-$PY -m ruff check --no-cache src/ scripts/ tests/ && $PY -m ruff format --check src/ scripts/ tests/
+$PY -m ruff check --no-cache src/ tests/ && $PY -m ruff format --check src/ tests/   # CI lints src/ and tests/ only (backend-tests.yml:120-123); lint changed scripts/ files individually
 git add src/api/routes/causal/agent.py src/api/routes/causal/discovery.py tests/unit/test_api/test_causal_optum_dataset_registry.py
 git commit -m "feat(causal): auto_discover defaults per dataset — off for optum_biologic_persistence, explicit opt-in honored
 
@@ -2561,7 +2561,7 @@ grep -n "workdir:" <scratchpad>/lane_a_codex_r1.out | head -1     # must be THIS
 - [ ] **Step 1: Final local gates (targeted, as CI runs them)**
 
 ```bash
-$PY -m ruff check --no-cache src/ scripts/ tests/ && $PY -m ruff format --check src/ scripts/ tests/
+$PY -m ruff check --no-cache src/ tests/ && $PY -m ruff format --check src/ tests/   # CI lints src/ and tests/ only (backend-tests.yml:120-123); lint changed scripts/ files individually
 $PY -m pytest -n 0 -p no:cacheprovider -q tests/unit/test_scripts/test_convert_optum_mart_causal.py tests/unit/test_scripts/test_convert_optum_mart.py tests/unit/test_scripts/test_convert_optum_mart_multicohort.py tests/unit/test_scripts/test_optum_causal_cohort_contract.py tests/unit/test_scripts/test_load_optum_causal_cohort.py tests/unit/test_api/test_causal_optum_dataset_registry.py tests/unit/test_api/test_causal_triggers_dataset.py tests/unit/test_api/test_causal_geo_encoding.py tests/unit/test_api/test_causal_covariate_roles.py tests/unit/test_api/test_causal_agent_analyze_negative_control_2007.py tests/unit/test_repositories/test_has_provenance_family_894.py tests/unit/test_docker/
 grep -rn "if False\|SIMULATED" $(git diff --name-only main...HEAD) || echo "no debris"
 git log --oneline main..HEAD
