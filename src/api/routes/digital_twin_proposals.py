@@ -352,12 +352,18 @@ async def create_draft_experiment(
     if not claimed:
         # The 409 must PROVE both halves (codex r2 #3): the orphan is gone AND the
         # winner is visible. Anything less is a 500 naming the unresolved draft.
+        # Two separate reads so a failing winner re-read never relabels a completed
+        # delete as "could not be removed" (codex r3 #1).
         try:
             removed = await _delete_orphan_draft(repo.client, experiment_id)
+        except Exception as e:
+            logger.error(f"Orphan draft {experiment_id} could not be removed: {e}")
+            removed = False
+        try:
             current = await repo.require_simulation(sim_uuid)
         except Exception as e:
-            logger.error(f"Post-lost-claim cleanup failed for draft {experiment_id}: {e}")
-            removed, current = False, None
+            logger.error(f"Winner re-read failed for simulation {simulation_id}: {e}")
+            current = None
         winner = (current or {}).get("experiment_design_id")
         if not removed or not winner:
             raise HTTPException(

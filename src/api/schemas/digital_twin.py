@@ -387,10 +387,12 @@ class BrandEnum(str, Enum):
 #: run for (#2206 item C.3): twin_simulations.experiment_design_id, written by
 #: /simulate (experiment_design_id) or by the proposed-experiments draft action.
 EXPERIMENT_LINK_DESCRIPTION = (
-    "The ml_experiments id this simulation is linked to, or null when it is not yet "
-    "linked (a proposal). Written by /simulate when given experiment_design_id, or by "
-    "POST /proposed-experiments/{simulation_id}/draft. The post-experiment fidelity "
-    "producer resolves the simulation through this link."
+    "The ml_experiments id this simulation is linked to, or null when it is not "
+    "linked. (An unlinked simulation is a PROPOSAL only when it is completed with a "
+    "deploy/refine recommendation — see /proposed-experiments; a completed 'skip' run "
+    "stays unlinked and proposes nothing.) Written by /simulate when given "
+    "experiment_design_id, or by POST /proposed-experiments/{simulation_id}/draft. The "
+    "post-experiment fidelity producer resolves the simulation through this link."
 )
 
 

@@ -18946,7 +18946,7 @@ export interface components {
             fidelity_status: components["schemas"]["FidelityStatusEnum"];
             /**
              * Experiment Design Id
-             * @description The ml_experiments id this simulation is linked to, or null when it is not yet linked (a proposal). Written by /simulate when given experiment_design_id, or by POST /proposed-experiments/{simulation_id}/draft. The post-experiment fidelity producer resolves the simulation through this link.
+             * @description The ml_experiments id this simulation is linked to, or null when it is not linked. (An unlinked simulation is a PROPOSAL only when it is completed with a deploy/refine recommendation — see /proposed-experiments; a completed 'skip' run stays unlinked and proposes nothing.) Written by /simulate when given experiment_design_id, or by POST /proposed-experiments/{simulation_id}/draft. The post-experiment fidelity producer resolves the simulation through this link.
              */
             experiment_design_id?: string | null;
             status: components["schemas"]["SimulationStatusEnum"];
@@ -19023,7 +19023,7 @@ export interface components {
             simulation_id: string;
             /**
              * Experiment Design Id
-             * @description The ml_experiments id this simulation is linked to, or null when it is not yet linked (a proposal). Written by /simulate when given experiment_design_id, or by POST /proposed-experiments/{simulation_id}/draft. The post-experiment fidelity producer resolves the simulation through this link.
+             * @description The ml_experiments id this simulation is linked to, or null when it is not linked. (An unlinked simulation is a PROPOSAL only when it is completed with a deploy/refine recommendation — see /proposed-experiments; a completed 'skip' run stays unlinked and proposes nothing.) Written by /simulate when given experiment_design_id, or by POST /proposed-experiments/{simulation_id}/draft. The post-experiment fidelity producer resolves the simulation through this link.
              */
             experiment_design_id?: string | null;
             /**
@@ -19076,7 +19076,7 @@ export interface components {
             simulation_id: string;
             /**
              * Experiment Design Id
-             * @description The ml_experiments id this simulation is linked to, or null when it is not yet linked (a proposal). Written by /simulate when given experiment_design_id, or by POST /proposed-experiments/{simulation_id}/draft. The post-experiment fidelity producer resolves the simulation through this link.
+             * @description The ml_experiments id this simulation is linked to, or null when it is not linked. (An unlinked simulation is a PROPOSAL only when it is completed with a deploy/refine recommendation — see /proposed-experiments; a completed 'skip' run stays unlinked and proposes nothing.) Written by /simulate when given experiment_design_id, or by POST /proposed-experiments/{simulation_id}/draft. The post-experiment fidelity producer resolves the simulation through this link.
              */
             experiment_design_id?: string | null;
             /** Intervention Type */
@@ -19172,7 +19172,7 @@ export interface components {
             fidelity_status: components["schemas"]["FidelityStatusEnum"];
             /**
              * Experiment Design Id
-             * @description The ml_experiments id this simulation is linked to, or null when it is not yet linked (a proposal). Written by /simulate when given experiment_design_id, or by POST /proposed-experiments/{simulation_id}/draft. The post-experiment fidelity producer resolves the simulation through this link.
+             * @description The ml_experiments id this simulation is linked to, or null when it is not linked. (An unlinked simulation is a PROPOSAL only when it is completed with a deploy/refine recommendation — see /proposed-experiments; a completed 'skip' run stays unlinked and proposes nothing.) Written by /simulate when given experiment_design_id, or by POST /proposed-experiments/{simulation_id}/draft. The post-experiment fidelity producer resolves the simulation through this link.
              */
             experiment_design_id?: string | null;
             status: components["schemas"]["SimulationStatusEnum"];

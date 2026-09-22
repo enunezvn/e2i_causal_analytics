@@ -508,6 +508,24 @@ class TestCreateDraftExperiment:
         assert ei.value.status_code == 500
         assert "None" not in str(ei.value.detail)
 
+    def test_a_lost_claim_whose_reread_fails_still_reports_the_completed_removal(self):
+        """codex r3 #1: a failing winner re-read must not relabel a completed delete as
+        'could not be removed' — the caller would resolve by hand a draft that is gone."""
+        from src.api.routes.digital_twin_proposals import create_draft_experiment
+
+        sim = _sim()
+        exp_id = str(uuid4())
+        client, _chain = _client(insert_rows=[{"id": exp_id}])
+        repo = _repo([], sim=sim, client=client, link_ok=False)
+        repo.require_simulation = AsyncMock(side_effect=[sim, RuntimeError("connection reset")])
+        with _patched(repo), pytest.raises(HTTPException) as ei:
+            asyncio.run(create_draft_experiment(sim["simulation_id"], user=ADMIN))
+        assert ei.value.status_code == 500
+        detail = str(ei.value.detail)
+        assert "was removed" in detail
+        assert "could not be removed" not in detail
+        assert "could not be read" in detail
+
     def test_a_claim_that_raises_is_a_500_naming_both_ids_never_a_200(self):
         from src.api.routes.digital_twin_proposals import create_draft_experiment
 
