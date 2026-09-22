@@ -44,7 +44,33 @@ is per run). Return shape documented in the PR's `interfaces` field.
 
 ### Real-frame measurement (item 4)
 
-PANEL_MEASUREMENT_PLACEHOLDER
+`panel_layer4_fake/` — `scripts/measure_feature_role_panel.py --layer4 fake` on the
+real persistence frame (n = 15,209, the 64 `MART_SAFE_FEATURES`, T =
+`treatment_dupixent`, Y = `persistent_at_180d_g28`; provider keys blanked, `DummyLM`
+answering every call; run under the box lock; `lane_e_panel_real_fake2.out`:
+`maxrss_kb=833240 elapsed_s=237.21`). Numbers from `panel_layer4_fake/summary.md`:
+
+| Layer | What fired (`summary.md:11-15`) |
+|---|---|
+| Layer 1 contracts | consulted 64, contracted 64, declared-safe 64, post-index **0** |
+| Layer 2 KG (shadow) | cache bound, 24 features with cached edges, **2 signalled** (`cci_chronic_pulmonary`, `elx_chronic_pulmonary`: `leak_drug_treats_disease` = indication evidence in the causal contrast; 62 `no_signal`) |
+| Layer 3 adversarial | scored **57** (the 7 non-numeric columns — categoricals and risk bands — are not scored by the node and have no verdict), pre-joint severities high 9 / moderate 10 / info 38, FDR active at 569 permutations with **0** confident features (n = 15,209 makes every association significant, but no `|ΔAUC|` clears the 0.10 floor), declared-safe immunity applied 0 |
+| Layer 4 LLM (fake) | classifier loaded, **fired on 19 features** (`summary.md:88`: the 10 moderate + 9 high-and-declared-safe) — this is the paid run's exact call count |
+| Ensemble | decided_by adversarial 36 / abstain 19 / kg 2 / none 7; abstain rate **0.406** (19 LLM-informed features abstain because Layer 4 is audit-only and the σ-band is joint-clamped — the honest "route to a human"); **leak verdicts 0** (`summary.md:90,92`: proven post-index 0, pending temporal review 0) |
+
+A null is a finding: on this cohort no covariate is excluded — all 64 are contracted
+pre-index, the prediction-era Layer-3 rule is inert by construction, and the only
+non-`no_signal` KG voice is indication evidence. The first fake run (before the
+`DummyLM` exhaustion fix) under-reported Layer 4 as "fired 1"; `lane_e_panel_real_fake.out`
+shows the 18 `Layer 4 skipped` lines that exposed it.
+
+`promotion_eligibility` (`panel.json`): `passes: true` on the node's metrics
+(n = 15,209 ≥ 200, non-abstain 0.98 over the 57 scored, kg_decided 2, disagreement 0.0)
+— recorded for the owner; nothing was promoted.
+
+The real Layer-4 run (19 calls) was queued once under the lock at the measured
+≈ US$4 and was refused by the session's permission system as a real-world
+transaction; it stays an owner decision (below).
 
 ## Owner decisions (not done here)
 
@@ -55,11 +81,21 @@ PANEL_MEASUREMENT_PLACEHOLDER
    ≈ US$19 + the Haiku evaluator. Above the US$5 gate → not run.
 2. **Paid real-frame panel run**, exact command:
    `python scripts/measure_feature_role_panel.py --parquet data/rwd/mart/persistence_causal/e2i_causal_v1_biologic_persistence.parquet --manifest-source optum_mart --treatment treatment_dupixent --outcome persistent_at_180d_g28 --covariates mart-safe --out docs/demos/results/2026-09-22_lane_e_feature_role_voters/panel_layer4_real --layer4 real --i-accept-cost`
-   — upper bound 64 calls ≈ US$13.5; the fake-LM run below says how many
-   features Layer 4 actually fires on, which bounds the real cost.
+   — measured 19 calls (`panel_layer4_fake/summary.md:88`) × ~68k tokens ≈ US$4.0 at
+   Sonnet list prices. Queued once by the lane (within the ≤ US$5 gate) and refused by
+   the session's permission system as a real-world transaction — the owner runs it.
 3. **KG promotion from shadow** for `optum_mart` / `csu` on the measurement above
    (`compute_promotion_eligibility` is recorded in `panel.json`).
 4. **Spec deviation to confirm**: approved *instruments* are routed to the
-   state's `instruments` channel, not `anchored_confounders` (graph_builder
+   state's `instruments` channel (not adjusted for, not anchored — graph_builder
    forces `conf -> outcome` for anchored confounders; an instrument must not
-   have that edge).
+   have that edge); estimation does not consume that channel yet.
+5. **Layer-3-only exclusions** (an uncontracted column that confidently predicts
+   Y): excluded per spec 3(b) and flagged `review_required` with `temporal_status=
+   unknown`, or keep-and-flag? Cannot fire on this cohort (all 64 contracted).
+6. **Panel provenance**: the public API accepts a caller-supplied panel whose
+   identity is checked at submit (typed parse, strict invariants, question,
+   coverage, manifest when declared) — consistency, not authenticity. A
+   server-owned panel artifact bound to a data fingerprint belongs with Lane B's
+   approved-review loader; the public `approved_structure_roles` field was
+   removed for the same reason (codex r2/r3).

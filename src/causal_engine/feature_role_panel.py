@@ -65,6 +65,17 @@ CAUSAL_ACTIVATION_PROFILE: Dict[str, Any] = {
 
 LEAK_SOURCE_LAYER_1 = "layer_1_post_index"
 LEAK_SOURCE_LAYER_3 = "layer_3_high"
+_LEAK_SOURCES = (LEAK_SOURCE_LAYER_1, LEAK_SOURCE_LAYER_3)
+
+#: Serialised-panel schema version. Bump when the record shape changes; the
+#: causal-agent route refuses a panel whose version it does not know.
+PANEL_SCHEMA_VERSION = "1"
+
+#: What the voter's prediction-era KG signal means in the CAUSAL contrast: a
+#: treatment drug approved for a PRE-index condition is indication evidence
+#: (the condition drives the treatment choice — a confounder candidate), not
+#: evidence that the condition descends from the treatment.
+KG_CAUSAL_INTERPRETATION_INDICATION = "indication_evidence"
 
 
 @dataclass(frozen=True)
@@ -124,12 +135,77 @@ class FeatureRolePanel:
     leakage_fdr: Dict[str, Any] = field(default_factory=dict)
     promotion_eligibility: Dict[str, Any] = field(default_factory=dict)
     built_at: str = ""
+    schema_version: str = PANEL_SCHEMA_VERSION
 
     def leak_features(self) -> List[str]:
         return sorted(name for name, rec in self.records.items() if rec.leak_verdict)
 
+    def validate_strict(self) -> None:
+        """Raise ``ValueError`` naming the first invariant a panel violates.
+
+        ``from_dict`` is a structural parse; this is the consistency check the
+        causal-agent route runs at submit (codex r3): the panel must be
+        internally coherent and every leak verdict must be backed by the
+        evidence it claims. It establishes CONSISTENCY, not authenticity — a
+        caller-supplied panel stays labelled as such downstream.
+        """
+        from src.data.manifests import MANIFEST_SOURCES
+
+        if self.schema_version != PANEL_SCHEMA_VERSION:
+            raise ValueError(
+                f"schema_version {self.schema_version!r} is not the supported "
+                f"{PANEL_SCHEMA_VERSION!r}"
+            )
+        if self.manifest_source not in MANIFEST_SOURCES:
+            raise ValueError(
+                f"manifest_source {self.manifest_source!r} is not a registered manifest"
+            )
+        if not self.treatment or not self.outcome or self.treatment == self.outcome:
+            raise ValueError("treatment and outcome must be distinct non-empty column names")
+        if not isinstance(self.n_rows, int) or self.n_rows <= 0:
+            raise ValueError(f"n_rows must be a positive integer, got {self.n_rows!r}")
+        if not self.features:
+            raise ValueError("features is empty")
+        if len(set(self.features)) != len(self.features):
+            raise ValueError("features contains duplicates")
+        if set(self.records) != set(self.features):
+            raise ValueError(
+                "records keys must equal features: "
+                f"missing={sorted(set(self.features) - set(self.records))} "
+                f"extra={sorted(set(self.records) - set(self.features))}"
+            )
+        for name, rec in self.records.items():
+            if rec.feature != name:
+                raise ValueError(f"record {name!r} carries feature={rec.feature!r}")
+            if not isinstance(rec.leak_verdict, bool) or not isinstance(rec.review_required, bool):
+                raise ValueError(f"record {name!r}: leak_verdict / review_required must be bool")
+            if rec.leak_verdict:
+                if rec.leak_source not in _LEAK_SOURCES:
+                    raise ValueError(
+                        f"record {name!r}: leak_verdict=True needs leak_source in {_LEAK_SOURCES}, "
+                        f"got {rec.leak_source!r}"
+                    )
+                if (
+                    rec.leak_source == LEAK_SOURCE_LAYER_1
+                    and rec.layer_1.get("verdict") != "post_index"
+                ):
+                    raise ValueError(
+                        f"record {name!r}: leak_source layer_1_post_index requires a post_index "
+                        f"Layer-1 verdict, got {rec.layer_1.get('verdict')!r}"
+                    )
+                if rec.leak_source == LEAK_SOURCE_LAYER_3 and (
+                    not rec.layer_3.get("ran") or rec.layer_1.get("verdict") == "post_index"
+                ):
+                    raise ValueError(
+                        f"record {name!r}: leak_source layer_3_high requires layer_3.ran and a "
+                        "non-post_index Layer-1 verdict"
+                    )
+            elif rec.leak_source is not None:
+                raise ValueError(f"record {name!r}: leak_source set without leak_verdict")
+
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "schema_version": self.schema_version,
             "manifest_source": self.manifest_source,
             "treatment": self.treatment,
             "outcome": self.outcome,
@@ -160,6 +236,7 @@ class FeatureRolePanel:
             leakage_fdr=dict(payload.get("leakage_fdr") or {}),
             promotion_eligibility=dict(payload.get("promotion_eligibility") or {}),
             built_at=str(payload.get("built_at") or ""),
+            schema_version=str(payload.get("schema_version", PANEL_SCHEMA_VERSION)),
         )
 
 
@@ -334,10 +411,19 @@ async def build_feature_role_panel(
             )
         else:
             signal, considered = "no_signal", ()
+        kg_causal = (
+            KG_CAUSAL_INTERPRETATION_INDICATION
+            if (signal == "leak_drug_treats_disease" and contract is not None and declared_safe)
+            else None
+        )
         layer_2 = {
             "mode": kg_mode,
             "cache_bound": kg_cache is not None,
             "signal": signal,
+            # The voter's vocabulary is prediction-era; this is what the signal
+            # means for the causal contrast (None when there is no signal or the
+            # column is not a declared pre-index covariate).
+            "causal_interpretation": kg_causal,
             "edges": [_kg_edge_to_json(e) for e in considered],
             "n_edges_cached": len(cached_edges),
             "feature_entity_ids": list(feat_ids),
@@ -408,11 +494,27 @@ async def build_feature_role_panel(
                 "kg_signal": signal,
                 "structural_role": None,
                 "structural_unclassifiable": None,
+                "kg_predictive_role": None,
+                "final_role_note": None,
             }
         else:
+            kg_decided = v.get("decided_by") == "kg"
             ensemble = {
                 "decided_by": v.get("decided_by"),
-                "final_role": v.get("final_role"),
+                # A KG-decided verdict carries the prediction-era conclusion
+                # ("descendant": the condition leaks the target). In the causal
+                # contrast that is indication evidence, so the causal role is
+                # WITHHELD for the author and the reviewer; the raw predictive
+                # role stays under its own name (codex r3).
+                "final_role": None if kg_decided else v.get("final_role"),
+                "kg_predictive_role": v.get("final_role") if kg_decided else None,
+                "final_role_note": (
+                    "withheld: the KG's predictive verdict is indication evidence in the "
+                    "causal contrast (treatment drug approved for this pre-index condition); "
+                    "the structural author and the reviewer decide the role"
+                    if kg_decided
+                    else None
+                ),
                 "confidence": v.get("confidence"),
                 "severity": severity,
                 "remediation": v.get("remediation"),

@@ -16,11 +16,20 @@ from __future__ import annotations
 
 from typing import Any, Dict, cast
 
+import networkx as nx
+import numpy as np
 import pandas as pd
 import pytest
 
 from src.agents.causal_impact.nodes.graph_builder import GraphBuilderNode
 from src.agents.causal_impact.state import CausalImpactState
+from src.causal_engine.discovery.base import (
+    AlgorithmResult,
+    DiscoveredEdge,
+    DiscoveryAlgorithmType,
+    DiscoveryResult,
+)
+from src.causal_engine.discovery.gate import DiscoveryGateDecision, GateEvaluation
 from src.causal_engine.feature_role_panel import (
     ConfounderChannels,
     FeatureRolePanel,
@@ -291,3 +300,109 @@ def test_panel_and_approved_roles_survive_the_langgraph_input_filter() -> None:
     assert seen["sentinel"] == "FILTERED"
     assert seen["feature_role_panel"] == {"features": ["c1"]}
     assert seen["approved_structure_roles"] == {"c1": "confounder"}
+
+
+class _RecordingAcceptingRunner:
+    """A runner that RECORDS the frame it was given and returns an ACCEPT-able
+    DAG asserting the excluded column as a common cause of t and y — the exact
+    shape that would re-adjust for it (codex r3 HIGH)."""
+
+    def __init__(self, extra_edges) -> None:
+        self.seen_columns: list = []
+        self._edges = [("t", "y"), *extra_edges]
+
+    async def discover_dag(self, *, data, config, session_id=None) -> DiscoveryResult:
+        self.seen_columns = list(data.columns)
+        dag = nx.DiGraph()
+        dag.add_nodes_from(data.columns)
+        dag.add_edges_from(
+            [(u, v) for u, v in self._edges if u in data.columns and v in data.columns]
+        )
+        return DiscoveryResult(
+            success=True,
+            config=config,
+            ensemble_dag=dag,
+            edges=[
+                DiscoveredEdge(
+                    source=u,
+                    target=v,
+                    confidence=0.95,
+                    algorithm_votes=1,
+                    algorithms=["pc"],
+                    bootstrap_stability=0.95,
+                )
+                for u, v in dag.edges()
+            ],
+            algorithm_results=[
+                AlgorithmResult(
+                    algorithm=DiscoveryAlgorithmType.PC,
+                    adjacency_matrix=np.zeros((2, 2), dtype=int),
+                    edge_list=list(dag.edges()),
+                    runtime_seconds=0.01,
+                    converged=True,
+                )
+            ],
+        )
+
+
+def _accept(node: GraphBuilderNode) -> None:
+    node.discovery_gate.evaluate = (  # type: ignore[method-assign]
+        lambda result, expected=None: GateEvaluation(
+            decision=DiscoveryGateDecision.ACCEPT, confidence=0.9, reasons=[]
+        )
+    )
+
+
+class TestExcludedColumnsNeverReenterViaDiscovery:
+    @pytest.mark.asyncio
+    async def test_accept_path_cannot_readjust_for_an_excluded_column(self) -> None:
+        node = GraphBuilderNode()
+        runner = _RecordingAcceptingRunner([("post_dx", "t"), ("post_dx", "y")])
+        node._discovery_runner = runner  # type: ignore[assignment]
+        _accept(node)
+        result = await node.execute(
+            _state(
+                auto_discover=True,
+                discovery_guided=True,
+                feature_role_panel=_panel(post_dx="layer_1_post_index").to_dict(),
+            )
+        )
+        assert "post_dx" not in runner.seen_columns, "discovery must never see an excluded column"
+        graph = result["causal_graph"]
+        assert "post_dx" not in graph["nodes"]
+        assert all("post_dx" not in adj for adj in graph["adjustment_sets"]), graph[
+            "adjustment_sets"
+        ]
+        # The frame every downstream node (estimation's fallback included) reads
+        # no longer carries the column.
+        assert "post_dx" not in result["data_cache"]["estimation_data"].columns
+        assert result["modeled_confounders"] == ["c1", "c2"]
+
+    @pytest.mark.asyncio
+    async def test_dummies_of_an_excluded_source_leave_the_frame_too(self) -> None:
+        node = GraphBuilderNode()
+        runner = _RecordingAcceptingRunner([("post_dx=1", "t"), ("post_dx=1", "y")])
+        node._discovery_runner = runner  # type: ignore[assignment]
+        _accept(node)
+        frame = _frame().rename(columns={"post_dx": "post_dx=1"})
+        result = await node.execute(
+            _state(
+                confounders=["c1", "c2", "post_dx=1"],
+                modeled_confounders=["c1", "c2", "post_dx=1"],
+                data_cache={"estimation_data": frame},
+                auto_discover=True,
+                discovery_guided=True,
+                feature_role_panel=_panel(post_dx="layer_1_post_index").to_dict(),
+            )
+        )
+        assert "post_dx=1" not in runner.seen_columns
+        assert all("post_dx=1" not in adj for adj in result["causal_graph"]["adjustment_sets"])
+        assert "post_dx=1" not in result["data_cache"]["estimation_data"].columns
+
+    @pytest.mark.asyncio
+    async def test_the_provenance_line_says_caller_supplied_not_vetted(self) -> None:
+        node = GraphBuilderNode()
+        result = await node.execute(_state(feature_role_panel=_panel().to_dict()))
+        line = next(w for w in result["warnings"] if w.startswith("feature_role_panel applied"))
+        assert "caller-supplied" in line and "provenance not verified" in line
+        assert "vetted" not in line

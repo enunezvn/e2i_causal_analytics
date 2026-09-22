@@ -254,3 +254,108 @@ def test_explicit_covariates_restrict_the_panel(_frame, stub_lm) -> None:
             outcome=OUTCOME,
             covariates=["missing"],
         )
+
+
+def test_panel_carries_a_schema_version_and_validates_strictly(panel: FeatureRolePanel) -> None:
+    """codex r3: the typed parse must be an identity/consistency check, not
+    coercion. ``validate_strict`` enforces the invariants and names the first
+    violation; the real panel passes it."""
+    from src.causal_engine.feature_role_panel import PANEL_SCHEMA_VERSION
+
+    payload = panel.to_dict()
+    assert payload["schema_version"] == PANEL_SCHEMA_VERSION == "1"
+    panel.validate_strict()  # must not raise
+    FeatureRolePanel.from_dict(payload).validate_strict()
+
+    def broken(**top):
+        return FeatureRolePanel.from_dict({**payload, **top})
+
+    with pytest.raises(ValueError, match="schema_version"):
+        broken(schema_version="0").validate_strict()
+    with pytest.raises(ValueError, match="features"):
+        broken(features=payload["features"][:-1]).validate_strict()
+    with pytest.raises(ValueError, match="n_rows"):
+        broken(n_rows=0).validate_strict()
+    with pytest.raises(ValueError, match="manifest"):
+        broken(manifest_source="nope").validate_strict()
+    rec = dict(payload["records"]["age_at_index"])
+    with pytest.raises(ValueError, match="feature"):
+        broken(
+            records={**payload["records"], "age_at_index": {**rec, "feature": "other"}}
+        ).validate_strict()
+    with pytest.raises(ValueError, match="leak_source"):
+        broken(
+            records={**payload["records"], "age_at_index": {**rec, "leak_verdict": True}}
+        ).validate_strict()
+    with pytest.raises(ValueError, match="leak_source"):
+        broken(
+            records={
+                **payload["records"],
+                "age_at_index": {**rec, "leak_verdict": True, "leak_source": "made_up"},
+            }
+        ).validate_strict()
+    with pytest.raises(ValueError, match="post_index"):
+        broken(
+            records={
+                **payload["records"],
+                "age_at_index": {**rec, "leak_verdict": True, "leak_source": "layer_1_post_index"},
+            }
+        ).validate_strict()
+    with pytest.raises(ValueError, match="layer_3"):
+        broken(
+            records={
+                **payload["records"],
+                "noise_feature": {
+                    **payload["records"]["noise_feature"],
+                    "leak_verdict": True,
+                    "leak_source": "layer_3_high",
+                    "layer_3": {**payload["records"]["noise_feature"]["layer_3"], "ran": False},
+                },
+            }
+        ).validate_strict()
+    with pytest.raises(ValueError, match="leak_verdict"):
+        broken(
+            records={**payload["records"], "age_at_index": {**rec, "leak_verdict": "yes"}}
+        ).validate_strict()
+
+
+def test_kg_decided_features_get_indication_evidence_not_a_causal_descendant(stub_lm) -> None:
+    """codex r3: the voter's KG rule speaks prediction-era vocabulary — a drug
+    approved for a pre-index condition is a "leak" there and yields
+    final_role="descendant". In the causal contrast that edge is INDICATION
+    evidence (a confounder candidate). The panel keeps the raw predictive verdict
+    under its own name and withholds the causal role for the author/reviewer."""
+    import numpy as np
+    import pandas as pd
+
+    rng = np.random.default_rng(3)
+    n = 400
+    y = rng.integers(0, 2, n)
+    frame = pd.DataFrame(
+        {
+            "treatment_dupixent": rng.integers(0, 2, n),
+            "persistent_at_180d_g28": y,
+            # unattested mart flag with a committed KG `treats` edge from both drugs
+            "cci_chronic_pulmonary": (rng.random(n) < 0.3).astype(int),
+            "age_at_index": 40 + 10 * rng.standard_normal(n),
+        }
+    )
+    panel = build_feature_role_panel_sync(
+        frame,
+        manifest_source="optum_mart",
+        treatment="treatment_dupixent",
+        outcome="persistent_at_180d_g28",
+        seed=3,
+    )
+    rec = panel.records["cci_chronic_pulmonary"]
+    assert rec.layer_2["signal"] == "leak_drug_treats_disease"
+    assert rec.layer_2["causal_interpretation"] == "indication_evidence"
+    assert rec.ensemble["decided_by"] == "kg"
+    assert rec.ensemble["kg_predictive_role"] == "descendant"
+    assert rec.ensemble["final_role"] is None
+    assert "indication" in rec.ensemble["final_role_note"]
+    assert rec.leak_verdict is False
+    # A feature the KG has nothing to say about is untouched.
+    assert panel.records["age_at_index"].layer_2["causal_interpretation"] is None
+    assert "kg_predictive_role" in panel.records["age_at_index"].ensemble
+    assert panel.records["age_at_index"].ensemble["kg_predictive_role"] is None

@@ -20,37 +20,44 @@ import pytest
 
 from src.agents.causal_impact.agent import CausalImpactAgent
 
-_PANEL = {
-    "manifest_source": "optum_mart",
-    "treatment": "copay_support",
-    "outcome": "adherent_180d",
-    "n_rows": 3,
-    "features": ["insurance_access_score", "post_dx"],
-    "records": {
-        "insurance_access_score": {
-            "feature": "insurance_access_score",
-            "layer_1": {"verdict": "pre_index", "temporal_status": "pre_index"},
-            "layer_2": {},
-            "layer_3": {},
-            "layer_4": {},
-            "ensemble": {},
-            "leak_verdict": False,
-            "leak_source": None,
+
+def _make_panel(treatment: str = "copay_support", outcome: str = "adherent_180d") -> dict:
+    """A strict-valid serialised panel (codex r3: the route validates invariants)."""
+    from src.causal_engine.feature_role_panel import FeatureRolePanel, FeatureRoleRecord
+
+    def rec(name: str, *, post: bool) -> FeatureRoleRecord:
+        return FeatureRoleRecord(
+            feature=name,
+            layer_1={
+                "verdict": "post_index" if post else "pre_index",
+                "temporal_status": "post_index" if post else "pre_index",
+                "declared_safe": not post,
+            },
+            layer_2={"signal": "no_signal", "edges": [], "mode": "shadow"},
+            layer_3={"ran": not post},
+            layer_4={"fired": False},
+            ensemble={"decided_by": "layer_1" if post else "adversarial"},
+            leak_verdict=post,
+            leak_source="layer_1_post_index" if post else None,
+        )
+
+    return FeatureRolePanel(
+        manifest_source="optum_mart",
+        treatment=treatment,
+        outcome=outcome,
+        n_rows=3,
+        features=("insurance_access_score", "post_dx"),
+        records={
+            "insurance_access_score": rec("insurance_access_score", post=False),
+            "post_dx": rec("post_dx", post=True),
         },
-        "post_dx": {
-            "feature": "post_dx",
-            "layer_1": {"verdict": "post_index", "temporal_status": "post_index"},
-            "layer_2": {},
-            "layer_3": {},
-            "layer_4": {},
-            "ensemble": {},
-            "leak_verdict": True,
-            "leak_source": "layer_1_post_index",
-        },
-    },
-    "layer_activity": {},
-    "activation_profile": {},
-}
+        layer_activity={},
+        activation_profile={},
+        built_at="2026-09-22T00:00:00+00:00",
+    ).to_dict()
+
+
+_PANEL = _make_panel()
 
 
 def _base_input() -> dict:
@@ -136,7 +143,11 @@ async def test_route_task_forwards_the_request_panel_into_the_initial_state(monk
     await causal_routes._run_agent_analysis_task(
         "lane-e-forward", req, df, ["insurance_access_score", "post_dx"], "synthetic"
     )
-    assert captured["feature_role_panel"] == _PANEL
+    from src.causal_engine.feature_role_panel import FeatureRolePanel
+
+    # The agent receives the typed round-trip of the payload (codex r3), which
+    # carries the panel's default keys the caller omitted.
+    assert captured["feature_role_panel"] == FeatureRolePanel.from_dict(_PANEL).to_dict()
     # Declared covariates are untouched at submit time: graph_builder is the
     # single place the panel narrows them (with its named warning).
     assert captured["modeled_confounders"] == ["insurance_access_score", "post_dx"]
@@ -164,12 +175,7 @@ async def test_route_task_omits_the_key_when_the_request_has_no_panel(monkeypatc
 def _submit_request(**panel_overrides):
     from src.api.schemas.causal import AgentCausalAnalysisRequest
 
-    panel = {
-        **_PANEL,
-        "treatment": "hcp_engagement_level",
-        "outcome": "patient_conversion_rate",
-        "features": ["insurance_access_score", "post_dx"],
-    }
+    panel = _make_panel("hcp_engagement_level", "patient_conversion_rate")
     panel.update(panel_overrides)
     return AgentCausalAnalysisRequest(
         treatment_var="hcp_engagement_level",
@@ -208,24 +214,26 @@ async def test_submit_refuses_a_malformed_panel() -> None:
 @pytest.mark.asyncio
 async def test_submit_refuses_a_panel_covering_none_of_the_covariates(monkeypatch) -> None:
     """A panel over other columns cannot vet this question's covariates."""
+    base = _make_panel("hcp_engagement_level", "patient_conversion_rate")
+    rec = dict(base["records"]["insurance_access_score"])
+    rec["feature"] = "unrelated_a"
     await _expect_400(
-        _submit_request(
-            features=["unrelated_a"],
-            records={
-                "unrelated_a": {
-                    "feature": "unrelated_a",
-                    "layer_1": {},
-                    "layer_2": {},
-                    "layer_3": {},
-                    "layer_4": {},
-                    "ensemble": {},
-                    "leak_verdict": False,
-                    "leak_source": None,
-                }
-            },
-        ),
-        "covers none",
+        _submit_request(features=["unrelated_a"], records={"unrelated_a": rec}), "covers none"
     )
+
+
+@pytest.mark.asyncio
+async def test_submit_refuses_a_panel_that_violates_the_strict_invariants() -> None:
+    """codex r3: a sparse caller-authored record asserting leak_verdict=true
+    without the evidence behind it is refused, not applied."""
+    base = _make_panel("hcp_engagement_level", "patient_conversion_rate")
+    rec = dict(base["records"]["insurance_access_score"])
+    rec["leak_verdict"] = True  # no leak_source, no post-index contract, no Layer-3 high
+    await _expect_400(
+        _submit_request(records={**base["records"], "insurance_access_score": rec}),
+        "leak_source",
+    )
+    await _expect_400(_submit_request(schema_version="0"), "schema_version")
 
 
 @pytest.mark.asyncio
@@ -240,3 +248,36 @@ async def test_submit_refuses_a_panel_from_another_manifest_when_the_spec_declar
     spec["feature_manifest_source"] = "optum"
     monkeypatch.setitem(causal_routes._CAUSAL_DATASET_SPECS, "patient_journeys", spec)
     await _expect_400(_submit_request(manifest_source="optum_mart"), "optum_mart")
+
+
+@pytest.mark.asyncio
+async def test_route_task_forwards_the_normalised_panel_not_the_raw_dict(monkeypatch) -> None:
+    """codex r3: what the agent consumes must be exactly what was validated —
+    the typed round-trip of the payload, not the caller's raw dictionary
+    (unknown keys dropped, shapes normalised)."""
+    import src.api.routes.causal.agent as causal_routes
+    from src.api.schemas.causal import AgentCausalAnalysisRequest
+    from src.causal_engine.feature_role_panel import FeatureRolePanel
+
+    captured = _capture(monkeypatch)
+    raw = {**_PANEL, "features": tuple(_PANEL["features"]), "smuggled": {"anything": 1}}
+    df = pd.DataFrame(
+        {
+            "copay_support": [0.0, 1.0, 1.0],
+            "adherent_180d": [0.0, 1.0, 0.0],
+            "insurance_access_score": [0.2, 0.9, 0.5],
+            "post_dx": [1.0, 0.0, 0.0],
+        }
+    )
+    req = AgentCausalAnalysisRequest(
+        treatment_var="copay_support",
+        outcome_var="adherent_180d",
+        dataset="patient_journeys",
+        feature_role_panel=raw,
+    )
+    await causal_routes._run_agent_analysis_task(
+        "lane-e-normalised", req, df, ["insurance_access_score", "post_dx"], "synthetic"
+    )
+    assert captured["feature_role_panel"] == FeatureRolePanel.from_dict(raw).to_dict()
+    assert "smuggled" not in captured["feature_role_panel"]
+    assert captured["feature_role_panel"]["features"] == list(_PANEL["features"])

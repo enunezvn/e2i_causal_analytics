@@ -126,6 +126,7 @@ class GraphBuilderNode:
             # The narrowed channels are written back so every downstream node
             # and the API response see the same adjustment set.
             panel_warnings: List[str] = []
+            excluded_columns: List[str] = []
             panel_payload = state.get("feature_role_panel")
             if panel_payload:
                 from src.causal_engine.feature_role_panel import derive_confounder_channels
@@ -147,14 +148,28 @@ class GraphBuilderNode:
                     narrowed["instruments"] = existing + [
                         i for i in channels.instruments if i not in existing
                     ]
+                # Excluded columns must leave the FRAME, not just the declared
+                # lists: guided discovery tiers every frame column as a candidate
+                # confounder and the estimator's no-backdoor fallback adjusts on
+                # every column, so a column left in the frame can re-enter an
+                # ACCEPT/AUGMENT DAG or the adjustment set (codex r3).
+                excluded_columns = [name for name, _why in channels.removed]
+                _cache = dict(state.get("data_cache") or {})
+                _frame = _cache.get("estimation_data")
+                if excluded_columns and _frame is not None and hasattr(_frame, "columns"):
+                    present = [c for c in excluded_columns if c in _frame.columns]
+                    if present:
+                        _cache["estimation_data"] = _frame.drop(columns=present)
+                        narrowed["data_cache"] = _cache
                 state = cast(CausalImpactState, {**state, **narrowed})
                 _pp = panel_payload if isinstance(panel_payload, dict) else {}
                 panel_warnings = [
-                    "feature_role_panel applied: manifest="
-                    f"{_pp.get('manifest_source', '?')}, question "
+                    "feature_role_panel applied (caller-supplied; identity checked at submit "
+                    "on question/manifest/coverage/invariants, provenance not verified): "
+                    f"manifest={_pp.get('manifest_source', '?')}, question "
                     f"{_pp.get('treatment', '?')} -> {_pp.get('outcome', '?')}, "
-                    f"{len(_pp.get('records') or {})} covariate(s) vetted, "
-                    f"{len(channels.removed)} removed from the adjustment set, "
+                    f"{len(_pp.get('records') or {})} covariate(s) in the panel, "
+                    f"{len(channels.removed)} removed from the adjustment set and the frame, "
                     f"{len(channels.review_required)} pending temporal review; "
                     "approved instruments are not consumed by estimation"
                 ] + list(channels.warnings)
@@ -235,6 +250,16 @@ class GraphBuilderNode:
             adjustment_sets = self._apply_adjustment_guarantee(
                 dag, treatment, outcome, state, adjustment_sets
             )
+            if excluded_columns:
+                # Belt and braces for the panel's exclusions: whatever DAG shipped,
+                # no excluded column is adjusted for (spec 3(b)).
+                denylist = set(excluded_columns)
+                deduped: List[List[str]] = []
+                for adj_set in adjustment_sets:
+                    kept = [c for c in adj_set if c not in denylist]
+                    if kept not in deduped:
+                        deduped.append(kept)
+                adjustment_sets = deduped
 
             # Compute confidence based on discovery results
             if (

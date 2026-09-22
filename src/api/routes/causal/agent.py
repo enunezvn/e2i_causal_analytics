@@ -62,6 +62,15 @@ _agent_analysis_store: DurableJobStore["AgentCausalAnalysisResponse"] = DurableJ
 # =============================================================================
 
 
+def _normalised_panel(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """The typed round-trip of the caller's panel: exactly what was validated at
+    submit reaches the agent (unknown keys dropped, shapes normalised) — never
+    the raw caller-authored dictionary (codex r3)."""
+    from src.causal_engine.feature_role_panel import FeatureRolePanel
+
+    return FeatureRolePanel.from_dict(payload).to_dict()
+
+
 def _validate_feature_role_panel(
     request: AgentCausalAnalysisRequest,
     spec: Dict[str, Any],
@@ -79,6 +88,12 @@ def _validate_feature_role_panel(
                 "feature_role_panel does not parse as a FeatureRolePanel "
                 f"(src.causal_engine.feature_role_panel.FeatureRolePanel.to_dict()): {exc}"
             ),
+        ) from exc
+    try:
+        panel.validate_strict()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail=f"feature_role_panel violates an invariant: {exc}"
         ) from exc
     if (panel.treatment, panel.outcome) != (request.treatment_var, request.outcome_var):
         raise HTTPException(
@@ -375,7 +390,7 @@ async def _run_agent_analysis_task(
         # graph_builder, with a named warning. ``approved_structure_roles`` is
         # NOT a request field: approval is resolved server-side (Lane B).
         **(
-            {"feature_role_panel": request.feature_role_panel}
+            {"feature_role_panel": _normalised_panel(request.feature_role_panel)}
             if request.feature_role_panel is not None
             else {}
         ),
