@@ -117,6 +117,46 @@ class GraphBuilderNode:
             if not treatment or not outcome:
                 treatment, outcome = self._infer_variables_from_query(state.get("query", ""))
 
+            # Lane E item 3(d): the feature-role panel, when the caller supplied
+            # one, decides which declared covariates may be adjusted for. Leak-
+            # verdict covariates (post-index contract / confident outcome leak)
+            # leave ``confounders`` + ``modeled_confounders`` with a NAMED
+            # warning instead of being adjusted for blind; approved structure
+            # (Lane B's ``approved_structure_roles`` seam) anchors confounders.
+            # The narrowed channels are written back so every downstream node
+            # and the API response see the same adjustment set.
+            panel_warnings: List[str] = []
+            panel_payload = state.get("feature_role_panel")
+            if panel_payload:
+                from src.causal_engine.feature_role_panel import derive_confounder_channels
+
+                channels = derive_confounder_channels(
+                    panel_payload,
+                    declared_covariates=[str(c) for c in (confounders or [])],
+                    approved_structure_roles=state.get("approved_structure_roles"),
+                )
+                confounders = list(channels.modeled_confounders)
+                narrowed: Dict[str, Any] = {
+                    "confounders": list(confounders),
+                    "modeled_confounders": list(confounders),
+                }
+                if channels.anchored_confounders is not None:
+                    narrowed["anchored_confounders"] = list(channels.anchored_confounders)
+                if channels.instruments:
+                    existing = [str(i) for i in (state.get("instruments") or [])]
+                    narrowed["instruments"] = existing + [
+                        i for i in channels.instruments if i not in existing
+                    ]
+                state = cast(CausalImpactState, {**state, **narrowed})
+                panel_warnings = list(channels.warnings)
+                logger.info(
+                    "feature_role_panel applied: modeled=%s removed=%s anchored=%s instruments=%s",
+                    confounders,
+                    channels.removed,
+                    channels.anchored_confounders,
+                    channels.instruments,
+                )
+
             # Check if auto-discovery is enabled
             auto_discover = state.get("auto_discover", False)
             discovery_result: Optional[DiscoveryResult] = None
@@ -248,7 +288,7 @@ class GraphBuilderNode:
             # warning is raised by InterpretationNode, which can corroborate
             # the flag against the E-value sensitivity result (surfacing
             # policy; see test_structural_recovery docstring item 6).
-            new_warnings: List[str] = []
+            new_warnings: List[str] = list(panel_warnings)
             if discovery_result is not None:
                 latent_diagnostic = discovery_result.metadata.get("latent_diagnostic")
                 if isinstance(latent_diagnostic, dict):

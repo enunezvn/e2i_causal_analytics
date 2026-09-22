@@ -1,0 +1,11 @@
+captured 2026-09-22 (lane transcript; each plant applied to the source, the guarding test file run, the source restored from a scratchpad copy and its sha256 verified equal to the pre-plant copy)
+
+PLANT 1  src/causal_engine/feature_role_panel.py   leak_verdict=leak_source is not None  ->  leak_verdict=False
+         tests/unit/test_causal_engine/test_feature_role_panel : 3 failed, 11 passed
+PLANT 2  src/agents/causal_impact/nodes/graph_builder.py   if panel_payload:  ->  if False and panel_payload:
+         tests/unit/test_agents/test_causal_impact/test_graph_builder_feature_role_panel.py : 2 failed, 7 passed
+PLANT 3  src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py   "final_role": verdict.final_role  ->  "final_role": None
+         tests/unit/test_data_preparer/test_legacy_verdict_role_keys_lane_e.py : 2 failed, 3 passed
+
+restore check: sha256 (first 16 hex) before/after — feature_role_panel 53c0c7676f3f1f3d, graph_builder 17fa2dc794de12ec, adaptive_validity_check 5cab75699b5582d7 (identical)
+green state before planting: 23 passed (lane_e_green_A4_unlocked.out), 38 passed (activation/packaging/graph_builder), 98 passed of the pre-existing sidecar/byte-identity files in run A
