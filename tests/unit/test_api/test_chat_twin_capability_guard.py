@@ -86,6 +86,8 @@ AFTER_TW2_OUTAGE = (
         "We don't offer what-if simulation of interventions.",
         "No data-driven simulation tool exists on this platform.",
         "This assistant has no ability to run digital-twin simulations.",
+        "I lack the ability to run digital-twin simulations.",
+        "The platform lacks the means to perform counterfactual simulations.",
     ],
 )
 def test_a_denial_of_the_simulation_capability_is_detected(text):

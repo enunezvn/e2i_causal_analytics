@@ -70,6 +70,12 @@ _DENIAL_PATTERNS = tuple(
         # run the digital-twin simulation" lacks DATA (codex r3 #2).
         r"\b(?:platform|assistant|system|e2i|toolbox|we|i)\s+lack(?:s|ing)?\s+"
         r"(?:an?\s+|any\s+)?(?:[\w-]+\s+){0,2}?" + _SUBJECT,
+        # "I lack the ability to run digital-twin simulations" / "the platform lacks the
+        # means to perform counterfactual simulations" — the lacked thing is a capability
+        # noun bridged to the subject (codex r4).
+        r"\b(?:platform|assistant|system|e2i|toolbox|we|i)\s+lack(?:s|ing)?\s+"
+        r"(?:an?\s+|any\s+|the\s+)?" + _NOUN + r"\s+(?:to\s+)?(?:run|perform|execute|do)?\s*"
+        r"(?:an?\s+|the\s+)?(?:[\w-]+\s+){0,2}?" + _SUBJECT,
         # "there's no tool that runs a counterfactual" — the capability noun first.
         _NEG + r"[^.\n]{0,40}?" + _NOUN + r"[^.\n]{0,80}?" + _SUBJECT,
         # "no digital twin simulation tool on this platform" — the subject first.
