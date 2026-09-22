@@ -25,6 +25,7 @@ Usage (smoke on a stratified sample):
     # then run tier-0 via the Optum wrapper (sets target + manifest + AUC bar):
     #   python scripts/run_optum_tier0_test.py --cohort initiation_mart \
     #     --feature-manifest-source optum_mart --single-model
+    python scripts/convert_optum_mart.py --cohort persistence_causal   # Lane A causal export (keeps the treatment)
 """
 
 from __future__ import annotations
@@ -64,6 +65,37 @@ TARGET_PERSISTENT = "persistent_at_180d"
 # aggregated coverage/gap columns; disc180 validated 98.2% vs discontinued_90d_flag.
 DISCONT_GAP_DAYS = 90
 PERSIST_GAP_DAYS = 60
+# --- Lane A (spec 2026-09-22 §3A.1): the CAUSAL cohort ------------------------
+# The persistence outcome is days-supply sensitive per brand (14-d Dupixent fills
+# vs 28-45-d Xolair fills): the shipped ``persistent_at_180d`` gap of -17.6 pp
+# collapses to 3.5 pp with a 14-day grace and INVERTS from 28 d on. The primary
+# causal outcome is therefore covered-through-day-(180-28) AND no internal gap
+# > 60 d — brand-invariant across 28-60 d grace. Owner decision, spec §7;
+# evidence docs/demos/results/2026-09-22_persistence_definition_disproof/.
+TARGET_PERSISTENT_G28 = "persistent_at_180d_g28"
+PERSIST_GRACE_DAYS = 28
+# Binary treatment: 1 = DUPIXENT, 0 = XOLAIR — the only contrast the drop
+# observes (remibrutinib is absent; FDA approval 2025-09-30 is the drop's last
+# observed day). Any other brand is EXCLUDED with an attrition step rather than
+# silently coded as the reference arm.
+TREATMENT_COL = "treatment_dupixent"
+CAUSAL_ARMS = ("XOLAIR", "DUPIXENT")
+# Precomputed switch flag carried from the raw drop (int32, both arms observed).
+SWITCH_FLAG = "biologic_switch_180d_flag"
+# The causal export's positive enumeration of non-feature columns: (dictionary
+# type, emission kind). ``CAUSAL_EXTRA_COLS`` (order = the parquet/table column
+# order after the allow-list features) is derived from this single mapping so
+# the type used for the data dictionary and the kind used to emit/validate the
+# value in ``build_journey_records`` can never drift apart.
+CAUSAL_EXTRA_COLUMNS: dict[str, tuple[str, str]] = {
+    "index_biologic_brand": ("treatment", "text"),
+    TREATMENT_COL: ("treatment", "flag"),
+    "treatment_start_date": ("anchor", "date"),
+    TARGET_DISCONTINUED: ("outcome", "flag"),
+    SWITCH_FLAG: ("outcome", "flag"),
+    TARGET_PERSISTENT: ("outcome", "flag"),
+}
+CAUSAL_EXTRA_COLS: tuple[str, ...] = tuple(CAUSAL_EXTRA_COLUMNS)
 DEFAULT_INPUT = "data/rwd/Optum_Parquet/Optum_enriched.parquet"
 DEFAULT_OUTPUT = "data/rwd/mart/initiation"
 _DERIVED = ("geographic_region", "enrollment_duration_days")
@@ -117,7 +149,8 @@ def select_initiation_cohort(
 def _initiator_eligible(
     df: pd.DataFrame, *, window_days: int, min_claim_count: int
 ) -> tuple[pd.DataFrame, list[tuple[str, int]]]:
-    """Shared prelude for the TREATMENT-anchored cohorts (discontinuation/persistence).
+    """Shared prelude for the TREATMENT-anchored cohorts (discontinuation,
+    persistence, and the causal cohort persistence_causal).
 
     The temporal frame shifts vs initiation: the index is the first biologic fill
     (``treatment_start_date``), so the denominator is INITIATORS only and a 180d
@@ -152,6 +185,32 @@ def _initiator_eligible(
     return df, attrition
 
 
+def _persistent(
+    cov_to_end: pd.Series, gap: pd.Series, *, window_days: int, grace_days: int = 0
+) -> pd.Series:
+    """Shared persistence predicate (int64 0/1): covered through day
+    ``window_days - grace_days`` AND no internal coverage gap exceeding
+    ``PERSIST_GAP_DAYS``. ``grace_days=0`` is the shipped, days-supply-artefact
+    ``persistent_at_180d``; ``grace_days=PERSIST_GRACE_DAYS`` is the
+    brand-invariant primary causal outcome ``persistent_at_180d_g28``. One
+    formula for both so the label can never drift between the prediction and
+    causal selectors.
+    """
+    return ((cov_to_end >= window_days - grace_days) & (gap <= PERSIST_GAP_DAYS)).astype("int64")
+
+
+def _discontinued(
+    cov_to_end: pd.Series, gap: pd.Series, term: pd.Series, *, window_days: int
+) -> pd.Series:
+    """Shared discontinuation predicate (int64 0/1): NOT covered through day
+    ``window_days`` AND a coverage gap (internal or terminal) of at least
+    ``DISCONT_GAP_DAYS``.
+    """
+    return (
+        (cov_to_end < window_days) & ((gap >= DISCONT_GAP_DAYS) | (term >= DISCONT_GAP_DAYS))
+    ).astype("int64")
+
+
 def select_discontinuation_cohort(
     df: pd.DataFrame, *, window_days: int = 180, min_claim_count: int = 2
 ) -> tuple[pd.DataFrame, list[tuple[str, int]]]:
@@ -169,9 +228,7 @@ def select_discontinuation_cohort(
     cov_to_end = (lce - ts).dt.days
     gap = df["max_internal_gap_days"].fillna(0)
     term = df["terminal_gap_days"].fillna(0)
-    df[TARGET_DISCONTINUED] = (
-        (cov_to_end < window_days) & ((gap >= DISCONT_GAP_DAYS) | (term >= DISCONT_GAP_DAYS))
-    ).astype("int64")
+    df[TARGET_DISCONTINUED] = _discontinued(cov_to_end, gap, term, window_days=window_days)
     attrition.append(("target_positives", int(df[TARGET_DISCONTINUED].sum())))
     return df, attrition
 
@@ -192,15 +249,88 @@ def select_persistence_cohort(
     lce = pd.to_datetime(df["last_coverage_end"])
     cov_to_end = (lce - ts).dt.days
     gap = df["max_internal_gap_days"].fillna(0)
-    df[TARGET_PERSISTENT] = ((cov_to_end >= window_days) & (gap <= PERSIST_GAP_DAYS)).astype(
-        "int64"
-    )
+    df[TARGET_PERSISTENT] = _persistent(cov_to_end, gap, window_days=window_days)
     attrition.append(("target_positives", int(df[TARGET_PERSISTENT].sum())))
     return df, attrition
 
 
+def select_persistence_causal_cohort(
+    df: pd.DataFrame, *, window_days: int = 180, min_claim_count: int = 2
+) -> tuple[pd.DataFrame, list[tuple[str, int]]]:
+    """Treatment-anchored CAUSAL cohort: Dupixent vs Xolair initiators with four
+    outcomes and the binary treatment (Lane A, spec 2026-09-22 §3A.1).
+
+    Same denominator as the prediction persistence cohort (``_initiator_eligible``)
+    restricted to the observed two-arm contrast. Emits:
+
+    - ``treatment_dupixent``     1 = DUPIXENT, 0 = XOLAIR
+    - ``persistent_at_180d_g28`` PRIMARY: covered through day window-28 AND no
+                                 internal gap > PERSIST_GAP_DAYS (brand-invariant)
+    - ``discontinued_180d``      secondary, as shipped (brand-robust)
+    - ``biologic_switch_180d_flag`` as shipped in the raw drop (NULL -> 0)
+    - ``persistent_at_180d``     the shipped definition, reported only alongside
+                                 the days-supply sweep (a measurement artefact)
+    """
+    df, attrition = _initiator_eligible(
+        df, window_days=window_days, min_claim_count=min_claim_count
+    )
+    # A row with a treatment_start_date but no brand is not an "unknown arm" to
+    # exclude quietly -- ``_initiator_eligible``'s initiated-filter treats a
+    # null brand as initiated (``NaN.ne("no_treatment")`` is True), and
+    # ``value_counts()`` drops NaN, so the isin-based exclusion below would
+    # never count it. This IS a data-integrity failure: fail loud, not silent.
+    null_brand = df["index_biologic_brand"].isna()
+    if null_brand.any():
+        n = int(null_brand.sum())
+        sample_patids = df.loc[null_brand, "patid"].head(5).tolist()
+        raise ValueError(
+            f"{n} initiator row(s) have a treatment_start_date but a null "
+            f"index_biologic_brand -- a data-integrity failure, not a silent "
+            f"drop; first patids: {sample_patids}"
+        )
+    if SWITCH_FLAG not in df.columns:
+        raise KeyError(
+            f"{SWITCH_FLAG} is not in the input frame; the causal cohort carries it as "
+            "an outcome and will not fabricate zeros for a missing column"
+        )
+    in_contrast = df["index_biologic_brand"].isin(CAUSAL_ARMS)
+    # Every brand outside the observed pair gets its OWN loud attrition step
+    # (never silently folded into the reference arm or dropped uncounted).
+    # dropna=False is defensive: by this point a null brand has already raised
+    # above, but the exclusion count must never silently drop a NaN either.
+    excluded_counts = (
+        df.loc[~in_contrast, "index_biologic_brand"].value_counts(dropna=False).sort_index()
+    )
+    for brand, n in excluded_counts.items():
+        attrition.append((f"excluded_arm:{brand}", int(n)))
+    df = df.loc[in_contrast].copy()
+    attrition.append(("two_arm_contrast", len(df)))
+
+    ts = pd.to_datetime(df["treatment_start_date"])
+    lce = pd.to_datetime(df["last_coverage_end"])
+    cov_to_end = (lce - ts).dt.days
+    gap = df["max_internal_gap_days"].fillna(0)
+    term = df["terminal_gap_days"].fillna(0)
+
+    df[TREATMENT_COL] = df["index_biologic_brand"].eq("DUPIXENT").astype("int64")
+    df[TARGET_PERSISTENT] = _persistent(cov_to_end, gap, window_days=window_days)
+    df[TARGET_PERSISTENT_G28] = _persistent(
+        cov_to_end, gap, window_days=window_days, grace_days=PERSIST_GRACE_DAYS
+    )
+    df[TARGET_DISCONTINUED] = _discontinued(cov_to_end, gap, term, window_days=window_days)
+    df[SWITCH_FLAG] = df[SWITCH_FLAG].fillna(0).astype("int64")
+
+    attrition.append(("target_positives", int(df[TARGET_PERSISTENT_G28].sum())))
+    attrition.append(("arm_dupixent", int(df[TREATMENT_COL].sum())))
+    return df, attrition
+
+
 def build_journey_records(
-    df: pd.DataFrame, *, target: str = TARGET, anchor_col: str = "index_date"
+    df: pd.DataFrame,
+    *,
+    target: str = TARGET,
+    anchor_col: str = "index_date",
+    extra_cols: tuple[str, ...] = (),
 ) -> list[dict[str, Any]]:
     """Map cohort rows to canonical journey record-dicts.
 
@@ -210,8 +340,21 @@ def build_journey_records(
 
     ``anchor_col`` is the temporal index for the journey: ``index_date`` for the
     initiation cohort, ``treatment_start_date`` for the treatment-anchored
-    discontinuation/persistence cohorts (the 64 baseline features are measured at
-    the dx index, which is <= treatment-start, so they remain pre-index there).
+    discontinuation, persistence, and causal cohorts (the 64 baseline features
+    are measured at the dx index, which is <= treatment-start, so they remain
+    pre-index there).
+
+    ``extra_cols`` (Lane A) is the CAUSAL cohort's positive enumeration of the
+    columns the prediction cohorts must never carry: the treatment, its brand
+    label, the treatment start and the secondary outcomes. Each column is
+    emitted by its declared ``CAUSAL_EXTRA_COLUMNS`` kind: ``date`` ->
+    ``pd.to_datetime``, ``text`` -> passed through verbatim after asserting the
+    value IS a ``str`` (a non-string, e.g. NaN/None, raises ``ValueError``
+    naming the column rather than stringifying to ``"nan"``/``"None"``), ``flag``
+    -> ``int`` after asserting the value is in ``{0, 1}`` (a non-binary flag,
+    including NA, raises ``ValueError`` naming the column and the offending
+    value -- never truncated, never silently coerced). The default (empty)
+    keeps every prediction cohort byte-identical.
     """
     raw_features = [c for c in MART_SAFE_FEATURES if c not in _DERIVED and c in df.columns]
     records: list[dict[str, Any]] = []
@@ -252,11 +395,32 @@ def build_journey_records(
         model_inputs.append(rec["geographic_region"])
         present = sum(1 for v in model_inputs if pd.notna(v))
         rec["data_quality_score"] = round(present / len(model_inputs), 4) if model_inputs else 0.0
+        for col in extra_cols:
+            value = row[col]
+            kind = CAUSAL_EXTRA_COLUMNS[col][1]
+            if kind == "date":
+                rec[col] = pd.to_datetime(value)
+            elif kind == "text":
+                if not isinstance(value, str):
+                    raise ValueError(
+                        f"{col} must be a string; got {value!r} for patid={row['patid']!r}"
+                    )
+                rec[col] = value
+            elif kind == "flag":
+                if pd.isna(value) or value not in (0, 1):
+                    raise ValueError(
+                        f"{col} must be a 0/1 flag; got {value!r} for patid={row['patid']!r}"
+                    )
+                rec[col] = int(value)
+            else:
+                raise ValueError(f"unknown CAUSAL_EXTRA_COLUMNS kind {kind!r} for column {col!r}")
         records.append(rec)
     return records
 
 
-def _data_dictionary_entries(target: str = TARGET) -> list[dict[str, Any]]:
+def _data_dictionary_entries(
+    target: str = TARGET, *, extra_cols: tuple[str, ...] = ()
+) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     for name in sorted(MART_SAFE_FEATURES) + [target]:
         contract = optum_mart_contract_for(name)
@@ -275,19 +439,39 @@ def _data_dictionary_entries(target: str = TARGET) -> list[dict[str, Any]]:
                 ),
             }
         )
+    for name in extra_cols:
+        entries.append(
+            {
+                "feature": name,
+                "type": CAUSAL_EXTRA_COLUMNS[name][0],
+                "source_table": "optum_mart.patient",
+                "lookback_window": "post-index (mart_treatment)",
+                "null_rate": "",
+                "notes": (
+                    "CAUSAL export only — the treatment / its anchor / a secondary outcome; "
+                    "never a prediction feature (manifest forbids it as such)"
+                ),
+            }
+        )
     return entries
 
 
-# --- Cohort registry (initiation + the treatment-anchored disc/persistence) ---
+# --- Cohort registry (initiation + the treatment-anchored disc/persistence
+# prediction cohorts + the Lane A causal cohort) ---
+CAUSAL_COHORT = "persistence_causal"
+PREDICTION_COHORTS = ("initiation", "discontinuation", "persistence")
+CAUSAL_RECORDS_NAME = "e2i_causal_v1_biologic_persistence"
 COHORT_TARGETS: dict[str, str] = {
     "initiation": TARGET,
     "discontinuation": TARGET_DISCONTINUED,
     "persistence": TARGET_PERSISTENT,
+    CAUSAL_COHORT: TARGET_PERSISTENT_G28,
 }
 _SELECTOR_BY_COHORT = {
     "initiation": select_initiation_cohort,
     "discontinuation": select_discontinuation_cohort,
     "persistence": select_persistence_cohort,
+    CAUSAL_COHORT: select_persistence_causal_cohort,
 }
 # Journey temporal anchor: dx-index for initiation; first biologic fill for the
 # treatment-anchored cohorts (the 64 baseline features are knowable at dx-index,
@@ -296,24 +480,32 @@ _ANCHOR_BY_COHORT = {
     "initiation": "index_date",
     "discontinuation": "treatment_start_date",
     "persistence": "treatment_start_date",
+    CAUSAL_COHORT: "treatment_start_date",
 }
 _SPLIT_CONFIG_BY_COHORT = {
     "initiation": ("optum_mart_initiation_v1", "optum_mart_initiation"),
     "discontinuation": ("optum_mart_discontinuation_v1", "optum_mart_discontinuation"),
     "persistence": ("optum_mart_persistence_v1", "optum_mart_persistence"),
+    CAUSAL_COHORT: ("optum_mart_persistence_causal_v1", "optum_mart_persistence_causal"),
 }
 _OUTPUT_BY_COHORT = {
     "initiation": DEFAULT_OUTPUT,
     "discontinuation": "data/rwd/mart/discontinuation",
     "persistence": "data/rwd/mart/persistence",
+    CAUSAL_COHORT: "data/rwd/mart/persistence_causal",
 }
-_TREATMENT_ANCHORED = ("discontinuation", "persistence")
-# Coverage/gap columns the treatment-anchored cohorts need beyond the allow-list.
+_TREATMENT_ANCHORED = ("discontinuation", "persistence", CAUSAL_COHORT)
+_EXTRA_COLS_BY_COHORT: dict[str, tuple[str, ...]] = {CAUSAL_COHORT: CAUSAL_EXTRA_COLS}
+_RECORDS_NAME_BY_COHORT: dict[str, str] = {CAUSAL_COHORT: CAUSAL_RECORDS_NAME}
+# Coverage/gap columns the treatment-anchored cohorts need beyond the allow-list
+# (the switch flag is projected for every treatment-anchored read; only the
+# causal selector consumes it).
 _OUTCOME_COLS = (
     "last_observed_date",
     "last_coverage_end",
     "max_internal_gap_days",
     "terminal_gap_days",
+    SWITCH_FLAG,
 )
 
 
@@ -335,8 +527,9 @@ def _read_patient_frame(
 ) -> pd.DataFrame:
     """Read the patient entity with column projection (memory-frugal).
 
-    The treatment-anchored cohorts (discontinuation/persistence) additionally
-    project the coverage/gap columns and push down an initiators-only filter
+    The treatment-anchored cohorts (discontinuation, persistence, and the
+    causal cohort persistence_causal) additionally project the coverage/gap
+    columns and push down an initiators-only filter
     (``index_biologic_brand != 'no_treatment'``) so the read is ~24K rows, not
     ~814K. Each cohort reads independently (sequential reads bound peak memory —
     no need to hold all three frames at once).
@@ -395,11 +588,33 @@ def convert(
         # The read pushed down to initiators; record the full patient denominator
         # as the funnel top so the attrition report stays transparent.
         attrition = [("patient_panel", _count_patient_panel(input_path))] + attrition
-    records = build_journey_records(cohort_df, target=target, anchor_col=anchor)
+    arms: dict[str, int] | None = None
+    if cohort == CAUSAL_COHORT:
+        # From the COHORT frame, not the emitted records: the arm count is a
+        # property of who is in the cohort, independent of what
+        # build_journey_records happens to carry through.
+        arms = {
+            str(brand): int(n)
+            for brand, n in cohort_df["index_biologic_brand"].value_counts().items()
+        }
+    extra_cols = _EXTRA_COLS_BY_COHORT.get(cohort, ())
+    records = build_journey_records(
+        cohort_df, target=target, anchor_col=anchor, extra_cols=extra_cols
+    )
+    if cohort == CAUSAL_COHORT:
+        # Real rows, tagged so the real-mode provenance filter keeps them and a
+        # synthetic-gold plant can never masquerade as claims data.
+        for rec in records:
+            rec["is_synthetic"] = False
     split = apply_chronological_split(records, date_key="journey_start_date", id_key="patient_id")
 
     out = Path(output_dir)
-    write_records(out, "e2i_ml_v3_patient_journeys", records, fmt="parquet")
+    write_records(
+        out,
+        _RECORDS_NAME_BY_COHORT.get(cohort, "e2i_ml_v3_patient_journeys"),
+        records,
+        fmt="parquet",
+    )
     cfg_id, cfg_name = _SPLIT_CONFIG_BY_COHORT[cohort]
     registry = build_split_registry(
         split_config_id=cfg_id,
@@ -409,10 +624,10 @@ def convert(
     )
     write_records(out, "e2i_ml_v3_split_registry", registry, fmt="json")
     write_attrition_report(out, attrition)
-    write_data_dictionary(out, _data_dictionary_entries(target))
+    write_data_dictionary(out, _data_dictionary_entries(target, extra_cols=extra_cols))
 
     positives = int(sum(r[target] for r in records))
-    summary = {
+    summary: dict[str, Any] = {
         "cohort": cohort,
         "patients": len(records),
         "positives": positives,
@@ -420,6 +635,8 @@ def convert(
         "splits": split["counts"],
         "output_dir": str(out),
     }
+    if arms is not None:
+        summary["arms"] = arms
     logger.info("Conversion summary: %s", summary)
     return summary
 
@@ -430,8 +647,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--cohort",
         default="initiation",
-        choices=("initiation", "discontinuation", "persistence", "all"),
-        help="Which cohort to build ('all' builds every cohort).",
+        choices=(*PREDICTION_COHORTS, CAUSAL_COHORT, "all"),
+        help=(
+            "Which cohort to build. 'all' builds the three PREDICTION cohorts; the "
+            f"causal cohort '{CAUSAL_COHORT}' (keeps the treatment) is always explicit."
+        ),
     )
     parser.add_argument(
         "--output",
@@ -454,9 +674,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING)
 
-    cohorts = (
-        ["initiation", "discontinuation", "persistence"] if args.cohort == "all" else [args.cohort]
-    )
+    cohorts = list(PREDICTION_COHORTS) if args.cohort == "all" else [args.cohort]
     for cohort in cohorts:
         if args.cohort == "all":
             output_dir = str(Path(args.output or "data/rwd/mart") / cohort)

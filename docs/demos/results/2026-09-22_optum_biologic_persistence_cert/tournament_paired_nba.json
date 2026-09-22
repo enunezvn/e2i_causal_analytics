@@ -1,0 +1,254 @@
+[
+ {
+  "dataset": "nba_triggers",
+  "brand": "Fabhalta",
+  "treatment": "control_group_flag",
+  "outcome": "action_taken",
+  "n": 5000,
+  "k": 0,
+  "before": {
+   "selected": "ols",
+   "ate": -0.06434350123008525,
+   "energy_scores": {
+    "ols": 0.3085027116411627
+   },
+   "gap": 0.0,
+   "per": {
+    "causal_forest": {
+     "ate": null,
+     "energy": null
+    },
+    "linear_dml": {
+     "ate": null,
+     "energy": null
+    },
+    "drlearner": {
+     "ate": null,
+     "energy": null
+    },
+    "ols": {
+     "ate": -0.06434350123008525,
+     "energy": 0.3085027116411627
+    }
+   }
+  },
+  "after": {
+   "selected": "ols",
+   "ate": -0.06434350123008525,
+   "energy_scores": {
+    "ols": 0.3085027116411627
+   },
+   "gap": 0.0,
+   "per": {
+    "causal_forest": {
+     "ate": null,
+     "energy": null
+    },
+    "linear_dml": {
+     "ate": null,
+     "energy": null
+    },
+    "drlearner": {
+     "ate": null,
+     "energy": null
+    },
+    "ols": {
+     "ate": -0.06434350123008525,
+     "energy": 0.3085027116411627
+    }
+   }
+  }
+ },
+ {
+  "dataset": "nba_triggers",
+  "brand": "Fabhalta",
+  "treatment": "acceptance_status",
+  "outcome": "conversion_flag",
+  "n": 5000,
+  "k": 2,
+  "before": {
+   "selected": "linear_dml",
+   "ate": 0.07289111247372529,
+   "energy_scores": {
+    "causal_forest": 0.30332548378239443,
+    "linear_dml": 0.3047571538794001,
+    "drlearner": 0.3047779470542529,
+    "ols": 0.30476011485137966
+   },
+   "gap": 0.0014316700970056773,
+   "per": {
+    "causal_forest": {
+     "ate": 0.07140279843253568,
+     "energy": 0.30332548378239443
+    },
+    "linear_dml": {
+     "ate": 0.07289111247372529,
+     "energy": 0.3047571538794001
+    },
+    "drlearner": {
+     "ate": 0.07427676852453478,
+     "energy": 0.3047779470542529
+    },
+    "ols": {
+     "ate": 0.07438603182433151,
+     "energy": 0.30476011485137966
+    }
+   }
+  },
+  "after": {
+   "selected": "linear_dml",
+   "ate": 0.07289111247372529,
+   "energy_scores": {
+    "causal_forest": 0.30334020746381135,
+    "linear_dml": 0.30477555756319924,
+    "drlearner": 0.30479722880989224,
+    "ols": 0.3047786715688476
+   },
+   "gap": 0.0014353500993878887,
+   "per": {
+    "causal_forest": {
+     "ate": 0.07140279843253568,
+     "energy": 0.30334020746381135
+    },
+    "linear_dml": {
+     "ate": 0.07289111247372529,
+     "energy": 0.30477555756319924
+    },
+    "drlearner": {
+     "ate": 0.07427676852453478,
+     "energy": 0.30479722880989224
+    },
+    "ols": {
+     "ate": 0.07438603182433151,
+     "energy": 0.3047786715688476
+    }
+   }
+  }
+ },
+ {
+  "dataset": "nba_triggers",
+  "brand": "Kisqali",
+  "treatment": "control_group_flag",
+  "outcome": "action_taken",
+  "n": 5000,
+  "k": 0,
+  "before": {
+   "selected": "ols",
+   "ate": -0.07167696510403913,
+   "energy_scores": {
+    "ols": 0.3084515897107074
+   },
+   "gap": 0.0,
+   "per": {
+    "causal_forest": {
+     "ate": null,
+     "energy": null
+    },
+    "linear_dml": {
+     "ate": null,
+     "energy": null
+    },
+    "drlearner": {
+     "ate": null,
+     "energy": null
+    },
+    "ols": {
+     "ate": -0.07167696510403913,
+     "energy": 0.3084515897107074
+    }
+   }
+  },
+  "after": {
+   "selected": "ols",
+   "ate": -0.07167696510403913,
+   "energy_scores": {
+    "ols": 0.3084515897107074
+   },
+   "gap": 0.0,
+   "per": {
+    "causal_forest": {
+     "ate": null,
+     "energy": null
+    },
+    "linear_dml": {
+     "ate": null,
+     "energy": null
+    },
+    "drlearner": {
+     "ate": null,
+     "energy": null
+    },
+    "ols": {
+     "ate": -0.07167696510403913,
+     "energy": 0.3084515897107074
+    }
+   }
+  }
+ },
+ {
+  "dataset": "nba_triggers",
+  "brand": "Kisqali",
+  "treatment": "acceptance_status",
+  "outcome": "conversion_flag",
+  "n": 5000,
+  "k": 2,
+  "before": {
+   "selected": "linear_dml",
+   "ate": 0.04544207769566362,
+   "energy_scores": {
+    "causal_forest": 0.3070036775839059,
+    "linear_dml": 0.3082464771437484,
+    "drlearner": 0.30824961385472593,
+    "ols": 0.3082691587297987
+   },
+   "gap": 0.0012427995598425223,
+   "per": {
+    "causal_forest": {
+     "ate": 0.03120158259768159,
+     "energy": 0.3070036775839059
+    },
+    "linear_dml": {
+     "ate": 0.04544207769566362,
+     "energy": 0.3082464771437484
+    },
+    "drlearner": {
+     "ate": 0.04591300485192726,
+     "energy": 0.30824961385472593
+    },
+    "ols": {
+     "ate": 0.046296434889540675,
+     "energy": 0.3082691587297987
+    }
+   }
+  },
+  "after": {
+   "selected": "linear_dml",
+   "ate": 0.04544207769566362,
+   "energy_scores": {
+    "causal_forest": 0.3044858253923868,
+    "linear_dml": 0.30570880170367587,
+    "drlearner": 0.3057129769729042,
+    "ols": 0.30573052475226314
+   },
+   "gap": 0.0012229763112890923,
+   "per": {
+    "causal_forest": {
+     "ate": 0.031201582597681597,
+     "energy": 0.3044858253923868
+    },
+    "linear_dml": {
+     "ate": 0.04544207769566362,
+     "energy": 0.30570880170367587
+    },
+    "drlearner": {
+     "ate": 0.04591300485192726,
+     "energy": 0.3057129769729042
+    },
+    "ols": {
+     "ate": 0.046296434889540675,
+     "energy": 0.30573052475226314
+    }
+   }
+  }
+ }
+]

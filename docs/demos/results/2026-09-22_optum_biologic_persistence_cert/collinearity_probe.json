@@ -1,0 +1,45 @@
+{
+ "dropped": [
+  "cci_hiv",
+  "elx_chf",
+  "elx_pvd",
+  "elx_paralysis",
+  "elx_chronic_pulmonary",
+  "elx_diabetes_uncomplicated",
+  "elx_diabetes_complicated",
+  "elx_peptic_ulcer",
+  "elx_aids_hiv",
+  "elx_metastatic_cancer",
+  "elx_rheumatoid_collagen",
+  "elx_depression",
+  "payer_category=commercial_exchange",
+  "payer_category=medicare_lis_dual",
+  "payer_bus=MCR",
+  "charlson_risk_band=5 plus"
+ ],
+ "kept_n": 61,
+ "full77": {
+  "k": 77,
+  "fit_s": 11.8,
+  "ate": 0.0335256340648345,
+  "ci": [
+   0.01676288756051691,
+   0.050288380569152094,
+   0.008552578841519536
+  ],
+  "warnings": [
+   "Co-variance matrix is underdetermined. Inference will be inv"
+  ]
+ },
+ "pruned": {
+  "k": 61,
+  "fit_s": 8.6,
+  "ate": 0.03352919169257372,
+  "ci": [
+   0.016707941456855602,
+   0.05035044192829185,
+   0.008582428232560392
+  ],
+  "warnings": []
+ }
+}

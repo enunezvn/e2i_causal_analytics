@@ -42,6 +42,7 @@ from ._common import (
 from .datasets import (
     _CAUSAL_DATASET_SPECS,
     _brand_scoped_covariates,
+    _default_auto_discover,
     _is_randomized_treatment,
     _negative_control_outcome,
 )
@@ -109,6 +110,20 @@ async def run_causal_agent_analysis(
                 f"Known datasets: {sorted(_CAUSAL_DATASET_SPECS)}"
             ),
         )
+    # Lane A: the schema default (auto_discover=True) is right for the synthetic
+    # gold standard and MEASURED wrong for the real claims frame (singular
+    # correlation matrix; ~230 s per PC fit). When the caller did not set the
+    # field, the dataset decides; an explicit value is always honored.
+    discovery_note: List[str] = []
+    if "auto_discover" not in request.model_fields_set:
+        resolved = _default_auto_discover(request.dataset)
+        request = request.model_copy(update={"auto_discover": resolved})
+        if not resolved:
+            discovery_note.append(
+                f"Structure discovery is OFF by default for dataset '{request.dataset}' "
+                "(measured to fail on this frame; Lane D pending) — the curated "
+                "common-cause DAG is used. Pass auto_discover=true to attempt it."
+            )
     # #1872: the spec-level covariate OFFER must not leak into a RANDOMIZED
     # treatment by default — randomization already closes every backdoor, and
     # the #1188 design keeps the RCT default-unadjusted (baselines stay a
@@ -190,7 +205,10 @@ async def run_causal_agent_analysis(
         dag=CausalDAGModel(),
         statistical_significance=False,
         refutation=RefutationSummary(),
-        warnings=["Analysis submitted; poll GET /causal/agent-analyze/{id} for the result."],
+        warnings=[
+            "Analysis submitted; poll GET /causal/agent-analyze/{id} for the result.",
+            *discovery_note,
+        ],
         latency_ms=0,
     )
     await _agent_analysis_store.set(analysis_id, pending)
@@ -550,6 +568,8 @@ def _estimator_comparison_from_estimation(
             success=bool(e.get("success")),
             skipped=bool(e.get("skipped", False)),
             energy_score=e.get("energy_score"),
+            tournament_energy_score=e.get("tournament_energy_score"),
+            served_refit=e.get("served_refit"),
             ate=e.get("ate"),
             error=e.get("error"),
             is_selected=(e.get("estimator") == selected),
