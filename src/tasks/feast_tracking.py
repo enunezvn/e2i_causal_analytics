@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from src.feature_store.feast_client import FEAST_FEATURE_VIEW_SOURCE_TABLES
+from src.feature_store.feast_views import FEAST_FEATURE_VIEW_SOURCE_TABLES
 from src.repositories.feast_tracking import (
     FeastFeatureViewRepository,
     FeastFreshnessRepository,

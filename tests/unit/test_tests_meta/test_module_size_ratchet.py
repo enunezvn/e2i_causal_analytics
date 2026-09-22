@@ -59,7 +59,7 @@ ALLOWLIST: dict[str, int] = {
     "src/causal_engine/energy_score/estimator_selector.py": 1916,
     "src/causal_engine/refutation_runner.py": 3166,
     "src/data/causal_role_classifier.py": 6525,
-    "src/feature_store/feast_client.py": 1711,
+    "src/feature_store/feast_client.py": 1706,
     "src/memory/lifecycle/consolidator.py": 1954,
     "src/memory/semantic_memory.py": 1795,
     "src/ml/data_generator.py": 1759,

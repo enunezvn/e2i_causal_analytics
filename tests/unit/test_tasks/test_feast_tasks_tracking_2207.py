@@ -27,7 +27,7 @@ from unittest.mock import patch
 
 import pytest
 
-from src.feature_store.feast_client import FEAST_FEATURE_VIEW_SOURCE_TABLES
+from src.feature_store.feast_views import FEAST_FEATURE_VIEW_SOURCE_TABLES
 from src.tasks import feast_tasks
 from src.workers.celery_app import celery_app
 
