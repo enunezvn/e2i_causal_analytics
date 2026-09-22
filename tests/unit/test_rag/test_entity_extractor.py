@@ -677,3 +677,10 @@ class TestRxNavAliases:
             brand_aliases.reset_cache()  # do not leak a primed round into other tests
         assert made["kwargs"] == {"timeout": 2.0}
         assert made["client"].closed is True
+
+    def test_the_unit_suite_pins_the_rxnav_lookup_off(self):
+        # Guard on tests/conftest.py: the pin must survive both load_dotenv(override=True)
+        # passes and a shell that exported RXNAV_BRAND_ALIASES=1, or unit runs hit RxNav.
+        import os
+
+        assert os.environ.get("RXNAV_BRAND_ALIASES") == "0"
