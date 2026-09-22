@@ -3,9 +3,10 @@
 
 WHY THIS SCRIPT EXISTS
 ----------------------
-``POST /api/segments/analyze`` (Heterogeneous Optimizer agent, Tier 2) and the
-Digital Twin ``/simulate`` cohort path both estimate causal effects from the
-``business_metrics`` rows with ``metric_type='per_hcp_rollup'`` (~12k rows).
+The Digital Twin ``/simulate`` cohort path estimates causal effects from the
+``business_metrics`` rows with ``metric_type='per_hcp_rollup'`` (~13.8k rows).
+(``POST /api/segments/analyze`` read this substrate when revision 1 was written; since
+2026-06-20 it reads the ``patient_journeys`` gold standard -- see BLAST RADIUS below.)
 The substrate originally had NO usable treatment signal (engagement_score /
 call_frequency entirely NULL); revision 1 of this script planted a single
 engagement-score treatment with a known per-region CATE. Revision 2 (this
@@ -35,8 +36,8 @@ Per per_hcp_rollup row i (one (hcp_id, brand, metric_date) cell):
     adjusting for (market_share, log-volume, region) identifies every channel's
     effect; the other channels contribute conditionally-independent outcome
     variance (wider CIs, no bias). engagement_score keeps the EXACT revision-1
-    generation stream (same seed -> identical values), so the /segments/analyze
-    treatment assignment is unchanged.
+    generation stream (same seed -> identical values), kept for reproducibility of
+    the revision-1 estimates.
 
   OUTCOME  cohort_conversion_outcome_i  (the column we REGENERATE; migration 147)
     Its OWN column since 2026-09-21. It used to be written into conversion_rate, which the
@@ -64,8 +65,8 @@ PLANTED TRUE PER-REGION CATE PER CHANNEL (verifiable; effect of above-median T)
   sample_volume                sample_distribution          +0.18  +0.12  +0.07  +0.02
   rep_training_score           rep_training_quality         +0.16  +0.10  +0.05  +0.01
 
-engagement_score taus are UNCHANGED from revision 1 (/segments/analyze
-coherence). All channels are monotone in the region-richness ordering
+engagement_score taus are UNCHANGED from revision 1 (reproducibility of the
+earlier estimates). All channels are monotone in the region-richness ordering
 (northeast > west > south > midwest, mirroring
 BusinessMetricsGenerator.REGION_FACTORS — the brand-independent MARKET-SIZE
 factor, unchanged by #1833; the #1833 brand x region execution matrix and
