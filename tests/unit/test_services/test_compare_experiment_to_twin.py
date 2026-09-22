@@ -19,7 +19,13 @@ def test_compare_experiment_to_twin_exists_with_2arg_signature():
 
     assert hasattr(ResultsAnalysisService, "compare_experiment_to_twin")
     sig = inspect.signature(ResultsAnalysisService.compare_experiment_to_twin)
-    assert list(sig.parameters) == ["self", "experiment_id", "twin_simulation_id"]
+    params = list(sig.parameters)
+    # The 2-arg call must still work: the ids first, everything after them optional
+    # (#2206 added an optional analysis_type selector for the FINAL-results producer).
+    assert params[:3] == ["self", "experiment_id", "twin_simulation_id"]
+    assert sig.parameters["twin_simulation_id"].default is None
+    assert all(sig.parameters[p].default is not inspect.Parameter.empty for p in params[3:])
+    assert "analysis_type" in params
 
 
 @pytest.mark.unit
