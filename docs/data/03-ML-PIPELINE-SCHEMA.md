@@ -48,10 +48,10 @@ dark queue had hidden were then decided by the owner (2026-09-22) and fixed: (1)
 scheduled evaluation path had no committed cohort contract to trigger with — migration 150
 persists one per model on `ml_model_registry` (§1.2), written at training time by the
 deployer's registry writer and healed by the manual trigger route, and the sweep reads it
-(§7.5); the 12 pre-existing goldstd models carry only the target (their training is not
-expressible as a loadable (table, target column) contract — see the migration's comment),
-so the sweep stays honestly blocked for them until an operator triggers once with a
-loadable `data_source`; (2) the data-prep Feast gate (#556) was unpassable by construction
+(§7.5); the 14 pre-existing real models carry NULL contracts (neither value is provable:
+the experiment label is a column of no live table and the goldstd frames were host-built —
+see the migration's comment), so the sweep stays honestly blocked for them until an
+operator triggers once with `data_source` + `target_outcome` and that job completes; (2) the data-prep Feast gate (#556) was unpassable by construction
 (it probed a `feature_analyzer_<experiment_id>` view that exists nowhere) and fails closed
 on the worker image (#307) — it now measures the freshness of the Feast views sourced from
 the run's table through the feast-free #559 probe and blocks only a run that trains on
@@ -142,7 +142,7 @@ Model versioning with performance metrics and lifecycle stage tracking. A trigge
 | `stage` | model_stage_enum | Current lifecycle stage |
 | `is_champion` | BOOLEAN | Whether this is the active champion model |
 | `cohort_data_source` | TEXT | Cohort contract (migration 150, #2207): the table name or JSON file-source dict the model was trained on — what a retrain loads. NULL = unknown (sweep blocked for this model) |
-| `cohort_target_outcome` | TEXT | Cohort contract: the prediction target the model was trained on; backfilled from `ml_experiments.prediction_target` for the 14 pre-existing real models |
+| `cohort_target_outcome` | TEXT | Cohort contract: the prediction target column the model was trained on; NULL for the 14 pre-existing real models (never backfilled: `ml_experiments.prediction_target` is an experiment label, a column of no live table) |
 | `cohort_feature_manifest_source` | TEXT | Cohort contract: the resolved Layer-5 manifest source (csu/optum/synthetic), optional |
 
 **Key constraints**: `UNIQUE(model_name, model_version)`, single-champion trigger per experiment
@@ -909,8 +909,8 @@ Automated retraining events triggered by monitoring alerts with before/after per
 Since the 2026-09-22 owner decision the contract of record is the model's `ml_model_registry`
 row (migration 150, §1.2): the sweep passes it to `evaluate_retraining_need` and enqueues
 for a contracted model; a model whose row lacks it is evaluated and blocked with
-`retraining_blocked_reason="no_cohort_contract"` (the 12 pre-existing goldstd models carry
-only the backfilled target, so they stay blocked until healed). The API trigger route keeps
+`retraining_blocked_reason="no_cohort_contract"` (the 14 pre-existing real models carry NULL
+contracts, so they stay blocked until a manual trigger's completed run heals them). The API trigger route keeps
 both fields optional on `TriggerRetrainingRequest` (Phase D): a request that omits them falls
 back to the row's contract, explicit values win, the row's id is written to `model_id`
 (never populated before), and the row is healed only once the job has COMPLETED with a

@@ -107,7 +107,7 @@ async def test_explicit_request_values_win_over_the_registry_row():
 async def test_the_trigger_never_writes_the_registry_row():
     """codex r1 HIGH-2: a contract persisted at trigger time could heal wrongly (the job
     has not run yet); healing is the completed job's business."""
-    db, rid = _db(cohort_target_outcome="initiation_kisqali")  # 150 backfill; source NULL
+    db, rid = _db(cohort_target_outcome="initiation_kisqali")  # set by hand; source NULL
     contract = {
         "data_source": "patient_journeys",
         "target_outcome": "treatment_initiated",

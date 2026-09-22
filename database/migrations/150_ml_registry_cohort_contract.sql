@@ -20,8 +20,8 @@
 -- heals a NULL contract from an explicit, complete request (RetrainingTriggerService).
 -- READER: the drift-monitor Supabase connector projection -> the sweep's cohort dict.
 --
--- Additive + nullable (the 083 pattern): ADD COLUMN IF NOT EXISTS, COMMENT, a NULL-only
--- backfill from an authoritative source, no constraint. Safe to re-run.
+-- Additive + nullable (the 083 pattern): ADD COLUMN IF NOT EXISTS, COMMENT, NO backfill
+-- (see the end of this file), no constraint. Safe to re-run.
 --
 -- NOTE: no BEGIN/COMMIT here -- the migration runner wraps each file.
 
@@ -39,46 +39,32 @@ COMMENT ON COLUMN ml_model_registry.cohort_data_source IS
 COMMENT ON COLUMN ml_model_registry.cohort_target_outcome IS
     'Cohort contract (#2207): the prediction target the model was trained on -- the '
     'target_outcome MLFoundationPipeline predicts on a retrain (must be a column of the '
-    'frame cohort_data_source loads). Backfilled from ml_experiments.prediction_target '
-    '(the experiment''s declared target) for the pre-existing real models. The sweep may '
-    'only enqueue a retrain when BOTH cohort_data_source and cohort_target_outcome are present.';
+    'frame cohort_data_source loads); NULL = unknown — never backfilled from '
+    'ml_experiments.prediction_target, which is an experiment label, not a column. The '
+    'sweep may only enqueue a retrain when BOTH cohort_data_source and cohort_target_outcome are present.';
 COMMENT ON COLUMN ml_model_registry.cohort_feature_manifest_source IS
     'Cohort contract (#2207): the RESOLVED Layer-5 feature-manifest source '
     '(csu/optum/synthetic, src/data/manifests/resolution.py) the model was trained under; '
     'NULL = none/unknown. Optional pass-through of the retrain contract.';
 
 -- ---------------------------------------------------------------------------
--- Backfill (NULL-only, real models only)
+-- NO backfill (dispatcher review 2026-09-22)
 -- ---------------------------------------------------------------------------
--- cohort_target_outcome: the experiment's declared prediction target, via the FK. The
--- 14 is_synthetic=false rows on 2026-09-22 (12 `<cohort>_<brand>_goldstd_lr_v1` +
--- 2 archived `csu_treatment_initiation_lr_*`) all have a populated
--- ml_experiments.prediction_target (initiation_kisqali, hcp_adoption_remibrutinib,
--- csu_treatment_initiation, ...). Idempotent: NULL-only.
-UPDATE ml_model_registry r
-   SET cohort_target_outcome = e.prediction_target
-  FROM ml_experiments e
- WHERE e.id = r.experiment_id
-   AND r.cohort_target_outcome IS NULL
-   AND r.is_synthetic = false
-   AND e.prediction_target IS NOT NULL
-   AND e.prediction_target <> '';
-
--- cohort_data_source: NOT backfilled -- the mapping is not provable as a
--- (table, target column) contract the retrain path could load:
---   * The 12 goldstd models were trained by
---     src/mlops/gold_standard_eval/cohort_deployer.train_cohort_model on frames built by
---     FeatureBuilder.load_frame (patient grain: patient_journeys filtered by brand/split;
---     HCP grain: hcp_brand_adoption JOIN hcp_profiles) with spec.label_column as the label
---     (treatment_initiated / persistent_180d / discontinued_180d / adopted --
---     src/mlops/gold_standard_eval/cohort_spec.py), NOT with the experiment's
---     prediction_target as a column: `initiation_kisqali` etc. is a column of no live
---     table (information_schema.columns, 2026-09-22: 0 rows for those 8 names). The
---     MLFoundationPipeline retrain loads ONE table (data_loader._load_from_supabase) and
---     reads scope_spec.prediction_target from it, so no cohort_data_source value would
---     reproduce that training; a fabricated one would enqueue jobs that fail at data-prep.
---   * The 2 csu_treatment_initiation_lr_* rows (archived; outside the sweep's
---     production/staging scope) were trained by src/mlops/prediction_synthesizer_deploy
---     .train_target_models on an in-process dataset, not a named table.
--- The sweep therefore stays honestly blocked for these 14 rows; the manual trigger route
--- heals the contract once an operator supplies a loadable data_source + target.
+-- Neither value is provable for the 14 pre-existing real rows (12
+-- `<cohort>_<brand>_goldstd_lr_v1` + 2 archived `csu_treatment_initiation_lr_*`):
+--   * cohort_target_outcome: ml_experiments.prediction_target holds the experiment's
+--     LABEL (initiation_kisqali, hcp_adoption_remibrutinib, csu_treatment_initiation,
+--     ...), which is a column of NO live table (information_schema.columns, 2026-09-22:
+--     0 rows for those names; only hcp_brand_adoption.adopted exists) — the goldstd
+--     models were trained on spec.label_column (treatment_initiated / persistent_180d /
+--     discontinued_180d / adopted, src/mlops/gold_standard_eval/cohort_spec.py). A
+--     contract column holding a plausible-looking non-column would make the sweep
+--     enqueue a job with a bogus target the moment a data source is set, and the
+--     conflict-refusing heal would then never let the correct value land.
+--   * cohort_data_source: the goldstd frames were host-built by FeatureBuilder.load_frame
+--     (patient grain: patient_journeys filtered by brand/split; HCP grain:
+--     hcp_brand_adoption JOIN hcp_profiles), not ONE table data_loader could reload; the
+--     csu rows were trained on an in-process dataset (prediction_synthesizer_deploy).
+-- Honest state: all 14 rows carry NULL contracts and the sweep stays blocked for them
+-- until an operator triggers POST /monitoring/retraining/trigger/{model_id} with
+-- data_source + target_outcome; that job's COMPLETED run heals the row.

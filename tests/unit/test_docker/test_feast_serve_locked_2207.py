@@ -83,6 +83,28 @@ def test_lock_store_materialization_wraps_both_methods_and_forwards_arguments(tm
 
 
 @pytest.mark.unit
+def test_only_the_two_materialize_methods_are_wrapped(tmp_path):
+    """The online read path (get_online_features, async in feast 0.43's feature server)
+    and every other store method must be untouched by the lock."""
+    mod = _load()
+    store = MagicMock()
+    names = (
+        "get_online_features",
+        "push",
+        "write_to_online_store",
+        "materialize",
+        "materialize_incremental",
+    )
+    before = {name: getattr(store, name) for name in names}
+    mod.lock_store_materialization(store, str(tmp_path / ".registry.lock"))
+    assert store.get_online_features is before["get_online_features"]
+    assert store.push is before["push"]
+    assert store.write_to_online_store is before["write_to_online_store"]
+    assert store.materialize is not before["materialize"]
+    assert store.materialize_incremental is not before["materialize_incremental"]
+
+
+@pytest.mark.unit
 def test_lock_is_released_when_the_call_raises(tmp_path):
     mod = _load()
     lock = str(tmp_path / ".registry.lock")

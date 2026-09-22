@@ -94,9 +94,9 @@ async def test_completed_retrain_heals_null_columns():
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_conflicting_row_value_blocks_the_whole_heal():
-    """The migration-150 backfill put the experiment LABEL (initiation_kisqali) on the
-    row; a retrain on the real column (treatment_initiated) must not compose the pair
-    {patient_journeys, initiation_kisqali} that nobody ever ran."""
+    """A row already carrying the experiment LABEL (initiation_kisqali) as its target
+    (e.g. set by hand): a retrain on the real column (treatment_initiated) must not
+    compose the pair {patient_journeys, initiation_kisqali} that nobody ever ran."""
     db, _ = _db(cohort_target_outcome="initiation_kisqali")
     out, _ = await _run(db, GOOD, CONTRACT)
     assert out["status"] == "completed"  # the retrain itself is unaffected

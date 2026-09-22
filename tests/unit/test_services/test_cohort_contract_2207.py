@@ -173,8 +173,9 @@ async def test_heal_fills_only_null_columns_and_never_overwrites():
 @pytest.mark.unit
 @pytest.mark.asyncio
 async def test_heal_refuses_to_compose_a_mixed_pair_on_any_conflict():
-    """codex r1 HIGH-2: row {target=initiation_kisqali} + contract {source=patient_journeys,
-    target=treatment_initiated} must NOT become {patient_journeys, initiation_kisqali}."""
+    """codex r1 HIGH-2: a row that already carries target=initiation_kisqali (however it got
+    there) + contract {source=patient_journeys, target=treatment_initiated} must NOT become
+    {patient_journeys, initiation_kisqali}."""
     rid = str(uuid4())
     db = FakeAsyncSupabase(
         {
