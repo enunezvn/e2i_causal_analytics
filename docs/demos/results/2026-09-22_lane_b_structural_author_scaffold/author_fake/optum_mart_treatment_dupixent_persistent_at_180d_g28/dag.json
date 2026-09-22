@@ -1,0 +1,4357 @@
+{
+  "meta": {
+    "authored_at": "2026-09-22T16:16:13.951647+00:00",
+    "manifest": "optum_mart",
+    "treatment": "treatment_dupixent",
+    "outcome": "persistent_at_180d_g28",
+    "treatment_label": "remibrutinib vs competitor biologic (CSU escalation therapy; rehearsed as Dupixent vs Xolair)",
+    "outcome_label": "persistence at 180 days (g28)",
+    "lm": "fake",
+    "resolver": "offline",
+    "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+    "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+    "n_features": 64,
+    "panel": null,
+    "provenance": "machine"
+  },
+  "schema_version": "1",
+  "treatment": "treatment_dupixent",
+  "outcome": "persistent_at_180d_g28",
+  "merge_latents": true,
+  "is_dag": true,
+  "adjustment_valid": true,
+  "adjustment_set": [
+    "age_at_index",
+    "cci_cerebrovascular",
+    "cci_chf",
+    "cci_chronic_pulmonary",
+    "cci_dementia",
+    "cci_diabetes_complication",
+    "cci_diabetes_no_complication",
+    "cci_hiv",
+    "cci_malignancy",
+    "cci_metastatic_cancer",
+    "cci_mi",
+    "cci_mild_liver",
+    "cci_paraplegia",
+    "cci_peptic_ulcer",
+    "cci_pvd",
+    "cci_renal",
+    "cci_rheumatic",
+    "cci_severe_liver",
+    "charlson_risk_band",
+    "charlson_score",
+    "comorbidity_diag_claim_count",
+    "comorbidity_diag_distinct_count",
+    "elixhauser_risk_band",
+    "elixhauser_van_walraven_score",
+    "elx_aids_hiv",
+    "elx_alcohol_abuse",
+    "elx_blood_loss_anemia",
+    "elx_cardiac_arrhythmia",
+    "elx_chf",
+    "elx_chronic_pulmonary",
+    "elx_coagulopathy",
+    "elx_deficiency_anemia",
+    "elx_depression",
+    "elx_diabetes_complicated",
+    "elx_diabetes_uncomplicated",
+    "elx_drug_abuse",
+    "elx_fluid_electrolyte",
+    "elx_hypertension_complicated",
+    "elx_hypertension_uncomplicated",
+    "elx_hypothyroidism",
+    "elx_liver_disease",
+    "elx_lymphoma",
+    "elx_metastatic_cancer",
+    "elx_obesity",
+    "elx_other_neurological",
+    "elx_paralysis",
+    "elx_peptic_ulcer",
+    "elx_psychoses",
+    "elx_pulmonary_circulation",
+    "elx_pvd",
+    "elx_renal_failure",
+    "elx_rheumatoid_collagen",
+    "elx_solid_tumor_no_metastasis",
+    "elx_valvular_disease",
+    "elx_weight_loss",
+    "enrollment_duration_days",
+    "gdr_cd",
+    "geographic_region",
+    "health_exchange_flag",
+    "high_comorbidity_burden_flag",
+    "lis_dual_flag",
+    "payer_bus",
+    "payer_category",
+    "payer_product"
+  ],
+  "minimal_adjustment_set": [
+    "age_at_index",
+    "cci_cerebrovascular",
+    "cci_chf",
+    "cci_chronic_pulmonary",
+    "cci_dementia",
+    "cci_diabetes_complication",
+    "cci_diabetes_no_complication",
+    "cci_hiv",
+    "cci_malignancy",
+    "cci_metastatic_cancer",
+    "cci_mi",
+    "cci_mild_liver",
+    "cci_paraplegia",
+    "cci_peptic_ulcer",
+    "cci_pvd",
+    "cci_renal",
+    "cci_rheumatic",
+    "cci_severe_liver",
+    "charlson_risk_band",
+    "charlson_score",
+    "comorbidity_diag_claim_count",
+    "comorbidity_diag_distinct_count",
+    "elixhauser_risk_band",
+    "elixhauser_van_walraven_score",
+    "elx_aids_hiv",
+    "elx_alcohol_abuse",
+    "elx_blood_loss_anemia",
+    "elx_cardiac_arrhythmia",
+    "elx_chf",
+    "elx_chronic_pulmonary",
+    "elx_coagulopathy",
+    "elx_deficiency_anemia",
+    "elx_depression",
+    "elx_diabetes_complicated",
+    "elx_diabetes_uncomplicated",
+    "elx_drug_abuse",
+    "elx_fluid_electrolyte",
+    "elx_hypertension_complicated",
+    "elx_hypertension_uncomplicated",
+    "elx_hypothyroidism",
+    "elx_liver_disease",
+    "elx_lymphoma",
+    "elx_metastatic_cancer",
+    "elx_obesity",
+    "elx_other_neurological",
+    "elx_paralysis",
+    "elx_peptic_ulcer",
+    "elx_psychoses",
+    "elx_pulmonary_circulation",
+    "elx_pvd",
+    "elx_renal_failure",
+    "elx_rheumatoid_collagen",
+    "elx_solid_tumor_no_metastasis",
+    "elx_valvular_disease",
+    "elx_weight_loss",
+    "enrollment_duration_days",
+    "gdr_cd",
+    "geographic_region",
+    "health_exchange_flag",
+    "high_comorbidity_burden_flag",
+    "lis_dual_flag",
+    "payer_bus",
+    "payer_category",
+    "payer_product"
+  ],
+  "warnings": [],
+  "dag_structure_json": {
+    "nodes": [
+      "treatment_dupixent",
+      "persistent_at_180d_g28",
+      "age_at_index",
+      "cci_cerebrovascular",
+      "cci_chf",
+      "cci_chronic_pulmonary",
+      "cci_dementia",
+      "cci_diabetes_complication",
+      "cci_diabetes_no_complication",
+      "cci_hiv",
+      "cci_malignancy",
+      "cci_metastatic_cancer",
+      "cci_mi",
+      "cci_mild_liver",
+      "cci_paraplegia",
+      "cci_peptic_ulcer",
+      "cci_pvd",
+      "cci_renal",
+      "cci_rheumatic",
+      "cci_severe_liver",
+      "charlson_risk_band",
+      "charlson_score",
+      "comorbidity_diag_claim_count",
+      "comorbidity_diag_distinct_count",
+      "elixhauser_risk_band",
+      "elixhauser_van_walraven_score",
+      "elx_aids_hiv",
+      "elx_alcohol_abuse",
+      "elx_blood_loss_anemia",
+      "elx_cardiac_arrhythmia",
+      "elx_chf",
+      "elx_chronic_pulmonary",
+      "elx_coagulopathy",
+      "elx_deficiency_anemia",
+      "elx_depression",
+      "elx_diabetes_complicated",
+      "elx_diabetes_uncomplicated",
+      "elx_drug_abuse",
+      "elx_fluid_electrolyte",
+      "elx_hypertension_complicated",
+      "elx_hypertension_uncomplicated",
+      "elx_hypothyroidism",
+      "elx_liver_disease",
+      "elx_lymphoma",
+      "elx_metastatic_cancer",
+      "elx_obesity",
+      "elx_other_neurological",
+      "elx_paralysis",
+      "elx_peptic_ulcer",
+      "elx_psychoses",
+      "elx_pulmonary_circulation",
+      "elx_pvd",
+      "elx_renal_failure",
+      "elx_rheumatoid_collagen",
+      "elx_solid_tumor_no_metastasis",
+      "elx_valvular_disease",
+      "elx_weight_loss",
+      "enrollment_duration_days",
+      "gdr_cd",
+      "geographic_region",
+      "health_exchange_flag",
+      "high_comorbidity_burden_flag",
+      "lis_dual_flag",
+      "payer_bus",
+      "payer_category",
+      "payer_product"
+    ],
+    "edges": [
+      [
+        "age_at_index",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "age_at_index",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_cerebrovascular",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "cci_cerebrovascular",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_chf",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "cci_chf",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_chronic_pulmonary",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "cci_chronic_pulmonary",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_dementia",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "cci_dementia",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_diabetes_complication",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "cci_diabetes_complication",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_diabetes_no_complication",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "cci_diabetes_no_complication",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_hiv",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "cci_hiv",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_malignancy",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "cci_malignancy",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_metastatic_cancer",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "cci_metastatic_cancer",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_mi",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "cci_mi",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_mild_liver",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "cci_mild_liver",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_paraplegia",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "cci_paraplegia",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_peptic_ulcer",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "cci_peptic_ulcer",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_pvd",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "cci_pvd",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_renal",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "cci_renal",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_rheumatic",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "cci_rheumatic",
+        "treatment_dupixent"
+      ],
+      [
+        "cci_severe_liver",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "cci_severe_liver",
+        "treatment_dupixent"
+      ],
+      [
+        "charlson_risk_band",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "charlson_risk_band",
+        "treatment_dupixent"
+      ],
+      [
+        "charlson_score",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "charlson_score",
+        "treatment_dupixent"
+      ],
+      [
+        "comorbidity_diag_claim_count",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "comorbidity_diag_claim_count",
+        "treatment_dupixent"
+      ],
+      [
+        "comorbidity_diag_distinct_count",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "comorbidity_diag_distinct_count",
+        "treatment_dupixent"
+      ],
+      [
+        "elixhauser_risk_band",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elixhauser_risk_band",
+        "treatment_dupixent"
+      ],
+      [
+        "elixhauser_van_walraven_score",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elixhauser_van_walraven_score",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_aids_hiv",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_aids_hiv",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_alcohol_abuse",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_alcohol_abuse",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_blood_loss_anemia",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_blood_loss_anemia",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_cardiac_arrhythmia",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_cardiac_arrhythmia",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_chf",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_chf",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_chronic_pulmonary",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_chronic_pulmonary",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_coagulopathy",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_coagulopathy",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_deficiency_anemia",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_deficiency_anemia",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_depression",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_depression",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_diabetes_complicated",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_diabetes_complicated",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_diabetes_uncomplicated",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_diabetes_uncomplicated",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_drug_abuse",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_drug_abuse",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_fluid_electrolyte",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_fluid_electrolyte",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_hypertension_complicated",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_hypertension_complicated",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_hypertension_uncomplicated",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_hypertension_uncomplicated",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_hypothyroidism",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_hypothyroidism",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_liver_disease",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_liver_disease",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_lymphoma",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_lymphoma",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_metastatic_cancer",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_metastatic_cancer",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_obesity",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_obesity",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_other_neurological",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_other_neurological",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_paralysis",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_paralysis",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_peptic_ulcer",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_peptic_ulcer",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_psychoses",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_psychoses",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_pulmonary_circulation",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_pulmonary_circulation",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_pvd",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_pvd",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_renal_failure",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_renal_failure",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_rheumatoid_collagen",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_rheumatoid_collagen",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_solid_tumor_no_metastasis",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_solid_tumor_no_metastasis",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_valvular_disease",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_valvular_disease",
+        "treatment_dupixent"
+      ],
+      [
+        "elx_weight_loss",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "elx_weight_loss",
+        "treatment_dupixent"
+      ],
+      [
+        "enrollment_duration_days",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "enrollment_duration_days",
+        "treatment_dupixent"
+      ],
+      [
+        "gdr_cd",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "gdr_cd",
+        "treatment_dupixent"
+      ],
+      [
+        "geographic_region",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "geographic_region",
+        "treatment_dupixent"
+      ],
+      [
+        "health_exchange_flag",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "health_exchange_flag",
+        "treatment_dupixent"
+      ],
+      [
+        "high_comorbidity_burden_flag",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "high_comorbidity_burden_flag",
+        "treatment_dupixent"
+      ],
+      [
+        "lis_dual_flag",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "lis_dual_flag",
+        "treatment_dupixent"
+      ],
+      [
+        "payer_bus",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "payer_bus",
+        "treatment_dupixent"
+      ],
+      [
+        "payer_category",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "payer_category",
+        "treatment_dupixent"
+      ],
+      [
+        "payer_product",
+        "persistent_at_180d_g28"
+      ],
+      [
+        "payer_product",
+        "treatment_dupixent"
+      ],
+      [
+        "treatment_dupixent",
+        "persistent_at_180d_g28"
+      ]
+    ],
+    "treatment_nodes": [
+      "treatment_dupixent"
+    ],
+    "outcome_nodes": [
+      "persistent_at_180d_g28"
+    ],
+    "adjustment_sets": [
+      [
+        "age_at_index",
+        "cci_cerebrovascular",
+        "cci_chf",
+        "cci_chronic_pulmonary",
+        "cci_dementia",
+        "cci_diabetes_complication",
+        "cci_diabetes_no_complication",
+        "cci_hiv",
+        "cci_malignancy",
+        "cci_metastatic_cancer",
+        "cci_mi",
+        "cci_mild_liver",
+        "cci_paraplegia",
+        "cci_peptic_ulcer",
+        "cci_pvd",
+        "cci_renal",
+        "cci_rheumatic",
+        "cci_severe_liver",
+        "charlson_risk_band",
+        "charlson_score",
+        "comorbidity_diag_claim_count",
+        "comorbidity_diag_distinct_count",
+        "elixhauser_risk_band",
+        "elixhauser_van_walraven_score",
+        "elx_aids_hiv",
+        "elx_alcohol_abuse",
+        "elx_blood_loss_anemia",
+        "elx_cardiac_arrhythmia",
+        "elx_chf",
+        "elx_chronic_pulmonary",
+        "elx_coagulopathy",
+        "elx_deficiency_anemia",
+        "elx_depression",
+        "elx_diabetes_complicated",
+        "elx_diabetes_uncomplicated",
+        "elx_drug_abuse",
+        "elx_fluid_electrolyte",
+        "elx_hypertension_complicated",
+        "elx_hypertension_uncomplicated",
+        "elx_hypothyroidism",
+        "elx_liver_disease",
+        "elx_lymphoma",
+        "elx_metastatic_cancer",
+        "elx_obesity",
+        "elx_other_neurological",
+        "elx_paralysis",
+        "elx_peptic_ulcer",
+        "elx_psychoses",
+        "elx_pulmonary_circulation",
+        "elx_pvd",
+        "elx_renal_failure",
+        "elx_rheumatoid_collagen",
+        "elx_solid_tumor_no_metastasis",
+        "elx_valvular_disease",
+        "elx_weight_loss",
+        "enrollment_duration_days",
+        "gdr_cd",
+        "geographic_region",
+        "health_exchange_flag",
+        "high_comorbidity_burden_flag",
+        "lis_dual_flag",
+        "payer_bus",
+        "payer_category",
+        "payer_product"
+      ]
+    ],
+    "latent_nodes": [],
+    "edge_provenance": [
+      {
+        "from_node": "age_at_index",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "age_at_index"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "age_at_index": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "age_at_index",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "age_at_index"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "age_at_index": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_cerebrovascular",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "cci_cerebrovascular"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_cerebrovascular": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_cerebrovascular",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "cci_cerebrovascular"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_cerebrovascular": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_chf",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "cci_chf"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_chf": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_chf",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "cci_chf"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_chf": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_chronic_pulmonary",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "cci_chronic_pulmonary"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_chronic_pulmonary": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_chronic_pulmonary",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "cci_chronic_pulmonary"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_chronic_pulmonary": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_dementia",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "cci_dementia"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_dementia": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_dementia",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "cci_dementia"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_dementia": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_diabetes_complication",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "cci_diabetes_complication"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_diabetes_complication": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_diabetes_complication",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "cci_diabetes_complication"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_diabetes_complication": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_diabetes_no_complication",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "cci_diabetes_no_complication"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_diabetes_no_complication": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_diabetes_no_complication",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "cci_diabetes_no_complication"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_diabetes_no_complication": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_hiv",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "cci_hiv"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_hiv": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_hiv",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "cci_hiv"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_hiv": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_malignancy",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "cci_malignancy"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_malignancy": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_malignancy",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "cci_malignancy"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_malignancy": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_metastatic_cancer",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "cci_metastatic_cancer"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_metastatic_cancer": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_metastatic_cancer",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "cci_metastatic_cancer"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_metastatic_cancer": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_mi",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "cci_mi"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_mi": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_mi",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "cci_mi"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_mi": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_mild_liver",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "cci_mild_liver"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_mild_liver": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_mild_liver",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "cci_mild_liver"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_mild_liver": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_paraplegia",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "cci_paraplegia"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_paraplegia": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_paraplegia",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "cci_paraplegia"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_paraplegia": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_peptic_ulcer",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "cci_peptic_ulcer"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_peptic_ulcer": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_peptic_ulcer",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "cci_peptic_ulcer"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_peptic_ulcer": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_pvd",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "cci_pvd"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_pvd": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_pvd",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "cci_pvd"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_pvd": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_renal",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "cci_renal"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_renal": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_renal",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "cci_renal"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_renal": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_rheumatic",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "cci_rheumatic"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_rheumatic": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_rheumatic",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "cci_rheumatic"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_rheumatic": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_severe_liver",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "cci_severe_liver"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_severe_liver": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "cci_severe_liver",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "cci_severe_liver"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "cci_severe_liver": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "charlson_risk_band",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "charlson_risk_band"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "charlson_risk_band": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "charlson_risk_band",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "charlson_risk_band"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "charlson_risk_band": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "charlson_score",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "charlson_score"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "charlson_score": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "charlson_score",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "charlson_score"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "charlson_score": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "comorbidity_diag_claim_count",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "comorbidity_diag_claim_count"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "comorbidity_diag_claim_count": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "comorbidity_diag_claim_count",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "comorbidity_diag_claim_count"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "comorbidity_diag_claim_count": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "comorbidity_diag_distinct_count",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "comorbidity_diag_distinct_count"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "comorbidity_diag_distinct_count": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "comorbidity_diag_distinct_count",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "comorbidity_diag_distinct_count"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "comorbidity_diag_distinct_count": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elixhauser_risk_band",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elixhauser_risk_band"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elixhauser_risk_band": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elixhauser_risk_band",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elixhauser_risk_band"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elixhauser_risk_band": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elixhauser_van_walraven_score",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elixhauser_van_walraven_score"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elixhauser_van_walraven_score": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elixhauser_van_walraven_score",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elixhauser_van_walraven_score"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elixhauser_van_walraven_score": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_aids_hiv",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_aids_hiv"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_aids_hiv": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_aids_hiv",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_aids_hiv"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_aids_hiv": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_alcohol_abuse",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_alcohol_abuse"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_alcohol_abuse": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_alcohol_abuse",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_alcohol_abuse"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_alcohol_abuse": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_blood_loss_anemia",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_blood_loss_anemia"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_blood_loss_anemia": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_blood_loss_anemia",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_blood_loss_anemia"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_blood_loss_anemia": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_cardiac_arrhythmia",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_cardiac_arrhythmia"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_cardiac_arrhythmia": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_cardiac_arrhythmia",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_cardiac_arrhythmia"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_cardiac_arrhythmia": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_chf",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_chf"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_chf": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_chf",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_chf"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_chf": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_chronic_pulmonary",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_chronic_pulmonary"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_chronic_pulmonary": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_chronic_pulmonary",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_chronic_pulmonary"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_chronic_pulmonary": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_coagulopathy",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_coagulopathy"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_coagulopathy": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_coagulopathy",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_coagulopathy"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_coagulopathy": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_deficiency_anemia",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_deficiency_anemia"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_deficiency_anemia": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_deficiency_anemia",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_deficiency_anemia"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_deficiency_anemia": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_depression",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_depression"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_depression": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_depression",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_depression"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_depression": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_diabetes_complicated",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_diabetes_complicated"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_diabetes_complicated": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_diabetes_complicated",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_diabetes_complicated"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_diabetes_complicated": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_diabetes_uncomplicated",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_diabetes_uncomplicated"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_diabetes_uncomplicated": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_diabetes_uncomplicated",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_diabetes_uncomplicated"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_diabetes_uncomplicated": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_drug_abuse",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_drug_abuse"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_drug_abuse": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_drug_abuse",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_drug_abuse"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_drug_abuse": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_fluid_electrolyte",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_fluid_electrolyte"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_fluid_electrolyte": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_fluid_electrolyte",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_fluid_electrolyte"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_fluid_electrolyte": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_hypertension_complicated",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_hypertension_complicated"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_hypertension_complicated": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_hypertension_complicated",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_hypertension_complicated"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_hypertension_complicated": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_hypertension_uncomplicated",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_hypertension_uncomplicated"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_hypertension_uncomplicated": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_hypertension_uncomplicated",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_hypertension_uncomplicated"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_hypertension_uncomplicated": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_hypothyroidism",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_hypothyroidism"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_hypothyroidism": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_hypothyroidism",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_hypothyroidism"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_hypothyroidism": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_liver_disease",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_liver_disease"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_liver_disease": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_liver_disease",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_liver_disease"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_liver_disease": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_lymphoma",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_lymphoma"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_lymphoma": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_lymphoma",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_lymphoma"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_lymphoma": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_metastatic_cancer",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_metastatic_cancer"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_metastatic_cancer": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_metastatic_cancer",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_metastatic_cancer"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_metastatic_cancer": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_obesity",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_obesity"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_obesity": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_obesity",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_obesity"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_obesity": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_other_neurological",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_other_neurological"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_other_neurological": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_other_neurological",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_other_neurological"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_other_neurological": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_paralysis",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_paralysis"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_paralysis": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_paralysis",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_paralysis"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_paralysis": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_peptic_ulcer",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_peptic_ulcer"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_peptic_ulcer": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_peptic_ulcer",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_peptic_ulcer"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_peptic_ulcer": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_psychoses",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_psychoses"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_psychoses": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_psychoses",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_psychoses"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_psychoses": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_pulmonary_circulation",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_pulmonary_circulation"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_pulmonary_circulation": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_pulmonary_circulation",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_pulmonary_circulation"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_pulmonary_circulation": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_pvd",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_pvd"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_pvd": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_pvd",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_pvd"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_pvd": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_renal_failure",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_renal_failure"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_renal_failure": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_renal_failure",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_renal_failure"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_renal_failure": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_rheumatoid_collagen",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_rheumatoid_collagen"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_rheumatoid_collagen": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_rheumatoid_collagen",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_rheumatoid_collagen"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_rheumatoid_collagen": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_solid_tumor_no_metastasis",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_solid_tumor_no_metastasis"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_solid_tumor_no_metastasis": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_solid_tumor_no_metastasis",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_solid_tumor_no_metastasis"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_solid_tumor_no_metastasis": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_valvular_disease",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_valvular_disease"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_valvular_disease": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_valvular_disease",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_valvular_disease"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_valvular_disease": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_weight_loss",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "elx_weight_loss"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_weight_loss": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "elx_weight_loss",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "elx_weight_loss"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "elx_weight_loss": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "enrollment_duration_days",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "enrollment_duration_days"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "enrollment_duration_days": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "enrollment_duration_days",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "enrollment_duration_days"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "enrollment_duration_days": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "gdr_cd",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "gdr_cd"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "gdr_cd": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "gdr_cd",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "gdr_cd"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "gdr_cd": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "geographic_region",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "geographic_region"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "geographic_region": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "geographic_region",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "geographic_region"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "geographic_region": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "health_exchange_flag",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "health_exchange_flag"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "health_exchange_flag": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "health_exchange_flag",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "health_exchange_flag"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "health_exchange_flag": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "high_comorbidity_burden_flag",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "high_comorbidity_burden_flag"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "high_comorbidity_burden_flag": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "high_comorbidity_burden_flag",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "high_comorbidity_burden_flag"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "high_comorbidity_burden_flag": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "lis_dual_flag",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "lis_dual_flag"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "lis_dual_flag": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "lis_dual_flag",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "lis_dual_flag"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "lis_dual_flag": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "payer_bus",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "payer_bus"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "payer_bus": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "payer_bus",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "payer_bus"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "payer_bus": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "payer_category",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "payer_category"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "payer_category": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "payer_category",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "payer_category"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "payer_category": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "payer_product",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "payer_product"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "payer_product": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "payer_product",
+        "to_node": "treatment_dupixent",
+        "authored_by": [
+          "payer_product"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "payer_product": "unsupported"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "treatment_dupixent",
+        "to_node": "persistent_at_180d_g28",
+        "authored_by": [
+          "age_at_index",
+          "gdr_cd",
+          "payer_category",
+          "payer_product",
+          "payer_bus",
+          "health_exchange_flag",
+          "lis_dual_flag",
+          "geographic_region",
+          "enrollment_duration_days",
+          "charlson_score",
+          "charlson_risk_band",
+          "elixhauser_van_walraven_score",
+          "elixhauser_risk_band",
+          "comorbidity_diag_distinct_count",
+          "comorbidity_diag_claim_count",
+          "high_comorbidity_burden_flag",
+          "cci_mi",
+          "cci_chf",
+          "cci_pvd",
+          "cci_cerebrovascular",
+          "cci_dementia",
+          "cci_chronic_pulmonary",
+          "cci_rheumatic",
+          "cci_peptic_ulcer",
+          "cci_mild_liver",
+          "cci_diabetes_no_complication",
+          "cci_diabetes_complication",
+          "cci_paraplegia",
+          "cci_renal",
+          "cci_malignancy",
+          "cci_severe_liver",
+          "cci_metastatic_cancer",
+          "cci_hiv",
+          "elx_chf",
+          "elx_cardiac_arrhythmia",
+          "elx_valvular_disease",
+          "elx_pulmonary_circulation",
+          "elx_pvd",
+          "elx_hypertension_uncomplicated",
+          "elx_hypertension_complicated",
+          "elx_paralysis",
+          "elx_other_neurological",
+          "elx_chronic_pulmonary",
+          "elx_diabetes_uncomplicated",
+          "elx_diabetes_complicated",
+          "elx_hypothyroidism",
+          "elx_renal_failure",
+          "elx_liver_disease",
+          "elx_peptic_ulcer",
+          "elx_aids_hiv",
+          "elx_lymphoma",
+          "elx_metastatic_cancer",
+          "elx_solid_tumor_no_metastasis",
+          "elx_rheumatoid_collagen",
+          "elx_coagulopathy",
+          "elx_obesity",
+          "elx_weight_loss",
+          "elx_fluid_electrolyte",
+          "elx_blood_loss_anemia",
+          "elx_deficiency_anemia",
+          "elx_alcohol_abuse",
+          "elx_drug_abuse",
+          "elx_psychoses",
+          "elx_depression"
+        ],
+        "grade": "estimand",
+        "grades_by_feature": {
+          "age_at_index": "estimand",
+          "gdr_cd": "estimand",
+          "payer_category": "estimand",
+          "payer_product": "estimand",
+          "payer_bus": "estimand",
+          "health_exchange_flag": "estimand",
+          "lis_dual_flag": "estimand",
+          "geographic_region": "estimand",
+          "enrollment_duration_days": "estimand",
+          "charlson_score": "estimand",
+          "charlson_risk_band": "estimand",
+          "elixhauser_van_walraven_score": "estimand",
+          "elixhauser_risk_band": "estimand",
+          "comorbidity_diag_distinct_count": "estimand",
+          "comorbidity_diag_claim_count": "estimand",
+          "high_comorbidity_burden_flag": "estimand",
+          "cci_mi": "estimand",
+          "cci_chf": "estimand",
+          "cci_pvd": "estimand",
+          "cci_cerebrovascular": "estimand",
+          "cci_dementia": "estimand",
+          "cci_chronic_pulmonary": "estimand",
+          "cci_rheumatic": "estimand",
+          "cci_peptic_ulcer": "estimand",
+          "cci_mild_liver": "estimand",
+          "cci_diabetes_no_complication": "estimand",
+          "cci_diabetes_complication": "estimand",
+          "cci_paraplegia": "estimand",
+          "cci_renal": "estimand",
+          "cci_malignancy": "estimand",
+          "cci_severe_liver": "estimand",
+          "cci_metastatic_cancer": "estimand",
+          "cci_hiv": "estimand",
+          "elx_chf": "estimand",
+          "elx_cardiac_arrhythmia": "estimand",
+          "elx_valvular_disease": "estimand",
+          "elx_pulmonary_circulation": "estimand",
+          "elx_pvd": "estimand",
+          "elx_hypertension_uncomplicated": "estimand",
+          "elx_hypertension_complicated": "estimand",
+          "elx_paralysis": "estimand",
+          "elx_other_neurological": "estimand",
+          "elx_chronic_pulmonary": "estimand",
+          "elx_diabetes_uncomplicated": "estimand",
+          "elx_diabetes_complicated": "estimand",
+          "elx_hypothyroidism": "estimand",
+          "elx_renal_failure": "estimand",
+          "elx_liver_disease": "estimand",
+          "elx_peptic_ulcer": "estimand",
+          "elx_aids_hiv": "estimand",
+          "elx_lymphoma": "estimand",
+          "elx_metastatic_cancer": "estimand",
+          "elx_solid_tumor_no_metastasis": "estimand",
+          "elx_rheumatoid_collagen": "estimand",
+          "elx_coagulopathy": "estimand",
+          "elx_obesity": "estimand",
+          "elx_weight_loss": "estimand",
+          "elx_fluid_electrolyte": "estimand",
+          "elx_blood_loss_anemia": "estimand",
+          "elx_deficiency_anemia": "estimand",
+          "elx_alcohol_abuse": "estimand",
+          "elx_drug_abuse": "estimand",
+          "elx_psychoses": "estimand",
+          "elx_depression": "estimand"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      }
+    ],
+    "adjustment_valid": true,
+    "is_dag": true
+  },
+  "features": [
+    {
+      "feature": "age_at_index",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): age_at_index->T, age_at_index->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "age_at_index->T": "unsupported",
+        "age_at_index->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "cci_cerebrovascular",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_cerebrovascular->T, cci_cerebrovascular->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "cci_cerebrovascular->T": "unsupported",
+        "cci_cerebrovascular->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "cci_chf",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_chf->T, cci_chf->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "cci_chf->T": "unsupported",
+        "cci_chf->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "cci_chronic_pulmonary",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_chronic_pulmonary->T, cci_chronic_pulmonary->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "cci_chronic_pulmonary->T": "unsupported",
+        "cci_chronic_pulmonary->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "cci_dementia",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_dementia->T, cci_dementia->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "cci_dementia->T": "unsupported",
+        "cci_dementia->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "cci_diabetes_complication",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_diabetes_complication->T, cci_diabetes_complication->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "cci_diabetes_complication->T": "unsupported",
+        "cci_diabetes_complication->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "cci_diabetes_no_complication",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_diabetes_no_complication->T, cci_diabetes_no_complication->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "cci_diabetes_no_complication->T": "unsupported",
+        "cci_diabetes_no_complication->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "cci_hiv",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_hiv->T, cci_hiv->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "cci_hiv->T": "unsupported",
+        "cci_hiv->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "cci_malignancy",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_malignancy->T, cci_malignancy->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "cci_malignancy->T": "unsupported",
+        "cci_malignancy->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "cci_metastatic_cancer",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_metastatic_cancer->T, cci_metastatic_cancer->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "cci_metastatic_cancer->T": "unsupported",
+        "cci_metastatic_cancer->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "cci_mi",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_mi->T, cci_mi->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "cci_mi->T": "unsupported",
+        "cci_mi->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "cci_mild_liver",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_mild_liver->T, cci_mild_liver->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "cci_mild_liver->T": "unsupported",
+        "cci_mild_liver->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "cci_paraplegia",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_paraplegia->T, cci_paraplegia->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "cci_paraplegia->T": "unsupported",
+        "cci_paraplegia->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "cci_peptic_ulcer",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_peptic_ulcer->T, cci_peptic_ulcer->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "cci_peptic_ulcer->T": "unsupported",
+        "cci_peptic_ulcer->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "cci_pvd",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_pvd->T, cci_pvd->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "cci_pvd->T": "unsupported",
+        "cci_pvd->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "cci_renal",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_renal->T, cci_renal->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "cci_renal->T": "unsupported",
+        "cci_renal->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "cci_rheumatic",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_rheumatic->T, cci_rheumatic->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "cci_rheumatic->T": "unsupported",
+        "cci_rheumatic->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "cci_severe_liver",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): cci_severe_liver->T, cci_severe_liver->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "cci_severe_liver->T": "unsupported",
+        "cci_severe_liver->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "charlson_risk_band",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): charlson_risk_band->T, charlson_risk_band->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "charlson_risk_band->T": "unsupported",
+        "charlson_risk_band->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "charlson_score",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): charlson_score->T, charlson_score->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "charlson_score->T": "unsupported",
+        "charlson_score->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "comorbidity_diag_claim_count",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): comorbidity_diag_claim_count->T, comorbidity_diag_claim_count->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "comorbidity_diag_claim_count->T": "unsupported",
+        "comorbidity_diag_claim_count->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "comorbidity_diag_distinct_count",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): comorbidity_diag_distinct_count->T, comorbidity_diag_distinct_count->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "comorbidity_diag_distinct_count->T": "unsupported",
+        "comorbidity_diag_distinct_count->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elixhauser_risk_band",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elixhauser_risk_band->T, elixhauser_risk_band->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elixhauser_risk_band->T": "unsupported",
+        "elixhauser_risk_band->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elixhauser_van_walraven_score",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elixhauser_van_walraven_score->T, elixhauser_van_walraven_score->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elixhauser_van_walraven_score->T": "unsupported",
+        "elixhauser_van_walraven_score->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_aids_hiv",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_aids_hiv->T, elx_aids_hiv->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_aids_hiv->T": "unsupported",
+        "elx_aids_hiv->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_alcohol_abuse",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_alcohol_abuse->T, elx_alcohol_abuse->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_alcohol_abuse->T": "unsupported",
+        "elx_alcohol_abuse->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_blood_loss_anemia",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_blood_loss_anemia->T, elx_blood_loss_anemia->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_blood_loss_anemia->T": "unsupported",
+        "elx_blood_loss_anemia->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_cardiac_arrhythmia",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_cardiac_arrhythmia->T, elx_cardiac_arrhythmia->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_cardiac_arrhythmia->T": "unsupported",
+        "elx_cardiac_arrhythmia->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_chf",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_chf->T, elx_chf->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_chf->T": "unsupported",
+        "elx_chf->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_chronic_pulmonary",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_chronic_pulmonary->T, elx_chronic_pulmonary->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_chronic_pulmonary->T": "unsupported",
+        "elx_chronic_pulmonary->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_coagulopathy",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_coagulopathy->T, elx_coagulopathy->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_coagulopathy->T": "unsupported",
+        "elx_coagulopathy->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_deficiency_anemia",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_deficiency_anemia->T, elx_deficiency_anemia->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_deficiency_anemia->T": "unsupported",
+        "elx_deficiency_anemia->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_depression",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_depression->T, elx_depression->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_depression->T": "unsupported",
+        "elx_depression->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_diabetes_complicated",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_diabetes_complicated->T, elx_diabetes_complicated->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_diabetes_complicated->T": "unsupported",
+        "elx_diabetes_complicated->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_diabetes_uncomplicated",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_diabetes_uncomplicated->T, elx_diabetes_uncomplicated->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_diabetes_uncomplicated->T": "unsupported",
+        "elx_diabetes_uncomplicated->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_drug_abuse",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_drug_abuse->T, elx_drug_abuse->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_drug_abuse->T": "unsupported",
+        "elx_drug_abuse->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_fluid_electrolyte",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_fluid_electrolyte->T, elx_fluid_electrolyte->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_fluid_electrolyte->T": "unsupported",
+        "elx_fluid_electrolyte->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_hypertension_complicated",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_hypertension_complicated->T, elx_hypertension_complicated->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_hypertension_complicated->T": "unsupported",
+        "elx_hypertension_complicated->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_hypertension_uncomplicated",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_hypertension_uncomplicated->T, elx_hypertension_uncomplicated->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_hypertension_uncomplicated->T": "unsupported",
+        "elx_hypertension_uncomplicated->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_hypothyroidism",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_hypothyroidism->T, elx_hypothyroidism->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_hypothyroidism->T": "unsupported",
+        "elx_hypothyroidism->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_liver_disease",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_liver_disease->T, elx_liver_disease->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_liver_disease->T": "unsupported",
+        "elx_liver_disease->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_lymphoma",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_lymphoma->T, elx_lymphoma->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_lymphoma->T": "unsupported",
+        "elx_lymphoma->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_metastatic_cancer",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_metastatic_cancer->T, elx_metastatic_cancer->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_metastatic_cancer->T": "unsupported",
+        "elx_metastatic_cancer->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_obesity",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_obesity->T, elx_obesity->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_obesity->T": "unsupported",
+        "elx_obesity->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_other_neurological",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_other_neurological->T, elx_other_neurological->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_other_neurological->T": "unsupported",
+        "elx_other_neurological->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_paralysis",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_paralysis->T, elx_paralysis->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_paralysis->T": "unsupported",
+        "elx_paralysis->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_peptic_ulcer",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_peptic_ulcer->T, elx_peptic_ulcer->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_peptic_ulcer->T": "unsupported",
+        "elx_peptic_ulcer->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_psychoses",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_psychoses->T, elx_psychoses->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_psychoses->T": "unsupported",
+        "elx_psychoses->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_pulmonary_circulation",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_pulmonary_circulation->T, elx_pulmonary_circulation->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_pulmonary_circulation->T": "unsupported",
+        "elx_pulmonary_circulation->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_pvd",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_pvd->T, elx_pvd->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_pvd->T": "unsupported",
+        "elx_pvd->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_renal_failure",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_renal_failure->T, elx_renal_failure->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_renal_failure->T": "unsupported",
+        "elx_renal_failure->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_rheumatoid_collagen",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_rheumatoid_collagen->T, elx_rheumatoid_collagen->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_rheumatoid_collagen->T": "unsupported",
+        "elx_rheumatoid_collagen->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_solid_tumor_no_metastasis",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_solid_tumor_no_metastasis->T, elx_solid_tumor_no_metastasis->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_solid_tumor_no_metastasis->T": "unsupported",
+        "elx_solid_tumor_no_metastasis->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_valvular_disease",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_valvular_disease->T, elx_valvular_disease->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_valvular_disease->T": "unsupported",
+        "elx_valvular_disease->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "elx_weight_loss",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): elx_weight_loss->T, elx_weight_loss->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "elx_weight_loss->T": "unsupported",
+        "elx_weight_loss->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "enrollment_duration_days",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): enrollment_duration_days->T, enrollment_duration_days->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "enrollment_duration_days->T": "unsupported",
+        "enrollment_duration_days->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "gdr_cd",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): gdr_cd->T, gdr_cd->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "gdr_cd->T": "unsupported",
+        "gdr_cd->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "geographic_region",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): geographic_region->T, geographic_region->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "geographic_region->T": "unsupported",
+        "geographic_region->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "health_exchange_flag",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): health_exchange_flag->T, health_exchange_flag->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "health_exchange_flag->T": "unsupported",
+        "health_exchange_flag->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "high_comorbidity_burden_flag",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): high_comorbidity_burden_flag->T, high_comorbidity_burden_flag->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "high_comorbidity_burden_flag->T": "unsupported",
+        "high_comorbidity_burden_flag->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "lis_dual_flag",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): lis_dual_flag->T, lis_dual_flag->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "lis_dual_flag->T": "unsupported",
+        "lis_dual_flag->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "payer_bus",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): payer_bus->T, payer_bus->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "payer_bus->T": "unsupported",
+        "payer_bus->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "payer_category",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): payer_category->T, payer_category->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "payer_category->T": "unsupported",
+        "payer_category->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    },
+    {
+      "feature": "payer_product",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): payer_product->T, payer_product->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "payer_product->T": "unsupported",
+        "payer_product->Y": "unsupported",
+        "T->Y": "estimand"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "dummy",
+      "n_edges": 3
+    }
+  ]
+}

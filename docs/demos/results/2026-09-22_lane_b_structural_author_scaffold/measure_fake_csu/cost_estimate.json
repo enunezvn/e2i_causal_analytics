@@ -1,0 +1,14 @@
+{
+  "n_briefs": 31,
+  "prompt_chars_total": 723326,
+  "prompt_chars_per_brief_mean": 23333.09677419355,
+  "prompt_tokens_estimate": 180831,
+  "output_tokens_estimate": 27900,
+  "chars_per_token_assumed": 4.0,
+  "output_tokens_per_brief_assumed": 900,
+  "usd_per_mtok_in_assumed": 2.0,
+  "usd_per_mtok_out_assumed": 8.0,
+  "usd_estimate": 0.584862,
+  "model": "openai/gpt-5.6-terra",
+  "note": "token counts measured from the real ChatAdapter prompt at 4 chars/token; rates are ASSUMED unless passed explicitly"
+}

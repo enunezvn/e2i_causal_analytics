@@ -1,0 +1,140 @@
+{
+  "meta": {
+    "measured_at": "2026-09-22T16:11:36.648779+00:00",
+    "lm": "fake",
+    "fake_source": "replay",
+    "resolver": "offline",
+    "cohort": "CSU_remibrutinib",
+    "golden": "/home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-b-structural-author-scaffold/tests/fixtures/causal_role_golden_set.json",
+    "n_briefs": 31
+  },
+  "n": 31,
+  "n_scored": 31,
+  "n_review": 0,
+  "exact_role_agreement": 28,
+  "exact_role_accuracy": 0.9032258064516129,
+  "leak_decision_agreement": 31,
+  "leak_decision_accuracy": 1.0,
+  "missed_leaks": [],
+  "missed_leak_rate": 0.0,
+  "conservative_errors": [],
+  "review": [],
+  "per_role": [
+    {
+      "role": "ancestor",
+      "support": 5,
+      "predicted": 5,
+      "tp": 5,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    {
+      "role": "collider",
+      "support": 5,
+      "predicted": 8,
+      "tp": 5,
+      "precision": 0.625,
+      "recall": 1.0,
+      "f1": 0.7692307692307693
+    },
+    {
+      "role": "confounder",
+      "support": 6,
+      "predicted": 6,
+      "tp": 6,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    {
+      "role": "descendant",
+      "support": 4,
+      "predicted": 4,
+      "tp": 4,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    {
+      "role": "instrument",
+      "support": 6,
+      "predicted": 6,
+      "tp": 6,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0
+    },
+    {
+      "role": "mediator",
+      "support": 5,
+      "predicted": 2,
+      "tp": 2,
+      "precision": 1.0,
+      "recall": 0.4,
+      "f1": 0.5714285714285715
+    }
+  ],
+  "per_cohort": {
+    "CSU_remibrutinib": {
+      "n": 31,
+      "n_scored": 31,
+      "n_review": 0,
+      "exact_role_agreement": 28,
+      "missed_leaks": 0
+    }
+  },
+  "confusion": {
+    "ancestor": {
+      "ancestor": 5,
+      "collider": 0,
+      "confounder": 0,
+      "descendant": 0,
+      "instrument": 0,
+      "mediator": 0
+    },
+    "collider": {
+      "ancestor": 0,
+      "collider": 5,
+      "confounder": 0,
+      "descendant": 0,
+      "instrument": 0,
+      "mediator": 0
+    },
+    "confounder": {
+      "ancestor": 0,
+      "collider": 0,
+      "confounder": 6,
+      "descendant": 0,
+      "instrument": 0,
+      "mediator": 0
+    },
+    "descendant": {
+      "ancestor": 0,
+      "collider": 0,
+      "confounder": 0,
+      "descendant": 4,
+      "instrument": 0,
+      "mediator": 0
+    },
+    "instrument": {
+      "ancestor": 0,
+      "collider": 0,
+      "confounder": 0,
+      "descendant": 0,
+      "instrument": 6,
+      "mediator": 0
+    },
+    "mediator": {
+      "ancestor": 0,
+      "collider": 3,
+      "confounder": 0,
+      "descendant": 0,
+      "instrument": 0,
+      "mediator": 2
+    }
+  },
+  "gate_passed": true,
+  "gate": "missed_leaks == 0",
+  "notes": []
+}

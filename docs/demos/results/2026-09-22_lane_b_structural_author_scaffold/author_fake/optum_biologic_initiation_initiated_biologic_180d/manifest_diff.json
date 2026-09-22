@@ -1,0 +1,1655 @@
+{
+  "manifest": "optum",
+  "n_features": 110,
+  "n_compared": 110,
+  "edge_exact_agreement": 93,
+  "role_agreement": 93,
+  "disagreements": [
+    "zip5",
+    "zip3",
+    "zip_code",
+    "geographic_region",
+    "insurance_product",
+    "plan_type",
+    "payer_category",
+    "urban_rural_code",
+    "office_visits_allergist",
+    "office_visits_dermatology",
+    "specialist_concentration",
+    "primary_specialist_type",
+    "saw_allergist_flag",
+    "saw_dermatologist_flag",
+    "index_date",
+    "lookback_start_date",
+    "specialist_visit_interaction"
+  ],
+  "rows": [
+    {
+      "feature": "age_at_index",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "age_group",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "gender",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "zip5",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "zip5->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "zip5->T": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "zip5->Y": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        }
+      },
+      "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
+      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+    },
+    {
+      "feature": "zip3",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "zip3->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "zip3->T": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "zip3->Y": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        }
+      },
+      "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
+      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+    },
+    {
+      "feature": "zip_code",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "zip_code->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "zip_code->T": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "zip_code->Y": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        }
+      },
+      "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
+      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+    },
+    {
+      "feature": "geographic_region",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "geographic_region->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "geographic_region->T": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "geographic_region->Y": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        }
+      },
+      "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
+      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+    },
+    {
+      "feature": "insurance_product",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "insurance_product->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "insurance_product->T": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "insurance_product->Y": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        }
+      },
+      "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
+      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+    },
+    {
+      "feature": "plan_type",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "plan_type->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "plan_type->T": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "plan_type->Y": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        }
+      },
+      "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
+      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+    },
+    {
+      "feature": "payer_category",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "payer_category->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "payer_category->T": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "payer_category->Y": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        }
+      },
+      "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
+      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+    },
+    {
+      "feature": "urban_rural_code",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "urban_rural_code->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "urban_rural_code->T": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "urban_rural_code->Y": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        }
+      },
+      "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
+      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+    },
+    {
+      "feature": "primary_diagnosis_code",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "dx_l50_1_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "dx_l50_8_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "dx_l50_9_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "dx_total_csu",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "dx_angioedema_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "months_since_first_dx",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "csu_chronicity",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "has_atopic_dermatitis",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "atopic_dermatitis_claim_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "has_asthma",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "asthma_claim_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "has_allergic_rhinitis",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "allergic_rhinitis_claim_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "has_anxiety",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "anxiety_claim_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "has_depression",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "depression_claim_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "has_thyroid_autoimmune",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "thyroid_autoimmune_claim_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "has_nsaid_hypersensitivity",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "nsaid_hypersensitivity_claim_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "has_angioedema",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "angioedema_claim_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "atopy_score",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "mental_health_flag",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "elixhauser_score",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "charlson_score",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "office_visits_total",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "office_visits_allergist",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "office_visits_allergist->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "office_visits_allergist->T": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "office_visits_allergist->Y": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        }
+      },
+      "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
+      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+    },
+    {
+      "feature": "office_visits_dermatology",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "office_visits_dermatology->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "office_visits_dermatology->T": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "office_visits_dermatology->Y": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        }
+      },
+      "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
+      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+    },
+    {
+      "feature": "office_visits_pcp",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "ed_visits_total",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "ed_visits_urticaria_angio",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "hospitalizations_total",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "unique_providers",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "h1_1g_ever_filled",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "h1_1g_fill_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "h1_1g_days_supply_total",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "h1_1g_days_since_last_fill",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "h1_2g_ever_filled",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "h1_2g_fill_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "h1_2g_days_supply_total",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "h1_2g_days_since_last_fill",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "h2_ever_filled",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "h2_fill_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "h2_days_supply_total",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "h2_days_since_last_fill",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "ltra_ever_filled",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "ltra_fill_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "ltra_days_supply_total",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "ltra_days_since_last_fill",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "sys_steroid_ever_filled",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "sys_steroid_fill_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "sys_steroid_days_supply_total",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "sys_steroid_days_since_last_fill",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "top_steroid_ever_filled",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "top_steroid_fill_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "top_steroid_days_supply_total",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "top_steroid_days_since_last_fill",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "immunosupp_ever_filled",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "immunosupp_fill_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "immunosupp_days_supply_total",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "immunosupp_days_since_last_fill",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "ige_total_tested",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "ige_total_result_last",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "ige_total_abnormal_flag",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "eosinophil_tested",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "eosinophil_result_last",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "eosinophil_abnormal_flag",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "crp_tested",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "crp_result_last",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "crp_abnormal_flag",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "tpo_ab_tested",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "tpo_ab_result_last",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "tpo_ab_abnormal_flag",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "free_t4_tested",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "free_t4_result_last",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "free_t4_abnormal_flag",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "tsh_tested",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "tsh_result_last",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "tsh_abnormal_flag",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "ana_tested",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "ana_result_last",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "ana_abnormal_flag",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "cbc_tested",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "cbc_result_last",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "cbc_abnormal_flag",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "specialist_concentration",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "specialist_concentration->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "specialist_concentration->T": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "specialist_concentration->Y": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        }
+      },
+      "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
+      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+    },
+    {
+      "feature": "primary_specialist_type",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "primary_specialist_type->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "primary_specialist_type->T": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "primary_specialist_type->Y": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        }
+      },
+      "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
+      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+    },
+    {
+      "feature": "saw_allergist_flag",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "saw_allergist_flag->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "saw_allergist_flag->T": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "saw_allergist_flag->Y": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        }
+      },
+      "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
+      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+    },
+    {
+      "feature": "saw_dermatologist_flag",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "saw_dermatologist_flag->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "saw_dermatologist_flag->T": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "saw_dermatologist_flag->Y": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        }
+      },
+      "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
+      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+    },
+    {
+      "feature": "index_date",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "index_date->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "index_date->T": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "index_date->Y": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        }
+      },
+      "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
+      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+    },
+    {
+      "feature": "lookback_start_date",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "lookback_start_date->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "lookback_start_date->T": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "lookback_start_date->Y": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        }
+      },
+      "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
+      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+    },
+    {
+      "feature": "comorbidity_load_total",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "csu_dx_intensity",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "polypharmacy_breadth",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "lab_workup_completeness",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "specialist_visit_interaction",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "specialist_visit_interaction->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "specialist_visit_interaction->T": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "specialist_visit_interaction->Y": {
+          "grade": "unsupported",
+          "rationale": ""
+        },
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        }
+      },
+      "authored_reasoning": "fake LM (dry run): stand-in confounder fragment, not an authored claim",
+      "manifest_rationale": "pattern attestation (instrument set vs confounder default) in src/data/manifests/optum_feature_manifest.py::_optum_attestation; literature grounding per feature in docs/layer4/optum_initiation_attestation_research.md"
+    }
+  ],
+  "note": "no threshold: the owner reads the diff and decides whether to relabel (spec \u00a73 Lane B item 1)"
+}
