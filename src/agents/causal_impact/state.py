@@ -34,7 +34,9 @@ class CausalGraph(TypedDict, total=False):
     # V4.4: Causal Discovery Integration
     discovery_enabled: bool  # Whether auto-discovery was used
     discovery_gate_decision: Literal["accept", "review", "reject", "augment"]  # Gate outcome
-    discovery_algorithms_used: List[str]  # Algorithms run (e.g., ["ges", "pc"])
+    discovery_algorithms_used: List[
+        str
+    ]  # Algorithms run (default: DEFAULT_DISCOVERY_ALGORITHM_NAMES)
     discovery_confidence: float  # Discovery ensemble confidence (0-1)
     discovery_n_edges: int  # Number of edges from discovery
     augmented_edges: List[tuple[str, str]]  # High-confidence edges added to manual DAG
@@ -368,7 +370,7 @@ class CausalImpactState(TypedDict):
     discovery_guided: NotRequired[bool]
     discovery_algorithms: NotRequired[
         List[str]
-    ]  # Algorithms to use: ["ges", "pc", "fci", "lingam"]
+    ]  # Algorithms to use (default DEFAULT_DISCOVERY_ALGORITHM_NAMES; also fci/lingam)
     discovery_ensemble_threshold: NotRequired[float]  # Min algorithm agreement (default: 0.5)
     discovery_alpha: NotRequired[float]  # Significance level for CI tests (default: 0.05)
     discovery_bootstrap_resamples: NotRequired[

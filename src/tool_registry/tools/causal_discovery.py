@@ -41,6 +41,10 @@ import numpy as np
 import pandas as pd
 from pydantic import BaseModel, Field
 
+from src.causal_engine.discovery.base import (
+    DEFAULT_DISCOVERY_ALGORITHM_NAMES,
+    DEFAULT_DISCOVERY_ALGORITHMS,
+)
 from src.tool_registry.registry import ToolParameter, ToolSchema, get_registry
 
 logger = logging.getLogger(__name__)
@@ -64,7 +68,7 @@ class DiscoverDagInput(BaseModel):
         ),
     )
     algorithms: List[str] = Field(
-        default=["ges", "pc"],
+        default_factory=lambda: list(DEFAULT_DISCOVERY_ALGORITHM_NAMES),
         description="Algorithms to use: 'ges', 'pc', 'fci', 'lingam', 'direct_lingam', 'ica_lingam'",
     )
     ensemble_threshold: float = Field(
@@ -351,8 +355,11 @@ class CausalDiscoveryTool:
                     errors.append(f"Unknown algorithm: {alg}")
 
             if not algorithms:
-                algorithms = [DiscoveryAlgorithmType.GES, DiscoveryAlgorithmType.PC]
-                errors.append("No valid algorithms specified, using defaults (GES, PC)")
+                algorithms = list(DEFAULT_DISCOVERY_ALGORITHMS)
+                errors.append(
+                    "No valid algorithms specified, using defaults "
+                    f"({', '.join(a.upper() for a in DEFAULT_DISCOVERY_ALGORITHM_NAMES)})"
+                )
 
             # Guided discovery (#1977): mirror graph_builder._run_discovery so a
             # chat-routed "learn the DAG" call gets the same oriented, corroborated
@@ -889,7 +896,7 @@ async def discover_dag(
     Args:
         data: DataFrame, dict of column name to values, or None (then the frame
             is resolved from ``**kwargs`` canonical keys).
-        algorithms: Algorithms to use (default: ["ges", "pc"])
+        algorithms: Algorithms to use (default: ``DEFAULT_DISCOVERY_ALGORITHM_NAMES``)
         ensemble_threshold: Minimum algorithm agreement (0-1)
         alpha: Significance level for CI tests
         max_k: Maximum conditioning set size
@@ -927,7 +934,7 @@ async def discover_dag(
     result = await tool.invoke(
         DiscoverDagInput(
             data=data_dict,
-            algorithms=algorithms or ["ges", "pc"],
+            algorithms=algorithms or list(DEFAULT_DISCOVERY_ALGORITHM_NAMES),
             ensemble_threshold=ensemble_threshold,
             alpha=alpha,
             max_k=max_k,
@@ -1277,7 +1284,7 @@ def register_discover_dag_tool() -> None:
                 type="List[str]",
                 description="Algorithms: 'ges', 'pc', 'fci', 'lingam'",
                 required=False,
-                default=["ges", "pc"],
+                default=list(DEFAULT_DISCOVERY_ALGORITHM_NAMES),
             ),
             ToolParameter(
                 name="ensemble_threshold",

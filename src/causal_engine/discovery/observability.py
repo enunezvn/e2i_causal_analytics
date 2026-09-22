@@ -163,7 +163,7 @@ class DiscoveryTracer:
 
         async with tracer.trace_discovery(
             session_id=session_id,
-            algorithms=["ges", "pc"]
+            algorithms=DEFAULT_DISCOVERY_ALGORITHM_NAMES,
         ) as span:
             result = await runner.discover_dag(data, config)
             span.n_edges_discovered = result.n_edges
