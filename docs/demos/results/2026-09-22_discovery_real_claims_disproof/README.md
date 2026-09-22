@@ -6,8 +6,9 @@ available?
 
 **Cheapest disproof:** run the PRODUCTION guided-discovery path
 (`GraphBuilderNode._run_discovery` — `src/agents/causal_impact/nodes/graph_builder.py`:
-PC + tiers `[covariates < T < Y]` + required estimand edge + bootstrap resamples,
-`DISCOVERY_BOOTSTRAP_RESAMPLES = 20` at `graph_builder.py:26`, then `DiscoveryGate`)
+PC + tiers `[covariates < T < Y]` + required estimand edge + bootstrap resamples —
+the scripts pass `discovery_bootstrap_resamples: 20` (`run_disproof.py:28`), the same
+value as production's `DISCOVERY_BOOTSTRAP_RESAMPLES = 20` at `graph_builder.py:26` — then `DiscoveryGate`)
 on real and planted-truth frames. The disproof script never calls `execute()`
 (it persists to `discovered_dags`); tracing is off (no Opik, no Redis).
 
@@ -15,11 +16,11 @@ on real and planted-truth frames. The disproof script never calls `execute()`
 
 | Label | Frame | T | Y | k | Rows |
 |---|---|---|---|---|---|
-| A0 | REAL Optum persistence cohort `data/rwd/mart/persistence/e2i_ml_v3_patient_journeys.parquet`, train split, production shape: every numeric non-id column tiered as a covariate, as `graph_builder.py` does (`covariate_cols`) | `lis_dual_flag` — a pre-index exposure; the mart frames carry NO treatment column | `persistent_at_180d` | 57 | 4,000 (`sample(n=4000, random_state=0)`) |
-| A1 | same, pruned: `keep = [age_at_index, enrollment_duration_days, comorbidity_diag_distinct_count, charlson_score]` + every `cci_*` flag with prevalence `>= 0.02` (`run_disproof.py:75-76`) | same | same | 14 | 4,000 |
-| A2 | A1 without `charlson_score` | same | same | 13 | 4,000 |
-| B | synthetic `data/rwd/synthetic_CSU/patient_journeys.parquet` (Remibrutinib rows), planted confounders `disease_severity`, `academic_hcp` (`data/synthetic/ground_truth_20260611T150429.json`) | `treatment_arm` | `treatment_initiated` | 10 | 4,000 |
-| timing | A0 rank-pruned greedily (a column is kept iff it raises the correlation-matrix rank; `run_timing.py`), ONE PC run, `discovery_bootstrap_resamples=0`, latent diagnostic off | same as A | same as A | 43 | 4,000 |
+| A0 (`disproof_runs.txt:5`: `n=4000 … k=57`) | REAL Optum persistence cohort `data/rwd/mart/persistence/e2i_ml_v3_patient_journeys.parquet`, train split, production shape: every numeric non-id column tiered as a covariate, as `graph_builder.py` does (`covariate_cols`) | `lis_dual_flag` — a pre-index exposure; the mart frames carry NO treatment column | `persistent_at_180d` | 57 | 4,000 (`sample(n=4000, random_state=0)`) |
+| A1 (`disproof_runs.txt:16`: `n=4000 … k=14`) | same, pruned: `keep = [age_at_index, enrollment_duration_days, comorbidity_diag_distinct_count, charlson_score]` + every `cci_*` flag with prevalence `>= 0.02` (`run_disproof.py:75-76`) | same | same | 14 | 4,000 |
+| A2 (`disproof_runs.txt:27`: `n=4000 … k=13`) | A1 without `charlson_score` | same | same | 13 | 4,000 |
+| B (`disproof_runs.txt:38`: `n=4000 … k=10`) | synthetic `data/rwd/synthetic_CSU/patient_journeys.parquet` (Remibrutinib rows), planted confounders `disease_severity`, `academic_hcp` (`data/synthetic/ground_truth_20260611T150429.json`) | `treatment_arm` | `treatment_initiated` | 10 | 4,000 |
+| timing (`timing_run.txt:2`: `kept k= 43`; `run_timing.py:6`: `n=4000`) | A0 rank-pruned greedily (a column is kept iff it raises the correlation-matrix rank; `run_timing.py`), ONE PC run, `discovery_bootstrap_resamples=0`, latent diagnostic off | same as A | same as A | 43 | 4,000 |
 
 ## Captured results
 
@@ -32,7 +33,7 @@ Every value below is quoted from the named file.
 | A1 | `disproof_runs.txt:16-21` | augment | 0.739 | 180.6 s | corroboration (bootstrap stability) 67.35 %; `T->Y in ensemble: False` although `(T, Y)` was a REQUIRED prior edge; `Edge recall: 0.00%` |
 | A2 | `disproof_runs.txt:27-32` | augment | 0.734 | 289.4 s | corroboration 66.81 %; `T->Y in ensemble: False` |
 | B | `disproof_runs.txt:38-47` | accept | 0.818 | 1.7 s | `T->Y in ensemble: True`; `PLANTED confounders: {'disease_severity': 'confounder', 'academic_hcp': 'instrument'}` |
-| timing | `timing_run.txt:2-4` | reject (`uncorroborated_single_run`) | 0.00 | 230.3 s | `kept k= 43`, 14 columns dropped as linearly dependent; `edges=130`; `T->Y: False` |
+| timing | `timing_run.txt:2-4` | reject (`uncorroborated_single_run`) | 0.00 | 230.3 s | `kept k= 43`; the 14 columns named on that line were dropped as linearly dependent (57 − 43 = 14); `edges=130`; `T->Y: False` |
 
 Derived (not captured, arithmetic on the lines above): the production path
 runs `1 + DISCOVERY_BOOTSTRAP_RESAMPLES` PC fits, so the timing frame under
@@ -54,10 +55,10 @@ production settings is about `21 × 230.3 s ≈ 81 min` for one causal question.
    states activation is a no-op for keep/drop on the initiation cohort.
 2. **Discovery cannot "take over" on a real claims frame as shipped**, for two
    measured reasons: (a) the Charlson/Elixhauser flag families and composite
-   scores are linearly dependent (rank 45 of 59), fisherz refuses the singular
+   scores are linearly dependent (rank 45 of 59 — A0 pre-fix row), fisherz refuses the singular
    correlation matrix, and — before this branch — the failure was reported as an
    empty structure; (b) even rank-pruned, one PC fit on 43 covariates takes
-   230.3 s, so the production bootstrap makes one question an ~81 min job
+   230.3 s (timing row), so the production bootstrap makes one question an ~81 min job (derived, see above)
    against the agent's hard timeout.
 3. **Expert approval is already advisory** in the causal agent
    (`CAUSAL_IMPACT_REQUIRE_DAG_APPROVAL`, default off — `refutation.py:90`,
@@ -82,7 +83,7 @@ below.
 
 - **Collinearity pre-pruning before PC** (turns A0 into A1/A2) **only together
   with a covariate cap or screening for the DAG-learning frame** — pruning alone
-  turns a 0.24 s honest failure into an ~81 min run. Dropped/capped covariates
+  turns a 0.24 s honest failure (A0 post-fix row) into an ~81 min run (derived, see above). Dropped/capped covariates
   would stay in the adjustment guarantee (`graph_builder._apply_adjustment_guarantee`),
   so the estimate would still condition on them.
 - **A real-data entry point.** The mart frames have no treatment column; the
