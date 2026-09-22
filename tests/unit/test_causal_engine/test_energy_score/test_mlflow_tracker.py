@@ -679,7 +679,13 @@ class TestLogToDatabase:
             sys.modules, {"psycopg2": mock_psycopg2, "psycopg2.extras": mock_psycopg2_extras}
         ):
             tracker._log_to_database(result, "exp-123")
-        details = [call.args[1][-1] for call in mock_cursor.execute.call_args_list]
+        # The energy_details JSONB is no longer the LAST parameter: #2207 (causal/012)
+        # appends the selection context (selection_run_id ... data_source) after it, so
+        # locate it by shape (estimator_params is the other JSONB, an empty dict).
+        details = [
+            next(p for p in call.args[1] if isinstance(p, dict) and "tournament_energy_score" in p)
+            for call in mock_cursor.execute.call_args_list
+        ]
         assert len(details) == 4
         assert details[0]["served_refit"] is True and details[0]["tournament_energy_score"] == 0.42
         assert details[1]["served_refit"] is False

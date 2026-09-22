@@ -1027,7 +1027,7 @@ class MLFoundationPipeline:
         scope = result.scope_spec or {}
         if splits is None and prepared.get("train") is not None and scope.get("prediction_target"):
             splits = frames_to_trainer_splits(
-                result.prepared_frames,
+                prepared,
                 target_column=scope.get("prediction_target"),
                 drop_columns=(
                     scope.get("entity_column"),

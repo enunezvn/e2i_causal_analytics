@@ -81,7 +81,7 @@ def _looks_like_identifier(name: str) -> bool:
 def feature_columns_to_drop(
     train_df: pd.DataFrame,
     target_column: str,
-    drop_columns: Iterable[str] = (),
+    drop_columns: Iterable[Optional[str]] = (),
 ) -> Dict[str, List[str]]:
     """``{reason: [columns]}`` to remove from X, decided on the TRAIN frame so every
     split keeps the same columns."""
@@ -121,7 +121,7 @@ def frames_to_trainer_splits(
     frames: Mapping[str, Optional[pd.DataFrame]],
     target_column: Optional[str],
     *,
-    drop_columns: Iterable[str] = (),
+    drop_columns: Iterable[Optional[str]] = (),
 ) -> Dict[str, Dict[str, Any]]:
     """``{train_data, validation_data, test_data, holdout_data}`` in the trainer's shape.
 
