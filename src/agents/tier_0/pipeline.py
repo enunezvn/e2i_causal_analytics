@@ -25,6 +25,11 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, cast
 from uuid import UUID
 
+from src.agents.tier_0.split_handoff import (
+    SPLIT_KEYS,
+    frames_to_trainer_splits,
+    preloaded_splits,
+)
 from src.data.manifests.resolution import resolve_manifest_source
 from src.utils.audit_chain import AgentTier, AuditChainService
 
@@ -160,6 +165,9 @@ class PipelineResult:
     # adaptation. ``None`` when no leakage remediation occurred.
     regulatory_adaptation_entry: Optional[Any] = None
     model_candidate: Optional[Dict[str, Any]] = None
+    # #2207: the target-bearing frames data_preparer produced (train / validation /
+    # test / holdout), handed to the trainer when the caller pre-loaded no splits.
+    prepared_frames: Optional[Dict[str, Any]] = None
     training_result: Optional[Dict[str, Any]] = None
     shap_analysis: Optional[Dict[str, Any]] = None
     deployment_result: Optional[Dict[str, Any]] = None
@@ -839,6 +847,9 @@ class MLFoundationPipeline:
         # Store outputs
         result.qc_report = data_output.get("qc_report", {})
         result.baseline_metrics = data_output.get("baseline_metrics", {})
+        result.prepared_frames = {
+            k: data_output.get(f"{k}_df") for k in ("train", "validation", "test", "holdout")
+        }
         # Phase 1 data-sufficiency: pre-flight verdict + thresholds + MDE
         # report attached to PipelineResult for downstream consumers /
         # audit-chain inspection.
@@ -1007,6 +1018,25 @@ class MLFoundationPipeline:
         if result.feature_refs_used:
             logger.info(f"Using {len(result.feature_refs_used)} Feast feature refs")
 
+        # #2207 (codex r1 HIGH-1): the caller's pre-loaded splits win; otherwise the
+        # trainer gets data_preparer's frames in its {X, y, row_count} contract. The
+        # retraining path pre-loads nothing, so without this the trainer received four
+        # empty dicts and failed before training (see split_handoff).
+        splits = preloaded_splits(input_data)
+        prepared = result.prepared_frames or {}
+        scope = result.scope_spec or {}
+        if splits is None and prepared.get("train") is not None and scope.get("prediction_target"):
+            splits = frames_to_trainer_splits(
+                prepared,
+                target_column=scope.get("prediction_target"),
+                drop_columns=(
+                    scope.get("entity_column"),
+                    scope.get("date_column"),
+                    *(scope.get("excluded_features") or []),
+                ),
+            )
+        splits = splits or {k: input_data.get(k) for k in SPLIT_KEYS}
+
         # Prepare model_trainer input
         trainer_input = {
             "model_candidate": result.model_candidate,
@@ -1019,11 +1049,8 @@ class MLFoundationPipeline:
             "hpo_timeout_hours": self.config.hpo_timeout_hours,
             "early_stopping": self.config.early_stopping,
             "enable_mlflow": not self.config.skip_mlflow,
-            # Optional: Pre-loaded data splits (if provided)
-            "train_data": input_data.get("train_data"),
-            "validation_data": input_data.get("validation_data"),
-            "test_data": input_data.get("test_data"),
-            "holdout_data": input_data.get("holdout_data"),
+            # Pre-loaded splits, else data_preparer's frames (#2207)
+            **splits,
             # Opt-in synthetic augmentation cohort path (Phase 3 consumption).
             # None → the augment_training_data node is a no-op.
             "augmentation_data_path": self.config.augmentation_data_path,
@@ -1296,6 +1323,13 @@ class MLFoundationPipeline:
             "regulatory_adaptation_entry": result.regulatory_adaptation_entry,
             # D1.1: thread workflow-level audit_workflow_id (see scope_input).
             "audit_workflow_id": result.audit_workflow_id,
+            # #2207 cohort contract: what this run trained on, persisted by the
+            # deployer's registry writer (migration 150) so the scheduled retraining
+            # sweep can enqueue a retrain of the registered model. The manifest source
+            # is the RESOLVED one scope_definer put on scope_spec.
+            "data_source": input_data.get("data_source"),
+            "target_outcome": input_data.get("target_outcome"),
+            "feature_manifest_source": deployer_scope_spec.get("feature_manifest_source"),
         }
 
         # Add shadow mode metrics if deploying to production

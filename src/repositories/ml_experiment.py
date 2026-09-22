@@ -292,8 +292,32 @@ class MLModelRegistry:
     # promotion gate (see MLModelRegistryRepository.transition_stage).
     training_provenance: Optional[str] = None
 
+    # #2207 cohort contract (migration 150): what the model was trained on, so the
+    # scheduled retraining sweep can enqueue a retrain. ``cohort_data_source`` is a table
+    # name or the JSON of a file-source dict (src/services/cohort_contract.py).
+    cohort_data_source: Optional[str] = None
+    cohort_target_outcome: Optional[str] = None
+    cohort_feature_manifest_source: Optional[str] = None
+
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for database storage."""
+        """Convert to dictionary for database storage.
+
+        The cohort-contract columns are emitted only when set, so an insert against a
+        schema that predates migration 150 still lands (deploy applies migrations
+        before the containers restart, but a row must never be lost to that ordering).
+        """
+        data = self._to_dict_base()
+        for col in (
+            "cohort_data_source",
+            "cohort_target_outcome",
+            "cohort_feature_manifest_source",
+        ):
+            value = getattr(self, col)
+            if value is not None:
+                data[col] = value
+        return data
+
+    def _to_dict_base(self) -> Dict[str, Any]:
         return {
             "id": str(self.id) if self.id else None,
             "experiment_id": str(self.experiment_id) if self.experiment_id else None,
@@ -338,6 +362,9 @@ class MLModelRegistry:
             calibration_slope=data.get("calibration_slope"),
             fairness_metrics=data.get("fairness_metrics", {}),
             stage=data.get("stage", "development"),
+            cohort_data_source=data.get("cohort_data_source"),
+            cohort_target_outcome=data.get("cohort_target_outcome"),
+            cohort_feature_manifest_source=data.get("cohort_feature_manifest_source"),
             is_champion=data.get("is_champion", False),
             artifact_path=data.get("artifact_path"),
             preprocessing_pipeline_path=data.get("preprocessing_pipeline_path"),
@@ -1023,6 +1050,10 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
         algorithm: str,
         hyperparameters: Dict[str, Any],
         metrics: Dict[str, float],
+        *,
+        cohort_data_source: Any = None,
+        cohort_target_outcome: Optional[str] = None,
+        cohort_feature_manifest_source: Optional[str] = None,
     ) -> MLModelRegistry:
         """Register a new model version.
 
@@ -1035,10 +1066,16 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
             algorithm: Algorithm name
             hyperparameters: Hyperparameter dict
             metrics: Performance metrics
+            cohort_data_source: #2207 cohort contract — the table name or file-source
+                dict the model was trained on (a dict is stored as canonical JSON)
+            cohort_target_outcome: #2207 — the prediction target the model was trained on
+            cohort_feature_manifest_source: #2207 — the resolved Layer-5 manifest source
 
         Returns:
             Created MLModelRegistry
         """
+        from src.services.cohort_contract import encode_data_source
+
         model = MLModelRegistry(
             id=uuid4(),
             experiment_id=experiment_id,
@@ -1054,6 +1091,9 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
             calibration_slope=metrics.get("calibration_slope"),
             stage="development",
             registered_at=datetime.now(timezone.utc),
+            cohort_data_source=encode_data_source(cohort_data_source),
+            cohort_target_outcome=cohort_target_outcome or None,
+            cohort_feature_manifest_source=cohort_feature_manifest_source or None,
         )
 
         if self.client:

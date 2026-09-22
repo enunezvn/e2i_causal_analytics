@@ -585,6 +585,11 @@ class FeastMaterializationRepository(BaseRepository[FeastMaterializationJob]):
         end_time: datetime,
         job_type: str = "incremental",
         job_id: Optional[str] = None,
+        *,
+        status: str = "pending",
+        error_message: Optional[str] = None,
+        rows_materialized: Optional[int] = None,
+        duration_seconds: Optional[float] = None,
     ) -> Optional[FeastMaterializationJob]:
         """Create a new materialization job record.
 
@@ -595,6 +600,13 @@ class FeastMaterializationRepository(BaseRepository[FeastMaterializationJob]):
             end_time: Materialization end time
             job_type: Job type (full/incremental)
             job_id: External job ID
+            status: Initial status. Defaults to ``pending``; a producer that records
+                a run AFTER it finished passes the terminal status here so the row
+                lands atomically with its outcome (#2207) — never a ``pending`` row
+                whose close-out could fail separately.
+            error_message: Error text for a ``failed`` terminal status.
+            rows_materialized: Rows written, when known per view.
+            duration_seconds: Job duration, when recorded at terminal status.
 
         Returns:
             Created job or None
@@ -604,6 +616,11 @@ class FeastMaterializationRepository(BaseRepository[FeastMaterializationJob]):
             return None
 
         try:
+            now = datetime.now(timezone.utc)
+            terminal = status in (
+                MaterializationStatus.SUCCESS.value,
+                MaterializationStatus.FAILED.value,
+            )
             job = FeastMaterializationJob(
                 id=uuid4(),
                 feature_view_id=feature_view_id,
@@ -612,8 +629,12 @@ class FeastMaterializationRepository(BaseRepository[FeastMaterializationJob]):
                 job_type=job_type,
                 start_time=start_time,
                 end_time=end_time,
-                status="pending",
-                created_at=datetime.now(timezone.utc),
+                status=status,
+                error_message=error_message,
+                rows_materialized=rows_materialized if rows_materialized is not None else 0,
+                duration_seconds=duration_seconds,
+                created_at=now,
+                completed_at=now if terminal else None,
             )
 
             data = job.to_dict()

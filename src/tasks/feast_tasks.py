@@ -12,9 +12,38 @@ from typing import Any, Dict, List, Optional, cast
 
 import yaml  # type: ignore[import-untyped]
 
+from src.feature_store.feast_remote_materialize import INIT_FAILURE_ERROR
+from src.tasks.feast_tracking import record_freshness_checks, record_materialization_jobs
 from src.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
+
+
+def _tracking_client():
+    """The SYNC supabase client the feast_tracking repositories drive (#2207).
+
+    Resolved per call (not at import) so the task module imports on any box and a
+    missing ``SUPABASE_URL`` surfaces as a logged, non-fatal recording failure.
+    """
+    from src.memory.services.factories import get_supabase_client
+
+    return get_supabase_client()
+
+
+def _record(label: str, coro_factory) -> None:
+    """Record a run's outcome into the Feast tracking tables — best-effort (#2207).
+
+    Recording is a side channel of the beat task: it must NEVER raise into the task,
+    so a broken tracking backend cannot turn a materialize/freshness run into a
+    failed task (or mask the run's real result).
+    """
+    try:
+        client = _tracking_client()
+        written = run_async(coro_factory(client))
+        logger.info(f"Feast tracking: recorded {written} {label} row(s)")
+    except Exception as e:  # noqa: BLE001 — side channel, never fail the parent
+        logger.warning(f"Feast tracking: could not record {label} (non-fatal): {e}")
+
 
 # Load configuration
 CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "feast_materialization.yaml"
@@ -31,24 +60,35 @@ def load_config() -> Dict[str, Any]:
     return {}
 
 
-def _fail_loud_if_skipped(result: Dict[str, Any], kind: str) -> None:
-    """#556: raise on a ``skipped`` materialization so a no-op is never silent.
+def _is_init_failure(result: Dict[str, Any]) -> bool:
+    """The job could not even build a Feast client (``MaterializationJob.initialize``)."""
+    return result.get("stage") == "init" or result.get("error") == INIT_FAILURE_ERROR
 
-    ``MaterializationJob`` returns ``status="skipped"`` when the runtime cannot
-    materialize — e.g. the app/worker image cannot ``import feast`` (tenacity
-    conflict, #307), so ``FeastClient.materialize()`` finds no embedded store.
-    Silently returning that masks a stale online store. The real scheduled
-    materialize runs in the e2i_feast sidecar materializer
-    (docker/feast/materializer-entrypoint.sh); on a worker this task must fail
-    loudly so the misconfiguration is visible rather than passing as success.
+
+def _fail_loud_if_skipped(result: Dict[str, Any], kind: str) -> None:
+    """#556: raise on a run that materialized NOTHING so a no-op is never silent.
+
+    ``skipped``: the runtime has no embedded store (``FeastClient.materialize`` with no
+    feast import, #307). ``failed``: the client could not be initialized, or the sidecar
+    call (remote mode, #2207) was refused / unreachable. Before #2207 only ``skipped``
+    raised, so the worker's every-6-h init failure was reported as a Celery SUCCESS with
+    a ``{"status": "failed"}`` payload (measured 2026-09-22) — invisible to anything
+    watching task states. The tracking rows are recorded BEFORE this raises, so the
+    truthful outcome lands and the beat is red.
     """
-    if result.get("status") == "skipped":
+    status = result.get("status")
+    if status == "skipped":
         reason = result.get("reason") or "feast unavailable in this runtime"
         raise RuntimeError(
             f"{kind} feature materialization skipped ({reason}); this runtime cannot "
             "materialize — the e2i_feast sidecar materializer owns scheduled "
             "materialization (#556). Failing loud so the no-op does not silently "
             "mask a stale online store."
+        )
+    if status == "failed":
+        raise RuntimeError(
+            f"{kind} feature materialization failed: {result.get('error')} — nothing was "
+            "materialized this run (#556: a no-op is never silent)."
         )
 
 
@@ -118,6 +158,22 @@ def materialize_features(
 
     result = cast(Dict[str, Any], run_async(run_job()))
 
+    # #2207: record the run's REAL outcome (success or failure) per targeted view
+    # before the skip check can raise — a skipped run is a failed job row too.
+    if not dry_run:
+        _record(
+            "full materialization job",
+            lambda client: record_materialization_jobs(
+                client,
+                job_type="full",
+                requested_start=start_dt,
+                requested_end=end_dt,
+                feature_views=feature_views,
+                result=result,
+                task_id=self.request.id,
+            ),
+        )
+
     # Log result
     status = result.get("status", "unknown")
     _fail_loud_if_skipped(result, "Full")
@@ -176,19 +232,39 @@ def materialize_incremental_features(
 
     result = cast(Dict[str, Any], run_async(run_job()))
 
+    # #2207: record the run's REAL outcome per targeted view (the window start is
+    # whatever the client resolved as "since the last run"; absent on a failed run).
+    if not dry_run:
+        _record(
+            "incremental materialization job",
+            lambda client: record_materialization_jobs(
+                client,
+                job_type="incremental",
+                requested_start=None,
+                requested_end=end_dt,
+                feature_views=feature_views,
+                result=result,
+                task_id=self.request.id,
+            ),
+        )
+
     # Log result
     status = result.get("status", "unknown")
-    _fail_loud_if_skipped(result, "Incremental")
     if status == "completed":
         duration = result.get("duration_seconds", 0)
         logger.info(f"Incremental materialization complete: duration={duration:.2f}s")
-    elif status == "failed":
+        return result
+
+    if status == "failed":
         logger.error(f"Incremental materialization failed: {result.get('error')}")
 
-        # Auto-recovery: try full materialization if configured
+        # Auto-recovery: try full materialization if configured — but NOT when the
+        # client itself could not be initialized (#2207): the recovery job builds the
+        # same client and fails identically, doubling the failure (measured
+        # 2026-09-22: every 6 h run logged two "Failed to initialize Feast client").
         config = load_config()
         recovery = config.get("recovery", {})
-        if recovery.get("auto_recover", True):
+        if recovery.get("auto_recover", True) and not _is_init_failure(result):
             logger.info("Attempting recovery with full materialization")
             recovery_days = recovery.get("recovery_days_back", 3)
             start_dt = now - timedelta(days=recovery_days)
@@ -206,7 +282,31 @@ def materialize_incremental_features(
                     await recovery_job.close()
 
             result["recovery_attempt"] = run_async(run_recovery())
+            # #2207: the recovery is a second, distinct (full-mode) job — recorded too.
+            recovery_result = result["recovery_attempt"]
+            _record(
+                "recovery materialization job",
+                lambda client: record_materialization_jobs(
+                    client,
+                    job_type="full",
+                    requested_start=start_dt,
+                    requested_end=end_dt,
+                    feature_views=feature_views,
+                    result=recovery_result,
+                    task_id=self.request.id,
+                ),
+            )
+            if recovery_result.get("status") == "completed":
+                # The store WAS populated (by the full run): not a no-op, not red.
+                logger.warning(
+                    "Incremental materialization failed but the recovery full "
+                    "materialization completed (%s)",
+                    recovery_result.get("feature_views"),
+                )
+                return result
+            _fail_loud_if_skipped(recovery_result, "Recovery full")
 
+    _fail_loud_if_skipped(result, "Incremental")
     return result
 
 
@@ -248,6 +348,27 @@ def check_feature_freshness(
             await job.close()
 
     result = cast(Dict[str, Any], run_async(run_check()))
+
+    # #2207: one freshness row per view the run reported on; a run that could not
+    # probe at all records every targeted view as ``unknown`` (#556: unverifiable
+    # is not fresh).
+    _record(
+        "freshness check",
+        lambda client: record_freshness_checks(
+            client,
+            result=result,
+            feature_views=feature_views,
+            max_staleness_hours=staleness_hours,
+        ),
+    )
+
+    # #2207: a check that could not probe anything (e.g. no Feast client) recorded every
+    # targeted view as ``unknown`` above; it must also be RED in Celery (#556).
+    if result.get("status") == "failed":
+        raise RuntimeError(
+            f"Feature freshness check failed: {result.get('error')} — no view was probed "
+            "this run (#556: unverifiable is not fresh, and a no-op is never silent)."
+        )
 
     # Log and alert
     if result.get("status") == "completed":
