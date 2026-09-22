@@ -111,6 +111,7 @@ function proposalsResponse(proposals: unknown[], overrides: Record<string, unkno
     outcome_column: 'cohort_conversion_outcome',
     outcome_measurable_in_real_mode: false,
     total_proposed: proposals.length,
+    truncated: false,
     total_linked: 0,
     real_experiments_running: 0,
     ...overrides,
@@ -354,6 +355,15 @@ describe('ExperimentRecommendations (Proposed experiments, #2206)', () => {
     expect(screen.getAllByTestId(/^proposal-sim-many-/)).toHaveLength(8);
     fireEvent.click(screen.getByRole('button', { name: /show the top 6 only/i }));
     expect(screen.getAllByTestId(/^proposal-sim-many-/)).toHaveLength(6);
+  });
+
+  it('says when the window is smaller than the population, with the exact total (codex r4)', () => {
+    mockProposals(proposalsResponse([proposal()], { total_proposed: 731, truncated: true }));
+    render(<ExperimentRecommendations />, { wrapper: createWrapper() });
+    expect(screen.getByText('731 proposed')).toBeInTheDocument();
+    expect(screen.getByTestId('proposals-envelope')).toHaveTextContent(
+      /731 proposals from twin simulations .* showing the top 1 of 731 \(deploy first, then predicted effect\)/
+    );
   });
 
   it('explains an empty list: nothing proposed yet, or everything already linked', () => {

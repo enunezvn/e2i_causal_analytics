@@ -377,6 +377,7 @@ export function ExperimentRecommendations({ className }: ExperimentRecommendatio
   const proposals = proposalsQuery.data?.proposals ?? [];
   const shownProposals = showAllProposals ? proposals : proposals.slice(0, MAX_PROPOSALS);
   const outcomeMeasurable = proposalsQuery.data?.outcome_measurable_in_real_mode ?? false;
+  const windowTruncated = proposalsQuery.data?.truncated ?? false;
   const outcomeColumn = proposalsQuery.data?.outcome_column;
   const totalProposed = proposalsQuery.data?.total_proposed ?? 0;
   const totalLinked = proposalsQuery.data?.total_linked ?? 0;
@@ -534,6 +535,9 @@ export function ExperimentRecommendations({ className }: ExperimentRecommendatio
                 {' · '}
                 {realRunning} real {realRunning === 1 ? 'experiment' : 'experiments'} running
                 {modelsState ? ` · ${modelsState}` : ''}
+                {windowTruncated
+                  ? ` · showing the top ${proposals.length} of ${totalProposed} (deploy first, then predicted effect)`
+                  : ''}
               </p>
               {shownProposals.map((proposal) => (
                 <ProposalRow

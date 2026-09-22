@@ -165,6 +165,7 @@ async def list_proposed_experiments(
     try:
         repo = await _twin_repo()
         rows = await repo.list_proposed_experiments(brand=effective_brand)
+        total = await repo.count_proposed_experiments(brand=effective_brand)
         linked = await repo.count_linked_simulations(brand=effective_brand)
         running = await _count_real_running_experiments(repo.client, effective_brand)
         measurable = await _outcome_measurable_in_real_mode(repo.client)
@@ -206,7 +207,10 @@ async def list_proposed_experiments(
             proposals=items,
             outcome_column=COHORT_OUTCOME_COLUMN,
             outcome_measurable_in_real_mode=measurable,
-            total_proposed=len(items),
+            # The exact population, never len(window) (codex r4): the store returns
+            # the top of the population in presentation order and says how big it is.
+            total_proposed=max(total, len(items)),
+            truncated=len(items) < max(total, len(items)),
             total_linked=linked,
             real_experiments_running=running,
         )
@@ -377,7 +381,11 @@ async def create_draft_experiment(
                         if not winner
                         else f"; it is linked to experiment {winner}"
                     )
-                    + ". Resolve the draft by hand."
+                    + (
+                        ". Resolve the draft by hand."
+                        if not removed
+                        else ". Nothing is left to clean up; retry the read of the simulation's link."
+                    )
                 ),
             )
         raise HTTPException(

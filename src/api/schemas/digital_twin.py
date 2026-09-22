@@ -549,7 +549,15 @@ class ProposedExperimentsResponse(BaseModel):
         ),
     )
     total_proposed: int = Field(
-        description="Unlinked deploy/refine simulations the caller may see."
+        description=(
+            "Exact size of the proposal population the caller may see (unlinked "
+            "deploy/refine simulations). proposals holds the top of it in presentation "
+            "order (deploy first, then predicted effect); see truncated."
+        ),
+    )
+    truncated: bool = Field(
+        default=False,
+        description="True when proposals holds fewer rows than total_proposed (the window is capped).",
     )
     total_linked: int = Field(
         description=(

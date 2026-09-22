@@ -1196,6 +1196,7 @@ const digitalTwinHandlers = [
       outcome_column: 'cohort_conversion_outcome',
       outcome_measurable_in_real_mode: false,
       total_proposed: 2,
+      truncated: false,
       total_linked: 0,
       real_experiments_running: 0,
     } satisfies ProposedExperimentsResponse);

@@ -44,6 +44,21 @@ async def test_list_proposed_filters_completed_deploy_or_refine_and_unlinked():
     chain.is_.assert_called_once_with("experiment_design_id", "null")
     chain.eq.assert_any_call("brand", "Kisqali")
     chain.limit.assert_called_once_with(50)
+    # codex r4 MED: the presentation order is applied IN the database, so a bounded
+    # window is the top of the whole population, not the newest rows re-sorted.
+    assert [c.args[0] for c in chain.order.call_args_list] == ["recommendation", "simulated_ate"]
+    assert chain.order.call_args_list[1].kwargs.get("desc") is True
+
+
+@pytest.mark.asyncio
+async def test_count_proposed_counts_the_whole_population():
+    client, chain = _chain([], count=731)
+    repo = SimulationRepository(supabase_client=client)
+    assert await repo.count_proposed(brand="Kisqali") == 731
+    chain.select.assert_called_once_with("simulation_id", count="exact")
+    chain.in_.assert_called_once_with("recommendation", ["deploy", "refine"])
+    chain.is_.assert_called_once_with("experiment_design_id", "null")
+    chain.eq.assert_any_call("brand", "Kisqali")
 
 
 @pytest.mark.asyncio
@@ -95,13 +110,18 @@ async def test_facade_forwards_list_proposed_and_count_linked_to_the_store():
     store.count_linked = AsyncMock(return_value=3)
     repo.simulations = store
 
+    store.count_proposed = AsyncMock(return_value=9)
+
     rows = await repo.list_proposed_experiments(brand="Kisqali", limit=25)
     linked = await repo.count_linked_simulations(brand="Kisqali")
+    total = await repo.count_proposed_experiments(brand="Kisqali")
 
     assert rows == [{"simulation_id": "s1"}]
     assert linked == 3
+    assert total == 9
     store.list_proposed.assert_awaited_once_with(brand="Kisqali", limit=25)
     store.count_linked.assert_awaited_once_with(brand="Kisqali")
+    store.count_proposed.assert_awaited_once_with(brand="Kisqali")
 
 
 @pytest.mark.asyncio

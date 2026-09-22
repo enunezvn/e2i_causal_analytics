@@ -64,6 +64,7 @@ const response: ProposedExperimentsResponse = {
   outcome_column: 'cohort_conversion_outcome',
   outcome_measurable_in_real_mode: false,
   total_proposed: 1,
+  truncated: false,
   total_linked: 0,
   real_experiments_running: 0,
 };

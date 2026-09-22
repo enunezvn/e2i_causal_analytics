@@ -99,11 +99,15 @@ def _client(
     return client, chain
 
 
-def _repo(proposed, *, linked=0, models=None, sim=None, link_ok=True, client=None):
+def _repo(proposed, *, linked=0, models=None, sim=None, link_ok=True, client=None, total=None):
     models = models or {}
     return SimpleNamespace(
         client=client or _client()[0],
         list_proposed_experiments=AsyncMock(return_value=proposed),
+        # The exact population count (codex r4 MED): the window may be smaller.
+        count_proposed_experiments=AsyncMock(
+            return_value=len(proposed) if total is None else total
+        ),
         count_linked_simulations=AsyncMock(return_value=linked),
         # The routes use the STRICT reads (codex r2 #2): None = no row; failures raise.
         require_model=AsyncMock(side_effect=lambda mid: models.get(str(mid))),
@@ -306,6 +310,27 @@ class TestListProposedExperiments:
         with _patched(repo), pytest.raises(HTTPException) as ei:
             asyncio.run(list_proposed_experiments(brand=None, user=ADMIN))
         assert ei.value.status_code == 500
+
+    def test_total_proposed_is_the_exact_population_and_a_truncated_window_says_so(self):
+        """codex r4 MED: the store returns a bounded window (top 500 in presentation
+        order); total_proposed must be the exact count and the envelope must say when
+        the window is smaller than the population — never len(window) as the total."""
+        from src.api.routes.digital_twin_proposals import list_proposed_experiments
+
+        repo = _repo([_sim(), _sim()], total=731)
+        with _patched(repo):
+            resp = asyncio.run(list_proposed_experiments(brand=None, user=ADMIN))
+        assert resp.total_proposed == 731
+        assert len(resp.proposals) == 2
+        assert resp.truncated is True
+        repo.count_proposed_experiments.assert_awaited_once()
+        assert repo.count_proposed_experiments.call_args.kwargs["brand"] is None
+
+        repo2 = _repo([_sim(), _sim()])
+        with _patched(repo2):
+            resp2 = asyncio.run(list_proposed_experiments(brand=None, user=ADMIN))
+        assert resp2.total_proposed == 2
+        assert resp2.truncated is False
 
     def test_one_model_lookup_per_distinct_model(self):
         from src.api.routes.digital_twin_proposals import list_proposed_experiments
@@ -525,6 +550,9 @@ class TestCreateDraftExperiment:
         assert "was removed" in detail
         assert "could not be removed" not in detail
         assert "could not be read" in detail
+        # codex r4 #1: a draft proven absent must not come with "resolve the draft by hand".
+        assert "by hand" not in detail
+        assert "retry" in detail.lower() or "re-read" in detail.lower()
 
     def test_a_claim_that_raises_is_a_500_naming_both_ids_never_a_200(self):
         from src.api.routes.digital_twin_proposals import create_draft_experiment

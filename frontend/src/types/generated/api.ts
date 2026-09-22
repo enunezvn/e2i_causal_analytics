@@ -16065,9 +16065,15 @@ export interface components {
             outcome_measurable_in_real_mode: boolean;
             /**
              * Total Proposed
-             * @description Unlinked deploy/refine simulations the caller may see.
+             * @description Exact size of the proposal population the caller may see (unlinked deploy/refine simulations). proposals holds the top of it in presentation order (deploy first, then predicted effect); see truncated.
              */
             total_proposed: number;
+            /**
+             * Truncated
+             * @description True when proposals holds fewer rows than total_proposed (the window is capped).
+             * @default false
+             */
+            truncated: boolean;
             /**
              * Total Linked
              * @description Completed deploy/refine simulations that already have an experiment — the linked half of the same population total_proposed counts the unlinked half of.

@@ -630,8 +630,10 @@ class SimulationRepository(BaseRepository):
         """Completed deploy/refine simulations not yet linked to an experiment.
 
         Brand scoping is the caller's (the route applies the H11 grant); ``None``
-        lists every brand so an admin's envelope counts are whole. Newest first;
-        the route re-orders for presentation.
+        lists every brand so an admin's envelope counts are whole. Ordered IN the
+        database in presentation order — deploy before refine, then the largest
+        predicted effect — so a bounded window is the top of the whole population
+        (codex r4); ``count_proposed`` gives the population size.
         """
         # A query failure PROPAGATES (codex r1 #3): swallowed into [] it would read as
         # a truthful-looking empty portfolio (200, total_proposed=0) on the page.
@@ -643,13 +645,30 @@ class SimulationRepository(BaseRepository):
             .eq("simulation_status", "completed")
             .in_("recommendation", list(self.PROPOSAL_RECOMMENDATIONS))
             .is_("experiment_design_id", "null")
-            .order("created_at", desc=True)
+            .order("recommendation")  # 'deploy' < 'refine'
+            .order("simulated_ate", desc=True)
             .limit(limit)
         )
         if brand:
             query = query.eq("brand", brand)
         result = await query.execute()
         return result.data or []
+
+    async def count_proposed(self, *, brand: Optional[str] = None) -> int:
+        """Size of the proposal population (``list_proposed`` returns a window of it)."""
+        if not self.client:
+            return 0
+        query = (
+            self.client.table(self.table_name)
+            .select("simulation_id", count="exact")
+            .eq("simulation_status", "completed")
+            .in_("recommendation", list(self.PROPOSAL_RECOMMENDATIONS))
+            .is_("experiment_design_id", "null")
+        )
+        if brand:
+            query = query.eq("brand", brand)
+        result = await query.execute()
+        return int(result.count or 0)
 
     async def count_linked(self, *, brand: Optional[str] = None) -> int:
         """Completed simulations that already have an experiment (the linked half).
@@ -1230,6 +1249,10 @@ class TwinRepository:
     async def count_linked_simulations(self, *, brand: Optional[str] = None) -> int:
         """Completed simulations already linked to an experiment (#2206 item C)."""
         return await self.simulations.count_linked(brand=brand)  # type: ignore[no-any-return]
+
+    async def count_proposed_experiments(self, *, brand: Optional[str] = None) -> int:
+        """Size of the proposal population (#2206 item C, codex r4)."""
+        return await self.simulations.count_proposed(brand=brand)  # type: ignore[no-any-return]
 
     async def claim_experiment_link(self, simulation_id: UUID, experiment_design_id: UUID) -> bool:
         """Conditional (unlinked-only) link; True only when a row was updated (#2206 item C)."""

@@ -347,9 +347,11 @@ export interface SimulationResponse {
   /** Unique simulation ID */
   simulation_id: string;
   /**
-   * The ml_experiments id this simulation is linked to, or null when it is not yet linked
-   * (a proposal). Written by /simulate when given experiment_design_id, or by the
-   * proposed-experiments draft action (#2206).
+   * The ml_experiments id this simulation is linked to, or null when it is not linked.
+   * (An unlinked simulation is a PROPOSAL only when it is completed with a deploy/refine
+   * recommendation; a completed 'skip' run stays unlinked and proposes nothing.) Written
+   * by /simulate when given experiment_design_id, or by the proposed-experiments draft
+   * action (#2206).
    */
   experiment_design_id?: string | null;
   /** Model ID used */
@@ -1008,8 +1010,13 @@ export interface ProposedExperimentsResponse {
    * from a proposal cannot yet be compared against the twin.
    */
   outcome_measurable_in_real_mode: boolean;
-  /** Unlinked deploy/refine simulations the caller may see. */
+  /**
+   * Exact size of the proposal population the caller may see; `proposals` holds the top of
+   * it in presentation order (deploy first, then predicted effect).
+   */
   total_proposed: number;
+  /** True when `proposals` holds fewer rows than total_proposed (the window is capped). */
+  truncated: boolean;
   /** Completed deploy/refine simulations that already have an experiment (the linked half of the proposal population). */
   total_linked: number;
   /** Real (non-synthetic) ml_experiments running with an intervention channel — 0 today. */
