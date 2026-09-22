@@ -1,6 +1,6 @@
-commit: 4a43b2173cdfb7ce228e5dcd7614716b78797e64
+commit: edb96fbd24ddb63ca6b2e3bb93fa619c86df9af1 dirty_src_scripts_tests=no
 probe1 dummylm typed outputs: dspy=3.1.0 edges=[['f', 'T'], ['f', 'Y'], ['T', 'Y']] type=list ambiguous=False type=bool
-probe2 graph_builder import seconds: 13.1
+probe2 graph_builder import seconds: 13.4
 probe2 backdoor module import seconds (after the above): 0.000
 probe3 CitationResolver.__init__ signature: (self, *, europe_pmc: 'Optional[EuropePMCClient]' = None, crossref: 'Optional[CrossrefClient]' = None, umls: 'Optional[UMLSClient]' = None) -> 'None'
 probe4 dead pin: repo.client=None create_review->None in 0.0s

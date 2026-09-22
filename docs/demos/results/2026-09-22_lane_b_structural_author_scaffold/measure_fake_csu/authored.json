@@ -1,12 +1,16 @@
 {
   "meta": {
-    "measured_at": "2026-09-22T16:47:04.148107+00:00",
+    "measured_at": "2026-09-22T18:21:22.262348+00:00",
     "lm": "fake",
     "fake_source": "replay",
     "resolver": "offline",
     "cohort": "CSU_remibrutinib",
     "golden": "/home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-b-structural-author-scaffold/tests/fixtures/causal_role_golden_set.json",
-    "n_briefs": 31
+    "n_briefs": 31,
+    "tree": {
+      "commit": "edb96fbd24ddb63ca6b2e3bb93fa619c86df9af1",
+      "dirty_src_scripts_tests": false
+    }
   },
   "records": [
     {
@@ -56,11 +60,10 @@
         }
       ],
       "derived_role": "ancestor",
-      "expected_role": "confounder",
+      "expected_role": "ancestor",
       "ambiguous": false,
       "review_required": false,
       "review_reasons": [
-        "author expected 'confounder', extractor derived 'ancestor'",
         "unsupported edges (no verified citation): childhood_eczema_history_flag->U_atopic_diathesis, U_atopic_diathesis->Y"
       ],
       "cross_check": {
@@ -79,7 +82,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:46:58.765187+00:00",
+      "authored_at": "2026-09-22T18:21:17.964319+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -130,11 +133,10 @@
         }
       ],
       "derived_role": "ancestor",
-      "expected_role": "confounder",
+      "expected_role": "ancestor",
       "ambiguous": false,
       "review_required": false,
       "review_reasons": [
-        "author expected 'confounder', extractor derived 'ancestor'",
         "unsupported edges (no verified citation): family_history_atopy_first_degree_relative_flag->U_heritable_atopy, U_heritable_atopy->Y"
       ],
       "cross_check": {
@@ -153,7 +155,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:46:58.915143+00:00",
+      "authored_at": "2026-09-22T18:21:18.104034+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -204,11 +206,10 @@
         }
       ],
       "derived_role": "ancestor",
-      "expected_role": "confounder",
+      "expected_role": "ancestor",
       "ambiguous": true,
       "review_required": false,
       "review_reasons": [
-        "author expected 'confounder', extractor derived 'ancestor'",
         "unsupported edges (no verified citation): hla_drb1_autoimmune_csu_susceptibility_allele_flag->U_autoimmune_endotype, U_autoimmune_endotype->Y"
       ],
       "cross_check": {
@@ -227,7 +228,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:46:59.078556+00:00",
+      "authored_at": "2026-09-22T18:21:18.237027+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -266,11 +267,10 @@
         }
       ],
       "derived_role": "ancestor",
-      "expected_role": "confounder",
+      "expected_role": "ancestor",
       "ambiguous": false,
       "review_required": false,
       "review_reasons": [
-        "author expected 'confounder', extractor derived 'ancestor'",
         "unsupported edges (no verified citation): patient_age_at_index_years->Y"
       ],
       "cross_check": {
@@ -287,7 +287,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:46:59.236013+00:00",
+      "authored_at": "2026-09-22T18:21:18.365717+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -326,11 +326,10 @@
         }
       ],
       "derived_role": "ancestor",
-      "expected_role": "confounder",
+      "expected_role": "ancestor",
       "ambiguous": false,
       "review_required": false,
       "review_reasons": [
-        "author expected 'confounder', extractor derived 'ancestor'",
         "unsupported edges (no verified citation): patient_sex_female_indicator->Y"
       ],
       "cross_check": {
@@ -347,7 +346,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:46:59.441332+00:00",
+      "authored_at": "2026-09-22T18:21:18.501544+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -398,11 +397,10 @@
         }
       ],
       "derived_role": "collider",
-      "expected_role": "confounder",
+      "expected_role": "collider",
       "ambiguous": false,
       "review_required": false,
       "review_reasons": [
-        "author expected 'confounder', extractor derived 'collider'",
         "unsupported edges (no verified citation): T->alive_and_enrolled_at_180d_post_index_flag, Y->alive_and_enrolled_at_180d_post_index_flag"
       ],
       "cross_check": {
@@ -419,7 +417,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:46:59.602072+00:00",
+      "authored_at": "2026-09-22T18:21:18.635080+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -470,11 +468,10 @@
         }
       ],
       "derived_role": "collider",
-      "expected_role": "confounder",
+      "expected_role": "collider",
       "ambiguous": false,
       "review_required": false,
       "review_reasons": [
-        "author expected 'confounder', extractor derived 'collider'",
         "unsupported edges (no verified citation): T->on_treatment_persistent_180d_pdc80_flag, Y->on_treatment_persistent_180d_pdc80_flag"
       ],
       "cross_check": {
@@ -491,7 +488,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:46:59.771075+00:00",
+      "authored_at": "2026-09-22T18:21:18.774496+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -542,11 +539,10 @@
         }
       ],
       "derived_role": "collider",
-      "expected_role": "confounder",
+      "expected_role": "collider",
       "ambiguous": false,
       "review_required": false,
       "review_reasons": [
-        "author expected 'confounder', extractor derived 'collider'",
         "unsupported edges (no verified citation): T->on_treatment_remibrutinib_at_180d_postindex_flag, Y->on_treatment_remibrutinib_at_180d_postindex_flag"
       ],
       "cross_check": {
@@ -563,7 +559,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:46:59.916467+00:00",
+      "authored_at": "2026-09-22T18:21:18.905761+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -614,11 +610,10 @@
         }
       ],
       "derived_role": "collider",
-      "expected_role": "confounder",
+      "expected_role": "collider",
       "ambiguous": false,
       "review_required": false,
       "review_reasons": [
-        "author expected 'confounder', extractor derived 'collider'",
         "unsupported edges (no verified citation): T->patient_initiated_discontinuation_180d_flag, Y->patient_initiated_discontinuation_180d_flag"
       ],
       "cross_check": {
@@ -635,7 +630,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:47:00.067624+00:00",
+      "authored_at": "2026-09-22T18:21:19.039339+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -706,7 +701,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:47:00.236994+00:00",
+      "authored_at": "2026-09-22T18:21:19.171976+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -777,7 +772,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:47:00.408254+00:00",
+      "authored_at": "2026-09-22T18:21:19.306612+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -848,7 +843,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:47:00.605817+00:00",
+      "authored_at": "2026-09-22T18:21:19.436322+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -919,7 +914,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:47:00.802171+00:00",
+      "authored_at": "2026-09-22T18:21:19.571506+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -990,7 +985,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:47:00.963532+00:00",
+      "authored_at": "2026-09-22T18:21:19.706241+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -1061,7 +1056,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:47:01.136298+00:00",
+      "authored_at": "2026-09-22T18:21:19.835281+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -1100,11 +1095,10 @@
         }
       ],
       "derived_role": "descendant",
-      "expected_role": "confounder",
+      "expected_role": "descendant",
       "ambiguous": false,
       "review_required": false,
       "review_reasons": [
-        "author expected 'confounder', extractor derived 'descendant'",
         "unsupported edges (no verified citation): Y->post_index_dlqi_score_150_180d"
       ],
       "cross_check": {
@@ -1121,7 +1115,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:47:01.306611+00:00",
+      "authored_at": "2026-09-22T18:21:19.971680+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -1160,11 +1154,10 @@
         }
       ],
       "derived_role": "descendant",
-      "expected_role": "confounder",
+      "expected_role": "descendant",
       "ambiguous": false,
       "review_required": false,
       "review_reasons": [
-        "author expected 'confounder', extractor derived 'descendant'",
         "unsupported edges (no verified citation): T->post_index_petechiae_event_180d_flag"
       ],
       "cross_check": {
@@ -1181,7 +1174,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:47:01.480570+00:00",
+      "authored_at": "2026-09-22T18:21:20.109212+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -1232,11 +1225,10 @@
         }
       ],
       "derived_role": "collider",
-      "expected_role": "confounder",
+      "expected_role": "collider",
       "ambiguous": false,
       "review_required": false,
       "review_reasons": [
-        "author expected 'confounder', extractor derived 'collider'",
         "unsupported edges (no verified citation): T->post_index_switch_to_alternative_biologic_180d_flag, Y->post_index_switch_to_alternative_biologic_180d_flag"
       ],
       "cross_check": {
@@ -1253,7 +1245,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:47:01.747073+00:00",
+      "authored_at": "2026-09-22T18:21:20.247366+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -1292,11 +1284,10 @@
         }
       ],
       "derived_role": "descendant",
-      "expected_role": "confounder",
+      "expected_role": "descendant",
       "ambiguous": true,
       "review_required": false,
       "review_reasons": [
-        "author expected 'confounder', extractor derived 'descendant'",
         "unsupported edges (no verified citation): T->post_index_thrombocytopenia_event_180d_flag"
       ],
       "cross_check": {
@@ -1313,7 +1304,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:47:02.004364+00:00",
+      "authored_at": "2026-09-22T18:21:20.390591+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -1352,11 +1343,10 @@
         }
       ],
       "derived_role": "descendant",
-      "expected_role": "confounder",
+      "expected_role": "descendant",
       "ambiguous": false,
       "review_required": false,
       "review_reasons": [
-        "author expected 'confounder', extractor derived 'descendant'",
         "unsupported edges (no verified citation): Y->uct_score_150_180d_post_index"
       ],
       "cross_check": {
@@ -1373,7 +1363,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:47:02.257844+00:00",
+      "authored_at": "2026-09-22T18:21:20.605458+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -1412,11 +1402,10 @@
         }
       ],
       "derived_role": "instrument",
-      "expected_role": "confounder",
+      "expected_role": "instrument",
       "ambiguous": false,
       "review_required": false,
       "review_reasons": [
-        "author expected 'confounder', extractor derived 'instrument'",
         "unsupported edges (no verified citation): calendar_time_post_remibrutinib_approval_indicator->T"
       ],
       "cross_check": {
@@ -1433,7 +1422,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:47:02.484458+00:00",
+      "authored_at": "2026-09-22T18:21:20.751991+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -1472,11 +1461,10 @@
         }
       ],
       "derived_role": "instrument",
-      "expected_role": "confounder",
+      "expected_role": "instrument",
       "ambiguous": false,
       "review_required": false,
       "review_reasons": [
-        "author expected 'confounder', extractor derived 'instrument'",
         "unsupported edges (no verified citation): index_prescriber_btk_inhibitor_preference_share_prior_365d->T"
       ],
       "cross_check": {
@@ -1493,7 +1481,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:47:02.660359+00:00",
+      "authored_at": "2026-09-22T18:21:20.897224+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -1532,11 +1520,10 @@
         }
       ],
       "derived_role": "instrument",
-      "expected_role": "confounder",
+      "expected_role": "instrument",
       "ambiguous": true,
       "review_required": false,
       "review_reasons": [
-        "author expected 'confounder', extractor derived 'instrument'",
         "unsupported edges (no verified citation): index_prescriber_csu_biologic_volume_tertile_prior_365d->T"
       ],
       "cross_check": {
@@ -1553,7 +1540,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:47:02.816327+00:00",
+      "authored_at": "2026-09-22T18:21:21.052662+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -1592,11 +1579,10 @@
         }
       ],
       "derived_role": "instrument",
-      "expected_role": "confounder",
+      "expected_role": "instrument",
       "ambiguous": false,
       "review_required": false,
       "review_reasons": [
-        "author expected 'confounder', extractor derived 'instrument'",
         "unsupported edges (no verified citation): index_prescriber_first_btki_initiation_within_first_year_post_approval_flag->T"
       ],
       "cross_check": {
@@ -1613,7 +1599,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:47:03.006563+00:00",
+      "authored_at": "2026-09-22T18:21:21.198308+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -1652,11 +1638,10 @@
         }
       ],
       "derived_role": "instrument",
-      "expected_role": "confounder",
+      "expected_role": "instrument",
       "ambiguous": false,
       "review_required": false,
       "review_reasons": [
-        "author expected 'confounder', extractor derived 'instrument'",
         "unsupported edges (no verified citation): payer_formulary_tier_change_remibrutinib_quarter->T"
       ],
       "cross_check": {
@@ -1673,7 +1658,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:47:03.174658+00:00",
+      "authored_at": "2026-09-22T18:21:21.349059+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -1712,11 +1697,10 @@
         }
       ],
       "derived_role": "instrument",
-      "expected_role": "confounder",
+      "expected_role": "instrument",
       "ambiguous": false,
       "review_required": false,
       "review_reasons": [
-        "author expected 'confounder', extractor derived 'instrument'",
         "unsupported edges (no verified citation): regional_zip3_quarter_remibrutinib_uptake_share->T"
       ],
       "cross_check": {
@@ -1733,7 +1717,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:47:03.341798+00:00",
+      "authored_at": "2026-09-22T18:21:21.504177+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -1784,11 +1768,10 @@
         }
       ],
       "derived_role": "mediator",
-      "expected_role": "confounder",
+      "expected_role": "mediator",
       "ambiguous": false,
       "review_required": false,
       "review_reasons": [
-        "author expected 'confounder', extractor derived 'mediator'",
         "unsupported edges (no verified citation): T->delta_anti_fcepsilon_ri_igg_titer_post_treatment_60_90d, delta_anti_fcepsilon_ri_igg_titer_post_treatment_60_90d->Y"
       ],
       "cross_check": {
@@ -1805,7 +1788,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:47:03.517024+00:00",
+      "authored_at": "2026-09-22T18:21:21.661565+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -1856,11 +1839,10 @@
         }
       ],
       "derived_role": "mediator",
-      "expected_role": "confounder",
+      "expected_role": "mediator",
       "ambiguous": false,
       "review_required": false,
       "review_reasons": [
-        "author expected 'confounder', extractor derived 'mediator'",
         "unsupported edges (no verified citation): T->delta_basophil_activation_test_cd63_pct_28_56d, delta_basophil_activation_test_cd63_pct_28_56d->Y"
       ],
       "cross_check": {
@@ -1877,7 +1859,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:47:03.690003+00:00",
+      "authored_at": "2026-09-22T18:21:21.812719+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -1928,11 +1910,10 @@
         }
       ],
       "derived_role": "collider",
-      "expected_role": "confounder",
+      "expected_role": "collider",
       "ambiguous": true,
       "review_required": false,
       "review_reasons": [
-        "author expected 'confounder', extractor derived 'collider'",
         "unsupported edges (no verified citation): T->delta_crp_mg_l_60_120d_post_index, Y->delta_crp_mg_l_60_120d_post_index"
       ],
       "cross_check": {
@@ -1949,7 +1930,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:47:03.843829+00:00",
+      "authored_at": "2026-09-22T18:21:21.965719+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -2000,11 +1981,10 @@
         }
       ],
       "derived_role": "collider",
-      "expected_role": "confounder",
+      "expected_role": "collider",
       "ambiguous": true,
       "review_required": false,
       "review_reasons": [
-        "author expected 'confounder', extractor derived 'collider'",
         "unsupported edges (no verified citation): T->delta_d_dimer_ug_ml_90_180d_post_index, Y->delta_d_dimer_ug_ml_90_180d_post_index"
       ],
       "cross_check": {
@@ -2021,7 +2001,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:47:03.997316+00:00",
+      "authored_at": "2026-09-22T18:21:22.116316+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     },
@@ -2072,11 +2052,10 @@
         }
       ],
       "derived_role": "collider",
-      "expected_role": "confounder",
+      "expected_role": "collider",
       "ambiguous": true,
       "review_required": false,
       "review_reasons": [
-        "author expected 'confounder', extractor derived 'collider'",
         "unsupported edges (no verified citation): T->delta_serum_il17_pg_ml_60_120d_post_index, Y->delta_serum_il17_pg_ml_60_120d_post_index"
       ],
       "cross_check": {
@@ -2093,7 +2072,7 @@
       "model_id": "dummy",
       "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
       "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
-      "authored_at": "2026-09-22T16:47:04.147680+00:00",
+      "authored_at": "2026-09-22T18:21:22.261908+00:00",
       "author_schema_version": "1",
       "reasoning": "fake LM (replay of the committed CSU blind authored edges)"
     }

@@ -6,12 +6,18 @@ validation" items 1–5, §5, §6 (Lane B line), §7. Branch
 `claude/lane-b-structural-author-scaffold`, base `31a4c5b6d` (origin/main).
 
 No paid LLM call and no prod write was made. Every number below cites the
-captured file:line in this directory.
+captured file:line in this directory. Every capture was regenerated on the
+clean committed tree `edb96fbd2` (codex r2 HIGH 4): `disproofs.txt:1` says
+`dirty_src_scripts_tests=no`, and every `score.json` / `authored.json` /
+`attestations.json` / `dag.json` carries `meta.tree` = `{commit, dirty_src_scripts_tests}`
+(`summary.md:6` and `review.md:6` repeat it), so a capture from a dirty tree
+says so on its face.
 
 ## Cheapest disproofs run before building
 
 Captured by `disproofs.py` → `disproofs.txt` (re-runnable from the worktree
-root; `disproofs.txt:1` names the commit it ran at).
+root; `disproofs.txt:1` names the commit it ran at and whether `src/`, `scripts/`
+or `tests/` were dirty at that moment — the committed capture says `no`).
 
 | # | Assumption the deliverable rests on | Result (cited) |
 |---|---|---|
@@ -22,6 +28,7 @@ root; `disproofs.txt:1` names the commit it ran at).
 | 5 | The guide can be read from `docs/` at runtime inside the API container | `disproofs.txt:7` — `.dockerignore:76 == 'docs/'`: the docs tree is NOT in the image → sections 0–6 are embedded (`src/data/kg/_structural_author_guide.py`) and pinned byte-for-byte by `test_guide_sections_are_verbatim`; likewise the item-5 loader reads the approved DAG from the review row, not from `docs/layer4/generated/` |
 | 6 | dspy keeps the docstring verbatim as instructions | `disproofs.txt:8` — 16545 vs 16546 chars, equal after `.strip()`: `inspect.cleandoc` drops the trailing newline only |
 | 7 | The node edit stays under the module-size ratchet | `disproofs.txt:9` — 4237 lines (pin lowered from 4238 to 4237 in `tests/unit/test_tests_meta/test_module_size_ratchet.py`; the provenance helper lives in `src/ml/causal_role_dgp/extractor.py`) |
+| 8 | (codex r2 MED 1) The assembler needs a fallback search because a full candidate set can fail the backdoor criterion while a proper subset is admissible | `nonmonotone_search.txt:3` — `unions checked: 19521; full-fails-but-subset-passes cases: 0` over every union of 2 classified fragments (≤3 authored edges each) and 3 fragments (≤2 edges) sharing latents by name (`nonmonotone_search.py`). Rebutted: in the fragment vocabulary an ancestor/confounder candidate always reaches Y, so a latent parent that also reaches T forms a chain only the candidate blocks, and the path conditioning opens runs through latents — a failing full set means no observed subset is admissible, which is what the assembler reports |
 
 Red proof for the provenance field (T1): `red_t1_provenance.txt:2` —
 `TypeError: ... unexpected keyword argument 'provenance'` at `31a4c5b6d`.
@@ -34,13 +41,13 @@ Red proof for the provenance field (T1): `red_t1_provenance.txt:2` —
 replays the committed CSU blind authored edges through the full pipeline
 (parse → `extract_role` → grade → stamp → score):
 
-- `measure_fake_csu/summary.md:9` — `PASS: gate missed_leaks == 0 — missed leaks 0 (rate 0.000 over 31 scored, 0 routed to review, n=31)`
-- `measure_fake_csu/summary.md:10` — `exact role agreement 28/31 (0.903); leak-decision agreement 31/31 (1.000)` — identical to the committed record `docs/layer4/csu_golden_validation_review_record.json` (n 31, exact 28, missed 0).
+- `measure_fake_csu/summary.md:10` — `PASS: gate missed_leaks == 0 — missed leaks 0 (rate 0.000 over 14 scored golden-leak features; 31 scored, 0 routed to review, n=31)`
+- `measure_fake_csu/summary.md:11` — `exact role agreement 28/31 (0.903); leak-decision agreement 31/31 (1.000)` — identical to the committed record `docs/layer4/csu_golden_validation_review_record.json` (n 31, exact 28, missed 0).
 
 `--cohort all` (91 briefs; the 60 non-CSU briefs get a stand-in confounder
 fragment, clearly not an authored claim):
 
-- `measure_fake_all91/summary.md:9` — `FAIL: gate missed_leaks == 0 — missed leaks 28 (rate 0.667 over 42 scored golden-leak features; ...)`, exit code 2: the gate has teeth on a stand-in author (28 = every leak-role feature of the PNH and BC cohorts; the rate is over the 42 golden leak features, not over all 91), and "the report is the deliverable" is the exit path.
+- `measure_fake_all91/summary.md:10` — `FAIL: gate missed_leaks == 0 — missed leaks 28 (rate 0.667 over 42 scored golden-leak features; ...)`, exit code 2: the gate has teeth on a stand-in author (28 = every leak-role feature of the PNH and BC cohorts; the rate is over the 42 golden leak features, not over all 91), and "the report is the deliverable" is the exit path.
 
 ### Cost estimate for the REAL benchmark (owner decision)
 
@@ -52,6 +59,14 @@ output tokens 81,900 assumed (900/brief), `cost_estimate.json:11` ≈ USD 1.72
 at ASSUMED 2.00/8.00 USD per Mtok. The rates are placeholders — pass the list
 price of `DSPY_LM_MODEL` (`openai/gpt-5.6-terra` in `.env`) with
 `--usd-per-mtok-in/--usd-per-mtok-out`.
+
+No Lane E panel enters this benchmark, by construction: the 91 golden
+briefs are literature-derived fixtures (label sets for ConcertAI CSU / PNH /
+BC cohorts that exist as no frame on this platform), so the four voters have
+nothing to run on and no panel can exist for them; the author gets the brief
+alone, exactly what a real feature gets when its panel record is absent. The
+panel is required on the cohort runs below (codex r2 MED 3, rebutted on this
+ground and documented in the script).
 
 Command for the real run (not executed):
 
@@ -66,8 +81,8 @@ Run (b) shape, `python -m scripts.author_cohort_dag --manifest optum --treatment
 
 Run (a) shape, `--manifest optum_mart --treatment treatment_dupixent --outcome persistent_at_180d_g28 --treatment-label "remibrutinib vs competitor biologic (CSU escalation therapy; rehearsed as Dupixent vs Xolair)" --lm fake`:
 
-- `author_fake/optum_mart_treatment_dupixent_persistent_at_180d_g28/dag.json:9,13,21,22` — `lm "fake"`, 64 features, `is_dag true`, `adjustment_valid true`.
-- `.../review.md` — the reviewer checklist item `escalation_decision_point` (the stated assumption), the per-feature table, `## Review items (0)` at line 85 (a stand-in author has nothing ambiguous to say).
+- `author_fake/optum_mart_treatment_dupixent_persistent_at_180d_g28/dag.json:9,13,25,26` — `lm "fake"`, 64 features, `is_dag true`, `adjustment_valid true`.
+- `.../review.md` — the reviewer checklist item `escalation_decision_point` (the stated assumption), the per-feature table, `## Review items (0)` at line 86 (a stand-in author has nothing ambiguous to say).
 
 Commands for the real runs (not executed; paid LLM + a prod `expert_reviews` write each):
 

@@ -2,7 +2,8 @@
 
 - lm: `fake` (fake source: replay)
 - resolver: `offline`; cohort: `CSU_remibrutinib`; briefs: 31
-- measured_at: 2026-09-22T16:47:04.148107+00:00
+- measured_at: 2026-09-22T18:21:22.262348+00:00
+- tree: commit edb96fbd24ddb63ca6b2e3bb93fa619c86df9af1 (dirty src/scripts/tests: False)
 
 ## Score
 

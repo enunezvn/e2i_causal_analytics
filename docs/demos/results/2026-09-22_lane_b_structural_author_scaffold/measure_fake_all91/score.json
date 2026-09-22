@@ -1,12 +1,16 @@
 {
   "meta": {
-    "measured_at": "2026-09-22T16:47:35.248851+00:00",
+    "measured_at": "2026-09-22T18:21:48.027481+00:00",
     "lm": "fake",
     "fake_source": "replay",
     "resolver": "offline",
     "cohort": "all",
     "golden": "/home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-b-structural-author-scaffold/tests/fixtures/causal_role_golden_set.json",
-    "n_briefs": 91
+    "n_briefs": 91,
+    "tree": {
+      "commit": "edb96fbd24ddb63ca6b2e3bb93fa619c86df9af1",
+      "dirty_src_scripts_tests": false
+    }
   },
   "n": 91,
   "n_scored": 91,

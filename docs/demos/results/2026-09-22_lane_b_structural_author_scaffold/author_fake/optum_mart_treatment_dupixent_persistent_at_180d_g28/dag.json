@@ -1,18 +1,22 @@
 {
   "meta": {
-    "authored_at": "2026-09-22T16:49:47.471309+00:00",
+    "authored_at": "2026-09-22T18:23:47.390582+00:00",
     "manifest": "optum_mart",
     "treatment": "treatment_dupixent",
     "outcome": "persistent_at_180d_g28",
     "treatment_label": "remibrutinib vs competitor biologic (CSU escalation therapy; rehearsed as Dupixent vs Xolair)",
-    "outcome_label": "persistence at 180 days (g28)",
+    "outcome_label": "persistent_at_180d_g28",
     "lm": "fake",
     "resolver": "offline",
     "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
     "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
     "n_features": 64,
     "panel": null,
-    "provenance": "machine"
+    "provenance": "machine",
+    "tree": {
+      "commit": "edb96fbd24ddb63ca6b2e3bb93fa619c86df9af1",
+      "dirty_src_scripts_tests": false
+    }
   },
   "schema_version": "1",
   "treatment": "treatment_dupixent",

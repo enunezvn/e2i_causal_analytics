@@ -2,7 +2,8 @@
 
 - lm: `fake` (fake source: replay)
 - resolver: `offline`; cohort: `all`; briefs: 91
-- measured_at: 2026-09-22T16:47:35.248851+00:00
+- measured_at: 2026-09-22T18:21:48.027481+00:00
+- tree: commit edb96fbd24ddb63ca6b2e3bb93fa619c86df9af1 (dirty src/scripts/tests: False)
 
 ## Score
 

@@ -1,8 +1,9 @@
 # Cohort DAG review: optum_mart — treatment_dupixent → persistent_at_180d_g28
 
 - treatment `treatment_dupixent` = remibrutinib vs competitor biologic (CSU escalation therapy; rehearsed as Dupixent vs Xolair)
-- outcome `persistent_at_180d_g28` = persistence at 180 days (g28)
+- outcome `persistent_at_180d_g28` = persistent_at_180d_g28
 - author LM: `fake`; prompt hash `1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c`; guide hash `04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a`
+- tree: commit edb96fbd24ddb63ca6b2e3bb93fa619c86df9af1 (dirty src/scripts/tests: False)
 - provenance: `machine` on every fragment (audit-only until this review is approved)
 - features authored: 64; latents: none
 - is a DAG: True; admissible observed adjustment set: True

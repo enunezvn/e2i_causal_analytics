@@ -29,7 +29,15 @@ out: list[str] = []
 import src  # noqa: E402
 
 assert ".worktrees/lane-b-structural-author-scaffold" in src.__file__, src.__file__
-out.append(f"commit: {subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode().strip()}")
+_dirty = (
+    subprocess.check_output(["git", "status", "--porcelain", "--", "src", "scripts", "tests"])
+    .decode()
+    .strip()
+)
+out.append(
+    f"commit: {subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode().strip()} "
+    f"dirty_src_scripts_tests={'yes' if _dirty else 'no'}"
+)
 
 # 1. DummyLM drives typed list / bool outputs.
 import dspy  # noqa: E402
@@ -53,7 +61,7 @@ out.append(
 
 # 2. Importing the graph builder costs the whole agent package.
 t0 = time.time()
-from src.agents.causal_impact.nodes.graph_builder import GraphBuilderNode  # noqa: E402
+from src.agents.causal_impact.nodes.graph_builder import GraphBuilderNode  # noqa: E402, F401
 
 out.append(f"probe2 graph_builder import seconds: {time.time() - t0:.1f}")
 t0 = time.time()
@@ -64,7 +72,9 @@ out.append(f"probe2 backdoor module import seconds (after the above): {time.time
 # 3. CitationResolver takes injectable clients.
 from src.data.kg.citation_resolver import CitationResolver  # noqa: E402
 
-out.append(f"probe3 CitationResolver.__init__ signature: {inspect.signature(CitationResolver.__init__)}")
+out.append(
+    f"probe3 CitationResolver.__init__ signature: {inspect.signature(CitationResolver.__init__)}"
+)
 
 # 4. Repo under the dead-Supabase pin.
 import asyncio  # noqa: E402
@@ -100,7 +110,11 @@ out.append(
 )
 
 # 7. Node line count vs the ratchet pin.
-n = len(Path("src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py").read_text().splitlines())
+n = len(
+    Path("src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py")
+    .read_text()
+    .splitlines()
+)
 out.append(f"probe7 adaptive_validity_check.py lines: {n}")
 
 # 8. Run (b) fake diff: the disagreements are exactly the manifest instruments.
@@ -109,7 +123,9 @@ import json  # noqa: E402
 from src.data.manifests.optum_feature_manifest import _OPTUM_INSTRUMENT_FEATURES  # noqa: E402
 
 diff = json.loads(
-    (HERE / "author_fake/optum_biologic_initiation_initiated_biologic_180d/manifest_diff.json").read_text()
+    (
+        HERE / "author_fake/optum_biologic_initiation_initiated_biologic_180d/manifest_diff.json"
+    ).read_text()
 )
 out.append(
     f"probe8 fake run(b) disagreements={len(diff['disagreements'])} manifest instruments="
@@ -120,8 +136,8 @@ out.append(
 cost = json.loads((HERE / "measure_real_refused/cost_estimate.json").read_text())
 per_brief = cost["prompt_chars_per_brief_mean"]
 out.append(
-    f"probe9 cost: 91 briefs usd={cost['usd_estimate']:.2f}; run(a) 64 briefs ratio={64/91:.2f}; "
-    f"run(b) 110 briefs ratio={110/91:.2f}; prompt chars/brief={per_brief:.0f}"
+    f"probe9 cost: 91 briefs usd={cost['usd_estimate']:.2f}; run(a) 64 briefs ratio={64 / 91:.2f}; "
+    f"run(b) 110 briefs ratio={110 / 91:.2f}; prompt chars/brief={per_brief:.0f}"
 )
 
 (HERE / "disproofs.txt").write_text("\n".join(out) + "\n")
