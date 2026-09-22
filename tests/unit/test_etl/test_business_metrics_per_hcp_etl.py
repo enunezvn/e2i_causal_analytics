@@ -250,6 +250,9 @@ def _make_mock_conn(rowcount: int = 7) -> MagicMock:
     cur = MagicMock()
     cur.rowcount = rowcount
     cur.execute = MagicMock()
+    # #2210: the explicit-window preflight reads one count; a MagicMock would cast to 1 and
+    # make every explicit run refuse. Default to "no planted cohort data at stake".
+    cur.fetchone.return_value = (0,)
     cur.__enter__ = MagicMock(return_value=cur)
     cur.__exit__ = MagicMock(return_value=False)
 
@@ -285,9 +288,9 @@ def test_impl_completed_path() -> None:
     # `call_args[0][0] is INSERT` is False. The old assertion would therefore have failed
     # because of a statement it was never about, while this one keeps its subject (the
     # upsert and its bound params) and additionally pins that the reconcile follows it.
-    args, _ = cur.execute.call_args_list[0]
+    args, _ = cur.execute.call_args_list[1]  # [0] is the #2210 preflight
     assert args[0] is etl.INSERT_PER_HCP_ROLLUP_SQL
-    assert cur.execute.call_args_list[1].args[0] is etl.RECONCILE_PER_HCP_ROLLUP_SQL
+    assert cur.execute.call_args_list[2].args[0] is etl.RECONCILE_PER_HCP_ROLLUP_SQL
     params = args[1]
     assert params["metric_id_prefix"] == etl.METRIC_ID_PREFIX
     assert params["metric_type"] == etl.METRIC_TYPE
@@ -648,7 +651,8 @@ def test_impl_explicit_dates_keep_trigger_timestamp_selection() -> None:
     conn = _make_mock_conn(rowcount=3)
     with patch.object(etl, "_connect_to_db", return_value=conn):
         result = etl._run_per_hcp_rollup_impl(start_date="2026-05-01", end_date="2026-09-16")
-    args, _ = conn.cursor.return_value.execute.call_args_list[0]  # [1] is the reconcile
+    # [0] is the #2210 preflight, [2] the reconcile
+    args, _ = conn.cursor.return_value.execute.call_args_list[1]
     assert args[0] is etl.INSERT_PER_HCP_ROLLUP_SQL
     assert result["selected_by"] == "trigger_timestamp"
 
@@ -818,3 +822,107 @@ def test_the_etl_module_does_not_import_the_twin_package() -> None:
         cwd=Path(__file__).resolve().parents[3],
     ).stdout.strip()
     assert out == "[]", out
+
+
+# --- #2210: an explicit-window run fails closed before deleting planted cohort data ---------
+
+
+def _conn_with_preflight(count: int, rowcount: int = 7) -> MagicMock:
+    conn = _make_mock_conn(rowcount=rowcount)
+    conn.cursor.return_value.fetchone.return_value = (count,)
+    return conn
+
+
+def test_the_preflight_counts_exactly_what_the_preview_reports_as_cohort_data() -> None:
+    """The preflight is the preview's ``rows_obsolete_with_cohort_data`` aggregate, composed
+    from the same CTEs, the same obsolete predicate and the same planted-column list -- one
+    definition, so the two cannot disagree. It reads only."""
+    sql = etl.PREFLIGHT_COHORT_DATA_SQL
+    cte_text = etl.INSERT_PER_HCP_ROLLUP_SQL.split("INSERT INTO business_metrics", 1)[0]
+    assert sql.startswith(cte_text.rstrip())
+    tail = sql.split(")\nSELECT count(*) FROM business_metrics o\n WHERE ", 1)[1]
+    assert tail.startswith(etl._PREVIEW_OBSOLETE_WHERE)
+    predicate = " OR ".join(f"o.{c} IS NOT NULL" for c in etl.COHORT_DATA_COLUMNS)
+    assert tail.rstrip().endswith(f"AND ({predicate})")
+    assert f"AND ({predicate})" in etl._PREVIEW_COUNTS_SQL
+    code = "\n".join(line.split("--", 1)[0] for line in sql.splitlines())
+    assert not re.search(r"\b(INSERT|UPDATE|DELETE|MERGE)\b|ON CONFLICT", code)
+
+
+def test_explicit_window_run_refuses_when_obsolete_rows_carry_cohort_data() -> None:
+    conn = _conn_with_preflight(3)
+    with patch.object(etl, "_connect_to_db", return_value=conn):
+        result = etl._run_per_hcp_rollup_impl(start_date="2026-05-01", end_date="2026-09-16")
+    cur = conn.cursor.return_value
+    assert [c.args[0] for c in cur.execute.call_args_list] == [etl.PREFLIGHT_COHORT_DATA_SQL]
+    assert result["status"] == "refused"
+    assert result["rows_obsolete_with_cohort_data"] == 3
+    assert (result["rows_affected"], result["rows_deleted"]) == (0, 0)
+    assert "allow_cohort_data_loss" in result["error"]
+    conn.close.assert_called_once()
+
+
+def test_explicit_window_run_proceeds_in_one_transaction_when_no_cohort_data_is_at_stake() -> None:
+    conn = _conn_with_preflight(0)
+    with patch.object(etl, "_connect_to_db", return_value=conn):
+        result = etl._run_per_hcp_rollup_impl(start_date="2026-05-01", end_date="2026-09-16")
+    cur = conn.cursor.return_value
+    assert [c.args[0] for c in cur.execute.call_args_list] == [
+        etl.PREFLIGHT_COHORT_DATA_SQL,
+        etl.INSERT_PER_HCP_ROLLUP_SQL,
+        etl.RECONCILE_PER_HCP_ROLLUP_SQL,
+    ]
+    assert conn.__enter__.call_count == 1  # preflight, insert and reconcile share one transaction
+    assert result["status"] == "completed"
+    assert result["rows_obsolete_with_cohort_data"] == 0
+    assert result["cohort_data_loss_acknowledged"] is False
+
+
+def test_explicit_window_override_proceeds_and_names_the_loss(caplog) -> None:
+    conn = _conn_with_preflight(2)
+    with patch.object(etl, "_connect_to_db", return_value=conn), caplog.at_level("WARNING"):
+        result = etl._run_per_hcp_rollup_impl(
+            start_date="2026-05-01", end_date="2026-09-16", allow_cohort_data_loss=True
+        )
+    cur = conn.cursor.return_value
+    assert [c.args[0] for c in cur.execute.call_args_list] == [
+        etl.PREFLIGHT_COHORT_DATA_SQL,
+        etl.INSERT_PER_HCP_ROLLUP_SQL,
+        etl.RECONCILE_PER_HCP_ROLLUP_SQL,
+    ]
+    assert result["status"] == "completed"
+    assert result["rows_obsolete_with_cohort_data"] == 2
+    assert result["cohort_data_loss_acknowledged"] is True
+    assert any(
+        "allow_cohort_data_loss" in r.getMessage() and "2" in r.getMessage() for r in caplog.records
+    )
+
+
+def test_the_arrival_run_has_no_preflight_and_its_sql_is_unchanged() -> None:
+    conn = _conn_with_preflight(99)
+    with patch.object(etl, "_connect_to_db", return_value=conn):
+        result = etl._run_per_hcp_rollup_impl(arrived_before="2026-09-14T03:15:00+00:00")
+    cur = conn.cursor.return_value
+    assert [c.args[0] for c in cur.execute.call_args_list] == [
+        etl.INSERT_PER_HCP_ROLLUP_BY_ARRIVAL_SQL,
+        etl.RECONCILE_PER_HCP_ROLLUP_BY_ARRIVAL_SQL,
+    ]
+    assert result["status"] == "completed"
+    assert "rows_obsolete_with_cohort_data" not in result
+
+
+def test_the_override_is_refused_on_the_arrival_path() -> None:
+    with patch.object(etl, "_connect_to_db") as connect:
+        result = etl._run_per_hcp_rollup_impl(
+            arrived_before="2026-09-14T03:15:00+00:00", allow_cohort_data_loss=True
+        )
+    assert result["status"] == "failed" and "allow_cohort_data_loss" in result["error"]
+    connect.assert_not_called()
+
+
+def test_the_celery_task_exposes_the_override() -> None:
+    import inspect
+
+    params = inspect.signature(etl.run_per_hcp_rollup.run).parameters
+    assert "allow_cohort_data_loss" in params
+    assert params["allow_cohort_data_loss"].default is False

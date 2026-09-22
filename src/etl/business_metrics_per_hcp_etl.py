@@ -441,6 +441,21 @@ PREVIEW_PER_HCP_ROLLUP_SQL: str = (
     + _PREVIEW_COUNTS_SQL
 )
 
+#: #2210: the explicit-window run's preflight -- the preview's ``rows_obsolete_with_cohort_data``
+#: aggregate on its own, composed from the same CTEs, the same obsolete predicate and the same
+#: planted-column list, so what the run refuses on is exactly what the preview reported. Runs
+#: inside the run's own transaction, before the INSERT, so the count is race-free with the DELETE.
+PREFLIGHT_COHORT_DATA_SQL: str = (
+    _PER_HCP_ROLLUP_CTES_TEMPLATE.replace("__WINDOW_COLUMN__", "trigger_timestamp")
+    + ",\nrollup AS ("
+    + _PER_HCP_ROLLUP_ROWS_SELECT
+    + ")\nSELECT count(*) FROM business_metrics o\n WHERE "
+    + _PREVIEW_OBSOLETE_WHERE
+    + "\n   AND ("
+    + " OR ".join(f"o.{col} IS NOT NULL" for col in COHORT_DATA_COLUMNS)
+    + ")"
+)
+
 
 # -----------------------------------------------------------------------------
 # metric_id helpers
@@ -539,6 +554,7 @@ def _run_per_hcp_rollup_impl(
     end_date: Optional[str] = None,
     request_id: str = "no-task-id",
     arrived_before: Optional[str] = None,
+    allow_cohort_data_loss: bool = False,
 ) -> Dict[str, Any]:
     """Pure-Python core of the per-HCP rollup ETL.
 
@@ -561,13 +577,25 @@ def _run_per_hcp_rollup_impl(
         the reconcile removed in the same transaction), ``selected_by``
         (``"arrival"`` for a scheduled run, ``"trigger_timestamp"`` for an
         explicit window), ``window_start``, ``window_end``, and on failure an
-        ``error`` field.
+        ``error`` field. An explicit-window run also reports
+        ``rows_obsolete_with_cohort_data`` and ``cohort_data_loss_acknowledged``.
+
+    #2210 -- fail closed. An explicit-window run's reconcile deletes every stored row on the
+    window's dates that the recompute no longer produces. On 2026-09-21 those rows carried the
+    Digital Twin's planted cohort data (columns this ETL never writes) and the twin went dark.
+    So the run first counts, in its own transaction, the obsolete rows still carrying that
+    data (``PREFLIGHT_COHORT_DATA_SQL`` -- the preview's own aggregate); a positive count is
+    refused (status ``refused``, nothing written) unless ``allow_cohort_data_loss=True``, in
+    which case the loss is logged by name and the caller owns the replant. The scheduled
+    arrival run is untouched: its ``affected_dates`` scope is the beat's own contract.
     """
     by_arrival = start_date is None and end_date is None
     selected_by = "arrival" if by_arrival else "trigger_timestamp"
     try:
         if arrived_before is not None and not by_arrival:
             raise ValueError("arrived_before cannot be combined with start_date/end_date")
+        if allow_cohort_data_loss and by_arrival:
+            raise ValueError("allow_cohort_data_loss applies to explicit windows only")
         if by_arrival:
             start_dt, end_dt = _resolve_window(
                 None, arrived_before, default_lookback_seconds=ARRIVAL_WINDOW_HOURS * 3600
@@ -606,10 +634,48 @@ def _run_per_hcp_rollup_impl(
 
     conn = None
     rows_deleted = 0
+    cohort_extra: Dict[str, Any] = {}
     try:
         conn = _connect_to_db()
         with conn:  # transactional: commits on exit, rolls back on exception
             with conn.cursor() as cur:
+                if not by_arrival:
+                    # #2210: same transaction as the DELETE below, so the count cannot go
+                    # stale between the check and the write.
+                    cur.execute(PREFLIGHT_COHORT_DATA_SQL, params)
+                    at_stake = int((cur.fetchone() or (0,))[0])
+                    cohort_extra = {
+                        "rows_obsolete_with_cohort_data": at_stake,
+                        "cohort_data_loss_acknowledged": bool(allow_cohort_data_loss),
+                    }
+                    if at_stake > 0 and not allow_cohort_data_loss:
+                        message = (
+                            f"refused: {at_stake} obsolete per_hcp_rollup rows in "
+                            f"[{start_dt.isoformat()}, {end_dt.isoformat()}) still carry the "
+                            "Digital Twin's planted cohort data and the reconcile would delete "
+                            "them; run preview_per_hcp_rollup, plan the replant "
+                            "(scripts/backfill_segment_engagement.py --execute), then re-run "
+                            "with allow_cohort_data_loss=True"
+                        )
+                        logger.error("Per-HCP business_metrics rollup %s [%s]", message, request_id)
+                        return {
+                            "status": "refused",
+                            "error": message,
+                            "rows_affected": 0,
+                            "rows_deleted": 0,
+                            "window_start": start_dt.isoformat(),
+                            "window_end": end_dt.isoformat(),
+                            "selected_by": selected_by,
+                            **cohort_extra,
+                        }
+                    if at_stake > 0:
+                        logger.warning(
+                            "Per-HCP business_metrics rollup [%s]: allow_cohort_data_loss=True "
+                            "-- %d obsolete rows carrying planted cohort data will be deleted; "
+                            "the caller owns the replant",
+                            request_id,
+                            at_stake,
+                        )
                 cur.execute(sql, params)
                 rows_affected = cur.rowcount
                 # codex r13-08: the upsert cannot delete a row whose group lost its last
@@ -631,6 +697,7 @@ def _run_per_hcp_rollup_impl(
                 "window_end": end_dt.isoformat(),
                 "selected_by": selected_by,
                 "rows_deleted": rows_deleted,
+                **cohort_extra,
             }
 
         logger.info(
@@ -645,6 +712,7 @@ def _run_per_hcp_rollup_impl(
             "window_end": end_dt.isoformat(),
             "selected_by": selected_by,
             "rows_deleted": rows_deleted,
+            **cohort_extra,
         }
 
     except Exception as e:
@@ -684,6 +752,7 @@ def run_per_hcp_rollup(
     self,  # noqa: ANN001 — Celery passes the bound task instance
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    allow_cohort_data_loss: bool = False,
 ) -> Dict[str, Any]:
     """Celery wrapper around :func:`_run_per_hcp_rollup_impl`.
 
@@ -694,4 +763,5 @@ def run_per_hcp_rollup(
         start_date=start_date,
         end_date=end_date,
         request_id=request_id,
+        allow_cohort_data_loss=allow_cohort_data_loss,
     )

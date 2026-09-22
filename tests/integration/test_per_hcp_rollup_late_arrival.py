@@ -422,3 +422,56 @@ def test_the_preview_names_the_cohort_data_an_obsolete_row_still_carries(
         stripped["rows_obsolete"] - baseline["rows_obsolete"],
         stripped["rows_obsolete_with_cohort_data"] - baseline["rows_obsolete_with_cohort_data"],
     ) == (1, 0), (baseline, stripped)
+
+
+def test_an_explicit_window_run_refuses_to_delete_planted_cohort_data_unless_acknowledged(
+    db_conn: Any, planted: dict
+) -> None:
+    """#2210: the preview says how much cohort data an explicit-window reconcile would delete;
+    the run itself must refuse to delete it. Plant one obsolete per_hcp_rollup cell carrying a
+    channel, run the explicit window: refused, row still there. Acknowledge the loss: the run
+    proceeds and the reconcile deletes the row. The fixture deletes anything left by hcp."""
+    from src.etl.business_metrics_per_hcp_etl import _run_per_hcp_rollup_impl
+
+    rid, a = planted["rid"], planted["a"]
+    metric_id = f"per_hcp_guard_{rid}"
+    with db_conn:
+        with db_conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO business_metrics (
+                    metric_id, metric_date, metric_type, brand, region, hcp_id,
+                    triggers_delivered_count, triggers_accepted_count, triggers_total_count,
+                    market_share, conversion_rate, is_synthetic, sample_volume
+                ) VALUES (
+                    %s, %s, 'per_hcp_rollup', %s::brand_type, 'northeast'::region_type, %s,
+                    1, 0, 1, 1.0, 0.0, true, 0.5
+                )
+                """,
+                (metric_id, date(2019, 1, 4), BRAND, a),
+            )
+
+    def _row_exists() -> bool:
+        with db_conn:
+            with db_conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM business_metrics WHERE metric_id = %s", (metric_id,))
+                return cur.fetchone() is not None
+
+    refused = _run_per_hcp_rollup_impl(
+        start_date="2019-01-01", end_date="2019-01-15", request_id="late-arrival-guard"
+    )
+    assert refused["status"] == "refused", refused
+    assert refused["rows_obsolete_with_cohort_data"] >= 1, refused
+    assert (refused["rows_affected"], refused["rows_deleted"]) == (0, 0), refused
+    assert _row_exists(), "a refused run must write nothing"
+
+    acknowledged = _run_per_hcp_rollup_impl(
+        start_date="2019-01-01",
+        end_date="2019-01-15",
+        request_id="late-arrival-guard-ack",
+        allow_cohort_data_loss=True,
+    )
+    assert acknowledged["status"] == "completed", acknowledged
+    assert acknowledged["cohort_data_loss_acknowledged"] is True
+    assert acknowledged["rows_deleted"] >= 1, acknowledged
+    assert not _row_exists(), "the acknowledged run's reconcile deletes the obsolete row"
