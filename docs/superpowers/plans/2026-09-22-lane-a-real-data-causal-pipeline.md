@@ -312,6 +312,13 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 ### Task 2: Export the causal cohort (records carry the treatment; prediction cohorts do not)
 
+> **Amended after the Task 1–2 quality review (commit `ec85fb7fa`), the landed code differs from the blocks below in these ways — the code is the truth:**
+> - the shipped outcome formulas live in two module-level predicates `_persistent(cov_to_end, gap, *, window_days, grace_days=0)` and `_discontinued(cov_to_end, gap, term, *, window_days)` used by all three selectors (byte-identical prediction outputs proven across nine file hashes);
+> - `CAUSAL_EXTRA_COLS` + `_CAUSAL_DICTIONARY_TYPE` became ONE ordered mapping `CAUSAL_EXTRA_COLUMNS: dict[str, tuple[dictionary_type, kind]]` with kinds `date` / `text` / `flag`; `CAUSAL_EXTRA_COLS = tuple(CAUSAL_EXTRA_COLUMNS)` is kept for the later tasks; a `flag` outside {0, 1} (NaN, None, 0.5) raises `ValueError` naming the column — never truncated;
+> - the causal selector appends one `excluded_arm:<BRAND>` attrition step per brand outside the pair before `two_arm_contrast`;
+> - `convert()` computes `arms` from `cohort_df["index_biologic_brand"].value_counts()`;
+> - extra tests: boundary rows (cov_to_end 151/152, gap 60/61), flag validation, the allow-list guard parameterised over `extra_cols`, and a registry key-set test.
+
 **Files:**
 - Modify: `scripts/convert_optum_mart.py` — `build_journey_records` (line 202), `_data_dictionary_entries` (line 259), the cohort registry (lines 282–318), `convert` (line 376), `main` (line 427)
 - Test: `tests/unit/test_scripts/test_convert_optum_mart_causal.py` (append)
@@ -327,6 +334,7 @@ from scripts.convert_optum_mart import (  # noqa: E402
     CAUSAL_RECORDS_NAME,
     COHORT_TARGETS,
     PREDICTION_COHORTS,
+    TARGET_PERSISTENT,
     build_journey_records,
     convert,
 )
@@ -500,7 +508,11 @@ def test_prediction_cohorts_still_drop_the_treatment(tmp_path):
     out = tmp_path / "persistence"
     convert(input_path=str(mart), output_dir=str(out), cohort="persistence", window_days=180, min_claim_count=2)
     frame = pd.read_parquet(out / "e2i_ml_v3_patient_journeys.parquet")
-    for col in (*CAUSAL_EXTRA_COLS, TARGET_PERSISTENT_G28, "is_synthetic"):
+    # TARGET_PERSISTENT ("persistent_at_180d") is a member of CAUSAL_EXTRA_COLS
+    # AND this PREDICTION cohort's own supervised target — it belongs in this
+    # frame for a reason unrelated to Lane A, so it is excluded from the
+    # leak-check and asserted present instead.
+    for col in {*CAUSAL_EXTRA_COLS, TARGET_PERSISTENT_G28, "is_synthetic"} - {TARGET_PERSISTENT}:
         assert col not in frame.columns, f"{col} leaked into the prediction persistence frame"
     assert "persistent_at_180d" in frame.columns
 
