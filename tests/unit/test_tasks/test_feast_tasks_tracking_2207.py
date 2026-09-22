@@ -347,3 +347,55 @@ def test_every_feast_task_has_an_explicit_route_to_a_consumed_queue():
         "src.tasks.materialize_feature_view",
     ):
         assert routes.get(task, {}).get("queue") in medium, task
+
+
+# ---------------------------------------------------------------------------
+# codex r3: a job row is counted only when it LANDED, and it lands atomically with
+# its terminal status — never a `pending` row whose close-out failed separately
+# ---------------------------------------------------------------------------
+
+
+class _JobsInsertRefusingSupabase(FakeSupabase):
+    """Registry inserts work; every ml_feast_materialization_jobs insert fails."""
+
+    def table(self, name: str) -> _FakeQuery:
+        q = super().table(name)
+        if name == "ml_feast_materialization_jobs":
+            q.execute = lambda: (_ for _ in ()).throw(RuntimeError("insert refused"))  # type: ignore[method-assign]
+        return q
+
+
+@pytest.mark.unit
+def test_a_job_row_that_did_not_land_is_not_counted(fake_job, caplog):
+    import asyncio
+
+    from src.tasks.feast_tracking import record_materialization_jobs
+
+    db = _JobsInsertRefusingSupabase()
+    written = asyncio.run(
+        record_materialization_jobs(
+            db,
+            job_type="incremental",
+            requested_start=None,
+            requested_end=datetime.now(timezone.utc),
+            feature_views=["hcp_profile_features"],
+            result=FAILED_INIT,
+        )
+    )
+    assert written == 0
+    assert "ml_feast_materialization_jobs" not in db.store  # nothing pending, nothing at all
+    assert len(db.store["ml_feast_feature_views"]) == 1  # the registry row still landed
+
+
+@pytest.mark.unit
+def test_job_rows_land_with_their_terminal_status_in_one_insert(fake_db, fake_job):
+    """No create-then-update pair: the single inserted row already carries the outcome."""
+    fake_job.outcomes = {"incremental": FAILED_INIT, "full": FAILED_INIT}
+    feast_tasks.materialize_incremental_features(feature_views=["hcp_profile_features"])
+    rows = fake_db.store["ml_feast_materialization_jobs"]
+    assert len(rows) == 2  # incremental + the recovery attempt
+    for r in rows:
+        assert r["status"] == "failed"
+        assert r["error_message"] == "Failed to initialize Feast client"
+        assert r["completed_at"]
+    assert not any(r["status"] == "pending" for r in rows)

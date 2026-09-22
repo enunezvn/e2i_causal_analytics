@@ -117,6 +117,9 @@ async def record_materialization_jobs(
     repo = FeastMaterializationRepository(client)
     written = 0
     for name in views:
+        # One atomic insert carrying the terminal status (codex r3): a create +
+        # update pair could leave a `pending` row when the close-out failed, and
+        # counting it as recorded would be a lie. `written` is rows that landed.
         job = await repo.create_job(
             feature_view_id=ids.get(name),  # type: ignore[arg-type]
             feature_view_name=name,
@@ -124,16 +127,14 @@ async def record_materialization_jobs(
             end_time=end_time,
             job_type=job_type,
             job_id=task_id,
-        )
-        if job is None or job.id is None:
-            continue
-        await repo.update_status(
-            job.id,
-            status,
+            status=status.value,
             error_message=error_message,
             rows_materialized=rows,
             duration_seconds=float(duration) if duration is not None else None,
         )
+        if job is None or job.id is None:
+            logger.warning("Feast tracking: job row for %s (%s) did not land", name, job_type)
+            continue
         written += 1
     return written
 

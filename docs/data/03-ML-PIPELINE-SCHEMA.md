@@ -41,10 +41,11 @@ after #2207, per table (details in each section):
 | `ml_feature_store` | none | roadmap stake, kept (owner decision (c)) |
 | `driver_rankings`, `feature_rankings` | none | roadmap stake, kept (owner decision (c)) |
 
-Nothing was left dark for memory: the retraining pipeline measured inside worker_medium
-at ~0.85 GB peak (n=4000, 2 HPO trials; +~75 MB at the prod cohort shape 15,209×77) —
-see the routing comment in `src/workers/celery_app.py`. Two blockers the dark queue had
-hidden remain, and both are owner decisions rather than lane fixes: (1) the scheduled
+Memory was not the binding constraint: the retraining pipeline measured inside worker_medium
+at ~0.85 GB peak (n=4000, 2 HPO trials; +~75 MB at the prod cohort shape 15,209×77) — see
+the routing comment in `src/workers/celery_app.py` — so it is routed there. It still does
+not run end to end on this box: two blockers the dark queue had hidden remain, and both
+are owner decisions rather than lane fixes: (1) the scheduled
 evaluation path has no committed cohort contract to trigger with — no persisted model
 record carries `data_source` + `target_outcome`, so it evaluates and logs instead of
 enqueueing a job that would fail closed; (2) the data-prep Feast gate (#556) fails closed

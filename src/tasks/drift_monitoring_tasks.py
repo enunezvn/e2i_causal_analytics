@@ -785,10 +785,15 @@ def evaluate_retraining_need(
     model_id: str,
     auto_approve: bool = False,
 ) -> Dict[str, Any]:
-    """Evaluate and optionally trigger model retraining.
+    """Evaluate whether a model needs retraining (scheduled path: evaluation only).
 
-    Checks drift scores and performance metrics to determine if
-    retraining is needed, then optionally triggers it.
+    Checks drift scores and performance metrics to decide whether retraining is
+    needed. This task carries no cohort contract, and a live retrain needs one
+    (``data_source`` + ``target_outcome`` — see ``_cohort_input_from_training_config``),
+    so ``evaluate_and_trigger_retraining`` refuses to enqueue a job from here
+    (#2207): the decision is logged and returned with
+    ``retraining_blocked_reason="no_cohort_contract"``. Triggering with the
+    contract is ``POST /monitoring/retraining/trigger/{model_id}``.
 
     Args:
         model_id: Model version/ID to evaluate
@@ -990,8 +995,12 @@ def execute_model_retraining(
     Loads the committed cohort named in ``training_config`` (data_source +
     target_outcome + optional feature_manifest_source), runs scope → data-prep
     (QC gate) → train → deploy (gated), and records the real validation metric.
-    Fails closed — never writes a simulated metric. Routed to the ``ml`` queue
-    (worker_heavy) since it runs a full training pipeline.
+    Fails closed — never writes a simulated metric. Routed to the ``analytics`` queue
+    (worker_medium, 4G cgroup) since #2207 — the ``ml`` queue has no consumer on this
+    box (worker_heavy replicas: 0, #705); measurement in ``src/workers/celery_app.py``.
+    On the current worker image the run stops at data-prep's Feast gate (#556, Feast
+    not importable there per #307) and is recorded ``failed`` with that reason unless
+    ``ALLOW_STALE_FEAST=1`` is set — an owner decision documented in the routing comment.
 
     Args:
         retraining_id: Retraining history record ID
@@ -1015,9 +1024,12 @@ def check_retraining_for_all_models(
     self,
     auto_approve: bool = False,
 ) -> Dict[str, Any]:
-    """Check retraining needs for all production models.
+    """Check retraining needs for all production models (evaluation only).
 
-    Evaluates each production model and triggers retraining if needed.
+    Fans out one ``evaluate_retraining_need`` per production/staging model. Since
+    #2207 this runs daily from the ``retraining-evaluation-daily`` beat on the
+    ``quick`` queue; it never enqueues a retraining job because no cohort contract
+    is known on this path (see ``evaluate_retraining_need``).
 
     Args:
         auto_approve: Skip approval requirement for all models
