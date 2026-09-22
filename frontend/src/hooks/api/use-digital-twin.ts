@@ -26,8 +26,12 @@ import {
   getDigitalTwinHealth,
   listInterventionTypes,
   listModels,
+  listProposedExperiments,
+  createDraftExperiment,
 } from '@/api/digital-twin';
 import type {
+  DraftExperimentResponse,
+  ProposedExperimentsResponse,
   SimulateRequest,
   SimulationResponse,
   SimulationDetailResponse,
@@ -196,9 +200,59 @@ export function useInterventionTypes(
   });
 }
 
+/**
+ * Hook to fetch the twin simulations that propose an experiment (#2206): completed,
+ * recommendation deploy or refine, not yet linked to an experiment — with the honest
+ * counts around them (linked simulations; real experiments running, 0 today).
+ *
+ * @example
+ * ```tsx
+ * const { data } = useProposedExperiments();
+ * data?.proposals.forEach((p) => console.log(p.brand, p.intervention_type, p.simulated_ate));
+ * ```
+ */
+export function useProposedExperiments(
+  params?: { brand?: string },
+  options?: Omit<UseQueryOptions<ProposedExperimentsResponse, ApiError>, 'queryKey' | 'queryFn'>
+) {
+  return useQuery<ProposedExperimentsResponse, ApiError>({
+    queryKey: queryKeys.digitalTwin.proposedExperiments(params),
+    queryFn: () => listProposedExperiments(params),
+    staleTime: 60 * 1000, // a new simulation or a new draft changes the list
+    ...options,
+  });
+}
+
 // =============================================================================
 // MUTATION HOOKS
 // =============================================================================
+
+/**
+ * Hook to create a linked draft experiment from a proposal (#2206). On success the
+ * proposal leaves the list (it is linked now) and history rows show the link, so
+ * both caches are invalidated.
+ */
+export function useCreateDraftExperiment(
+  options?: Omit<UseMutationOptions<DraftExperimentResponse, ApiError, string>, 'mutationFn'>
+) {
+  const queryClient = useQueryClient();
+
+  return useMutation<DraftExperimentResponse, ApiError, string>({
+    mutationFn: (simulationId) => createDraftExperiment(simulationId),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({
+        queryKey: [...queryKeys.digitalTwin.all(), 'proposed-experiments'],
+      });
+      queryClient.invalidateQueries({
+        queryKey: [...queryKeys.digitalTwin.all(), 'history'],
+      });
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.digitalTwin.simulation(data.simulation_id),
+      });
+    },
+    ...options,
+  });
+}
 
 /**
  * Hook to run a digital twin simulation.

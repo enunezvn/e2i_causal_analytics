@@ -86,6 +86,8 @@ const mockHistory = {
   simulations: [
     {
       simulation_id: 'real-sim-001',
+      // Linked to an experiment (#2206): the row says so.
+      experiment_design_id: 'a1b2c3d4-0000-4000-8000-000000000001',
       created_at: '2026-06-04T10:00:00Z',
       intervention_type: InterventionType.EMAIL_CAMPAIGN,
       brand: 'Remibrutinib',
@@ -1172,6 +1174,24 @@ describe('DigitalTwin', () => {
     const title = screen.getByText(/Confidence: 83%/).getAttribute('title') ?? '';
     expect(title).toMatch(/Confidence blends the evidence behind this estimate/);
     expect(title).not.toMatch(/more twins does not raise|follows the twin sample/i);
+  });
+
+  // #2206 item C.3: a history row linked to an experiment says so; an unlinked row
+  // (a proposal) shows nothing rather than a placeholder.
+  it('shows the linked experiment on a history row and nothing on an unlinked one (#2206)', async () => {
+    const user = userEvent.setup();
+    render(<DigitalTwin />, { wrapper: createWrapper() });
+    await act(async () => {
+      await user.click(screen.getByRole('button', { name: /History/i }));
+    });
+    const chips = screen.getAllByText(/linked · a1b2c3d4/);
+    expect(chips.length).toBeGreaterThan(0);
+    expect(chips[0]).toHaveAttribute(
+      'title',
+      'Linked to experiment a1b2c3d4-0000-4000-8000-000000000001'
+    );
+    // Exactly one history row is linked in the fixture.
+    expect(screen.getAllByText(/^linked · /)).toHaveLength(1);
   });
 
   // #2206 owner fix: the blend no longer imputes 0.7 for an unvalidated model — the

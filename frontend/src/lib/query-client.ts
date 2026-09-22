@@ -448,6 +448,10 @@ export const queryKeys = {
         params?.brand ?? null,
         params?.twin_type ?? 'hcp',
       ] as const,
+    // Twin simulations proposing an experiment (#2206); brand folded in so a
+    // brand filter does not collide with the all-brands read.
+    proposedExperiments: (params?: { brand?: string }) =>
+      [...queryKeys.digitalTwin.all(), 'proposed-experiments', params?.brand ?? 'all'] as const,
   },
 
   /**

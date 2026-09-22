@@ -1,27 +1,50 @@
 /**
- * Experiment Health Monitor Component
- * ====================================
+ * Experiment Health Monitor + Proposed Experiments Component
+ * ===========================================================
  *
- * Surfaces the live health of currently running experiments from the monitoring
- * sweep (enrollment, information fraction, SRM, open alerts), ranked worst-first
- * with the sweep's own recommended actions. Digital-twin pre-screening of
- * proposed experiments is not yet wired, so no twin score or lift estimate is
- * fabricated here — and no "Recommended/Simulated/Approved" pipeline states are
- * invented for what is purely a monitoring feed.
+ * Two real feeds, never mixed:
+ *
+ * 1. The live health of currently running experiments from the monitoring
+ *    sweep (enrollment, information fraction, SRM, open alerts), ranked
+ *    worst-first with the sweep's own recommended actions. No twin score or
+ *    lift estimate is fabricated for a monitoring row.
+ * 2. Proposed experiments (#2206): completed digital-twin simulations whose
+ *    recommendation is deploy or refine and which are not yet linked to an
+ *    experiment — each with the twin's own predicted lift and interval,
+ *    recommended sample size and duration, the model's fidelity state and the
+ *    estimate's provenance. An admin can turn one into a linked `draft`
+ *    experiment; it stays a draft until promoted. Nothing runs by itself.
  *
  * @module components/insights/ExperimentRecommendations
  */
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { FlaskConical, Users, AlertCircle, ListChecks, ArrowRight } from 'lucide-react';
+import {
+  FlaskConical,
+  Users,
+  AlertCircle,
+  ListChecks,
+  ArrowRight,
+  Lightbulb,
+  Clock,
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { useTriggerMonitoring } from '@/hooks/api';
+import {
+  useCreateDraftExperiment,
+  useProposedExperiments,
+} from '@/hooks/api/use-digital-twin';
+import { useAuth } from '@/hooks/use-auth';
+import { toast } from '@/hooks/use-toast';
 import { EmptyState } from '@/components/ui/EmptyState';
 import type { ExperimentHealthSummary } from '@/types/experiments';
+import { FidelityStatus } from '@/types/digital-twin';
+import type { ProposedExperimentItem } from '@/types/digital-twin';
 
 // =============================================================================
 // TYPES
@@ -58,6 +81,7 @@ const HEALTH_RANK: Record<Experiment['health'], number> = {
 };
 
 const MAX_CARDS = 5;
+const MAX_PROPOSALS = 6;
 
 // =============================================================================
 // HELPERS
@@ -110,6 +134,48 @@ function toExperimentCard(summary: ExperimentHealthSummary): Experiment {
   };
 }
 
+/** `digital_engagement` → `Digital engagement` */
+function humanize(value: string): string {
+  const spaced = value.replace(/_/g, ' ').trim();
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+function formatLift(ate: number, lower?: number | null, upper?: number | null): string {
+  const pct = (v: number) => `${v >= 0 ? '+' : ''}${(v * 100).toFixed(1)}%`;
+  if (lower == null || upper == null) return pct(ate);
+  return `${pct(ate)} [${pct(lower)}, ${pct(upper)}]`;
+}
+
+/** The estimate's provenance, said plainly (the backend's recorded label). */
+function provenanceLabel(provenance?: string | null): string {
+  if (!provenance) return 'provenance not recorded';
+  if (provenance.startsWith('cohort_estimated')) return 'estimated on the brand cohort';
+  if (provenance.startsWith('synthetic')) return 'synthetic training frame';
+  if (provenance.startsWith('rwd')) return 'real-world data';
+  return provenance;
+}
+
+function fidelityConfig(status: ProposedExperimentItem['fidelity_status']) {
+  switch (status) {
+    case FidelityStatus.VALIDATED:
+      return {
+        label: 'Model validated',
+        className: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20',
+      };
+    case FidelityStatus.BELOW_THRESHOLD:
+      return {
+        label: 'Model below threshold',
+        className: 'bg-rose-500/10 text-rose-600 border-rose-500/20',
+      };
+    case FidelityStatus.UNVALIDATED:
+    default:
+      return {
+        label: 'Model unvalidated',
+        className: 'bg-amber-500/10 text-amber-600 border-amber-500/20',
+      };
+  }
+}
+
 // =============================================================================
 // SUB-COMPONENTS
 // =============================================================================
@@ -134,7 +200,7 @@ function ExperimentCard({ experiment }: { experiment: Experiment }) {
         </Badge>
       </div>
 
-      {/* Metrics Grid — real experiment-health fields (no Digital-Twin prescreen wired) */}
+      {/* Metrics Grid — real experiment-health fields */}
       <div className="grid grid-cols-2 gap-3 mb-3">
         <div className="p-2 rounded bg-[var(--color-muted)]/30">
           <div className="text-xs text-[var(--color-muted-foreground)]">Enrolled</div>
@@ -179,12 +245,108 @@ function ExperimentCard({ experiment }: { experiment: Experiment }) {
   );
 }
 
+function ProposalRow({
+  proposal,
+  canDraft,
+  isDrafting,
+  draftedExperimentId,
+  onDraft,
+}: {
+  proposal: ProposedExperimentItem;
+  canDraft: boolean;
+  isDrafting: boolean;
+  draftedExperimentId?: string;
+  onDraft: (proposal: ProposedExperimentItem) => void;
+}) {
+  const fidelity = fidelityConfig(proposal.fidelity_status);
+  const isDeploy = proposal.recommendation === 'deploy';
+
+  return (
+    <div
+      className="p-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-card)]"
+      data-testid={`proposal-${proposal.simulation_id}`}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h4 className="text-sm font-medium text-[var(--color-foreground)]">
+              {proposal.brand} · {humanize(proposal.intervention_type)}
+            </h4>
+            <Badge
+              variant="outline"
+              className={cn(
+                'text-xs',
+                isDeploy
+                  ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20'
+                  : 'bg-amber-500/10 text-amber-600 border-amber-500/20'
+              )}
+            >
+              {isDeploy ? 'Twin says deploy' : 'Twin says refine'}
+            </Badge>
+            <Badge variant="outline" className={cn('text-xs', fidelity.className)}>
+              {fidelity.label}
+            </Badge>
+          </div>
+          <p className="mt-1 text-xs text-[var(--color-muted-foreground)]">
+            Predicted lift{' '}
+            <span className="font-medium text-[var(--color-foreground)]">
+              {formatLift(
+                proposal.simulated_ate,
+                proposal.simulated_ci_lower,
+                proposal.simulated_ci_upper
+              )}
+            </span>
+            {' · '}
+            {proposal.recommended_sample_size != null
+              ? `n=${proposal.recommended_sample_size.toLocaleString()}`
+              : 'n not recommended'}
+            {' · '}
+            {proposal.recommended_duration_weeks != null
+              ? `${proposal.recommended_duration_weeks} weeks`
+              : 'duration not recommended'}
+            {' · '}
+            {provenanceLabel(proposal.data_provenance)}
+          </p>
+          {proposal.recommendation_rationale && (
+            <p className="mt-1 text-xs text-[var(--color-muted-foreground)] line-clamp-2">
+              {proposal.recommendation_rationale}
+            </p>
+          )}
+        </div>
+        {canDraft && !draftedExperimentId && (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={isDrafting}
+            onClick={() => onDraft(proposal)}
+            aria-label={`Create draft experiment from ${proposal.brand} ${humanize(proposal.intervention_type)}`}
+          >
+            {isDrafting ? 'Creating…' : 'Create draft experiment'}
+          </Button>
+        )}
+      </div>
+      {draftedExperimentId && (
+        <p className="mt-2 text-xs text-emerald-600">
+          Draft experiment <span className="font-mono">{draftedExperimentId}</span> created and
+          linked. It stays a draft until promoted to running and enrolled.
+        </p>
+      )}
+    </div>
+  );
+}
+
 // =============================================================================
 // MAIN COMPONENT
 // =============================================================================
 
 export function ExperimentRecommendations({ className }: ExperimentRecommendationsProps) {
   const { data, isPending, mutate } = useTriggerMonitoring();
+  const { isAdmin } = useAuth();
+  const proposalsQuery = useProposedExperiments();
+  const createDraft = useCreateDraftExperiment();
+  // simulation_id -> experiment_id created in this session (the row leaves the
+  // list on refetch; until then the row says what happened).
+  const [drafted, setDrafted] = useState<Record<string, string>>({});
 
   // Trigger a one-shot monitoring sweep on mount — there is no GET-list
   // endpoint; the monitor endpoint returns the live experiment summaries.
@@ -210,6 +372,45 @@ export function ExperimentRecommendations({ className }: ExperimentRecommendatio
   // so per-row flags under-report; the deployment flag is the reliable signal).
   const syntheticSubstrate =
     (data?.synthetic_data_forced ?? false) || (data?.synthetic_data_included ?? false);
+
+  const proposals = proposalsQuery.data?.proposals ?? [];
+  const shownProposals = proposals.slice(0, MAX_PROPOSALS);
+  const totalProposed = proposalsQuery.data?.total_proposed ?? 0;
+  const totalLinked = proposalsQuery.data?.total_linked ?? 0;
+  const realRunning = proposalsQuery.data?.real_experiments_running ?? 0;
+  const modelsState = (() => {
+    if (proposals.length === 0) return null;
+    const states = new Set(proposals.map((p) => p.fidelity_status));
+    if (states.size === 1 && states.has(FidelityStatus.UNVALIDATED)) return 'models unvalidated';
+    if (states.size === 1 && states.has(FidelityStatus.VALIDATED)) return 'models validated';
+    return 'model fidelity mixed';
+  })();
+
+  const handleDraft = (proposal: ProposedExperimentItem) => {
+    const confirmed = window.confirm(
+      `Create a draft experiment for ${proposal.brand} · ${humanize(proposal.intervention_type)}?\n\n` +
+        `It is written with status "draft" (n=${proposal.recommended_sample_size ?? '—'}, ` +
+        `${proposal.recommended_duration_weeks ?? '—'} weeks) and linked to this simulation. ` +
+        'Nothing runs until it is promoted.'
+    );
+    if (!confirmed) return;
+    createDraft.mutate(proposal.simulation_id, {
+      onSuccess: (created) => {
+        setDrafted((prev) => ({ ...prev, [proposal.simulation_id]: created.experiment_id }));
+        toast({
+          title: 'Draft experiment created',
+          description: `${created.experiment_name} (${created.experiment_id}) is linked to the simulation and stays a draft until promoted.`,
+        });
+      },
+      onError: (error) => {
+        toast({
+          title: 'Could not create the draft experiment',
+          description: error.message,
+          variant: 'destructive',
+        });
+      },
+    });
+  };
 
   return (
     <Card className={cn('bg-[var(--color-card)] border-[var(--color-border)]', className)}>
@@ -285,11 +486,84 @@ export function ExperimentRecommendations({ className }: ExperimentRecommendatio
                     {' '}on a <span className="font-medium">synthetic-gold substrate</span> — freshness
                     and enrollment alerts reflect the seeded dataset, not a live feed
                   </>
-                ) : null}. Digital-twin pre-screening of proposed experiments is not yet wired.
+                ) : null}. Proposed experiments below come from completed digital-twin simulations;
+                nothing runs until a draft is promoted.
               </div>
             </div>
           </>
         )}
+
+        {/* Proposed experiments (#2206) — a second real feed, never merged into the monitor list */}
+        <div className="pt-3 border-t border-[var(--color-border)]" data-testid="proposed-experiments">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-1.5 text-sm font-medium text-[var(--color-foreground)]">
+              <Lightbulb className="h-4 w-4 text-purple-500" />
+              Proposed experiments
+            </div>
+            {totalProposed > 0 && (
+              <Badge variant="outline" className="text-xs bg-purple-500/10 text-purple-600">
+                {totalProposed} proposed
+              </Badge>
+            )}
+          </div>
+          {proposalsQuery.isPending ? (
+            <EmptyState title="Loading proposals…" />
+          ) : proposalsQuery.isError ? (
+            <EmptyState
+              title="Couldn’t load proposed experiments"
+              description={proposalsQuery.error?.message ?? 'The proposals request failed.'}
+            />
+          ) : proposals.length === 0 ? (
+            <EmptyState
+              title="No proposed experiments"
+              description={
+                totalLinked > 0
+                  ? `Every completed simulation is already linked to an experiment (${totalLinked} linked).`
+                  : 'No completed digital-twin simulation recommends deploy or refine yet. Run one on the Digital Twin page.'
+              }
+            />
+          ) : (
+            <div className="space-y-2">
+              <p className="text-xs text-[var(--color-muted-foreground)]" data-testid="proposals-envelope">
+                {totalProposed} {totalProposed === 1 ? 'proposal' : 'proposals'} from twin simulations
+                {' · '}
+                {totalLinked} linked
+                {' · '}
+                {realRunning} real {realRunning === 1 ? 'experiment' : 'experiments'} running
+                {modelsState ? ` · ${modelsState}` : ''}
+              </p>
+              {shownProposals.map((proposal) => (
+                <ProposalRow
+                  key={proposal.simulation_id}
+                  proposal={proposal}
+                  canDraft={isAdmin}
+                  isDrafting={
+                    createDraft.isPending && createDraft.variables === proposal.simulation_id
+                  }
+                  draftedExperimentId={drafted[proposal.simulation_id]}
+                  onDraft={handleDraft}
+                />
+              ))}
+              {proposals.length > MAX_PROPOSALS && (
+                <Link
+                  to="/digital-twin"
+                  className="flex items-center justify-center gap-1 p-2 rounded-lg border border-[var(--color-border)] text-xs font-medium text-purple-600 hover:bg-purple-500/5"
+                >
+                  View all {proposals.length} proposals on the Digital Twin page
+                  <ArrowRight className="h-3 w-3" />
+                </Link>
+              )}
+              <div className="flex items-start gap-2 text-xs text-[var(--color-muted-foreground)]">
+                <Clock className="h-3.5 w-3.5 mt-0.5 text-purple-500" />
+                <span>
+                  A draft is written with the twin’s recommended sample size and duration and linked
+                  to its simulation. Promotion to running and enrollment stay manual; the daily sweep,
+                  final analysis and fidelity roll-up then close the loop.
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
       </CardContent>
     </Card>
   );

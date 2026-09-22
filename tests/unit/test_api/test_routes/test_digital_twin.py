@@ -2226,11 +2226,13 @@ async def test_run_simulation_persists_the_experiment_link_it_was_given(
         twin_count=1000,
         experiment_design_id=str(exp_id),
     )
-    await run_simulation(request, {"user_id": "test_user", "role": "operator"})
+    resp = await run_simulation(request, {"user_id": "test_user", "role": "operator"})
 
     mock_twin_repository.simulations.link_experiment.assert_awaited_once_with(
         saved_id, UUID(str(exp_id))
     )
+    # Read-back (#2206 item C.3): the caller can see the link it asked for.
+    assert resp.experiment_design_id == str(exp_id)
 
 
 @pytest.mark.asyncio

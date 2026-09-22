@@ -602,6 +602,61 @@ class SimulationRepository(BaseRepository):
             logger.error(f"Failed to list simulations: {e}")
             return []
 
+    # A proposed experiment (#2206, owner item C): a COMPLETED simulation whose
+    # recommendation is deploy or refine and which no experiment has claimed yet.
+    PROPOSAL_RECOMMENDATIONS = ("deploy", "refine")
+
+    async def list_proposed(
+        self,
+        *,
+        brand: Optional[str] = None,
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        """Completed deploy/refine simulations not yet linked to an experiment.
+
+        Brand scoping is the caller's (the route applies the H11 grant); ``None``
+        lists every brand so an admin's envelope counts are whole. Newest first;
+        the route re-orders for presentation.
+        """
+        if not self.client:
+            return []
+        try:
+            query = (
+                self.client.table(self.table_name)
+                .select("*")
+                .eq("simulation_status", "completed")
+                .in_("recommendation", list(self.PROPOSAL_RECOMMENDATIONS))
+                .is_("experiment_design_id", "null")
+                .order("created_at", desc=True)
+                .limit(limit)
+            )
+            if brand:
+                query = query.eq("brand", brand)
+            result = await query.execute()
+            return result.data or []
+        except Exception as e:
+            logger.error(f"Failed to list proposed experiments: {e}")
+            return []
+
+    async def count_linked(self, *, brand: Optional[str] = None) -> int:
+        """Completed simulations that already have an experiment (the linked half)."""
+        if not self.client:
+            return 0
+        try:
+            query = (
+                self.client.table(self.table_name)
+                .select("simulation_id", count="exact")
+                .eq("simulation_status", "completed")
+                .not_.is_("experiment_design_id", "null")
+            )
+            if brand:
+                query = query.eq("brand", brand)
+            result = await query.execute()
+            return int(result.count or 0)
+        except Exception as e:
+            logger.error(f"Failed to count linked simulations: {e}")
+            return 0
+
     async def get_latest_for_experiment(
         self,
         experiment_design_id: UUID,
@@ -1114,6 +1169,18 @@ class TwinRepository:
         return await self.simulations.get_simulation(  # type: ignore[no-any-return]
             simulation_id
         )
+
+    async def list_proposed_experiments(
+        self, *, brand: Optional[str] = None, limit: int = 500
+    ) -> List[Dict[str, Any]]:
+        """Proposed experiments (#2206 item C); every kwarg forwarded to the store."""
+        return await self.simulations.list_proposed(  # type: ignore[no-any-return]
+            brand=brand, limit=limit
+        )
+
+    async def count_linked_simulations(self, *, brand: Optional[str] = None) -> int:
+        """Completed simulations already linked to an experiment (#2206 item C)."""
+        return await self.simulations.count_linked(brand=brand)  # type: ignore[no-any-return]
 
     async def save_fidelity_record(self, record: FidelityRecord) -> UUID:
         """Save fidelity tracking record."""

@@ -359,3 +359,204 @@ class FidelityReportResponse(BaseModel):
     degradation_rate: Optional[float] = None
     recommendation: str
     generated_at: datetime
+
+
+# =============================================================================
+# Simulation enums + list / history contracts (moved verbatim from
+# routes/digital_twin.py, which is size-pinned by the module ratchet)
+# =============================================================================
+
+
+class TwinTypeEnum(str, Enum):
+    """Types of digital twins."""
+
+    HCP = "hcp"
+    PATIENT = "patient"
+    TERRITORY = "territory"
+
+
+class BrandEnum(str, Enum):
+    """Pharmaceutical brands."""
+
+    REMIBRUTINIB = "Remibrutinib"
+    FABHALTA = "Fabhalta"
+    KISQALI = "Kisqali"
+
+
+#: SimulationResponse / list / history read-back of the experiment a pre-screen was
+#: run for (#2206 item C.3): twin_simulations.experiment_design_id, written by
+#: /simulate (experiment_design_id) or by the proposed-experiments draft action.
+EXPERIMENT_LINK_DESCRIPTION = (
+    "The ml_experiments id this simulation is linked to, or null when it is not yet "
+    "linked (a proposal). Written by /simulate when given experiment_design_id, or by "
+    "POST /proposed-experiments/{simulation_id}/draft. The post-experiment fidelity "
+    "producer resolves the simulation through this link."
+)
+
+
+class SimulationStatusEnum(str, Enum):
+    """Simulation status values."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class RecommendationEnum(str, Enum):
+    """Simulation recommendations."""
+
+    DEPLOY = "deploy"
+    SKIP = "skip"
+    REFINE = "refine"
+
+
+class EstimateScopeEnum(str, Enum):
+    """What a simulation's effect was estimated ON (#2053)."""
+
+    COHORT = "cohort"
+    REGIONS = "regions"
+    UNKNOWN = "unknown"
+
+
+class SimulationListItem(BaseModel):
+    """Summary item for simulation list."""
+
+    simulation_id: str
+    experiment_design_id: Optional[str] = Field(
+        default=None, description=EXPERIMENT_LINK_DESCRIPTION
+    )
+    intervention_type: str
+    brand: str
+    twin_type: str
+    twin_count: int
+    simulated_ate: float
+    recommendation: RecommendationEnum
+    status: SimulationStatusEnum
+    created_at: datetime
+    data_provenance: Optional[str] = None
+    # Scope of simulated_ate (#2053); see SimulationResponse.estimate_scope.
+    estimate_scope: EstimateScopeEnum
+    target_regions: List[str] = Field(default=[])
+    cohort_effect: Optional[float] = None
+
+
+class SimulationListResponse(BaseModel):
+    """Response for listing simulations."""
+
+    total_count: int
+    simulations: List[SimulationListItem]
+    page: int
+    page_size: int
+
+
+class SimulationHistoryItem(BaseModel):
+    """Summary row for the simulation-history view.
+
+    Matches the frontend ``SimulationHistoryResponse.simulations[]`` contract
+    (``frontend/src/types/digital-twin.ts``): note ``ate_estimate`` and
+    ``recommendation_type`` field names, distinct from ``SimulationListItem``.
+    """
+
+    simulation_id: str
+    experiment_design_id: Optional[str] = Field(
+        default=None, description=EXPERIMENT_LINK_DESCRIPTION
+    )
+    created_at: datetime
+    intervention_type: str
+    brand: str
+    ate_estimate: float
+    recommendation_type: str
+    data_provenance: Optional[str] = None
+    # Scope of ate_estimate (#2053); see SimulationResponse.estimate_scope.
+    estimate_scope: EstimateScopeEnum
+    target_regions: List[str] = Field(default=[])
+    filter_regions: List[str] = Field(default=[])
+
+
+class SimulationHistoryResponse(BaseModel):
+    """Response for the simulation-history endpoint (frontend contract)."""
+
+    simulations: List[SimulationHistoryItem]
+    total: int
+    offset: int
+    limit: int
+
+
+# =============================================================================
+# Proposed experiments (#2206, owner item C)
+# =============================================================================
+
+
+class ProposedExperimentItem(BaseModel):
+    """A twin simulation that proposes an experiment: completed, recommendation
+    deploy or refine, not yet linked to an ``ml_experiments`` row."""
+
+    simulation_id: str
+    model_id: str
+    brand: str
+    intervention_type: str
+    intervention_config: Dict[str, Any] = Field(default_factory=dict)
+    simulated_ate: float
+    simulated_ci_lower: Optional[float] = None
+    simulated_ci_upper: Optional[float] = None
+    recommendation: Literal["deploy", "refine"]
+    recommendation_rationale: str = ""
+    recommended_sample_size: Optional[int] = None
+    recommended_duration_weeks: Optional[int] = None
+    simulation_confidence: Optional[float] = None
+    data_provenance: Optional[str] = None
+    fidelity_status: FidelityStatusEnum = Field(
+        description=(
+            "The model's fidelity state as it stands NOW (derived from the model row): "
+            "'unvalidated' until an experiment outcome has been compared against it."
+        ),
+    )
+    created_at: datetime
+    proposal_basis: Literal["twin_simulation"] = Field(
+        default="twin_simulation",
+        description="What proposed this: a completed digital-twin simulation (the only source today).",
+    )
+
+
+class ProposedExperimentsResponse(BaseModel):
+    """Proposals plus the honest counts around them."""
+
+    proposals: List[ProposedExperimentItem]
+    total_proposed: int = Field(
+        description="Unlinked deploy/refine simulations the caller may see."
+    )
+    total_linked: int = Field(
+        description="Completed simulations that already have an experiment (the closed half)."
+    )
+    real_experiments_running: int = Field(
+        description=(
+            "ml_experiments rows with is_synthetic=false, status='running' and an "
+            "intervention_channel — the real A/B portfolio. 0 today: every real row is "
+            "pipeline lineage and the 360 running A/B rows are synthetic."
+        ),
+    )
+
+
+class DraftExperimentResponse(BaseModel):
+    """The ``ml_experiments`` draft created from a proposal, and what stays manual."""
+
+    experiment_id: str
+    simulation_id: str
+    experiment_name: str
+    status: Literal["draft"] = "draft"
+    brand: str
+    intervention_channel: str
+    prediction_target: str
+    target_enrollment: Optional[int] = None
+    planned_duration_days: Optional[int] = None
+    created_by: Optional[str] = None
+    linked: bool = Field(
+        description="twin_simulations.experiment_design_id now names this experiment."
+    )
+    next_step: str = Field(
+        description=(
+            "What is still manual: promote the draft to 'running' and enroll units; the "
+            "daily sweep, final analysis and fidelity roll-up then close the loop."
+        ),
+    )

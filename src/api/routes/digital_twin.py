@@ -28,7 +28,6 @@ Version: 4.2.0
 import asyncio
 import logging
 from datetime import datetime, timezone
-from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, cast
 from uuid import UUID
 
@@ -59,10 +58,13 @@ from src.api.routes.digital_twin_honesty import (  # noqa: F401 — re-exported
 )
 from src.api.routes.digital_twin_rejections import Decile, rejected_request
 from src.api.schemas.digital_twin import (  # noqa: F401 — re-exported
+    EXPERIMENT_LINK_DESCRIPTION,
     FIDELITY_STATUS_DESCRIPTION,
     SIMULATION_CONFIDENCE_DESCRIPTION,
+    BrandEnum,
     DigitalTwinHealthResponse,
     EffectHeterogeneityResponse,
+    EstimateScopeEnum,
     FidelityGradeEnum,
     FidelityHistoryResponse,
     FidelityRecordResponse,
@@ -72,8 +74,15 @@ from src.api.schemas.digital_twin import (  # noqa: F401 — re-exported
     InterventionTypesResponse,
     ModelListResponse,
     R2ScoreBasisEnum,
+    RecommendationEnum,
+    SimulationHistoryItem,
+    SimulationHistoryResponse,
+    SimulationListItem,
+    SimulationListResponse,
+    SimulationStatusEnum,
     TwinModelDetailResponse,
     TwinModelSummary,
+    TwinTypeEnum,
 )
 from src.api.schemas.digital_twin import heterogeneity_response as _heterogeneity_response
 from src.api.schemas.digital_twin import live_subgroups_basis as _live_subgroups_basis
@@ -191,47 +200,6 @@ async def _load_trained_generator(
 # =============================================================================
 # ENUMS
 # =============================================================================
-
-
-class TwinTypeEnum(str, Enum):
-    """Types of digital twins."""
-
-    HCP = "hcp"
-    PATIENT = "patient"
-    TERRITORY = "territory"
-
-
-class BrandEnum(str, Enum):
-    """Pharmaceutical brands."""
-
-    REMIBRUTINIB = "Remibrutinib"
-    FABHALTA = "Fabhalta"
-    KISQALI = "Kisqali"
-
-
-class SimulationStatusEnum(str, Enum):
-    """Simulation status values."""
-
-    PENDING = "pending"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-
-class RecommendationEnum(str, Enum):
-    """Simulation recommendations."""
-
-    DEPLOY = "deploy"
-    SKIP = "skip"
-    REFINE = "refine"
-
-
-class EstimateScopeEnum(str, Enum):
-    """What a simulation's effect was estimated ON (#2053)."""
-
-    COHORT = "cohort"
-    REGIONS = "regions"
-    UNKNOWN = "unknown"
 
 
 def _live_estimate_scope(target_regions: List[str]) -> EstimateScopeEnum:
@@ -401,6 +369,9 @@ class SimulationResponse(BaseModel):
     fidelity_warning_reason: Optional[str] = None
     model_fidelity_score: Optional[float] = None
     fidelity_status: FidelityStatusEnum = Field(description=FIDELITY_STATUS_DESCRIPTION)
+    experiment_design_id: Optional[str] = Field(
+        default=None, description=EXPERIMENT_LINK_DESCRIPTION
+    )
     status: SimulationStatusEnum
     error_message: Optional[str] = None
     execution_time_ms: int
@@ -459,64 +430,6 @@ class SimulationDetailResponse(SimulationResponse):
     population_filters: Dict[str, Any]
     intervention_config: Dict[str, Any]
     completed_at: Optional[datetime] = None
-
-
-class SimulationListItem(BaseModel):
-    """Summary item for simulation list."""
-
-    simulation_id: str
-    intervention_type: str
-    brand: str
-    twin_type: str
-    twin_count: int
-    simulated_ate: float
-    recommendation: RecommendationEnum
-    status: SimulationStatusEnum
-    created_at: datetime
-    data_provenance: Optional[str] = None
-    # Scope of simulated_ate (#2053); see SimulationResponse.estimate_scope.
-    estimate_scope: EstimateScopeEnum
-    target_regions: List[str] = Field(default=[])
-    cohort_effect: Optional[float] = None
-
-
-class SimulationListResponse(BaseModel):
-    """Response for listing simulations."""
-
-    total_count: int
-    simulations: List[SimulationListItem]
-    page: int
-    page_size: int
-
-
-class SimulationHistoryItem(BaseModel):
-    """Summary row for the simulation-history view.
-
-    Matches the frontend ``SimulationHistoryResponse.simulations[]`` contract
-    (``frontend/src/types/digital-twin.ts``): note ``ate_estimate`` and
-    ``recommendation_type`` field names, distinct from ``SimulationListItem``.
-    """
-
-    simulation_id: str
-    created_at: datetime
-    intervention_type: str
-    brand: str
-    ate_estimate: float
-    recommendation_type: str
-    data_provenance: Optional[str] = None
-    # Scope of ate_estimate (#2053); see SimulationResponse.estimate_scope.
-    estimate_scope: EstimateScopeEnum
-    target_regions: List[str] = Field(default=[])
-    filter_regions: List[str] = Field(default=[])
-
-
-class SimulationHistoryResponse(BaseModel):
-    """Response for the simulation-history endpoint (frontend contract)."""
-
-    simulations: List[SimulationHistoryItem]
-    total: int
-    offset: int
-    limit: int
 
 
 class ScenarioSimulateRequest(BaseModel):
@@ -943,6 +856,7 @@ async def run_simulation(
             fidelity_warning_reason=result.fidelity_warning_reason,
             model_fidelity_score=result.model_fidelity_score,
             fidelity_status=FidelityStatusEnum(result.fidelity_status.value),
+            experiment_design_id=str(experiment_link) if experiment_link is not None else None,
             status=SimulationStatusEnum(result.status.value),
             error_message=result.error_message,
             execution_time_ms=result.execution_time_ms,
@@ -952,13 +866,9 @@ async def run_simulation(
             data_provenance=result.data_provenance,
             estimate_scope=_live_estimate_scope(result.target_regions),
             target_regions=result.target_regions,
-            cohort_effect=(None if result.cohort_ate is None else round(result.cohort_ate, 4)),
-            cohort_ci_lower=(
-                None if result.cohort_ci_lower is None else round(result.cohort_ci_lower, 4)
-            ),
-            cohort_ci_upper=(
-                None if result.cohort_ci_upper is None else round(result.cohort_ci_upper, 4)
-            ),
+            cohort_effect=_round4(result.cohort_ate),
+            cohort_ci_lower=_round4(result.cohort_ci_lower),
+            cohort_ci_upper=_round4(result.cohort_ci_upper),
             effect_heterogeneity=_heterogeneity_response(result.effect_heterogeneity),
             subgroups_basis=_live_subgroups_basis(
                 result.data_provenance, calculated=request.calculate_heterogeneity
@@ -1038,6 +948,7 @@ async def list_simulations(
             items.append(
                 SimulationListItem(
                     simulation_id=str(sim.get("simulation_id", "")),
+                    experiment_design_id=sim.get("experiment_design_id"),
                     intervention_type=sim.get("intervention_type", "unknown"),
                     brand=sim.get("brand", "unknown"),
                     twin_type=sim.get("twin_type", "unknown"),
@@ -1118,6 +1029,7 @@ async def get_simulation_history(
             items.append(
                 SimulationHistoryItem(
                     simulation_id=str(sim.get("simulation_id", "")),
+                    experiment_design_id=sim.get("experiment_design_id"),
                     created_at=sim.get("created_at", datetime.now(timezone.utc)),
                     intervention_type=sim.get("intervention_type", "unknown"),
                     brand=sim.get("brand", "unknown"),
@@ -1422,6 +1334,7 @@ async def get_simulation(
             recommended_duration_weeks=result.get("recommended_duration_weeks"),
             simulation_confidence=round(float(result.get("simulation_confidence", 0.0) or 0.0), 3),
             **fidelity_fields,  # fidelity_status/_warning/_reason + model_fidelity_score
+            experiment_design_id=result.get("experiment_design_id"),
             status=SimulationStatusEnum(result.get("simulation_status", "completed")),
             error_message=result.get("error_message"),
             execution_time_ms=result.get("execution_time_ms", 0),
@@ -1918,3 +1831,10 @@ async def get_fidelity_report(
     except Exception as e:
         logger.error(f"Failed to generate fidelity report: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate fidelity report")
+
+
+# Proposed experiments from twin simulations (#2206 item C) live in their own
+# module (this one is size-pinned) and mount under this router's prefix.
+from src.api.routes.digital_twin_proposals import router as _proposals_router  # noqa: E402
+
+router.include_router(_proposals_router)

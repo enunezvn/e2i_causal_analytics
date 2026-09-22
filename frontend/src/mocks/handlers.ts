@@ -42,6 +42,8 @@ import {
   FidelityStatus,
   Recommendation,
   SimulationStatus,
+  type DraftExperimentResponse,
+  type ProposedExperimentsResponse,
   type SimulationDetailResponse,
   type SimulationResponse,
 } from '@/types/digital-twin';
@@ -1139,6 +1141,82 @@ const digitalTwinHandlers = [
       subgroups_basis: 'cohort_rows',
     } satisfies SimulationDetailResponse;
     return HttpResponse.json(detail);
+  }),
+
+  // GET /digital-twin/proposed-experiments - twin simulations proposing an experiment (#2206)
+  // Returns ProposedExperimentsResponse matching types/digital-twin.ts. Honest envelope:
+  // 0 real experiments running, models unvalidated (the live state at writing time).
+  http.get(`${baseUrl}/digital-twin/proposed-experiments`, async () => {
+    await simulateDelay();
+    return HttpResponse.json({
+      proposals: [
+        {
+          simulation_id: 'sim_prop_001',
+          model_id: 'mock-model-shared-synthetic-fit',
+          brand: 'Remibrutinib',
+          intervention_type: 'digital_engagement',
+          intervention_config: { intervention_type: 'digital_engagement', duration_weeks: 12 },
+          simulated_ate: 0.3999,
+          simulated_ci_lower: 0.3105,
+          simulated_ci_upper: 0.4893,
+          recommendation: 'deploy',
+          recommendation_rationale: 'Effect is positive and the 95% CI excludes zero.',
+          recommended_sample_size: 13,
+          recommended_duration_weeks: 13,
+          simulation_confidence: 0.72,
+          data_provenance: 'cohort_estimated_synthetic_gold_v1',
+          fidelity_status: FidelityStatus.UNVALIDATED,
+          created_at: new Date(Date.now() - 86400000).toISOString(),
+          proposal_basis: 'twin_simulation',
+        },
+        {
+          simulation_id: 'sim_prop_002',
+          model_id: 'mock-model-shared-synthetic-fit',
+          brand: 'Kisqali',
+          intervention_type: 'email_campaign',
+          intervention_config: { intervention_type: 'email_campaign', duration_weeks: 8 },
+          simulated_ate: 0.021,
+          simulated_ci_lower: -0.004,
+          simulated_ci_upper: 0.046,
+          recommendation: 'refine',
+          recommendation_rationale: 'The interval straddles the minimum effect.',
+          recommended_sample_size: 4200,
+          recommended_duration_weeks: 10,
+          simulation_confidence: 0.58,
+          data_provenance: 'cohort_estimated_synthetic_gold_v1',
+          fidelity_status: FidelityStatus.UNVALIDATED,
+          created_at: new Date(Date.now() - 172800000).toISOString(),
+          proposal_basis: 'twin_simulation',
+        },
+      ],
+      total_proposed: 2,
+      total_linked: 0,
+      real_experiments_running: 0,
+    } satisfies ProposedExperimentsResponse);
+  }),
+
+  // POST /digital-twin/proposed-experiments/:id/draft - create a linked draft experiment (#2206)
+  http.post(`${baseUrl}/digital-twin/proposed-experiments/:id/draft`, async ({ params }) => {
+    await simulateDelay();
+    const { id } = params;
+    return HttpResponse.json(
+      {
+        experiment_id: `exp_draft_${String(id)}`,
+        simulation_id: String(id),
+        experiment_name: `twin_proposal_Remibrutinib_digital_engagement_${String(id).slice(0, 8)}`,
+        status: 'draft',
+        brand: 'Remibrutinib',
+        intervention_channel: 'digital_engagement',
+        prediction_target: 'cohort_conversion_outcome',
+        target_enrollment: 13,
+        planned_duration_days: 91,
+        created_by: 'mock@example.com',
+        linked: true,
+        next_step:
+          "Still manual: promote this draft to 'running' and enroll units. The daily sweep, the final analysis and the fidelity roll-up then close the loop against the linked simulation.",
+      } satisfies DraftExperimentResponse,
+      { status: 201 }
+    );
   }),
 
   // GET /digital-twin/fidelity - Get fidelity metrics

@@ -3238,6 +3238,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/digital-twin/proposed-experiments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List proposed experiments
+         * @description Completed twin simulations recommending deploy/refine, not yet linked to an
+         *     experiment — ordered deploy first, then predicted effect — with the honest
+         *     counts around them (linked simulations; real experiments running, 0 today).
+         */
+        get: operations["list_proposed_experiments"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/digital-twin/proposed-experiments/{simulation_id}/draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a draft experiment from a proposal
+         * @description Create ONE ``ml_experiments`` row with ``status='draft'`` from the twin's
+         *     recommended parameters and link the simulation to it. The draft stays a draft
+         *     until promoted; a failed link is a 500 naming both ids, never a 200 hiding an
+         *     orphan (the ``/simulate`` rule).
+         */
+        post: operations["create_draft_experiment_from_proposal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/models/predict/{model_name}": {
         parameters: {
             query?: never;
@@ -9363,6 +9408,46 @@ export interface components {
             analysis_id?: string | null;
             /** @description Brand+outcome-scoped therapy label + competitor landscape; None until estimated or for an unknown brand (honest omission). */
             clinical_context?: components["schemas"]["ClinicalContext"] | null;
+        };
+        /**
+         * DraftExperimentResponse
+         * @description The ``ml_experiments`` draft created from a proposal, and what stays manual.
+         */
+        DraftExperimentResponse: {
+            /** Experiment Id */
+            experiment_id: string;
+            /** Simulation Id */
+            simulation_id: string;
+            /** Experiment Name */
+            experiment_name: string;
+            /**
+             * Status
+             * @default draft
+             * @constant
+             */
+            status: "draft";
+            /** Brand */
+            brand: string;
+            /** Intervention Channel */
+            intervention_channel: string;
+            /** Prediction Target */
+            prediction_target: string;
+            /** Target Enrollment */
+            target_enrollment?: number | null;
+            /** Planned Duration Days */
+            planned_duration_days?: number | null;
+            /** Created By */
+            created_by?: string | null;
+            /**
+             * Linked
+             * @description twin_simulations.experiment_design_id now names this experiment.
+             */
+            linked: boolean;
+            /**
+             * Next Step
+             * @description What is still manual: promote the draft to 'running' and enroll units; the daily sweep, final analysis and fidelity roll-up then close the loop.
+             */
+            next_step: string;
         };
         /**
          * DriftDetectionResponse
@@ -15883,6 +15968,86 @@ export interface components {
             note: string;
         };
         /**
+         * ProposedExperimentItem
+         * @description A twin simulation that proposes an experiment: completed, recommendation
+         *     deploy or refine, not yet linked to an ``ml_experiments`` row.
+         */
+        ProposedExperimentItem: {
+            /** Simulation Id */
+            simulation_id: string;
+            /** Model Id */
+            model_id: string;
+            /** Brand */
+            brand: string;
+            /** Intervention Type */
+            intervention_type: string;
+            /** Intervention Config */
+            intervention_config?: {
+                [key: string]: unknown;
+            };
+            /** Simulated Ate */
+            simulated_ate: number;
+            /** Simulated Ci Lower */
+            simulated_ci_lower?: number | null;
+            /** Simulated Ci Upper */
+            simulated_ci_upper?: number | null;
+            /**
+             * Recommendation
+             * @enum {string}
+             */
+            recommendation: "deploy" | "refine";
+            /**
+             * Recommendation Rationale
+             * @default
+             */
+            recommendation_rationale: string;
+            /** Recommended Sample Size */
+            recommended_sample_size?: number | null;
+            /** Recommended Duration Weeks */
+            recommended_duration_weeks?: number | null;
+            /** Simulation Confidence */
+            simulation_confidence?: number | null;
+            /** Data Provenance */
+            data_provenance?: string | null;
+            /** @description The model's fidelity state as it stands NOW (derived from the model row): 'unvalidated' until an experiment outcome has been compared against it. */
+            fidelity_status: components["schemas"]["FidelityStatusEnum"];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Proposal Basis
+             * @description What proposed this: a completed digital-twin simulation (the only source today).
+             * @default twin_simulation
+             * @constant
+             */
+            proposal_basis: "twin_simulation";
+        };
+        /**
+         * ProposedExperimentsResponse
+         * @description Proposals plus the honest counts around them.
+         */
+        ProposedExperimentsResponse: {
+            /** Proposals */
+            proposals: components["schemas"]["ProposedExperimentItem"][];
+            /**
+             * Total Proposed
+             * @description Unlinked deploy/refine simulations the caller may see.
+             */
+            total_proposed: number;
+            /**
+             * Total Linked
+             * @description Completed simulations that already have an experiment (the closed half).
+             */
+            total_linked: number;
+            /**
+             * Real Experiments Running
+             * @description ml_experiments rows with is_synthetic=false, status='running' and an intervention_channel — the real A/B portfolio. 0 today: every real row is pipeline lineage and the 360 running A/B rows are synthetic.
+             */
+            real_experiments_running: number;
+        };
+        /**
          * ProposedQuestion
          * @description An agent-proposed treatment->outcome question, ranked by a data-driven
          *     screening signal (the adjusted association strength). This is a SCREENING
@@ -18747,6 +18912,11 @@ export interface components {
             model_fidelity_score?: number | null;
             /** @description Explicit fidelity state of the model behind this run (#2206): 'unvalidated' when its fidelity_score is NULL (no experiment outcome has been compared against it — fidelity_warning is True and this is NOT a pass), 'below_threshold' or 'validated' when measured. A stored simulation derives it from the model row at read time. */
             fidelity_status: components["schemas"]["FidelityStatusEnum"];
+            /**
+             * Experiment Design Id
+             * @description The ml_experiments id this simulation is linked to, or null when it is not yet linked (a proposal). Written by /simulate when given experiment_design_id, or by POST /proposed-experiments/{simulation_id}/draft. The post-experiment fidelity producer resolves the simulation through this link.
+             */
+            experiment_design_id?: string | null;
             status: components["schemas"]["SimulationStatusEnum"];
             /** Error Message */
             error_message?: string | null;
@@ -18820,6 +18990,11 @@ export interface components {
             /** Simulation Id */
             simulation_id: string;
             /**
+             * Experiment Design Id
+             * @description The ml_experiments id this simulation is linked to, or null when it is not yet linked (a proposal). Written by /simulate when given experiment_design_id, or by POST /proposed-experiments/{simulation_id}/draft. The post-experiment fidelity producer resolves the simulation through this link.
+             */
+            experiment_design_id?: string | null;
+            /**
              * Created At
              * Format: date-time
              */
@@ -18867,6 +19042,11 @@ export interface components {
         SimulationListItem: {
             /** Simulation Id */
             simulation_id: string;
+            /**
+             * Experiment Design Id
+             * @description The ml_experiments id this simulation is linked to, or null when it is not yet linked (a proposal). Written by /simulate when given experiment_design_id, or by POST /proposed-experiments/{simulation_id}/draft. The post-experiment fidelity producer resolves the simulation through this link.
+             */
+            experiment_design_id?: string | null;
             /** Intervention Type */
             intervention_type: string;
             /** Brand */
@@ -18958,6 +19138,11 @@ export interface components {
             model_fidelity_score?: number | null;
             /** @description Explicit fidelity state of the model behind this run (#2206): 'unvalidated' when its fidelity_score is NULL (no experiment outcome has been compared against it — fidelity_warning is True and this is NOT a pass), 'below_threshold' or 'validated' when measured. A stored simulation derives it from the model row at read time. */
             fidelity_status: components["schemas"]["FidelityStatusEnum"];
+            /**
+             * Experiment Design Id
+             * @description The ml_experiments id this simulation is linked to, or null when it is not yet linked (a proposal). Written by /simulate when given experiment_design_id, or by POST /proposed-experiments/{simulation_id}/draft. The post-experiment fidelity producer resolves the simulation through this link.
+             */
+            experiment_design_id?: string | null;
             status: components["schemas"]["SimulationStatusEnum"];
             /** Error Message */
             error_message?: string | null;
@@ -26940,6 +27125,123 @@ export interface operations {
             };
             /** @description Authentication required */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationErrorResponse"];
+                };
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_proposed_experiments: {
+        parameters: {
+            query?: {
+                /** @description Filter by brand (omit for all you may see) */
+                brand?: components["schemas"]["BrandEnum"] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProposedExperimentsResponse"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidationErrorResponse"];
+                };
+            };
+            /** @description Internal server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    create_draft_experiment_from_proposal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                simulation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DraftExperimentResponse"];
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Simulation not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Simulation already linked to an experiment */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

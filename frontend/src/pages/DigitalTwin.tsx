@@ -111,6 +111,23 @@ function StatusBadge({ status }: { status: string }) {
  * (`deploy` | `skip` | `refine`) — also tolerates `analyze` for legacy
  * history rows — and never throws on an unknown value.
  */
+/**
+ * The experiment a stored simulation is linked to (#2206): written by /simulate when
+ * given experiment_design_id, or by the proposed-experiments draft action. Absent
+ * when the run is still a proposal — nothing is shown rather than a placeholder.
+ */
+function LinkedExperimentChip({ experimentId }: { experimentId?: string | null }) {
+  if (!experimentId) return null;
+  return (
+    <span
+      className="ml-2 inline-flex items-center rounded-full bg-purple-500/10 px-2 py-0.5 text-[10px] font-medium text-purple-600"
+      title={`Linked to experiment ${experimentId}`}
+    >
+      linked · {experimentId.slice(0, 8)}
+    </span>
+  );
+}
+
 function RecommendationBadge({ recommendation }: { recommendation: string }) {
   const config: Record<string, { icon: typeof CheckCircle; className: string }> = {
     deploy: { icon: CheckCircle, className: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400' },
@@ -1167,6 +1184,7 @@ export default function DigitalTwin() {
                             <p className="text-xs text-[var(--color-text-tertiary)]">
                               {sim.brand} - {new Date(sim.created_at).toLocaleString()}
                               {group.count > 1 ? ' · latest' : ''}
+                              <LinkedExperimentChip experimentId={sim.experiment_design_id} />
                             </p>
                           </div>
                         </div>
@@ -1195,6 +1213,7 @@ export default function DigitalTwin() {
                             >
                               <span className="text-xs text-[var(--color-text-tertiary)]">
                                 {new Date(run.created_at).toLocaleString()}
+                                <LinkedExperimentChip experimentId={run.experiment_design_id} />
                               </span>
                               <div className="flex items-center gap-3">
                                 <span className="text-xs font-medium text-[var(--color-text-primary)]">

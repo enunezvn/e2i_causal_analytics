@@ -346,6 +346,12 @@ export interface SubgroupAxisProvenance {
 export interface SimulationResponse {
   /** Unique simulation ID */
   simulation_id: string;
+  /**
+   * The ml_experiments id this simulation is linked to, or null when it is not yet linked
+   * (a proposal). Written by /simulate when given experiment_design_id, or by the
+   * proposed-experiments draft action (#2206).
+   */
+  experiment_design_id?: string | null;
   /** Model ID used */
   model_id: string;
   /** Type of intervention */
@@ -451,6 +457,8 @@ export interface SimulationDetailResponse extends SimulationResponse {
 export interface SimulationListItem {
   /** Simulation ID */
   simulation_id: string;
+  /** Linked experiment id, null when unlinked (#2206) */
+  experiment_design_id?: string | null;
   /** Intervention type */
   intervention_type: string;
   /** Brand */
@@ -840,6 +848,8 @@ export interface SimulationHistoryResponse {
   /** List of simulations */
   simulations: Array<{
     simulation_id: string;
+    /** Linked experiment id, null when unlinked (#2206) */
+    experiment_design_id?: string | null;
     created_at: string;
     intervention_type: InterventionType;
     brand: string;
@@ -947,4 +957,64 @@ export interface ModelCardData {
   fidelityGrade?: FidelityGrade;
   isActive: boolean;
   lastUsed?: string;
+}
+
+// =============================================================================
+// PROPOSED EXPERIMENTS (#2206, owner item C)
+// =============================================================================
+
+/**
+ * A twin simulation that proposes an experiment: completed, recommendation deploy or
+ * refine, not yet linked to an ml_experiments row. Mirrors
+ * ProposedExperimentItem in src/api/schemas/digital_twin.py.
+ */
+export interface ProposedExperimentItem {
+  simulation_id: string;
+  model_id: string;
+  brand: string;
+  intervention_type: string;
+  intervention_config: Record<string, unknown>;
+  simulated_ate: number;
+  simulated_ci_lower?: number | null;
+  simulated_ci_upper?: number | null;
+  recommendation: 'deploy' | 'refine';
+  recommendation_rationale: string;
+  recommended_sample_size?: number | null;
+  recommended_duration_weeks?: number | null;
+  simulation_confidence?: number | null;
+  data_provenance?: string | null;
+  /** The model's fidelity state as it stands NOW ('unvalidated' until measured). */
+  fidelity_status: FidelityStatus;
+  created_at: string;
+  /** What proposed this: a completed digital-twin simulation (the only source today). */
+  proposal_basis: 'twin_simulation';
+}
+
+/** Proposals plus the honest counts around them. */
+export interface ProposedExperimentsResponse {
+  proposals: ProposedExperimentItem[];
+  /** Unlinked deploy/refine simulations the caller may see. */
+  total_proposed: number;
+  /** Completed simulations that already have an experiment. */
+  total_linked: number;
+  /** Real (non-synthetic) ml_experiments running with an intervention channel — 0 today. */
+  real_experiments_running: number;
+}
+
+/** The ml_experiments draft created from a proposal, and what stays manual. */
+export interface DraftExperimentResponse {
+  experiment_id: string;
+  simulation_id: string;
+  experiment_name: string;
+  status: 'draft';
+  brand: string;
+  intervention_channel: string;
+  prediction_target: string;
+  target_enrollment?: number | null;
+  planned_duration_days?: number | null;
+  created_by?: string | null;
+  /** twin_simulations.experiment_design_id now names this experiment. */
+  linked: boolean;
+  /** What is still manual: promote the draft to running and enroll units. */
+  next_step: string;
 }
