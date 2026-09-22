@@ -328,22 +328,40 @@ INSERT_PER_HCP_ROLLUP_SQL: str = _compose_rollup_insert("trigger_timestamp")
 #: recomputed whole.
 INSERT_PER_HCP_ROLLUP_BY_ARRIVAL_SQL: str = _compose_rollup_insert("created_at")
 
-_PER_HCP_RECONCILE_SCOPE_BY_ARRIVAL: str = (
-    "b.metric_date IN (SELECT metric_date FROM affected_dates)"
+#: The reconcile's WHERE clause, alias-parameterised: ``__A__`` is the business_metrics
+#: alias, ``__R__`` the rollup CTE alias, ``__SCOPE__`` the date scope on ``__A__``. The
+#: explicit-window reconcile, the arrival reconcile and BOTH preview obsolete counts are
+#: composed from this one template (codex r1/r2, 2026-09-22), so "a stored row on a scoped
+#: date that no recomputed row reproduces" has exactly one definition.
+_PER_HCP_OBSOLETE_WHERE_TEMPLATE: str = """__A__.metric_type = %(metric_type)s
+   AND __A__.hcp_id IS NOT NULL
+   AND __SCOPE__
+   AND NOT EXISTS (SELECT 1 FROM rollup __R__ WHERE __R__.metric_id = __A__.metric_id)"""
+_PER_HCP_SCOPE_BY_ARRIVAL_TEMPLATE: str = (
+    "__A__.metric_date IN (SELECT metric_date FROM affected_dates)"
 )
-_PER_HCP_RECONCILE_SCOPE_BY_WINDOW: str = (
-    "b.metric_date >= %(start_date)s::DATE AND b.metric_date <  %(end_date)s::DATE"
+_PER_HCP_SCOPE_BY_WINDOW_TEMPLATE: str = (
+    "__A__.metric_date >= %(start_date)s::DATE AND __A__.metric_date <  %(end_date)s::DATE"
 )
 
-#: The explicit-window reconcile's WHERE clause, on the preview's alias ``o``: a stored row on
-#: a scoped date that no recomputed row reproduces. Both obsolete counts below are built from
-#: this ONE fragment, and a unit test holds it equal (aliases normalised) to the reconcile's
-#: whole predicate, so the preview cannot count a row the reconcile would spare or vice versa.
-_PREVIEW_OBSOLETE_WHERE: str = (
-    "o.metric_type = %(metric_type)s AND o.hcp_id IS NOT NULL AND "
-    + _PER_HCP_RECONCILE_SCOPE_BY_WINDOW.replace("b.", "o.")
-    + " AND NOT EXISTS (SELECT 1 FROM rollup r2 WHERE r2.metric_id = o.metric_id)"
-)
+
+def _obsolete_where(alias: str, rollup_alias: str, scope_template: str) -> str:
+    """The obsolete-row predicate on the given aliases. ``scope_template`` is one of the
+    two ``_PER_HCP_SCOPE_BY_*_TEMPLATE`` strings."""
+    return (
+        _PER_HCP_OBSOLETE_WHERE_TEMPLATE.replace("__SCOPE__", scope_template)
+        .replace("__A__", alias)
+        .replace("__R__", rollup_alias)
+    )
+
+
+#: Named forms of the two scopes on the reconcile's alias (referenced by the integration
+#: prod-write guard's docs).
+_PER_HCP_RECONCILE_SCOPE_BY_ARRIVAL: str = _PER_HCP_SCOPE_BY_ARRIVAL_TEMPLATE.replace("__A__", "b")
+_PER_HCP_RECONCILE_SCOPE_BY_WINDOW: str = _PER_HCP_SCOPE_BY_WINDOW_TEMPLATE.replace("__A__", "b")
+
+#: Both preview obsolete counts use the explicit-window predicate on the preview's alias.
+_PREVIEW_OBSOLETE_WHERE: str = _obsolete_where("o", "r2", _PER_HCP_SCOPE_BY_WINDOW_TEMPLATE)
 
 _PREVIEW_COUNTS_SQL: str = """
 SELECT
@@ -390,17 +408,14 @@ _PER_HCP_RECONCILE_TAIL: str = """
 , rollup AS (__ROWS_SELECT__
 )
 DELETE FROM business_metrics b
- WHERE b.metric_type = %(metric_type)s
-   AND b.hcp_id IS NOT NULL
-   AND __SCOPE__
-   AND NOT EXISTS (SELECT 1 FROM rollup r WHERE r.metric_id = b.metric_id);
+ WHERE __WHERE__;
 """
 
 
-def _compose_rollup_reconcile(window_column: str, scope: str) -> str:
+def _compose_rollup_reconcile(window_column: str, scope_template: str) -> str:
     return _PER_HCP_ROLLUP_CTES_TEMPLATE.replace("__WINDOW_COLUMN__", window_column) + (
         _PER_HCP_RECONCILE_TAIL.replace("__ROWS_SELECT__", _PER_HCP_ROLLUP_ROWS_SELECT).replace(
-            "__SCOPE__", scope
+            "__WHERE__", _obsolete_where("b", "r", scope_template)
         )
     )
 
@@ -408,12 +423,12 @@ def _compose_rollup_reconcile(window_column: str, scope: str) -> str:
 #: Explicit window: reconcile the WHOLE calendar range, so a date that lost every trigger
 #: (and is therefore unselectable by arrival) is cleaned too.
 RECONCILE_PER_HCP_ROLLUP_SQL: str = _compose_rollup_reconcile(
-    "trigger_timestamp", _PER_HCP_RECONCILE_SCOPE_BY_WINDOW
+    "trigger_timestamp", _PER_HCP_SCOPE_BY_WINDOW_TEMPLATE
 )
 
 #: Scheduled run: reconcile the dates this run touched.
 RECONCILE_PER_HCP_ROLLUP_BY_ARRIVAL_SQL: str = _compose_rollup_reconcile(
-    "created_at", _PER_HCP_RECONCILE_SCOPE_BY_ARRIVAL
+    "created_at", _PER_HCP_SCOPE_BY_ARRIVAL_TEMPLATE
 )
 
 #: Read-only readout of an explicit-window run: the same CTE text and row SELECT as

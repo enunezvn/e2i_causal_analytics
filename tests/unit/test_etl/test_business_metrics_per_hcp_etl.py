@@ -756,23 +756,48 @@ def test_the_cohort_data_count_names_every_planted_column_and_only_obsolete_rows
     assert tuple(etl.COHORT_DATA_COLUMNS) == PLANTED_COLUMNS
 
 
-def _normalised(sql: str) -> str:
-    return " ".join(sql.split())
-
-
-def test_both_obsolete_counts_share_the_explicit_reconciles_whole_predicate() -> None:
-    """codex r1 (2026-09-22): naming two of the predicate's four conditions is a proxy. Both
-    preview aggregates are built from ONE fragment, and that fragment, aliases normalised,
-    is the explicit-window reconcile's entire WHERE clause -- so no row can be counted the
-    reconcile would spare, or spared that the reconcile would delete."""
-    fragment = etl._PREVIEW_OBSOLETE_WHERE
-    assert etl._PREVIEW_COUNTS_SQL.count(fragment) == 2
-    reconcile_where = etl.RECONCILE_PER_HCP_ROLLUP_SQL.rsplit("WHERE", 1)[1].rstrip().rstrip(";")
-    # the reconcile's last WHERE is the anti-join's; take the DELETE's whole clause instead
-    delete_clause = etl.RECONCILE_PER_HCP_ROLLUP_SQL.split("DELETE FROM business_metrics b", 1)[1]
-    delete_where = delete_clause.split("WHERE", 1)[1].rstrip().rstrip(";")
-    assert reconcile_where in delete_where
-    assert _normalised(fragment.replace("o.", "b.").replace("r2", "r")) == _normalised(delete_where)
+def test_both_obsolete_counts_and_the_reconcile_come_from_one_alias_parameterised_predicate() -> (
+    None
+):
+    """codex r1/r2 (2026-09-22): naming two of the predicate's four conditions was a proxy, and
+    comparing normalised text could hide a semantic difference. Production composes the
+    reconcile's WHERE clause and both preview aggregates from ONE alias-parameterised
+    template, so the three texts are the same predicate by construction; this test pins
+    that construction and the template's four conditions."""
+    template = etl._PER_HCP_OBSOLETE_WHERE_TEMPLATE
+    for cond in (
+        "__A__.metric_type = %(metric_type)s",
+        "__A__.hcp_id IS NOT NULL",
+        "__SCOPE__",
+        "NOT EXISTS (SELECT 1 FROM rollup __R__ WHERE __R__.metric_id = __A__.metric_id)",
+    ):
+        assert cond in template, cond
+    preview = etl._obsolete_where("o", "r2", etl._PER_HCP_SCOPE_BY_WINDOW_TEMPLATE)
+    assert etl._PREVIEW_COUNTS_SQL.count(preview) == 2
+    reconcile = etl._obsolete_where("b", "r", etl._PER_HCP_SCOPE_BY_WINDOW_TEMPLATE)
+    assert (
+        f"DELETE FROM business_metrics b\n WHERE {reconcile};" in etl.RECONCILE_PER_HCP_ROLLUP_SQL
+    )
+    arrival = etl._obsolete_where("b", "r", etl._PER_HCP_SCOPE_BY_ARRIVAL_TEMPLATE)
+    assert (
+        f"DELETE FROM business_metrics b\n WHERE {arrival};"
+        in etl.RECONCILE_PER_HCP_ROLLUP_BY_ARRIVAL_SQL
+    )
+    for sql in (
+        etl._PREVIEW_COUNTS_SQL,
+        etl.RECONCILE_PER_HCP_ROLLUP_SQL,
+        etl.PREVIEW_PER_HCP_ROLLUP_SQL,
+    ):
+        for marker in (
+            "__A__",
+            "__R__",
+            "__SCOPE__",
+            "__OBSOLETE_WHERE__",
+            "__COHORT_DATA_PREDICATE__",
+        ):
+            assert marker not in sql, marker
+    params = lambda text: set(re.findall(r"%\((\w+)\)s", text))  # noqa: E731
+    assert params(preview) == params(reconcile) == {"metric_type", "start_date", "end_date"}
 
 
 def test_the_etl_module_does_not_import_the_twin_package() -> None:

@@ -456,10 +456,10 @@ def generate_dgp(rows: pd.DataFrame, *, seed: int = DEFAULT_SEED) -> pd.DataFram
     out_noise = rng.normal(0.0, _OUT_NOISE_STD, n)
 
     result = df[[KEY, "brand", "region"]].copy()
-    result["engagement_score"] = np.round(engagement, 4)
+    result[LEGACY_ENGAGEMENT_COLUMN] = np.round(engagement, 4)
 
     tbin_by_col: Dict[str, np.ndarray] = {
-        "engagement_score": _within_brand_tbin(engagement, brands)
+        LEGACY_ENGAGEMENT_COLUMN: _within_brand_tbin(engagement, brands)
     }
 
     # --- Revision-2 channels: per-channel child RNGs (order-independent,
