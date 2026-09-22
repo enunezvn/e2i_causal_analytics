@@ -107,6 +107,23 @@ class TestExactCollinearity:
         assert result.collinear == ["c3_affine"]
         assert result.kept == ["c3", "c1"]
 
+    def test_covariate_dependent_on_treatment_or_outcome_is_dropped(self) -> None:
+        """The learner's correlation matrix includes T and Y, so a covariate that
+        duplicates T, is affine in Y, or is a combination of T and a kept
+        covariate leaves that matrix singular even when the covariates are
+        independent among themselves (codex r1 finding 2). The rank basis is
+        therefore seeded with T and Y before any covariate is admitted."""
+        frame = _base_frame()
+        frame["t_dup"] = frame[T]
+        frame["y_comp"] = 1.0 - frame[Y]
+        frame["t_plus_c1"] = 2.0 * frame[T] + frame["c1"]
+        covs = ["c1", "t_dup", "c2", "y_comp", "t_plus_c1"]
+        result = preflight_discovery_frame(frame, T, Y, covs, max_covariates=20)
+        assert result.collinear == ["t_dup", "y_comp", "t_plus_c1"]
+        assert result.kept == ["c1", "c2"]
+        sub = frame[[T, Y, *result.kept]].to_numpy(dtype=float)
+        assert np.linalg.matrix_rank(np.corrcoef(sub, rowvar=False)) == 2 + len(result.kept)
+
     def test_kept_columns_match_the_correlation_matrix_rank(self) -> None:
         """The incremental criterion IS the spec's "raises the correlation-matrix
         rank": the kept set has full correlation rank and adding any dropped
@@ -180,25 +197,47 @@ class TestCap:
         frame = self._frame_with_known_ranking()
         covs = list(frame.columns[2:])
         result = preflight_discovery_frame(frame, T, Y, covs, max_covariates=4)
-        # top-2 by |assoc T| = {a_strong, ab}; top-2 by |assoc Y| = {b_strong, ab}
-        # union (k=2) = 3 <= 4; k=3 adds a_weak and b_weak -> 5 > 4, so k=2,
-        # and the one free slot is filled from the T list first (a_weak).
-        assert set(result.kept) == {"a_strong", "ab", "b_strong", "a_weak"}
+        # top-2 by |assoc T| = {a_strong, ab}; top-2 by |assoc Y| = {b_strong, ab}:
+        # union (k=2) = 3 <= 4; k=3 adds a_weak and b_weak -> 5 > 4. The spec's
+        # rule IS the symmetric union, so k = 2 and the free slot stays free
+        # (codex r1 finding 3 removed an asymmetric fill of the remainder).
+        assert set(result.kept) == {"a_strong", "ab", "b_strong"}
         assert result.screening["k"] == 2
-        assert result.screening["k_treatment"] == 3
-        assert result.screening["k_outcome"] == 2
-        assert result.screening["top_by_treatment"] == ["a_strong", "ab", "a_weak"]
+        assert result.screening["top_by_treatment"] == ["a_strong", "ab"]
         assert result.screening["top_by_outcome"] == ["b_strong", "ab"]
         assert set(result.capped) == set(covs) - set(result.kept)
-        assert len(result.kept) == 4
+        assert "k_treatment" not in result.screening
 
-    def test_cap_fills_every_slot_when_candidates_remain(self) -> None:
+    def test_cap_is_the_largest_symmetric_union_that_fits(self) -> None:
         frame = self._frame_with_known_ranking()
         covs = list(frame.columns[2:])
-        for cap in (1, 2, 3, 5, 6, 7):
+        for cap in (2, 3, 5, 6, 7):
             result = preflight_discovery_frame(frame, T, Y, covs, max_covariates=cap)
-            assert len(result.kept) == cap, cap
+            k = result.screening["k"]
+            by_t = result.screening["top_by_treatment"]
+            by_y = result.screening["top_by_outcome"]
+            assert len(by_t) == k == len(by_y), cap
+            assert set(result.kept) == set(by_t) | set(by_y), cap
+            assert len(result.kept) <= cap, cap
             assert len(result.kept) + len(result.capped) == len(covs)
+            # k + 1 would not have fit: recompute the rankings from the
+            # reported associations (ties by manifest order).
+            assoc_t = result.screening["association_with_treatment"]
+            assoc_y = result.screening["association_with_outcome"]
+            order_t = sorted(covs, key=lambda c: (-assoc_t[c], covs.index(c)))
+            order_y = sorted(covs, key=lambda c: (-assoc_y[c], covs.index(c)))
+            assert len(set(order_t[: k + 1]) | set(order_y[: k + 1])) > cap, cap
+
+    def test_cap_of_one_with_distinct_tops_keeps_nothing_and_says_so(self) -> None:
+        """Degenerate cap: the top-1 by T and the top-1 by Y differ, so no
+        symmetric union fits under 1 and the learner sees T and Y only. The
+        result reports k = 0 rather than inventing a one-sided pick."""
+        frame = self._frame_with_known_ranking()
+        covs = list(frame.columns[2:])
+        result = preflight_discovery_frame(frame, T, Y, covs, max_covariates=1)
+        assert result.kept == []
+        assert result.screening["k"] == 0
+        assert set(result.capped) == set(covs)
 
     def test_cap_preserves_manifest_order_of_the_kept_columns(self) -> None:
         frame = self._frame_with_known_ranking()
@@ -225,6 +264,33 @@ class TestCap:
             before.screening["association_with_outcome"]
             != after.screening["association_with_outcome"]
         )
+
+    def test_selection_is_invariant_to_the_treatment_outcome_relation(self) -> None:
+        """Two frames with IDENTICAL covariate-T and covariate-Y rankings but a
+        different T-Y association must select the same covariates (codex r1
+        finding 7: the permutation test above cannot tell 'never reads T-Y'
+        from 'reads it uniformly'). Y is shifted by the part of T that is
+        orthogonal to every covariate (the in-sample residual of T on the
+        covariates), which leaves every covariate-Y covariance exactly
+        unchanged and changes only corr(T, Y)."""
+        frame = self._frame_with_known_ranking()
+        covs = list(frame.columns[2:])
+        X = frame[covs].to_numpy(dtype=float)
+        X = X - X.mean(axis=0)
+        t = frame[T].to_numpy(dtype=float)
+        t = t - t.mean()
+        resid = t - X @ np.linalg.lstsq(X, t, rcond=None)[0]
+        shifted = frame.copy()
+        shifted[Y] = frame[Y] + 3.0 * resid
+        r_before = np.corrcoef(frame[T], frame[Y])[0, 1]
+        r_after = np.corrcoef(shifted[T], shifted[Y])[0, 1]
+        assert abs(r_after - r_before) > 0.1  # the T-Y relation really changed
+        for cap in (2, 3, 4, 6):
+            a = preflight_discovery_frame(frame, T, Y, covs, max_covariates=cap)
+            b = preflight_discovery_frame(shifted, T, Y, covs, max_covariates=cap)
+            assert a.kept == b.kept, cap
+            assert a.screening["top_by_treatment"] == b.screening["top_by_treatment"], cap
+            assert a.screening["top_by_outcome"] == b.screening["top_by_outcome"], cap
 
     def test_ties_break_by_manifest_order(self) -> None:
         """Two covariates with IDENTICAL association to T and to Y (``b`` is
@@ -267,6 +333,34 @@ class TestProtectedCovariates:
         assert "noise_3" in result.kept
         assert len(result.kept) <= 3
         assert result.protected == ["noise_3"]
+
+    def test_protected_beyond_the_cap_are_capped_by_the_same_rule(self) -> None:
+        """Anchors are exempt from the cap only while they fit under it. A
+        legacy caller that anchors every modeled confounder must not bypass
+        the cap (codex r1 finding 4): the anchors kept are chosen by the same
+        pre-treatment screen, the rest are reported as capped AND as
+        protected_capped (the caller drops their required edges and keeps
+        them in the adjustment guarantee)."""
+        frame = TestCap()._frame_with_known_ranking()
+        covs = list(frame.columns[2:])
+        result = preflight_discovery_frame(frame, T, Y, covs, max_covariates=3, protected=covs)
+        assert len(result.kept) <= 3
+        assert set(result.kept) == {"a_strong", "ab", "b_strong"}
+        assert result.protected == result.kept
+        assert set(result.protected_capped) == set(covs) - set(result.kept)
+        assert result.capped == result.protected_capped
+        assert result.to_dict()["protected_capped"] == result.protected_capped
+
+    def test_protected_within_the_cap_leave_the_remainder_to_the_screen(self) -> None:
+        frame = TestCap()._frame_with_known_ranking()
+        covs = list(frame.columns[2:])
+        result = preflight_discovery_frame(
+            frame, T, Y, covs, max_covariates=3, protected=["noise_3", "noise_1"]
+        )
+        assert set(result.protected) == {"noise_3", "noise_1"}
+        assert result.protected_capped == []
+        assert len(result.kept) <= 3
+        assert {"noise_3", "noise_1"} <= set(result.kept)
 
     def test_protected_duplicate_wins_over_an_unprotected_earlier_column(self) -> None:
         frame = _base_frame()

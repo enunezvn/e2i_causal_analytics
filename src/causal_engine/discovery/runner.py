@@ -16,7 +16,8 @@ Author: E2I Causal Analytics Team
 import asyncio
 import logging
 import time
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Type, cast
 from uuid import UUID
 
@@ -743,7 +744,8 @@ class DiscoveryRunner:
         discovery run, so the primary fits' wall (``elapsed_before_s``) is
         charged first and the loop stops before a resample that would overrun
         it, estimating the next resample's cost as the mean resample so far
-        (the primary fits' wall before any resample ran). Measured on the real Optum
+        (the primary fits' wall before any resample ran); a resample that is
+        still running when the budget ends is abandoned (``n_abandoned``). Measured on the real Optum
         persistence frame at 43 covariates, one PC fit is 230 s: under
         production's 20 resamples that is ~81 min against a 900 s agent
         timeout, which is why the loop must be bounded and the ACHIEVED count
@@ -762,47 +764,87 @@ class DiscoveryRunner:
         counts: Dict[Tuple[str, str], int] = {(e.source, e.target): 0 for e in edges}
         succeeded = 0
         attempted = 0
+        abandoned = 0
         budget_exhausted = False
         loop_start = time.monotonic()
         resample_wall: List[float] = []
-        for _ in range(n_resamples):
-            if budget is not None:
-                loop_elapsed = time.monotonic() - loop_start
-                spent = elapsed_before_s + loop_elapsed
-                # Next resample's cost: the mean resample so far, or — before
-                # any ran — the primary fits' wall (same algorithm, same frame
-                # size, so the first guess is the fit already measured).
-                if resample_wall:
-                    estimate = sum(resample_wall) / len(resample_wall)
-                else:
-                    estimate = elapsed_before_s
-                if spent + estimate > budget:
-                    budget_exhausted = True
-                    break
-            attempted += 1
-            indices = rng.integers(0, len(data), len(data))
-            resample = data.iloc[indices].reset_index(drop=True)
-            fit_start = time.monotonic()
-            try:
-                result = algorithm.discover(resample, config)
-            except Exception as exc:
-                logger.debug(f"Bootstrap resample failed: {exc}")
+        # Under a budget each resample fit is WAITED FOR only as long as the
+        # budget has left: the estimate below cannot see a fit that is slower
+        # than its predecessors (measured on the real Optum persistence frame,
+        # one gsq resample fit ran 57 min after a 9 s primary fit —
+        # docs/demos/results/2026-09-22_lane_d_guided_discovery_claims/
+        # d7_gsq_arm_stopped.txt). An overrun is abandoned: the worker thread
+        # cannot be cancelled and finishes on its own (the same contract as the
+        # per-algorithm timeout in ``_run_algorithms``); it is counted as
+        # attempted and abandoned, never as succeeded.
+        pool: Optional[ThreadPoolExecutor] = (
+            ThreadPoolExecutor(max_workers=1, thread_name_prefix="discovery-bootstrap")
+            if budget is not None
+            else None
+        )
+        try:
+            for _ in range(n_resamples):
+                if budget is not None:
+                    loop_elapsed = time.monotonic() - loop_start
+                    spent = elapsed_before_s + loop_elapsed
+                    # Next resample's cost: the mean resample so far, or — before
+                    # any ran — the primary fits' wall (same algorithm, same frame
+                    # size, so the first guess is the fit already measured).
+                    if resample_wall:
+                        estimate = sum(resample_wall) / len(resample_wall)
+                    else:
+                        estimate = elapsed_before_s
+                    if spent + estimate > budget:
+                        budget_exhausted = True
+                        break
+                attempted += 1
+                indices = rng.integers(0, len(data), len(data))
+                resample = data.iloc[indices].reset_index(drop=True)
+                fit_start = time.monotonic()
+                try:
+                    if pool is not None and budget is not None:
+                        remaining = budget - (elapsed_before_s + (fit_start - loop_start))
+                        future = pool.submit(algorithm.discover, resample, config)
+                        try:
+                            result = future.result(timeout=max(0.0, remaining))
+                        except FuturesTimeoutError:
+                            abandoned += 1
+                            budget_exhausted = True
+                            resample_wall.append(time.monotonic() - fit_start)
+                            logger.warning(
+                                f"Bootstrap resample abandoned: still running after the "
+                                f"{remaining:.1f}s the budget had left ({budget:.0f}s); "
+                                "its worker thread finishes on its own"
+                            )
+                            # The pool is single-threaded and its worker is busy
+                            # with the abandoned fit: release it without waiting.
+                            pool.shutdown(wait=False)
+                            pool = None
+                            break
+                    else:
+                        result = algorithm.discover(resample, config)
+                except Exception as exc:
+                    logger.debug(f"Bootstrap resample failed: {exc}")
+                    resample_wall.append(time.monotonic() - fit_start)
+                    continue
                 resample_wall.append(time.monotonic() - fit_start)
-                continue
-            resample_wall.append(time.monotonic() - fit_start)
-            if not result.converged:
-                continue
-            succeeded += 1
-            found = {(source, target) for source, target in result.edge_list}
-            for key in counts:
-                if key in found:
-                    counts[key] += 1
+                if not result.converged:
+                    continue
+                succeeded += 1
+                found = {(source, target) for source, target in result.edge_list}
+                for key in counts:
+                    if key in found:
+                        counts[key] += 1
+        finally:
+            if pool is not None:
+                pool.shutdown(wait=False)
         loop_elapsed = time.monotonic() - loop_start
         corroborated = succeeded >= min_required
         summary: Dict[str, Any] = {
             "n_resamples": n_resamples,
             "n_attempted": attempted,
             "n_succeeded": succeeded,
+            "n_abandoned": abandoned,
             "min_resamples": min_required,
             "corroborated": corroborated,
             "time_budget_s": budget,

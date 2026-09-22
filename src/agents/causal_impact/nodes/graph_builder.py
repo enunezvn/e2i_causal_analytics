@@ -1127,12 +1127,44 @@ class GraphBuilderNode:
             if dag is None or not dag.has_edge(source, target)
         ]
         result.metadata["required_edges_missing"] = missing
-        if missing:
-            result.metadata["required_edges_missing_cause"] = (
-                "removed in PC's skeleton phase: the data found the pair conditionally "
-                f"independent at alpha={config.alpha} (causal-learn applies required "
-                "edges at orientation only, to edges that survived the skeleton)"
-            )
+        if not missing:
+            return
+        # The cause is ESTABLISHED from the run, not assumed (codex r1
+        # finding 6): a run that did not converge names its failure; an edge
+        # the algorithm DID draw but the ensemble no longer carries was
+        # removed by post-processing (cycle removal); only an edge a converged
+        # run never drew is the skeleton-phase removal.
+        converged = [r for r in result.algorithm_results if r.converged]
+        if not converged:
+            errors = [
+                str(r.metadata.get("error"))
+                for r in result.algorithm_results
+                if r.metadata.get("error")
+            ]
+            if not errors and result.metadata.get("error"):
+                errors = [str(result.metadata["error"])]
+            detail = "; ".join(errors) if errors else "no algorithm run converged"
+            cause = f"discovery did not converge ({detail}), so no edge was learned"
+        else:
+            drawn = {(source, target) for r in converged for source, target in (r.edge_list or [])}
+            if all(tuple(edge) in drawn for edge in missing):
+                cause = (
+                    "drawn by the algorithm but removed by the ensemble's post-processing "
+                    "(cycle removal keeps the higher-confidence direction)"
+                )
+            elif any(tuple(edge) in drawn for edge in missing):
+                cause = (
+                    "part drawn by the algorithm but removed by the ensemble's "
+                    "post-processing (cycle removal), part removed in PC's skeleton phase "
+                    f"(conditionally independent at alpha={config.alpha})"
+                )
+            else:
+                cause = (
+                    "removed in PC's skeleton phase: the data found the pair conditionally "
+                    f"independent at alpha={config.alpha} (causal-learn applies required "
+                    "edges at orientation only, to edges that survived the skeleton)"
+                )
+        result.metadata["required_edges_missing_cause"] = cause
 
     def _build_dag_with_discovery(
         self,

@@ -159,7 +159,9 @@ class TestPreflightShapesTheLearningFrame:
         assert T in learned and Y in learned
         assert "const" not in learned
         assert "sev_dup" not in learned
-        assert len(learned) == 4 + 2
+        # The cap is the largest symmetric top-k union that fits (codex r1
+        # finding 3), so the learner sees AT MOST the cap, plus T and Y.
+        assert 2 < len(learned) <= 4 + 2
         assert "sev" in learned  # strongest T- and Y-association survives the cap
         # column order follows the frame, never re-sorted
         assert learned == [c for c in frame.columns if c in set(learned)]
@@ -200,7 +202,8 @@ class TestPreflightShapesTheLearningFrame:
         assert runner.config is not None
         assert runner.config.time_budget_s == 30.0
         assert runner.config.min_resamples == 5
-        assert len(runner.data.columns) == 2 + 2  # type: ignore[union-attr]
+        assert 2 < len(runner.data.columns) <= 2 + 2  # type: ignore[union-attr]
+        assert "sev" in runner.data.columns  # type: ignore[union-attr]
 
     @pytest.mark.asyncio
     async def test_anchored_confounder_survives_the_cap_and_stays_required(self) -> None:
@@ -226,8 +229,10 @@ class TestPreflightShapesTheLearningFrame:
         preflight = result.metadata["preflight"]
         assert preflight["constant"] == ["const"]
         assert preflight["collinear"] == ["sev_dup"]
-        assert len(preflight["kept"]) == 4
+        assert 0 < len(preflight["kept"]) <= 4
+        assert "sev" in preflight["kept"]
         assert set(preflight["capped"]) | set(preflight["kept"]) == set(covs) - {"const", "sev_dup"}
+        assert preflight["protected_capped"] == []
         assert preflight["max_covariates"] == 4
 
     @pytest.mark.asyncio
@@ -316,6 +321,122 @@ class TestRequiredEdgeHonesty:
         out = await node.execute(_state(frame, covs, discovery_max_covariates=4))
         assert out["discovery_result"]["metadata"]["required_edges_missing"] == []
         assert not [w for w in out.get("warnings", []) if f"{T} -> {Y}" in w]
+
+
+class _RejectingRunner(_AcceptingRunner):
+    """A converged run that drew nothing: the gate REJECTs (too few edges)."""
+
+    def __init__(self) -> None:
+        super().__init__([], draw_estimand=False)
+
+
+class TestEstimandEdgeOnEveryGatePath:
+    """Spec item 3: 'in every case assert the estimand edge on the shipped
+    DAG'. The CAPABILITY is the edge's presence on every path; the label
+    follows the documented provenance design (``_compute_edge_provenance``:
+    ``required_prior`` when the DAG shipped through discovery, ``curated`` when
+    the shipped DAG is the manual construction — a manual DAG's edges did not
+    come from the prior even where the prior agrees; codex iter-1 HIGH of the
+    provenance PR, pinned by test_graph_builder_guarantee.py)."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("runner", "expected_decision", "expected_label"),
+        [
+            (
+                _AcceptingRunner([("sev", T), ("sev", Y)], draw_estimand=False),
+                "accept",
+                "required_prior",
+            ),
+            (_RejectingRunner(), "reject", "curated"),
+            (_CapturingRunner(), "reject", "curated"),
+            # ACCEPT whose ensemble orients outcome->treatment: execute() discards
+            # the discovered DAG for the manual one (dag_overridden), so the
+            # shipped DAG is manual and its edges are curated.
+            (_AcceptingRunner([(Y, T), ("sev", T)], draw_estimand=False), "accept", "curated"),
+        ],
+        ids=["accept", "reject-no-edges", "discovery-failed", "accept-overridden"],
+    )
+    async def test_estimand_edge_is_shipped_on_every_path(
+        self, runner: Any, expected_decision: str, expected_label: str
+    ) -> None:
+        frame, covs = _frame()
+        node = GraphBuilderNode()
+        node._discovery_runner = runner
+        out = await node.execute(_state(frame, covs, discovery_max_covariates=4))
+        graph = out["causal_graph"]
+        assert graph["discovery_gate_decision"] == expected_decision
+        assert [T, Y] in [list(e) for e in graph["edges"]]
+        provenance = {(e["source"], e["target"]): e["provenance"] for e in graph["edge_provenance"]}
+        assert provenance[(T, Y)] == expected_label
+        assert graph["adjustment_sets"] and set(covs) <= set(graph["adjustment_sets"][0])
+
+
+class TestRequiredEdgeCauseIsEstablishedNotAssumed:
+    """codex r1 finding 6: the cause of a missing required edge must name what
+    actually happened — a run that did not converge, an edge PC drew that the
+    ensemble's post-processing removed, or the skeleton-phase removal — never
+    the skeleton explanation by default."""
+
+    def _config(self) -> DiscoveryConfig:
+        from src.causal_engine.discovery.base import CausalPriorKnowledge
+
+        return DiscoveryConfig(
+            prior_knowledge=CausalPriorKnowledge(
+                tiers=[["sev"], [T], [Y]], required_edges=[(T, Y)], forbidden_edges=[]
+            )
+        )
+
+    def _result(
+        self,
+        drawn: List[Tuple[str, str]],
+        ensemble: List[Tuple[str, str]],
+        converged: bool,
+        error: str | None = None,
+    ) -> DiscoveryResult:
+        dag = nx.DiGraph()
+        dag.add_nodes_from(["sev", T, Y])
+        dag.add_edges_from(ensemble)
+        meta: Dict[str, Any] = {}
+        if error:
+            meta["error"] = error
+        return DiscoveryResult(
+            success=converged,
+            config=self._config(),
+            ensemble_dag=dag if converged else None,
+            algorithm_results=[
+                AlgorithmResult(
+                    algorithm=DiscoveryAlgorithmType.PC,
+                    adjacency_matrix=np.zeros((3, 3), dtype=int),
+                    edge_list=drawn,
+                    runtime_seconds=0.0,
+                    converged=converged,
+                    metadata={"error": error} if error else {},
+                )
+            ],
+            metadata=meta,
+        )
+
+    def test_skeleton_cause_only_when_pc_converged_and_did_not_draw_it(self) -> None:
+        result = self._result(drawn=[("sev", T)], ensemble=[("sev", T)], converged=True)
+        GraphBuilderNode._annotate_required_edges(result, result.config)
+        assert result.metadata["required_edges_missing"] == [[T, Y]]
+        assert "skeleton" in result.metadata["required_edges_missing_cause"]
+
+    def test_failed_run_names_the_failure_not_the_skeleton(self) -> None:
+        result = self._result(drawn=[], ensemble=[], converged=False, error="timeout after 300s")
+        GraphBuilderNode._annotate_required_edges(result, result.config)
+        cause = result.metadata["required_edges_missing_cause"]
+        assert result.metadata["required_edges_missing"] == [[T, Y]]
+        assert "skeleton" not in cause
+        assert "did not converge" in cause and "timeout after 300s" in cause
+
+    def test_edge_drawn_but_removed_by_post_processing_says_so(self) -> None:
+        result = self._result(drawn=[(T, Y), ("sev", T)], ensemble=[("sev", T)], converged=True)
+        GraphBuilderNode._annotate_required_edges(result, result.config)
+        cause = result.metadata["required_edges_missing_cause"]
+        assert "skeleton" not in cause
+        assert "post-processing" in cause
 
 
 class TestRealPCRunsOnACollinearFrame:

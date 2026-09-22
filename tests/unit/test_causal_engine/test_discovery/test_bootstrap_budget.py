@@ -62,6 +62,26 @@ class _SlowAlgorithm(BaseDiscoveryAlgorithm):
         )
 
 
+class _StallingAlgorithm(_SlowAlgorithm):
+    """``_SlowAlgorithm`` whose call number ``stall_on`` sleeps ``stall_seconds``
+    instead — one resample fit that outlives the budget."""
+
+    def __init__(self, seconds: float, stall_on: int, stall_seconds: float) -> None:
+        super().__init__(seconds)
+        self.stall_on = stall_on
+        self.stall_seconds = stall_seconds
+
+    def discover(self, data: pd.DataFrame, config: DiscoveryConfig) -> AlgorithmResult:
+        if self.calls + 1 == self.stall_on:
+            original = self.seconds
+            self.seconds = self.stall_seconds
+            try:
+                return super().discover(data, config)
+            finally:
+                self.seconds = original
+        return super().discover(data, config)
+
+
 def _frame() -> pd.DataFrame:
     rng = np.random.default_rng(0)
     return pd.DataFrame(rng.normal(size=(60, 4)), columns=["a", "b", "c", "d"])
@@ -115,6 +135,7 @@ class TestBudgetBoundsTheLoop:
         assert summary["n_succeeded"] == summary["n_attempted"]
         assert summary["budget_exhausted"] is True
         assert summary["time_budget_s"] == 0.42
+        assert summary["n_abandoned"] == 0
         assert summary["corroborated"] is True
         assert summary["elapsed_s"] <= 0.42 + 0.05 + 0.05  # one fit of overshoot at most
         by_edge = {(e.source, e.target): e for e in result.edges}
@@ -123,7 +144,41 @@ class TestBudgetBoundsTheLoop:
         # a multiple of 1/n_succeeded, not of 1/20.
         stability = by_edge[("c", "d")].bootstrap_stability
         assert stability is not None
-        assert abs(stability * summary["n_succeeded"] - round(stability * summary["n_succeeded"])) < 1e-9
+        assert (
+            abs(stability * summary["n_succeeded"] - round(stability * summary["n_succeeded"]))
+            < 1e-9
+        )
+
+    @pytest.mark.asyncio
+    async def test_a_resample_that_outlives_the_budget_is_abandoned_not_awaited(self) -> None:
+        """Measured on the real frame: one gsq resample fit ran 57 minutes
+        (docs/demos/results/2026-09-22_lane_d_guided_discovery_claims/
+        d7_gsq_arm_stopped.txt). The estimate-before-start check cannot see a
+        fit that is slower than its predecessors, so every resample is also
+        WAITED FOR only as long as the budget has left (codex r1 finding 5):
+        an overrun is abandoned (its thread finishes on its own, the same
+        contract as the per-algorithm timeout), counted as attempted and
+        abandoned, never as succeeded, and the loop returns at the budget."""
+        algorithm = _StallingAlgorithm(seconds=0.05, stall_on=4, stall_seconds=3.0)
+        config = DiscoveryConfig(
+            algorithms=[DiscoveryAlgorithmType.PC],
+            bootstrap_resamples=20,
+            time_budget_s=0.6,
+            min_resamples=2,
+            random_state=0,
+        )
+        start = time.monotonic()
+        result = await _runner(algorithm).discover_dag(_frame(), config)
+        wall = time.monotonic() - start
+        summary = result.metadata["bootstrap"]
+        assert wall < 1.5, wall  # returned long before the 3 s stall ended
+        assert summary["budget_exhausted"] is True
+        assert summary["n_abandoned"] == 1
+        assert (summary["n_attempted"], summary["n_succeeded"]) == (3, 2)
+        assert summary["corroborated"] is True
+        assert summary["elapsed_s"] <= 0.6 + 0.2
+        by_edge = {(e.source, e.target): e for e in result.edges}
+        assert by_edge[("a", "b")].bootstrap_stability == 1.0
 
     @pytest.mark.asyncio
     async def test_no_budget_runs_every_requested_resample(self) -> None:

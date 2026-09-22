@@ -131,10 +131,24 @@ class TestForcedIndependenceTest:
         assert result.metadata["indep_test"] == "fisherz"
         assert result.metadata["indep_test_forced"] is False
 
-    def test_forced_test_is_used_and_recorded(self) -> None:
+    def test_forced_test_is_used_and_recorded(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The forced test must reach causal-learn's ``pc`` call, not only the
+        metadata (codex r1 finding 7: a wrapper that ran fisherz and wrote
+        'gsq' would pass a metadata-only assertion)."""
+        import causallearn.search.ConstraintBased.PC as pc_module
+
+        real_pc = pc_module.pc
+        seen: list = []
+
+        def spy(X, **kwargs):  # type: ignore[no-untyped-def]
+            seen.append(kwargs.get("indep_test"))
+            return real_pc(X, **kwargs)
+
+        monkeypatch.setattr(pc_module, "pc", spy)
         frame = _mixed_frame()
         frame["sev"] = (frame["sev"] > 0).astype(float)  # gsq needs discrete data
         result = PCAlgorithm().discover(frame, DiscoveryConfig(indep_test="gsq"))
         assert result.converged, result.metadata
+        assert seen == ["gsq"]
         assert result.metadata["indep_test"] == "gsq"
         assert result.metadata["indep_test_forced"] is True
