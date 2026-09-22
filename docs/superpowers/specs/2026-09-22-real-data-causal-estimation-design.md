@@ -45,10 +45,12 @@ initiation-vs-none (needs a re-pull with follow-up for the untreated).
 
 ## 3. Lanes
 
-Four lanes, each its own plan → implementation → PR. Order: A, then B and D (independent
-of each other, both need A's frame), then C. Lane A is usable on its own
-(curated-confounder DAG, discovery off); Lane B upgrades A's structure with a validated
-prior; Lane D makes guided discovery run on claims frames so it can corroborate or
+Five lanes, each its own plan → implementation → PR. Order: A, then E, then B and D
+(independent of each other; both need A's frame, B needs E's voters), then C. Lane A is
+usable on its own (curated-confounder DAG, discovery off); Lane E turns the four
+feature-role voters on for the causal cohorts and makes their verdicts an input to DAG
+construction; Lane B upgrades A's structure with a validated prior authored over that
+evidence; Lane D makes guided discovery run on claims frames so it can corroborate or
 challenge that prior; Lane C is pre-wiring.
 
 ### Lane A — real-data causal pipeline, rehearsed on Dupixent vs Xolair → persistence
@@ -98,6 +100,53 @@ Gates: unit tests for export, loader, registry and spec consistency (the existin
 registry-consistency tests must include the new key); a real-DB probe of the loaded
 table's arm split against the parquet; the API run recorded as the cert.
 
+### Lane E — the four voters, live and wired into DAG construction
+
+Verified state (2026-09-22). Four independent processes assign each feature a causal
+role in the ML data-preparer node (`adaptive_validity_check`, voter in
+`src/data/kg/ensemble_voter.py`): Layer 1 declarative contract (live), Layer 3
+adversarial probe (live), Layer 2 knowledge graph and Layer 4 LLM classifier. The last
+two are dark, for three different reasons:
+
+| Voter | Why it is dark | Evidence |
+|---|---|---|
+| Layer 4 LLM | flag off (`adaptive_layer4_enabled` defaults False; no script or config sets it); audit-only (`ADAPTIVE_LAYER4_LLM_DECIDES` unset); the compiled artifact `artifacts/dspy/causal_role_classifier.json` is committed but excluded from the image by `.dockerignore`'s `*.json` (only `config/**/*.json` and `data/kg_cache/**` are un-ignored) | `adaptive_validity_check.py:3776`, `ensemble_voter.py:195-204`, `.dockerignore:103-124` |
+| Layer 2 KG | activation bound only for manifest `optum` (`src/data/kg/activation.py::KG_ACTIVATIONS`), shadow mode, one cache (`data/kg_cache/1cdaa038__96bfd2e0.json`, target omalizumab RXNORM:302379); nothing for `optum_mart`, `csu`, `optum_hcp`, so those cohorts emit `no_signal` by construction; promotion is operator-driven | `activation.py:34-39`, memory note 2026-09-22 |
+| Causal agent | `graph_builder` consumes none of the four; every registry covariate is adjusted blind | grep: no voter import under `src/agents/causal_impact/` |
+
+1. **Ship the voters.** Un-ignore `artifacts/dspy/causal_role_classifier.json` (a
+   packaging guard test mirroring `tests/unit/test_data/test_kg/test_kg_cache_packaging.py`
+   proves it is in the image). Build and commit KG caches for `optum_mart` and `csu`
+   with `scripts/build_kg_cache.py --live` against both treatment concepts of the Lane A
+   contrast (omalizumab RXNORM:302379 and dupilumab, whose RxCUI is resolved through
+   RxNav in-lane and pinned by a test); add their `KG_ACTIVATIONS` entries in shadow.
+   Define a cohort-scoped **causal activation profile** on the existing per-run config
+   (`adaptive_layer4_enabled=True`, KG shadow, structural decider on) that the causal
+   path applies; no global flag flips, `ADAPTIVE_LAYER4_LLM_DECIDES` stays off — under
+   this design the voters inform, the author and the human decide.
+2. **Feature-role panel.** `src/causal_engine/feature_role_panel.py`: runs the existing
+   node's four layers (reused, not re-implemented) over a causal frame's covariates for
+   a (manifest source, T, Y) and returns, per feature: the Layer 1 verdict, the Layer 3
+   statistic and severity, the Layer 2 signal with its supporting edges, the Layer 4
+   role, mechanism and citation verdicts, and the ensemble verdict (`decided_by`,
+   `final_role`, confidence, disagreements). Serialisable; recorded as evidence.
+3. **Panel → DAG construction.** (a) The panel is part of every feature's brief to the
+   structural author (Lane B) and is written per feature into `agent_assessment_json`
+   for the reviewer. (b) Hard constraints on authored structure: a Layer 1 high veto
+   (post-index) forbids `feature → T`; a Layer 3 high veto (leak) excludes the feature
+   from any adjustment set whatever the authored edges say. (c) Cross-check: the
+   author's derived role vs the ensemble `final_role`; disagreement sets
+   `ambiguous=true` and the review shows both. (d) The causal agent reads the panel:
+   `anchored_confounders` = features whose approved structure derives confounder or
+   instrument and that carry no leak verdict; leak-verdict covariates are removed from
+   `modeled_confounders` with a named warning in the response, instead of being
+   adjusted for blind as today.
+4. **Measure.** Re-run `scripts/measure_layer4_precision.py` with the artifact as
+   packaged (the ≥0.95 instrument-precision gate); run the panel on the real persistence
+   frame's 64 covariates and record which layers fired, how many features each decided,
+   and the abstain rate — a null is a finding. KG promotion from shadow follows the
+   existing `compute_promotion_eligibility`, decided by the owner on that measurement.
+
 ### Lane B — structural author with human validation
 
 Authors the DAG for the CSU escalation decision from the guide
@@ -107,7 +156,8 @@ queue, and feeds the approved structure back to Lane A as its structural prior.
 1. `src/data/kg/structural_author.py`: a DSPy program (OpenAI via
    `src/optimization/dspy_lm.py::ensure_dspy_configured`) whose instructions are the
    guide's sections 0–6 verbatim. Inputs per feature: the brief the Layer-4 classifier
-   already gets (`adaptive_validity_check._build_layer_4_inputs`). Outputs: edges over
+   already gets (`adaptive_validity_check._build_layer_4_inputs`) plus the Lane E
+   feature-role panel for that feature. Outputs: edges over
    `{feature, T, Y, U_*}`, cited rationale per non-obvious edge, `ambiguous`, expected
    role. Post-processing: `extract_role` derives the role; citations go through
    `src/data/kg/citation_resolver.CitationResolver.verify_citation`; per-edge grade
@@ -216,7 +266,10 @@ Optum_enriched.parquet ──convert_optum_mart --cohort persistence_causal─�
         │                                                                     │
         │                                                   load_optum_causal_cohort ──▶ public.optum_biologic_persistence_causal
         │                                                                     │
-optum_mart manifest ──structural_author──▶ attestations.json ──assembler──▶ dag.json ──▶ expert_reviews (human)
+optum_mart manifest ─┐
+causal frame ────────┴─feature_role_panel (L1 contract · L2 KG · L3 probe · L4 LLM → ensemble)─┐
+                                                                                          ▼
+                     structural_author (guide + panel evidence) ──▶ attestations.json ──assembler──▶ dag.json ──▶ expert_reviews (human)
                                                                               │ approved
                                                        anchored_confounders ◀─┘
                                                                               ▼
@@ -245,6 +298,10 @@ loader, registry consistency, real-DB arm-split probe, API run cert. Lane B: par
 grader on fixed model outputs, assembler on hand-built fragments (latent, M-structure),
 scorer on the golden fixtures, CLI with a fake LM and the dead-Supabase pin, provenance
 handling in the decider; the benchmark itself is a real-LM run recorded as evidence.
+Lane E: image-packaging guard for the DSPy artifact, KG activation entries against
+their committed caches (fail-loud on a missing cache), the panel on a fixture frame with
+a fake LM and the committed KG cache (real Layer 1 and Layer 3), the veto constraints and
+the leak-covariate removal in the agent, and the precision re-measurement as evidence.
 Lane C: matcher unit tests, synthetic planted-truth end-to-end. Lane D: pre-flight on
 hand-built collinear frames (exact duplicate, composite = sum of parts, constant),
 screening rule determinism and manifest-order tie-break, budgeted bootstrap with a fake
@@ -256,5 +313,9 @@ evidence with the planted synthetic frame as its control.
 - GO for migration 148 apply and the production table load (Lane A step 2).
 - Whether the existing 110 Optum attestations should be relabelled `machine` now
   (they are research-agent output with no human sign-off).
+- KG promotion from shadow to promoted for the causal cohorts, on Lane E's measurement.
+- Layer 4 stays audit-only (`ADAPTIVE_LAYER4_LLM_DECIDES` off): under this design the
+  LLM's role is evidence to the author and the reviewer, not a decider. Say so if you
+  want it to decide.
 - The persistence definition per brand (60-day gap vs dosing interval) before any
   estimate is quoted externally.
