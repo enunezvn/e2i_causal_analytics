@@ -396,7 +396,13 @@ class TestSchemaModelFollowsTheExpandContractPair:
             "the per_hcp_rollup contract is not in the forward-migration scan at all — "
             "the end state this class asserts is not being derived from it"
         )
-        re_adder = next((p for p in every if p.name.startswith("033_")), None)
+        # ``rglob`` order is directory-entry order, not sorted: ``database/ml/033_ragas_…``
+        # also starts with ``033_`` and can be reached first (it was, on one CI
+        # checkout). The re-adder this guard is about is ``database/migrations/033``.
+        re_adder = next(
+            (p for p in every if p.name.startswith("033_") and p.parent.name == "migrations"),
+            None,
+        )
         assert re_adder is not None, (
             "no migration 033 in the scan — it is the file that re-ADDs trx_count and "
             "the reason this ordering rule exists"

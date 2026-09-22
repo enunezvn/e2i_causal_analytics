@@ -18,11 +18,16 @@ pytestmark = pytest.mark.skipif(
     reason="E2I_DB_INTEGRATION!=1; set to 1 to run against the real Supabase DB.",
 )
 
+# data/ is gitignored: derive the default from THIS checkout's root (absent in a
+# worktree unless E2I_OPTUM_CAUSAL_PARQUET points at the main checkout's copy).
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 _PARQUET = Path(
     os.getenv(
         "E2I_OPTUM_CAUSAL_PARQUET",
-        "/home/enunez/Projects/e2i_causal_analytics/data/rwd/mart/persistence_causal/"
-        "e2i_causal_v1_biologic_persistence.parquet",
+        str(
+            _REPO_ROOT
+            / "data/rwd/mart/persistence_causal/e2i_causal_v1_biologic_persistence.parquet"
+        ),
     )
 )
 
