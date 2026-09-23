@@ -336,3 +336,28 @@ async def test_reuse_heals_only_a_provenance_the_stored_cohort_agrees_with():
     assert row["training_provenance"] is None  # the claim contradicts the stored cohort
     await _register(db, "exp_kisq_al_1", None, synthetic, run_id="run-a")
     assert row["training_provenance"] == "synthetic_gold"  # agreeing claim heals
+
+
+@pytest.mark.asyncio
+async def test_a_reused_row_with_no_cohort_passed_skips_only_the_cohort_heal():
+    """``_persist_model_registry_row``'s ``cohort`` defaults to None (the integration
+    suite's idempotent re-run passes none): the reuse path must not fail on it."""
+    from src.agents.ml_foundation.model_deployer.nodes.registry_manager import (
+        _persist_model_registry_row,
+    )
+
+    db = _plain_db()
+    first = await _register(db, "exp_kisq_al_1", None, _table(is_synthetic=True))
+    row = _row(db, first["model_registry_id"])
+    row["training_provenance"] = None
+    rid = await _persist_model_registry_row(
+        db,
+        experiment_id_str="exp_kisq_al_1",
+        model_uri="runs:/run-a/model",
+        registered_model_name=row["model_name"],
+        model_version=1,
+        validation_metrics=None,
+        training_provenance="synthetic_gold",
+    )
+    assert rid == row["id"]  # reused, not duplicated
+    assert row["training_provenance"] == "synthetic_gold"  # provenance heal still ran

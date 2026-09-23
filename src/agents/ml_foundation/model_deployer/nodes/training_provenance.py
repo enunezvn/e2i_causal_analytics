@@ -93,10 +93,12 @@ def cohort_contract_from_state(state: Any) -> Dict[str, Any]:
 
 
 async def heal_reused_row(
-    client: Any, row_id: str, cohort: Dict[str, Any], provenance: Optional[str]
+    client: Any, row_id: str, cohort: Optional[Dict[str, Any]], provenance: Optional[str]
 ) -> None:
     """NULL-only heals of a reused registry row: the cohort contract first (#2207), then
-    the provenance, which is validated against that stored contract."""
+    the provenance, which is validated against that stored contract. ``cohort`` is None
+    when the caller passed no contract (``_persist_model_registry_row``'s default) —
+    nothing to heal from, the provenance heal still runs."""
     if cohort:
         await heal_registry_cohort_contract(client, row_id, cohort)
     if provenance:
