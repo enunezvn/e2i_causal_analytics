@@ -49,6 +49,7 @@ _CONSUMERS = tuple(
         "test_territory_metrics_etl_integration.py",
         "test_business_metrics_per_hcp_etl_integration.py",
         "test_patient_adherence_etl_integration.py",
+        "test_etl_provenance_inheritance_895.py",
     )
 )
 

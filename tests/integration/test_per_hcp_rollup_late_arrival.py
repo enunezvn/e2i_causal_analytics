@@ -26,6 +26,8 @@ from tests.integration._prod_write_guard import (
     per_hcp_rollup_spec,
     planted_prefix,
     require_isolated_windows,
+    require_no_foreign_reconcile,
+    require_windows_still_isolated,
     selected_metric_dates,
     territory_arrival_spec,
     territory_rollup_spec,
@@ -106,8 +108,7 @@ def planted(db_conn: Any) -> Any:
     guard_arrival_start = datetime.fromisoformat(FIRST_ARRIVAL_RUN) - timedelta(
         hours=ARRIVAL_WINDOW_HOURS
     )
-    require_isolated_windows(
-        db_conn,
+    guard_specs = (
         per_hcp_rollup_spec(
             test_file=__file__,
             start=guard_arrival_start,
@@ -139,6 +140,7 @@ def planted(db_conn: Any) -> Any:
             window_column="created_at",
         ),
     )
+    require_isolated_windows(db_conn, *guard_specs)
     with db_conn:
         with db_conn.cursor() as cur:
             for hcp_id in hcps.values():
@@ -195,11 +197,25 @@ def planted(db_conn: Any) -> Any:
         "rid": rid,
         "territory_selected_dates": territory_selected_dates,
         "territory_run_xid": None,
+        "territory_run_created_at": None,
+        # Set by the territory test: the arrival run's own selection params and the census
+        # spec built on them, so the teardown can re-read the selection and the final
+        # re-census can include it (#2215).
+        "territory_arrival_params": None,
+        "territory_extra_specs": [],
         **hcps,
     }
     yield state
+    arrival_params = state["territory_arrival_params"]
+    if arrival_params is not None:
+        # #2215 (codex r1 on this lane): a selected date that appeared between the
+        # recording and the run is reported by the test, but the run still wrote a row
+        # for every territory on it. Re-read the run's own selection while the planted
+        # rows that drive it still exist, and sweep the union, not just the recorded set.
+        territory_selected_dates.update(selected_metric_dates(db_conn, arrival_params))
     dates = sorted({TUESDAY, MONDAY} | territory_selected_dates)
     run_xid = state["territory_run_xid"]
+    run_created_at = state["territory_run_created_at"]
     with db_conn:
         with db_conn.cursor() as cur:
             cur.execute(
@@ -207,12 +223,16 @@ def planted(db_conn: Any) -> Any:
                 (planted_prefix(f"T_LATE_{rid}"),),
             )
             if run_xid is not None:
+                # The run's own INSERTS: its xid AND its transaction timestamp. A foreign
+                # row the run overwrote takes the xid but keeps its created_at (the upsert
+                # stamps NOW() on insert only), so it is reported below, not swept (#2215).
                 cur.execute(
-                    "DELETE FROM territory_metrics WHERE metric_date = ANY(%s) AND xmin::text = %s",
-                    (dates, run_xid),
+                    "DELETE FROM territory_metrics WHERE metric_date = ANY(%s) "
+                    "AND xmin::text = %s AND created_at = %s",
+                    (dates, run_xid, run_created_at),
                 )
             cur.execute(
-                "SELECT territory_id, metric_date, xmin::text FROM territory_metrics "
+                "SELECT territory_id, metric_date, xmin::text, created_at FROM territory_metrics "
                 " WHERE metric_date = ANY(%s) ORDER BY 2, 1",
                 (dates,),
             )
@@ -237,6 +257,11 @@ def planted(db_conn: Any) -> Any:
         f"territory_metrics rows on {dates} were not written by the territory run "
         f"(xid {run_xid}) and were left in place, not deleted: {not_ours}"
     )
+    # #2215: the fixture census, the runs and this teardown are separate transactions.
+    # With our rows gone, anything the same censuses (the four fixture specs plus the
+    # arrival spec the territory test recorded) still reach landed inside a window while
+    # this file was writing -- REPORTED as a teardown failure, never deleted.
+    require_windows_still_isolated(db_conn, *guard_specs, *state["territory_extra_specs"])
 
 
 def _land_batch(
@@ -292,6 +317,11 @@ def test_a_late_weekly_batch_rolls_up_under_each_triggers_own_date(
 
     _land_batch(db_conn, rid, EARLY_BATCH, [("b1", b, TUESDAY)])
     first = _run_per_hcp_rollup_impl(arrived_before=FIRST_ARRIVAL_RUN, request_id="late-arrival-1")
+    # #2215 (codex r2 HIGH-1): nothing on the affected dates pre-existed (censused), and
+    # the second run re-rolls the same (hcp, brand, date) keys with more triggers, so
+    # neither arrival run's reconcile deletes anything; a count is a foreign row that
+    # landed after the census and is already gone.
+    require_no_foreign_reconcile(first)
     assert first["status"] == "completed" and first["selected_by"] == "arrival", first
     assert _rows(db_conn, rid) == {(b, TUESDAY): (1, 1.0)}
 
@@ -309,6 +339,7 @@ def test_a_late_weekly_batch_rolls_up_under_each_triggers_own_date(
     second = _run_per_hcp_rollup_impl(
         arrived_before="2019-01-14T03:15:00+00:00", request_id="late-arrival-2"
     )
+    require_no_foreign_reconcile(second)
     assert second["status"] == "completed" and second["rows_affected"] == 3, second
     rows = _rows(db_conn, rid)
     assert rows[(a, TUESDAY)] == pytest.approx((2, 2 / 3))
@@ -347,17 +378,20 @@ def test_a_late_weekly_batch_rolls_up_under_each_triggers_own_date(
     # every selected date is fully ours, and ours are exactly the two planted dates.
     arrival_end = datetime.fromisoformat(TERRITORY_ARRIVAL_RUN)
     arrival_start = arrival_end - timedelta(hours=territory_metrics_etl.ARRIVAL_WINDOW_HOURS)
-    (census,) = require_isolated_windows(
-        db_conn,
-        territory_arrival_spec(
-            test_file=__file__,
-            start=arrival_start,
-            end=arrival_end,
-            hcp_like=planted_prefix(f"hl_{rid}_"),
-            trigger_like=planted_prefix(f"trlate_{rid}_"),
-            territory_like=planted_prefix(f"T_LATE_{rid}"),
-        ),
+    arrival_spec = territory_arrival_spec(
+        test_file=__file__,
+        start=arrival_start,
+        end=arrival_end,
+        hcp_like=planted_prefix(f"hl_{rid}_"),
+        trigger_like=planted_prefix(f"trlate_{rid}_"),
+        territory_like=planted_prefix(f"T_LATE_{rid}"),
     )
+    arrival_params = {
+        "start_date": arrival_start,
+        "end_date": arrival_end,
+        "per_hcp_metric_type": territory_metrics_etl.PER_HCP_METRIC_TYPE,
+    }
+    (census,) = require_isolated_windows(db_conn, arrival_spec)
     # Positive control: the census COUNTED our rows (3 per-HCP rows on the two dates + the
     # 4 triggers in their lookbacks), so a green verdict is a measurement, not a census
     # that reached nothing.
@@ -365,35 +399,36 @@ def test_a_late_weekly_batch_rolls_up_under_each_triggers_own_date(
 
     def _selected_dates() -> set[date]:
         # READ ONLY by construction (codex r2-2): the selection is the ETL's raw CTE.
-        return selected_metric_dates(
-            db_conn,
-            {
-                "start_date": arrival_start,
-                "end_date": arrival_end,
-                "per_hcp_metric_type": territory_metrics_etl.PER_HCP_METRIC_TYPE,
-            },
-        )
+        return selected_metric_dates(db_conn, arrival_params)
 
     # Pinned BEFORE it is recorded (codex r1-2): a date that is not one of ours fails here
     # and is never handed to the wholesale teardown.
     selected = _selected_dates()
     assert selected == {TUESDAY, MONDAY}, selected
     planted["territory_selected_dates"].update(selected)
+    # Handed to the teardown: it re-reads this selection before deleting, and re-censuses
+    # this spec after (#2215).
+    planted["territory_arrival_params"] = arrival_params
+    planted["territory_extra_specs"].append(arrival_spec)
 
     territory = _run_territory_rollup_impl(
         arrived_before=TERRITORY_ARRIVAL_RUN, request_id="late-arrival-territory"
     )
+    # #2215: no territory row on the selected dates pre-existed (leg 3 was 0).
+    require_no_foreign_reconcile(territory)
     # The run's transaction id, read off our own keyed row it just wrote: the teardown
     # deletes by it, and every row on the recorded dates must carry it -- a row that does
     # not was written by someone else and is reported, not swept.
     with db_conn:
         with db_conn.cursor() as cur:
             cur.execute(
-                "SELECT xmin::text FROM territory_metrics WHERE territory_id = %s AND metric_date = %s",
+                "SELECT xmin::text, created_at FROM territory_metrics "
+                " WHERE territory_id = %s AND metric_date = %s",
                 (f"T_LATE_{rid}", TUESDAY),
             )
             row = cur.fetchone()
             planted["territory_run_xid"] = row[0] if row else None
+            planted["territory_run_created_at"] = row[1] if row else None
     assert territory["status"] == "completed" and territory["selected_by"] == "arrival", territory
     assert planted["territory_run_xid"] is not None
     with db_conn:
