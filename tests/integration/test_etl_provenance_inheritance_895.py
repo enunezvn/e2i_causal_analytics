@@ -40,6 +40,12 @@ from typing import Any
 
 import pytest
 
+from tests.integration._prod_write_guard import (
+    per_hcp_rollup_spec,
+    require_windows_still_isolated,
+    territory_rollup_spec,
+)
+
 psycopg2 = pytest.importorskip("psycopg2")
 
 pytestmark = pytest.mark.skipif(
@@ -211,23 +217,43 @@ def mixed_substrate(db_conn: Any, test_run_id: str) -> dict:
                     ),
                 )
 
-    yield {"run_id": rid, "hcps": hcps}
+    state = {"run_id": rid, "hcps": hcps, "territory_run_xid": None}
+    yield state
 
-    # Teardown in reverse FK order; territory_metrics rows are deletable by
-    # the far-past metric_date window (the territory ETL cross-products
-    # every territory in hcp_profiles against the window's metric_dates, so
+    # Teardown in reverse FK order. The territory ETL cross-products every
+    # territory in hcp_profiles against the window's metric_dates, so
     # prefix-matching territory_id alone would leak foreign-territory rows
-    # created by our own ETL run). The date-scoped delete is safe ONLY
-    # because the fixture proved the window held zero territory_metrics
-    # rows AND has held the window's advisory lock ever since -- everything
-    # in it now is ours. The lock is released after the delete.
+    # created by our own ETL run -- and a date-scoped delete would destroy
+    # any foreign row that landed in the window after the emptiness proof
+    # above (#2215: the proof, the runs and this delete are separate
+    # transactions, and the advisory lock serialises this suite against
+    # itself, not against a foreign writer). So the delete is keyed to what
+    # this run owns: its two territories, plus rows on the window's dates
+    # carrying the territory run's own transaction id (read off the run's
+    # keyed row after it ran; every row the run wrote shares that xmin, the
+    # #2213 rule). Anything else in the window is REPORTED, not deleted.
+    # The lock is released after the delete.
+    run_xid = state["territory_run_xid"]
+    not_ours: list[tuple[Any, ...]] = []
     try:
         with db_conn:
             with db_conn.cursor() as cur:
                 cur.execute(
-                    "DELETE FROM territory_metrics WHERE metric_date >= %s AND metric_date < %s",
+                    "DELETE FROM territory_metrics WHERE territory_id IN (%s, %s)",
+                    (f"TS_{rid}", f"TR_{rid}"),
+                )
+                if run_xid is not None:
+                    cur.execute(
+                        "DELETE FROM territory_metrics WHERE metric_date >= %s "
+                        "AND metric_date < %s AND xmin::text = %s",
+                        (WINDOW_START.date(), WINDOW_END.date(), run_xid),
+                    )
+                cur.execute(
+                    "SELECT territory_id, metric_date, xmin::text FROM territory_metrics "
+                    " WHERE metric_date >= %s AND metric_date < %s ORDER BY 2, 1",
                     (WINDOW_START.date(), WINDOW_END.date()),
                 )
+                not_ours = cur.fetchall()
                 cur.execute(
                     "DELETE FROM business_metrics WHERE hcp_id LIKE %s",
                     (f"hcp895_{rid}_%",),
@@ -245,6 +271,30 @@ def mixed_substrate(db_conn: Any, test_run_id: str) -> dict:
                     "SELECT pg_advisory_unlock(hashtext(%s))",
                     (_WINDOW_ADVISORY_LOCK_KEY,),
                 )
+    assert not not_ours, (
+        f"territory_metrics rows in [{WINDOW_START.date()}, {WINDOW_END.date()}) were not "
+        f"written by the territory run (xid {run_xid}) and were left in place, not deleted: "
+        f"{not_ours}"
+    )
+    # #2215: with our rows gone, anything the family's census still reaches in the window
+    # landed while this file was writing -- REPORTED as a teardown failure, never deleted.
+    require_windows_still_isolated(
+        db_conn,
+        per_hcp_rollup_spec(
+            test_file=__file__,
+            start=WINDOW_START,
+            end=WINDOW_END,
+            hcp_like=f"hcp895_{rid}_%",
+            trigger_like=f"tr895_{rid}_%",
+        ),
+        territory_rollup_spec(
+            test_file=__file__,
+            start=WINDOW_START,
+            end=WINDOW_END,
+            territory_like=f"T%_{rid}",
+            teardown_deletes_window=True,
+        ),
+    )
 
 
 def _run_per_hcp(window_suffix: str = "") -> dict:
@@ -314,6 +364,15 @@ def test_territory_rollup_composes_provenance(db_conn: Any, mixed_substrate: dic
 
     rid = mixed_substrate["run_id"]
     with db_conn.cursor() as cur:
+        # The run's transaction id, off our own keyed row it just wrote: the teardown
+        # deletes the run's cross-join rows on the window's dates by it (#2215).
+        cur.execute(
+            "SELECT xmin::text FROM territory_metrics WHERE territory_id = %s "
+            " ORDER BY metric_date LIMIT 1",
+            (f"TS_{rid}",),
+        )
+        row = cur.fetchone()
+        mixed_substrate["territory_run_xid"] = row[0] if row else None
         cur.execute(
             "SELECT territory_id, BOOL_AND(is_synthetic), BOOL_OR(is_synthetic)"
             "  FROM territory_metrics"

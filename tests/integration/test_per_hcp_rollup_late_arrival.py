@@ -25,6 +25,7 @@ from tests.integration._prod_write_guard import (
     adherence_spec,
     per_hcp_rollup_spec,
     require_isolated_windows,
+    require_windows_still_isolated,
     selected_metric_dates,
     territory_arrival_spec,
     territory_rollup_spec,
@@ -105,8 +106,7 @@ def planted(db_conn: Any) -> Any:
     guard_arrival_start = datetime.fromisoformat(FIRST_ARRIVAL_RUN) - timedelta(
         hours=ARRIVAL_WINDOW_HOURS
     )
-    require_isolated_windows(
-        db_conn,
+    guard_specs = (
         per_hcp_rollup_spec(
             test_file=__file__,
             start=guard_arrival_start,
@@ -138,6 +138,7 @@ def planted(db_conn: Any) -> Any:
             window_column="created_at",
         ),
     )
+    require_isolated_windows(db_conn, *guard_specs)
     with db_conn:
         with db_conn.cursor() as cur:
             for hcp_id in hcps.values():
@@ -226,6 +227,10 @@ def planted(db_conn: Any) -> Any:
         f"territory_metrics rows on {dates} were not written by the territory run "
         f"(xid {run_xid}) and were left in place, not deleted: {not_ours}"
     )
+    # #2215: the fixture census, the runs and this teardown are separate transactions.
+    # With our rows gone, anything the same four censuses still reach landed inside a
+    # window while this file was writing -- REPORTED as a teardown failure, never deleted.
+    require_windows_still_isolated(db_conn, *guard_specs)
 
 
 def _land_batch(

@@ -77,6 +77,7 @@ import pytest
 from tests.integration._prod_write_guard import (
     adherence_spec,
     require_isolated_windows,
+    require_windows_still_isolated,
 )
 
 psycopg2 = pytest.importorskip("psycopg2")
@@ -124,8 +125,7 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
     # Prod-write guard (owner-approved, 2026-09-17): the explicit-window variant UPDATEs
     # every journey with journey_start_date in [start, end), planted or not, so an
     # unplanted journey here is both a derivation source and a write target.
-    require_isolated_windows(
-        db_conn,
+    guard_specs = (
         adherence_spec(
             test_file=__file__,
             start=start_dt,
@@ -133,6 +133,7 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
             journey_like=f"pj_{test_run_id}_%",
         ),
     )
+    require_isolated_windows(db_conn, *guard_specs)
 
     # Patient A ("normal"): 30-day journey, full coverage, 5 triggers with a
     # 14-day gap inserted between trigger 2 and trigger 3.
@@ -296,6 +297,10 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
                     "DELETE FROM patient_journeys WHERE patient_journey_id LIKE %s",
                     (f"pj_{test_run_id}_%",),
                 )
+        # #2215: the census, the runs and this teardown are separate transactions. With
+        # our rows gone, anything the same census still reaches landed inside the window
+        # while this file was writing -- REPORTED as a teardown failure, never deleted.
+        require_windows_still_isolated(db_conn, *guard_specs)
 
 
 def _fetch_journey_metrics(db_conn: Any, journey_id: str) -> tuple[Any, Any, Any]:

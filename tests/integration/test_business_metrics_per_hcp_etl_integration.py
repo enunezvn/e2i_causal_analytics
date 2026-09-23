@@ -54,6 +54,7 @@ import pytest
 from tests.integration._prod_write_guard import (
     per_hcp_rollup_spec,
     require_isolated_windows,
+    require_windows_still_isolated,
 )
 
 psycopg2 = pytest.importorskip("psycopg2")
@@ -110,8 +111,7 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
 
     # Prod-write guard (owner-approved, 2026-09-17): refuse before writing if this
     # window holds rows we did not plant. See tests/integration/_prod_write_guard.py.
-    require_isolated_windows(
-        db_conn,
+    guard_specs = (
         per_hcp_rollup_spec(
             test_file=__file__,
             start=start_dt,
@@ -120,6 +120,7 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
             trigger_like=f"tr_{test_run_id}_%",
         ),
     )
+    require_isolated_windows(db_conn, *guard_specs)
 
     hcps = []
     for terr_idx, (territory_id, region) in enumerate(TERRITORIES):
@@ -255,6 +256,10 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
                 "DELETE FROM hcp_profiles WHERE hcp_id LIKE %s",
                 (f"hcp_{test_run_id}_%",),
             )
+    # #2215: the census, the runs and this teardown are separate transactions. With our
+    # rows gone, anything the same census still reaches landed inside the window while
+    # this file was writing -- REPORTED as a teardown failure, never deleted here.
+    require_windows_still_isolated(db_conn, *guard_specs)
 
 
 def test_per_hcp_rollup_materialises_rows(db_conn: Any, synthetic_dataset: dict) -> None:

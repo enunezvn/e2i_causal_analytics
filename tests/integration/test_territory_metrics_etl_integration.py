@@ -52,6 +52,7 @@ import pytest
 # rather than ImportError when the binary is absent.
 from tests.integration._prod_write_guard import (
     require_isolated_windows,
+    require_windows_still_isolated,
     territory_rollup_spec,
 )
 
@@ -142,8 +143,7 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
     # matters here: the territory rollup CROSS JOINs every hcp_profiles.territory_id
     # with every windowed date, so it writes a row per REAL territory even when every
     # source row is planted. See tests/integration/_prod_write_guard.py.
-    require_isolated_windows(
-        db_conn,
+    guard_specs = (
         territory_rollup_spec(
             test_file=__file__,
             start=start_dt,
@@ -152,6 +152,7 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
             teardown_deletes_window=False,
         ),
     )
+    require_isolated_windows(db_conn, *guard_specs)
 
     # Build the HCP roster.
     hcps: list[dict] = []
@@ -303,6 +304,10 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
                     "DELETE FROM hcp_profiles WHERE hcp_id LIKE %s",
                     (f"hcp_{test_run_id}_%",),
                 )
+        # #2215: the census, the runs and this teardown are separate transactions. With
+        # our rows gone, anything the same census still reaches landed inside the window
+        # while this file was writing -- REPORTED as a teardown failure, never deleted.
+        require_windows_still_isolated(db_conn, *guard_specs)
 
 
 def _fetch_territory_rollup(db_conn: Any, test_run_id: str) -> list[tuple[Any, ...]]:

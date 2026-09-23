@@ -63,6 +63,30 @@ Three independent legs, because the family has three distinct hazards
 A guard with only leg 1 would permit the territory suite; a guard with only leg 2
 would permit the per-HCP suite. All three are required for the refusal to
 discriminate file by file.
+
+Three transactions, and the protocol that closes the gap between them (#2215)
+-----------------------------------------------------------------------------
+The census runs READ ONLY and rolls back; the file then plants and runs the real ETL
+on the ETL's own connection (``with conn:`` commits it); the teardown deletes
+afterwards. A writer landing rows inside the window between the census and the
+teardown is invisible to the census. Folding all of it into one rolled-back
+transaction was weighed and rejected: every ETL entry commits and closes its own
+connection, the per-HCP run opens with ``SET TRANSACTION ISOLATION LEVEL`` (refused
+after any prior query, so the census could no longer be READ ONLY), and the
+late-arrival file's concurrency tests exist to COMMIT a foreign row from a second
+connection mid-run -- a class of test a single transaction cannot express.
+
+So the gap is closed from the other side, by a protocol every file follows:
+
+1. :func:`require_isolated_windows` BEFORE planting -- REFUSE.
+2. The teardown deletes only what the run owns: by planted prefix, or on swept dates
+   by the run's own transaction id (``xmin``, #2213), and REPORTS any other row there.
+3. :func:`require_windows_still_isolated` AFTER the deletes, on the SAME specs --
+   REPORT. With ours gone, ``planted`` is 0 on every leg and any row the census still
+   reaches was inside the window while the file wrote.
+
+A meta test pins that every live-writing file makes the second call after its
+``yield``, and that no file deletes ``territory_metrics`` by date alone.
 """
 
 from __future__ import annotations
@@ -80,8 +104,10 @@ __all__ = [
     "adherence_spec",
     "assess",
     "census_sql",
+    "census_windows",
     "per_hcp_rollup_spec",
     "require_isolated_windows",
+    "require_windows_still_isolated",
     "selected_metric_dates",
     "selected_metric_dates_sql",
     "territory_arrival_spec",
@@ -688,24 +714,17 @@ def adherence_spec(
     )
 
 
-def require_isolated_windows(conn: Any, *specs: WriteWindowSpec) -> tuple[WindowCensus, ...]:
-    """Census every spec and FAIL on the first refusal. One call per test file."""
-    return tuple(_require_isolated_window(conn, spec) for spec in specs)
+def census_windows(conn: Any, *specs: WriteWindowSpec) -> tuple[WindowCensus, ...]:
+    """Measure every spec inside one READ ONLY transaction each; no verdict."""
+    return tuple(_census_window(conn, spec) for spec in specs)
 
 
-def _require_isolated_window(conn: Any, spec: WriteWindowSpec) -> WindowCensus:
-    """Census the live DB and FAIL -- never skip -- when the window is not isolated.
+def _census_window(conn: Any, spec: WriteWindowSpec) -> WindowCensus:
+    """Run a spec's five statements inside ``BEGIN TRANSACTION READ ONLY`` … ``ROLLBACK``.
 
-    Fail rather than skip, deliberately: all five files already skip without the
-    opt-in, so another skip would change nothing. The hazard only materialises when
-    somebody has opted in, and at that moment the useful outcome is a red test
-    naming the file, the window and the counts.
-
-    Read-only by construction: the census runs inside a READ ONLY transaction, so a
-    mistake in a spec's SQL cannot itself write.
+    Read-only by construction: a mistake in a spec's SQL cannot itself write, whichever
+    phase (before the writes, or after the teardown) is asking.
     """
-    import pytest
-
     counts: list[int] = []
     with conn.cursor() as cur:
         cur.execute("BEGIN TRANSACTION READ ONLY")
@@ -716,8 +735,26 @@ def _require_isolated_window(conn: Any, spec: WriteWindowSpec) -> WindowCensus:
                 counts.append(int(row[0]) if row and row[0] is not None else 0)
         finally:
             cur.execute("ROLLBACK")
+    return WindowCensus(*counts)  # type: ignore[arg-type]
 
-    census = WindowCensus(*counts)  # type: ignore[arg-type]
+
+def require_isolated_windows(conn: Any, *specs: WriteWindowSpec) -> tuple[WindowCensus, ...]:
+    """Census every spec and FAIL on the first refusal. One call per test file, BEFORE it
+    plants or writes anything."""
+    return tuple(_require_isolated_window(conn, spec) for spec in specs)
+
+
+def _require_isolated_window(conn: Any, spec: WriteWindowSpec) -> WindowCensus:
+    """Census the live DB and FAIL -- never skip -- when the window is not isolated.
+
+    Fail rather than skip, deliberately: all five files already skip without the
+    opt-in, so another skip would change nothing. The hazard only materialises when
+    somebody has opted in, and at that moment the useful outcome is a red test
+    naming the file, the window and the counts.
+    """
+    import pytest
+
+    census = _census_window(conn, spec)
     verdict = assess(census)
     if verdict.refused:
         detail = "\n".join(f"  - {r}" for r in verdict.reasons)
@@ -732,3 +769,51 @@ def _require_isolated_window(conn: Any, spec: WriteWindowSpec) -> WindowCensus:
             pytrace=False,
         )
     return census
+
+
+def require_windows_still_isolated(conn: Any, *specs: WriteWindowSpec) -> tuple[WindowCensus, ...]:
+    """Re-census the SAME specs after the file's teardown and FAIL -- REPORT -- on a refusal.
+
+    The census, the ETL run and the teardown are three transactions (#2215): a writer
+    landing a row inside the window after the census permitted is derived from by the
+    run, written against, or overwritten, and the pre-run census cannot see it. This is
+    the other side of that gap. Call it once, at the END of the fixture teardown, after
+    the deletes -- which must remove only what the run owns (by planted prefix, or on
+    swept dates by the run's own transaction id, as #2213 established) -- so that whatever
+    is left in the window is, by construction, not ours. With ours gone, ``planted`` reads
+    0 on every leg and any row the census reaches is a foreign row that was inside the
+    window while the file wrote: the same five statements discriminate before and after.
+
+    A report is not a refusal. The writes have happened and the teardown has run; nothing
+    can be undone from here, and this function deletes nothing. What it does is make the
+    file FAIL at teardown, naming the file, the window and the leg with its counts, so a
+    run that touched foreign data cannot finish green. What it cannot see, stated so the
+    green is not over-read: a foreign row that landed after the census and was removed
+    again before this re-read leaves no count behind; and a foreign row the run itself
+    OVERWROTE on a swept date now carries the run's xid and is indistinguishable from the
+    run's own rows. Both need the single-transaction design the issue weighed and rejected
+    (the family's concurrency tests require a second, committing connection).
+    """
+    import pytest
+
+    censuses = census_windows(conn, *specs)
+    reports: list[str] = []
+    for spec, census in zip(specs, censuses, strict=True):
+        verdict = assess(census)
+        if verdict.refused:
+            detail = "\n".join(f"  - {r}" for r in verdict.reasons)
+            reports.append(f"  window: {spec.window_description}\n{detail}")
+    if reports:
+        joined = "\n".join(reports)
+        pytest.fail(
+            f"REPORTED: {specs[0].test_file} found rows it does not own inside its window "
+            f"after its writes and its teardown.\n"
+            f"{joined}\n"
+            f"  The census permitted before the writes, so these rows landed while the file "
+            f"was writing (#2215): the run may have derived from them or written against them; "
+            f"nothing was deleted by this report, and the file's teardown removed only rows "
+            f"the run owns. Inspect the rows by hand before running the file again. "
+            f"See tests/integration/_prod_write_guard.py.",
+            pytrace=False,
+        )
+    return censuses
