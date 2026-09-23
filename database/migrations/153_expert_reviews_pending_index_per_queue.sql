@@ -48,21 +48,30 @@
 --   there is no window without pending uniqueness. The old index is dropped
 --   FIRST and the new ones carry NEW names, so IF NOT EXISTS can never no-op on
 --   the old definition. Table lock is brief (41 rows).
---   DEPLOY WINDOW (codex r1 HIGH, dispositioned): deploy.sh applies this file
---   BEFORE flipping containers, so for the length of the flip the OLD image
---   (whose gate does not filter initial_dag and whose recovery does not filter
---   by queue) runs on the NEW schema. In that window the old gate behaves
---   exactly as it does today: if a pending initial_dag row exists on the
---   estimand of a runtime consult, it adopts it (#2244's status-quo harm). The
---   split does not create that harm and cannot widen it -- it is the same row
---   the old gate would adopt under 140 -- and the new image ends it. The other
---   order (new image on the old schema) is never produced by deploy.sh; it
---   would fail CLOSED (the new gate ignores the authored row, its own insert
---   hits 140's index, the queue-scoped recovery finds nothing -> BLOCKED),
---   never adopt. Prod holds 0 pending and 0 initial_dag rows today; if Lane B's
---   real runs land first, deploy when no causal run on those estimands is in
---   flight. A two-deploy rollout (readers first, index second) buys nothing
---   here: its first stage is that fail-closed state, not a safe one.
+--   DEPLOY WINDOW (codex r1/r2 HIGH, dispositioned -- owner decision): deploy.sh
+--   applies this file BEFORE flipping containers, so for the length of the
+--   flip the OLD image (gate and recovery not queue-aware) runs on the NEW
+--   schema. Two cases in that window, both needing a pending initial_dag row
+--   on the estimand of a runtime consult:
+--   (a) the initial_dag row already existed: the old gate adopts it exactly as
+--       it does today under 140 -- the status-quo harm, not a new one.
+--   (b) NEW to the window (codex r2): a pending dag_approval consult exists,
+--       and Lane B's `author_cohort_dag.py --review` inserts its initial_dag row
+--       AFTER this file commits and BEFORE the flip. Under 140 that insert hit
+--       23505 and the script exited 3 (loud, nothing corrupted); under this
+--       index it succeeds, and an old-image consult on that estimand during the
+--       rest of the flip takes the NEWEST pending row -- the authored one --
+--       and advances its snapshot to the runtime structure. This requires the
+--       owner's paid authoring run to write inside the container flip
+--       (minutes) on an estimand a runtime consult then hits; the operational
+--       guard is: do not run `--review` while a deploy is in progress. Prod
+--       holds 0 pending and 0 initial_dag rows today.
+--   The reverse order (new image on the old schema) is never produced by
+--   deploy.sh and would fail CLOSED (the new gate ignores the authored row,
+--   its insert hits 140's index, the queue-scoped recovery finds nothing ->
+--   BLOCKED). A two-deploy rollout (readers first, index second) trades (b)
+--   for that fail-closed state during its first stage and needs a second
+--   deploy; it is offered to the owner in PR #2244's lane, not taken here.
 -- REVERSE: database/migrations/rollback_153_expert_reviews_pending_index_per_queue.sql
 --   (restores 140's exact index; refuses while both queues hold a pending row
 --   on one estimand; deletes this file's ledger row so a re-apply is not
