@@ -289,10 +289,10 @@ class TestUpsertShadowColumns:
 
         _sql, params = cur.calls[0]
         assert _UPSERT_SQL.count("%s") == len(params)
-        # The last two positional params are the Stage-3 gate columns and
-        # the three before them are the Stage-1 shadow columns; all None when
-        # nothing fired (columns stay NULL). Five trailing None params.
-        assert params[-5:] == (None, None, None, None, None)
+        # The two params before the trailing run id (#2260) are the Stage-3
+        # gate columns and the three before them are the Stage-1 shadow
+        # columns; all None when nothing fired (columns stay NULL).
+        assert params[-6:-1] == (None, None, None, None, None)
 
 
 class TestUpsertGateColumns:
@@ -335,6 +335,6 @@ class TestUpsertGateColumns:
             f"placeholder/param mismatch: {_UPSERT_SQL.count('%s')} %s vs "
             f"{len(params)} params — the upsert would raise against a real DB"
         )
-        # The two gate values are the LAST two positional params (they were
-        # appended after the three Stage-1 shadow columns).
-        assert params[-2:] == ("R1", "moderate")
+        # The two gate values follow the three Stage-1 shadow columns; the
+        # run id (#2260) was appended after them.
+        assert params[-3:-1] == ("R1", "moderate")

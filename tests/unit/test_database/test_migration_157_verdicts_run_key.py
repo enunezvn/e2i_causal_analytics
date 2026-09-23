@@ -46,9 +46,75 @@ def _m157() -> list[Path]:
     return sorted(MIGRATIONS.glob("157_*.sql"))
 
 
+R157 = MIGRATIONS / "rollback_157_adaptive_validity_verdicts_run_key.sql"
+NEW_INDEX = "uix_adaptive_validity_verdicts_run_key"
+OLD_INDEX = "uix_adaptive_validity_verdicts_natural_key"
+
+
+def _sql(path: Path) -> str:
+    return "\n".join(
+        line for line in path.read_text().splitlines() if not line.strip().startswith("--")
+    )
+
+
+def _key_exprs(text: str, anchor: str) -> list[str]:
+    """The comma-separated expressions of the first ``( ... )`` after ``anchor``."""
+    body = text[text.index(anchor) :]
+    body = body[body.index("(") + 1 :]
+    depth, out, cur = 0, [], ""
+    for ch in body:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            if depth == 0:
+                break
+            depth -= 1
+        if ch == "," and depth == 0:
+            out.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    out.append(cur)
+    return [re.sub(r"\s+", " ", e).strip() for e in out]
+
+
 @pytest.mark.unit
 def test_migration_157_exists_and_the_number_is_unique():
     assert len(_m157()) == 1, _m157()
+
+
+@pytest.mark.unit
+def test_the_mirrors_conflict_target_is_157s_index_expression_for_expression():
+    """Postgres picks the arbiter index by matching expressions; a drift between the
+    two is a runtime error on every upsert, which only the opt-in real-DB tests below
+    would otherwise catch."""
+    from scripts.mirror_audit_sidecar_to_supabase import _UPSERT_SQL
+
+    index = _key_exprs(_sql(_m157()[0]), f"CREATE UNIQUE INDEX IF NOT EXISTS {NEW_INDEX}")
+    target = _key_exprs(_UPSERT_SQL, "ON CONFLICT")
+    assert target == index
+    assert len(index) == 4 and "audit_workflow_id" in index[3]
+
+
+@pytest.mark.unit
+def test_157_drops_040s_key_and_touches_no_rows():
+    s = _sql(_m157()[0])
+    assert re.search(rf"DROP INDEX IF EXISTS {OLD_INDEX}\s*;", s)
+    assert "ADD COLUMN IF NOT EXISTS audit_workflow_id UUID" in s
+    upper = s.upper()
+    assert "CONCURRENTLY" not in upper and "\nBEGIN;" not in upper and "\nCOMMIT;" not in upper
+    assert "UPDATE " not in upper and "DELETE FROM" not in upper and "INSERT INTO" not in upper
+
+
+@pytest.mark.unit
+def test_rollback_restores_040s_key_and_clears_the_ledger_row():
+    assert R157.name.startswith("rollback_")  # run_migrations.sh apply_dir() skips it
+    s = _sql(R157)
+    old = _key_exprs(s, f"CREATE UNIQUE INDEX IF NOT EXISTS {OLD_INDEX}")
+    m040 = _sql(MIGRATIONS / "040_adaptive_validity_verdicts.sql")
+    assert old == _key_exprs(m040, f"CREATE UNIQUE INDEX IF NOT EXISTS {OLD_INDEX}")
+    assert s.index("RAISE EXCEPTION") < s.index(f"CREATE UNIQUE INDEX IF NOT EXISTS {OLD_INDEX}")
+    assert f"DELETE FROM public.schema_migrations WHERE filename = '{_m157()[0].name}'" in s
 
 
 # --------------------------------------------------------------------------
@@ -212,3 +278,42 @@ def test_legacy_sidecars_without_a_run_id_keep_the_old_dedup(db, tmp_path, monke
     assert _count(db) == 1
     rows = _rows(db)
     assert rows[0][4] is None
+
+
+def _indexes(dsn: str) -> set[str]:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT indexname FROM pg_indexes WHERE tablename = 'adaptive_validity_verdicts' "
+            "AND indexname LIKE 'uix_%'"
+        )
+        return {r[0] for r in cur.fetchall()}
+
+
+def _apply_rollback(dsn: str) -> None:
+    import psycopg
+
+    with psycopg.connect(dsn) as conn:
+        conn.execute(R157.read_text())
+
+
+def test_rollback_restores_040s_index_when_no_key_is_shared(db, tmp_path, monkeypatch):
+    _write_run_sidecar(tmp_path, monkeypatch, run_id=uuid4(), feature_severity="high")
+    _mirror(tmp_path, db)
+    assert _indexes(db) == {NEW_INDEX}
+    _apply_rollback(db)
+    assert _indexes(db) == {OLD_INDEX}
+    assert _count(db) == 1
+
+
+def test_rollback_refuses_while_two_runs_share_an_old_key(db, tmp_path, monkeypatch):
+    import psycopg
+
+    _write_run_sidecar(tmp_path, monkeypatch, run_id=uuid4(), feature_severity="high")
+    _write_run_sidecar(tmp_path, monkeypatch, run_id=uuid4(), feature_severity="info")
+    _mirror(tmp_path, db)
+    with pytest.raises(psycopg.errors.RaiseException, match="rollback_157"):
+        _apply_rollback(db)
+    assert _indexes(db) == {NEW_INDEX}
+    assert _count(db) == 2

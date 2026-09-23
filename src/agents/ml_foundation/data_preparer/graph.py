@@ -178,6 +178,7 @@ def write_adaptive_verdicts_sidecar(state: Dict[str, Any]) -> Path | None:
         # data_preparer state shape; the field is declared on
         # ``DataPreparerState`` as ``Optional[List[Dict[str, Any]]]``).
         role_attributions = state.get("role_attributions") or []
+        run_id = state.get("audit_workflow_id")
         payload = {
             # Schema-version pin (Issue #235), single-sourced from the reader
             # (#1620). This used to be an independent literal here plus a
@@ -192,6 +193,10 @@ def write_adaptive_verdicts_sidecar(state: Dict[str, Any]) -> Path | None:
             # agreeing is a property the system requires, not a coincidence.
             "schema_version": SIDECAR_SCHEMA_VERSION,
             "experiment_id": state.get("experiment_id"),
+            # The run that wrote this sidecar (#2260): runs of one scope share the
+            # experiment id and written_at has second resolution, so the mirror keys
+            # on this too. MLFoundationPipeline mints it once per run.
+            "audit_workflow_id": str(run_id) if run_id is not None else None,
             "data_source": state.get("data_source"),
             "written_at": ts,
             "leakage_severity": state.get("leakage_severity"),
