@@ -385,7 +385,8 @@ async def log_to_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
         )
 
         return {
-            "mlflow_status": "success",
+            # #2280: the run was logged but the model artifact was not — say so.
+            "mlflow_status": "success" if model_uri else "model_not_logged",
             "mlflow_run_id": mlflow_run_id,
             "mlflow_experiment_id": mlflow_experiment_id,
             "mlflow_model_uri": model_uri,
@@ -527,6 +528,10 @@ async def _log_model_artifact(
     """
     # Determine MLflow flavor based on framework/algorithm
     flavor = _get_mlflow_flavor(algorithm_name, framework)
+    if hasattr(model, "calibrated_classifiers_"):
+        # #2280: the deployed object is the sklearn CalibratedClassifierCV (#633), even
+        # around a booster; the native xgboost/lightgbm flavors cannot serialize it.
+        flavor = "sklearn"
 
     try:
         logger.info(f"Attempting to log model with flavor={flavor}")
@@ -535,6 +540,14 @@ async def _log_model_artifact(
             name="model",
             flavor=flavor,
         )
+        if model_uri is None:
+            # #2280: the connector swallows mlflow's error (and logs it) and returns None.
+            logger.error(
+                "Model artifact NOT logged (flavor=%s, model_uri=None); see the "
+                "'Failed to log model' error above",
+                flavor,
+            )
+            return None
         logger.info(f"Successfully logged model: {model_uri}")
         return cast(str, model_uri)
     except Exception as e:
@@ -547,6 +560,9 @@ async def _log_model_artifact(
                 name="model",
                 flavor="sklearn",
             )
+            if model_uri is None:
+                logger.error("Model artifact NOT logged with the sklearn fallback either")
+                return None
             logger.info(f"Successfully logged model with sklearn fallback: {model_uri}")
             return cast(str, model_uri)
         except Exception as e2:
