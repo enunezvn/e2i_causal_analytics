@@ -40,7 +40,25 @@
 --   else. A future author-side type must be added to BOTH predicates here (and
 --   to STRUCTURAL_AUTHOR_REVIEW_TYPE in src/repositories/expert_review.py).
 --
--- SAFETY: index DDL only; no row is read, written or deleted. The new keys
+-- ALSO (codex r3): two DB-side readers of the review chronology ranked BOTH
+--   queues and are replaced below with the runtime-queue predicate:
+--   * public.dag_structure_rejected(hash, brand) (migration 134) -- the
+--     predicate INSIDE promote_causal_path_guarded, the RefutationNode's sole
+--     promoter write (src/repositories/causal_path.py). Unfixed, a Lane B
+--     initial_dag REJECTION of a hash would refuse a promotion the Python gate
+--     does not refuse, and a newer initial_dag APPROVAL could mask a runtime
+--     rejection and let a refused structure promote.
+--   * public.is_dag_approved(hash, brand) (ml/010) -- the schema-owned mirror
+--     of ExpertReviewRepository.is_dag_approved (no in-repo caller; service_role
+--     callable). Unfixed, it would answer true on an initial_dag approval where
+--     the Python reader now answers false.
+--   Both are CREATE OR REPLACE with identical signatures (privileges and
+--   ownership are kept by Postgres); 134's grants are re-asserted below.
+--   The operator views (v_pending_expert_reviews, ml/010) keep BOTH queues on
+--   purpose: the Expert Reviews page shows the owner every review.
+--
+-- SAFETY: index DDL plus the two CREATE OR REPLACE FUNCTION statements; no row
+--   is written or deleted. The new keys
 --   PARTITION the old one (every row that was unique under 140 is unique under
 --   its queue), so the creates cannot fail on existing rows. Plain CREATE INDEX
 --   (not CONCURRENTLY): run_migrations.sh wraps this file in --single-
@@ -101,3 +119,101 @@ COMMENT ON INDEX uq_er_pending_estimand_structural IS
     'At most one PENDING review per estimand in the STRUCTURAL-AUTHOR queue (migration 153, '
     '#2244): the Lane B initial_dag review (migration 152) written by '
     'scripts/author_cohort_dag.py --review and read back only by structural_prior_loader.';
+
+-- ---------------------------------------------------------------------------
+-- DB-side chronology readers: runtime queue only (see ALSO in the header).
+-- Body identical to migration 134's except the review_type predicate on BOTH
+-- scans (the latest adjudication AND the reopen check).
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION public.dag_structure_rejected(
+    p_dag_version_hash text,
+    p_brand text DEFAULT NULL
+) RETURNS boolean
+LANGUAGE sql
+STABLE
+SET search_path = public
+AS $$
+    WITH latest_np AS (
+        SELECT r.approval_status, r.created_at
+        FROM public.expert_reviews r
+        WHERE r.dag_version_hash = p_dag_version_hash
+          AND (NULLIF(p_brand, '') IS NULL OR r.brand = p_brand)
+          AND r.review_type <> 'initial_dag'  -- migration 153: runtime queue only
+          AND r.approval_status <> 'pending'
+        ORDER BY r.created_at DESC
+        LIMIT 1
+    )
+    SELECT COALESCE(
+        (SELECT l.approval_status = 'rejected'
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM public.expert_reviews p
+                    WHERE p.dag_version_hash = p_dag_version_hash
+                      AND (NULLIF(p_brand, '') IS NULL OR p.brand = p_brand)
+                      AND p.review_type <> 'initial_dag'  -- migration 153
+                      AND p.approval_status = 'pending'
+                      AND p.created_at > l.created_at  -- a tie is NOT a reopen
+                )
+         FROM latest_np l),
+        false
+    );
+$$;
+
+COMMENT ON FUNCTION public.dag_structure_rejected(text, text) IS
+    'Lane 1 (migration 134; runtime queue only since migration 153, #2244): the '
+    'expert-review chronology rule in SQL -- true when the newest non-pending RUNTIME '
+    'review (not a Lane B initial_dag row) of this DAG hash (and brand, when given) is '
+    'rejected and no pending runtime review is newer. Python mirror: ExpertReviewGate'
+    '._latest_adjudication over runtime_review_queue(...). NULL hash reads false.';
+
+-- ml/010's schema-owned mirror of ExpertReviewRepository.is_dag_approved: same
+-- signature, same body, plus the runtime-queue predicate.
+CREATE OR REPLACE FUNCTION public.is_dag_approved(
+    p_dag_hash VARCHAR(64),
+    p_brand VARCHAR(50) DEFAULT NULL
+)
+RETURNS BOOLEAN AS $$
+BEGIN
+    RETURN EXISTS (
+        SELECT 1
+        FROM public.expert_reviews
+        WHERE dag_version_hash = p_dag_hash
+          AND approval_status = 'approved'
+          AND review_type <> 'initial_dag'  -- migration 153: runtime queue only
+          AND (valid_until IS NULL OR valid_until >= CURRENT_DATE)
+          AND (p_brand IS NULL OR brand = p_brand)
+    );
+END;
+$$ LANGUAGE plpgsql;
+
+COMMENT ON FUNCTION public.is_dag_approved(VARCHAR, VARCHAR) IS
+    'Check if a DAG (by hash) has an active RUNTIME-queue expert approval (migration 153, '
+    '#2244: a Lane B initial_dag approval never counts; mirrors '
+    'ExpertReviewRepository.is_dag_approved).';
+
+DO $$
+DECLARE
+    v_fn text;
+BEGIN
+    -- 134's grant posture must survive the replace (CREATE OR REPLACE keeps
+    -- privileges; asserted rather than assumed).
+    FOREACH v_fn IN ARRAY ARRAY['public.dag_structure_rejected(text, text)'] LOOP
+        IF NOT has_function_privilege('service_role', v_fn, 'EXECUTE') THEN
+            RAISE EXCEPTION 'migration 153: service_role cannot EXECUTE %', v_fn;
+        END IF;
+        IF has_function_privilege('anon', v_fn, 'EXECUTE') THEN
+            RAISE EXCEPTION 'migration 153: anon can still EXECUTE %', v_fn;
+        END IF;
+        IF has_function_privilege('authenticated', v_fn, 'EXECUTE') THEN
+            RAISE EXCEPTION 'migration 153: authenticated can still EXECUTE %', v_fn;
+        END IF;
+    END LOOP;
+    -- Behavioural smoke: an unknown hash is neither rejected nor approved.
+    IF public.dag_structure_rejected('migration-153-no-such-hash', NULL) THEN
+        RAISE EXCEPTION 'migration 153: unknown hash reads as rejected';
+    END IF;
+    IF public.is_dag_approved('migration-153-no-such-hash', NULL) THEN
+        RAISE EXCEPTION 'migration 153: unknown hash reads as approved';
+    END IF;
+END $$;

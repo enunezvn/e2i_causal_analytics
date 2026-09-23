@@ -37,6 +37,7 @@ REPO = Path(__file__).resolve().parents[3]
 MIGRATIONS = REPO / "database" / "migrations"
 M140 = MIGRATIONS / "140_expert_reviews_estimand_key.sql"
 M152 = MIGRATIONS / "152_expert_review_type_initial_dag.sql"
+M134 = MIGRATIONS / "134_guarded_causal_path_promote.sql"
 M153 = MIGRATIONS / "153_expert_reviews_pending_index_per_queue.sql"
 R153 = MIGRATIONS / "rollback_153_expert_reviews_pending_index_per_queue.sql"
 TABLE_DDL = REPO / "database" / "ml" / "010_causal_validation_tables.sql"
@@ -107,6 +108,42 @@ def test_migration_replaces_the_estimand_index_with_one_per_queue():
 
 
 @pytest.mark.unit
+def test_migration_replaces_both_db_side_chronology_readers_with_the_runtime_queue():
+    """codex r3: ``dag_structure_rejected`` (134, inside the promotion RPC) and the
+    schema-owned ``is_dag_approved`` (010) ranked both queues."""
+    s = _sql(M153)
+    rej = s[s.index("CREATE OR REPLACE FUNCTION public.dag_structure_rejected") :]
+    rej = rej[: rej.index("$$;") + 3]
+    # BOTH scans (latest adjudication and the reopen check) carry the predicate.
+    assert rej.count("review_type <> 'initial_dag'") == 2, rej
+    assert "p_dag_version_hash text" in rej and "p_brand text DEFAULT NULL" in rej
+    appr = s[s.index("CREATE OR REPLACE FUNCTION public.is_dag_approved") :]
+    appr = appr[: appr.index("LANGUAGE plpgsql")]
+    assert appr.count("review_type <> 'initial_dag'") == 1, appr
+    # Same signatures as 134 / 010, so these REPLACE rather than overload.
+    assert "p_dag_hash VARCHAR(64)" in appr and "p_brand VARCHAR(50) DEFAULT NULL" in appr
+    # 134's grant posture is asserted, not assumed.
+    assert "has_function_privilege('service_role'" in s
+    assert "has_function_privilege('anon'" in s
+
+
+@pytest.mark.unit
+def test_rollback_restores_both_readers_to_their_pre_153_bodies():
+    s = _sql(R153)
+    rej = s[s.index("CREATE OR REPLACE FUNCTION public.dag_structure_rejected") :]
+    rej = rej[: rej.index("$$;") + 3]
+    assert "initial_dag" not in rej
+    # byte-for-byte the 134 body (comments stripped on both sides)
+    m134 = _sql(M134)
+    body134 = m134[m134.index("CREATE OR REPLACE FUNCTION public.dag_structure_rejected") :]
+    body134 = body134[: body134.index("$$;") + 3]
+    assert rej == body134
+    appr = s[s.index("CREATE OR REPLACE FUNCTION public.is_dag_approved") :]
+    appr = appr[: appr.index("LANGUAGE plpgsql")]
+    assert "initial_dag" not in appr
+
+
+@pytest.mark.unit
 def test_migration_is_wrapped_and_touches_no_rows():
     s = _sql(M153).upper()
     # Plain (non-CONCURRENTLY) index DDL and no ALTER TYPE: run_migrations.sh wraps the
@@ -114,7 +151,7 @@ def test_migration_is_wrapped_and_touches_no_rows():
     # or not at all -- there is no window with NO pending uniqueness.
     assert "CONCURRENTLY" not in s
     assert "ALTER TYPE" not in s
-    assert "BEGIN;" not in s and "COMMIT;" not in s
+    assert "\nBEGIN;" not in s and "\nCOMMIT;" not in s  # plpgsql BEGIN/END blocks are fine
     assert "DELETE FROM" not in s and "UPDATE " not in s and "INSERT INTO" not in s
     assert "DROP TABLE" not in s and "DROP COLUMN" not in s
 
@@ -204,8 +241,19 @@ def _enum_and_table_ddl() -> str:
             "ALTER TABLE public.expert_reviews ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;",
             "ALTER TABLE public.expert_reviews ADD COLUMN IF NOT EXISTS adjustment_set_hash VARCHAR(64);",
             "CREATE TABLE IF NOT EXISTS public.schema_migrations (filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ DEFAULT now());",
+            # 010's schema-owned reader, verbatim (153 replaces it; the rollback restores it).
+            _function_ddl_from_010(),
+            # migration 134's promote RPC updates causal_paths (its own smoke test calls it).
+            "CREATE TABLE IF NOT EXISTS public.causal_paths (path_id TEXT PRIMARY KEY, validation_status TEXT);",
         ]
     )
+
+
+def _function_ddl_from_010() -> str:
+    text = TABLE_DDL.read_text()
+    start = text.index("CREATE OR REPLACE FUNCTION is_dag_approved(")
+    end = text.index("$$ LANGUAGE plpgsql;", start) + len("$$ LANGUAGE plpgsql;")
+    return text[start:end]
 
 
 @pytest.fixture(scope="module")
@@ -242,6 +290,7 @@ def db(throwaway_pg, request) -> Iterator[tuple[object, str]]:
     # Owned by ``postgres``, the role run_migrations.sh applies with against prod (the
     # index swap needs table ownership).
     conn.execute(_enum_and_table_ddl(), user="postgres")
+    assert apply_migration(conn, M134, record=M134.name) == "wrapped"
     assert apply_migration(conn, M140, record=M140.name) == "wrapped"
     assert apply_migration(conn, M152, record=M152.name) == "unwrapped"
     yield throwaway_pg, name
@@ -256,16 +305,33 @@ def _indexdefs(pg, db: str) -> dict[str, str]:
     return dict(line.split("|", 1) for line in rows)
 
 
-def _insert_pending(conn, review_type: str) -> str:
-    """One pending row of ``review_type`` on the estimand (B, T, Y); returns the id."""
+def _insert(conn, review_type: str, status: str, dag_hash: str) -> str:
+    """One row on the estimand (B, T, Y); returns the id. ``created_at`` is the
+    insert time, so successive calls are strictly ordered for the chronology rule."""
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO public.expert_reviews (review_type, reviewer_id, approval_status, "
-            "brand, treatment_variable, outcome_variable, dag_version_hash) "
-            "VALUES (%s, 'q', 'pending', 'B', 'T', 'Y', %s) RETURNING review_id",
-            (review_type, "h_" + review_type),
+            "brand, treatment_variable, outcome_variable, dag_version_hash, created_at) "
+            "VALUES (%s, 'q', %s, 'B', 'T', 'Y', %s, clock_timestamp()) RETURNING review_id",
+            (review_type, status, dag_hash),
         )
         return str(cur.fetchone()[0])
+
+
+def _insert_pending(conn, review_type: str) -> str:
+    return _insert(conn, review_type, "pending", "h_" + review_type)
+
+
+def _rejected(conn, dag_hash: str, brand: str = "B") -> bool:
+    with conn.cursor() as cur:
+        cur.execute("SELECT public.dag_structure_rejected(%s, %s)", (dag_hash, brand))
+        return bool(cur.fetchone()[0])
+
+
+def _approved(conn, dag_hash: str, brand: str = "B") -> bool:
+    with conn.cursor() as cur:
+        cur.execute("SELECT public.is_dag_approved(%s, %s)", (dag_hash, brand))
+        return bool(cur.fetchone()[0])
 
 
 def _unique_violation(conn, review_type: str) -> str | None:
@@ -309,6 +375,7 @@ def test_153_lets_the_two_queues_coexist_and_keeps_each_unique(db):
         STRUCTURAL_INDEX: STRUCTURAL_INDEXDEF,
     }
     assert pg.rows(name, "SELECT filename FROM public.schema_migrations ORDER BY 1") == [
+        M134.name,
         M140.name,
         M152.name,
         M153.name,
@@ -370,6 +437,78 @@ def test_rollback_153_restores_140_and_refuses_while_both_queues_are_pending(db)
         RUNTIME_INDEX: RUNTIME_INDEXDEF,
         STRUCTURAL_INDEX: STRUCTURAL_INDEXDEF,
     }
+
+
+@pytest.mark.unit
+def test_153_db_side_readers_ignore_the_structural_queue_and_the_rollback_restores_them(db):
+    """codex r3: the promotion RPC's ``dag_structure_rejected`` and the schema's
+    ``is_dag_approved`` ranked both queues. Premise first (134 + 010 as applied),
+    then 153, then the rollback."""
+    from tests.unit.test_database.learning_loop._pg import apply_migration
+
+    pg, name = db
+    with pg.connect(name) as conn:
+        _insert(conn, "initial_dag", "rejected", "h-rej")
+        _insert(conn, "initial_dag", "approved", "h-appr")
+        conn.commit()
+        # Premise under 134/010: an authored verdict decides for the runtime gate.
+        assert _rejected(conn, "h-rej") is True
+        assert _approved(conn, "h-appr") is True
+
+    apply_migration(_conn(pg, name), M153, record=M153.name)
+    with pg.connect(name) as conn:
+        # The authored verdicts no longer decide...
+        assert _rejected(conn, "h-rej") is False
+        assert _approved(conn, "h-appr") is False
+        # ...the runtime queue's still do, with 134's chronology intact:
+        _insert(conn, "dag_approval", "rejected", "h-rej")
+        conn.commit()
+        assert _rejected(conn, "h-rej") is True
+        # a NEWER authored approval of the same hash does not mask that rejection
+        _insert(conn, "initial_dag", "approved", "h-rej")
+        conn.commit()
+        assert _rejected(conn, "h-rej") is True
+        assert _approved(conn, "h-rej") is False
+        # a newer pending RUNTIME row reopens it; a pending authored row does not
+        _insert(conn, "initial_dag", "pending", "h-rej")
+        conn.commit()
+        assert _rejected(conn, "h-rej") is True
+        _insert(conn, "dag_approval", "pending", "h-rej")
+        conn.commit()
+        assert _rejected(conn, "h-rej") is False
+        _insert(conn, "dag_approval", "approved", "h-appr")
+        conn.commit()
+        assert _approved(conn, "h-appr") is True
+        # grants survived the replace (134's posture)
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT has_function_privilege('service_role', "
+                "'public.dag_structure_rejected(text, text)', 'EXECUTE'), "
+                "has_function_privilege('anon', "
+                "'public.dag_structure_rejected(text, text)', 'EXECUTE')"
+            )
+            assert cur.fetchone() == (True, False)
+        # leave one pending row per estimand so the rollback's precondition passes
+        conn.execute(
+            "UPDATE public.expert_reviews SET approval_status = 'superseded' "
+            "WHERE approval_status = 'pending' AND review_type = 'initial_dag'"
+        )
+        conn.commit()
+
+    proc = pg.run_script(name, R153.read_bytes(), single_transaction=True, user="postgres")
+    assert proc.returncode == 0, proc.stderr.decode()
+    with pg.connect(name) as conn:
+        # Both queues again: h-rej's newest non-pending row is the authored
+        # approval, so 134's rule reads "not rejected"; h-appr's authored
+        # approval counts once more.
+        assert _rejected(conn, "h-rej") is False
+        assert _approved(conn, "h-appr") is True
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT has_function_privilege('service_role', "
+                "'public.dag_structure_rejected(text, text)', 'EXECUTE')"
+            )
+            assert cur.fetchone() == (True,)
 
 
 def _conn(pg, name: str):
