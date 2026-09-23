@@ -15,7 +15,9 @@ That is a property of the DATA, and it is measured elsewhere.
 
 from __future__ import annotations
 
+import ast
 import re
+from pathlib import Path
 
 import pytest
 
@@ -680,3 +682,199 @@ def test_census_sql_renders_a_read_only_transaction_for_hand_off() -> None:
         "teardown_reach_preexisting",
     ):
         assert f"[{leg}]" in rendered
+
+
+# =============================================================================
+# #2215: census, write and teardown are separate transactions (TOCTOU)
+# =============================================================================
+
+
+class _CountingCursor:
+    """A cursor that answers every census statement from a mutable count table, so a
+    test can let a foreign row "land" between the census and the teardown by bumping a
+    count -- the seam the issue names. Records the transaction boundary statements."""
+
+    def __init__(self, conn: "_CountingConn") -> None:
+        self._conn = conn
+        self._pending: object = None
+
+    def execute(self, sql: str, params: object = None) -> None:
+        self._conn.log.append(sql)
+        if sql in ("BEGIN TRANSACTION READ ONLY", "ROLLBACK"):
+            self._pending = None
+            return
+        leg = self._conn.legs[sql]
+        self._pending = (self._conn.counts[leg],)
+
+    def fetchone(self) -> object:
+        return self._pending
+
+    def __enter__(self) -> "_CountingCursor":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+
+class _CountingConn:
+    def __init__(self, spec: WriteWindowSpec, counts: dict[str, int]) -> None:
+        self.legs = {q.sql: q.leg for q in spec.queries}
+        self.counts = counts
+        self.log: list[str] = []
+
+    def cursor(self) -> _CountingCursor:
+        return _CountingCursor(self)
+
+
+def _per_hcp_spec() -> WriteWindowSpec:
+    return per_hcp_rollup_spec(
+        test_file="f.py", start="2024-01-01", end="2024-02-01", hcp_like="h_%", trigger_like="t_%"
+    )
+
+
+def _isolated_counts() -> dict[str, int]:
+    # 3 planted triggers on 2 planted HCPs, nothing foreign anywhere: the census permits.
+    return {
+        "source_rows_total": 3,
+        "source_rows_planted": 3,
+        "target_entities_total": 2,
+        "target_entities_planted": 2,
+        "teardown_reach_preexisting": 0,
+    }
+
+
+@pytest.mark.parametrize(
+    ("leg", "landed"),
+    [
+        ("source_rows_total", 1),  # a foreign trigger on an already-selected date
+        ("target_entities_total", 1),  # a foreign hcp_id the rollup wrote a row for
+        ("teardown_reach_preexisting", 1),  # a foreign rollup row inside the reconcile scope
+    ],
+)
+def test_a_foreign_row_landing_after_the_census_is_reported_before_the_file_finishes(
+    leg: str, landed: int
+) -> None:
+    """#2215 (codex r1-2 / r2-1 on #2213): the census, the ETL run and the teardown are three
+    transactions. A writer landing a row inside the window AFTER the census permitted is
+    derived from by the run (a foreign trigger), written against (a foreign hcp_id) or
+    overwritten (a foreign rollup row) -- and today nothing in the family notices. The
+    protocol closes the gap from the other side: the teardown deletes only what the run
+    owns and then re-censuses the SAME specs; a window that permitted before the writes
+    and refuses after them is REPORTED by a failing teardown, naming the leg."""
+    from tests.integration._prod_write_guard import (
+        require_isolated_windows,
+        require_windows_still_isolated,
+    )
+
+    spec = _per_hcp_spec()
+    counts = _isolated_counts()
+    conn = _CountingConn(spec, counts)
+    (before,) = require_isolated_windows(conn, spec)
+    assert assess(before).refused is False
+
+    counts[leg] += landed  # the foreign row lands: after the census, before the teardown
+
+    with pytest.raises(pytest.fail.Exception) as reported:
+        require_windows_still_isolated(conn, spec)
+    message = str(reported.value)
+    assert message.startswith("REPORTED:"), message
+    assert "f.py" in message
+    assert "after its writes" in message
+    # The report names the leg that moved, with the counts, so the reader knows what to
+    # look for -- and says what the report did NOT do (nothing was deleted by it).
+    expected_leg = {
+        "source_rows_total": "derivation",
+        "target_entities_total": "key space",
+        "teardown_reach_preexisting": "teardown reach",
+    }[leg]
+    assert expected_leg in message, message
+    assert "nothing was deleted" in message, message
+
+
+def test_a_window_still_isolated_after_the_teardown_is_permitted_and_measured() -> None:
+    """The happy path: counts unchanged (or ours gone, planted and total falling together)
+    -> the post-teardown census permits and returns the measurement, like the first."""
+    from tests.integration._prod_write_guard import (
+        require_isolated_windows,
+        require_windows_still_isolated,
+    )
+
+    spec = _per_hcp_spec()
+    counts = _isolated_counts()
+    conn = _CountingConn(spec, counts)
+    require_isolated_windows(conn, spec)
+    # The prefix-scoped teardown removed our 3 triggers on our 2 HCPs.
+    counts.update(
+        source_rows_total=0,
+        source_rows_planted=0,
+        target_entities_total=0,
+        target_entities_planted=0,
+    )
+    (after,) = require_windows_still_isolated(conn, spec)
+    assert after == WindowCensus(0, 0, 0, 0, 0)
+
+
+def test_the_post_teardown_census_runs_inside_a_read_only_transaction_like_the_first() -> None:
+    """The re-read is the same five statements under the same READ ONLY boundary: a report
+    must not be able to write, any more than the refusal can."""
+    from tests.integration._prod_write_guard import require_windows_still_isolated
+
+    spec = _per_hcp_spec()
+    conn = _CountingConn(spec, _isolated_counts())
+    require_windows_still_isolated(conn, spec)
+    assert conn.log[0] == "BEGIN TRANSACTION READ ONLY"
+    assert conn.log[-1] == "ROLLBACK"
+    assert conn.log[1:-1] == [q.sql for q in spec.queries]
+
+
+_INTEGRATION_DIR = Path(__file__).resolve().parents[3] / "tests" / "integration"
+
+#: Every file that writes to the live database under E2I_DB_INTEGRATION, and whether it
+#: censuses through the guard before writing (the 895 file keeps its own inline pre-check
+#: under an advisory lock; it joins the family for the post-teardown report).
+_GUARDED_FILES: dict[str, bool] = {
+    "test_per_hcp_rollup_late_arrival.py": True,
+    "test_business_metrics_per_hcp_etl_integration.py": True,
+    "test_territory_metrics_etl_integration.py": True,
+    "test_patient_adherence_etl_integration.py": True,
+    "test_etl_provenance_inheritance_895.py": False,
+}
+
+
+@pytest.mark.parametrize("filename", sorted(_GUARDED_FILES))
+def test_every_live_writing_file_re_censuses_after_its_teardown(filename: str) -> None:
+    """#2215, family-wide: the protocol is only as good as its adoption. Each live-writing
+    file must re-read its specs AFTER its own deletes (a static pin -- the files themselves
+    are CI-only). A file that drops the call drops the report."""
+    source = (_INTEGRATION_DIR / filename).read_text()
+    if _GUARDED_FILES[filename]:
+        assert "require_isolated_windows(" in source, filename
+    assert "require_windows_still_isolated(" in source, (
+        f"{filename} does not re-census its windows after its teardown (#2215)"
+    )
+    # The re-census must come after the fixture hands control back, i.e. in the teardown.
+    assert source.index("require_windows_still_isolated(") > source.index("yield"), filename
+
+
+@pytest.mark.parametrize("filename", sorted(_GUARDED_FILES))
+def test_no_live_writing_file_sweeps_territory_metrics_by_date_without_the_runs_xid(
+    filename: str,
+) -> None:
+    """A date-scoped DELETE on ``territory_metrics`` destroys whatever landed on those dates
+    after the census (#2215's second harm). A date-scoped delete may stay only when it is
+    also keyed -- to the run's own transaction id (``xmin``, as #2213 established: rows the
+    run did not write are reported, not swept) or to the file's own planted territory ids."""
+    # Read the statements as the parser does: adjacent string literals are one constant,
+    # so a predicate on a second line is part of the same statement, not a separate one.
+    tree = ast.parse((_INTEGRATION_DIR / filename).read_text())
+    statements = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and node.value.lstrip().startswith("DELETE FROM territory_metrics WHERE metric_date")
+    ]
+    for statement in statements:
+        assert "xmin" in statement or "territory_id" in statement, (
+            f"{filename}: {statement!r} sweeps by date alone"
+        )
