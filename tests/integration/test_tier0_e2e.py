@@ -20,6 +20,7 @@ Updated: 2026-01-28 - Aligned with agent contract changes from commit 75462ef
 """
 
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -58,7 +59,14 @@ _MLFLOW_UNAVAILABLE_MARKERS = (
 )
 
 
-def _mlflow_infra_unavailable(error_msg: str) -> bool:
+def _mlflow_server_reachable(tracking_uri: str | None = None, timeout: float = 3.0) -> bool:
+    """Whether the MLflow tracking server answers."""
+    return True
+
+
+def _mlflow_infra_unavailable(
+    error_msg: str, server_reachable: Callable[[], bool] = _mlflow_server_reachable
+) -> bool:
     """Whether a trainer error means MLflow itself is unavailable (skip, not fail)."""
     lowered = error_msg.lower()
     return any(marker in lowered for marker in _MLFLOW_UNAVAILABLE_MARKERS)
