@@ -336,12 +336,12 @@ async def list_causal_variables(
     rows = probe.data or []
     present = set(rows[0].keys()) if rows else set()
 
-    def _available(role: str) -> List[str]:
+    def _available(curated: List[str]) -> List[str]:
         # If the probe returned nothing (empty table), fall back to the curated
         # list so the dropdowns still populate rather than collapsing to empty.
         if not present:
-            return list(spec[role])
-        return [c for c in spec[role] if c in present]
+            return list(curated)
+        return [c for c in curated if c in present]
 
     # #1872: nba_triggers covariates are JOINED from patient_journeys (like the
     # #1188 baselines below) — the physical-table probe would filter every one
@@ -349,7 +349,7 @@ async def list_causal_variables(
     if dataset == "nba_triggers":
         covariate_candidates = _brand_scoped_covariates(list(spec["covariate"]), brand)
     else:
-        covariate_candidates = _brand_scoped_covariates(_available("covariate"), brand)
+        covariate_candidates = _brand_scoped_covariates(_available(spec["covariate"]), brand)
 
     # #1188: baselines are JOINED from patient_journeys, not columns of this
     # dataset's physical table — the probe cannot vet them, so the curated
@@ -358,13 +358,16 @@ async def list_causal_variables(
     baseline_candidates = list(spec.get("baseline_covariate", []))
 
     _offered = (
-        _available("treatment") + _available("outcome") + covariate_candidates + baseline_candidates
+        _available(spec["treatment"])
+        + _available(spec["outcome"])
+        + covariate_candidates
+        + baseline_candidates
     )
     labels = {c: _column_label(c) for c in _offered}
     return CausalVariablesResponse(
         dataset=dataset,
-        treatment_candidates=_available("treatment"),
-        outcome_candidates=_available("outcome"),
+        treatment_candidates=_available(spec["treatment"]),
+        outcome_candidates=_available(spec["outcome"]),
         covariate_candidates=covariate_candidates,
         baseline_candidates=baseline_candidates,
         columns=sorted(present),
