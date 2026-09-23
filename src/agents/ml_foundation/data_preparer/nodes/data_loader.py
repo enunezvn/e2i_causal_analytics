@@ -88,7 +88,11 @@ async def load_data(state: DataPreparerState) -> Dict[str, Any]:
         its own label from ``days_to_treatment`` — see
         ``gold_standard_eval.feature_builder.LEAKAGE_DENYLIST``) and MUST contain
         ``scope_spec.prediction_target`` (fail loud otherwise — this also catches
-        the scope_definer's ``adopt* -> will_adopt`` target rewrite).
+        the scope_definer's ``adopt* -> will_adopt`` target rewrite). The explicit
+        ``columns`` list IS the leakage guard for a table cohort: the trainer's
+        ``split_enforcer._check_feature_leakage`` is a name-similarity check on the
+        target column only, so a post-outcome column with an unrelated name would
+        sail through it.
       - ``{"type": "file_dir" | "files", ...}`` — local files (``_load_from_files``).
 
     Args:
