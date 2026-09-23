@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
+from ..blocking_issues import KIND_QUALITY_CHECK, merge_blocking_issues
 from ..state import DataPreparerState
 from .qc_threshold import resolve_qc_min_overall_score
 
@@ -77,6 +78,11 @@ async def run_quality_checks(state: DataPreparerState) -> Dict[str, Any]:
         failed_expectations = []
         warnings = []
         remediation_steps = []
+        # This node's OWN blocking issues for this pass. It must not be
+        # returned as-is: ``blocking_issues`` has no reducer, so returning a
+        # fresh list would wipe every upstream producer's entry (#2283).
+        # ``merge_blocking_issues`` at the return site folds it into the
+        # incoming channel, replacing only this node's previous contribution.
         blocking_issues = []
 
         # === COMPLETENESS CHECKS ===
@@ -185,7 +191,13 @@ async def run_quality_checks(state: DataPreparerState) -> Dict[str, Any]:
             "failed_expectations": failed_expectations,
             "warnings": warnings,
             "remediation_steps": remediation_steps,
-            "blocking_issues": blocking_issues,
+            # ``qc_status`` above is derived from this node's OWN issues; the
+            # channel carries every producer's.
+            "blocking_issues": merge_blocking_issues(
+                state.get("blocking_issues"),
+                blocking_issues,
+                kind=KIND_QUALITY_CHECK,
+            ),
             "row_count": row_count,
             "column_count": column_count,
             "validated_at": datetime.now().isoformat(),
@@ -205,7 +217,11 @@ async def run_quality_checks(state: DataPreparerState) -> Dict[str, Any]:
             "error": str(e),
             "error_type": "quality_check_error",
             "qc_status": "failed",
-            "blocking_issues": [f"Quality check error: {str(e)}"],
+            "blocking_issues": merge_blocking_issues(
+                state.get("blocking_issues"),
+                [f"Quality check error: {str(e)}"],
+                kind=KIND_QUALITY_CHECK,
+            ),
         }
 
 

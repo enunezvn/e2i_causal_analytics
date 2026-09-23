@@ -537,23 +537,17 @@ async def finalize_output(state: DataPreparerState) -> Dict[str, Any]:
         # === QC GATE DECISION ===
         qc_status = state.get("qc_status", "unknown")
         overall_score = state.get("overall_score")
+        # Every producer's entries reach the gate on their own now. The
+        # re-promotion of ``audit_sampling_frame``'s entry that used to sit
+        # here (Phase-1 Task 1.3, ``5749b974c``) existed solely because
+        # ``run_quality_checks`` overwrote this channel with a fresh local
+        # list. #2283 fixed that at the source — the clobbering nodes merge
+        # through ``blocking_issues.merge_blocking_issues`` — so re-deriving
+        # one producer's entry from its report is dead weight, and keeping a
+        # per-producer rescue would imply the general defect still exists.
+        # Pinned by ``test_blocking_issues_channel_2283.py::
+        # test_sampling_frame_entry_reaches_the_gate_without_re_promotion``.
         blocking_issues = list(state.get("blocking_issues", []) or [])
-
-        # Re-promote sampling-frame audit's blocking entry (Phase-1 Task 1.3).
-        # ``run_quality_checks`` overwrites ``blocking_issues`` with a fresh
-        # local list, so the audit's earlier append (from
-        # ``audit_sampling_frame``) is lost by the time we reach the gate.
-        # Re-derive it from the audit report here so the gate decision is
-        # durable across intermediate node overwrites.
-        sampling_frame_report = state.get("sampling_frame_audit_report") or {}
-        sampling_frame_blocking_detail = sampling_frame_report.get("blocking_detail")
-        if sampling_frame_blocking_detail:
-            sf_message = sampling_frame_blocking_detail.get(
-                "message", "Sampling-frame drift exceeds blocking threshold"
-            )
-            sf_blocking_entry = f"sampling_frame_drift: {sf_message}"
-            if sf_blocking_entry not in blocking_issues:
-                blocking_issues.append(sf_blocking_entry)
 
         # Apply gate logic (from tier0-contracts.md)
         # Gate passes if qc_status is "passed" OR "warning" (with score threshold)

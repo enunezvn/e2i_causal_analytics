@@ -182,9 +182,16 @@ takes precedence over Supabase (but not over file-based ingestion).
 |----------|----------|-------------|----------|
 | Errors collected with `lazy=True` | ✅ | ✅ | schema_validator.py:78 |
 | Errors added to `blocking_issues` | ✅ | ✅ | schema_validator.py:96 |
-| Failed status blocks gate | ✅ | ✅ | graph.py:62-68 |
+| Failed status blocks gate | ✅ | ✅ | graph.py `finalize_output` |
 
 **Status**: ✅ **COMPLIANT** - Schema failures properly block downstream training
+
+> This row was **not** true in practice until #2283. `blocking_issues` has no
+> LangGraph reducer, so `run_quality_checks` (fresh `[]`) and `run_ge_validation`
+> (`None` on the happy path) overwrote the schema validator's entry before the
+> gate read it. Every node that writes the channel now merges through
+> `blocking_issues.merge_blocking_issues`; a compiled-graph regression covers it
+> (`tests/unit/test_agents/test_ml_foundation/test_data_preparer/test_blocking_issues_channel_2283.py`).
 
 ### Graph Integration
 

@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from src.mlops.data_quality import ExpectationSuiteBuilder, get_data_quality_validator
 
+from ..blocking_issues import KIND_GE_VALIDATION, merge_blocking_issues
 from ..state import DataPreparerState
 
 logger = logging.getLogger(__name__)
@@ -153,11 +154,11 @@ async def run_ge_validation(state: DataPreparerState) -> Dict[str, Any]:
                     f"{_ds_raw.get('type')!r}; expected one of "
                     f"('file_dir', 'files') or a string suite name"
                 ),
-                "blocking_issues": state.get("blocking_issues", [])
-                + [
-                    f"GE validation: unrecognised data_source dict shape "
-                    f"(type={_ds_raw.get('type')!r})"
-                ],
+                "blocking_issues": merge_blocking_issues(
+                    state.get("blocking_issues"),
+                    [f"unrecognised data_source dict shape (type={_ds_raw.get('type')!r})"],
+                    kind=KIND_GE_VALIDATION,
+                ),
             }
         else:
             data_source = "business_metrics"
@@ -232,8 +233,12 @@ async def run_ge_validation(state: DataPreparerState) -> Dict[str, Any]:
             contract_violation = contract_suite is not None and result.expectations_failed > 0
             if result.blocking or contract_violation:
                 all_passed = False
+                # Messages are UNTAGGED here; ``merge_blocking_issues`` at the
+                # return site prefixes each with ``ge_validation: ``, which is
+                # what lets a re-entrant pass replace them (see
+                # ``blocking_issues.py``). Hence no "GE validation" stutter.
                 blocking_issues.append(
-                    f"GE validation failed for {split_name}: "
+                    f"failed for {split_name}: "
                     f"{result.expectations_failed} expectations failed"
                     + (" (table cohort contract violated)" if contract_violation else "")
                 )
@@ -264,9 +269,16 @@ async def run_ge_validation(state: DataPreparerState) -> Dict[str, Any]:
         else:
             ge_status = "failed"
 
-        # Update blocking issues in state
-        existing_blocking = state.get("blocking_issues", [])
-        updated_blocking = existing_blocking + blocking_issues
+        # Fold this pass's GE issues into the channel. This must never be
+        # ``None`` and must never drop another producer's entries: the channel
+        # has no reducer, so this return value REPLACES it (#2283). Returning
+        # ``updated_blocking if blocking_issues else None`` wiped a populated
+        # channel on every clean GE run.
+        updated_blocking = merge_blocking_issues(
+            state.get("blocking_issues"),
+            blocking_issues,
+            kind=KIND_GE_VALIDATION,
+        )
 
         logger.info(
             f"GE validation completed: status={ge_status}, "
@@ -281,7 +293,7 @@ async def run_ge_validation(state: DataPreparerState) -> Dict[str, Any]:
             "ge_expectations_evaluated": total_expectations,
             "ge_expectations_passed": total_passed,
             "ge_success_rate": overall_success_rate,
-            "blocking_issues": updated_blocking if blocking_issues else None,
+            "blocking_issues": updated_blocking,
         }
 
     except Exception as e:
@@ -289,6 +301,9 @@ async def run_ge_validation(state: DataPreparerState) -> Dict[str, Any]:
         return {
             "ge_validation_status": "error",
             "ge_validation_error": str(e),
-            "blocking_issues": state.get("blocking_issues", [])
-            + [f"GE validation error: {str(e)}"],
+            "blocking_issues": merge_blocking_issues(
+                state.get("blocking_issues"),
+                [f"error: {str(e)}"],
+                kind=KIND_GE_VALIDATION,
+            ),
         }
