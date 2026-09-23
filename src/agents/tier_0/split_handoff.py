@@ -35,12 +35,14 @@ split to ``0..n-1`` (``data_loader._split_by_column`` / ``data_splitter``), and 
 trainer's ``_check_duplicate_indices`` compares index SETS across splits, so the
 loader's indices would read as CRITICAL cross-split duplicates on every run.
 
-Known, pre-existing limit NOT closed here (codex r2 HIGH-1, owner decision): the
-Supabase-table route of ``data_loader`` is a temporal ``val_days`` / ``test_days``
-split with no holdout unless an entity column is set, while ``split_enforcer``
-requires a non-empty holdout and 60/20/10/10 ratios — a table-sourced retrain fails
-there with that exact reason. File-sourced cohorts (``data_split`` column, the
-documented trigger example) carry all four splits.
+Table-sourced cohorts (codex r2 HIGH-1, closed by the #2207 split contract, owner
+decision 2026-09-23): the Supabase-table route of ``data_loader`` used to be a temporal
+``val_days`` / ``test_days`` split with no holdout, which ``split_enforcer`` (non-empty
+holdout, 60/20/10/10) always refused. It now honours a table's ``data_split`` column
+verbatim — exactly as the file route does — and the retrain contract may be a table
+dict (``{"type": "table", "table": ..., "filters": {...}, "columns": [...]}``) so a
+brand-partitioned, provenance-scoped, column-scoped cohort reloads exactly. A table
+WITHOUT ``data_split`` keeps the temporal split and still fails the enforcer.
 """
 
 from __future__ import annotations

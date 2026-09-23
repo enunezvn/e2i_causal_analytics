@@ -16,6 +16,8 @@ Covers:
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -50,6 +52,118 @@ def test_cohort_input_maps_all_fields() -> None:
     # The pipeline requires problem_description + business_objective.
     assert inp["problem_description"]
     assert inp["business_objective"]
+
+
+_TABLE_CONTRACT = {
+    "type": "table",
+    "table": "patient_journeys",
+    "filters": {"brand": "Kisqali", "is_synthetic": True},
+    "columns": ["disease_severity", "academic_hcp", "treatment_initiated"],
+}
+
+
+def test_cohort_input_passes_table_dict_data_source_through_unchanged() -> None:
+    """#2207 split contract: a table cohort dict (migration 151's registry value,
+    decoded by the sweep) reaches MLFoundationPipeline.run verbatim — no str()
+    flattening, no key loss — so data_loader can route on its ``type``."""
+    cfg = {**_FULL_COHORT, "data_source": dict(_TABLE_CONTRACT)}
+    inp = _cohort_input_from_training_config(cfg)
+    assert inp["data_source"] == _TABLE_CONTRACT
+    assert isinstance(inp["data_source"], dict)
+    assert inp["target_outcome"] == "initiated_biologic_180d"
+
+
+_MIGRATION_151 = (
+    Path(__file__).resolve().parents[3]
+    / "database"
+    / "migrations"
+    / "151_registry_cohort_contracts_goldstd.sql"
+)
+
+
+def _registry_row_from_migration(model_name: str) -> dict:
+    """The registry row migration 151 produces for ``model_name`` (parsed, not typed)."""
+    sql = _MIGRATION_151.read_text()
+    m = re.search(
+        r"SET cohort_data_source = '(\{[^']*\})',\s*cohort_target_outcome = '([a-z_0-9]+)',"
+        r"\s*cohort_feature_manifest_source = '([a-z_]+)'\s*WHERE model_name = '"
+        + re.escape(model_name)
+        + "'",
+        sql,
+    )
+    assert m, f"{model_name} not seeded by migration 151"
+    return {
+        "model_name": model_name,
+        "cohort_data_source": m.group(1),
+        "cohort_target_outcome": m.group(2),
+        "cohort_feature_manifest_source": m.group(3),
+    }
+
+
+@pytest.mark.parametrize(
+    ("model_name", "brand"),
+    [
+        ("initiation_kisqali_goldstd_lr_v1", "Kisqali"),
+        ("initiation_remibrutinib_goldstd_lr_v1", "Remibrutinib"),
+        ("persistence_fabhalta_goldstd_lr_v1", "Fabhalta"),
+    ],
+)
+def test_cohort_input_derives_brand_from_the_table_contract_filters(
+    model_name: str, brand: str
+) -> None:
+    """codex r3 HIGH on PR #2241: the sweep contract carried no brand, so a scheduled
+    retrain from a migration 151 row ran as scope "unknown - <label>". The contract dict
+    already names the partition; derive ``brand`` from ``data_source["filters"]["brand"]``
+    when the config has no explicit brand."""
+    from src.services.cohort_contract import contract_from_registry_row
+
+    cohort = contract_from_registry_row(_registry_row_from_migration(model_name))
+    inp = _cohort_input_from_training_config(dict(cohort))
+    assert inp["brand"] == brand
+    assert inp["feature_manifest_source"] == "synthetic_csu"
+    assert inp["target_outcome"] == cohort["target_outcome"]
+
+
+def test_cohort_input_explicit_brand_wins_over_the_contract_filter() -> None:
+    cfg = {**_FULL_COHORT, "data_source": dict(_TABLE_CONTRACT), "brand": "competitor"}
+    assert _cohort_input_from_training_config(cfg)["brand"] == "competitor"
+
+
+def test_cohort_input_string_source_without_brand_has_no_brand_key() -> None:
+    cfg = {"data_source": "patient_journeys", "target_outcome": "treatment_initiated"}
+    assert "brand" not in _cohort_input_from_training_config(cfg)
+
+
+def test_cohort_input_table_dict_without_brand_filter_has_no_brand_key() -> None:
+    cfg = {
+        "data_source": {
+            "type": "table",
+            "table": "patient_journeys",
+            "filters": {"is_synthetic": True},
+        },
+        "target_outcome": "treatment_initiated",
+    }
+    assert "brand" not in _cohort_input_from_training_config(cfg)
+
+
+def test_cohort_input_file_dict_with_a_brand_filter_derives_no_brand() -> None:
+    """codex r4 MED: derivation must be gated on type == "table" — a file-source dict is
+    not a partitioned table cohort even if it carries a filters key."""
+    cfg = {
+        "data_source": {"type": "file_dir", "path": "/x", "filters": {"brand": "Kisqali"}},
+        "target_outcome": "treatment_initiated",
+    }
+    assert "brand" not in _cohort_input_from_training_config(cfg)
+
+
+def test_cohort_input_table_dict_with_non_dict_filters_does_not_raise() -> None:
+    cfg = {
+        "data_source": {"type": "table", "table": "patient_journeys", "filters": ["brand"]},
+        "target_outcome": "treatment_initiated",
+    }
+    inp = _cohort_input_from_training_config(cfg)
+    assert "brand" not in inp
+    assert inp["data_source"]["filters"] == ["brand"]  # passed through untouched
 
 
 def test_cohort_input_missing_data_source_fails_loud() -> None:
