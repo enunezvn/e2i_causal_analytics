@@ -520,3 +520,38 @@ def test_unit_outcomes_are_deterministic_for_a_seed():
         max(abs(x - y) for x, y in zip(la, lb, strict=True)) < 5.0
     )  # sub-second frontier drift only
     assert 3600.0 <= max(la) <= 14 * 86400.0
+
+
+# Digest of the MAIN rng stream's draws (panel, arm, y) on a clock-independent
+# fixture (no created_at -> fixed 60 units, no jitter span), computed on
+# 2026-09-23 from the PRE-FEATURE generator at origin/main 8fdfbab00 and equal
+# on this branch (scratch script abuo_digest.py, both sides sha256
+# 21f8f4d7…f713aa). It pins the backward-compatibility claim that the lag draw
+# lives on a SEPARATE stream: drawing it from self._rng would still be
+# deterministic and still reproduce the result rows, but shifts every later
+# panel / arm / y draw and changes this digest (codex r2 LOW).
+_MAIN_STREAM_DIGEST_PRE_FEATURE = "21f8f4d7ab4b2da48c89230f241c94e8f619d35a8435f9aae2b8e6a758f713aa"
+
+
+def test_lag_draw_leaves_the_main_rng_stream_unchanged():
+    import hashlib
+
+    exp = ExperimentGenerator(GeneratorConfig(seed=7, n_records=16, brand=Brand.KISQALI)).generate()
+    exp = exp.drop(columns=["created_at"])
+    out = ABExperimentGenerator(
+        GeneratorConfig(seed=9),
+        experiments_df=exp,
+        hcp_ids=[f"scvhcp_{i:05d}" for i in range(500)],
+        units_per_experiment=60,
+    ).generate()
+    asn, res = out["ab_experiment_assignments"], out["ab_experiment_results"]
+    h = hashlib.sha256()
+    for r in asn.sort_values(["experiment_id", "unit_id"])[
+        ["experiment_id", "unit_id", "variant"]
+    ].itertuples(index=False):
+        h.update("|".join(map(str, r)).encode())
+    for r in res.sort_values("experiment_id")[
+        ["experiment_id", "control_mean", "treatment_mean", "control_n", "treatment_n"]
+    ].itertuples(index=False):
+        h.update(f"{r[0]}|{r[1]:.12f}|{r[2]:.12f}|{r[3]}|{r[4]}".encode())
+    assert h.hexdigest() == _MAIN_STREAM_DIGEST_PRE_FEATURE

@@ -74,3 +74,15 @@ def test_rollback_drops_exactly_this_table():
     drops = re.findall(r"DROP TABLE IF EXISTS (?:public\.)?(\w+)", s)
     assert drops == [TABLE]
     assert "DROP TABLE" not in _sql(M).upper()
+
+
+@pytest.mark.unit
+def test_rollback_retires_exactly_its_own_ledger_row():
+    """A manual rollback must also retire the schema_migrations row (the 143/144
+    pattern; codex r2 MED) or the deploy runner skips recreating the table."""
+    s = _ws(_sql(R))
+    deletes = re.findall(
+        r"DELETE FROM (?:public\.)?schema_migrations WHERE filename = '([^']+)'", s
+    )
+    assert deletes == [M.name]
+    assert s.count("DELETE FROM") == 1

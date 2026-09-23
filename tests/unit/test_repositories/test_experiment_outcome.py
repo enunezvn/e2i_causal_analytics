@@ -306,6 +306,7 @@ class _FeedQuery:
         self._rows = rows
         self._log = log
         self._range = None
+        self._order = None
 
     def _rec(self, op, *a):
         self._log.append((self._table, op, a))
@@ -321,6 +322,7 @@ class _FeedQuery:
         return self._rec("in_", *a)
 
     def order(self, *a, **k):
+        self._order = a[0] if a else None
         return self._rec("order", *a)
 
     def range(self, start, end):
@@ -332,7 +334,18 @@ class _FeedQuery:
         if self._range is None:
             return _Page(list(self._rows[:_POSTGREST_MAX_ROWS]), len(self._rows))
         s, e = self._range
-        return _Page(self._rows[s : e + 1], len(self._rows))
+        # Offset paging is only stable over a total order (codex r2 LOW): a
+        # ranged read without .order(<unique column>) is served in a SHUFFLED
+        # order per call, like a heap scan may, so a reader that drops the
+        # order duplicates/omits rows with the total count unchanged.
+        if self._order in ("unit_id", "id"):
+            rows = sorted(self._rows, key=lambda r: str(r.get(self._order)))
+        else:
+            import random
+
+            rows = list(self._rows)
+            random.Random(len(self._log)).shuffle(rows)
+        return _Page(rows[s : e + 1], len(self._rows))
 
 
 class _FeedClient:
@@ -454,6 +467,11 @@ class TestLoadArraysUnitOutcomeFeed:
             ranges = [a for t, op, a in client.log if t == table and op == "range"]
             assert ranges and ranges[0] == (0, 999), table
             assert len(ranges) >= 2, table
+            orders = [a for t, op, a in client.log if t == table and op == "order"]
+            assert orders and all(a[0] == "unit_id" for a in orders), table
+        # the per-unit values survived paging intact (no duplicate / omitted unit)
+        assert sorted(control.tolist()) == [1.0] * 700
+        assert sorted(treatment.tolist()) == [0.0] * 700
 
     def test_short_assignments_read_fails_loud_instead_of_a_truncated_atE(self):
         """A server that reports 1,400 assignments but serves fewer must not feed
