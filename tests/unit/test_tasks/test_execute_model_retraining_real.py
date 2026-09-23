@@ -146,6 +146,26 @@ def test_cohort_input_table_dict_without_brand_filter_has_no_brand_key() -> None
     assert "brand" not in _cohort_input_from_training_config(cfg)
 
 
+def test_cohort_input_file_dict_with_a_brand_filter_derives_no_brand() -> None:
+    """codex r4 MED: derivation must be gated on type == "table" — a file-source dict is
+    not a partitioned table cohort even if it carries a filters key."""
+    cfg = {
+        "data_source": {"type": "file_dir", "path": "/x", "filters": {"brand": "Kisqali"}},
+        "target_outcome": "treatment_initiated",
+    }
+    assert "brand" not in _cohort_input_from_training_config(cfg)
+
+
+def test_cohort_input_table_dict_with_non_dict_filters_does_not_raise() -> None:
+    cfg = {
+        "data_source": {"type": "table", "table": "patient_journeys", "filters": ["brand"]},
+        "target_outcome": "treatment_initiated",
+    }
+    inp = _cohort_input_from_training_config(cfg)
+    assert "brand" not in inp
+    assert inp["data_source"]["filters"] == ["brand"]  # passed through untouched
+
+
 def test_cohort_input_missing_data_source_fails_loud() -> None:
     cfg = dict(_FULL_COHORT)
     del cfg["data_source"]

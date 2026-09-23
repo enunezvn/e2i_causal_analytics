@@ -875,8 +875,13 @@ def _cohort_input_from_training_config(training_config: Dict[str, Any]) -> Dict[
     # "unknown - <label>". A table cohort dict already names its partition —
     # derive the brand from its filters when no explicit brand was given (an explicit
     # brand still wins; string / file sources are unchanged).
-    if "brand" not in input_data and isinstance(data_source, dict):
-        contract_brand = (data_source.get("filters") or {}).get("brand")
+    if (
+        "brand" not in input_data
+        and isinstance(data_source, dict)
+        and data_source.get("type") == "table"
+        and isinstance(data_source.get("filters"), dict)
+    ):
+        contract_brand = data_source["filters"].get("brand")
         if isinstance(contract_brand, str) and contract_brand:
             input_data["brand"] = contract_brand
     return input_data
