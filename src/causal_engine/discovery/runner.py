@@ -14,8 +14,10 @@ Author: E2I Causal Analytics Team
 """
 
 import asyncio
+import itertools
 import logging
 import math
+import threading
 import time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
@@ -93,6 +95,71 @@ def _run_algorithm_in_process(
         "converged": result.converged,
         "metadata": result.metadata,
     }
+
+
+_DIAGNOSTIC_THREAD_SEQ = itertools.count(1)
+# #2233 (codex r1 HIGH): abandoned FCI fits must not ACCUMULATE. The API's
+# heavy-compute slot is released when the graph ends, not when an abandoned
+# thread ends, so without a bound a later guided run would start while a
+# ~380 s fit still holds the GIL (measured: one busy thread slows the loop
+# thread 2.5x — the contention behind the live worker abort). Documented
+# bound: at most ONE outstanding diagnostic thread per process; while it is
+# alive a new diagnostic is skipped and says so.
+_OUTLIVED_DIAGNOSTIC_THREADS: List[threading.Thread] = []
+_OUTLIVED_LOCK = threading.Lock()
+
+
+def outlived_diagnostic_threads() -> List[str]:
+    """Names of timed-out diagnostic threads that are still running (dead ones
+    are forgotten on every call)."""
+    with _OUTLIVED_LOCK:
+        _OUTLIVED_DIAGNOSTIC_THREADS[:] = [t for t in _OUTLIVED_DIAGNOSTIC_THREADS if t.is_alive()]
+        return [t.name for t in _OUTLIVED_DIAGNOSTIC_THREADS]
+
+
+def _register_outlived_diagnostic_thread(thread: threading.Thread) -> None:
+    with _OUTLIVED_LOCK:
+        _OUTLIVED_DIAGNOSTIC_THREADS.append(thread)
+
+
+def join_outlived_diagnostic_threads(timeout: Optional[float] = None) -> None:
+    """Wait for outstanding diagnostic threads (test hygiene; production never
+    joins them — they are daemon threads by design)."""
+    with _OUTLIVED_LOCK:
+        threads = list(_OUTLIVED_DIAGNOSTIC_THREADS)
+    for thread in threads:
+        thread.join(timeout=timeout)
+    outlived_diagnostic_threads()
+
+
+def _spawn_daemon_future(fn: Any, *, name: str) -> Tuple["asyncio.Future[Any]", threading.Thread]:
+    """Run ``fn`` on a fresh daemon thread; resolve an asyncio Future with its
+    outcome on the running loop. A Future the waiter already cancelled (timeout)
+    or a loop already closed is ignored: the thread's result is abandoned."""
+    loop = asyncio.get_running_loop()
+    future: "asyncio.Future[Any]" = loop.create_future()
+
+    def _deliver(setter: Any, value: Any) -> None:
+        if not future.done():
+            setter(value)
+
+    def _run() -> None:
+        try:
+            result = fn()
+        except BaseException as exc:  # noqa: BLE001 - delivered to the waiter
+            try:
+                loop.call_soon_threadsafe(_deliver, future.set_exception, exc)
+            except RuntimeError:  # loop closed: nobody is waiting
+                pass
+        else:
+            try:
+                loop.call_soon_threadsafe(_deliver, future.set_result, result)
+            except RuntimeError:
+                pass
+
+    thread = threading.Thread(target=_run, name=name, daemon=True)
+    thread.start()
+    return future, thread
 
 
 class DiscoveryRunner:
@@ -1034,14 +1101,48 @@ class DiscoveryRunner:
                         "elapsed_before_s": elapsed_s,
                     }
                 }
-        loop = asyncio.get_event_loop()
-        future = loop.run_in_executor(None, lambda: self._run_latent_diagnostic(data, config))
+        alive = outlived_diagnostic_threads()
+        if alive:
+            logger.warning(
+                f"Latent-confounding diagnostic (FCI) not started: a previous diagnostic "
+                f"thread ({alive[0]}) is still running (bound: one outstanding per process)"
+            )
+            return {
+                "latent_diagnostic": {
+                    "ran": False,
+                    "error": (
+                        f"skipped: a previous FCI diagnostic thread ({alive[0]}) is still "
+                        "running (bound: one outstanding diagnostic per process)"
+                    ),
+                    "fci_outlived_threads_alive": alive,
+                    "time_budget_s": budget,
+                    "elapsed_before_s": elapsed_s,
+                }
+            }
+        # #2233: a dedicated DAEMON thread, not the loop's shared default executor.
+        # causallearn's FCI cannot be interrupted, so a timed-out fit keeps
+        # computing (~380 s on the real frame); on the default executor that
+        # thread held one of the ``min(32, cpu + 4)`` slots ``asyncio.to_thread``
+        # and the bootstrap share, and ``asyncio.run`` JOINS it at shutdown (the
+        # Lane D acceptance script hung to rc=124 on exactly that; a gunicorn
+        # worker would sit in graceful shutdown). A daemon thread is abandoned
+        # deterministically: nothing awaits or joins it after the timeout, and
+        # the result records that it outlived the budget. Bound: one FCI fit per
+        # guided run, serialized by the API's heavy-compute slot.
+        future, thread = _spawn_daemon_future(
+            lambda: self._run_latent_diagnostic(data, config),
+            name=f"fci-latent-diagnostic-{next(_DIAGNOSTIC_THREAD_SEQ)}",
+        )
         try:
             payload = await asyncio.wait_for(future, timeout=remaining)
         except asyncio.TimeoutError:
+            outlived = thread.is_alive()
+            if outlived:
+                _register_outlived_diagnostic_thread(thread)
             logger.warning(
                 f"Latent-confounding diagnostic (FCI) timed out after {remaining:.1f}s "
-                f"(discovery time budget {budget:.0f}s)"
+                f"(discovery time budget {budget:.0f}s); thread {thread.name} abandoned "
+                f"(daemon, still running={outlived})"
             )
             return {
                 "latent_diagnostic": {
@@ -1054,8 +1155,12 @@ class DiscoveryRunner:
                     ),
                     "time_budget_s": budget,
                     "elapsed_before_s": elapsed_s,
+                    "fci_thread_outlived_timeout": outlived,
+                    "fci_thread_name": thread.name,
                 }
             }
+        payload["fci_thread_outlived_timeout"] = False
+        payload["fci_thread_name"] = thread.name
         if budget is not None:
             payload["time_budget_s"] = budget
             payload["elapsed_before_s"] = elapsed_s

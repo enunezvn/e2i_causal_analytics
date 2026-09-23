@@ -31,9 +31,12 @@ MODEL_NAME = "initiation_kisqali_goldstd_lr_v1"
 
 
 def _db(**contract_cols: Any) -> tuple[FakeAsyncSupabase, str]:
-    rid = str(uuid4())
+    rid, exp_id = str(uuid4()), str(uuid4())
     row: Dict[str, Any] = {
         "id": rid,
+        # #2242: every live registry row has its experiment (1454/1454 on 2026-09-23);
+        # the trigger refuses a registered row whose identity it cannot read.
+        "experiment_id": exp_id,
         "model_name": MODEL_NAME,
         "model_version": "1.0",
         "is_synthetic": False,
@@ -42,7 +45,17 @@ def _db(**contract_cols: Any) -> tuple[FakeAsyncSupabase, str]:
         "cohort_feature_manifest_source": None,
     }
     row.update(contract_cols)
-    return FakeAsyncSupabase({"ml_model_registry": [row], "ml_retraining_history": []}), rid
+    experiment = {
+        "id": exp_id,
+        "experiment_name": "initiation_kisqali_goldstd_eval_v1",
+        "prediction_target": "initiation_kisqali",
+    }
+    store = {
+        "ml_model_registry": [row],
+        "ml_experiments": [experiment],
+        "ml_retraining_history": [],
+    }
+    return FakeAsyncSupabase(store), rid
 
 
 async def _trigger(

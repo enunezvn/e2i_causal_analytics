@@ -865,11 +865,18 @@ def _cohort_input_from_training_config(training_config: Dict[str, Any]) -> Dict[
         "data_source": data_source,
     }
     # Optional pass-through: brand context, the Layer-5 manifest opt-in, the
-    # deployment target and an explicit clinical|commercial deployment intent (#2248;
-    # absent, scope_definer keeps its clinical default — never inferred here).
-    # feature_manifest_source flows into scope_spec via the pipeline's scope stage
-    # (Phase B), engaging Layer-1 contracts + #544.
-    for opt in ("brand", "feature_manifest_source", "target_environment", "deployment_intent"):
+    # deployment target, an explicit clinical|commercial deployment intent (#2248; absent,
+    # scope_definer keeps its clinical default — never inferred here), and (#2242) the
+    # retrained model's logical identity (``retrain_of``, set by the trigger) —
+    # target_outcome above stays the physical label. feature_manifest_source flows into
+    # scope_spec via the pipeline's scope stage (Phase B), engaging Layer-1 contracts + #544.
+    for opt in (
+        "brand",
+        "feature_manifest_source",
+        "target_environment",
+        "deployment_intent",
+        "retrain_of",
+    ):
         if training_config.get(opt) is not None:
             input_data[opt] = training_config[opt]
     # #2248 option (a): the parent's calibration method (the registry row's, via the
@@ -995,6 +1002,39 @@ async def _execute_real_retraining(
             f"success_criteria_met={success_criteria_met}, calibration_method={calibration} "
             "— not a promotable result; job marked failed (no metric written)"
         )
+
+    # #2242 (codex r1/r2): a retrain's deliverable is a new version of the retrained
+    # model — the ml_model_registry row (retrain_of.model_name, .new_model_version) this
+    # history row points at, written by THIS run: the deployer reports the id it wrote
+    # (None when it failed closed), and that exact row must carry the candidate's name,
+    # version and the retrained model's experiment. A same-named row from an earlier
+    # delivery of this job does not count. Otherwise the job is NOT completed.
+    retrain_of = pipeline_input.get("retrain_of")
+    if retrain_of:
+        deployed_rid = (getattr(result, "deployment_result", None) or {}).get("model_registry_id")
+        linked_rows: List[Dict[str, Any]] = []
+        if deployed_rid:
+            try:
+                linked = await (
+                    repo.client.table("ml_model_registry")
+                    .select("id")
+                    .eq("id", deployed_rid)
+                    .eq("model_name", retrain_of.get("model_name"))
+                    .eq("model_version", retrain_of.get("new_model_version"))
+                    .eq("experiment_id", retrain_of.get("experiment_id"))
+                    .limit(1)
+                    .execute()
+                )
+                linked_rows = getattr(linked, "data", None) or []
+            except Exception as e:  # noqa: BLE001 — unverifiable link is not a completion
+                logger.error(f"Retraining {retraining_id}: candidate lookup failed ({e})")
+        if not linked_rows:
+            return await _mark_failed(
+                f"validation_auc={performance_after!r} but no ml_model_registry row "
+                f"{retrain_of.get('model_name')!r} v{retrain_of.get('new_model_version')!r} "
+                f"written by this run (deployer reported {deployed_rid!r}) — the candidate is "
+                "not linked to the retrained model; job marked failed"
+            )
 
     # Real metric + success criteria met — record completion. The pipeline also
     # gated deployment on the regulatory AUC/leakage gate.

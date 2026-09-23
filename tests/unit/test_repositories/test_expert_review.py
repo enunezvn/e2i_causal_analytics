@@ -67,10 +67,12 @@ class TestExpertReviewRepository:
             )
         )
         # The recovery lookup (_find_pending_review_id, keyed on the estimand) finds
-        # the winner's row: .select().eq().eq().limit().execute()
+        # the winner's row: .select().eq().eq().neq().limit().execute() -- the neq is
+        # the queue filter (migration 153, #2244): a dag_approval consult recovers only
+        # a runtime-queue row, never a Lane B initial_dag review.
         recovery_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-winner"}]))
         (
-            mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute
+            mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.neq.return_value.limit.return_value.execute
         ) = recovery_execute
 
         review_id = await repo.create_review(
@@ -92,7 +94,7 @@ class TestExpertReviewRepository:
         # If recovery were (wrongly) attempted, it would find this row and return it.
         leak_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-stale"}]))
         (
-            mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute
+            mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.neq.return_value.limit.return_value.execute
         ) = leak_execute
 
         review_id = await repo.create_review(
@@ -117,7 +119,7 @@ class TestExpertReviewRepository:
         )
         recovery_execute = AsyncMock(return_value=MagicMock(data=[]))
         (
-            mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute
+            mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.neq.return_value.limit.return_value.execute
         ) = recovery_execute
 
         review_id = await repo.create_review(
@@ -472,12 +474,13 @@ class TestExpertReviewRepository:
         """Test is_dag_approved returns True for approved DAG.
 
         Chain pins the #1972 predicate: validity is ``.or_(gte-or-is.null)``,
-        not a bare ``.gte`` (which drops NULL = permanent rows).
+        not a bare ``.gte`` (which drops NULL = permanent rows) -- after the
+        ``.neq("review_type", "initial_dag")`` queue filter (migration 153, #2244).
         """
         mock_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-123"}]))
         mock_query = MagicMock()
         mock_query.execute = mock_execute
-        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.or_.return_value = mock_query
+        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.neq.return_value.or_.return_value = mock_query
 
         result = await repo.is_dag_approved("abc123")
 
@@ -489,7 +492,7 @@ class TestExpertReviewRepository:
         mock_execute = AsyncMock(return_value=MagicMock(data=[]))
         mock_query = MagicMock()
         mock_query.execute = mock_execute
-        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.or_.return_value = mock_query
+        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.neq.return_value.or_.return_value = mock_query
 
         result = await repo.is_dag_approved("abc123")
 
@@ -524,7 +527,7 @@ class TestExpertReviewRepository:
         mock_query.execute = mock_execute
         mock_query.limit.return_value = mock_query
         # #1972: validity goes through .or_(gte-or-is.null), not a bare .gte
-        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.or_.return_value.order.return_value = mock_query
+        mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.neq.return_value.or_.return_value.order.return_value = mock_query
 
         result = await repo.get_dag_approval("abc123")
 
@@ -752,8 +755,9 @@ class TestExpertReviewRepositoryErrorHandling:
 
         mock_query = MagicMock()
         mock_query.execute = failing_execute
-        # #1972: is_dag_approved's validity filter is .or_(...), not .gte(...)
-        client.table.return_value.select.return_value.eq.return_value.eq.return_value.or_.return_value = mock_query
+        # #1972: is_dag_approved's validity filter is .or_(...), not .gte(...);
+        # #2244: it follows the .neq("review_type", "initial_dag") queue filter.
+        client.table.return_value.select.return_value.eq.return_value.eq.return_value.neq.return_value.or_.return_value = mock_query
         client.table.return_value.insert.return_value.execute = failing_execute
 
         repo.client = client

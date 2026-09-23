@@ -135,7 +135,8 @@ class TestContextEnricherNode:
         node = ContextEnricherNode()
         result = await node.execute(state_with_ensemble)
 
-        assert result["prediction_context"] is None
+        # Delta only (#2238): the node does not touch prediction_context.
+        assert "prediction_context" not in result
         assert result["status"] == "completed"
 
     @pytest.mark.asyncio
@@ -180,23 +181,28 @@ class TestContextEnricherNode:
 
     @pytest.mark.asyncio
     async def test_enrich_already_failed(self, state_with_ensemble):
-        """Test that already failed state passes through."""
+        """An already-failed state gets an EMPTY delta, not an echo (#2238): the
+        graph's operator.add channels would re-append the accumulated rows."""
         state_with_ensemble["status"] = "failed"
+        state_with_ensemble["errors"] = [{"error": "Previous error"}]
 
         node = ContextEnricherNode()
         result = await node.execute(state_with_ensemble)
 
-        assert result["status"] == "failed"
+        assert result == {}
+        assert state_with_ensemble["status"] == "failed"  # input untouched
+        assert state_with_ensemble["errors"] == [{"error": "Previous error"}]
 
     @pytest.mark.asyncio
     async def test_enrich_already_completed(self, state_with_ensemble):
-        """Test that already completed state passes through."""
+        """An already-completed state gets an empty delta (#2238)."""
         state_with_ensemble["status"] = "completed"
 
         node = ContextEnricherNode()
         result = await node.execute(state_with_ensemble)
 
-        assert result["status"] == "completed"
+        assert result == {}
+        assert state_with_ensemble["status"] == "completed"
 
     @pytest.mark.asyncio
     async def test_enrich_total_latency(self, mock_context_store, state_with_ensemble):

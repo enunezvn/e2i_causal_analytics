@@ -23,24 +23,23 @@ LIMIT = 1500
 
 # path (relative to repo) -> pinned line count. Measured, not guessed. Only shrinks.
 ALLOWLIST: dict[str, int] = {
-    # 1566: MEASURED on main e3fb21186. The file crossed LIMIT on main itself:
-    # Lane D (#2227) took it to 1478 and Lane E (#2226) to 1566 — each PR was
-    # under the limit alone, and E's PR CI ran on a merge ref computed before D
-    # landed, so neither gate saw the sum. Pinned so the ratchet forbids further
-    # growth; Lane B lowers it (delegates the backdoor criterion out of the file)
-    # and the split by concern is an owner decision.
-    "src/agents/causal_impact/nodes/graph_builder.py": 1560,
+    # graph_builder.py crossed LIMIT on main at e3fb21186 (Lane D 1478 -> Lane E
+    # 1566; each PR under the limit alone, CI saw neither sum), was pinned, and
+    # was split by concern (Lane B item 5): manual_dag.py, discovery_orchestration.py,
+    # discovery_reporting.py. It is under LIMIT and unpinned; the general gate
+    # below forbids it from crossing again.
     "src/agents/causal_impact/nodes/refutation.py": 2519,
     "src/agents/feedback_learner/dspy_integration.py": 1836,
     "src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py": 4224,
-    "src/agents/ml_foundation/model_deployer/nodes/registry_manager.py": 1669,
+    "src/agents/ml_foundation/model_deployer/nodes/registry_manager.py": 1563,
     "src/agents/ml_foundation/model_trainer/nodes/evaluator.py": 4026,
     # 3710: MEASURED from the merged tree, not either side's pin. The lane's
     # value-lookup mask (#2114) and main's #2139 structural guard both run here,
     # and the guard now receives the structured brand (codex iter10). That costs
     # lines relative to the lane (3700) and saves them relative to main (3770),
     # so the pin still shrinks from main's.
-    "src/agents/orchestrator/nodes/dispatcher.py": 3686,
+    # 3686 -> 3685: #2238 dropped the dispatch node's full-state echo (one line).
+    "src/agents/orchestrator/nodes/dispatcher.py": 3685,
     "src/agents/tool_composer/executor.py": 1627,
     "src/agents/tool_composer/tool_registrations.py": 4843,
     "src/api/main.py": 1692,

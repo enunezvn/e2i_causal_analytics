@@ -4,7 +4,8 @@ Drives the real repository facades (BaseRepository / MLExperimentRepository /
 MLModelRegistryRepository / RetrainingHistoryRepository) so a test asserts on the rows
 that LANDED, not on mock call shapes. Supports the builder chain those repositories use:
 select / eq / neq / in_ / is_ / not_ / like / order / limit / range / insert / update /
-upsert / delete. Unknown columns in an ``eq`` filter do not match (like PostgREST).
+upsert / delete. Unknown columns in an ``eq`` filter do not match (like PostgREST);
+``order`` sorts like Postgres (chained keys, NULLS LAST ascending / FIRST descending).
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ class _AsyncQuery:
         self._payload: Any = None
         self._filters: List[tuple] = []
         self._limit: Optional[int] = None
+        self._order: List[tuple] = []
         self._negate_next = False
 
     # builders -------------------------------------------------------------
@@ -73,7 +75,10 @@ class _AsyncQuery:
     def like(self, col, pattern):
         return self._add("like", col, pattern)
 
-    def order(self, *_a, **_k):
+    def order(self, column, *, desc=False, **_k):
+        # PostgREST semantics: chained calls append sort keys; ASC puts NULLs last,
+        # DESC puts them first (Postgres defaults).
+        self._order.append((column, desc))
         return self
 
     def limit(self, n, *_a, **_k):
@@ -133,6 +138,14 @@ class _AsyncQuery:
                 rows.remove(r)
             return SimpleNamespace(data=[dict(r) for r in hit], count=len(hit))
         out = [dict(r) for r in rows if self._match(r)]
+        for column, desc in reversed(self._order):  # stable sort, last key first
+            present = [r for r in out if r.get(column) is not None]
+            nulls = [r for r in out if r.get(column) is None]
+            present.sort(
+                key=lambda r: r[column] if isinstance(r[column], (int, float)) else str(r[column]),
+                reverse=desc,
+            )
+            out = nulls + present if desc else present + nulls
         if self._limit is not None:
             out = out[: self._limit]
         return SimpleNamespace(data=out, count=len(out))

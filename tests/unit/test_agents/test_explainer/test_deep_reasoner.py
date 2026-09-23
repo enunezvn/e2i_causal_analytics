@@ -33,7 +33,8 @@ class TestDeepReasonerNode:
         """Helper to get an assembled state for testing reasoning."""
         assembler = ContextAssemblerNode()
         state = {**base_state, "analysis_results": analysis_results}
-        return await assembler.execute(state)
+        # Nodes return only their delta (#2238); merge it as LangGraph would.
+        return {**state, **(await assembler.execute(state))}
 
     # ========================================================================
     # BASIC EXECUTION TESTS
@@ -211,13 +212,14 @@ class TestDeepReasonerNode:
 
     @pytest.mark.asyncio
     async def test_handles_failed_status(self, base_explainer_state):
-        """Test that already-failed state is passed through."""
+        """An already-failed state gets an EMPTY delta, not an echo (#2238)."""
         node = DeepReasonerNode(use_llm=False)
         state = {**base_explainer_state, "status": "failed"}
 
         result = await node.execute(state)
 
-        assert result["status"] == "failed"
+        assert result == {}
+        assert state["status"] == "failed"  # input untouched
 
     # ========================================================================
     # LATENCY TRACKING TESTS

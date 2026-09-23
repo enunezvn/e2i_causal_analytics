@@ -262,6 +262,16 @@ class ModelDeployerState(BaseAgentSchema):
     data_source: Optional[Any] = None
     target_outcome: Optional[str] = None
 
+    # #2242: set on a retrain only — the ml_model_registry row being retrained
+    # (model_name / experiment_id / new_model_version, built by the retraining trigger).
+    # register_model registers the candidate as (model_name, new_model_version) inside
+    # that model's experiment instead of a generated "<experiment_id>_deployment" name.
+    retrain_of: Optional[Dict[str, Any]] = None
+
+    # #2255: True when the trainer appended synthetic augmentation rows (the pipeline's
+    # training_augmentation.applied) — a real load plus those rows is 'mixed'.
+    training_augmentation_applied: bool = False
+
     # === OUTPUT FIELDS (Final) ===
 
     # Deployment manifest (K8s / serving)

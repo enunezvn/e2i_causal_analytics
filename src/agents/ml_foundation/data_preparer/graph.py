@@ -6,6 +6,7 @@ This module assembles the data preparation pipeline using LangGraph.
 import json
 import logging
 import os
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Literal
@@ -164,7 +165,9 @@ def write_adaptive_verdicts_sidecar(state: Dict[str, Any]) -> Path | None:
         base = Path(artifacts_dir) / str(state.get("experiment_id") or "anon")
         base.mkdir(parents=True, exist_ok=True)
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        sidecar = base / f"adaptive_verdicts_{ts}.json"
+        # Runs of one scope share its experiment id (#2242/#2257): a per-write suffix
+        # keeps two same-second sidecars from overwriting each other.
+        sidecar = base / f"adaptive_verdicts_{ts}_{uuid.uuid4().hex[:6]}.json"
         # Phase 1 of causal-role propagation (Issue #237): the producer
         # writes a typed ``role_attributions`` list alongside the existing
         # ``adaptive_verdicts``. Reader sidecar contract: a feature's

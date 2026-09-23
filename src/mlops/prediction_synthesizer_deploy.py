@@ -215,6 +215,7 @@ async def _get_or_create_experiment(
     client: Any,
     experiment_name: str = DEPLOY_EXPERIMENT_NAME,
     *,
+    brand: str | None,
     created_by: str = "prediction_synthesizer_deploy",
     description: str = "Real deployable models backing live chat predictions (#840).",
     prediction_target: str | None = None,
@@ -235,6 +236,12 @@ async def _get_or_create_experiment(
     ``prediction_target`` overrides the module-level ``PREDICTION_TARGET`` constant.
     Existing callers that omit this argument retain unchanged behaviour
     (back-compat): the serving deploy path always resolves the initiation target.
+
+    ``brand`` is REQUIRED (no default) and written only at INSERT: the serving
+    deploy passes ``BRAND`` (its models are trained on the CSU/Remibrutinib
+    scenario), other callers pass the brand of the data they trained on, and
+    ``None`` (NULL) means an all-brand cohort. A default of ``BRAND`` stamped
+    every gold-standard cohort 'Remibrutinib' (#2256).
     """
     target = prediction_target or PREDICTION_TARGET
     existing = await (
@@ -255,7 +262,7 @@ async def _get_or_create_experiment(
     row = {
         "experiment_name": experiment_name,
         "prediction_target": target,
-        "brand": BRAND,
+        "brand": brand,
         "is_synthetic": False,
         "created_by": created_by,
         "description": description,
@@ -399,7 +406,7 @@ async def register_deployed_models(
     before writing, and reads the row back to confirm it actually landed
     (a trigger/RLS no-op must not be reported as success).
     """
-    experiment_id = await _get_or_create_experiment(client, experiment_name)
+    experiment_id = await _get_or_create_experiment(client, experiment_name, brand=BRAND)
 
     registered: List[str] = []
     for m in models:

@@ -77,11 +77,11 @@ class ModelOrchestratorNode:
         self.clients = model_clients or {}
         self.timeout_per_model = timeout_per_model
 
-    async def execute(self, state: PredictionSynthesizerState) -> PredictionSynthesizerState:
+    async def execute(self, state: PredictionSynthesizerState) -> Dict[str, Any]:
         """Orchestrate predictions from multiple models."""
         # Check if already failed or completed
         if state.get("status") in ["failed", "completed"]:
-            return state
+            return {}  # nothing to add; echoing the state would re-append the accumulators (#2238)
 
         start_time = time.time()
 
@@ -118,7 +118,6 @@ class ModelOrchestratorNode:
             if not models_to_use:
                 logger.warning("No models available for prediction")
                 return {
-                    **state,
                     "errors": [
                         {
                             "node": "orchestrator",
@@ -155,7 +154,6 @@ class ModelOrchestratorNode:
 
             if not predictions:
                 return {
-                    **state,
                     "individual_predictions": [],
                     "models_succeeded": succeeded,
                     "models_failed": failed,
@@ -172,7 +170,6 @@ class ModelOrchestratorNode:
             )
 
             return {
-                **state,
                 "individual_predictions": predictions,
                 "models_succeeded": succeeded,
                 "models_failed": failed,
@@ -184,7 +181,6 @@ class ModelOrchestratorNode:
         except Exception as e:
             logger.error(f"Model orchestration failed: {e}")
             return {
-                **state,
                 "errors": [{"node": "orchestrator", "error": str(e)}],
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "status": "failed",

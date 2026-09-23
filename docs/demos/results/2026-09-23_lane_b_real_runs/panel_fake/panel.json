@@ -1,0 +1,5917 @@
+{
+  "activation_profile": {
+    "adaptive_layer4_enabled": true,
+    "adaptive_structural_decider_enabled": true,
+    "kg_mode": "shadow"
+  },
+  "built_at": "2026-09-23T01:13:57.495874+00:00",
+  "features": [
+    "age_at_index",
+    "gdr_cd",
+    "payer_category",
+    "payer_product",
+    "payer_bus",
+    "health_exchange_flag",
+    "lis_dual_flag",
+    "geographic_region",
+    "enrollment_duration_days",
+    "charlson_score",
+    "charlson_risk_band",
+    "elixhauser_van_walraven_score",
+    "elixhauser_risk_band",
+    "comorbidity_diag_distinct_count",
+    "comorbidity_diag_claim_count",
+    "high_comorbidity_burden_flag",
+    "cci_mi",
+    "cci_chf",
+    "cci_pvd",
+    "cci_cerebrovascular",
+    "cci_dementia",
+    "cci_chronic_pulmonary",
+    "cci_rheumatic",
+    "cci_peptic_ulcer",
+    "cci_mild_liver",
+    "cci_diabetes_no_complication",
+    "cci_diabetes_complication",
+    "cci_paraplegia",
+    "cci_renal",
+    "cci_malignancy",
+    "cci_severe_liver",
+    "cci_metastatic_cancer",
+    "cci_hiv",
+    "elx_chf",
+    "elx_cardiac_arrhythmia",
+    "elx_valvular_disease",
+    "elx_pulmonary_circulation",
+    "elx_pvd",
+    "elx_hypertension_uncomplicated",
+    "elx_hypertension_complicated",
+    "elx_paralysis",
+    "elx_other_neurological",
+    "elx_chronic_pulmonary",
+    "elx_diabetes_uncomplicated",
+    "elx_diabetes_complicated",
+    "elx_hypothyroidism",
+    "elx_renal_failure",
+    "elx_liver_disease",
+    "elx_peptic_ulcer",
+    "elx_aids_hiv",
+    "elx_lymphoma",
+    "elx_metastatic_cancer",
+    "elx_solid_tumor_no_metastasis",
+    "elx_rheumatoid_collagen",
+    "elx_coagulopathy",
+    "elx_obesity",
+    "elx_weight_loss",
+    "elx_fluid_electrolyte",
+    "elx_blood_loss_anemia",
+    "elx_deficiency_anemia",
+    "elx_alcohol_abuse",
+    "elx_drug_abuse",
+    "elx_psychoses",
+    "elx_depression"
+  ],
+  "layer_activity": {
+    "ensemble": {
+      "abstain_rate": 0.40625,
+      "decided_by": {
+        "None": 7,
+        "abstain": 19,
+        "adversarial": 36,
+        "kg": 2
+      },
+      "final_roles": {},
+      "leak_sources": {},
+      "leak_verdicts": 0,
+      "review_required": 0
+    },
+    "layer_1": {
+      "consulted": 64,
+      "contracted": 64,
+      "declared_safe": 64,
+      "post_index": 0
+    },
+    "layer_2": {
+      "cache_bound": true,
+      "mode": "shadow",
+      "signalled": 2,
+      "signals": {
+        "leak_drug_treats_disease": 2,
+        "no_signal": 62
+      },
+      "with_cached_edges": 24
+    },
+    "layer_3": {
+      "declared_safe_immunity_applied": 9,
+      "fdr": {
+        "active": true,
+        "confident_features": [],
+        "enabled": true,
+        "n_confident": 0,
+        "n_permutations": 569,
+        "q": 0.1,
+        "reason": "active"
+      },
+      "fdr_confident": 0,
+      "scored": 57,
+      "severity_pre_joint_check": {
+        "high": 9,
+        "info": 38,
+        "moderate": 10
+      }
+    },
+    "layer_4": {
+      "classifier_loaded": true,
+      "enabled": true,
+      "fired": 19,
+      "lm": "fake",
+      "roles": {
+        "confounder": 19
+      }
+    }
+  },
+  "leakage_fdr": {
+    "active": true,
+    "confident_features": [],
+    "enabled": true,
+    "n_confident": 0,
+    "n_permutations": 569,
+    "q": 0.1,
+    "reason": "active"
+  },
+  "manifest_source": "optum_mart",
+  "n_rows": 15209,
+  "outcome": "persistent_at_180d_g28",
+  "promotion_eligibility": {
+    "cross_source_disagreement_rate": 0.0,
+    "kg_decided_count": 2,
+    "n_features": 57,
+    "n_patients": 15209,
+    "non_abstain_pct": 0.6666666666666666,
+    "passes": false,
+    "patient_count_pass": true
+  },
+  "records": {
+    "age_at_index": {
+      "ensemble": {
+        "confidence": 0.0,
+        "decided_by": "abstain",
+        "disagreements": [],
+        "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "abstain",
+        "remediation": "review",
+        "severity": "abstain",
+        "structural_role": null,
+        "structural_unclassifiable": false
+      },
+      "feature": "age_at_index",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [],
+        "knowable_at": "enrollment",
+        "source": "mart_demographics",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5342476722682867,
+        "declared_safe_immunity_applied": true,
+        "delta_auc": 0.03018033691857136,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5040673353497154,
+        "null_std": 0.003011801402243362,
+        "p_value": 0.0017543859649122807,
+        "ran": true,
+        "severity_pre_joint_check": "high",
+        "z_score": 10.02069289697897
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": true,
+        "mechanism": "fake LM (measurement run): no mechanism; records which features fire",
+        "remediation": "keep_with_caveat",
+        "role": "confounder"
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "cci_cerebrovascular": {
+      "ensemble": {
+        "confidence": 0.0,
+        "decided_by": "abstain",
+        "disagreements": [],
+        "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "abstain",
+        "remediation": "review",
+        "severity": "abstain",
+        "structural_role": null,
+        "structural_unclassifiable": false
+      },
+      "feature": "cci_cerebrovascular",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "I67.9"
+          ],
+          [
+            "UMLS",
+            "C0007820"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "I67.9",
+          "C0007820"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5055916589240205,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.004443492643910085,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5011481662801104,
+        "null_std": 0.0008647029708595245,
+        "p_value": 0.0035087719298245615,
+        "ran": true,
+        "severity_pre_joint_check": "moderate",
+        "z_score": 5.138750291898735
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": true,
+        "mechanism": "fake LM (measurement run): no mechanism; records which features fire",
+        "remediation": "keep_with_caveat",
+        "role": "confounder"
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "cci_chf": {
+      "ensemble": {
+        "confidence": 0.0,
+        "decided_by": "abstain",
+        "disagreements": [],
+        "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "abstain",
+        "remediation": "review",
+        "severity": "abstain",
+        "structural_role": null,
+        "structural_unclassifiable": false
+      },
+      "feature": "cci_chf",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "I50.9"
+          ],
+          [
+            "UMLS",
+            "C0018802"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "I50.9",
+          "C0018802"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5075814770191319,
+        "declared_safe_immunity_applied": true,
+        "delta_auc": 0.006496375970511781,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5010851010486201,
+        "null_std": 0.0007912437067697348,
+        "p_value": 0.0017543859649122807,
+        "ran": true,
+        "severity_pre_joint_check": "high",
+        "z_score": 8.210335090099282
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": true,
+        "mechanism": "fake LM (measurement run): no mechanism; records which features fire",
+        "remediation": "keep_with_caveat",
+        "role": "confounder"
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "cci_chronic_pulmonary": {
+      "ensemble": {
+        "confidence": 0.7,
+        "decided_by": "kg",
+        "disagreements": [],
+        "evidence": "KG-only verdict: signal=leak_drug_treats_disease (no LLM available); deterministic drop [shadow-mode: verdict capped to info/keep; KG not yet promoted]",
+        "final_role": null,
+        "final_role_note": "withheld: the KG's predictive verdict is indication evidence in the causal contrast (treatment drug approved for this pre-index condition); the structural author and the reviewer decide the role",
+        "kg_predictive_role": "descendant",
+        "kg_signal": "leak_drug_treats_disease",
+        "layer": "2",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": false
+      },
+      "feature": "cci_chronic_pulmonary",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "J44.9"
+          ],
+          [
+            "UMLS",
+            "C0024117"
+          ],
+          [
+            "ICD10CM",
+            "J45.909"
+          ],
+          [
+            "UMLS",
+            "C0004096"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": "indication_evidence",
+        "edges": [
+          {
+            "datasource": "chembl_indications",
+            "evidence": [],
+            "evidence_source": "open_targets",
+            "object_id": "C0004096",
+            "object_name": "asthma",
+            "pmids": [],
+            "predicate": "treats",
+            "score": null,
+            "source_object_id": "MONDO_0004979",
+            "source_subject_id": "CHEMBL1201589",
+            "subject_id": "302379",
+            "subject_name": "OMALIZUMAB"
+          },
+          {
+            "datasource": "chembl_indications",
+            "evidence": [],
+            "evidence_source": "open_targets",
+            "object_id": "C0004096",
+            "object_name": "asthma",
+            "pmids": [],
+            "predicate": "treats",
+            "score": null,
+            "source_object_id": "MONDO_0004979",
+            "source_subject_id": "CHEMBL2108675",
+            "subject_id": "1876376",
+            "subject_name": "DUPILUMAB"
+          }
+        ],
+        "feature_entity_ids": [
+          "J44.9",
+          "C0024117",
+          "J45.909",
+          "C0004096"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 4,
+        "signal": "leak_drug_treats_disease",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5088110006197832,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.005468172385997283,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.503342828233786,
+        "null_std": 0.0024845088343535605,
+        "p_value": 0.042105263157894736,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 2.2009067991179174
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "cci_dementia": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=2.34\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0010 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "cci_dementia",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "F03.90"
+          ],
+          [
+            "UMLS",
+            "C0497327"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "F03.90",
+          "C0497327"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5015519103132049,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.0009972660365151764,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5005546442766897,
+        "null_std": 0.0004266653669501933,
+        "p_value": 0.042105263157894736,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 2.337349393140672
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "cci_diabetes_complication": {
+      "ensemble": {
+        "confidence": 0.0,
+        "decided_by": "abstain",
+        "disagreements": [],
+        "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "abstain",
+        "remediation": "review",
+        "severity": "abstain",
+        "structural_role": null,
+        "structural_unclassifiable": false
+      },
+      "feature": "cci_diabetes_complication",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "E11.8"
+          ],
+          [
+            "UMLS",
+            "C0011849"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "E11.8",
+          "C0011849"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5089086874831383,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.007448548851857528,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5014601386312808,
+        "null_std": 0.0011110133055464828,
+        "p_value": 0.0017543859649122807,
+        "ran": true,
+        "severity_pre_joint_check": "moderate",
+        "z_score": 6.7042841113354195
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": true,
+        "mechanism": "fake LM (measurement run): no mechanism; records which features fire",
+        "remediation": "keep_with_caveat",
+        "role": "confounder"
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "cci_diabetes_no_complication": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=0.17\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0003 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "cci_diabetes_no_complication",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "E11.9"
+          ],
+          [
+            "UMLS",
+            "C0011849"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "E11.9",
+          "C0011849"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 2,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5021420999215785,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.00025213179251837303,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5018899681290602,
+        "null_std": 0.0014908490925991365,
+        "p_value": 0.3508771929824561,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 0.16911959350547554
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "cci_hiv": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=0.92\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0002 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "cci_hiv",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "B20"
+          ],
+          [
+            "UMLS",
+            "C0019693"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "B20",
+          "C0019693"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 1,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5005801801602573,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.00023234859616083625,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5003478315640965,
+        "null_std": 0.00025176000477200307,
+        "p_value": 0.23333333333333334,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 0.9228971709436293
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "cci_malignancy": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=1.16\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0011 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "cci_malignancy",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "C80.1"
+          ],
+          [
+            "UMLS",
+            "C0006826"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "C80.1",
+          "C0006826"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.502378960469992,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.0011089897168102825,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5012699707531817,
+        "null_std": 0.0009566737053614375,
+        "p_value": 0.12982456140350876,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 1.159214171556329
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "cci_metastatic_cancer": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=0.32\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0001 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "cci_metastatic_cancer",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "C79.9"
+          ],
+          [
+            "UMLS",
+            "C0027627"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "C79.9",
+          "C0027627"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 5,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5005527935076713,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.00010782070427484136,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5004449728033965,
+        "null_std": 0.00033669996911149015,
+        "p_value": 0.356140350877193,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 0.3202278413014618
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "cci_mi": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=0.77\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0004 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "cci_mi",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "I21.9"
+          ],
+          [
+            "UMLS",
+            "C0027051"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "I21.9",
+          "C0027051"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5011854731118358,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.00042949449914497784,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5007559786126908,
+        "null_std": 0.0005561562867681811,
+        "p_value": 0.26842105263157895,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 0.7722550465818994
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "cci_mild_liver": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=0.24\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0002 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "cci_mild_liver",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "K76.9"
+          ],
+          [
+            "UMLS",
+            "C0023895"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "K76.9",
+          "C0023895"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5014244626185902,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.00021568442691122236,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.501208778191679,
+        "null_std": 0.000904231006215544,
+        "p_value": 0.3894736842105263,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 0.23852801488628567
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "cci_paraplegia": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=0.29\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0001 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "cci_paraplegia",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "G82.20"
+          ],
+          [
+            "UMLS",
+            "C0030486"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "G82.20",
+          "C0030486"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5003923525319601,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 6.824032471530739e-05,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5003241122072448,
+        "null_std": 0.00023508064421409036,
+        "p_value": 0.41403508771929826,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 0.290284744383975
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "cci_peptic_ulcer": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=-0.56\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0002 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "cci_peptic_ulcer",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "K27.9"
+          ],
+          [
+            "UMLS",
+            "C0030920"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "K27.9",
+          "C0030920"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 2,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5002761292407456,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": -0.00020812645731105306,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5004842556980567,
+        "null_std": 0.0003686457169581869,
+        "p_value": 0.6684210526315789,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": -0.5645703930276762
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "cci_pvd": {
+      "ensemble": {
+        "confidence": 0.0,
+        "decided_by": "abstain",
+        "disagreements": [],
+        "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "abstain",
+        "remediation": "review",
+        "severity": "abstain",
+        "structural_role": null,
+        "structural_unclassifiable": false
+      },
+      "feature": "cci_pvd",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "I73.9"
+          ],
+          [
+            "UMLS",
+            "C0085096"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "I73.9",
+          "C0085096"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 2,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5082498250352927,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.0069433801965378406,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5013064448387549,
+        "null_std": 0.0010026831231130118,
+        "p_value": 0.0017543859649122807,
+        "ran": true,
+        "severity_pre_joint_check": "moderate",
+        "z_score": 6.924800105322263
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": true,
+        "mechanism": "fake LM (measurement run): no mechanism; records which features fire",
+        "remediation": "keep_with_caveat",
+        "role": "confounder"
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "cci_renal": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=4.22\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0044 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "cci_renal",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "N18.9"
+          ],
+          [
+            "UMLS",
+            "C0022661"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "N18.9",
+          "C0022661"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 1,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5057864307462783,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.004383532864061346,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5014028978822169,
+        "null_std": 0.0010379229207912956,
+        "p_value": 0.0035087719298245615,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 4.223370325726511
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "cci_rheumatic": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=1.29\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0015 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "cci_rheumatic",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "M06.9"
+          ],
+          [
+            "UMLS",
+            "C0003873"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "M06.9",
+          "C0003873"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5029930702071608,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.0014651483702299295,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5015279218369308,
+        "null_std": 0.001132987297042687,
+        "p_value": 0.10877192982456141,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 1.2931728131941518
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "cci_severe_liver": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=0.73\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0001 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "cci_severe_liver",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "K74.60"
+          ],
+          [
+            "UMLS",
+            "C0023890"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "K74.60",
+          "C0023890"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5003748527173244,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.0001294609382644918,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5002453917790599,
+        "null_std": 0.00017813017758356827,
+        "p_value": 0.2719298245614035,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 0.7267771245765265
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "charlson_risk_band": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": null,
+        "disagreements": [],
+        "evidence": "no verdict: the node evaluates non-numeric columns only through a manifest contract, and this column has none",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": null,
+        "remediation": null,
+        "severity": null,
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "charlson_risk_band",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": null,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": null,
+        "delta_auc_below_floor": null,
+        "fdr_confident": false,
+        "n_permutations": null,
+        "null_mean": null,
+        "null_std": null,
+        "p_value": null,
+        "ran": false,
+        "severity_pre_joint_check": null,
+        "z_score": null
+      },
+      "layer_4": {
+        "citations": {
+          "checked": null,
+          "unverified": null,
+          "verdicts": [],
+          "verified": null,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "charlson_score": {
+      "ensemble": {
+        "confidence": 0.0,
+        "decided_by": "abstain",
+        "disagreements": [],
+        "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "abstain",
+        "remediation": "review",
+        "severity": "abstain",
+        "structural_role": null,
+        "structural_unclassifiable": false
+      },
+      "feature": "charlson_score",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5262387762096506,
+        "declared_safe_immunity_applied": true,
+        "delta_auc": 0.02241970182266806,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5038190743869826,
+        "null_std": 0.0029680622142404397,
+        "p_value": 0.0017543859649122807,
+        "ran": true,
+        "severity_pre_joint_check": "high",
+        "z_score": 7.5536495546153875
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": true,
+        "mechanism": "fake LM (measurement run): no mechanism; records which features fire",
+        "remediation": "keep_with_caveat",
+        "role": "confounder"
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "comorbidity_diag_claim_count": {
+      "ensemble": {
+        "confidence": 0.0,
+        "decided_by": "abstain",
+        "disagreements": [],
+        "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "abstain",
+        "remediation": "review",
+        "severity": "abstain",
+        "structural_role": null,
+        "structural_unclassifiable": false
+      },
+      "feature": "comorbidity_diag_claim_count",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5437066007383629,
+        "declared_safe_immunity_applied": true,
+        "delta_auc": 0.039432261463746676,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5042743392746162,
+        "null_std": 0.003186621757262416,
+        "p_value": 0.0017543859649122807,
+        "ran": true,
+        "severity_pre_joint_check": "high",
+        "z_score": 12.374315016797727
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": true,
+        "mechanism": "fake LM (measurement run): no mechanism; records which features fire",
+        "remediation": "keep_with_caveat",
+        "role": "confounder"
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "comorbidity_diag_distinct_count": {
+      "ensemble": {
+        "confidence": 0.0,
+        "decided_by": "abstain",
+        "disagreements": [],
+        "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "abstain",
+        "remediation": "review",
+        "severity": "abstain",
+        "structural_role": null,
+        "structural_unclassifiable": false
+      },
+      "feature": "comorbidity_diag_distinct_count",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.540509718995779,
+        "declared_safe_immunity_applied": true,
+        "delta_auc": 0.036227630637202246,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5042820883585768,
+        "null_std": 0.003236198846438139,
+        "p_value": 0.0017543859649122807,
+        "ran": true,
+        "severity_pre_joint_check": "high",
+        "z_score": 11.194500819093829
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": true,
+        "mechanism": "fake LM (measurement run): no mechanism; records which features fire",
+        "remediation": "keep_with_caveat",
+        "role": "confounder"
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elixhauser_risk_band": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": null,
+        "disagreements": [],
+        "evidence": "no verdict: the node evaluates non-numeric columns only through a manifest contract, and this column has none",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": null,
+        "remediation": null,
+        "severity": null,
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "elixhauser_risk_band",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": null,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": null,
+        "delta_auc_below_floor": null,
+        "fdr_confident": false,
+        "n_permutations": null,
+        "null_mean": null,
+        "null_std": null,
+        "p_value": null,
+        "ran": false,
+        "severity_pre_joint_check": null,
+        "z_score": null
+      },
+      "layer_4": {
+        "citations": {
+          "checked": null,
+          "unverified": null,
+          "verdicts": [],
+          "verified": null,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elixhauser_van_walraven_score": {
+      "ensemble": {
+        "confidence": 0.0,
+        "decided_by": "abstain",
+        "disagreements": [],
+        "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "abstain",
+        "remediation": "review",
+        "severity": "abstain",
+        "structural_role": null,
+        "structural_unclassifiable": false
+      },
+      "feature": "elixhauser_van_walraven_score",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5214113798909252,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.017411886475934724,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5039994934149905,
+        "null_std": 0.0031317235825901748,
+        "p_value": 0.0017543859649122807,
+        "ran": true,
+        "severity_pre_joint_check": "moderate",
+        "z_score": 5.559841415356895
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": true,
+        "mechanism": "fake LM (measurement run): no mechanism; records which features fire",
+        "remediation": "keep_with_caveat",
+        "role": "confounder"
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_aids_hiv": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=0.92\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0002 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "elx_aids_hiv",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "B20"
+          ],
+          [
+            "UMLS",
+            "C0019693"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "B20",
+          "C0019693"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 1,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5005801801602573,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.00023234859616083625,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5003478315640965,
+        "null_std": 0.00025176000477200307,
+        "p_value": 0.23333333333333334,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 0.9228971709436293
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_alcohol_abuse": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=3.98\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0020 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "elx_alcohol_abuse",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "F10.10"
+          ],
+          [
+            "UMLS",
+            "C0001973"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "F10.10",
+          "C0001973"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 1,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5026401312704567,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.0019613950839643124,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5006787361864924,
+        "null_std": 0.0004930481453622139,
+        "p_value": 0.0017543859649122807,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 3.9781005210421982
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_blood_loss_anemia": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=1.70\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0008 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "elx_blood_loss_anemia",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "D50.0"
+          ],
+          [
+            "UMLS",
+            "C0002871"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "D50.0",
+          "C0002871"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 1,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5013912018244037,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.0007674902753140866,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5006237115490896,
+        "null_std": 0.0004521936259831712,
+        "p_value": 0.07368421052631578,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 1.6972602690836016
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_cardiac_arrhythmia": {
+      "ensemble": {
+        "confidence": 0.0,
+        "decided_by": "abstain",
+        "disagreements": [],
+        "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "abstain",
+        "remediation": "review",
+        "severity": "abstain",
+        "structural_role": null,
+        "structural_unclassifiable": false
+      },
+      "feature": "elx_cardiac_arrhythmia",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "I49.9"
+          ],
+          [
+            "UMLS",
+            "C0003811"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "I49.9",
+          "C0003811"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5114498277639263,
+        "declared_safe_immunity_applied": true,
+        "delta_auc": 0.00976830414596519,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5016815236179611,
+        "null_std": 0.0012689662455498312,
+        "p_value": 0.0017543859649122807,
+        "ran": true,
+        "severity_pre_joint_check": "high",
+        "z_score": 7.69784395780573
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": true,
+        "mechanism": "fake LM (measurement run): no mechanism; records which features fire",
+        "remediation": "keep_with_caveat",
+        "role": "confounder"
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_chf": {
+      "ensemble": {
+        "confidence": 0.0,
+        "decided_by": "abstain",
+        "disagreements": [],
+        "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "abstain",
+        "remediation": "review",
+        "severity": "abstain",
+        "structural_role": null,
+        "structural_unclassifiable": false
+      },
+      "feature": "elx_chf",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "I50.9"
+          ],
+          [
+            "UMLS",
+            "C0018802"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "I50.9",
+          "C0018802"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5075814770191319,
+        "declared_safe_immunity_applied": true,
+        "delta_auc": 0.006496375970511781,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5010851010486201,
+        "null_std": 0.0007912437067697348,
+        "p_value": 0.0017543859649122807,
+        "ran": true,
+        "severity_pre_joint_check": "high",
+        "z_score": 8.210335090099282
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": true,
+        "mechanism": "fake LM (measurement run): no mechanism; records which features fire",
+        "remediation": "keep_with_caveat",
+        "role": "confounder"
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_chronic_pulmonary": {
+      "ensemble": {
+        "confidence": 0.7,
+        "decided_by": "kg",
+        "disagreements": [],
+        "evidence": "KG-only verdict: signal=leak_drug_treats_disease (no LLM available); deterministic drop [shadow-mode: verdict capped to info/keep; KG not yet promoted]",
+        "final_role": null,
+        "final_role_note": "withheld: the KG's predictive verdict is indication evidence in the causal contrast (treatment drug approved for this pre-index condition); the structural author and the reviewer decide the role",
+        "kg_predictive_role": "descendant",
+        "kg_signal": "leak_drug_treats_disease",
+        "layer": "2",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": false
+      },
+      "feature": "elx_chronic_pulmonary",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "J44.9"
+          ],
+          [
+            "UMLS",
+            "C0024117"
+          ],
+          [
+            "ICD10CM",
+            "J45.909"
+          ],
+          [
+            "UMLS",
+            "C0004096"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": "indication_evidence",
+        "edges": [
+          {
+            "datasource": "chembl_indications",
+            "evidence": [],
+            "evidence_source": "open_targets",
+            "object_id": "C0004096",
+            "object_name": "asthma",
+            "pmids": [],
+            "predicate": "treats",
+            "score": null,
+            "source_object_id": "MONDO_0004979",
+            "source_subject_id": "CHEMBL1201589",
+            "subject_id": "302379",
+            "subject_name": "OMALIZUMAB"
+          },
+          {
+            "datasource": "chembl_indications",
+            "evidence": [],
+            "evidence_source": "open_targets",
+            "object_id": "C0004096",
+            "object_name": "asthma",
+            "pmids": [],
+            "predicate": "treats",
+            "score": null,
+            "source_object_id": "MONDO_0004979",
+            "source_subject_id": "CHEMBL2108675",
+            "subject_id": "1876376",
+            "subject_name": "DUPILUMAB"
+          }
+        ],
+        "feature_entity_ids": [
+          "J44.9",
+          "C0024117",
+          "J45.909",
+          "C0004096"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 4,
+        "signal": "leak_drug_treats_disease",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5088110006197832,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.005468172385997283,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.503342828233786,
+        "null_std": 0.0024845088343535605,
+        "p_value": 0.042105263157894736,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 2.2009067991179174
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_coagulopathy": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=-0.80\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0004 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "elx_coagulopathy",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "D68.9"
+          ],
+          [
+            "UMLS",
+            "C0005779"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "D68.9",
+          "C0005779"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 1,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5002755942145658,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": -0.0004188501971751357,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5006944444117409,
+        "null_std": 0.0005254462271817661,
+        "p_value": 0.7736842105263158,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": -0.7971323715114318
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_deficiency_anemia": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=3.60\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0037 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "elx_deficiency_anemia",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "D50.9"
+          ],
+          [
+            "UMLS",
+            "C0162316"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "D50.9",
+          "C0162316"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5050993791065768,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.003740003464933972,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5013593756416428,
+        "null_std": 0.001038419197701085,
+        "p_value": 0.0017543859649122807,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 3.6016316659147067
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_depression": {
+      "ensemble": {
+        "confidence": 0.0,
+        "decided_by": "abstain",
+        "disagreements": [],
+        "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "abstain",
+        "remediation": "review",
+        "severity": "abstain",
+        "structural_role": null,
+        "structural_unclassifiable": false
+      },
+      "feature": "elx_depression",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "F33.9"
+          ],
+          [
+            "UMLS",
+            "C0011581"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "F33.9",
+          "C0011581"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.511850852178553,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.00939022987051985,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5024606223080331,
+        "null_std": 0.0018785483982814784,
+        "p_value": 0.0017543859649122807,
+        "ran": true,
+        "severity_pre_joint_check": "moderate",
+        "z_score": 4.998662732943245
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": true,
+        "mechanism": "fake LM (measurement run): no mechanism; records which features fire",
+        "remediation": "keep_with_caveat",
+        "role": "confounder"
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_diabetes_complicated": {
+      "ensemble": {
+        "confidence": 0.0,
+        "decided_by": "abstain",
+        "disagreements": [],
+        "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "abstain",
+        "remediation": "review",
+        "severity": "abstain",
+        "structural_role": null,
+        "structural_unclassifiable": false
+      },
+      "feature": "elx_diabetes_complicated",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "E11.8"
+          ],
+          [
+            "UMLS",
+            "C0011849"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "E11.8",
+          "C0011849"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5089086874831383,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.007448548851857528,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5014601386312808,
+        "null_std": 0.0011110133055464828,
+        "p_value": 0.0017543859649122807,
+        "ran": true,
+        "severity_pre_joint_check": "moderate",
+        "z_score": 6.7042841113354195
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": true,
+        "mechanism": "fake LM (measurement run): no mechanism; records which features fire",
+        "remediation": "keep_with_caveat",
+        "role": "confounder"
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_diabetes_uncomplicated": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=0.17\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0003 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "elx_diabetes_uncomplicated",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "E11.9"
+          ],
+          [
+            "UMLS",
+            "C0011849"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "E11.9",
+          "C0011849"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 2,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5021420999215785,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.00025213179251837303,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5018899681290602,
+        "null_std": 0.0014908490925991365,
+        "p_value": 0.3508771929824561,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 0.16911959350547554
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_drug_abuse": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=1.24\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0008 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "elx_drug_abuse",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "F19.10"
+          ],
+          [
+            "UMLS",
+            "C0038586"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "F19.10",
+          "C0038586"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 4,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5016223108413826,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.0007884275038657629,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5008338833375169,
+        "null_std": 0.000634573967253541,
+        "p_value": 0.11578947368421053,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 1.242451699174023
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_fluid_electrolyte": {
+      "ensemble": {
+        "confidence": 0.0,
+        "decided_by": "abstain",
+        "disagreements": [],
+        "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "abstain",
+        "remediation": "review",
+        "severity": "abstain",
+        "structural_role": null,
+        "structural_unclassifiable": false
+      },
+      "feature": "elx_fluid_electrolyte",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "E87.8"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "E87.8"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 1,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5079003526223795,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.006457043279551433,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5014433093428281,
+        "null_std": 0.0010899772117109428,
+        "p_value": 0.0017543859649122807,
+        "ran": true,
+        "severity_pre_joint_check": "moderate",
+        "z_score": 5.924016768585262
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": true,
+        "mechanism": "fake LM (measurement run): no mechanism; records which features fire",
+        "remediation": "keep_with_caveat",
+        "role": "confounder"
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_hypertension_complicated": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=4.21\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0044 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "elx_hypertension_complicated",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "I11.9"
+          ],
+          [
+            "UMLS",
+            "C0020538"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "I11.9",
+          "C0020538"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5057953812884135,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.004434329693717154,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5013610515946963,
+        "null_std": 0.001054076793713936,
+        "p_value": 0.005263157894736842,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 4.206837414656696
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_hypertension_uncomplicated": {
+      "ensemble": {
+        "confidence": 0.0,
+        "decided_by": "abstain",
+        "disagreements": [],
+        "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "abstain",
+        "remediation": "review",
+        "severity": "abstain",
+        "structural_role": null,
+        "structural_unclassifiable": false
+      },
+      "feature": "elx_hypertension_uncomplicated",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "I10"
+          ],
+          [
+            "UMLS",
+            "C0020538"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "I10",
+          "C0020538"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.516499494021283,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.01330956530748717,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5031899287137959,
+        "null_std": 0.00235628190243782,
+        "p_value": 0.0017543859649122807,
+        "ran": true,
+        "severity_pre_joint_check": "moderate",
+        "z_score": 5.648545402702892
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": true,
+        "mechanism": "fake LM (measurement run): no mechanism; records which features fire",
+        "remediation": "keep_with_caveat",
+        "role": "confounder"
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_hypothyroidism": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=0.47\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0008 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "elx_hypothyroidism",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "E03.9"
+          ],
+          [
+            "UMLS",
+            "C0020676"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "E03.9",
+          "C0020676"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5031810204456242,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.000818790219988208,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.502362230225636,
+        "null_std": 0.0017450723823425646,
+        "p_value": 0.2807017543859649,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 0.4692012940397771
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_liver_disease": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=-0.24\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0002 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "elx_liver_disease",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "K76.9"
+          ],
+          [
+            "UMLS",
+            "C0023895"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "K76.9",
+          "C0023895"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5010049909471341,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": -0.00022461132461915057,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5012296022717533,
+        "null_std": 0.0009424679268504742,
+        "p_value": 0.543859649122807,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": -0.23832251286232464
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_lymphoma": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=-0.47\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0001 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "elx_lymphoma",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "C85.90"
+          ],
+          [
+            "UMLS",
+            "C0024299"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "C85.90",
+          "C0024299"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 2,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5002762629972907,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": -0.00014517223905163856,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5004214352363423,
+        "null_std": 0.00030980275544843674,
+        "p_value": 0.6140350877192983,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": -0.46859570000112827
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_metastatic_cancer": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=0.32\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0001 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "elx_metastatic_cancer",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "C79.9"
+          ],
+          [
+            "UMLS",
+            "C0027627"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "C79.9",
+          "C0027627"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 5,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5005527935076713,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.00010782070427484136,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5004449728033965,
+        "null_std": 0.00033669996911149015,
+        "p_value": 0.356140350877193,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 0.3202278413014618
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_obesity": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=0.52\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0010 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "elx_obesity",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "E66.9"
+          ],
+          [
+            "UMLS",
+            "C0028754"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "E66.9",
+          "C0028754"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 1,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5034930856114561,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.0010241969412949636,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5024688886701612,
+        "null_std": 0.0019622500354593343,
+        "p_value": 0.24210526315789474,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 0.5219502727924344
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_other_neurological": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=2.33\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0016 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "elx_other_neurological",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "G96.9"
+          ],
+          [
+            "UMLS",
+            "C0027765"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "G96.9",
+          "C0027765"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 4,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.502514422410927,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.0016179611482781686,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5008964612626489,
+        "null_std": 0.0006949249329609626,
+        "p_value": 0.03508771929824561,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 2.3282531271173394
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_paralysis": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=0.29\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0001 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "elx_paralysis",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "G83.9"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "G83.9"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 3,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5003923525319601,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 6.824032471530739e-05,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5003241122072448,
+        "null_std": 0.00023508064421409036,
+        "p_value": 0.41403508771929826,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 0.290284744383975
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_peptic_ulcer": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=-0.56\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0002 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "elx_peptic_ulcer",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "K27.9"
+          ],
+          [
+            "UMLS",
+            "C0030920"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "K27.9",
+          "C0030920"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 2,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5002761292407456,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": -0.00020812645731105306,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5004842556980567,
+        "null_std": 0.0003686457169581869,
+        "p_value": 0.6684210526315789,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": -0.5645703930276762
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_psychoses": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=3.51\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0028 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "elx_psychoses",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "F29"
+          ],
+          [
+            "UMLS",
+            "C0033975"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "F29",
+          "C0033975"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 1,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5038523222521536,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.0027893399482324943,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5010629823039211,
+        "null_std": 0.0007939415695077428,
+        "p_value": 0.008771929824561403,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 3.5132811473291823
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_pulmonary_circulation": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=4.45\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0027 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "elx_pulmonary_circulation",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "I27.20"
+          ],
+          [
+            "UMLS",
+            "C0020542"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "I27.20",
+          "C0020542"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5034963069149146,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.0027275889903741746,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5007687179245405,
+        "null_std": 0.0006130808757241407,
+        "p_value": 0.0035087719298245615,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 4.448987235415689
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_pvd": {
+      "ensemble": {
+        "confidence": 0.0,
+        "decided_by": "abstain",
+        "disagreements": [],
+        "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "abstain",
+        "remediation": "review",
+        "severity": "abstain",
+        "structural_role": null,
+        "structural_unclassifiable": false
+      },
+      "feature": "elx_pvd",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "I73.9"
+          ],
+          [
+            "UMLS",
+            "C0085096"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "I73.9",
+          "C0085096"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 2,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5082498250352927,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.0069433801965378406,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5013064448387549,
+        "null_std": 0.0010026831231130118,
+        "p_value": 0.0017543859649122807,
+        "ran": true,
+        "severity_pre_joint_check": "moderate",
+        "z_score": 6.924800105322263
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": true,
+        "mechanism": "fake LM (measurement run): no mechanism; records which features fire",
+        "remediation": "keep_with_caveat",
+        "role": "confounder"
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_renal_failure": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=4.19\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0044 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "elx_renal_failure",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "N18.9"
+          ],
+          [
+            "UMLS",
+            "C0022661"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "N18.9",
+          "C0022661"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 1,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5057507623342818,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.004360686274542447,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5013900760597394,
+        "null_std": 0.0010413783011658316,
+        "p_value": 0.005263157894736842,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 4.18741803018233
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_rheumatoid_collagen": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=1.29\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0015 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "elx_rheumatoid_collagen",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "M06.9"
+          ],
+          [
+            "UMLS",
+            "C0003873"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "M06.9",
+          "C0003873"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5029930702071608,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.0014651483702299295,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5015279218369308,
+        "null_std": 0.001132987297042687,
+        "p_value": 0.10877192982456141,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 1.2931728131941518
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_solid_tumor_no_metastasis": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=1.10\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0010 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "elx_solid_tumor_no_metastasis",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "C80.1"
+          ],
+          [
+            "UMLS",
+            "C0006826"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "C80.1",
+          "C0006826"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5021474501833779,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.000985803269078711,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5011616469142992,
+        "null_std": 0.0008969920949317812,
+        "p_value": 0.15263157894736842,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 1.0990099853150703
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_valvular_disease": {
+      "ensemble": {
+        "confidence": 0.0,
+        "decided_by": "abstain",
+        "disagreements": [],
+        "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "abstain",
+        "remediation": "review",
+        "severity": "abstain",
+        "structural_role": null,
+        "structural_unclassifiable": false
+      },
+      "feature": "elx_valvular_disease",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "UMLS",
+            "C0018824"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "C0018824"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5069740439628336,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.0057641868643778515,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5012098570984558,
+        "null_std": 0.0009393667016640845,
+        "p_value": 0.0017543859649122807,
+        "ran": true,
+        "severity_pre_joint_check": "moderate",
+        "z_score": 6.1362478084081715
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": true,
+        "mechanism": "fake LM (measurement run): no mechanism; records which features fire",
+        "remediation": "keep_with_caveat",
+        "role": "confounder"
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "elx_weight_loss": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=2.35\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0016 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "elx_weight_loss",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [
+          [
+            "ICD10CM",
+            "R63.4"
+          ],
+          [
+            "UMLS",
+            "C1262477"
+          ]
+        ],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [
+          "R63.4",
+          "C1262477"
+        ],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5024520361290695,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.0015519831662497152,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5009000529628198,
+        "null_std": 0.0006601548358363647,
+        "p_value": 0.03684210526315789,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 2.3509381163336833
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "enrollment_duration_days": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=3.96\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0125 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "enrollment_duration_days",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [],
+        "knowable_at": "index_date",
+        "source": "mart_derived_enrollment",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5164966405483233,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": 0.012455572688163441,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5040410678601599,
+        "null_std": 0.0031459444596859927,
+        "p_value": 0.005263157894736842,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": 3.9592474844284675
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "gdr_cd": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": null,
+        "disagreements": [],
+        "evidence": "no verdict: the node evaluates non-numeric columns only through a manifest contract, and this column has none",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": null,
+        "remediation": null,
+        "severity": null,
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "gdr_cd",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [],
+        "knowable_at": "enrollment",
+        "source": "mart_demographics",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": null,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": null,
+        "delta_auc_below_floor": null,
+        "fdr_confident": false,
+        "n_permutations": null,
+        "null_mean": null,
+        "null_std": null,
+        "p_value": null,
+        "ran": false,
+        "severity_pre_joint_check": null,
+        "z_score": null
+      },
+      "layer_4": {
+        "citations": {
+          "checked": null,
+          "unverified": null,
+          "verdicts": [],
+          "verified": null,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "geographic_region": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": null,
+        "disagreements": [],
+        "evidence": "no verdict: the node evaluates non-numeric columns only through a manifest contract, and this column has none",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": null,
+        "remediation": null,
+        "severity": null,
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "geographic_region",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [],
+        "knowable_at": "enrollment",
+        "source": "mart_derived_geo",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": null,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": null,
+        "delta_auc_below_floor": null,
+        "fdr_confident": false,
+        "n_permutations": null,
+        "null_mean": null,
+        "null_std": null,
+        "p_value": null,
+        "ran": false,
+        "severity_pre_joint_check": null,
+        "z_score": null
+      },
+      "layer_4": {
+        "citations": {
+          "checked": null,
+          "unverified": null,
+          "verdicts": [],
+          "verified": null,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "health_exchange_flag": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": "adversarial",
+        "disagreements": [],
+        "evidence": "Layer 3 adversarial discriminator: z=-0.31\u03c3 (below 4.50\u03c3 HBLP-effective noise floor); legitimate weak signal [HBLP-relaxed: high_eff=7.50\u03c3 (base=5.0\u03c3 \u00d7 1.00 \u00d7 layer_1_factor=1.50), n_train_pos=11206, layer_1_declared_safe=True] [joint check #194: |delta_AUC|=0.0001 \u2264 floor 0.1000; z above HBLP band but absolute effect below pharma-actionable threshold]",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "3",
+        "remediation": "keep",
+        "severity": "info",
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "health_exchange_flag",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [],
+        "knowable_at": "enrollment",
+        "source": "mart_demographics",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5001783420599819,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": -5.727626467821878e-05,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5002356183246601,
+        "null_std": 0.0001839910610840441,
+        "p_value": 0.5614035087719298,
+        "ran": true,
+        "severity_pre_joint_check": "info",
+        "z_score": -0.3112991704094577
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "high_comorbidity_burden_flag": {
+      "ensemble": {
+        "confidence": 0.0,
+        "decided_by": "abstain",
+        "disagreements": [],
+        "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "abstain",
+        "remediation": "review",
+        "severity": "abstain",
+        "structural_role": null,
+        "structural_unclassifiable": false
+      },
+      "feature": "high_comorbidity_burden_flag",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [],
+        "knowable_at": "index_date",
+        "source": "mart_comorbidity",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.5140703191150275,
+        "declared_safe_immunity_applied": true,
+        "delta_auc": 0.012065493312249154,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5020048258027784,
+        "null_std": 0.0015380537440053486,
+        "p_value": 0.0017543859649122807,
+        "ran": true,
+        "severity_pre_joint_check": "high",
+        "z_score": 7.8446500060710465
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": true,
+        "mechanism": "fake LM (measurement run): no mechanism; records which features fire",
+        "remediation": "keep_with_caveat",
+        "role": "confounder"
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "lis_dual_flag": {
+      "ensemble": {
+        "confidence": 0.0,
+        "decided_by": "abstain",
+        "disagreements": [],
+        "evidence": "LLM verdict (audit-only, not used for the decision): causal_role=confounder, recommended_remediation=keep_with_caveat; No decisive layer; abstaining for human review",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": "abstain",
+        "remediation": "review",
+        "severity": "abstain",
+        "structural_role": null,
+        "structural_unclassifiable": false
+      },
+      "feature": "lis_dual_flag",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [],
+        "knowable_at": "enrollment",
+        "source": "mart_demographics",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": 0.537107431785611,
+        "declared_safe_immunity_applied": true,
+        "delta_auc": 0.03396302466714196,
+        "delta_auc_below_floor": true,
+        "fdr_confident": false,
+        "n_permutations": 569,
+        "null_mean": 0.5031444071184691,
+        "null_std": 0.00236321208422192,
+        "p_value": 0.0017543859649122807,
+        "ran": true,
+        "severity_pre_joint_check": "high",
+        "z_score": 14.371551708751598
+      },
+      "layer_4": {
+        "citations": {
+          "checked": 0,
+          "unverified": 0,
+          "verdicts": [],
+          "verified": 0,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": true,
+        "mechanism": "fake LM (measurement run): no mechanism; records which features fire",
+        "remediation": "keep_with_caveat",
+        "role": "confounder"
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "payer_bus": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": null,
+        "disagreements": [],
+        "evidence": "no verdict: the node evaluates non-numeric columns only through a manifest contract, and this column has none",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": null,
+        "remediation": null,
+        "severity": null,
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "payer_bus",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [],
+        "knowable_at": "enrollment",
+        "source": "mart_demographics",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": null,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": null,
+        "delta_auc_below_floor": null,
+        "fdr_confident": false,
+        "n_permutations": null,
+        "null_mean": null,
+        "null_std": null,
+        "p_value": null,
+        "ran": false,
+        "severity_pre_joint_check": null,
+        "z_score": null
+      },
+      "layer_4": {
+        "citations": {
+          "checked": null,
+          "unverified": null,
+          "verdicts": [],
+          "verified": null,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "payer_category": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": null,
+        "disagreements": [],
+        "evidence": "no verdict: the node evaluates non-numeric columns only through a manifest contract, and this column has none",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": null,
+        "remediation": null,
+        "severity": null,
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "payer_category",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [],
+        "knowable_at": "enrollment",
+        "source": "mart_demographics",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": null,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": null,
+        "delta_auc_below_floor": null,
+        "fdr_confident": false,
+        "n_permutations": null,
+        "null_mean": null,
+        "null_std": null,
+        "p_value": null,
+        "ran": false,
+        "severity_pre_joint_check": null,
+        "z_score": null
+      },
+      "layer_4": {
+        "citations": {
+          "checked": null,
+          "unverified": null,
+          "verdicts": [],
+          "verified": null,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    },
+    "payer_product": {
+      "ensemble": {
+        "confidence": null,
+        "decided_by": null,
+        "disagreements": [],
+        "evidence": "no verdict: the node evaluates non-numeric columns only through a manifest contract, and this column has none",
+        "final_role": null,
+        "final_role_note": null,
+        "kg_predictive_role": null,
+        "kg_signal": "no_signal",
+        "layer": null,
+        "remediation": null,
+        "severity": null,
+        "structural_role": null,
+        "structural_unclassifiable": null
+      },
+      "feature": "payer_product",
+      "layer_1": {
+        "contract_present": true,
+        "declared_safe": true,
+        "entity_codes": [],
+        "knowable_at": "enrollment",
+        "source": "mart_demographics",
+        "temporal_status": "pre_index",
+        "verdict": "pre_index",
+        "window_days": null
+      },
+      "layer_2": {
+        "cache_bound": true,
+        "causal_interpretation": null,
+        "edges": [],
+        "feature_entity_ids": [],
+        "mode": "shadow",
+        "n_edges_cached": 0,
+        "signal": "no_signal",
+        "target_entity_ids": [
+          "302379",
+          "1876376"
+        ]
+      },
+      "layer_3": {
+        "ablation_severity": null,
+        "actual_auc": null,
+        "declared_safe_immunity_applied": false,
+        "delta_auc": null,
+        "delta_auc_below_floor": null,
+        "fdr_confident": false,
+        "n_permutations": null,
+        "null_mean": null,
+        "null_std": null,
+        "p_value": null,
+        "ran": false,
+        "severity_pre_joint_check": null,
+        "z_score": null
+      },
+      "layer_4": {
+        "citations": {
+          "checked": null,
+          "unverified": null,
+          "verdicts": [],
+          "verified": null,
+          "verified_ids": []
+        },
+        "cited_pmids": [],
+        "evaluator": {
+          "missed_considerations": null,
+          "model": null,
+          "notes": null,
+          "rationale_complete": null,
+          "satisfied": null
+        },
+        "fired": false,
+        "mechanism": null,
+        "remediation": null,
+        "role": null
+      },
+      "leak_source": null,
+      "leak_verdict": false,
+      "review_required": false
+    }
+  },
+  "schema_version": "1",
+  "treatment": "treatment_dupixent"
+}

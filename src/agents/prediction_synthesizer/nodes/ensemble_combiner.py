@@ -31,18 +31,17 @@ class EnsembleCombinerNode:
         """
         self.default_confidence_level = confidence_level
 
-    async def execute(self, state: PredictionSynthesizerState) -> PredictionSynthesizerState:
+    async def execute(self, state: PredictionSynthesizerState) -> Dict[str, Any]:
         """Combine predictions into ensemble."""
         start_time = time.time()
 
         if state.get("status") == "failed":
-            return state
+            return {}  # nothing to add; echoing the state would re-append the accumulators (#2238)
 
         try:
             predictions = state.get("individual_predictions", [])
             if not predictions:
                 return {
-                    **state,
                     "errors": [{"node": "ensemble", "error": "No predictions to combine"}],
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "status": "failed",
@@ -121,7 +120,6 @@ class EnsembleCombinerNode:
             )
 
             return {
-                **state,
                 "ensemble_prediction": ensemble_pred,
                 "prediction_summary": enhanced_summary,
                 "prediction_interpretation": interpretation,
@@ -133,7 +131,6 @@ class EnsembleCombinerNode:
         except Exception as e:
             logger.error(f"Ensemble combination failed: {e}")
             return {
-                **state,
                 "errors": [{"node": "ensemble", "error": str(e)}],
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "status": "failed",

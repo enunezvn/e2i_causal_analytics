@@ -69,6 +69,7 @@ async def test_existing_scope_refreshed_not_duplicated():
     existing = MLExperiment(
         id=uuid4(),
         experiment_name="Kisqali - Predict prescribing",
+        mlflow_experiment_id="exp-existing",
         prediction_target="prescribing",
         created_by="scope_definer",
         status="running",
@@ -78,8 +79,9 @@ async def test_existing_scope_refreshed_not_duplicated():
         "src.agents.ml_foundation.scope_definer.agent._get_experiment_repository",
         new=AsyncMock(return_value=repo),
     ):
-        await ScopeDefinerAgent()._persist_scope_spec(_OUTPUT)
+        bound = await ScopeDefinerAgent()._persist_scope_spec(_OUTPUT)
 
+    assert bound == "exp-existing"  # #2257: the run takes the refreshed row's id
     repo.create_experiment.assert_not_awaited()
     repo.update.assert_awaited_once()
     row_id, updates = repo.update.await_args.args

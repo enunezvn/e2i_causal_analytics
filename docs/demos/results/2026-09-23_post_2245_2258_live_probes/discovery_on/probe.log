@@ -1,0 +1,46 @@
+[discontinued_180d] submitted analysis_id=1b031bb7-0f53-4440-8ede-f7e6e4c2cd78 status=pending warnings=['Analysis submitted; poll GET /causal/agent-analyze/{id} for the result.']
+[discontinued_180d] poll 1 t=28s status=running
+[discontinued_180d] poll 2 t=43s status=running
+[discontinued_180d] poll 3 t=58s status=running
+[discontinued_180d] poll 4 t=73s status=running
+[discontinued_180d] poll 5 t=88s status=running
+[discontinued_180d] poll 6 t=104s status=running
+[discontinued_180d] poll 7 t=119s status=running
+[discontinued_180d] poll 8 t=134s status=running
+[discontinued_180d] poll 9 t=150s status=running
+[discontinued_180d] poll 10 t=165s status=running
+[discontinued_180d] poll 11 t=180s status=running
+[discontinued_180d] poll 12 t=196s status=running
+[discontinued_180d] poll 13 t=211s status=running
+[discontinued_180d] poll 14 t=226s status=running
+[discontinued_180d] poll 15 t=242s status=running
+[discontinued_180d] poll 16 t=257s status=running
+[discontinued_180d] poll 17 t=273s status=running
+[discontinued_180d] poll 18 t=288s status=running
+[discontinued_180d] poll 19 t=304s status=running
+[discontinued_180d] poll 20 t=320s status=running
+[discontinued_180d] poll 21 t=335s status=running
+[discontinued_180d] poll 22 t=351s status=running
+[discontinued_180d] poll 23 t=366s status=running
+[discontinued_180d] poll 24 t=383s status=running
+[discontinued_180d] poll 25 t=398s status=running
+[discontinued_180d] poll 26 t=414s status=running
+[discontinued_180d] poll 27 t=429s status=running
+[discontinued_180d] poll 28 t=444s status=running
+[discontinued_180d] poll 29 t=460s status=running
+[discontinued_180d] poll 30 t=475s status=running
+[discontinued_180d] poll 31 t=490s status=running
+[discontinued_180d] poll 32 t=506s status=running
+[discontinued_180d] poll 33 t=521s status=running
+[discontinued_180d] poll 34 t=537s status=running
+[discontinued_180d] poll 35 t=553s status=running
+[discontinued_180d] poll 36 t=568s status=running
+[discontinued_180d] poll 37 t=583s status=running
+[discontinued_180d] poll 38 t=599s status=running
+[discontinued_180d] poll 39 t=614s status=running
+[discontinued_180d] poll 40 t=630s status=running
+[discontinued_180d] poll 41 t=645s status=running
+[discontinued_180d] poll 42 t=660s status=running
+[discontinued_180d] poll 43 t=676s status=completed
+[discontinued_180d] DONE status=completed n_rows=15209 est=LinearDML ate=0.007056123869614513 ci=[-0.0053728049252601395, 0.019485052664489168] p=0.26583454458398803 refut=3/4 gate=proceed evalue=1.3339091666123395 dag_source=augmented wall=675.6s
+exit=0

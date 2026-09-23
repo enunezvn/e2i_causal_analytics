@@ -1,0 +1,17 @@
+======================================================================
+csu_escalation_causal loader (DRY RUN)  input=/home/enunez/Projects/e2i_causal_analytics/data/rwd/synthetic_CSU/csu_escalation_causal/csu_escalation_causal_synthetic.parquet
+======================================================================
+WOULD WRITE: n=3000 arms={'XOLAIR': 1220, 'DUPIXENT': 506, 'RHAPSIDO': 1274} treatment={'0': 1726, '1': 1274}
+  persistent_at_180d_g28: positives={'XOLAIR': 294, 'DUPIXENT': 118, 'RHAPSIDO': 938} rate={'XOLAIR': 0.241, 'DUPIXENT': 0.2332, 'RHAPSIDO': 0.7363}
+  discontinued_180d: positives={'XOLAIR': 592, 'DUPIXENT': 281, 'RHAPSIDO': 177} rate={'XOLAIR': 0.4852, 'DUPIXENT': 0.5553, 'RHAPSIDO': 0.1389}
+  biologic_switch_180d_flag: positives={'XOLAIR': 36, 'DUPIXENT': 14, 'RHAPSIDO': 35} rate={'XOLAIR': 0.0295, 'DUPIXENT': 0.0277, 'RHAPSIDO': 0.0275}
+  persistent_at_180d: positives={'XOLAIR': 322, 'DUPIXENT': 138, 'RHAPSIDO': 740} rate={'XOLAIR': 0.2639, 'DUPIXENT': 0.2727, 'RHAPSIDO': 0.5808}
+PROVENANCE: every row is_synthetic=true (verified)
+GUARD: datasets._CAUSAL_SYNTHETIC_BACKED covers 'csu_escalation_causal', the planted-truth seam is closed, and deployed 814eaa959 descends from the guard commit c0860bbf4
+LIVE BEFORE: n=0 arms={'XOLAIR': 0, 'DUPIXENT': 0, 'RHAPSIDO': 0} treatment={'0': 0, '1': 0}
+  persistent_at_180d_g28: positives={'XOLAIR': 0, 'DUPIXENT': 0, 'RHAPSIDO': 0} rate={'XOLAIR': None, 'DUPIXENT': None, 'RHAPSIDO': None}
+  discontinued_180d: positives={'XOLAIR': 0, 'DUPIXENT': 0, 'RHAPSIDO': 0} rate={'XOLAIR': None, 'DUPIXENT': None, 'RHAPSIDO': None}
+  biologic_switch_180d_flag: positives={'XOLAIR': 0, 'DUPIXENT': 0, 'RHAPSIDO': 0} rate={'XOLAIR': None, 'DUPIXENT': None, 'RHAPSIDO': None}
+  persistent_at_180d: positives={'XOLAIR': 0, 'DUPIXENT': 0, 'RHAPSIDO': 0} rate={'XOLAIR': None, 'DUPIXENT': None, 'RHAPSIDO': None}
+LIVE BEFORE provenance: is_synthetic counts {'true': 0, 'false': 0}
+DRY RUN complete. No rows written. Re-run with --execute to write.
