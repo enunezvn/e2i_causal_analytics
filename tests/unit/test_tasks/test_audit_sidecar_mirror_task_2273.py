@@ -46,11 +46,13 @@ REPO = Path(__file__).resolve().parents[3]
 BASE_COMPOSE = REPO / "docker" / "docker-compose.yml"
 MIRROR_SCRIPT = REPO / "scripts" / "mirror_audit_sidecar_to_supabase.py"
 MIGRATIONS = REPO / "database" / "migrations"
-VERDICT_MIGRATIONS = (
-    "040_adaptive_validity_verdicts.sql",
-    "041_role_attributions.sql",
-    "042_audit_evaluator_shadow_columns.sql",
-    "043_audit_evaluator_soft_gate_columns.sql",
+# Every forward migration that touches the table, in order (040-043 today). Globbed,
+# not listed, so a later one — #2260's 157 changes the mirror's conflict key — is
+# applied here as soon as it lands instead of leaving the rehearsal on a stale schema.
+VERDICT_MIGRATIONS = tuple(
+    p.name
+    for p in sorted(MIGRATIONS.glob("[0-9]*.sql"))
+    if "adaptive_validity_verdicts" in p.read_text()
 )
 
 BEAT_ENTRY = "audit-sidecar-mirror-nightly"
@@ -190,6 +192,8 @@ def verdicts_db() -> Iterator[Any]:
     if proc.returncode != 0:
         pytest.skip("the supabase-db container is not reachable")
     from tests.unit.test_database.learning_loop._pg import PgConn, ThrowawayPg
+
+    assert VERDICT_MIGRATIONS[0] == "040_adaptive_validity_verdicts.sql", VERDICT_MIGRATIONS
 
     pg = ThrowawayPg(image=proc.stdout.decode().strip())
     pg.start()
