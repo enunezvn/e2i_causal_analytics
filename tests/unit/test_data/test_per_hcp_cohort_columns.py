@@ -49,3 +49,61 @@ def test_the_provider_re_exports_the_same_objects():
     assert provider.INTERVENTION_TREATMENT_MAP is columns.INTERVENTION_TREATMENT_MAP
     assert provider.COHORT_OUTCOME_COLUMN == columns.COHORT_OUTCOME_COLUMN
     assert provider.COHORT_ESTIMABLE_INTERVENTIONS == frozenset(columns.INTERVENTION_TREATMENT_MAP)
+
+
+# --------------------------------------------------------------------------- lane T1
+# The adoption DGP's planted channel effects (owner decision 2026-09-23: "approve DGP
+# extension, we need to recover statistical, not structural effects").
+
+
+def test_adoption_channel_constants_share_the_intervention_key_set():
+    assert set(columns.ADOPTION_CHANNEL_LOGIT_BETA) == set(columns.INTERVENTION_TREATMENT_MAP)
+    assert set(columns.ADOPTION_CHANNEL_PLANTED_RD) == set(columns.INTERVENTION_TREATMENT_MAP)
+    assert columns.ADOPTION_NULL_CHANNEL in columns.INTERVENTION_TREATMENT_MAP
+
+
+def test_adoption_channel_ordering_mirrors_the_business_metrics_plant_with_one_null():
+    expected_order = (
+        "digital_engagement",  # engagement_score
+        "speaker_program_invitation",  # speaker_program_count
+        "peer_influence_activation",  # peer_influence_score
+        "patient_support_program",  # patient_support_enrollment
+        "email_campaign",  # email_campaign_count
+        "call_frequency_increase",  # call_frequency
+        "sample_distribution",  # sample_volume
+        "rep_training_quality",  # rep_training_score -- the honest null
+    )
+    by_beta = tuple(
+        sorted(
+            columns.ADOPTION_CHANNEL_LOGIT_BETA,
+            key=columns.ADOPTION_CHANNEL_LOGIT_BETA.get,
+            reverse=True,
+        )
+    )
+    by_rd = tuple(
+        sorted(
+            columns.ADOPTION_CHANNEL_PLANTED_RD,
+            key=columns.ADOPTION_CHANNEL_PLANTED_RD.get,
+            reverse=True,
+        )
+    )
+    assert by_beta == expected_order
+    assert by_rd == expected_order
+    betas = [columns.ADOPTION_CHANNEL_LOGIT_BETA[k] for k in expected_order]
+    rds = [columns.ADOPTION_CHANNEL_PLANTED_RD[k] for k in expected_order]
+    assert betas[:-1] == sorted(betas[:-1], reverse=True) and len(set(betas[:-1])) == 7
+    assert rds[:-1] == sorted(rds[:-1], reverse=True) and len(set(rds[:-1])) == 7
+    nulls = [k for k, v in columns.ADOPTION_CHANNEL_LOGIT_BETA.items() if v == 0.0]
+    assert nulls == [columns.ADOPTION_NULL_CHANNEL] == ["rep_training_quality"]
+    assert columns.ADOPTION_CHANNEL_PLANTED_RD[columns.ADOPTION_NULL_CHANNEL] == 0.0
+
+
+def test_adoption_channel_planted_rd_is_the_measured_0_155_per_logit_unit():
+    # explore_adoption_dgp.md section 3: realised RD ~ 0.155 * beta on this DGP (0.148-0.157),
+    # not the first-order 0.24 * beta. A constant edited on one side only breaks this.
+    for k, beta in columns.ADOPTION_CHANNEL_LOGIT_BETA.items():
+        rd = columns.ADOPTION_CHANNEL_PLANTED_RD[k]
+        if beta == 0.0:
+            assert rd == 0.0
+        else:
+            assert 0.145 <= rd / beta <= 0.16, f"{k}: rd/beta={rd / beta:.3f}"
