@@ -112,6 +112,23 @@ def _blas_thread_limit(input_data: Optional[Dict[str, Any]] = None):
     return _threadpool_limits(limits=cap, user_api="blas")
 
 
+def hyperparameters_of_record(output: Dict[str, Any]) -> Dict[str, Any]:
+    """The training run's hyperparameters plus the post-hoc calibration it DEPLOYED.
+
+    #2248 option (a): a pipeline deploy copies the run's hyperparameters onto the
+    ``ml_model_registry`` row (``registry_manager``), which is where a later retrain reads
+    the parent's calibration method. Only a method actually applied to the deployed
+    estimator is recorded; the trainer's own ``best_hyperparameters`` are not mutated.
+    """
+    record = dict(output.get("best_hyperparameters") or {})
+    cal = output.get("post_hoc_calibration") or {}
+    method = cal.get("calibration_method_resolved")
+    applied = output.get("calibration_applied") and cal.get("calibration_applied")
+    if applied and method in ("sigmoid", "isotonic"):
+        record["calibration_method"] = method
+    return record
+
+
 class ModelTrainerAgent:
     """Model Trainer: Train ML models with HPO and validation.
 
@@ -726,7 +743,7 @@ class ModelTrainerAgent:
                 run_name=output.get("training_run_id", f"run_{uuid4().hex[:8]}"),
                 mlflow_run_id=output.get("mlflow_run_id", ""),
                 algorithm=output.get("algorithm_name", "unknown"),
-                hyperparameters=output.get("best_hyperparameters", {}),
+                hyperparameters=hyperparameters_of_record(output),
                 training_samples=output.get("train_samples", 0),
                 feature_names=output.get("feature_names", []),
                 optuna_study_name=output.get("hpo_study_name"),

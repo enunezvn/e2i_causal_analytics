@@ -468,7 +468,7 @@ def test_calibration_method_of_reads_the_fitted_calibrator():
 
 
 @pytest.mark.asyncio
-async def test_register_cohort_model_records_the_calibration_method(tmp_path):
+async def test_register_cohort_model_records_the_artifacts_calibration_method(tmp_path):
     X, y, feature_columns = _tiny_gold_standard_xy()
     model = train_cohort_model(INITIATION, X, y)
     artifact_path = serialize_model(model, tmp_path / "artifacts", "csu_initiation_goldstd_lr_v1")
@@ -480,22 +480,24 @@ async def test_register_cohort_model_records_the_calibration_method(tmp_path):
         artifact_path=artifact_path,
         auc=0.671,
         feature_count=len(feature_columns),
-        calibration_method="sigmoid",
     )
     (row,) = [r for (t, r, _oc) in client.upserts if t == "ml_model_registry"]
     assert row["hyperparameters"] == {"calibration_method": "sigmoid"}
 
 
 @pytest.mark.asyncio
-async def test_register_cohort_model_without_a_method_leaves_hyperparameters_alone(tmp_path):
-    """An upsert without the key keeps whatever the row already records."""
-    X, y, feature_columns = _tiny_gold_standard_xy()
-    model = train_cohort_model(INITIATION, X, y)
-    artifact_path = serialize_model(model, tmp_path / "artifacts", "csu_initiation_goldstd_lr_v1")
+async def test_an_uncalibrated_artifact_records_no_method_and_clears_a_stale_one(tmp_path):
+    """codex r1 HIGH: re-registering the bare-LR fallback over a calibrated row must not
+    leave the old "sigmoid" standing — the row describes the artifact just written."""
+    from sklearn.linear_model import LogisticRegression
+
+    X, y, _ = _tiny_gold_standard_xy()
+    bare = LogisticRegression(max_iter=1000).fit(X, y)
+    artifact_path = serialize_model(bare, tmp_path / "artifacts", "csu_initiation_goldstd_lr_v1")
 
     client = FakeClient()
     await register_cohort_model(
-        client, INITIATION, artifact_path=artifact_path, auc=0.671, feature_count=3
+        client, INITIATION, artifact_path=artifact_path, auc=0.6, feature_count=3
     )
     (row,) = [r for (t, r, _oc) in client.upserts if t == "ml_model_registry"]
-    assert "hyperparameters" not in row
+    assert row["hyperparameters"] == {}

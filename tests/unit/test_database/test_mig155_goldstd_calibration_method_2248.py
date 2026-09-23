@@ -33,26 +33,43 @@ def _body(path: Path) -> str:
     )
 
 
-def _names(body: str) -> set:
-    block = re.search(r"model_name\s+IN\s*\((?P<names>.*?)\)", body, re.S)
-    assert block, body
-    return set(re.findall(r"'([^']+)'", block.group("names")))
+_UPDATE_RE = re.compile(
+    r"UPDATE\s+ml_model_registry\s+SET\s+(?P<set>.*?)\s+WHERE\s+(?P<where>.*?);", re.S
+)
+
+
+def _pins(body: str) -> list:
+    """(model_name, id, trained_at) of every UPDATE; each must carry all three."""
+    out = []
+    for m in _UPDATE_RE.finditer(body):
+        where = m.group("where")
+        name = re.search(r"model_name\s*=\s*'([^']+)'", where)
+        rid = re.search(r"\bid\s*=\s*'([0-9a-f-]{36})'", where)
+        ts = re.search(r"trained_at\s*=\s*'([^']+)'", where)
+        assert name and rid and ts, m.group(0)
+        out.append((name.group(1), rid.group(1), ts.group(1)))
+    return out
 
 
 @pytest.mark.unit
-def test_exactly_the_twelve_goldstd_rows_and_nothing_else():
+def test_exactly_the_twelve_goldstd_rows_each_pinned_to_its_audited_registration():
+    """codex r1 HIGH: names + the algorithm string are not proof of WHICH artifact;
+    the (id, trained_at) pair is the audited registration (every upsert restamps
+    trained_at)."""
     body = _body(_MIGRATION)
-    assert len(re.findall(r"\bUPDATE\b", body)) == 1
-    assert _names(body) == _GOLDSTD and len(_GOLDSTD) == 12
+    pins = _pins(body)
+    assert len(pins) == 12 == len(re.findall(r"\bUPDATE\b", body))
+    assert {name for name, _, _ in pins} == _GOLDSTD
+    assert len({rid for _, rid, _ in pins}) == 12
     assert not re.search(r"\b(ALTER|CREATE|DROP|DELETE|INSERT)\b", body, re.I)
 
 
 @pytest.mark.unit
 def test_the_value_is_the_sigmoid_the_goldstd_trainer_fits_and_the_reader_accepts():
     body = _body(_MIGRATION)
-    literal = re.search(r"\|\|\s*'(?P<json>\{[^']*\})'::jsonb", body)
-    assert literal, body
-    value = json.loads(literal.group("json"))
+    literals = set(re.findall(r"\|\|\s*'(\{[^']*\})'::jsonb", body))
+    assert len(literals) == 1, literals  # the same value on all 12 rows
+    value = json.loads(literals.pop())
     assert value == {"calibration_method": "sigmoid"}
     assert value["calibration_method"] in RECORDED_CALIBRATION_METHODS
     # what the contract reader makes of a row carrying it
@@ -85,13 +102,15 @@ def test_it_merges_never_overwrites_and_is_scoped_to_real_calibrated_rows():
     assert re.search(
         r"NOT\s*\(COALESCE\(hyperparameters,\s*'\{\}'::jsonb\)\s*\?\s*'calibration_method'\)", body
     )
-    assert re.search(r"is_synthetic\s*=\s*false", body)
-    assert re.search(r"algorithm\s*=\s*'logistic_regression_calibrated'", body)
+    for m in _UPDATE_RE.finditer(body):
+        assert re.search(r"COALESCE\(hyperparameters,\s*'\{\}'::jsonb\)\s*\|\|", m.group("set"))
+        assert re.search(r"\?\s*'calibration_method'", m.group("where"))
+        assert re.search(r"is_synthetic\s*=\s*false", m.group("where"))
 
 
 @pytest.mark.unit
 def test_the_rollback_removes_only_what_155_wrote():
     body = _body(_ROLLBACK)
-    assert _names(body) == _GOLDSTD
+    assert sorted(_pins(body)) == sorted(_pins(_body(_MIGRATION)))
     assert re.search(r"hyperparameters\s*-\s*'calibration_method'", body)
     assert re.search(r"hyperparameters\s*->>\s*'calibration_method'\s*=\s*'sigmoid'", body)

@@ -129,7 +129,6 @@ async def run(db: Any = None) -> dict[str, Any]:
     """
     from src.mlops.gold_standard_eval.cohort_deployer import (
         GOLDSTD_MODEL_NAME,
-        calibration_method_of,
         register_cohort_model,
         serialize_model,
         train_cohort_model,
@@ -233,7 +232,6 @@ async def run(db: Any = None) -> dict[str, Any]:
         auc=holdout_auc,
         feature_count=len(champion_fb.feature_columns),
         training_samples=n_train_champion,
-        calibration_method=calibration_method_of(champion),
     )
     champion_registered = model_handle == GOLDSTD_MODEL_NAME
     logger.info("Registered champion handle=%r (staging).", model_handle)

@@ -41,6 +41,8 @@ The REAL prod registration runs in T11's CLI; this module exposes the functions
 from __future__ import annotations
 
 import logging
+import pickle
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -146,7 +148,6 @@ async def register_cohort_model(
     training_samples: int | None = None,
     stage: str = GOLDSTD_STAGE,
     experiment_name: str = GOLDSTD_EXPERIMENT_NAME,
-    calibration_method: str | None = None,
 ) -> str:
     """Register the gold-standard model row at ``stage='staging'`` (collision-safe).
 
@@ -193,9 +194,20 @@ async def register_cohort_model(
         # synthetic-gold cohort — label it so the catalog is self-describing and
         # the promotion gate can refuse synthetic_gold -> production.
         training_provenance="synthetic_gold",
-        # #2248 option (a): a retrain of this row reproduces its calibration method.
-        hyperparameters={"calibration_method": calibration_method} if calibration_method else None,
+        # #2248 option (a): a retrain of this row reproduces its calibration method. Read
+        # off the artifact being registered, so the row always describes THAT artifact
+        # (the bare-LR fallback records none, replacing a stale method).
+        hyperparameters=_hyperparameters_of_artifact(artifact_path),
     )
+
+
+def _hyperparameters_of_artifact(artifact_path: str) -> dict[str, str]:
+    """``{"calibration_method": m}`` for a calibrated pickled artifact, else ``{}``."""
+    if not Path(artifact_path).is_file():
+        return {}  # register_model_row refuses the missing artifact
+    with open(artifact_path, "rb") as fh:
+        method = calibration_method_of(pickle.load(fh))  # noqa: S301 — our own artifact
+    return {"calibration_method": method} if method else {}
 
 
 def calibration_method_of(model: Any) -> str | None:
