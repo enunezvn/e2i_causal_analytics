@@ -412,6 +412,10 @@ class CausalImpactState(TypedDict):
     discovery_time_budget_s: NotRequired[Optional[float]]  # wall budget (default 180 s)
     discovery_min_resamples: NotRequired[int]  # corroboration needs this many (default 10)
     discovery_indep_test: NotRequired[Optional[str]]  # force a CI test (measurement only)
+    # #2233: bounds on the backdoor adjustment-set search (graph_builder runs
+    # it off the loop under both); None disables that bound.
+    adjustment_search_time_budget_s: NotRequired[Optional[float]]  # default 60 s
+    adjustment_search_max_candidates: NotRequired[Optional[int]]  # default 40
     # #1974: durable record of the discovery run in public.discovered_dags
     # (DiscoveredDagRepository, written by graph_builder whenever discovery
     # actually ran). Exactly one of the two is set per discovery run:

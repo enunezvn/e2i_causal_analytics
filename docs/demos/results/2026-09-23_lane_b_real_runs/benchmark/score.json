@@ -1,0 +1,160 @@
+{
+  "meta": {
+    "measured_at": "2026-09-23T01:35:53.001063+00:00",
+    "lm": "openai/gpt-5.6-terra",
+    "fake_source": null,
+    "resolver": "live",
+    "cohort": "all",
+    "golden": "/home/enunez/Projects/e2i_causal_analytics/.worktrees/lane-b-real-runs/tests/fixtures/causal_role_golden_set.json",
+    "n_briefs": 91,
+    "tree": {
+      "commit": "8615c0cadce9cd157b8bfd84e2dff625313187de",
+      "dirty_src_scripts_tests": false
+    }
+  },
+  "n": 91,
+  "n_scored": 91,
+  "n_review": 0,
+  "exact_role_agreement": 60,
+  "exact_role_accuracy": 0.6593406593406593,
+  "leak_decision_agreement": 91,
+  "leak_decision_accuracy": 1.0,
+  "missed_leaks": [],
+  "missed_leak_rate": 0.0,
+  "n_leak_truth": 42,
+  "n_leak_scored": 42,
+  "conservative_errors": [],
+  "review": [],
+  "per_role": [
+    {
+      "role": "ancestor",
+      "support": 13,
+      "predicted": 10,
+      "tp": 8,
+      "precision": 0.8,
+      "recall": 0.6153846153846154,
+      "f1": 0.6956521739130435
+    },
+    {
+      "role": "collider",
+      "support": 14,
+      "predicted": 21,
+      "tp": 11,
+      "precision": 0.5238095238095238,
+      "recall": 0.7857142857142857,
+      "f1": 0.6285714285714286
+    },
+    {
+      "role": "confounder",
+      "support": 17,
+      "predicted": 25,
+      "tp": 16,
+      "precision": 0.64,
+      "recall": 0.9411764705882353,
+      "f1": 0.7619047619047621
+    },
+    {
+      "role": "descendant",
+      "support": 13,
+      "predicted": 13,
+      "tp": 5,
+      "precision": 0.38461538461538464,
+      "recall": 0.38461538461538464,
+      "f1": 0.38461538461538464
+    },
+    {
+      "role": "instrument",
+      "support": 19,
+      "predicted": 14,
+      "tp": 14,
+      "precision": 1.0,
+      "recall": 0.7368421052631579,
+      "f1": 0.8484848484848484
+    },
+    {
+      "role": "mediator",
+      "support": 15,
+      "predicted": 8,
+      "tp": 6,
+      "precision": 0.75,
+      "recall": 0.4,
+      "f1": 0.5217391304347827
+    }
+  ],
+  "per_cohort": {
+    "BC_kisqali": {
+      "n": 30,
+      "n_scored": 30,
+      "n_review": 0,
+      "exact_role_agreement": 17,
+      "missed_leaks": 0
+    },
+    "CSU_remibrutinib": {
+      "n": 31,
+      "n_scored": 31,
+      "n_review": 0,
+      "exact_role_agreement": 23,
+      "missed_leaks": 0
+    },
+    "PNH_fabhalta": {
+      "n": 30,
+      "n_scored": 30,
+      "n_review": 0,
+      "exact_role_agreement": 20,
+      "missed_leaks": 0
+    }
+  },
+  "confusion": {
+    "ancestor": {
+      "ancestor": 8,
+      "collider": 0,
+      "confounder": 5,
+      "descendant": 0,
+      "instrument": 0,
+      "mediator": 0
+    },
+    "collider": {
+      "ancestor": 0,
+      "collider": 11,
+      "confounder": 0,
+      "descendant": 2,
+      "instrument": 0,
+      "mediator": 1
+    },
+    "confounder": {
+      "ancestor": 1,
+      "collider": 0,
+      "confounder": 16,
+      "descendant": 0,
+      "instrument": 0,
+      "mediator": 0
+    },
+    "descendant": {
+      "ancestor": 0,
+      "collider": 7,
+      "confounder": 0,
+      "descendant": 5,
+      "instrument": 0,
+      "mediator": 1
+    },
+    "instrument": {
+      "ancestor": 1,
+      "collider": 0,
+      "confounder": 4,
+      "descendant": 0,
+      "instrument": 14,
+      "mediator": 0
+    },
+    "mediator": {
+      "ancestor": 0,
+      "collider": 3,
+      "confounder": 0,
+      "descendant": 6,
+      "instrument": 0,
+      "mediator": 6
+    }
+  },
+  "gate_passed": true,
+  "gate": "missed_leaks == 0",
+  "notes": []
+}
