@@ -308,3 +308,70 @@ def test_a_cloudpickle_caller_is_left_alone():
     }
     explicit = {"serialization_format": "skops", "skops_trusted_types": ["x.Y"]}
     assert sklearn_log_model_kwargs(mlflow, model, dict(explicit)) == explicit
+
+
+# ---------------------------------------------------------------------------
+# codex r2: a calibrated booster is a CalibratedClassifierCV, not a native booster
+# ---------------------------------------------------------------------------
+
+
+class _RecordingRun:
+    def __init__(self):
+        self.flavors = []
+
+    async def log_model(self, *, model, name, flavor, **kwargs):
+        self.flavors.append(flavor)
+        return "models:/m-recorded"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+@pytest.mark.parametrize("algorithm, framework", [("XGBoost", "xgboost"), ("LightGBM", "lightgbm")])
+async def test_a_calibrated_booster_is_logged_with_the_sklearn_flavor(algorithm, framework):
+    """mlflow.xgboost.log_model(CalibratedClassifierCV) fails ('no attribute save_model',
+    measured on 3.15.1): the deployed object decides the flavor, not the algorithm name."""
+    from src.agents.ml_foundation.model_trainer.nodes.mlflow_logger import _log_model_artifact
+
+    model, _ = _calibrated("sigmoid")  # the wrapper type is what matters here
+    run = _RecordingRun()
+    assert await _log_model_artifact(run, model, algorithm, framework) == "models:/m-recorded"
+    assert run.flavors == ["sklearn"]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_an_uncalibrated_booster_keeps_its_native_flavor():
+    from src.agents.ml_foundation.model_trainer.nodes.mlflow_logger import _log_model_artifact
+
+    run = _RecordingRun()
+    await _log_model_artifact(run, object(), "XGBoost", "xgboost")
+    assert run.flavors == ["xgboost"]
+
+
+@pytest.mark.unit
+def test_only_calibrated_models_are_inspected(monkeypatch):
+    """codex r2 MED: no second full skops serialization of every sklearn model."""
+    import skops.io as sio
+
+    calls = []
+    real = sio.dumps
+    monkeypatch.setattr(sio, "dumps", lambda m: calls.append(type(m).__name__) or real(m))
+    X, y = _frame()
+    assert skops_trusted_types_for(LogisticRegression(max_iter=1000).fit(X, y)) == []
+    assert calls == []
+    model, _ = _calibrated("sigmoid")
+    assert skops_trusted_types_for(model)
+    assert calls == ["CalibratedClassifierCV"]
+
+
+@pytest.mark.unit
+def test_a_calibrated_booster_is_not_trusted_with_its_booster_classes():
+    """Measured: skops also reports xgboost.core.Booster / xgboost.sklearn.XGBClassifier.
+    Those are outside the allowlist, so nothing is trusted and mlflow refuses loudly."""
+    xgboost = pytest.importorskip("xgboost")
+    X, y = _frame()
+    base = xgboost.XGBClassifier(n_estimators=5, max_depth=2, verbosity=0).fit(X[:400], y[:400])
+    model, _ = apply_post_hoc_calibration(base, X[400:500], y[400:500], method="sigmoid")
+    reported = skops_io.get_untrusted_types(data=skops_io.dumps(model))
+    assert "xgboost.sklearn.XGBClassifier" in reported
+    assert skops_trusted_types_for(model) == []

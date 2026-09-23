@@ -528,6 +528,10 @@ async def _log_model_artifact(
     """
     # Determine MLflow flavor based on framework/algorithm
     flavor = _get_mlflow_flavor(algorithm_name, framework)
+    if hasattr(model, "calibrated_classifiers_"):
+        # #2280: the deployed object is the sklearn CalibratedClassifierCV (#633), even
+        # around a booster; the native xgboost/lightgbm flavors cannot serialize it.
+        flavor = "sklearn"
 
     try:
         logger.info(f"Attempting to log model with flavor={flavor}")

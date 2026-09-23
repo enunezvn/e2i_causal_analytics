@@ -38,9 +38,13 @@ TRUSTED_SKLEARN_CALIBRATION_TYPES: frozenset[str] = frozenset(
 def skops_trusted_types_for(model: Any) -> List[str]:
     """The skops-untrusted types of ``model`` to trust: all of them, only if all are allowlisted.
 
-    Returns ``[]`` when the model needs no trust, when skops is unavailable, or when any
-    reported type is outside :data:`TRUSTED_SKLEARN_CALIBRATION_TYPES`.
+    Returns ``[]`` for a model that is not a fitted calibrator, when skops is unavailable,
+    or when any reported type is outside :data:`TRUSTED_SKLEARN_CALIBRATION_TYPES` (e.g. a
+    calibrated XGBoost / LightGBM also reports its booster classes: mlflow then refuses it
+    loudly — trusting booster classes is a separate decision, see #2280).
     """
+    if not hasattr(model, "calibrated_classifiers_"):
+        return []  # only a fitted calibrator carries these types; no second serialization
     try:
         import skops.io as sio
     except ImportError:
