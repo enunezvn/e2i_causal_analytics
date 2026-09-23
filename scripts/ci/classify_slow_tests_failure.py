@@ -69,6 +69,14 @@ _HARD = re.compile(
     re.IGNORECASE,
 )
 
+# Not upstream, whatever tokens follow: brand_aliases logs these only when the
+# failure did NOT come through RxNavClient's RxNavError wrapper (an escaped
+# httpx error, a malformed payload, a constructor/close() crash) — client
+# defects, even when the escaped class is ConnectError (#2267).
+_NOT_UPSTREAM = re.compile(
+    r"brand_aliases: (?:unexpected \w+ while resolving|RxNav client raised \w+ outside the round)"
+)
+
 # Echo evidence: the fan-out degradation assertions report the provider fell
 # back — true during an outage, but ALSO true under a client parsing bug, so an
 # echo never counts as hard evidence on its own.
@@ -173,6 +181,8 @@ def classify(junit_path: Path) -> tuple[str, str]:
         if not _in_family(tc):
             verdict = "foreign"
         elif exception_type is not None and exception_type not in _UPSTREAM_EXCEPTION_TYPES:
+            verdict = "unrecognized"
+        elif _NOT_UPSTREAM.search(failure_text):
             verdict = "unrecognized"
         elif _HARD.search(failure_text):
             verdict = "hard"

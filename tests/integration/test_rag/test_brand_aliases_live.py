@@ -12,27 +12,16 @@ an upstream outage.
 from __future__ import annotations
 
 import logging
-import socket
 
 import pytest
 
 from src.rag import brand_aliases
 from src.rag.brand_aliases import rxnav_brand_aliases
+from tests.integration.test_clinical_context._live_gate import requires_network
 
-
-def _network_available() -> bool:
-    try:
-        socket.create_connection(("rxnav.nlm.nih.gov", 443), timeout=3).close()
-        return True
-    except OSError:
-        return False
-
-
-pytestmark = [
-    pytest.mark.integration,
-    pytest.mark.slow,
-    pytest.mark.skipif(not _network_available(), reason="No outbound network to RxNav."),
-]
+# The gate probes an unrelated host, so an RxNav outage goes RED (#1612); the
+# old preflight to the RxNav host itself turned one into a silent skip.
+pytestmark = [pytest.mark.integration, pytest.mark.slow, requires_network]
 
 
 def test_real_rxnav_resolves_the_three_pairs(monkeypatch, caplog):
