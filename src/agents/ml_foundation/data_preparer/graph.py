@@ -96,8 +96,8 @@ def _derive_role_attributions_safely(state: Any) -> list[Dict[str, Any]]:
         return []
 
 
-def write_adaptive_verdicts_sidecar(state: Dict[str, Any]) -> Path | None:
-    """Write the adaptive-validity audit trail to a JSON sidecar.
+def adaptive_verdicts_sidecar_outcome(state: Dict[str, Any]) -> Dict[str, Any]:
+    """Write the adaptive-validity audit trail to a JSON sidecar and report the outcome.
 
     Writes when ADAPTIVE_VALIDITY_ARTIFACTS_DIR is set in the environment AND
     the state has at least one verdict. Otherwise no-ops (silently skipped in
@@ -150,16 +150,24 @@ def write_adaptive_verdicts_sidecar(state: Dict[str, Any]) -> Path | None:
     pricing-pin unit test. The telemetry keys are audit-only — never
     consumed by the orchestrator.
 
+    #238 names the sidecar the canonical audit record (the Supabase table is only
+    a mirror of it), so a failed write is logged at ERROR and reported, not
+    downgraded to a WARN (#2273: a root-owned volume made every prod write fail
+    for four months with nothing in the run output). It is still NOT raised:
+    the record is audit-only and must never block the QC gate.
+
     Args:
         state: DataPreparerState dict-like with adaptive_verdicts.
 
     Returns:
-        Path to the written sidecar, or None when no write occurred.
+        ``{"status", "path", "error"}`` where status is ``"written"`` (path set),
+        ``"skipped"`` (no artifacts dir configured, or no verdicts) or
+        ``"write_failed"`` (error set).
     """
     artifacts_dir = os.environ.get("ADAPTIVE_VALIDITY_ARTIFACTS_DIR")
     verdicts = state.get("adaptive_verdicts") or []
     if not artifacts_dir or not verdicts:
-        return None
+        return {"status": "skipped", "path": None, "error": None}
     try:
         base = Path(artifacts_dir) / str(state.get("experiment_id") or "anon")
         base.mkdir(parents=True, exist_ok=True)
@@ -209,10 +217,26 @@ def write_adaptive_verdicts_sidecar(state: Dict[str, Any]) -> Path | None:
             sidecar,
             len(verdicts),
         )
-        return sidecar
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to write adaptive-validity sidecar: %s", exc)
-        return None
+        return {"status": "written", "path": str(sidecar), "error": None}
+    except Exception as exc:  # noqa: BLE001 — audit-only: report, never block the QC gate
+        logger.error(
+            "Adaptive-validity audit sidecar NOT written under %s (verdicts=%d); the "
+            "canonical audit record for experiment %s is lost: %s",
+            artifacts_dir,
+            len(verdicts),
+            state.get("experiment_id"),
+            exc,
+        )
+        return {"status": "write_failed", "path": None, "error": f"{type(exc).__name__}: {exc}"}
+
+
+def write_adaptive_verdicts_sidecar(state: Dict[str, Any]) -> Path | None:
+    """Write the sidecar; return its path, or None when skipped or failed.
+
+    See :func:`adaptive_verdicts_sidecar_outcome`, which also says WHY no path came back.
+    """
+    path = adaptive_verdicts_sidecar_outcome(state)["path"]
+    return Path(path) if path else None
 
 
 def create_data_preparer_graph() -> StateGraph:  # type: ignore[type-arg]
@@ -622,7 +646,7 @@ async def finalize_output(state: DataPreparerState) -> Dict[str, Any]:
         # in the dict-shaped pydantic state via ``__setitem__`` (the
         # BaseAgentSchema dict-compat shim accepts it).
         state["role_attributions"] = role_attributions  # type: ignore[index]
-        write_adaptive_verdicts_sidecar(state)
+        updates["adaptive_audit_sidecar"] = adaptive_verdicts_sidecar_outcome(state)
 
         logger.info(
             f"Data preparation completed: gate_passed={gate_passed}, "
