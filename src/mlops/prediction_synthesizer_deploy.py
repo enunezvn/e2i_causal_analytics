@@ -322,6 +322,16 @@ async def register_model_row(
     ``training_provenance=None`` it is refused before any I/O (``ValueError``), the same
     fail-closed rule ``MLModelRegistryRepository.transition_stage`` applies (#2259).
     """
+    # Production provenance allowed HERE (#2259, owner decision):
+    #   'real' / 'mixed'  -- promotable anywhere (MLModelRegistryRepository.production_refusal).
+    #   'synthetic_gold'  -- allowed at THIS seam only, deliberately. transition_stage and
+    #       the deployer refuse it (#968), but this primitive's production caller is the
+    #       owner-run ``python -m src.mlops.prediction_synthesizer_deploy`` CLI (no cron/CI
+    #       caller), which trains only on synthetic_v2 and says so. It is the same owner-run
+    #       exemption pattern as #1354's scripts/promote_hcp_adoption_champions.py, and the row
+    #       records the truth, so the gate's other readers can see it. cohort_deployer never
+    #       reaches production (it refuses stage='production' itself).
+    #   None              -- refused: nothing records what the model was trained on.
     if stage == "production" and training_provenance is None:
         raise ValueError(
             f"refusing to register {model_name} at stage='production' with "
