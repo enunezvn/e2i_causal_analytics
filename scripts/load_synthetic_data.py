@@ -21,7 +21,7 @@ import os
 import sys
 from datetime import date, datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 import pandas as pd
 
@@ -328,11 +328,16 @@ def generate_datasets(
 
     # A/B assignments/enrollments/results with a recoverable +0.15 uplift. 600 units
     # per experiment (300/arm) keeps the empirical uplift within +/-0.05 of the truth.
+    # unit_id IS an hcp_profiles.hcp_id (Part of #2207): panels are sampled from
+    # this run's namespaced HCP universe, in generation (PK) order — the same
+    # order --refresh-ab reads back from the DB, so both paths draw the same
+    # panels for the same seed. Mirrors CoverageTablesGenerator below.
     ab = ABExperimentGenerator(
         GeneratorConfig(id_prefix=id_prefix, seed=seed + 1),
         experiments_df=experiments,
         units_per_experiment=600,
         true_uplift=0.15,
+        hcp_ids=datasets["hcp_profiles"]["hcp_id"].tolist(),
     ).generate()
     datasets.update(ab)  # ab_experiment_assignments / enrollments / results
 
@@ -580,7 +585,116 @@ def write_cohort_frames(out_dir) -> list:
     return written
 
 
-def build_ab_refresh_datasets(sizes: dict, seed: int = 42, id_prefix: str = "scv") -> dict:
+def _read_only_supabase_client():
+    """A client used ONLY to read hcp_profiles for --refresh-ab.
+
+    BatchLoader deliberately builds no client under --dry-run, but the A/B
+    unit universe must still be REAL ids (never fabricated), so the refresh
+    path reads them through its own client regardless of dry-run. Fails loud
+    without credentials.
+    """
+    cfg = LoaderConfig(dry_run=True)  # env resolution only (SUPABASE_URL + key)
+    if not cfg.supabase_url or not cfg.supabase_key:
+        raise RuntimeError(
+            "--refresh-ab needs SUPABASE_URL and a Supabase key to read the namespaced "
+            "HCP universe (hcp_profiles.hcp_id); refusing to fabricate unit ids"
+        )
+    from supabase import create_client
+
+    return create_client(cfg.supabase_url, cfg.supabase_key)
+
+
+def fetch_synthetic_hcp_ids(
+    client, id_prefix: str = "scv", page_size: int = 1000, max_pages: int = 1000
+) -> list:
+    """Read EVERY synthetic ``hcp_profiles.hcp_id`` in the ``id_prefix`` namespace
+    (the A/B unit universe), read-only.
+
+    Scoped server-side to ``{id_prefix}hcp_%`` (codex r1 MED): the full load
+    samples from THIS run's tagged hcp_profiles frame, so the refresh must
+    sample from the same namespace — every synthetic HCP that happens to exist
+    would mix a coexisting namespace's cohort into the panels.
+
+    PK-ordered ``.range()`` windows paged to exhaustion (cap-agnostic: advance by
+    the rows actually returned, stop only on an EMPTY page — PostgREST's default
+    page is 1,000 and the universe is 5,000; the same idiom as
+    ``BusinessMetricRepository.get_by_region_paged``). The paged total is checked
+    against the server's exact count, and the list must be non-empty and
+    duplicate-free — a short or empty universe fails LOUD rather than letting the
+    generator sample from a partial panel. hcp_id order (PK) is the generator's
+    seed contract, so it is preserved.
+    """
+    # LIKE metacharacters in the tag would widen the server-side read ('_' is
+    # a one-char wildcard, '%'/'*' any run); refuse rather than escape-and-hope.
+    if not id_prefix or any(c in id_prefix for c in "%_*\\"):
+        raise ValueError(
+            f"--tag {id_prefix!r} is empty or carries a LIKE metacharacter (% _ * \\); "
+            "the HCP-universe read cannot be scoped to it"
+        )
+    namespace = f"{id_prefix}hcp_"
+    ids: list = []
+    expected: Optional[int] = None
+    offset = 0
+    exhausted = False
+    for _page in range(max_pages):
+        resp = (
+            client.table("hcp_profiles")
+            .select("hcp_id", count="exact")
+            .eq("is_synthetic", True)
+            .like("hcp_id", f"{namespace}%")
+            .order("hcp_id")
+            .range(offset, offset + page_size - 1)
+            .execute()
+        )
+        if expected is None:
+            expected = resp.count
+        rows = resp.data or []
+        if not rows:
+            exhausted = True
+            break
+        ids.extend(str(r["hcp_id"]) for r in rows)
+        offset += len(rows)
+    if not exhausted:
+        raise RuntimeError(
+            f"hcp_profiles paged read hit max_pages={max_pages} before exhausting the universe"
+        )
+    if expected is None or len(ids) != expected:
+        raise ValueError(
+            f"hcp_profiles paged read returned {len(ids)} synthetic ids but the server "
+            f"reports {expected} — refusing to sample panels from a partial universe"
+        )
+    if len(set(ids)) != len(ids):
+        raise ValueError(f"hcp_profiles read returned duplicate ids ({len(ids) - len(set(ids))})")
+    # LIKE's '_' is a one-char wildcard, so the server-side pattern also admits an
+    # adjacent shape like 'scvhcpX00001' (codex r2 MED). Enforce the EXACT
+    # namespace here, after the count check (which is evaluated on the server's
+    # own match set, so it stays honest).
+    scoped = [h for h in ids if h.startswith(namespace)]
+    if len(scoped) != len(ids):
+        logger.warning(
+            "refresh-ab: dropped %d hcp_profiles ids outside the exact '%s' namespace",
+            len(ids) - len(scoped),
+            namespace,
+        )
+    ids = scoped
+    if not ids:
+        raise ValueError(
+            f"hcp_profiles has no is_synthetic rows in the '{namespace}' namespace — no "
+            "HCP universe to sample A/B panels from (load hcp_profiles with this --tag first)"
+        )
+    logger.info(
+        "refresh-ab: HCP universe = %d synthetic hcp_profiles ids in namespace %shcp_ (%s .. %s)",
+        len(ids),
+        id_prefix,
+        ids[0],
+        ids[-1],
+    )
+    return ids
+
+
+def build_ab_refresh_datasets(
+    sizes: dict, seed: int = 42, id_prefix: str = "scv", *, hcp_ids: Sequence[str]
+) -> dict:
     """Shard-09 A/B substrate refresh — experiments + assignments/enrollments/results ONLY.
 
     Runs weekly from reseed_synthetic.sh (after the frontier append, which does
@@ -590,6 +704,10 @@ def build_ab_refresh_datasets(sizes: dict, seed: int = 42, id_prefix: str = "scv
     rows + their AB fan-out in place with fresh rolling-enrollment timestamps;
     MLOps/observability rows reference the same stable experiment ids and are
     left alone.
+
+    ``hcp_ids`` (required): the namespaced HCP universe the A/B panels are
+    sampled from. This path generates no hcp_profiles frame, so the caller
+    reads it from the DB (``fetch_synthetic_hcp_ids``) in PK order.
     """
     exp_n = max(10, sizes.get("trigger", 1200) // 100)
     exp_frames = []
@@ -606,6 +724,7 @@ def build_ab_refresh_datasets(sizes: dict, seed: int = 42, id_prefix: str = "scv
         experiments_df=experiments,
         units_per_experiment=600,
         true_uplift=0.15,
+        hcp_ids=hcp_ids,
     ).generate()
     datasets.update(ab)  # ab_experiment_assignments / enrollments / results
     for table_name, df in datasets.items():
@@ -874,7 +993,10 @@ def main():
             # --small-sized reload (36 experiments) would strand the other 324
             # deployed 'running' rows with zero fan-out. Mirrors
             # --append-frontier's documented ignoring of --small.
-            datasets = build_ab_refresh_datasets(FULL_SIZES, id_prefix=args.tag)
+            # The unit universe is READ from hcp_profiles (never fabricated), even
+            # under --dry-run: an unreachable DB fails loud here, before generation.
+            hcp_ids = fetch_synthetic_hcp_ids(_read_only_supabase_client(), id_prefix=args.tag)
+            datasets = build_ab_refresh_datasets(FULL_SIZES, id_prefix=args.tag, hcp_ids=hcp_ids)
             logger.info(
                 "refresh-ab: %d experiments, %d assignments",
                 len(datasets["ml_experiments"]),

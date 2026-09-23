@@ -1,0 +1,30 @@
+{
+  "budget_guard_usd": 25.0,
+  "price_source": "src/services/llm_pricing.py:30 gpt-5.6-terra (2.50 in / 15.00 out per Mtok); scripts/measure_feature_role_panel.py:61-62 Sonnet 4.6 (3.00 / 15.00) for Layer 4 (anthropic/claude-sonnet-4-6, src/data/causal_role_classifier_loader.py:87)",
+  "steps": {
+    "1_benchmark_91_briefs": {
+      "usd_estimate": 2.557,
+      "prompt_tokens": 531375,
+      "output_tokens_assumed": 81900,
+      "source": "benchmark/cost_estimate.json (the tool's own, refused-run capture)"
+    },
+    "2_panel_real_layer4": {
+      "usd_estimate_at_measured_19_calls": 4.005,
+      "usd_upper_bound_64_calls": 13.49,
+      "source": "scripts/measure_feature_role_panel.py _estimate_cost_usd; call count from Lane E panel_layer4_fake/summary.md (fired 19), re-measured in panel_fake/"
+    },
+    "3_run_a_64_briefs": {
+      "usd_estimate": 1.8,
+      "prompt_tokens": 374582,
+      "source": "cost_estimate_author_runs.json (same estimator as the benchmark CLI, real ChatAdapter prompt; panel text from Lane E's committed fake panel as the size proxy)"
+    },
+    "4_run_b_110_briefs": {
+      "usd_estimate": 3.073,
+      "prompt_tokens": 635257,
+      "source": "cost_estimate_author_runs.json"
+    }
+  },
+  "cumulative_usd_estimate": 11.44,
+  "cumulative_usd_upper_bound": 20.92,
+  "under_guard": true
+}

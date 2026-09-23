@@ -42,6 +42,8 @@ import pytest
 
 from tests.integration._prod_write_guard import (
     per_hcp_rollup_spec,
+    planted_prefix,
+    planted_suffix,
     require_isolated_windows,
     require_no_foreign_reconcile,
     require_windows_still_isolated,
@@ -175,14 +177,14 @@ def mixed_substrate(db_conn: Any, test_run_id: str) -> dict:
             test_file=__file__,
             start=WINDOW_START,
             end=WINDOW_END,
-            hcp_like=f"hcp895_{rid}_%",
-            trigger_like=f"tr895_{rid}_%",
+            hcp_like=planted_prefix(f"hcp895_{rid}_"),
+            trigger_like=planted_prefix(f"tr895_{rid}_"),
         ),
         territory_rollup_spec(
             test_file=__file__,
             start=WINDOW_START,
             end=WINDOW_END,
-            territory_like=f"T%_{rid}",
+            territory_like=planted_suffix(f"_{rid}"),
             teardown_deletes_window=True,
         ),
     )
@@ -300,15 +302,21 @@ def mixed_substrate(db_conn: Any, test_run_id: str) -> dict:
                 )
                 not_ours = cur.fetchall()
                 cur.execute(
-                    "DELETE FROM business_metrics WHERE hcp_id LIKE %s",
-                    (f"hcp895_{rid}_%",),
+                    "DELETE FROM business_metrics WHERE hcp_id LIKE %s ESCAPE '\\'",
+                    (planted_prefix(f"hcp895_{rid}_"),),
                 )
-                cur.execute("DELETE FROM triggers WHERE trigger_id LIKE %s", (f"tr895_{rid}_%",))
                 cur.execute(
-                    "DELETE FROM patient_journeys WHERE patient_journey_id LIKE %s",
-                    (f"pj895_{rid}_%",),
+                    "DELETE FROM triggers WHERE trigger_id LIKE %s ESCAPE '\\'",
+                    (planted_prefix(f"tr895_{rid}_"),),
                 )
-                cur.execute("DELETE FROM hcp_profiles WHERE hcp_id LIKE %s", (f"hcp895_{rid}_%",))
+                cur.execute(
+                    "DELETE FROM patient_journeys WHERE patient_journey_id LIKE %s ESCAPE '\\'",
+                    (planted_prefix(f"pj895_{rid}_"),),
+                )
+                cur.execute(
+                    "DELETE FROM hcp_profiles WHERE hcp_id LIKE %s ESCAPE '\\'",
+                    (planted_prefix(f"hcp895_{rid}_"),),
+                )
         assert not not_ours, (
             f"territory_metrics rows in [{WINDOW_START.date()}, {WINDOW_END.date()}) were "
             f"not inserted by the territory run (xid {run_xid} at {run_created_at}) and were "
@@ -345,8 +353,8 @@ def _run_per_hcp(window_suffix: str = "") -> dict:
 def _fetch_tags(db_conn: Any, rid: str) -> dict[str, bool]:
     with db_conn.cursor() as cur:
         cur.execute(
-            "SELECT hcp_id, is_synthetic FROM business_metrics WHERE hcp_id LIKE %s",
-            (f"hcp895_{rid}_%",),
+            "SELECT hcp_id, is_synthetic FROM business_metrics WHERE hcp_id LIKE %s ESCAPE '\\'",
+            (planted_prefix(f"hcp895_{rid}_"),),
         )
         return {hcp_id.rsplit("_", 1)[-1]: tag for hcp_id, tag in cur.fetchall()}
 

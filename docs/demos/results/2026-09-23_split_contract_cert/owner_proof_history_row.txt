@@ -1,0 +1,1 @@
+c4252b47-4978-41ff-91df-2ff6b6d4bcbf | failed | manual | 0.735294 |  | pipeline status='completed', validation_auc=0.8375264397620491, success_criteria_met=False — not a promotable result; job marked failed (no metric written) | 2026-09-23 05:42:45.284767+00 | 2026-09-23 05:44:05.053047+00

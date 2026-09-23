@@ -1,0 +1,22 @@
+[2026-09-23 05:42:45,796: INFO/ForkPoolWorker-2] Retraining c4252b47-4978-41ff-91df-2ff6b6d4bcbf: running MLFoundationPipeline on data_source={'columns': ['disease_severity', 'academic_hcp', 'geographic_region', 'insurance_type', 'age_at_diagnosis', 'comorbidity_burden', 'prior_therapy_lines', 'rep_detailing_high', 'sample_dropped', 'trigger_accepted', 'treatment_initiated'], 'filters': {'brand': 
+[2026-09-23 05:42:45,968: WARNING/ForkPoolWorker-2] ADAPTIVE_CRITERIA on but state missing pre-eval inputs (n_samples=None, prevalence=None, feature_count=None); falling back to fixed thresholds. Caller (e.g., scripts/run_tier0_test.py) must inject these.
+[2026-09-23 05:42:49,228: INFO/ForkPoolWorker-2] Loading table cohort contract: table=patient_journeys filters={'brand': 'Kisqali', 'is_synthetic': True} columns=['disease_severity', 'academic_hcp', 'geographic_region', 'insurance_type', 'age_at_diagnosis', 'comorbidity_burden', 'prior_therapy_lines', 'rep_detailing_high', 'sample_dropped', 'trigger_accepted', 'treatment_initiated']
+[2026-09-23 05:42:49,990: INFO/ForkPoolWorker-2] Using precomputed 'data_split' column from table patient_journeys (8838 rows, 12 cols)
+[2026-09-23 05:42:50,010: INFO/ForkPoolWorker-2] Split from 'data_split' column: train=5294, val=1791, test=869, holdout=884
+[2026-09-23 05:42:50,777: INFO/ForkPoolWorker-2] GE validation completed: status=passed, passed=39/39, splits_validated=3
+[2026-09-23 05:42:57,991: WARNING/ForkPoolWorker-2] Declared-safe immunity: exempted 5 manifest pre-index feature(s) from leakage (contract is authoritative); severity none -> info. Features: ['academic_hcp', 'age_at_diagnosis', 'comorbidity_burden', 'disease_severity', 'prior_therapy_lines']
+[2026-09-23 05:42:57,992: INFO/ForkPoolWorker-2] adaptive_validity_check: scored=8 flagged=2 (high) prior_severity=none new_severity=info
+[2026-09-23 05:43:03,178: INFO/ForkPoolWorker-2] Stage 3 complete: algorithm=LogisticRegression, score=0.758, duration=4.15s
+[2026-09-23 05:43:15,578: INFO/ForkPoolWorker-2] Starting model training: algorithm=LogisticRegression, problem_type=binary_classification, X_train shape=(6888, 15)
+[2026-09-23 05:43:15,602: INFO/ForkPoolWorker-2] Model training completed: early_stopped=False, final_epoch=None
+[2026-09-23 05:43:38,592: WARNING/ForkPoolWorker-2] T2.3 ADVISORY: test AUC=0.8353 is above honest band [0.5690, 0.8040] (baseline=0.5040, perm_null_p99=0.5487477370148452). NOT enforced (advisory mode per plan v3 §4 T2.3); deployer is unaffected. Position=above — if 'below', signal is too weak relative to baseline OR noise; if 'above', leakage is harder to rule out for this cohort.
+[2026-09-23 05:43:39,320: INFO/ForkPoolWorker-2] Success criterion met: minimum_lift_over_baseline=0.3313 (threshold=0.1)
+[2026-09-23 05:43:39,320: INFO/ForkPoolWorker-2] Success criterion met: minimum_auc=0.8353 (threshold=0.75)
+[2026-09-23 05:43:39,320: INFO/ForkPoolWorker-2] Success criterion not met: minimum_precision=0.6267 (threshold=0.7)
+[2026-09-23 05:43:39,320: INFO/ForkPoolWorker-2] Success criterion met: minimum_recall=0.7616 (threshold=0.65)
+[2026-09-23 05:43:39,320: INFO/ForkPoolWorker-2] Success criterion not met: minimum_f1=0.6876 (threshold=0.7)
+[2026-09-23 05:43:39,320: INFO/ForkPoolWorker-2] Evaluation complete: success_criteria_met=False
+[2026-09-23 05:44:04,568: INFO/ForkPoolWorker-2] Model training complete: LogisticRegression (success_criteria_met: False) in 61.08s
+[2026-09-23 05:44:05,052: WARNING/ForkPoolWorker-2] Pipeline pipeline_12321fd63481: Skipping deployment - success criteria not met
+[2026-09-23 05:44:05,052: ERROR/ForkPoolWorker-2] Retraining c4252b47-4978-41ff-91df-2ff6b6d4bcbf failed closed: pipeline status='completed', validation_auc=0.8375264397620491, success_criteria_met=False — not a promotable result; job marked failed (no metric written)
+[2026-09-23 05:44:05,096: INFO/ForkPoolWorker-2] Task src.tasks.execute_model_retraining[05c76e52-ff9b-4d7e-bd85-c4c4b9045627] succeeded in 79.5016259290278s: {'status': 'failed', 'retraining_id': 'c4252b47-4978-41ff-91df-2ff6b6d4bcbf', 'old_version': '4ec55d13-46c8-4df4-9ec8-7723fad67fb3', 'new_version': '4ec55d13-46c8-4df4-9ec8-7723fad67fb3_retrained_20260923_0542', 'error': 'pipeline status=\'c

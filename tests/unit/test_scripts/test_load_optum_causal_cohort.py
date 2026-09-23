@@ -89,9 +89,14 @@ class _FakeQuery:
         self._t, self._op, self._filters, self._count = table, op, [], None
         self._batch, self._on_conflict = batch, on_conflict
         self._range = None
+        self._order = None
 
     def select(self, cols, count=None):
         self._count = count
+        return self
+
+    def order(self, col, desc=False):
+        self._order = (col, desc)
         return self
 
     def eq(self, col, val):
@@ -112,6 +117,9 @@ class _FakeQuery:
         # .range() below sees a stable, real-order slice like a live table would.
         rows = [r for r in self._t.rows.values() if all(r.get(c) == v for c, v in self._filters)]
         total = len(rows)
+        if self._order is not None:
+            col, desc = self._order
+            rows = sorted(rows, key=lambda r: str(r.get(col)), reverse=desc)
         if self._range is not None:
             start, end = self._range
             rows = rows[start : end + 1]
