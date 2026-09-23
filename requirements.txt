@@ -9,12 +9,6 @@
 # none of the ~3.5GB nvidia-*-cu12 / triton CUDA stack. The CPU wheels live on
 # the PyTorch CPU index, so it is added as an extra index below.
 --extra-index-url https://download.pytorch.org/whl/cpu
-# 2026-09-23: PyPI's simple page for momentchi2 (causal-learn's dep) intermittently
-# returns HTTP 503 to CI's pip ("momentchi2==0.1.8 (from versions: none)"), failing
-# every install job. pip skips a 503 index page and falls back to --find-links, so this
-# points at the exact PyPI-hosted 0.1.8 wheel (sha256 39523a54...ad3c4d, the digest the
-# lock pins); the == pin below is unchanged. Remove once the PyPI page serves again.
---find-links https://files.pythonhosted.org/packages/f2/96/2f709aa4d4ddcfe5ae699fb4319d8613ca4e90c928c7911c366b8506777e/momentchi2-0.1.8-py3-none-any.whl
 a2wsgi==1.10.10
 aiohappyeyeballs==2.6.1
 aiohttp==3.14.3
