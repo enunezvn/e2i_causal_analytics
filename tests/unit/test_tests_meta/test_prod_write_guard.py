@@ -830,15 +830,30 @@ def test_the_post_teardown_census_runs_inside_a_read_only_transaction_like_the_f
 _INTEGRATION_DIR = Path(__file__).resolve().parents[3] / "tests" / "integration"
 
 #: Every file that writes to the live database under E2I_DB_INTEGRATION, and whether it
-#: censuses through the guard before writing (the 895 file keeps its own inline pre-check
-#: under an advisory lock; it joins the family for the post-teardown report).
+#: censuses through the guard before writing. All five do: the 895 file keeps its own
+#: inline pre-check (triggers + territory_metrics, skip-not-fail) under its advisory lock
+#: and ALSO censuses through the guard (codex r2 HIGH-2 on this lane: the inline check
+#: never looked at business_metrics, so an obsolete per_hcp_rollup row in its window
+#: would be deleted by its own per-HCP reconcile before the post-teardown report).
 _GUARDED_FILES: dict[str, bool] = {
     "test_per_hcp_rollup_late_arrival.py": True,
     "test_business_metrics_per_hcp_etl_integration.py": True,
     "test_territory_metrics_etl_integration.py": True,
     "test_patient_adherence_etl_integration.py": True,
-    "test_etl_provenance_inheritance_895.py": False,
+    "test_etl_provenance_inheritance_895.py": True,
 }
+
+
+def _delete_lines_after(fn: ast.FunctionDef, yield_line: int, table: str = "") -> list[int]:
+    """Line numbers of every ``DELETE FROM <table>`` string constant after the yield."""
+    return [
+        n.lineno
+        for n in ast.walk(fn)
+        if isinstance(n, ast.Constant)
+        and isinstance(n.value, str)
+        and re.search(rf"delete\s+from\s+{table}", n.value, re.IGNORECASE)
+        and n.lineno > yield_line
+    ]
 
 
 def _fixture_with_yield(tree: ast.Module, name: str) -> ast.FunctionDef:
@@ -892,7 +907,13 @@ def test_every_live_writing_file_re_censuses_after_its_teardown(filename: str) -
     assert len(after) == 1, (
         f"{filename}: {fixture.name} must re-census exactly once after its teardown (#2215)"
     )
-    assert after[0].lineno > yield_line, f"{filename}: the re-census must follow the yield"
+    # codex r2 (MEDIUM): "after the teardown" means after its LAST delete -- a re-census
+    # that ran between two deletes would count rows the teardown was about to remove.
+    deletes = _delete_lines_after(fixture, yield_line)
+    assert deletes, f"{filename}: {fixture.name} has no teardown delete after its yield"
+    assert after[0].lineno > max(deletes), (
+        f"{filename}: the re-census must follow the teardown's last DELETE"
+    )
 
 
 def test_the_territory_file_re_censuses_the_window_for_surviving_foreign_rows() -> None:
@@ -932,7 +953,14 @@ def test_the_late_arrival_teardown_re_reads_the_selection_before_it_deletes() ->
     (after,) = _calls(fixture, "require_windows_still_isolated")
     re_read = [c for c in _calls(fixture, "selected_metric_dates") if c.lineno > yield_line]
     assert re_read, "the teardown must re-read the arrival selection before deleting"
-    assert re_read[0].lineno < after.lineno
+    # codex r2 (MEDIUM): before the swept DELETE itself, not merely before the report.
+    swept = [
+        line
+        for line in _delete_lines_after(fixture, yield_line, "territory_metrics")
+        if line > yield_line
+    ]
+    assert swept, "the teardown must delete the run's territory_metrics rows"
+    assert re_read[0].lineno < min(swept), "the re-read must precede the swept DELETE"
     # The arrival spec is built inside the test; the fixture reaches it through its state.
     assert any(
         isinstance(a, ast.Starred) and isinstance(a.value, ast.Subscript) for a in after.args
@@ -980,9 +1008,72 @@ def test_no_live_writing_file_sweeps_territory_metrics_by_date_without_the_runs_
         and isinstance(node.value, str)
         and re.search(r"delete\s+from\s+territory_metrics", node.value, re.IGNORECASE)
     ]
+    # codex r2 (MEDIUM): the key must be a CONJUNCT of the WHERE clause, not a mention.
+    conj = r"(?:\bWHERE\b|\bAND\b)\s+"
     for statement in statements:
-        keyed_by_id = "territory_id" in statement
-        keyed_by_run = "xmin" in statement and "created_at" in statement
+        keyed_by_id = re.search(conj + r"territory_id\s+(?:=|IN|LIKE)\b", statement, re.IGNORECASE)
+        keyed_by_run = re.search(
+            conj + r"xmin::text\s*=\s*%s\b", statement, re.IGNORECASE
+        ) and re.search(conj + r"created_at\s*=\s*%s\b", statement, re.IGNORECASE)
         assert keyed_by_id or keyed_by_run, (
             f"{filename}: {statement!r} is not keyed to what the run owns"
         )
+
+
+# =============================================================================
+# #2215, codex r2 HIGH-1: a foreign row the run's own reconcile deleted
+# =============================================================================
+
+
+def test_a_clean_run_whose_reconcile_deleted_a_row_is_reported() -> None:
+    """The one row the post-teardown census cannot see: a foreign row that landed after the
+    census and was DELETED by the ETL's own reconcile (per-HCP obsolete predicate, territory
+    owned-and-obsolete predicate) before the re-read. Both ETLs return that DELETE's rowcount
+    as ``rows_deleted``; with the census green and no stale rows of the file's own, a clean
+    run must report zero, so a non-zero count is the foreign deletion, reported by name."""
+    from tests.integration._prod_write_guard import require_no_foreign_reconcile
+
+    require_no_foreign_reconcile({"status": "completed", "rows_deleted": 0})
+    with pytest.raises(pytest.fail.Exception) as reported:
+        require_no_foreign_reconcile({"status": "completed", "rows_deleted": 1})
+    message = str(reported.value)
+    assert message.startswith("REPORTED:"), message
+    assert "reconcile deleted 1 row" in message, message
+
+
+def test_a_run_with_known_stale_rows_of_its_own_states_the_expected_count() -> None:
+    """A file that deliberately makes one of its OWN rows obsolete (the late-arrival
+    reconcile test) declares that count; anything above it is foreign."""
+    from tests.integration._prod_write_guard import require_no_foreign_reconcile
+
+    require_no_foreign_reconcile({"status": "completed", "rows_deleted": 1}, own_obsolete=1)
+    with pytest.raises(pytest.fail.Exception):
+        require_no_foreign_reconcile({"status": "completed", "rows_deleted": 2}, own_obsolete=1)
+
+
+def test_a_result_without_a_reconcile_count_is_reported_not_permitted() -> None:
+    """A refused or failed run reports 0; a result that lacks the key is not a clean run."""
+    from tests.integration._prod_write_guard import require_no_foreign_reconcile
+
+    with pytest.raises(pytest.fail.Exception):
+        require_no_foreign_reconcile({"status": "completed"})
+
+
+#: The files whose runs reconcile (the adherence ETL only UPDATEs; nothing to count).
+_RECONCILING_FILES = [
+    "test_per_hcp_rollup_late_arrival.py",
+    "test_business_metrics_per_hcp_etl_integration.py",
+    "test_territory_metrics_etl_integration.py",
+    "test_etl_provenance_inheritance_895.py",
+]
+
+
+@pytest.mark.parametrize("filename", _RECONCILING_FILES)
+def test_every_reconciling_file_checks_its_runs_reconcile_count(filename: str) -> None:
+    """Adoption pin for the mitigation above: each reconciling file checks the count on
+    the runs whose expected value it knows (the first run into a censused-clean window is
+    always 0)."""
+    tree = ast.parse((_INTEGRATION_DIR / filename).read_text())
+    assert _calls(tree, "require_no_foreign_reconcile"), (
+        f"{filename} never checks a run's reconcile delete count (#2215, codex r2 HIGH-1)"
+    )
