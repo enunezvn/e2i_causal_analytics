@@ -1,0 +1,77 @@
+OK   attempt_evidence_sealed (local pre-check): lane_b_814eaa959
+OK   attempt_is_latest_run_attempt: run 35796394678 attempt 1 job 106989113332
+OK   attempt_evidence_matches_github: job 106989113332
+OK   attempt_is_latest_deploy_run: 35796394678
+NOTE lane_b_814eaa959.pre is a diagnostic only (and the dispatch-time lower bound for run lookup); no pass/fail decision reads it
+OK   running:e2i_api: running
+OK   health:e2i_api: healthy
+OK   image_is_the_api_image:e2i_api: sha256:64cab9bb2120e70dffd7c39d8899762eb8b9830cf5b937f532f4a64e71d0c6ee
+OK   image_replaced:e2i_api
+OK   running:e2i_bentoml: running
+OK   health:e2i_bentoml: healthy
+OK   running:e2i_feast_materializer: running
+OK   health:e2i_feast_materializer: healthy
+OK   running:e2i_feast: running
+OK   health:e2i_feast: healthy
+OK   running:e2i_frontend: running
+OK   health:e2i_frontend: healthy
+OK   tag_sha_matches_api:e2i_frontend: 814eaa9591bdf17f0d488f9258d67c908c95d47d
+OK   image_replaced:e2i_frontend
+OK   running:e2i_scheduler: running
+OK   health:e2i_scheduler: healthy
+OK   image_is_the_api_image:e2i_scheduler: sha256:64cab9bb2120e70dffd7c39d8899762eb8b9830cf5b937f532f4a64e71d0c6ee
+OK   image_replaced:e2i_scheduler
+OK   running:e2i-causal-analytics-worker_light-1: running
+OK   health:e2i-causal-analytics-worker_light-1: healthy
+OK   image_is_the_api_image:e2i-causal-analytics-worker_light-1: sha256:64cab9bb2120e70dffd7c39d8899762eb8b9830cf5b937f532f4a64e71d0c6ee
+OK   image_replaced:e2i-causal-analytics-worker_light-1
+OK   running:e2i-causal-analytics-worker_light-2: running
+OK   health:e2i-causal-analytics-worker_light-2: healthy
+OK   image_is_the_api_image:e2i-causal-analytics-worker_light-2: sha256:64cab9bb2120e70dffd7c39d8899762eb8b9830cf5b937f532f4a64e71d0c6ee
+OK   image_replaced:e2i-causal-analytics-worker_light-2
+OK   running:e2i-causal-analytics-worker_medium-1: running
+OK   health:e2i-causal-analytics-worker_medium-1: healthy
+OK   image_is_the_api_image:e2i-causal-analytics-worker_medium-1: sha256:64cab9bb2120e70dffd7c39d8899762eb8b9830cf5b937f532f4a64e71d0c6ee
+OK   image_replaced:e2i-causal-analytics-worker_medium-1
+OK   replicas:api: 1
+OK   replicas:bentoml: 1
+OK   replicas:feast: 1
+OK   replicas:feast-materializer: 1
+OK   replicas:frontend: 1
+OK   replicas:scheduler: 1
+OK   replicas:worker_light: 2
+OK   replicas:worker_medium: 1
+OK   running_is_tag_image:e2i_bentoml: sha256:dffc81227899bd95e9fb1eef2ee48fb972f3e84e05851dad464e43588be0c455
+OK   attempt_new_sha_is_the_running_api:e2i_bentoml: 814eaa9591bdf17f0d488f9258d67c908c95d47d
+OK   bentoml_decision_matches_diff:e2i_bentoml: rebuilt
+OK   running_is_build_result:e2i_bentoml sha256:dffc81227899bd95e9fb1eef2ee48fb972f3e84e05851dad464e43588be0c455
+OK   bentoml_started_after_attempt:e2i_bentoml 2026-09-23T00:19:33.87721176Z
+OK   running_is_tag_image:e2i_feast_materializer: sha256:0b11edd2232a33177a6b8b720f610e2ba2a77d2d211a9db80581c9474c3217ea
+OK   attempt_new_sha_is_the_running_api:e2i_feast_materializer: 814eaa9591bdf17f0d488f9258d67c908c95d47d
+OK   feast_up_succeeded:e2i_feast_materializer: yes
+OK   build_decision_matches_diff:e2i_feast_materializer: rebuild
+OK   rebuild_logged:e2i_feast_materializer: yes
+OK   running_is_build_result:e2i_feast_materializer sha256:0b11edd2232a33177a6b8b720f610e2ba2a77d2d211a9db80581c9474c3217ea
+OK   started_after_attempt:e2i_feast_materializer 2026-09-23T00:14:09.118858805Z
+OK   code_manifest:e2i_feast_materializer: 6290a75cba98d164edd8cf4fdbd11be4fd6ef247b6fcc5d4492ac31837565b9d
+OK   expected_manifest_is_the_merge_commit:e2i_feast_materializer: 6290a75cba98d164edd8cf4fdbd11be4fd6ef247b6fcc5d4492ac31837565b9d
+OK   running_is_tag_image:e2i_feast: sha256:50200abdbd1b04072d0abeb92119eec7a1a331597ce51684ca9d6bcb61687efd
+OK   attempt_new_sha_is_the_running_api:e2i_feast: 814eaa9591bdf17f0d488f9258d67c908c95d47d
+OK   feast_up_succeeded:e2i_feast: yes
+OK   build_decision_matches_diff:e2i_feast: rebuild
+OK   rebuild_logged:e2i_feast: yes
+OK   running_is_build_result:e2i_feast sha256:50200abdbd1b04072d0abeb92119eec7a1a331597ce51684ca9d6bcb61687efd
+OK   started_after_attempt:e2i_feast 2026-09-23T00:13:37.612238781Z
+OK   code_manifest:e2i_feast: 6290a75cba98d164edd8cf4fdbd11be4fd6ef247b6fcc5d4492ac31837565b9d
+OK   expected_manifest_is_the_merge_commit:e2i_feast: 6290a75cba98d164edd8cf4fdbd11be4fd6ef247b6fcc5d4492ac31837565b9d
+OK   migrations: 2
+OK   canonical_registry_rows: 34
+OK   schema_generation: contract (accepted here: expand contract)
+OK   rekey_audit_table: t
+OK   canonical_calculator_code: present
+OK   feast_fields: triggers_accepted_count,triggers_delivered_count,triggers_total_count
+OK   event_rows_left_under_005_008: 0
+OK   cache_basis: canonical-trx-2026-09-15
+OK   kpi_calculation: ok
+OK   api_health: up
+reseed cron held lines: 0
