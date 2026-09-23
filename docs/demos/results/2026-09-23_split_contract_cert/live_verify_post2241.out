@@ -1,0 +1,31 @@
+PASS  A.image e2i_api == origin/main  zvn/e2i-api:5e0303766
+PASS  A.image e2i-causal-analytics-worker_medium-1 == origin/main  zvn/e2i-api:5e0303766
+PASS  A.image e2i_scheduler == origin/main  zvn/e2i-api:5e0303766
+PASS  A.image e2i_frontend == origin/main  2i-frontend:5e0303766
+PASS  A.sidecar e2i_feast healthy  healthy 2026-09-23T04:48:33.563501658Z
+PASS  A.sidecar e2i_feast_materializer healthy  healthy 2026-09-23T04:49:05.063007893Z
+PASS  A.e2i_feast log: materialize endpoints registry-locked (serve_locked.py live)  lines=2
+PASS  A.sidecar /health from worker_medium  200
+PASS  B.migrations 150 + 151 + ml/046 in ledger  150_ml_registry_cohort_contract.sql ; 151_registry_cohort_contracts_goldstd.sql ; ml/046_ab_results_one_final_per_experiment.sql
+PASS  B.ml_model_registry cohort_* columns  cohort_data_source,cohort_feature_manifest_source,cohort_target_outcome
+PASS  B.14 real registry rows: 9 full contracts + 3 HCP target-only + 2 csu NULL (migration 151)  9/3/2/14
+PASS  B.partial unique index one FINAL per experiment  ts USING btree (experiment_id) WHERE (analysis_type = 'final'::ab_analysis_type)
+PASS  B.final rows 1:1 with experiments  360/360
+PASS  B.twin_simulations link state readable  30 sims, linked=0
+PASS  B.no draft experiments created by verification  drafts=0
+PASS  C.fidelity_tracking_update -> analytics  {"queue": "analytics"}
+PASS  C.execute_model_retraining -> analytics  {"queue": "analytics"}
+PASS  C.feast weekly beat off the ml queue  {"queue": "analytics"}
+PASS  C.feast incremental beat on a consumed queue  {"queue": "analytics"}
+PASS  C.worker_medium consumes analytics  matches=1
+PASS  C.FEAST_URL set in worker_medium  http://feast:6566
+PASS  D.admin token minted  status=200
+PASS  D./digital-twin/health 200  {"status": "healthy", "service": "digital-twin", "models_available": 3, "brands_simulable": 3, "simulations_pending": 0,
+PASS  D./models: 3 rows, all unvalidated, shared_fit_model_count 3  [{"brand": "Kisqali", "fidelity_status": "unvalidated", "r2_score_basis": "synthetic_target", "shared_fit_model_count": 3}, {"brand": "Fabhalta", "fidelity_status": "unvalidated", "r2_score_basis": "synthetic_target", "shared_fit_model_count": 3}, {"brand": "Remibrutinib", "fidelity_status": "unvalidated", "r2_score_basis": "synthetic_target", "shared_fit_model_count": 3}]
+PASS  D./proposed-experiments 200 with honest envelope  {"total_proposed": 30, "total_linked": 0, "real_experiments_running": 0, "outcome_measurable_in_real_mode": false}
+PASS  D.proposals: every item unlinked deploy/refine with n + weeks  n=30 first={"brand": "Remibrutinib", "intervention_type": "digital_engagement", "recommendation": "deploy", "recommended_sample_size": 13, "recommended_duration_weeks": 13, "fidelity_status": "unvalidated", "proposal_basis": "twin_simulation"}
+PASS  D.simulation list carries experiment_design_id (read-back)  status=200 keys=['brand', 'cohort_effect', 'created_at', 'data_provenance', 'estimate_scope', 'experiment_design_id', 'intervention_type', 'recommendation']
+PASS  D.openapi lists proposals + draft routes  /api/digital-twin/proposed-experiments,/api/digital-twin/proposed-experiments/{simulation_id}/draft
+PASS  D.openapi retraining trigger present  POST /api/monitoring/retraining/trigger/{model_id}
+
+29/29 checks passed

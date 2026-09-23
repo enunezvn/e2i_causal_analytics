@@ -1,0 +1,83 @@
+WARNING src.mlops.pandera_schemas: Schema validation failed for patient_journeys: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: train split failed schema validation: 2 errors
+WARNING src.mlops.pandera_schemas: Schema validation failed for patient_journeys: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: validation split failed schema validation: 2 errors
+WARNING src.mlops.pandera_schemas: Schema validation failed for patient_journeys: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: test split failed schema validation: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: Schema validation FAILED for patient_journeys: 6 errors across 3 splits (1527ms)
+INFO src.agents.ml_foundation.data_preparer.nodes.ge_validator: Running GE validation for experiment probe-initiation-kisqali
+INFO src.agents.ml_foundation.data_preparer.nodes.ge_validator: GE suite 'patient_journeys': skipping expect_column_to_exist on patient_id — not in contract projection (table patient_journeys)
+INFO src.agents.ml_foundation.data_preparer.nodes.ge_validator: GE suite 'patient_journeys': skipping expect_column_to_exist on event_type — not in contract projection (table patient_journeys)
+INFO src.agents.ml_foundation.data_preparer.nodes.ge_validator: GE suite 'patient_journeys': skipping expect_column_to_exist on event_date — not in contract projection (table patient_journeys)
+INFO src.agents.ml_foundation.data_preparer.nodes.ge_validator: GE suite 'patient_journeys': skipping expect_column_values_to_not_be_null on patient_id — not in contract projection (table patient_journeys)
+INFO src.agents.ml_foundation.data_preparer.nodes.ge_validator: GE suite 'patient_journeys': skipping expect_column_values_to_not_be_null on event_type — not in contract projection (table patient_journeys)
+INFO src.agents.ml_foundation.data_preparer.nodes.ge_validator: GE contract suite patient_journeys__contract: 13 expectation(s) (1 kept from 'patient_journeys', 5 skipped, 12 contract checks)
+
+=== initiation / Kisqali ===
+[load_data 1.2s] -> {"blocking_issues": []}
+[audit_sampling_frame 0.0s] -> {"blocking_issues": []}
+[run_schema_validation 1.5s] -> {"schema_validation_status": "failed", "blocking_issues": ["Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]"]}
+[run_quality_checks 0.0s] -> {"qc_status": "passed", "overall_score": 1.0, "blocking_issues": []}
+INFO src.agents.ml_foundation.data_preparer.nodes.ge_validator: GE validation completed: status=passed, passed=39/39, splits_validated=3
+WARNING src.mlops.pandera_schemas: Schema validation failed for patient_journeys: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: train split failed schema validation: 2 errors
+WARNING src.mlops.pandera_schemas: Schema validation failed for patient_journeys: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: validation split failed schema validation: 2 errors
+WARNING src.mlops.pandera_schemas: Schema validation failed for patient_journeys: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: test split failed schema validation: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: Schema validation FAILED for patient_journeys: 6 errors across 3 splits (37ms)
+INFO src.agents.ml_foundation.data_preparer.nodes.ge_validator: Running GE validation for experiment probe-persistence-kisqali
+INFO src.agents.ml_foundation.data_preparer.nodes.ge_validator: GE suite 'patient_journeys': skipping expect_column_to_exist on patient_id — not in contract projection (table patient_journeys)
+INFO src.agents.ml_foundation.data_preparer.nodes.ge_validator: GE suite 'patient_journeys': skipping expect_column_to_exist on event_type — not in contract projection (table patient_journeys)
+INFO src.agents.ml_foundation.data_preparer.nodes.ge_validator: GE suite 'patient_journeys': skipping expect_column_to_exist on event_date — not in contract projection (table patient_journeys)
+INFO src.agents.ml_foundation.data_preparer.nodes.ge_validator: GE suite 'patient_journeys': skipping expect_column_values_to_not_be_null on patient_id — not in contract projection (table patient_journeys)
+INFO src.agents.ml_foundation.data_preparer.nodes.ge_validator: GE suite 'patient_journeys': skipping expect_column_values_to_not_be_null on event_type — not in contract projection (table patient_journeys)
+INFO src.agents.ml_foundation.data_preparer.nodes.ge_validator: GE contract suite patient_journeys__contract: 12 expectation(s) (1 kept from 'patient_journeys', 5 skipped, 11 contract checks)
+[run_ge_validation 0.7s] -> {"ge_validation_status": "passed", "ge_expectations_passed": 39, "ge_expectations_evaluated": 39, "blocking_issues": []}
+[engineer_features 0.0s] -> {"blocking_issues": []}
+[detect_leakage 0.9s] -> {"leakage_detected": false, "leakage_severity": "none", "leaked_features": [], "blocking_issues": []}
+[adaptive_validity_check 14.6s] -> {"leakage_detected": true, "leakage_severity": "high", "leaked_features": ["age_at_diagnosis", "disease_severity"], "blocking_issues": []}
+[route_after_leakage_detection] -> remediate
+leakage_remediation would run (LLM) — NOT executed by this probe; FAIL
+
+=== persistence / Kisqali ===
+[load_data 0.8s] -> {"blocking_issues": []}
+[audit_sampling_frame 0.0s] -> {"blocking_issues": []}
+[run_schema_validation 0.0s] -> {"schema_validation_status": "failed", "blocking_issues": ["Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]"]}
+[run_quality_checks 0.0s] -> {"qc_status": "passed", "overall_score": 1.0, "blocking_issues": []}
+INFO src.agents.ml_foundation.data_preparer.nodes.ge_validator: GE validation completed: status=passed, passed=36/36, splits_validated=3
+WARNING src.mlops.pandera_schemas: Schema validation failed for patient_journeys: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: train split failed schema validation: 2 errors
+WARNING src.mlops.pandera_schemas: Schema validation failed for patient_journeys: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: validation split failed schema validation: 2 errors
+WARNING src.mlops.pandera_schemas: Schema validation failed for patient_journeys: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: test split failed schema validation: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: Schema validation FAILED for patient_journeys: 6 errors across 3 splits (34ms)
+INFO src.agents.ml_foundation.data_preparer.nodes.ge_validator: Running GE validation for experiment probe-discontinuation-kisqali
+INFO src.agents.ml_foundation.data_preparer.nodes.ge_validator: GE suite 'patient_journeys': skipping expect_column_to_exist on patient_id — not in contract projection (table patient_journeys)
+INFO src.agents.ml_foundation.data_preparer.nodes.ge_validator: GE suite 'patient_journeys': skipping expect_column_to_exist on event_type — not in contract projection (table patient_journeys)
+INFO src.agents.ml_foundation.data_preparer.nodes.ge_validator: GE suite 'patient_journeys': skipping expect_column_to_exist on event_date — not in contract projection (table patient_journeys)
+INFO src.agents.ml_foundation.data_preparer.nodes.ge_validator: GE suite 'patient_journeys': skipping expect_column_values_to_not_be_null on patient_id — not in contract projection (table patient_journeys)
+INFO src.agents.ml_foundation.data_preparer.nodes.ge_validator: GE suite 'patient_journeys': skipping expect_column_values_to_not_be_null on event_type — not in contract projection (table patient_journeys)
+INFO src.agents.ml_foundation.data_preparer.nodes.ge_validator: GE contract suite patient_journeys__contract: 12 expectation(s) (1 kept from 'patient_journeys', 5 skipped, 11 contract checks)
+[run_ge_validation 0.7s] -> {"ge_validation_status": "passed", "ge_expectations_passed": 36, "ge_expectations_evaluated": 36, "blocking_issues": []}
+[engineer_features 0.0s] -> {"blocking_issues": []}
+[detect_leakage 0.7s] -> {"leakage_detected": false, "leakage_severity": "none", "leaked_features": [], "blocking_issues": []}
+[adaptive_validity_check 5.8s] -> {"leakage_detected": true, "leakage_severity": "high", "leaked_features": ["disease_severity"], "blocking_issues": []}
+[route_after_leakage_detection] -> remediate
+leakage_remediation would run (LLM) — NOT executed by this probe; FAIL
+
+=== discontinuation / Kisqali ===
+[load_data 0.7s] -> {"blocking_issues": []}
+[audit_sampling_frame 0.0s] -> {"blocking_issues": []}
+[run_schema_validation 0.0s] -> {"schema_validation_status": "failed", "blocking_issues": ["Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]"]}
+[run_quality_checks 0.0s] -> {"qc_status": "passed", "overall_score": 1.0, "blocking_issues": []}
+INFO src.agents.ml_foundation.data_preparer.nodes.ge_validator: GE validation completed: status=passed, passed=36/36, splits_validated=3
+[run_ge_validation 0.6s] -> {"ge_validation_status": "passed", "ge_expectations_passed": 36, "ge_expectations_evaluated": 36, "blocking_issues": []}
+[engineer_features 0.0s] -> {"blocking_issues": []}
+[detect_leakage 0.8s] -> {"leakage_detected": false, "leakage_severity": "none", "leaked_features": [], "blocking_issues": []}
+[adaptive_validity_check 6.0s] -> {"leakage_detected": true, "leakage_severity": "high", "leaked_features": ["disease_severity"], "blocking_issues": []}
+[route_after_leakage_detection] -> remediate
+leakage_remediation would run (LLM) — NOT executed by this probe; FAIL
+
+SUMMARY: {'initiation': False, 'persistence': False, 'discontinuation': False} | SOME FAIL

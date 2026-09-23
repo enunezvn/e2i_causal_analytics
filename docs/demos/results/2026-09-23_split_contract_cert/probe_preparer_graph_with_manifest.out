@@ -1,0 +1,96 @@
+WARNING src.mlops.pandera_schemas: Schema validation failed for patient_journeys: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: train split failed schema validation: 2 errors
+WARNING src.mlops.pandera_schemas: Schema validation failed for patient_journeys: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: validation split failed schema validation: 2 errors
+WARNING src.mlops.pandera_schemas: Schema validation failed for patient_journeys: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: test split failed schema validation: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: Schema validation FAILED for patient_journeys: 6 errors across 3 splits (1771ms)
+
+=== initiation / Kisqali === resolve_manifest_source(dict, 'synthetic_csu') -> 'synthetic_csu'
+[load_data 1.2s] {} blocking=[]
+[audit_sampling_frame 0.0s] {} blocking=[]
+[run_schema_validation 1.8s] {} blocking=['Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+[run_quality_checks 0.0s] {"qc_status": "passed", "overall_score": 1.0} blocking=[]
+WARNING src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check: Declared-safe immunity: exempted 5 manifest pre-index feature(s) from leakage (contract is authoritative); severity none -> info. Features: ['academic_hcp', 'age_at_diagnosis', 'comorbidity_burden', 'disease_severity', 'prior_therapy_lines']
+INFO src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check: adaptive_validity_check: scored=8 flagged=2 (high) prior_severity=none new_severity=info
+WARNING src.agents.ml_foundation.data_preparer.nodes.sufficiency_check: target_mde not specified in scope_spec.sufficiency; using computed_from_data default 0.06989044200982245. Override via scope_spec.sufficiency.target_mde.
+WARNING src.mlops.pandera_schemas: Schema validation failed for patient_journeys: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: train split failed schema validation: 2 errors
+WARNING src.mlops.pandera_schemas: Schema validation failed for patient_journeys: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: validation split failed schema validation: 2 errors
+WARNING src.mlops.pandera_schemas: Schema validation failed for patient_journeys: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: test split failed schema validation: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: Schema validation FAILED for patient_journeys: 6 errors across 3 splits (35ms)
+[run_ge_validation 0.7s] {"ge_validation_status": "passed"} blocking=[]
+[engineer_features 0.0s] {} blocking=[]
+[detect_leakage 0.9s] {"leakage_severity": "none", "leaked_features": []} blocking=[]
+[adaptive_validity_check 14.2s] {"leakage_severity": "info", "leaked_features": []} blocking=[]
+  feature=rep_detailing_high     severity=info      z=8.83     remediation=keep       decided_by=adversarial layer=3 declared_safe=None
+  feature=sample_dropped         severity=info      z=5.32     remediation=keep       decided_by=adversarial layer=3 declared_safe=None
+  feature=trigger_accepted       severity=info      z=17.94    remediation=keep       decided_by=adversarial layer=3 declared_safe=None
+  columns with no adaptive finding (Layer 1 / not scored): ['disease_severity', 'academic_hcp', 'geographic_region', 'insurance_type', 'age_at_diagnosis', 'comorbidity_burden', 'prior_therapy_lines']
+  adaptive_flagged_features=[] leaked_features=[]
+[route_after_leakage_detection] -> continue
+[transform_data 0.2s] {} blocking=[]
+[compute_baseline_metrics 0.0s] {} blocking=[]
+[sufficiency_check 0.0s] {} blocking=[]
+[finalize_output 0.0s] {"gate_passed": true, "qc_passed": true, "is_ready": true, "qc_score": 1.0} blocking=[]
+GATE initiation/Kisqali: gate_passed=True qc_status=passed qc_passed=True is_ready=True qc_score=1.0 missing_required_features=[] blocking_issues=[]
+VERDICT initiation/Kisqali: PASS
+
+=== persistence / Kisqali === resolve_manifest_source(dict, 'synthetic_csu') -> 'synthetic_csu'
+[load_data 0.8s] {} blocking=[]
+[audit_sampling_frame 0.0s] {} blocking=[]
+[run_schema_validation 0.0s] {} blocking=['Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+[run_quality_checks 0.0s] {"qc_status": "passed", "overall_score": 1.0} blocking=[]
+WARNING src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check: Declared-safe immunity: exempted 5 manifest pre-index feature(s) from leakage (contract is authoritative); severity none -> info. Features: ['academic_hcp', 'age_at_diagnosis', 'comorbidity_burden', 'disease_severity', 'prior_therapy_lines']
+INFO src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check: adaptive_validity_check: scored=7 flagged=1 (high) prior_severity=none new_severity=info
+WARNING src.agents.ml_foundation.data_preparer.nodes.sufficiency_check: target_mde not specified in scope_spec.sufficiency; using computed_from_data default 0.11545145447676615. Override via scope_spec.sufficiency.target_mde.
+WARNING src.mlops.pandera_schemas: Schema validation failed for patient_journeys: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: train split failed schema validation: 2 errors
+WARNING src.mlops.pandera_schemas: Schema validation failed for patient_journeys: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: validation split failed schema validation: 2 errors
+WARNING src.mlops.pandera_schemas: Schema validation failed for patient_journeys: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: test split failed schema validation: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: Schema validation FAILED for patient_journeys: 6 errors across 3 splits (35ms)
+[run_ge_validation 0.6s] {"ge_validation_status": "passed"} blocking=[]
+[engineer_features 0.0s] {} blocking=[]
+[detect_leakage 0.8s] {"leakage_severity": "none", "leaked_features": []} blocking=[]
+[adaptive_validity_check 5.9s] {"leakage_severity": "info", "leaked_features": []} blocking=[]
+  feature=copay_support          severity=info      z=2.03     remediation=keep       decided_by=adversarial layer=3 declared_safe=None
+  feature=psp_enrolled           severity=info      z=4.76     remediation=keep       decided_by=adversarial layer=3 declared_safe=None
+  columns with no adaptive finding (Layer 1 / not scored): ['disease_severity', 'academic_hcp', 'geographic_region', 'insurance_type', 'age_at_diagnosis', 'comorbidity_burden', 'prior_therapy_lines']
+  adaptive_flagged_features=[] leaked_features=[]
+[route_after_leakage_detection] -> continue
+[transform_data 0.2s] {} blocking=[]
+[compute_baseline_metrics 0.0s] {} blocking=[]
+[sufficiency_check 0.0s] {} blocking=[]
+[finalize_output 0.0s] {"gate_passed": true, "qc_passed": true, "is_ready": true, "qc_score": 1.0} blocking=[]
+GATE persistence/Kisqali: gate_passed=True qc_status=passed qc_passed=True is_ready=True qc_score=1.0 missing_required_features=[] blocking_issues=[]
+VERDICT persistence/Kisqali: PASS
+
+=== discontinuation / Kisqali === resolve_manifest_source(dict, 'synthetic_csu') -> 'synthetic_csu'
+[load_data 0.8s] {} blocking=[]
+[audit_sampling_frame 0.0s] {} blocking=[]
+[run_schema_validation 0.0s] {} blocking=['Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+[run_quality_checks 0.0s] {"qc_status": "passed", "overall_score": 1.0} blocking=[]
+WARNING src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check: Declared-safe immunity: exempted 5 manifest pre-index feature(s) from leakage (contract is authoritative); severity none -> info. Features: ['academic_hcp', 'age_at_diagnosis', 'comorbidity_burden', 'disease_severity', 'prior_therapy_lines']
+INFO src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check: adaptive_validity_check: scored=7 flagged=1 (high) prior_severity=none new_severity=info
+WARNING src.agents.ml_foundation.data_preparer.nodes.sufficiency_check: target_mde not specified in scope_spec.sufficiency; using computed_from_data default 0.08454854552323386. Override via scope_spec.sufficiency.target_mde.
+[run_ge_validation 0.6s] {"ge_validation_status": "passed"} blocking=[]
+[engineer_features 0.0s] {} blocking=[]
+[detect_leakage 0.7s] {"leakage_severity": "none", "leaked_features": []} blocking=[]
+[adaptive_validity_check 5.6s] {"leakage_severity": "info", "leaked_features": []} blocking=[]
+  feature=copay_support          severity=info      z=2.03     remediation=keep       decided_by=adversarial layer=3 declared_safe=None
+  feature=psp_enrolled           severity=info      z=4.76     remediation=keep       decided_by=adversarial layer=3 declared_safe=None
+  columns with no adaptive finding (Layer 1 / not scored): ['disease_severity', 'academic_hcp', 'geographic_region', 'insurance_type', 'age_at_diagnosis', 'comorbidity_burden', 'prior_therapy_lines']
+  adaptive_flagged_features=[] leaked_features=[]
+[route_after_leakage_detection] -> continue
+[transform_data 0.1s] {} blocking=[]
+[compute_baseline_metrics 0.0s] {} blocking=[]
+[sufficiency_check 0.0s] {} blocking=[]
+[finalize_output 0.0s] {"gate_passed": true, "qc_passed": true, "is_ready": true, "qc_score": 1.0} blocking=[]
+GATE discontinuation/Kisqali: gate_passed=True qc_status=passed qc_passed=True is_ready=True qc_score=1.0 missing_required_features=[] blocking_issues=[]
+VERDICT discontinuation/Kisqali: PASS
+
+SUMMARY: {'initiation': True, 'persistence': True, 'discontinuation': True} | ALL PASS

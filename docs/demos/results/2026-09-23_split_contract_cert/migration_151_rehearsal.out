@@ -1,0 +1,43 @@
+BEGIN
+UPDATE 1
+UPDATE 1
+UPDATE 1
+UPDATE 1
+UPDATE 1
+UPDATE 1
+UPDATE 1
+UPDATE 1
+UPDATE 1
+UPDATE 1
+UPDATE 1
+UPDATE 1
+=== AFTER-APPLY (inside txn) ===
+csu_treatment_initiation_lr_balanced_v1|||
+csu_treatment_initiation_lr_full_v1|||
+discontinuation_fabhalta_goldstd_lr_v1|{"columns": ["disease_severity", "academic_hcp", "geographic|discontinued_180d|synthetic_csu
+discontinuation_kisqali_goldstd_lr_v1|{"columns": ["disease_severity", "academic_hcp", "geographic|discontinued_180d|synthetic_csu
+discontinuation_remibrutinib_goldstd_lr_v1|{"columns": ["disease_severity", "academic_hcp", "geographic|discontinued_180d|synthetic_csu
+hcp_adoption_fabhalta_goldstd_lr_v1||adopted|
+hcp_adoption_kisqali_goldstd_lr_v1||adopted|
+hcp_adoption_remibrutinib_goldstd_lr_v1||adopted|
+initiation_fabhalta_goldstd_lr_v1|{"columns": ["disease_severity", "academic_hcp", "geographic|treatment_initiated|synthetic_csu
+initiation_kisqali_goldstd_lr_v1|{"columns": ["disease_severity", "academic_hcp", "geographic|treatment_initiated|synthetic_csu
+initiation_remibrutinib_goldstd_lr_v1|{"columns": ["disease_severity", "academic_hcp", "geographic|treatment_initiated|synthetic_csu
+persistence_fabhalta_goldstd_lr_v1|{"columns": ["disease_severity", "academic_hcp", "geographic|persistent_180d|synthetic_csu
+persistence_kisqali_goldstd_lr_v1|{"columns": ["disease_severity", "academic_hcp", "geographic|persistent_180d|synthetic_csu
+persistence_remibrutinib_goldstd_lr_v1|{"columns": ["disease_severity", "academic_hcp", "geographic|persistent_180d|synthetic_csu
+=== SECOND APPLY ===
+UPDATE 0
+UPDATE 0
+UPDATE 0
+UPDATE 0
+UPDATE 0
+UPDATE 0
+UPDATE 0
+UPDATE 0
+UPDATE 0
+UPDATE 0
+UPDATE 0
+UPDATE 0
+ROLLBACK
+0|14
