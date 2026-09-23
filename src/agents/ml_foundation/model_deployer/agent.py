@@ -267,6 +267,9 @@ class ModelDeployerAgent:
             # PR for T2.6c authorization. Signal-only; does NOT mutate
             # promotion_successful.
             "regulatory_deployment_manifest": final_state.get("regulatory_deployment_manifest"),
+            # #2242: the ml_model_registry row THIS run wrote (None when not persisted) —
+            # what a retrain's completion must point at.
+            "model_registry_id": final_state.get("model_registry_id"),
         }
 
         # Store to database (ml_deployments and ml_model_registry)

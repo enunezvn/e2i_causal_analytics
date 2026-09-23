@@ -27,11 +27,19 @@ pytestmark = pytest.mark.unit
 
 MODEL = "initiation_kisqali_goldstd_lr_v1"
 NEW_VERSION = "1.0_retrained_20260923_0632_ab12cd"
-GOOD = SimpleNamespace(
-    status="completed",
-    training_result={"validation_metrics": {"roc_auc": 0.71}, "success_criteria_met": True},
-    deployment_result={"model_version": "1"},
-)
+CANDIDATE_ID = str(uuid4())
+
+
+def _result(model_registry_id: Any) -> SimpleNamespace:
+    """A promotable pipeline result whose deployer reported ``model_registry_id``."""
+    return SimpleNamespace(
+        status="completed",
+        training_result={"validation_metrics": {"roc_auc": 0.71}, "success_criteria_met": True},
+        deployment_result={"model_version": "1", "model_registry_id": model_registry_id},
+    )
+
+
+GOOD = _result(CANDIDATE_ID)
 
 
 def _db(with_candidate: bool) -> tuple[FakeAsyncSupabase, Dict[str, Any]]:
@@ -40,7 +48,7 @@ def _db(with_candidate: bool) -> tuple[FakeAsyncSupabase, Dict[str, Any]]:
     if with_candidate:
         rows.append(
             {
-                "id": str(uuid4()),
+                "id": CANDIDATE_ID,
                 "model_name": MODEL,
                 "model_version": NEW_VERSION,
                 "experiment_id": exp_id,
@@ -63,9 +71,9 @@ def _db(with_candidate: bool) -> tuple[FakeAsyncSupabase, Dict[str, Any]]:
     }
 
 
-async def _run(db: FakeAsyncSupabase, training_config: Dict[str, Any]):
+async def _run(db: FakeAsyncSupabase, training_config: Dict[str, Any], result: Any = GOOD):
     pipeline = MagicMock()
-    pipeline.run = AsyncMock(return_value=GOOD)
+    pipeline.run = AsyncMock(return_value=result)
     service = MagicMock()
     service.complete_retraining = AsyncMock(return_value=None)
     with (
@@ -99,3 +107,23 @@ async def test_retrain_with_its_registered_candidate_completes():
     out, service = await _run(db, tc)
     assert out["status"] == "completed"
     service.complete_retraining.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_codex_r2_a_row_this_run_did_not_register_does_not_complete_it():
+    """Celery redelivery: the first execution wrote (MODEL, NEW_VERSION); the second's
+    registry write is refused (run-provenance conflict) so its deployer reports no id.
+    The pre-existing row must not complete the second execution with its metric."""
+    db, tc = _db(with_candidate=True)
+    out, service = await _run(db, tc, result=_result(None))
+    assert out["status"] == "failed"
+    service.complete_retraining.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_codex_r2_a_reported_row_that_is_not_the_candidate_does_not_complete():
+    db, tc = _db(with_candidate=True)
+    parent_id = db.rows("ml_model_registry")[0]["id"]  # a real row, wrong version
+    out, service = await _run(db, tc, result=_result(parent_id))
+    assert out["status"] == "failed"
+    service.complete_retraining.assert_not_awaited()
