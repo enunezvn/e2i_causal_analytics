@@ -1,0 +1,63 @@
+PASS  A.image e2i_api == origin/main  zvn/e2i-api:814eaa959
+PASS  A.image e2i-causal-analytics-worker_medium-1 == origin/main  zvn/e2i-api:814eaa959
+PASS  A.image e2i_scheduler == origin/main  zvn/e2i-api:814eaa959
+PASS  A.image e2i_frontend == origin/main  2i-frontend:814eaa959
+PASS  A.sidecar e2i_feast healthy  healthy 2026-09-23T00:13:37.612238781Z
+PASS  A.sidecar e2i_feast_materializer healthy  healthy 2026-09-23T00:14:09.118858805Z
+PASS  A.e2i_feast log: materialize endpoints registry-locked (serve_locked.py live)  lines=2
+PASS  A.sidecar /health from worker_medium  200
+PASS  B.migrations 150 + ml/046 in ledger  150_ml_registry_cohort_contract.sql ; ml/046_ab_results_one_final_per_experiment.sql
+PASS  B.ml_model_registry cohort_* columns  cohort_data_source,cohort_feature_manifest_source,cohort_target_outcome
+PASS  B.14 real registry rows carry NULL contracts (no backfill)  14/14
+PASS  B.partial unique index one FINAL per experiment  ts USING btree (experiment_id) WHERE (analysis_type = 'final'::ab_analysis_type)
+PASS  B.final rows 1:1 with experiments  360/360
+PASS  B.twin_simulations link state readable  30 sims, linked=0
+PASS  B.no draft experiments created by verification  drafts=0
+PASS  C.fidelity_tracking_update -> analytics  {"queue": "analytics"}
+PASS  C.execute_model_retraining -> analytics  {"queue": "analytics"}
+PASS  C.feast weekly beat off the ml queue  {"queue": "analytics"}
+PASS  C.feast incremental beat on a consumed queue  {"queue": "analytics"}
+PASS  C.worker_medium consumes analytics  matches=1
+PASS  C.FEAST_URL set in worker_medium  http://feast:6566
+PASS  D.admin token minted  status=200
+PASS  D./digital-twin/health 200  {"status": "healthy", "service": "digital-twin", "models_available": 3, "brands_simulable": 3, "simulations_pending": 0,
+PASS  D./models: 3 rows, all unvalidated, shared_fit_model_count 3  [{"brand": "Kisqali", "fidelity_status": "unvalidated", "r2_score_basis": "synthetic_target", "shared_fit_model_count": 3}, {"brand": "Fabhalta", "fidelity_status": "unvalidated", "r2_score_basis": "synthetic_target", "shared_fit_model_count": 3}, {"brand": "Remibrutinib", "fidelity_status": "unvalidated", "r2_score_basis": "synthetic_target", "shared_fit_model_count": 3}]
+PASS  D./proposed-experiments 200 with honest envelope  {"total_proposed": 30, "total_linked": 0, "real_experiments_running": 0, "outcome_measurable_in_real_mode": false}
+PASS  D.proposals: every item unlinked deploy/refine with n + weeks  n=30 first={"brand": "Remibrutinib", "intervention_type": "digital_engagement", "recommendation": "deploy", "recommended_sample_size": 13, "recommended_duration_weeks": 13, "fidelity_status": "unvalidated", "proposal_basis": "twin_simulation"}
+PASS  D.simulation list carries experiment_design_id (read-back)  status=200 keys=['brand', 'cohort_effect', 'created_at', 'data_provenance', 'estimate_scope', 'experiment_design_id', 'intervention_type', 'recommendation']
+PASS  D.openapi lists proposals + draft routes  /api/digital-twin/proposed-experiments,/api/digital-twin/proposed-experiments/{simulation_id}/draft
+PASS  D.openapi retraining trigger present  POST /api/monitoring/retraining/trigger/{model_id}
+enqueued src.tasks.materialize_incremental_features: 133e597f-e9fc-442d-9d34-709574236a84 
+enqueued src.tasks.check_feature_freshness: 70cba100-0923-4f5a-899a-c4e95847138d 
+enqueued src.tasks.check_retraining_for_all_models: ed6942a7-684c-4645-af6b-ee5d3f1d8e67 
+PASS  E.materialization job rows landed  before=0 after=success:10
+PASS  E.freshness rows landed  before=10 after=ERR:ERROR:  aggregate functions are not allowed in GROUP BY LINE 1: SELECT freshness_status || ':' || count(*) FROM ml_feast_fea...                                           ^
+--- worker_medium log tail ---
+. src.tasks.check_feature_freshness
+  . src.tasks.check_retraining_for_all_models
+  . src.tasks.evaluate_retraining_need
+  . src.tasks.execute_model_retraining
+  . src.tasks.execute_twin_retraining
+  . src.tasks.materialize_feature_view
+  . src.tasks.materialize_features
+  . src.tasks.materialize_incremental_features
+[2026-09-23 00:22:21,599: INFO/MainProcess] Task src.tasks.materialize_incremental_features[133e597f-e9fc-442d-9d34-709574236a84] received
+[2026-09-23 00:22:21,664: INFO/ForkPoolWorker-2] Feast client initialized in remote mode: http://feast:6566
+[2026-09-23 00:22:23,643: INFO/ForkPoolWorker-2] Remote Feast incremental materialize completed in 1.98s: ['hcp_conversion_features', 'hcp_engagement_features', 'hcp_profile_features', 'patient_journey_features', 'patient_adherence_features', 'trigger_effectiveness_features', 'trigger_response_features', 'territory_performance_features', 'goldstd_cohort_features', 'goldstd_hcp_cohort_features']
+[2026-09-23 00:22:23,645: INFO/ForkPoolWorker-2] Feast client closed
+[2026-09-23 00:22:23,816: INFO/MainProcess] Task src.tasks.check_feature_freshness[70cba100-0923-4f5a-899a-c4e95847138d] received
+[2026-09-23 00:22:23,913: INFO/ForkPoolWorker-1] Starting feature freshness check: 70cba100-0923-4f5a-899a-c4e95847138d
+[2026-09-23 00:22:24,042: INFO/ForkPoolWorker-1] Feast client initialized in remote mode: http://feast:6566
+[2026-09-23 00:22:24,042: INFO/ForkPoolWorker-1] Checking feature freshness...
+[2026-09-23 00:22:24,120: INFO/ForkPoolWorker-2] Feast tracking: recorded 10 incremental materialization job row(s)
+[2026-09-23 00:22:24,149: INFO/ForkPoolWorker-2] Task src.tasks.materialize_incremental_features[133e597f-e9fc-442d-9d34-709574236a84] succeeded in 2.545395039021969s: {'status': 'completed', 'feature_views': ['hcp_conversion_features', 'hcp_engagement_features', 'hcp_profile_features', 'patient_journey_features', 'patient_adherence_features', 'trigger_effectiveness_features', 'trigger_response_features', 'territory_performance_features', 'goldstd_cohort_features', 'goldstd_hcp_cohort_features'], 'end_date': '2026-09-23T00:22:21.625808+00:00', 'duration_seconds': 1.978069, 'incremental': True, 'materializer': 'remote:http://feast:6566', 'mode': 'incremental'}
+[2026-09-23 00:22:25,471: INFO/ForkPoolWorker-1] Feast client closed
+[2026-09-23 00:22:25,904: INFO/ForkPoolWorker-1] Feast tracking: recorded 10 freshness check row(s)
+[2026-09-23 00:22:25,905: WARNING/ForkPoolWorker-1] Feature freshness FAILED: 10 stale ['hcp_conversion_features', 'hcp_engagement_features', 'hcp_profile_features', 'patient_journey_features', 'patient_adherence_features', 'trigger_effectiveness_features', 'trigger_response_features', 'territory_performance_features', 'goldstd_cohort_features', 'goldstd_hcp_cohort_features'], 0 unverifiable []
+[2026-09-23 00:22:25,932: WARNING/ForkPoolWorker-1] ALERT: feature freshness FAILED — 10 stale ['hcp_conversion_features', 'hcp_engagement_features', 'hcp_profile_features', 'patient_journey_features', 'patient_adherence_features', 'trigger_effectiveness_features', 'trigger_response_features', 'territory_performance_features', 'goldstd_cohort_features', 'goldstd_hcp_cohort_features'], 0 unverifiable []
+[2026-09-23 00:22:26,014: INFO/ForkPoolWorker-1] Task src.tasks.check_feature_freshness[70cba100-0923-4f5a-899a-c4e95847138d] succeeded in 2.1580399805679917s: {'status': 'completed', 'fresh': False, 'stale_features': [{'feature_view': 'hcp_conversion_features', 'last_updated': '2026-09-21T00:00:00+00:00', 'age_hours': 48.37334525944444}, {'feature_view': 'hcp_engagement_features', 'last_updated': '2026-09-21T00:00:00+00:00', 'age_hours': 48.37334525944444}, {'feature_view': 'hcp_profile_features', 'last_updated': '2026-07-21T23:39:55.695178+00:00', 'age_hours': 1512.7078743766667}, {'feature_view': 'patient_journey_features', 'last_updated': '2026-09-21T00:00:00+00:00', 'age_hours': 48.37334525944444}, {'feature_view': 'patient_adherence_features', 'last_updated': '2026-09-21T00:00:00+00:00', 'age_hours': 48.37334525944444}, {'feature_view': 'trigger_effectiveness_features', 'last_updated': '2026-09-21T00:00:00+00:00', 'age_hours': 48.37334525944444}, {'feature_view': 'trigger_response_features', 'last_updated': '2026-09-21T00:00:00+00:00', 'age_hours': 48.37334525944444}, {'feature_view': 'territory_performance_features', 'last_updated': '2026-09-21T00:00:00+00:00', ...}]}
+--- e2i_feast log tail ---
+Materializing [1m[32m10[0m feature views to [1m[32m2026-09-23 00:22:21+00:00[0m into the [1m[32mredis[0m online store.
+172.20.0.8:55752 - "POST /materialize-incremental HTTP/1.1" 200
+
+31/31 checks passed
