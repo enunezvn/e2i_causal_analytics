@@ -10,10 +10,11 @@ modules only; never another route module or the package root.
 """
 
 import asyncio
+import contextlib
 import logging
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncIterator, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
@@ -56,6 +57,111 @@ router = APIRouter()
 _agent_analysis_store: DurableJobStore["AgentCausalAnalysisResponse"] = DurableJobStore(
     "causal:agent_analyze", AgentCausalAnalysisResponse, ttl_seconds=_CAUSAL_JOB_TTL_SECONDS
 )
+# #2233: liveness heartbeat + read-repair, the mechanism ``discovery.py`` already
+# uses on this store class. gunicorn's ``worker_abort`` hook never fires under
+# ``UvicornWorker`` (config/gunicorn.conf.py, measured), so a worker aborted
+# mid-task (code 134, live 2026-09-22) cannot close its own row and the row used
+# to stay ``running`` for the 8h TTL. The task stamps this sidecar every INTERVAL
+# (the loop is free to beat: the heavy steps run in worker threads); a poll on
+# ANY worker repairs a non-terminal row whose stamp is older than TTL (= the
+# gunicorn ``--timeout``: a loop stalled that long is killed anyway) to
+# ``failed`` with the reason in ``warnings`` — the schema's reason channel.
+_TERMINAL_AGENT_STATUSES = frozenset({"completed", "needs_review", "failed"})
+_AGENT_ALIVE_MARKER = "alive"
+_AGENT_HEARTBEAT_INTERVAL_SECONDS: float = 15.0
+_AGENT_HEARTBEAT_TTL_SECONDS: int = 120
+_AGENT_INTERRUPTED_WARNING = (
+    "The analysis was interrupted before it finished (the API worker was aborted, "
+    "restarted or recycled); no estimate was produced. Re-submit the analysis."
+)
+
+
+async def _touch_agent_heartbeat(analysis_id: str) -> None:
+    """Stamp the liveness sidecar; a failed touch must never end the run or the beat."""
+    try:
+        await _agent_analysis_store.touch_marker(
+            analysis_id, _AGENT_ALIVE_MARKER, ttl_seconds=_AGENT_HEARTBEAT_TTL_SECONDS
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"agent-analyze {analysis_id}: heartbeat touch failed: {e}")
+
+
+async def _agent_is_alive(analysis_id: str) -> bool:
+    """True while the owning task beats. A store that cannot answer counts as
+    alive: repairing on a read error would fail a run that may well be live."""
+    try:
+        age = await _agent_analysis_store.marker_age_seconds(analysis_id, _AGENT_ALIVE_MARKER)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"agent-analyze {analysis_id}: heartbeat read failed, assuming alive: {e}")
+        return True
+    return age is not None and age <= _AGENT_HEARTBEAT_TTL_SECONDS
+
+
+async def _repair_if_orphaned(job: AgentCausalAnalysisResponse) -> AgentCausalAnalysisResponse:
+    """Read-repair for an orphaned run: a non-terminal row whose task no longer
+    beats is over. Mark it ``failed`` with the reason, fabricate nothing, and
+    PERSIST it so every later poll (on any worker) agrees. Terminal rows are
+    returned as-is — their task is gone because it finished."""
+    if job.status in _TERMINAL_AGENT_STATUSES or await _agent_is_alive(job.analysis_id):
+        return job
+    # The store has no compare-and-set. Re-read immediately before writing so a
+    # result the task published between the liveness check and this write is
+    # never replaced (codex r1 HIGH); the residual window is one read + one
+    # write on this worker, and the task guards its own side symmetrically
+    # (``_publish_unless_terminal``: a repaired row stands).
+    current = await _agent_analysis_store.get(job.analysis_id)
+    if current is not None and current.status in _TERMINAL_AGENT_STATUSES:
+        return current
+    job = current or job
+    repaired = job.model_copy(
+        update={"status": "failed", "warnings": [*job.warnings, _AGENT_INTERRUPTED_WARNING]}
+    )
+    logger.warning(
+        f"agent-analyze {job.analysis_id}: no heartbeat for a `{job.status}` row; "
+        "repaired to failed"
+    )
+    await _agent_analysis_store.set(job.analysis_id, repaired)
+    return repaired
+
+
+async def _publish_unless_terminal(analysis_id: str, row: AgentCausalAnalysisResponse) -> None:
+    """The task's writes. A row some worker's poll already closed as ``failed``
+    (no live heartbeat seen — e.g. THIS worker's beats never reached Redis) is
+    terminal to the caller, who was told to re-submit: publishing over it would
+    resurrect a run nobody is watching and contradict what the API answered.
+    The repaired row stands (the discover-effects contract, discovery.py)."""
+    current = await _agent_analysis_store.get(analysis_id)
+    if current is not None and current.status in _TERMINAL_AGENT_STATUSES:
+        logger.warning(
+            f"agent-analyze {analysis_id}: row already terminal (`{current.status}`, "
+            f"repaired by a poll); not publishing `{row.status}` over it"
+        )
+        return
+    await _agent_analysis_store.set(analysis_id, row)
+
+
+async def _beat_agent_heartbeat(analysis_id: str) -> None:
+    while True:
+        await _touch_agent_heartbeat(analysis_id)
+        await asyncio.sleep(_AGENT_HEARTBEAT_INTERVAL_SECONDS)
+
+
+@contextlib.asynccontextmanager
+async def _agent_heartbeat(analysis_id: str) -> AsyncIterator[None]:
+    """Beat for the duration of the block. First beat inline, BEFORE anything
+    else: a created task only runs once the coroutine suspends. Started before
+    the heavy-compute slot is acquired, so a run queued behind another analysis
+    is still alive; cancelled on every exit path."""
+    await _touch_agent_heartbeat(analysis_id)
+    heartbeat = asyncio.create_task(_beat_agent_heartbeat(analysis_id))
+    try:
+        yield
+    finally:
+        heartbeat.cancel()
+        try:
+            await heartbeat
+        except asyncio.CancelledError:
+            pass
 
 
 # =============================================================================
@@ -286,6 +392,9 @@ async def run_causal_agent_analysis(
         latency_ms=0,
     )
     await _agent_analysis_store.set(analysis_id, pending)
+    # Alive from the moment the row exists: a poll that lands before the task's
+    # first beat must not declare a brand-new job dead (#2233).
+    await _touch_agent_heartbeat(analysis_id)
     background_tasks.add_task(
         _run_agent_analysis_task,
         analysis_id,
@@ -310,7 +419,7 @@ async def get_causal_agent_analysis(analysis_id: str) -> AgentCausalAnalysisResp
     job = await _agent_analysis_store.get(analysis_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Analysis {analysis_id} not found")
-    return job
+    return await _repair_if_orphaned(job)
 
 
 async def _expert_review_repo_factory() -> Any:
@@ -372,6 +481,9 @@ async def _run_agent_analysis_task(
 ) -> None:
     """Background: run the agent on the pre-loaded frame; cache the result.
 
+    Runs under the liveness heartbeat (#2233, ``_agent_heartbeat``) so a poll
+    can tell a live run from one orphaned by an aborted worker.
+
     The state is built DIRECTLY (not via CausalImpactAgent, whose wrapper would
     short-circuit a "synthetic" data_source to fast OLS) — so "Auto" runs the
     real energy-score selection across the registry. ``data_source`` here is only
@@ -379,165 +491,168 @@ async def _run_agent_analysis_task(
     refutation is bounded so the run completes in minutes (not the full
     ~610-re-estimation suite), with a generous wall-clock cap.
     """
-    import time as _time
+    async with _agent_heartbeat(analysis_id):
+        import time as _time
 
-    prev = await _agent_analysis_store.get(analysis_id)
-    if prev is not None:
-        await _agent_analysis_store.set(analysis_id, prev.model_copy(update={"status": "running"}))
-
-    parameters: Dict[str, Any] = {}
-    if request.estimator:
-        parameters["method"] = request.estimator
-    parameters.setdefault(
-        "refutation_config",
-        {
-            "bootstrap": {"num_bootstraps": 20},
-            "placebo_treatment": {"num_simulations": 10},
-            "data_subset": {"num_subsets": 5},
-            "random_common_cause": {"num_simulations": 10},
-        },
-    )
-    # #2007: the declared negative-control outcome (None when undeclared — the
-    # runner then emits SKIPPED ``no_negative_control_declared``). The submit
-    # endpoint fetched it as a passthrough column of ``df``; it is SPLIT OFF
-    # here into its own data_cache entry, index-aligned with the estimation
-    # frame, because two existing consumers treat every non-question column of
-    # ``estimation_data`` as a covariate: guided discovery tiers all of them as
-    # candidate confounders (graph_builder), and the estimator's no-backdoor
-    # fallback adjusts on all of them (estimation). A control that entered
-    # either would corrupt the very estimate it is meant to check.
-    negative_control = _negative_control_outcome(
-        request.dataset, request.treatment_var, request.outcome_var
-    )
-    data_cache: Dict[str, Any] = {"estimation_data": df}
-    if negative_control and negative_control in df.columns:
-        data_cache["negative_control_data"] = df[[negative_control]]
-        data_cache["estimation_data"] = df.drop(columns=[negative_control])
-    initial_state: Dict[str, Any] = {
-        "query": (
-            f"What is the causal effect of {request.treatment_var} on {request.outcome_var}?"
-        ),
-        "query_id": analysis_id,
-        "treatment_var": request.treatment_var,
-        "outcome_var": request.outcome_var,
-        "confounders": covariates,
-        # Fix 4 (two-channel confounder wiring): ``modeled_confounders`` is the
-        # ADJUSTMENT-GUARANTEE channel — every covariate listed here is unioned
-        # into the final adjustment set no matter what the discovered DAG shows,
-        # so the estimate's conditioning set stays exactly the declared
-        # covariates (unchanged vs the old wiring by construction).
-        "modeled_confounders": covariates,
-        # STRUCTURAL-PRIOR channel: deliberately EMPTY. The dataset spec's
-        # covariate list is a role ALLOWLIST (an offer of adjustable columns),
-        # not a per-question assertion that each is a genuine confounder — no
-        # curated structural subset exists at this call site. Declaring them all
-        # here (the old single-channel behavior) forced conf->treatment and
-        # conf->outcome as REQUIRED edges for every covariate, making the
-        # shipped DAG identical for real data and pure noise (measured:
-        # F1 0.78, SHD 4 on the recovery benchmark). Empty anchors leave tiers +
-        # the estimand edge as the only prior, so the DATA selects the
-        # confounder edges (measured: F1 mean 0.93, SHD<=1 at n=2000) and the
-        # corroboration gate scores real evidence (bootstrap stability) instead
-        # of prior-determined renormalization.
-        "anchored_confounders": [],
-        # #1188: pre-treatment baselines for RCT efficiency adjustment —
-        # deliberately NOT in confounders (they are not backdoor variables;
-        # the estimation node routes them to the selector's
-        # efficiency_controls channel).
-        "baseline_covariates": list(baseline_covariates or []),
-        "data_source": data_source,
-        "data_cache": data_cache,
-        # Learn the DAG from data via GUIDED discovery (graph_builder anchors the
-        # treatment/outcome roles; the data selects the confounders). Falls back
-        # to the domain DAG if discovery is skipped or not accepted by the gate.
-        "auto_discover": request.auto_discover,
-        "discovery_guided": True,
-        # Lane E item 3(d): the feature-role panel, forwarded only when supplied
-        # (graph_builder keys off presence; see the state docstring). The
-        # declared covariates above stay as submitted — the panel narrows them in
-        # graph_builder, with a named warning. ``approved_structure_roles`` is
-        # NOT a request field: approval is resolved server-side (Lane B).
-        **(
-            {"feature_role_panel": _normalised_panel(request.feature_role_panel)}
-            if request.feature_role_panel is not None
-            else {}
-        ),
-        "parameters": parameters,
-        "interpretation_depth": "standard",
-        "brand": request.brand,
-        # DESIGN declaration from the dataset spec (per-treatment): a genuinely
-        # randomized assignment reports the E-value sensitivity as information
-        # instead of an unmeasured-confounding BLOCK gate, and the narrative
-        # stops calling the RCT "observational data". Fail-closed default False.
-        "randomized_design": _is_randomized_treatment(request.dataset, request.treatment_var),
-        # #2007: consumed by the refutation node (negative-control-outcome test);
-        # the column itself is data_cache["negative_control_data"] (see above).
-        "negative_control_outcome": negative_control,
-        # Cooperative compute deadline so the refutation suite self-terminates
-        # before the hard wait_for cap below (orphan-fix): timed-out runs return
-        # cleanly instead of orphaning an uncancellable to_thread refutation.
-        "compute_deadline": time.monotonic() + _REFUTATION_COMPUTE_BUDGET_S,
-        "errors": [],
-        "warnings": [],
-        "fallback_used": False,
-        "retry_count": 0,
-    }
-
-    # Lane B (real-data causal estimation): an APPROVED expert review of a
-    # structural-author cohort DAG for this (T, Y) seeds the structural-prior
-    # channel (anchored_confounders) and the approved roles. Unapproved machine
-    # attestations never do; a store outage leaves the run prior-less and says
-    # so in ``warnings`` (spec §3 Lane B item 5, §5).
-    await _apply_approved_structural_prior(initial_state, request, covariates)
-
-    start = _time.time()
-    try:
-        from src.agents.causal_impact.graph import create_causal_impact_graph
-
-        graph = create_causal_impact_graph()
-        # Bound concurrency to ONE per-worker heavy-compute slot (OOM guard),
-        # mirroring the hierarchical / parallel endpoints.
-        async with heavy_compute_slot():
-            final_state = await asyncio.wait_for(
-                graph.ainvoke(initial_state), timeout=_AGENT_HARD_TIMEOUT_S
+        prev = await _agent_analysis_store.get(analysis_id)
+        if prev is not None:
+            await _publish_unless_terminal(
+                analysis_id, prev.model_copy(update={"status": "running"})
             )
-        response = _agent_state_to_response(
-            analysis_id=analysis_id,
-            request=request,
-            data_source=data_source,
-            n_rows=int(df.shape[0]),
-            final_state=final_state,
-            latency_ms=int((_time.time() - start) * 1000),
+
+        parameters: Dict[str, Any] = {}
+        if request.estimator:
+            parameters["method"] = request.estimator
+        parameters.setdefault(
+            "refutation_config",
+            {
+                "bootstrap": {"num_bootstraps": 20},
+                "placebo_treatment": {"num_simulations": 10},
+                "data_subset": {"num_subsets": 5},
+                "random_common_cause": {"num_simulations": 10},
+            },
         )
-        # Store the result first so it is pollable immediately; the MLflow
-        # trail below is best-effort observability (wave-51 Gap B) and runs
-        # after, so tracking problems cannot affect the cached result.
-        await _agent_analysis_store.set(analysis_id, response)
-        await _record_agent_mlflow_run(
-            request=request,
-            analysis_id=analysis_id,
-            response=response,
-            final_state=final_state,
+        # #2007: the declared negative-control outcome (None when undeclared — the
+        # runner then emits SKIPPED ``no_negative_control_declared``). The submit
+        # endpoint fetched it as a passthrough column of ``df``; it is SPLIT OFF
+        # here into its own data_cache entry, index-aligned with the estimation
+        # frame, because two existing consumers treat every non-question column of
+        # ``estimation_data`` as a covariate: guided discovery tiers all of them as
+        # candidate confounders (graph_builder), and the estimator's no-backdoor
+        # fallback adjusts on all of them (estimation). A control that entered
+        # either would corrupt the very estimate it is meant to check.
+        negative_control = _negative_control_outcome(
+            request.dataset, request.treatment_var, request.outcome_var
         )
-    except Exception as e:  # noqa: BLE001 — cache a generic FAILED record
-        logger.error(f"Background causal agent analysis failed: {e}", exc_info=True)
-        await _agent_analysis_store.set(
-            analysis_id,
-            AgentCausalAnalysisResponse(
-                analysis_id=analysis_id,
-                status="failed",
-                treatment_var=request.treatment_var,
-                outcome_var=request.outcome_var,
-                dataset=request.dataset,
-                n_rows=int(df.shape[0]),
-                data_source=data_source,
-                dag=CausalDAGModel(),
-                statistical_significance=False,
-                refutation=RefutationSummary(),
-                warnings=["Analysis failed due to an internal error."],
-                latency_ms=int((_time.time() - start) * 1000),
+        data_cache: Dict[str, Any] = {"estimation_data": df}
+        if negative_control and negative_control in df.columns:
+            data_cache["negative_control_data"] = df[[negative_control]]
+            data_cache["estimation_data"] = df.drop(columns=[negative_control])
+        initial_state: Dict[str, Any] = {
+            "query": (
+                f"What is the causal effect of {request.treatment_var} on {request.outcome_var}?"
             ),
-        )
+            "query_id": analysis_id,
+            "treatment_var": request.treatment_var,
+            "outcome_var": request.outcome_var,
+            "confounders": covariates,
+            # Fix 4 (two-channel confounder wiring): ``modeled_confounders`` is the
+            # ADJUSTMENT-GUARANTEE channel — every covariate listed here is unioned
+            # into the final adjustment set no matter what the discovered DAG shows,
+            # so the estimate's conditioning set stays exactly the declared
+            # covariates (unchanged vs the old wiring by construction).
+            "modeled_confounders": covariates,
+            # STRUCTURAL-PRIOR channel: deliberately EMPTY. The dataset spec's
+            # covariate list is a role ALLOWLIST (an offer of adjustable columns),
+            # not a per-question assertion that each is a genuine confounder — no
+            # curated structural subset exists at this call site. Declaring them all
+            # here (the old single-channel behavior) forced conf->treatment and
+            # conf->outcome as REQUIRED edges for every covariate, making the
+            # shipped DAG identical for real data and pure noise (measured:
+            # F1 0.78, SHD 4 on the recovery benchmark). Empty anchors leave tiers +
+            # the estimand edge as the only prior, so the DATA selects the
+            # confounder edges (measured: F1 mean 0.93, SHD<=1 at n=2000) and the
+            # corroboration gate scores real evidence (bootstrap stability) instead
+            # of prior-determined renormalization.
+            "anchored_confounders": [],
+            # #1188: pre-treatment baselines for RCT efficiency adjustment —
+            # deliberately NOT in confounders (they are not backdoor variables;
+            # the estimation node routes them to the selector's
+            # efficiency_controls channel).
+            "baseline_covariates": list(baseline_covariates or []),
+            "data_source": data_source,
+            "data_cache": data_cache,
+            # Learn the DAG from data via GUIDED discovery (graph_builder anchors the
+            # treatment/outcome roles; the data selects the confounders). Falls back
+            # to the domain DAG if discovery is skipped or not accepted by the gate.
+            "auto_discover": request.auto_discover,
+            "discovery_guided": True,
+            # Lane E item 3(d): the feature-role panel, forwarded only when supplied
+            # (graph_builder keys off presence; see the state docstring). The
+            # declared covariates above stay as submitted — the panel narrows them in
+            # graph_builder, with a named warning. ``approved_structure_roles`` is
+            # NOT a request field: approval is resolved server-side (Lane B).
+            **(
+                {"feature_role_panel": _normalised_panel(request.feature_role_panel)}
+                if request.feature_role_panel is not None
+                else {}
+            ),
+            "parameters": parameters,
+            "interpretation_depth": "standard",
+            "brand": request.brand,
+            # DESIGN declaration from the dataset spec (per-treatment): a genuinely
+            # randomized assignment reports the E-value sensitivity as information
+            # instead of an unmeasured-confounding BLOCK gate, and the narrative
+            # stops calling the RCT "observational data". Fail-closed default False.
+            "randomized_design": _is_randomized_treatment(request.dataset, request.treatment_var),
+            # #2007: consumed by the refutation node (negative-control-outcome test);
+            # the column itself is data_cache["negative_control_data"] (see above).
+            "negative_control_outcome": negative_control,
+            # Cooperative compute deadline so the refutation suite self-terminates
+            # before the hard wait_for cap below (orphan-fix): timed-out runs return
+            # cleanly instead of orphaning an uncancellable to_thread refutation.
+            "compute_deadline": time.monotonic() + _REFUTATION_COMPUTE_BUDGET_S,
+            "errors": [],
+            "warnings": [],
+            "fallback_used": False,
+            "retry_count": 0,
+        }
+
+        # Lane B (real-data causal estimation): an APPROVED expert review of a
+        # structural-author cohort DAG for this (T, Y) seeds the structural-prior
+        # channel (anchored_confounders) and the approved roles. Unapproved machine
+        # attestations never do; a store outage leaves the run prior-less and says
+        # so in ``warnings`` (spec §3 Lane B item 5, §5).
+        await _apply_approved_structural_prior(initial_state, request, covariates)
+
+        start = _time.time()
+        try:
+            from src.agents.causal_impact.graph import create_causal_impact_graph
+
+            graph = create_causal_impact_graph()
+            # Bound concurrency to ONE per-worker heavy-compute slot (OOM guard),
+            # mirroring the hierarchical / parallel endpoints.
+            async with heavy_compute_slot():
+                final_state = await asyncio.wait_for(
+                    graph.ainvoke(initial_state), timeout=_AGENT_HARD_TIMEOUT_S
+                )
+            response = _agent_state_to_response(
+                analysis_id=analysis_id,
+                request=request,
+                data_source=data_source,
+                n_rows=int(df.shape[0]),
+                final_state=final_state,
+                latency_ms=int((_time.time() - start) * 1000),
+            )
+            # Store the result first so it is pollable immediately; the MLflow
+            # trail below is best-effort observability (wave-51 Gap B) and runs
+            # after, so tracking problems cannot affect the cached result.
+            await _publish_unless_terminal(analysis_id, response)
+            await _record_agent_mlflow_run(
+                request=request,
+                analysis_id=analysis_id,
+                response=response,
+                final_state=final_state,
+            )
+        except Exception as e:  # noqa: BLE001 — cache a generic FAILED record
+            logger.error(f"Background causal agent analysis failed: {e}", exc_info=True)
+            await _publish_unless_terminal(
+                analysis_id,
+                AgentCausalAnalysisResponse(
+                    analysis_id=analysis_id,
+                    status="failed",
+                    treatment_var=request.treatment_var,
+                    outcome_var=request.outcome_var,
+                    dataset=request.dataset,
+                    n_rows=int(df.shape[0]),
+                    data_source=data_source,
+                    dag=CausalDAGModel(),
+                    statistical_significance=False,
+                    refutation=RefutationSummary(),
+                    warnings=["Analysis failed due to an internal error."],
+                    latency_ms=int((_time.time() - start) * 1000),
+                ),
+            )
 
 
 def _agent_mlflow_output(
