@@ -1565,12 +1565,22 @@ class TriggerRetrainingRequest(BaseModel):
     auto_approve: bool = Field(default=False, description="Auto-approve retraining")
 
     # Cohort identity for a REAL retrain (Phase D): ``data_source`` is a Supabase
-    # table name OR the loader's file-source dict ({"type": "file_dir"|"files", ...}
-    # — a bare path string is read as a TABLE, #2207); ``target_outcome`` the target
-    # column; ``feature_manifest_source`` opts into Layer-5 contracts. Optional at the
+    # table name, the loader's file-source dict ({"type": "file_dir"|"files", ...}
+    # — a bare path string is read as a TABLE, #2207), OR a table cohort dict
+    # ({"type": "table", "table": "patient_journeys", "filters": {"brand": "Kisqali",
+    # "is_synthetic": true}, "columns": [...covariates..., "treatment_initiated"]} —
+    # #2207 split contract: the table's ``data_split`` column is honoured verbatim,
+    # ``filters`` scope the query, ``columns`` scope the SELECT and must include
+    # ``target_outcome``); ``target_outcome`` the target column;
+    # ``feature_manifest_source`` opts into Layer-5 contracts. Optional at the
     # schema layer so drift/scheduled callers still validate — the job fails closed.
     data_source: Optional[Union[str, Dict[str, Any]]] = Field(
-        None, description="Committed cohort: a table name or a file-source dict"
+        None,
+        description=(
+            "Committed cohort: a table name, a file-source dict "
+            '({"type": "file_dir"|"files", ...}) or a table cohort dict '
+            '({"type": "table", "table": ..., "filters": {...}, "columns": [...]})'
+        ),
     )
     target_outcome: Optional[str] = Field(None, description="Prediction target column")
     brand: Optional[str] = Field(None, description="Brand context")
