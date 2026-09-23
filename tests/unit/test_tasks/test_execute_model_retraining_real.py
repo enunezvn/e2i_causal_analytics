@@ -52,6 +52,25 @@ def test_cohort_input_maps_all_fields() -> None:
     assert inp["business_objective"]
 
 
+_TABLE_CONTRACT = {
+    "type": "table",
+    "table": "patient_journeys",
+    "filters": {"brand": "Kisqali", "is_synthetic": True},
+    "columns": ["disease_severity", "academic_hcp", "treatment_initiated"],
+}
+
+
+def test_cohort_input_passes_table_dict_data_source_through_unchanged() -> None:
+    """#2207 split contract: a table cohort dict (migration 151's registry value,
+    decoded by the sweep) reaches MLFoundationPipeline.run verbatim — no str()
+    flattening, no key loss — so data_loader can route on its ``type``."""
+    cfg = {**_FULL_COHORT, "data_source": dict(_TABLE_CONTRACT)}
+    inp = _cohort_input_from_training_config(cfg)
+    assert inp["data_source"] == _TABLE_CONTRACT
+    assert isinstance(inp["data_source"], dict)
+    assert inp["target_outcome"] == "initiated_biologic_180d"
+
+
 def test_cohort_input_missing_data_source_fails_loud() -> None:
     cfg = dict(_FULL_COHORT)
     del cfg["data_source"]
