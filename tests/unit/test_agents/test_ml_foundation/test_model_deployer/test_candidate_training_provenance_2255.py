@@ -6,13 +6,14 @@ initiation contracts: ``filters.is_synthetic = true``) landed with NULL, and the
 promotion gate (``MLModelRegistryRepository.transition_stage`` refuses
 ``synthetic_gold -> production``) could not see it.
 
-After: the provenance is DERIVED from the load itself — a table cohort contract whose
-``filters`` pin ``is_synthetic`` selects only synthetic rows (``synthetic_gold``, the
-only synthetic value migration 083 allows) or only real rows (``real``). When the load
-does not pin it, a retrain inherits its parent's provenance (it trains on the parent's
-contract); a non-retrain run stays NULL (unknown) rather than being guessed. Deriving
-first matters: a retrain of a ``synthetic_gold`` parent on a REAL cohort (the remedy
-#968 prescribes) must not inherit the block.
+After: the provenance is DERIVED from what was trained on — a table cohort contract
+whose ``filters`` pin ``is_synthetic`` selects only synthetic rows (``synthetic_gold``,
+the only synthetic value migration 083 allows) or only real rows (``real``), and a real
+load the trainer augmented with synthetic rows is ``mixed``. An unpinned load stays NULL
+(unknown), never guessed — not even from the parent (codex r1: an unpinned load is real
+rows in strict mode and both in showcase mode, whatever the parent was trained on). A
+retrain of a ``synthetic_gold`` parent on a REAL cohort (the remedy #968 prescribes) is
+therefore ``real`` and promotable.
 
 Real code over the in-memory async supabase fake (the #2242 harness); patched only:
 trigger side channels, scope_definer memory/Opik writers, and the MLflow call.
@@ -162,10 +163,11 @@ async def test_a_retrain_on_the_synthetic_gold_contract_is_labelled_and_refused_
 
 
 @pytest.mark.asyncio
-async def test_a_retrain_whose_load_is_not_pinned_inherits_the_parents_provenance():
+async def test_a_retrain_whose_load_is_not_pinned_does_not_inherit_the_parents_label():
+    """codex r1 HIGH: the parent's label says nothing about an unpinned load's rows."""
     unpinned = _table(brand="Kisqali")
     db, _, _, out = await _goldstd_retrain({"data_source": unpinned})
-    assert _row(db, out["model_registry_id"])["training_provenance"] == "synthetic_gold"
+    assert _row(db, out["model_registry_id"])["training_provenance"] is None
 
 
 @pytest.mark.asyncio
@@ -217,10 +219,10 @@ async def test_a_non_retrain_run_with_an_unpinned_source_stays_unknown():
 async def test_a_reused_row_heals_a_null_provenance_but_never_overwrites_one():
     db = _plain_db()
     pinned = _table(brand="Kisqali", is_synthetic=True)
-    first = await _register(db, "exp_kisq_al_1", None, "patient_journeys", run_id="run-a")
+    first = await _register(db, "exp_kisq_al_1", None, pinned, run_id="run-a")
     row = _row(db, first["model_registry_id"])
-    assert row["training_provenance"] is None
-    # the same run re-deployed (the reuse path) now knows its load
+    row["training_provenance"] = None  # a row written before #2255
+    # the same run re-deployed (the reuse path) heals the NULL column
     again = await _register(db, "exp_kisq_al_1", None, pinned, run_id="run-a")
     assert again["model_registry_id"] == row["id"]
     assert row["training_provenance"] == "synthetic_gold"
@@ -229,11 +231,108 @@ async def test_a_reused_row_heals_a_null_provenance_but_never_overwrites_one():
     assert row["training_provenance"] == "synthetic_gold"  # heal is NULL-only
 
 
-@pytest.mark.asyncio
-async def test_the_retrained_identity_carries_the_parents_provenance():
-    from src.services.cohort_contract import load_registry_model_identity
+# ------------------------------------------------------- codex r1 (2026-09-23) findings
 
-    db, ids = _goldstd_db()
-    db.rows("ml_model_registry")[0]["training_provenance"] = "synthetic_gold"
-    identity = await load_registry_model_identity(db, ids["Kisqali"]["model"])
-    assert identity["training_provenance"] == "synthetic_gold"
+
+@pytest.mark.parametrize(
+    "pinned, augmented, expected",
+    [
+        (False, True, "mixed"),  # real rows + synthetic augmentation rows
+        (True, True, "synthetic_gold"),  # every row is synthetic either way
+        (False, False, "real"),
+        (None, True, None),  # unknown load stays unknown
+    ],
+)
+def test_synthetic_augmentation_is_part_of_the_provenance(pinned, augmented, expected):
+    from src.agents.ml_foundation.model_deployer.nodes.registry_manager import (
+        _candidate_training_provenance,
+    )
+
+    source = _table(brand="Kisqali") if pinned is None else _table(is_synthetic=pinned)
+    state = {"data_source": source, "training_augmentation_applied": augmented}
+    assert _candidate_training_provenance(state) == expected
+
+
+@pytest.mark.asyncio
+async def test_the_augmentation_flag_reaches_the_deployer_state():
+    """pipeline -> deployer input -> ModelDeployerAgent.run -> declared state field."""
+    from src.agents.ml_foundation.model_deployer.agent import ModelDeployerAgent
+    from src.agents.ml_foundation.model_deployer.state import ModelDeployerState
+    from src.agents.tier_0.pipeline import (
+        MLFoundationPipeline,
+        PipelineConfig,
+        PipelineResult,
+        PipelineStage,
+    )
+
+    assert ModelDeployerState(audit_workflow_id=uuid4()).training_augmentation_applied is False
+    deployer_input: Dict[str, Any] = {}
+
+    class _Deployer:
+        async def run(self, payload):
+            deployer_input.update(payload)
+            return {"deployment_successful": False}
+
+    pipeline = MLFoundationPipeline(PipelineConfig())
+    result = PipelineResult(
+        pipeline_run_id="run-1", status="running", current_stage=PipelineStage.MODEL_DEPLOYMENT
+    )
+    result.experiment_id = "exp_x"
+    result.scope_spec = {}
+    result.training_result = {"model_artifact_uri": "runs:/x/model", "validation_metrics": {}}
+    result.training_augmentation = {"applied": True, "rows_added": 40}
+    with (
+        patch.object(MLFoundationPipeline, "_get_agent", return_value=_Deployer()),
+        patch.object(MLFoundationPipeline, "_get_audit_service", return_value=None),
+    ):
+        await pipeline._run_model_deployment(
+            {"target_outcome": "treatment_initiated", "data_source": "patient_journeys"},
+            result,
+            None,
+        )
+    assert deployer_input["training_augmentation_applied"] is True
+
+    captured: Dict[str, Any] = {}
+
+    class _Graph:
+        async def ainvoke(self, initial_state, *_a, **_k):
+            captured.update(dict(initial_state))
+            return {**initial_state, "deployment_successful": False}
+
+    agent = ModelDeployerAgent.__new__(ModelDeployerAgent)
+    agent.agent_name = "model_deployer"
+    agent.tier = 0
+    agent.graph = _Graph()
+    with patch(
+        "src.agents.ml_foundation.model_deployer.agent._get_opik_connector", return_value=None
+    ):
+        try:
+            await agent.run(
+                {
+                    "model_uri": "runs:/x/model",
+                    "experiment_id": "exp_x",
+                    "validation_metrics": {},
+                    "success_criteria_met": True,
+                    "deployment_name": "d",
+                    "training_augmentation_applied": True,
+                }
+            )
+        except Exception:
+            pass  # the stub graph's output need not satisfy the agent's post-processing
+    assert captured["training_augmentation_applied"] is True
+
+
+@pytest.mark.asyncio
+async def test_reuse_heals_only_a_provenance_the_stored_cohort_agrees_with():
+    """codex r1 HIGH: a redeploy claiming a different cohort than the artifact's stored
+    one must not relabel it (a stored synthetic cohort healed 'real' would pass #968)."""
+    db = _plain_db()
+    synthetic = _table(brand="Kisqali", is_synthetic=True)
+    first = await _register(db, "exp_kisq_al_1", None, synthetic, run_id="run-a")
+    row = _row(db, first["model_registry_id"])
+    row["training_provenance"] = None  # a row written before #2255
+    real = _table(brand="Kisqali", is_synthetic=False)
+    await _register(db, "exp_kisq_al_1", None, real, run_id="run-a")
+    assert row["training_provenance"] is None  # the claim contradicts the stored cohort
+    await _register(db, "exp_kisq_al_1", None, synthetic, run_id="run-a")
+    assert row["training_provenance"] == "synthetic_gold"  # agreeing claim heals

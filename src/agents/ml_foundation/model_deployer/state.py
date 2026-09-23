@@ -268,6 +268,10 @@ class ModelDeployerState(BaseAgentSchema):
     # that model's experiment instead of a generated "<experiment_id>_deployment" name.
     retrain_of: Optional[Dict[str, Any]] = None
 
+    # #2255: True when the trainer appended synthetic augmentation rows (the pipeline's
+    # training_augmentation.applied) — a real load plus those rows is 'mixed'.
+    training_augmentation_applied: bool = False
+
     # === OUTPUT FIELDS (Final) ===
 
     # Deployment manifest (K8s / serving)

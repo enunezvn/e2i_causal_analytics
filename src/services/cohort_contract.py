@@ -162,7 +162,7 @@ async def load_registry_model_identity(client: Any, model_id: Optional[str]) -> 
     """The LOGICAL identity of the registry row a retrain refreshes (#2242), or ``{}``.
 
     ``{model_id, model_name, model_version, experiment_id, experiment_name,
-    prediction_target, training_provenance}`` — the registered model the candidate becomes a new version of and
+    prediction_target}`` — the registered model the candidate becomes a new version of and
     the ``ml_experiments`` row it attaches to (``prediction_target`` is that experiment's
     logical target, e.g. ``initiation_kisqali``; the cohort contract's
     ``target_outcome`` stays the physical frame column the loader needs). ``{}`` when any
@@ -177,7 +177,7 @@ async def load_registry_model_identity(client: Any, model_id: Optional[str]) -> 
     try:
         reg = await (
             client.table("ml_model_registry")
-            .select("id, model_name, model_version, experiment_id, training_provenance")
+            .select("id, model_name, model_version, experiment_id")
             .eq("id", model_id)
             .limit(1)
             .execute()
@@ -206,8 +206,6 @@ async def load_registry_model_identity(client: Any, model_id: Optional[str]) -> 
         "experiment_id": str(row["experiment_id"]),
         "experiment_name": exp_rows[0]["experiment_name"],
         "prediction_target": exp_rows[0].get("prediction_target") or None,
-        # #2255: the fallback provenance of a candidate whose load does not pin it.
-        "training_provenance": row.get("training_provenance") or None,
     }
     return {k: v for k, v in identity.items() if v is not None}
 

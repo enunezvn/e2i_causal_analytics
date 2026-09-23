@@ -959,6 +959,45 @@ async def _get_async_supabase_client_or_none() -> Optional[Any]:
         return None
 
 
+async def _heal_training_provenance(client: Any, row_id: str, provenance: str) -> None:
+    """NULL-only heal of a reused row's ``training_provenance`` (#2255, codex r1).
+
+    Only when the row's STORED cohort contract derives the same provenance: a redeploy
+    claiming a different cohort than the artifact was trained on must not relabel it
+    (a synthetic cohort healed ``real`` would pass the #968 gate). A row with no
+    derivable stored contract is left NULL.
+    """
+    from src.services.cohort_contract import training_provenance_from_contract
+
+    res = await (
+        client.table("ml_model_registry")
+        .select("cohort_data_source, training_provenance")
+        .eq("id", row_id)
+        .limit(1)
+        .execute()
+    )
+    rows = getattr(res, "data", None) or []
+    if not rows or rows[0].get("training_provenance"):
+        return
+    stored = training_provenance_from_contract(rows[0].get("cohort_data_source"))
+    if stored != provenance:
+        logger.warning(
+            "ml_model_registry %s: training_provenance %r not healed — the stored cohort "
+            "contract derives %r",
+            row_id,
+            provenance,
+            stored,
+        )
+        return
+    await (
+        client.table("ml_model_registry")
+        .update({"training_provenance": provenance})
+        .eq("id", row_id)
+        .is_("training_provenance", "null")
+        .execute()
+    )
+
+
 async def _persist_model_registry_row(
     client: Optional[Any],
     *,
@@ -1112,14 +1151,8 @@ async def _persist_model_registry_row(
         )
         if cohort:  # #2207: heal NULL contract columns on the reused row
             await heal_registry_cohort_contract(client, str(existing.id), cohort)
-        if training_provenance:  # #2255: same NULL-only heal
-            await (
-                client.table("ml_model_registry")
-                .update({"training_provenance": training_provenance})
-                .eq("id", str(existing.id))
-                .is_("training_provenance", "null")
-                .execute()
-            )
+        if training_provenance:
+            await _heal_training_provenance(client, str(existing.id), training_provenance)
         return str(existing.id)
 
     # 4. Source the NOT-NULL ``algorithm`` + ``hyperparameters`` from the REAL
@@ -1235,19 +1268,20 @@ def _cohort_contract_from_state(state: Any) -> Dict[str, Any]:
 def _candidate_training_provenance(state: Any) -> Optional[str]:
     """What the candidate was trained on (#2255), for the #968 promotion gate.
 
-    Derived from the load first (``training_provenance_from_contract``: a table
-    contract pinning ``is_synthetic``). Only when the load does not pin it does a
-    retrain inherit its parent's provenance — it trains on the parent's contract. The
-    order matters: a retrain of a ``synthetic_gold`` parent on a REAL cohort (the
-    remedy #968 prescribes) is ``real``, not the parent's block. A non-retrain run with
-    an unpinned load stays ``None`` (unknown) — never guessed.
+    Derived from the training data only: the load (``training_provenance_from_contract``
+    — a table contract pinning ``is_synthetic``) plus the trainer's opt-in synthetic
+    augmentation (``real`` rows + synthetic rows = ``mixed``). An unpinned load stays
+    ``None`` (unknown) — never inherited from a retrain's parent (its label says nothing
+    about an unpinned load's rows: real in strict mode, both on a showcase instance), so
+    a retrain of a ``synthetic_gold`` parent on a REAL cohort (the remedy #968
+    prescribes) is ``real``.
     """
     from src.services.cohort_contract import training_provenance_from_contract
 
-    derived = training_provenance_from_contract(state.get("data_source"))
-    if derived:
-        return derived
-    return (state.get("retrain_of") or {}).get("training_provenance") or None
+    loaded = training_provenance_from_contract(state.get("data_source"))
+    if loaded == "real" and state.get("training_augmentation_applied"):
+        return "mixed"
+    return loaded
 
 
 async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:

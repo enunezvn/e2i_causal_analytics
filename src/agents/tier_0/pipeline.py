@@ -1334,6 +1334,10 @@ class MLFoundationPipeline:
             "feature_manifest_source": deployer_scope_spec.get("feature_manifest_source"),
             # #2242: register a retrain's candidate as a new version of the retrained model.
             "retrain_of": input_data.get("retrain_of"),
+            # #2255: synthetic augmentation rows are part of the candidate's provenance.
+            "training_augmentation_applied": bool(
+                (result.training_augmentation or {}).get("applied")
+            ),
         }
 
         # Add shadow mode metrics if deploying to production
