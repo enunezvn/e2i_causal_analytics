@@ -1,7 +1,7 @@
 """Contract tests: nightly Job A reds caused by an UPSTREAM provider outage are
 routed to a distinct low-priority outcome, not the red alarm (#1804/#1813/#2173).
 
-The clinical-context and UMLS UTS live suites deliberately hit real providers
+The clinical-context, UMLS UTS and RxNav brand-alias live suites deliberately hit real providers
 so that an outage goes RED instead of silently skipping (#1612/#1629). That
 signal has correctly detected transient upstream failures, but each red used to
 file the same "Nightly slow-tests failed" alarm that a real regression files.
@@ -316,7 +316,6 @@ def test_similarly_named_umls_module_is_not_treated_as_the_live_suite(tmp_path: 
     assert outputs.get("classification") == "real", outputs
 
 
-
 # ── #2267: the RxNav brand-alias live test (added by #2217) ──────────────────
 # Run 35844937407 (2026-09-23 nightly, job "Slow Tests (tracked)"): RxNav was
 # unreachable and the test died on ``out["Kisqali"]``. The captured WARNING is
@@ -411,6 +410,7 @@ def test_similarly_named_brand_alias_module_is_not_treated_as_the_live_suite(
     cases = [(f"{_BRAND_ALIASES_LIVE}_regression", _BRAND_ALIASES_TEST, failure)]
     _, outputs = _classify(tmp_path, _junit(cases))
     assert outputs.get("classification") == "real", outputs
+
 
 def test_system_out_evidence_promotes_an_echo_to_hard(tmp_path: Path) -> None:
     """With `junit_logging=all` the fan-out echoes carry their captured WARNING

@@ -48,6 +48,11 @@ _CLINICAL_CLASSNAME_PREFIX = "tests.integration.test_clinical_context"
 _CLINICAL_FILE_PREFIX = "tests/integration/test_clinical_context"
 _UMLS_CLASSNAME = "tests.integration.test_kg.test_umls_uts_live"
 _UMLS_FILE = "tests/integration/test_kg/test_umls_uts_live.py"
+# #2267: the RxNav brand-alias live test. Its outage evidence is the logged
+# RxNav reason it puts in its own assertion message (a transport error names
+# the httpx class, a 5xx says "RxNav HTTP 5xx").
+_BRAND_ALIASES_CLASSNAME = "tests.integration.test_rag.test_brand_aliases_live"
+_BRAND_ALIASES_FILE = "tests/integration/test_rag/test_brand_aliases_live.py"
 
 # Hard evidence: the provider itself misbehaved on the wire. Sources: the
 # 08-24/08-25 outages ("ChEMBL HTTP 500", "HTTP 500 Internal Server Error"
@@ -113,6 +118,8 @@ def _in_family(testcase: ET.Element) -> bool:
         or file_attr == _CLINICAL_FILE_PREFIX
         or file_attr.startswith(f"{_CLINICAL_FILE_PREFIX}/")
         or file_attr == _UMLS_FILE
+        or classname == _BRAND_ALIASES_CLASSNAME
+        or file_attr == _BRAND_ALIASES_FILE
     )
 
 
