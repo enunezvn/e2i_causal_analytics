@@ -1,0 +1,4 @@
+experiments 360, results 360
+outcome_source counts: {'unit_outcomes': 360}
+effect equal within 1e-9: 360/360; sizes equal stored n: 360/360
+VERDICT PASS
