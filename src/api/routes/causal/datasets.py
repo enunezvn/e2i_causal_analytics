@@ -63,7 +63,9 @@ logger = logging.getLogger(__name__)
 # feature-store inputs. (Caught in adversarial review, 2026-06-29.)
 # treatment/outcome stay the curated causal columns (the synthetic gold-standard
 # only wires those relationships).
-_CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
+# Values are column-role lists, plus the optional string
+# ``feature_manifest_source`` (Lane B item 1) — hence ``Dict[str, Any]``.
+_CAUSAL_DATASET_SPECS: Dict[str, Dict[str, Any]] = {
     "patient_journeys": {
         "treatment": [
             "treatment_arm",
@@ -250,6 +252,17 @@ _CAUSAL_DATASET_SPECS: Dict[str, Dict[str, List[str]]] = {
             "persistent_at_180d",
         ],
         "covariate": list(MART_SAFE_FEATURES),
+        # Lane B item 1 (owner GO 2026-09-23, decision left open by PR #2230):
+        # the registered manifest (src.data.manifests.MANIFEST_SOURCES) this
+        # frame's feature-role panel and structural-author review are built
+        # under (scripts/measure_feature_role_panel.py --manifest-source
+        # optum_mart). Two consumers in src/api/routes/causal/agent.py arm on
+        # it: _apply_approved_structural_prior looks an APPROVED review up by
+        # (T, Y, brand, manifest) and stays silent when none exists, and
+        # _validate_feature_role_panel refuses (400) a request panel built
+        # under another manifest. Lane C's csu_escalation_causal declares
+        # nothing until its own panel/review exist.
+        "feature_manifest_source": "optum_mart",
     },
     # ------------------------------------------------------------------
     # Lane C (spec 2026-09-22 §3C.2): remibrutinib PRE-WIRING. The CSU
