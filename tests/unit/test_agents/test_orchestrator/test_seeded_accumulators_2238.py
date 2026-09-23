@@ -102,7 +102,9 @@ async def test_agent_run_emits_each_agent_card_once(boundary_stubs):
     """The user-facing path: ``OrchestratorAgent.run`` formats its output from
     the ``agent_results`` channel, so an echoing synthesizer showed every
     agent card twice."""
-    result = await OrchestratorAgent(allow_mock=True).run(
+    # enable_opik=False: the run must stay offline (codex r2) — the tracer is
+    # not covered by the tree's autouse stubs and defaults on.
+    result = await OrchestratorAgent(allow_mock=True, enable_opik=False).run(
         {"query": "what is the impact of hcp engagement on patient conversions?"}
     )
 
