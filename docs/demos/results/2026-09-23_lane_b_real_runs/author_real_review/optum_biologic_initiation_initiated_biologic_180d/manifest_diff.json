@@ -1,0 +1,1903 @@
+{
+  "manifest": "optum",
+  "n_features": 110,
+  "n_compared": 110,
+  "edge_exact_agreement": 93,
+  "role_agreement": 93,
+  "disagreements": [
+    "zip5",
+    "zip3",
+    "zip_code",
+    "geographic_region",
+    "insurance_product",
+    "plan_type",
+    "payer_category",
+    "urban_rural_code",
+    "office_visits_allergist",
+    "office_visits_dermatology",
+    "specialist_concentration",
+    "primary_specialist_type",
+    "saw_allergist_flag",
+    "saw_dermatologist_flag",
+    "index_date",
+    "lookback_start_date",
+    "specialist_visit_interaction"
+  ],
+  "rows": [
+    {
+      "feature": "age_at_index",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "age_group",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "gender",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "zip5",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "zip5->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        },
+        "zip5->T": {
+          "grade": "unsupported",
+          "rationale": "Residential ZIP code captures geographic access conditions, including spatial availability of relevant clinicians and travel/access barriers, which can affect whether a patient initiates a biologic at the index date."
+        },
+        "zip5->Y": {
+          "grade": "unsupported",
+          "rationale": "The same residential access conditions can affect whether biologic treatment is initiated within the 180-day follow-up period, independently of initiation status at the index date."
+        }
+      },
+      "authored_reasoning": "`zip5` is recorded at enrollment and represents the patient\u2019s residential geographic area. Geographic location can affect access to biologic-prescribing specialists, travel burden, local provider availability, and health-plan/provider-network access. These access mechanisms can influence both biologic initiation at the index date (`T`) and whether a biologic is initiated by 180 days (`Y`). Thus, for this treatment-access outcome, residential ZIP code is modeled as a pre-index common cause of treatment initiation and subsequent initiation status. This treats ZIP code as a contextual exposure rather than merely an arbitrary administrative identifier. The causal effect may differ across ZIP areas and may be mediated by unmeasured local access and socioeconomic factors; because ZIP code can also be only a proxy for those factors, the precise direct mechanism is somewhat ambiguous.",
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 59,
+            "text": "- Geography/residence \u2014 `zip5`, `zip3`, `zip_code`, `geographic_region`, `urban_rural_code`: specialist proximity & regional adoption shift omalizumab use (PMID 36481046 \u2014 use varied by patient ZIP, higher nearer the allergist practice; PMID 40169378 \u2014 BRIT registry, deprivation/distance affect access).",
+            "pmids": [
+              "36481046",
+              "40169378"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
+    },
+    {
+      "feature": "zip3",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "zip3->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        },
+        "zip3->T": {
+          "grade": "unsupported",
+          "rationale": "Residential geographic area influences health-care access, including availability and accessibility of clinicians and services that can evaluate patients and initiate specialty/biologic treatment. ZIP3 is a measured area-level location marker for these access and delivery-system differences."
+        },
+        "zip3->Y": {
+          "grade": "unsupported",
+          "rationale": "The same area-level access, provider availability, network, and travel-barrier mechanisms can affect whether a patient has initiated/obtained biologic therapy by 180 days, independently of the index-date initiation indicator. Geographic access is therefore plausibly prognostic for the 180-day treatment-initiation outcome."
+        }
+      },
+      "authored_reasoning": "`zip3` is the patient\u2019s residential three-digit ZIP-code region known at enrollment. Geographic residence affects access to specialists, biologic-prescribing practices, payer/network availability, travel burden, and local health-care resources. These factors can affect biologic initiation at the index date (`T`) and the probability of having initiated/received a biologic by 180 days (`Y`) through access pathways not fully mediated by the index initiation indicator. Thus the geographic feature is authored as a pre-treatment common cause of both treatment and outcome. The specified treatment effect edge `T \u2192 Y` is included as required. Because ZIP3 is a coarse proxy for several location-linked mechanisms and could alternatively act only through initial treatment access in some settings, this is somewhat mechanism-dependent.",
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 59,
+            "text": "- Geography/residence \u2014 `zip5`, `zip3`, `zip_code`, `geographic_region`, `urban_rural_code`: specialist proximity & regional adoption shift omalizumab use (PMID 36481046 \u2014 use varied by patient ZIP, higher nearer the allergist practice; PMID 40169378 \u2014 BRIT registry, deprivation/distance affect access).",
+            "pmids": [
+              "36481046",
+              "40169378"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
+    },
+    {
+      "feature": "zip_code",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "zip_code->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        },
+        "zip_code->T": {
+          "grade": "unsupported",
+          "rationale": "Residential ZIP code captures geographic access to specialty care, including local specialist supply and travel burden. Geographic access affects whether a patient can receive an index biologic-initiation decision."
+        },
+        "zip_code->Y": {
+          "grade": "unsupported",
+          "rationale": "The same residential access context can affect whether biologic treatment is initiated by 180 days, through access to prescribers, follow-up care, and local socioeconomic and insurance-related barriers."
+        }
+      },
+      "authored_reasoning": "`zip_code` is known at enrollment and represents the patient's residential geographic context. Residential location affects availability of relevant specialists, travel burden, insurance-market and area-level socioeconomic conditions, and consequently the likelihood of biologic initiation both at the index decision and during the 180-day follow-up. Thus it is a pre-treatment common cause of biologic initiation at the anchor (`T`) and the 180-day initiation outcome (`Y`). The stated outcome is closely related to the treatment definition, but under the supplied causal question the faithful graph includes both geographic arrows and the required treatment-effect arrow.",
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 59,
+            "text": "- Geography/residence \u2014 `zip5`, `zip3`, `zip_code`, `geographic_region`, `urban_rural_code`: specialist proximity & regional adoption shift omalizumab use (PMID 36481046 \u2014 use varied by patient ZIP, higher nearer the allergist practice; PMID 40169378 \u2014 BRIT registry, deprivation/distance affect access).",
+            "pmids": [
+              "36481046",
+              "40169378"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
+    },
+    {
+      "feature": "geographic_region",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "geographic_region->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        },
+        "geographic_region->T": {
+          "grade": "unsupported",
+          "rationale": "Patient geographic region influences biologic initiation through geographic variation in clinician supply and specialty access, local prescribing practice, and payer or formulary policies. These regional health-system differences can change the likelihood of receiving a biologic at the index date."
+        },
+        "geographic_region->Y": {
+          "grade": "unsupported",
+          "rationale": "The same regional access, coverage, and delivery-system factors can affect whether a biologic is initiated and recorded during the subsequent 180-day window, independently of the initial index-date treatment decision. Geographic variation in health-care delivery is therefore a plausible direct determinant of this utilization-based outcome."
+        }
+      },
+      "authored_reasoning": "`geographic_region` is derived from the patient's enrollment ZIP code and is known before the index date. Geographic region can causally affect whether a patient initiates a biologic through local specialist availability, practice patterns, payer/formulary policies, and regional access to biologic therapies. Those same regional health-system factors can also affect the probability that biologic initiation is observed or occurs within the 180-day outcome window, independently of the index initiation decision. Thus, region is a pre-index common cause of both biologic initiation and the 180-day initiation outcome. No post-index pathway is implied.",
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 59,
+            "text": "- Geography/residence \u2014 `zip5`, `zip3`, `zip_code`, `geographic_region`, `urban_rural_code`: specialist proximity & regional adoption shift omalizumab use (PMID 36481046 \u2014 use varied by patient ZIP, higher nearer the allergist practice; PMID 40169378 \u2014 BRIT registry, deprivation/distance affect access).",
+            "pmids": [
+              "36481046",
+              "40169378"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
+    },
+    {
+      "feature": "insurance_product",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "insurance_product->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        },
+        "insurance_product->T": {
+          "grade": "unsupported",
+          "rationale": "Insurance product causally influences biologic initiation through formulary design, specialty-drug coverage, prior authorization, network restrictions, and patient cost sharing."
+        },
+        "insurance_product->Y": {
+          "grade": "unsupported",
+          "rationale": "The insurance product can continue to determine access to and affordability of biologic dispensing during follow-up, affecting the probability of biologic initiation documented by 180 days independently of the index-date treatment decision."
+        }
+      },
+      "authored_reasoning": "`insurance_product` is known at enrollment, before the index-date biologic initiation. Insurance product determines formulary coverage, prior-authorization requirements, network access, and patient cost sharing; these can affect whether biologic treatment is initiated at index. The same coverage/access mechanisms can independently affect whether a patient initiates or remains able to initiate biologic therapy during the 180-day outcome period. Thus, insurance product is a pre-treatment common cause of biologic initiation and the 180-day biologic-initiation outcome.",
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 60,
+            "text": "- Coverage/payer \u2014 `insurance_product`, `plan_type`, `payer_category`: prior-auth / step-therapy / formulary gate initiation (Aetna CPB 0670; Cigna & UHC Xolair PA policies; PMID 40004611 cost/access disparities).",
+            "pmids": [
+              "40004611"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
+    },
+    {
+      "feature": "plan_type",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "plan_type->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        },
+        "plan_type->T": {
+          "grade": "unsupported",
+          "rationale": "Insurance plan type determines benefit design and access restrictions (including cost sharing and coverage rules), which can causally affect whether a patient initiates a biologic at the index date."
+        },
+        "plan_type->Y": {
+          "grade": "unsupported",
+          "rationale": "The same plan-specific coverage, authorization, network, and cost-sharing mechanisms can affect whether biologic therapy is initiated during the subsequent 180-day follow-up window."
+        }
+      },
+      "authored_reasoning": "`plan_type` is known at enrollment and determines insurance benefit design, formulary coverage, prior-authorization requirements, provider networks, and patient cost sharing. These features can affect biologic initiation at the index date and the likelihood of biologic initiation by 180 days. Thus plan type is a pre-treatment common cause of treatment initiation and the 180-day initiation outcome. The treatment-to-outcome edge is included as required.",
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 60,
+            "text": "- Coverage/payer \u2014 `insurance_product`, `plan_type`, `payer_category`: prior-auth / step-therapy / formulary gate initiation (Aetna CPB 0670; Cigna & UHC Xolair PA policies; PMID 40004611 cost/access disparities).",
+            "pmids": [
+              "40004611"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
+    },
+    {
+      "feature": "payer_category",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "payer_category->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        },
+        "payer_category->T": {
+          "grade": "unsupported",
+          "rationale": "Payer category determines drug-benefit design, formulary coverage, utilization management, and out-of-pocket cost. These access constraints can causally affect whether a patient initiates a biologic."
+        },
+        "payer_category->Y": {
+          "grade": "unsupported",
+          "rationale": "Because the outcome is biologic initiation by 180 days, payer-specific coverage and cost-sharing policies can directly affect the probability that initiation occurs or is sustained/recorded within that follow-up period, independently of the index treatment decision."
+        }
+      },
+      "authored_reasoning": "`payer_category` is known at enrollment, before the index-date biologic initiation. Insurance type determines formulary coverage, prior-authorization requirements, patient cost sharing, and network access, which can affect whether a biologic is initiated at the index (`T`) and whether biologic initiation is observed/achieved by 180 days (`Y`). Thus payer category is a pre-treatment common cause of treatment and outcome. No latent node is needed because the measured payer category itself has plausible direct administrative/access effects on both nodes.",
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 60,
+            "text": "- Coverage/payer \u2014 `insurance_product`, `plan_type`, `payer_category`: prior-auth / step-therapy / formulary gate initiation (Aetna CPB 0670; Cigna & UHC Xolair PA policies; PMID 40004611 cost/access disparities).",
+            "pmids": [
+              "40004611"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
+    },
+    {
+      "feature": "urban_rural_code",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "urban_rural_code->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        },
+        "urban_rural_code->T": {
+          "grade": "unsupported",
+          "rationale": "Urban versus rural residence affects geographic access to health care and specialty services, which can affect the opportunity and timing of biologic initiation at the index date."
+        },
+        "urban_rural_code->Y": {
+          "grade": "unsupported",
+          "rationale": "The same rural-urban differences in access, service availability, and continuity of care can affect whether a patient initiates a biologic during follow-up through 180 days."
+        }
+      },
+      "authored_reasoning": "`urban_rural_code` is a pre-index geographic-access characteristic derived from enrollment ZIP3. Rural versus urban residence can affect access to specialty clinicians, infusion/injection services, pharmacy availability, and continuity of care. Those access differences can influence both biologic initiation at the index date and whether a biologic is initiated/recorded by 180 days. It is therefore modeled as a common cause of `T` and `Y`, not as a post-treatment variable.",
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 59,
+            "text": "- Geography/residence \u2014 `zip5`, `zip3`, `zip_code`, `geographic_region`, `urban_rural_code`: specialist proximity & regional adoption shift omalizumab use (PMID 36481046 \u2014 use varied by patient ZIP, higher nearer the allergist practice; PMID 40169378 \u2014 BRIT registry, deprivation/distance affect access).",
+            "pmids": [
+              "36481046",
+              "40169378"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
+    },
+    {
+      "feature": "primary_diagnosis_code",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "dx_l50_1_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "dx_l50_8_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "dx_l50_9_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "dx_total_csu",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "dx_angioedema_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "months_since_first_dx",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "csu_chronicity",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "has_atopic_dermatitis",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "atopic_dermatitis_claim_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "has_asthma",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "asthma_claim_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "has_allergic_rhinitis",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "allergic_rhinitis_claim_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "has_anxiety",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "anxiety_claim_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "has_depression",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "depression_claim_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "has_thyroid_autoimmune",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "thyroid_autoimmune_claim_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "has_nsaid_hypersensitivity",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "nsaid_hypersensitivity_claim_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "has_angioedema",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "angioedema_claim_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "atopy_score",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "mental_health_flag",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "elixhauser_score",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "charlson_score",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "office_visits_total",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "office_visits_allergist",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "office_visits_allergist->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        },
+        "office_visits_allergist->T": {
+          "grade": "unsupported",
+          "rationale": "Pre-index allergist encounters provide direct opportunities for specialist evaluation and treatment escalation, including prescribing or arranging biologic therapy. International chronic urticaria guidance describes escalation to biologic treatment as a clinician-directed management decision after inadequate control with prior therapy."
+        },
+        "office_visits_allergist->Y": {
+          "grade": "unsupported",
+          "rationale": "Greater pre-index contact with an allergist can continue the specialty-care pathway beyond the anchor through reassessment, escalation, and completion of prescribing/coverage processes, thereby increasing the probability of biologic initiation during the 180-day follow-up outcome period."
+        }
+      },
+      "authored_reasoning": "`office_visits_allergist` is stated to be knowable at the index date, so it is treated as a pre-index count of allergist encounters in the preceding 180 days. More allergist visits create opportunities for specialist assessment, escalation discussions, authorization work, and prescribing of a biologic at index; they also increase the probability that biologic initiation is documented/occurs during the following 180-day outcome horizon. Thus the visit count is modeled as a pre-treatment common cause of both biologic initiation at index and biologic initiation by 180 days. This is a care-pathway/utilization confounder, not a post-treatment leak. The count may also reflect underlying disease severity or access to specialty care, but those mechanisms reinforce its association with both treatment and subsequent initiation rather than making it post-treatment.",
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 61,
+            "text": "- Specialist access \u2014 `office_visits_allergist`, `office_visits_dermatology`, `specialist_concentration`, `primary_specialist_type`, `saw_allergist_flag`, `saw_dermatologist_flag`, `specialist_visit_interaction`: allergist/derm contact is the biologic-prescribing channel (PMID 36481046; PMID 33528934).",
+            "pmids": [
+              "33528934",
+              "36481046"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
+    },
+    {
+      "feature": "office_visits_dermatology",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "office_visits_dermatology->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        },
+        "office_visits_dermatology->T": {
+          "grade": "unsupported",
+          "rationale": "Pre-index dermatology visits represent opportunities for specialist assessment of persistent or uncontrolled disease and for implementation of guideline-recommended escalation, including biologic treatment."
+        },
+        "office_visits_dermatology->Y": {
+          "grade": "unsupported",
+          "rationale": "Greater prior dermatology-care contact creates more opportunities for follow-up, prescribing, and documented biologic initiation during the 180-day ascertainment period, independently of whether initiation occurred exactly at index."
+        }
+      },
+      "authored_reasoning": "Assuming the 180-day procedure-event count is a pre-index lookback despite the underspecified window direction, prior dermatology encounters increase opportunities for evaluation of uncontrolled disease and for escalation to biologic therapy. The same prior specialty-care engagement can also increase the chance that biologic initiation is recorded during the subsequent 180-day outcome window. Thus the measured visit count is authored as a pre-treatment common cause of index biologic initiation and 180-day biologic initiation. The treatment-to-outcome edge is included as required. The feature timing is ambiguous because `window_days=180` does not explicitly state that the window ends before index; if it includes post-index visits, it could instead be downstream of treatment/outcome and leaky.",
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 61,
+            "text": "- Specialist access \u2014 `office_visits_allergist`, `office_visits_dermatology`, `specialist_concentration`, `primary_specialist_type`, `saw_allergist_flag`, `saw_dermatologist_flag`, `specialist_visit_interaction`: allergist/derm contact is the biologic-prescribing channel (PMID 36481046; PMID 33528934).",
+            "pmids": [
+              "33528934",
+              "36481046"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
+    },
+    {
+      "feature": "office_visits_pcp",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "ed_visits_total",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "ed_visits_urticaria_angio",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "hospitalizations_total",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "unique_providers",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "h1_1g_ever_filled",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "h1_1g_fill_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "h1_1g_days_supply_total",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "h1_1g_days_since_last_fill",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "h1_2g_ever_filled",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "h1_2g_fill_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "h1_2g_days_supply_total",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "h1_2g_days_since_last_fill",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "h2_ever_filled",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "h2_fill_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "h2_days_supply_total",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "h2_days_since_last_fill",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "ltra_ever_filled",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "ltra_fill_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "ltra_days_supply_total",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "ltra_days_since_last_fill",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "sys_steroid_ever_filled",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "sys_steroid_fill_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "sys_steroid_days_supply_total",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "sys_steroid_days_since_last_fill",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "top_steroid_ever_filled",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "top_steroid_fill_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "top_steroid_days_supply_total",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "top_steroid_days_since_last_fill",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "immunosupp_ever_filled",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "immunosupp_fill_count",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "immunosupp_days_supply_total",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "immunosupp_days_since_last_fill",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "ige_total_tested",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "ige_total_result_last",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "ige_total_abnormal_flag",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "eosinophil_tested",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "eosinophil_result_last",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "eosinophil_abnormal_flag",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "crp_tested",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "crp_result_last",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "crp_abnormal_flag",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "tpo_ab_tested",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "tpo_ab_result_last",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "tpo_ab_abnormal_flag",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "free_t4_tested",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "free_t4_result_last",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "free_t4_abnormal_flag",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "tsh_tested",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "tsh_result_last",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "tsh_abnormal_flag",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "ana_tested",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "ana_result_last",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "ana_abnormal_flag",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "cbc_tested",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "cbc_result_last",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "cbc_abnormal_flag",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "specialist_concentration",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "specialist_concentration->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        },
+        "specialist_concentration->T": {
+          "grade": "unsupported",
+          "rationale": "A higher concentration of care from relevant specialists represents greater specialist involvement, which can causally affect whether a patient initiates a biologic through specialist assessment, referral, prescribing, and access to advanced therapy."
+        },
+        "specialist_concentration->Y": {
+          "grade": "unsupported",
+          "rationale": "Ongoing specialist involvement can independently affect subsequent biologic initiation during follow-up through continued disease assessment, treatment escalation, and prescribing decisions; this pathway need not operate solely through the index initiation."
+        }
+      },
+      "authored_reasoning": "`specialist_concentration` is a pre-index, patient-level measure derived from procedure-event NPIs over a 180-day history and is knowable at the index date. It most plausibly captures concentration/intensity of specialist involvement in the patient's care. Greater specialist involvement can directly influence biologic initiation at index through referral, evaluation, prescribing capability, and treatment access. It can also influence the probability of biologic initiation during the subsequent 180 days independently of the index initiation, through continuing specialty follow-up and treatment-management decisions. Thus it is a pre-treatment common cause of both the index biologic-initiation exposure and the 180-day biologic-initiation outcome.\n\nThe treatment-to-outcome edge is included as required: initiating a biologic at index makes biologic initiation by 180 days more likely (and may deterministically satisfy a broadly defined \u201cinitiated within 180 days\u201d outcome, depending on outcome construction).",
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 61,
+            "text": "- Specialist access \u2014 `office_visits_allergist`, `office_visits_dermatology`, `specialist_concentration`, `primary_specialist_type`, `saw_allergist_flag`, `saw_dermatologist_flag`, `specialist_visit_interaction`: allergist/derm contact is the biologic-prescribing channel (PMID 36481046; PMID 33528934).",
+            "pmids": [
+              "33528934",
+              "36481046"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
+    },
+    {
+      "feature": "primary_specialist_type",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "primary_specialist_type->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        },
+        "primary_specialist_type->T": {
+          "grade": "unsupported",
+          "rationale": "The type of specialist managing the patient can directly influence whether biologic therapy is initiated at the index date through specialty-specific prescribing practices, treatment expertise, referral patterns, and access/authorization workflows."
+        },
+        "primary_specialist_type->Y": {
+          "grade": "unsupported",
+          "rationale": "The managing specialist can also affect whether biologic therapy is initiated during the subsequent 180 days through continued follow-up, escalation decisions, and access to biologic-treatment infrastructure; this route need not be fully mediated by initiation exactly at index."
+        }
+      },
+      "authored_reasoning": "`primary_specialist_type` is a pre-index care-delivery characteristic derived from procedure-event history and knowable at the index date. The specialty principally managing the patient can affect biologic initiation through specialty-specific prescribing authority, familiarity, referral pathways, and infusion/authorization infrastructure. It can also affect biologic initiation within 180 days through subsequent specialist follow-up and treatment escalation decisions, independently of whether initiation occurred exactly at index. Thus the feature is modeled as a common cause of treatment initiation and the 180-day initiation outcome. The causal question/outcome are unusually overlapping, so the exact interpretation of the initiation time windows should be verified; a specialty measure could alternatively behave like an instrument if it affects the outcome only through index initiation.",
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 61,
+            "text": "- Specialist access \u2014 `office_visits_allergist`, `office_visits_dermatology`, `specialist_concentration`, `primary_specialist_type`, `saw_allergist_flag`, `saw_dermatologist_flag`, `specialist_visit_interaction`: allergist/derm contact is the biologic-prescribing channel (PMID 36481046; PMID 33528934).",
+            "pmids": [
+              "33528934",
+              "36481046"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
+    },
+    {
+      "feature": "saw_allergist_flag",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "saw_allergist_flag->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        },
+        "saw_allergist_flag->T": {
+          "grade": "unsupported",
+          "rationale": "Allergist involvement can causally affect biologic initiation: allergy specialists assess chronic urticaria severity and inadequate response to second-generation H1-antihistamines and implement guideline-recommended escalation to biologic therapy such as omalizumab."
+        },
+        "saw_allergist_flag->Y": {
+          "grade": "unsupported",
+          "rationale": "Specialist allergy care can independently affect whether a patient initiates biologic treatment within 180 days through follow-up, treatment planning, prescribing capability, and access to escalation after reassessment; this pathway need not operate solely through the index-date initiation indicator."
+        }
+      },
+      "authored_reasoning": "At the index date, `saw_allergist_flag` indicates that the patient\u2019s care is being managed by an allergy specialist. Allergy-specialist contact can directly influence the decision to initiate a biologic through assessment of antihistamine-refractory disease and implementation of guideline-recommended escalation. It can also affect the probability of biologic initiation by 180 days through specialist follow-up, access to biologic prescribing, and ongoing treatment planning, beyond the index initiation decision. Thus, the feature is a pre-/at-index common cause of both biologic initiation and the 180-day initiation outcome. Because the specialty field may sometimes be recorded contemporaneously with, rather than strictly before, the initiation encounter, temporal direction is somewhat uncertain; however, the most defensible clinical mechanism is specialist care influencing treatment decisions.",
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 61,
+            "text": "- Specialist access \u2014 `office_visits_allergist`, `office_visits_dermatology`, `specialist_concentration`, `primary_specialist_type`, `saw_allergist_flag`, `saw_dermatologist_flag`, `specialist_visit_interaction`: allergist/derm contact is the biologic-prescribing channel (PMID 36481046; PMID 33528934).",
+            "pmids": [
+              "33528934",
+              "36481046"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
+    },
+    {
+      "feature": "saw_dermatologist_flag",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "saw_dermatologist_flag->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        },
+        "saw_dermatologist_flag->T": {
+          "grade": "unsupported",
+          "rationale": "Dermatologist involvement can causally influence biologic initiation through specialist assessment of inflammatory skin disease, selection of systemic therapy, prescribing authority, and management of biologic eligibility and monitoring. Dermatology treatment guidelines include biologic agents as dermatologist-directed systemic treatment options."
+        },
+        "saw_dermatologist_flag->Y": {
+          "grade": "unsupported",
+          "rationale": "The dermatologist-care relationship can affect subsequent biologic initiation/receipt within 180 days through follow-up, escalation planning, medication access processes, and continued specialty management; these effects need not operate solely through the index initiation indicator."
+        }
+      },
+      "authored_reasoning": "At the index date, having a dermatologist as the primary specialist can directly affect whether a biologic is initiated: dermatologists evaluate dermatologic inflammatory disease severity, have specialty-specific familiarity with biologic eligibility and monitoring, and can prescribe or arrange biologic therapy. The same specialty care relationship can also affect biologic initiation/receipt by 180 days through follow-up, treatment planning, prior authorization, and escalation decisions. The flag is measured at the anchor and is not caused by the index biologic initiation. Thus the honest direct causal representation is that dermatologist involvement affects both the index treatment and the 180-day biologic-initiation outcome. Although underlying disease severity may influence referral to dermatology, adding that latent is not necessary to represent the measured specialist-care feature's direct effects and would not change its confounder role.",
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 61,
+            "text": "- Specialist access \u2014 `office_visits_allergist`, `office_visits_dermatology`, `specialist_concentration`, `primary_specialist_type`, `saw_allergist_flag`, `saw_dermatologist_flag`, `specialist_visit_interaction`: allergist/derm contact is the biologic-prescribing channel (PMID 36481046; PMID 33528934).",
+            "pmids": [
+              "33528934",
+              "36481046"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
+    },
+    {
+      "feature": "index_date",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.3333333333333333,
+      "authored_only": [
+        "biologic_initiation->index_date"
+      ],
+      "manifest_only": [
+        "index_date->biologic_initiation"
+      ],
+      "authored_role": "descendant",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        },
+        "T->index_date": {
+          "grade": "unsupported",
+          "rationale": "The feature is a derived index/anchor timestamp. With biologic initiation specified as the treatment and index_date specified as the prediction anchor, the initiation event operationally defines the cohort index date; this is an administrative derivation rather than a patient-level prognostic mechanism."
+        }
+      },
+      "authored_reasoning": "`index_date` is an administratively derived cohort-anchor timestamp, not a patient characteristic or biological exposure. In this cohort, biologic initiation defines the index event; therefore assignment of the derived index-date field follows from the initiation event (`T \u2192 index_date`). The timestamp has no intrinsic causal pathway to the future 180-day initiation outcome beyond its operational definition. Thus it is a treatment-descendant/dead-end feature and should not be used as a model covariate.\n\nThis is ambiguous because, if the field were instead explicitly modeled as calendar period (rather than as the derived anchor timestamp), secular changes in biologic availability, formulary policy, and prescribing could affect both initiation at index and initiation during follow-up, producing a confounder-like calendar-time mechanism. The derivation supplied identifies it as the derived anchor field, so the operational-descendant interpretation is preferred.",
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 62,
+            "text": "- Calendar anchors \u2014 `index_date`, `lookback_start_date`: temporal adoption of biologics (PMID 32382379; PMID 40004611).",
+            "pmids": [
+              "32382379",
+              "40004611"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
+    },
+    {
+      "feature": "lookback_start_date",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.3333333333333333,
+      "authored_only": [
+        "biologic_initiation->lookback_start_date"
+      ],
+      "manifest_only": [
+        "lookback_start_date->biologic_initiation"
+      ],
+      "authored_role": "descendant",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        },
+        "T->lookback_start_date": {
+          "grade": "unsupported",
+          "rationale": "The feature is derived solely from index_date, and the index/anchor is the biologic-initiation event. The lookback-start timestamp is therefore an operational field constructed once the initiation-indexed record is created; it is not a patient-level cause of treatment or outcome."
+        }
+      },
+      "authored_reasoning": "`lookback_start_date` is an administrative timestamp deterministically constructed from the treatment index date, rather than a pre-treatment patient attribute. In this cohort, the index is created by biologic initiation; consequently, the start of the extracted lookback interval exists as a function of that indexed initiation event. It has no plausible causal effect on whether biologic initiation is recorded by 180 days. Thus it is a post-index administrative descendant/dead-end of T, not a clinical confounder or prognostic factor. Calendar era could alternatively make such a date a proxy for secular prescribing/access effects, but that mechanism is not established by the stated derivation.",
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 62,
+            "text": "- Calendar anchors \u2014 `index_date`, `lookback_start_date`: temporal adoption of biologics (PMID 32382379; PMID 40004611).",
+            "pmids": [
+              "32382379",
+              "40004611"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
+    },
+    {
+      "feature": "comorbidity_load_total",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "csu_dx_intensity",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "polypharmacy_breadth",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "lab_workup_completeness",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    },
+    {
+      "feature": "specialist_visit_interaction",
+      "compared": true,
+      "edge_exact": false,
+      "edge_jaccard": 0.6666666666666666,
+      "authored_only": [
+        "specialist_visit_interaction->initiated_biologic_180d"
+      ],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "instrument",
+      "role_agree": false,
+      "manifest_provenance": "machine",
+      "authored_rationale": {
+        "T->Y": {
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)"
+        },
+        "specialist_visit_interaction->T": {
+          "grade": "unsupported",
+          "rationale": "Greater involvement with relevant specialists can causally increase the opportunity for assessment, referral, recommendation, and prescribing of a biologic, thereby affecting biologic initiation."
+        },
+        "specialist_visit_interaction->Y": {
+          "grade": "unsupported",
+          "rationale": "Specialist-care involvement can also affect timely initiation/documentation within 180 days through continuing follow-up, care coordination, access to prescribing services, and completion of treatment work-up; this route need not operate solely through the index initiation decision."
+        }
+      },
+      "authored_reasoning": "`specialist_visit_interaction` represents involvement with allergy and dermatology specialists by the index date. Specialist access and care patterns can affect the decision to initiate a biologic and can independently affect whether biologic initiation is achieved/documented within 180 days through referral, diagnostic work-up, treatment recommendation, follow-up, and access/navigation. I therefore model the measured interaction as a pre-treatment common cause of biologic initiation and the 180-day initiation outcome. Because `knowable_at=index_date` does not establish whether an included specialist visit occurred before or as part of the initiation encounter, a post-decision interpretation is also possible; this timing uncertainty makes the mechanism ambiguous.",
+      "manifest_rationale": {
+        "found": true,
+        "source": "docs/layer4/optum_initiation_attestation_research.md",
+        "bullets": [
+          {
+            "line": 61,
+            "text": "- Specialist access \u2014 `office_visits_allergist`, `office_visits_dermatology`, `specialist_concentration`, `primary_specialist_type`, `saw_allergist_flag`, `saw_dermatologist_flag`, `specialist_visit_interaction`: allergist/derm contact is the biologic-prescribing channel (PMID 36481046; PMID 33528934).",
+            "pmids": [
+              "33528934",
+              "36481046"
+            ]
+          }
+        ],
+        "edge_pattern": "src/data/manifests/optum_feature_manifest.py::_optum_attestation",
+        "note": null
+      }
+    }
+  ],
+  "note": "no threshold: the owner reads the diff and decides whether to relabel (spec \u00a73 Lane B item 1)"
+}

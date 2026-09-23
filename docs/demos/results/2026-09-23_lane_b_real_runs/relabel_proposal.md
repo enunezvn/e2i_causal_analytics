@@ -2,7 +2,7 @@
 
 **Status: PROPOSAL. Nothing in `src/data/manifests/optum_feature_manifest.py` was edited.** The relabel is applied only after the owner reads this diff (spec §3 Lane B item 1; PR #2230 owner decision 3).
 
-- source: `docs/demos/results/2026-09-23_lane_b_real_runs/author_real/optum_biologic_initiation_initiated_biologic_180d/manifest_diff.json` + `attestations.json`; author model `openai/gpt-5.6-terra`; tree `{"commit": "8615c0cadce9cd157b8bfd84e2dff625313187de", "dirty_src_scripts_tests": false}`
+- source: `docs/demos/results/2026-09-23_lane_b_real_runs/author_real_review/optum_biologic_initiation_initiated_biologic_180d/manifest_diff.json` + `attestations.json`; author model `openai/gpt-5.6-terra`; tree `{"commit": "c67f2e5928fad81af3c8dec3ddcfe62174baef00", "dirty_src_scripts_tests": false}`
 - compared: 110 attested features; agree on edges AND role: **93** → recommended `machine_reviewed`; disagree: **17** → provenance unchanged (`machine`)
 - edge-exact agreement 93/110, role agreement 93/110
 - authored edge grades over all non-estimand edges: {'unsupported': 218}

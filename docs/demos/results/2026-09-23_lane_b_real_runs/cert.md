@@ -2,20 +2,21 @@
 
 ## Verdict
 
-**PASS with one blocked deliverable.** The paid benchmark passes the spec gate (zero missed leaks); the real Lane E panel and both real authoring runs completed and their files are committed; the relabel proposal is written. **No `expert_reviews` row exists for run (a) or run (b): both `--review` inserts were refused by production Postgres** (`22P02 invalid input value for enum expert_review_type: "initial_dag"`), files kept, exit 3. The re-run of `--review` waits on migration 151 (PR #2246, owner-applied). Nothing was approved; nothing was relabelled.
+**PASS.** The paid benchmark passes the spec gate (zero missed leaks); the real Lane E panel and both real authoring runs completed; **two PENDING `initial_dag` reviews now exist on prod for the owner** — run (a) `b54d7c32-00c2-440f-9ff3-8f0baa52bbc6` (estimand `:treatment_dupixent:persistent_at_180d_g28`) and run (b) `2fa5a4a5-4035-4511-9fa1-1aedf1bd6645` (`:biologic_initiation:initiated_biologic_180d`), each with the structural-author evidence persisted (`author_real_review/*/review.json`; prod read-back below). The relabel proposal is written. History stated plainly: **the first `--review` attempts of both runs were refused by production Postgres** (`22P02 invalid input value for enum expert_review_type: "initial_dag"` — the enum lacked the value the scaffold writes), files kept, exit 3; after the owner applied migration 152 the re-runs opened the rows, served entirely from dspy's response cache (zero new tokens, outputs identical to the first runs). Nothing was approved; nothing was relabelled.
 
-Spend: **USD 12.05 + run (a) at list price** (`spend_actual.json`; litellm-reported USD 8.76 + run (a)), under the USD 25 guard. RUN_A_SPEND_LINE
+Spend: **USD 14.17 at list price** (`spend_actual.json`; litellm-reported USD 9.86; the two cache-served re-runs cost nothing new), under the USD 25 guard; pre-run estimate USD 11.44 (`budget_guard.json`) — the overshoot is the panel's 85k-token prompts and the author's 1.5k-token answers.
 
 | step | ran | result (cited) | spend list / litellm |
 |---|---|---|---|
 | 1 benchmark, 91 blind briefs, `openai/gpt-5.6-terra`, live resolver | yes, exit 0 | `benchmark/summary.md:10` **PASS: gate missed_leaks == 0** (0 over 42 golden-leak features); `:11` exact role 60/91 (0.659), leak-decision 91/91, conservative errors 0 | 3.36 / 1.84 |
 | 2 real Lane E panel, 64 covariates, Layer 4 `anthropic/claude-sonnet-4-6` | yes, exit 0 | `panel_real/summary.md:14` fired 19, roles confounder 18 / descendant 1; `:15` abstain 19 (rate 0.406), leak verdicts 0 | 5.06 / 5.06 |
-| 3 run (a) `optum_mart` T=`treatment_dupixent` Y=`persistent_at_180d_g28`, real panel, `--review` | RUN_A_RAN | RUN_A_RESULT | RUN_A_COST |
+| 3 run (a) `optum_mart` T=`treatment_dupixent` Y=`persistent_at_180d_g28`, real panel, `--review` | yes, **exit 3 at the review step** (pre-152), files kept | `author_real/optum_mart_treatment_dupixent_persistent_at_180d_g28/dag.json` 64 features, `is_dag true`, `adjustment_valid true`, minimal set 44; `review.md` `## Review items (44)`; `run_a_log.txt` `22P02 … "initial_dag"` | 2.12 / 1.10 |
+| 3′/4′ re-runs of (a) and (b) with `--review` after migration 152 | yes, exit 0 | `author_real_review/*/review.json`: review ids above, `assessment_persisted true`; `rerun_vs_first_*.json`: 64/64 and 110/110 identical roles, edges, ambiguity flags and reasoning | 0.00 (cache) |
 | 4 run (b) `optum` T=`biologic_initiation` Y=`initiated_biologic_180d`, `--diff-manifest-attestations --review` | yes, **exit 3 at the review step**, files kept | `author_real/optum_biologic_initiation_initiated_biologic_180d/manifest_diff.json:3-6` compared 110, edge-exact 93, role-agree 93; `run_b_log.txt` `22P02 … "initial_dag"` | 3.60 / 1.85 |
 | relabel PROPOSAL | yes | `relabel_proposal.md`: 93 → `machine_reviewed`, 17 unchanged; manifest NOT edited | — |
 | smoke (1 feature, run (b) shape, no `--review`) | yes, exit 0 | `smoke_1_feature/token_usage.json`: 5,583 prompt + 912 completion tokens per brief — the cheapest disproof that the real author parses before the 110-brief spend | 0.03 / 0.01 |
 
-## What ran, and how (tree `8615c0cadce9…`, `dirty_src_scripts_tests: false` on every `meta.tree`)
+## What ran, and how (`meta.tree`: benchmark + run (b) at `8615c0cad`, run (a) at `5e1c969c6`, re-runs at `c67f2e592` — evidence-only commits on top of `origin/main` `f1bb9e36c`; `dirty_src_scripts_tests: false` on every capture)
 
 Worktree `.worktrees/lane-b-real-runs` off `origin/main` `f1bb9e36c`; real `.env`; the parquet read from the main checkout by absolute path (gitignored). Every paid step printed its estimate first (`budget_guard.json`: cumulative estimate USD 11.44, upper bound 20.92 < 25). Actual token usage is captured per step from dspy's call history (`*/token_usage.json`, the CLIs report none) and priced at list in `spend_actual.json` (gpt-5.6-terra 2.50/15.00 from `src/services/llm_pricing.py:30`; Sonnet 4.6 3.00/15.00 from the panel CLI). The CLIs' own `--i-accept-cost` gates were honoured; no other prod write was attempted.
 
@@ -46,7 +47,15 @@ Cost reality: prompt tokens 515,868 vs the estimate's 531,375 (4 chars/token was
 
 ## 3. Run (a) — `optum_mart`, dupilumab vs omalizumab → persistence at 180 d (28-day grace)
 
-RUN_A_SECTION
+`author_real/optum_mart_treatment_dupixent_persistent_at_180d_g28/` (first run, `meta.tree` commit `5e1c969c6`) and the identical `author_real_review/…` (queued as review `b54d7c32…`): 64 features authored with the real panel record in every brief (`panel_summary.present true` ×64), `dag.json` `is_dag true`, `adjustment_valid true`, full admissible set 64, minimal adjustment set 44, warnings none; `review.md` carries the reviewer checklist item `escalation_decision_point` (the stated assumption) and `## Review items (44)`.
+
+- Roles: **confounder 44, ancestor 20** — the author draws `feature -> Y` only (no `-> T`) for 20 comorbidity flags (`enrollment_duration_days`, `cci_pvd`, `cci_peptic_ulcer`, `cci_mild_liver`, `cci_diabetes_*`, `cci_renal`, `elx_pulmonary_circulation`, `elx_paralysis`, `elx_diabetes_uncomplicated`, `elx_hypothyroidism`, `elx_peptic_ulcer`, `elx_rheumatoid_collagen`, `elx_coagulopathy`, `elx_weight_loss`, `elx_blood_loss_anemia`, `elx_deficiency_anemia`, `elx_alcohol_abuse`, `elx_drug_abuse`, `elx_depression`), i.e. prognostic for persistence but, in its reading, not a driver of the dupilumab-vs-omalizumab choice. Ancestors are adjustable, so the full set still holds all 64.
+- Lane E constraints: constraint violations 0 (Layer 1 post-index 0, leak verdicts 0 on this panel, so nothing to veto or exclude). Cross-check: `cross_check.agrees null` ×64 because the real panel's `final_role` is null on every feature (abstain under the audit-only profile) — the ensemble had no verdict to agree or disagree with; the panel's contribution to run (a) is the per-feature Layer 3/4 evidence in the brief, not a role.
+- 44/64 flagged `ambiguous` by the author (its own hedges, e.g. `gdr_cd`: the administrative code "may imperfectly represent biological sex"; `enrollment_duration_days`: "no well-supported direct mechanism … selects dupilumab rather than omalizumab"); `review_required 0`; `expected_role == derived_role` ×64.
+- Citations: 101 of 108 non-estimand edges cite something, 88 abstracts resolved — and all 108 are graded `unsupported` (see §4: the grader's entity match).
+- Cost reality: 365,742 prompt + 80,227 completion tokens (`author_real/run_a_usage/token_usage.json`), USD 2.12 list vs the 1.80 estimate.
+- `--review` on the first run: refused (22P02, pre-152). On the re-run: review `b54d7c32-00c2-440f-9ff3-8f0baa52bbc6`, dag hash `1fe5b479…`, adjustment hash `0adbe0ae…`, `assessment_persisted true` (`author_real_review/optum_mart_treatment_dupixent_persistent_at_180d_g28/review.json`). Created WITHOUT `--brand` (README: the loader tries the run's brand then the brandless key).
+
 
 ## 4. Run (b) — `optum`, `biologic_initiation` → `initiated_biologic_180d`, diff vs the 110 machine attestations
 
@@ -55,17 +64,24 @@ RUN_A_SECTION
 - **93/110 agree on the exact edge set AND role.** The 17 disagreements are **exactly the manifest's 17 instruments** — the same set the fake run disagreed on (`…scaffold/disproofs.txt:10`), but now with the real author's reasoning: 15 instrument → confounder (the author adds `feature -> Y`: geography `zip5/zip3/zip_code/geographic_region/urban_rural_code`, payer `insurance_product/plan_type/payer_category`, specialist access `office_visits_allergist/_dermatology`, `specialist_concentration`, `primary_specialist_type`, `saw_allergist_flag`, `saw_dermatologist_flag`, `specialist_visit_interaction`), 2 instrument → descendant (`index_date`, `lookback_start_date`: the author reverses `date -> T` to `T -> date`, "the initiation event operationally defines the cohort index date"). Both rationales per row are in `relabel_proposal.md` (the manifest side cites `docs/layer4/optum_initiation_attestation_research.md` L59/L62 with PMIDs).
 - **73/110 flagged `ambiguous` by the author itself**, with the stated reason (e.g. `age_group`): T=`biologic_initiation` and Y=`initiated_biologic_180d` are *overlapping initiation constructs*, so the operational meaning of Y matters — run (b) was briefed with the bare column names (the diff exercise has no labels). `review_required 0`; `expected_role == derived_role` on all 110. This is a finding about the run (b) estimand framing, not about the manifest.
 - **All 218 non-estimand edges graded `unsupported`** by the citation grader, including edges whose PMID abstract resolved (`abstract_resolved true`, `entities_found []`, `overall_confidence 0.0` — e.g. `age_at_index -> T` citing PMID 24472253 in `smoke_1_feature/…/attestations.json`). The grader's entity match found nothing in any abstract; every record therefore carries `review_reasons: unsupported edges`. Worth the owner's eye: either the grader is stricter than the guide intends, or the author's citations are generic — the cert does not decide which.
-- `--review`: refused, see Verdict. `review.json` absent by design (the CLI writes it only after a row exists).
+- `--review`: refused on the first run (22P02); on the re-run review `2fa5a4a5-4035-4511-9fa1-1aedf1bd6645`, dag hash `1107933f…`, `assessment_persisted true` (`author_real_review/optum_biologic_initiation_initiated_biologic_180d/review.json`). `relabel_proposal.md` is generated from the queued (re-run) copy, byte-identical to the first.
 
 ## 5. Relabel PROPOSAL (owner item 4) — `relabel_proposal.md`
 
 Rule: `machine_reviewed` only where the real author reproduces the manifest's edge set exactly AND derives the same role (two independent machine readings coincide); otherwise unchanged (`machine`). Result: **93 → `machine_reviewed`, 17 unchanged**, one table row per attested feature with both rationales, disagreements first, a machine-readable map at the end. **`src/data/manifests/optum_feature_manifest.py` is untouched**; the relabel is applied only after the owner reads the diff. `machine_reviewed` is not human sign-off and does not make an attestation decide (spec §7: only `human` / an approved review does).
 
-## Blocked: the review rows (both runs)
+## The review rows: refused first (22P02), then opened after migration 152
 
-`run_b_log.txt` / `run_a_log.txt`: `ERROR src.repositories.expert_review: Failed to create expert review: {'message': 'invalid input value for enum expert_review_type: "initial_dag"', 'code': '22P02'}` → `expert review NOT opened … (files kept)`, exit 3. Prod enum (read-only probe): `{dag_approval, methodology_review, quarterly_audit, ad_hoc_validation}` (`database/ml/010_causal_validation_tables.sql:53`); 41 `dag_approval` rows exist. The scaffold writes `initial_dag` and its item-5 loader fail-closes on `review_type == "initial_dag"` (`src/data/kg/structural_prior_loader.py:64`) — tested against an in-memory repository, never the real enum. Fix in flight: migration 151 (PR #2246, `ALTER TYPE expert_review_type ADD VALUE IF NOT EXISTS 'initial_dag'`), owner-applied; #2244 tracks the `uq_er_pending_estimand` index ignoring `review_type`.
+`run_b_log.txt` / `run_a_log.txt`: `ERROR src.repositories.expert_review: Failed to create expert review: {'message': 'invalid input value for enum expert_review_type: "initial_dag"', 'code': '22P02'}` → `expert review NOT opened … (files kept)`, exit 3. Prod enum (read-only probe): `{dag_approval, methodology_review, quarterly_audit, ad_hoc_validation}` (`database/ml/010_causal_validation_tables.sql:53`); 41 `dag_approval` rows exist. The scaffold writes `initial_dag` and its item-5 loader fail-closes on `review_type == "initial_dag"` (`src/data/kg/structural_prior_loader.py:64`) — tested against an in-memory repository, never the real enum. Fix: migration `152_expert_review_type_initial_dag.sql` (PR #2246, `ALTER TYPE expert_review_type ADD VALUE IF NOT EXISTS 'initial_dag'`), applied by the owner — ledger `public.schema_migrations` row at `2026-09-23 06:29:00Z` (`container_before_review_reruns.txt`); #2244 tracks the `uq_er_pending_estimand` index ignoring `review_type`. API container before and after the re-runs: image `bd2b73f0706b…`, StartedAt `2026-09-23T06:36:44Z` (`container_before_review_reruns.txt`, `container_after_review_reruns.txt` — same container; the CLIs write through the repository, not the API).
 
-Re-run commands after 151 lands (paid; the authored files are regenerated — the review row is minted from the in-memory DAG at the end of the run, there is no open-from-files mode):
+Re-runs (`author_real_review/`, 06:41Z): both `--review` succeeded (`run_a_log.txt` / `run_b_log.txt`: `Created expert review …`, exit 0). Prod read-back (read-only `psql`):
+
+    2fa5a4a5-4035-4511-9fa1-1aedf1bd6645 | initial_dag | pending | structural_author | data_science | brand NULL | biologic_initiation → initiated_biologic_180d | :biologic_initiation:initiated_biologic_180d | dag 1107933f1274… | adj 9df4e23b2ddf… | has structural_author evidence | 112 nodes
+    b54d7c32-00c2-440f-9ff3-8f0baa52bbc6 | initial_dag | pending | structural_author | data_science | brand NULL | treatment_dupixent → persistent_at_180d_g28   | :treatment_dupixent:persistent_at_180d_g28   | dag 1fe5b4797227… | adj 0adbe0ae6366… | has structural_author evidence | 66 nodes
+
+Both rows are `pending` and `approved_at` is NULL — approval is the owner's action in the Expert Reviews page (never done here). The re-runs were served from `~/.dspy_cache` (same prompt hash, same inputs): `author_real_review/*/token_usage.json` 0 prompt / 0 completion tokens, 44 s per run; `rerun_vs_first_*.json` 64/64 and 110/110 identical roles, edge sets, ambiguity flags; every `reasoning` and `edge_provenance` byte-identical. So the queued DAGs ARE the first runs' DAGs. Consequence, stated plainly: this lane has ONE independent real-LM authoring per cohort, not two — no run-to-run variance was measured.
+
+The commands as run (the row is minted from the in-memory DAG at the end of the run; there is no open-from-files mode — a future re-run after the cache expires is paid again):
 
     python -m scripts.author_cohort_dag --manifest optum_mart --treatment treatment_dupixent \
         --outcome persistent_at_180d_g28 \
@@ -73,12 +89,12 @@ Re-run commands after 151 lands (paid; the authored files are regenerated — th
         --outcome-label "persistence at 180 days (28-day grace)" \
         --panel docs/demos/results/2026-09-23_lane_b_real_runs/panel_real/panel.json \
         --lm real --i-accept-cost --resolver live --review \
-        --out-root docs/demos/results/<date>_lane_b_reviews          # ≈ USD RUN_A_RERUN_EST at list (this run's measured tokens)
+        --out-root docs/demos/results/2026-09-23_lane_b_real_runs/author_real_review   # ≈ USD 2.12 at list (measured tokens); USD 0 while the dspy cache holds
 
     python -m scripts.author_cohort_dag --manifest optum --treatment biologic_initiation \
         --outcome initiated_biologic_180d --lm real --i-accept-cost --resolver live \
         --allow-no-panel --no-assumption --diff-manifest-attestations --review \
-        --out-root docs/demos/results/<date>_lane_b_reviews          # ≈ USD 3.60 at list (this run's measured tokens)
+        --out-root docs/demos/results/2026-09-23_lane_b_real_runs/author_real_review   # ≈ USD 3.60 at list (measured tokens); USD 0 while the dspy cache holds
 
 ## Not done (deliberately)
 

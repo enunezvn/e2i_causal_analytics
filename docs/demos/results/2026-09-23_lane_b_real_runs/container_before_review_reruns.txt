@@ -1,0 +1,8 @@
+sha256:bd2b73f0706b998ee462e89eeca69eb19b95bbe43a9d4a61c3774aced5cce4b4 2026-09-23T06:36:44.582574376Z
+{dag_approval,methodology_review,quarterly_audit,ad_hoc_validation,initial_dag}
+ERROR:  column "version" does not exist
+LINE 1: select version, applied_at from schema_migrations where vers...
+               ^
+150_ml_registry_cohort_contract.sql|2026-09-22 22:37:18.839765+00
+151_registry_cohort_contracts_goldstd.sql|2026-09-23 04:45:24.03216+00
+152_expert_review_type_initial_dag.sql|2026-09-23 06:29:00.941869+00
