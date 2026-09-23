@@ -40,6 +40,14 @@ from typing import Any
 
 import pytest
 
+from tests.integration._prod_write_guard import (
+    per_hcp_rollup_spec,
+    require_isolated_windows,
+    require_no_foreign_reconcile,
+    require_windows_still_isolated,
+    territory_rollup_spec,
+)
+
 psycopg2 = pytest.importorskip("psycopg2")
 
 pytestmark = pytest.mark.skipif(
@@ -157,6 +165,38 @@ def mixed_substrate(db_conn: Any, test_run_id: str) -> dict:
             "provenance assertions over (or delete) foreign rows"
         )
 
+    # The family's census as well (#2215, codex r2 HIGH-2): the inline proof above never
+    # looked at business_metrics, and _run_per_hcp()'s reconcile DELETEs any obsolete
+    # per_hcp_rollup row in this window, planted or not -- a foreign one would be gone
+    # before the post-teardown report could count it. The same specs are re-read after
+    # the teardown. The guard FAILS rather than skips; the lock must not outlive that.
+    guard_specs = (
+        per_hcp_rollup_spec(
+            test_file=__file__,
+            start=WINDOW_START,
+            end=WINDOW_END,
+            hcp_like=f"hcp895_{rid}_%",
+            trigger_like=f"tr895_{rid}_%",
+        ),
+        territory_rollup_spec(
+            test_file=__file__,
+            start=WINDOW_START,
+            end=WINDOW_END,
+            territory_like=f"T%_{rid}",
+            teardown_deletes_window=True,
+        ),
+    )
+    try:
+        require_isolated_windows(db_conn, *guard_specs)
+    except BaseException:
+        with db_conn:
+            with db_conn.cursor() as cur:
+                cur.execute(
+                    "SELECT pg_advisory_unlock(hashtext(%s))",
+                    (_WINDOW_ADVISORY_LOCK_KEY,),
+                )
+        raise
+
     with db_conn:
         with db_conn.cursor() as cur:
             for key, hcp in hcps.items():
@@ -211,23 +251,54 @@ def mixed_substrate(db_conn: Any, test_run_id: str) -> dict:
                     ),
                 )
 
-    yield {"run_id": rid, "hcps": hcps}
+    state = {
+        "run_id": rid,
+        "hcps": hcps,
+        "territory_run_xid": None,
+        "territory_run_created_at": None,
+    }
+    yield state
 
-    # Teardown in reverse FK order; territory_metrics rows are deletable by
-    # the far-past metric_date window (the territory ETL cross-products
-    # every territory in hcp_profiles against the window's metric_dates, so
+    # Teardown in reverse FK order. The territory ETL cross-products every
+    # territory in hcp_profiles against the window's metric_dates, so
     # prefix-matching territory_id alone would leak foreign-territory rows
-    # created by our own ETL run). The date-scoped delete is safe ONLY
-    # because the fixture proved the window held zero territory_metrics
-    # rows AND has held the window's advisory lock ever since -- everything
-    # in it now is ours. The lock is released after the delete.
+    # created by our own ETL run -- and a date-scoped delete would destroy
+    # any foreign row that landed in the window after the emptiness proof
+    # above (#2215: the proof, the runs and this delete are separate
+    # transactions, and the advisory lock serialises this suite against
+    # itself, not against a foreign writer). So the delete is keyed to what
+    # this run owns: its two territories, plus the territory run's own
+    # INSERTS on the window's dates -- rows carrying both the run's
+    # transaction id (xmin, the #2213 rule) and its transaction timestamp
+    # (created_at: the upsert stamps NOW() on insert and its ON CONFLICT arm
+    # never touches it, so a foreign row the run overwrote takes the xid but
+    # keeps its own created_at), both read off the run's keyed row after it
+    # ran. Anything else in the window is REPORTED, not deleted -- while the
+    # lock is still held, so a waiting invocation of this suite cannot plant
+    # into the window before the report reads it. The lock is released last.
+    run_xid = state["territory_run_xid"]
+    run_created_at = state["territory_run_created_at"]
+    not_ours: list[tuple[Any, ...]] = []
     try:
         with db_conn:
             with db_conn.cursor() as cur:
                 cur.execute(
-                    "DELETE FROM territory_metrics WHERE metric_date >= %s AND metric_date < %s",
+                    "DELETE FROM territory_metrics WHERE territory_id IN (%s, %s)",
+                    (f"TS_{rid}", f"TR_{rid}"),
+                )
+                if run_xid is not None:
+                    cur.execute(
+                        "DELETE FROM territory_metrics WHERE metric_date >= %s "
+                        "AND metric_date < %s AND xmin::text = %s AND created_at = %s",
+                        (WINDOW_START.date(), WINDOW_END.date(), run_xid, run_created_at),
+                    )
+                cur.execute(
+                    "SELECT territory_id, metric_date, xmin::text, created_at "
+                    "  FROM territory_metrics "
+                    " WHERE metric_date >= %s AND metric_date < %s ORDER BY 2, 1",
                     (WINDOW_START.date(), WINDOW_END.date()),
                 )
+                not_ours = cur.fetchall()
                 cur.execute(
                     "DELETE FROM business_metrics WHERE hcp_id LIKE %s",
                     (f"hcp895_{rid}_%",),
@@ -238,6 +309,15 @@ def mixed_substrate(db_conn: Any, test_run_id: str) -> dict:
                     (f"pj895_{rid}_%",),
                 )
                 cur.execute("DELETE FROM hcp_profiles WHERE hcp_id LIKE %s", (f"hcp895_{rid}_%",))
+        assert not not_ours, (
+            f"territory_metrics rows in [{WINDOW_START.date()}, {WINDOW_END.date()}) were "
+            f"not inserted by the territory run (xid {run_xid} at {run_created_at}) and were "
+            f"left in place, not deleted: {not_ours}"
+        )
+        # #2215: with our rows gone, anything the family's census still reaches in the
+        # window landed while this file was writing -- REPORTED as a teardown failure,
+        # never deleted.
+        require_windows_still_isolated(db_conn, *guard_specs)
     finally:
         with db_conn:
             with db_conn.cursor() as cur:
@@ -250,11 +330,16 @@ def mixed_substrate(db_conn: Any, test_run_id: str) -> dict:
 def _run_per_hcp(window_suffix: str = "") -> dict:
     from src.etl.business_metrics_per_hcp_etl import _run_per_hcp_rollup_impl
 
-    return _run_per_hcp_rollup_impl(
+    result = _run_per_hcp_rollup_impl(
         start_date=WINDOW_START.isoformat(),
         end_date=WINDOW_END.isoformat(),
         request_id=f"integration-895{window_suffix}",
     )
+    # #2215 (codex r2 HIGH-1): the window was censused clean and every rerun reproduces
+    # the same three cells, so the reconcile must delete nothing; a count is a foreign
+    # row that landed after the census and is already gone.
+    require_no_foreign_reconcile(result)
+    return result
 
 
 def _fetch_tags(db_conn: Any, rid: str) -> dict[str, bool]:
@@ -311,9 +396,20 @@ def test_territory_rollup_composes_provenance(db_conn: Any, mixed_substrate: dic
         request_id="integration-895-territory",
     )
     assert result["status"] == "completed", f"territory ETL failed: {result}"
+    require_no_foreign_reconcile(result)  # #2215: the window held no territory row before
 
     rid = mixed_substrate["run_id"]
     with db_conn.cursor() as cur:
+        # The run's transaction id, off our own keyed row it just wrote: the teardown
+        # deletes the run's cross-join rows on the window's dates by it (#2215).
+        cur.execute(
+            "SELECT xmin::text, created_at FROM territory_metrics WHERE territory_id = %s "
+            " ORDER BY metric_date LIMIT 1",
+            (f"TS_{rid}",),
+        )
+        row = cur.fetchone()
+        mixed_substrate["territory_run_xid"] = row[0] if row else None
+        mixed_substrate["territory_run_created_at"] = row[1] if row else None
         cur.execute(
             "SELECT territory_id, BOOL_AND(is_synthetic), BOOL_OR(is_synthetic)"
             "  FROM territory_metrics"
