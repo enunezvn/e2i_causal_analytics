@@ -89,8 +89,15 @@ So the gap is closed from the other side, by a protocol every file follows:
    REPORT. With ours gone, ``planted`` is 0 on every leg and any row the census still
    reaches was inside the window while the file wrote.
 
-A meta test pins that every live-writing file makes the second call after its
-``yield``, and that no file deletes ``territory_metrics`` by date alone.
+4. :func:`require_no_foreign_reconcile` on each run whose expected reconcile count the
+   file knows. The one row the re-census cannot see is a foreign row that landed after
+   the census and was DELETED by the ETL's own reconcile before the re-read; both
+   reconciling ETLs return that DELETE's rowcount as ``rows_deleted``, and on a
+   censused-clean window with no stale rows of the file's own it must be 0.
+
+A meta test pins that every live-writing file makes the second call after its last
+teardown DELETE, that every reconciling file checks the count, and that no file deletes
+``territory_metrics`` by date alone.
 """
 
 from __future__ import annotations
@@ -111,6 +118,7 @@ __all__ = [
     "census_windows",
     "per_hcp_rollup_spec",
     "require_isolated_windows",
+    "require_no_foreign_reconcile",
     "require_windows_still_isolated",
     "selected_metric_dates",
     "selected_metric_dates_sql",
@@ -793,9 +801,11 @@ def require_windows_still_isolated(conn: Any, *specs: WriteWindowSpec) -> tuple[
     file FAIL at teardown, naming the file, the window and the leg with its counts, so a
     run that touched foreign data cannot finish green. What it cannot see, stated so the
     green is not over-read: a foreign row that landed after the census and was removed
-    again before this re-read leaves no count behind -- that needs the single-transaction
-    design the issue weighed and rejected (the family's concurrency tests require a
-    second, committing connection). A foreign row the run OVERWROTE on a swept date is
+    again before this re-read leaves no count behind. When the remover is the ETL's own
+    reconcile, :func:`require_no_foreign_reconcile` catches it by the run's reported
+    ``rows_deleted``; when it is any other writer, only the single-transaction design the
+    issue weighed and rejected could (the family's concurrency tests require a second,
+    committing connection). A foreign row the run OVERWROTE on a swept date is
     the teardown's to catch, not this census's: it takes the run's xid but keeps its own
     ``created_at``, so a teardown keyed to both leaves it in place and reports it, and
     this re-census then counts it. Its overwritten values are reported, not restored.
@@ -823,3 +833,38 @@ def require_windows_still_isolated(conn: Any, *specs: WriteWindowSpec) -> tuple[
             pytrace=False,
         )
     return censuses
+
+
+def require_no_foreign_reconcile(result: Mapping[str, Any], *, own_obsolete: int = 0) -> None:
+    """FAIL -- REPORT -- when a run's reconcile deleted more rows than the file expected.
+
+    The post-teardown census cannot see a row that was already gone: a foreign row that
+    landed inside the window after the census and was DELETED by the ETL's own reconcile
+    (the per-HCP obsolete predicate; the territory owned-and-obsolete predicate) leaves no
+    count behind (#2215, codex r2 HIGH-1). Both reconciling ETLs return that DELETE's
+    rowcount as ``rows_deleted``. With the census green there was no foreign obsolete row
+    to delete, so on a run whose own data produces no stale rows the count must be 0 --
+    and a file that deliberately makes ``own_obsolete`` of its OWN rows stale states that
+    number. Anything above it is a row this run did not plant, deleted by production SQL
+    the test invoked: reported here, by the count, because the row itself is gone.
+
+    A result without the key is not a clean run and is reported rather than permitted.
+    """
+    import pytest
+
+    deleted = result.get("rows_deleted")
+    if deleted is None:
+        pytest.fail(
+            f"REPORTED: the run returned no reconcile delete count (rows_deleted) to check "
+            f"against the census: {dict(result)!r}",
+            pytrace=False,
+        )
+    if int(deleted) != own_obsolete:
+        pytest.fail(
+            f"REPORTED: the run's reconcile deleted {int(deleted)} row(s); this file expected "
+            f"{own_obsolete} (its own stale rows). The census permitted before the run, so the "
+            f"extra row(s) landed inside the window after it and were deleted by the ETL's own "
+            f"reconcile -- the post-teardown census cannot see them (#2215). Result: "
+            f"{dict(result)!r}",
+            pytrace=False,
+        )

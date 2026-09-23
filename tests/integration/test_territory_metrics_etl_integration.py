@@ -52,6 +52,7 @@ import pytest
 # rather than ImportError when the binary is absent.
 from tests.integration._prod_write_guard import (
     require_isolated_windows,
+    require_no_foreign_reconcile,
     require_windows_still_isolated,
     territory_rollup_spec,
 )
@@ -326,6 +327,14 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
         )
 
 
+def _reconciled_nothing(result: dict) -> dict:
+    """#2215 (codex r2 HIGH-1): the window was censused clean and every planted per-HCP
+    row is reproduced by each recompute, so the owned-and-obsolete reconcile must delete
+    nothing; a count is a foreign row that landed after the census and is already gone."""
+    require_no_foreign_reconcile(result)
+    return result
+
+
 def _fetch_territory_rollup(db_conn: Any, test_run_id: str) -> list[tuple[Any, ...]]:
     """Read back territory_metrics rows for the test run, ordered by date."""
     with db_conn.cursor() as cur:
@@ -352,10 +361,12 @@ def test_territorial_sums_match_per_hcp_sums(db_conn: Any, synthetic_dataset: di
     """
     from src.etl.territory_metrics_etl import _run_territory_rollup_impl
 
-    result = _run_territory_rollup_impl(
-        start_date=synthetic_dataset["start_date"].isoformat(),
-        end_date=synthetic_dataset["end_date"].isoformat(),
-        request_id="integration-territory-sums",
+    result = _reconciled_nothing(
+        _run_territory_rollup_impl(
+            start_date=synthetic_dataset["start_date"].isoformat(),
+            end_date=synthetic_dataset["end_date"].isoformat(),
+            request_id="integration-territory-sums",
+        )
     )
     assert result["status"] == "completed", f"ETL failed: {result}"
 
@@ -397,10 +408,12 @@ def test_covered_lives_matches_total_patient_volume_sum(
     """
     from src.etl.territory_metrics_etl import _run_territory_rollup_impl
 
-    _run_territory_rollup_impl(
-        start_date=synthetic_dataset["start_date"].isoformat(),
-        end_date=synthetic_dataset["end_date"].isoformat(),
-        request_id="integration-covered-lives",
+    _reconciled_nothing(
+        _run_territory_rollup_impl(
+            start_date=synthetic_dataset["start_date"].isoformat(),
+            end_date=synthetic_dataset["end_date"].isoformat(),
+            request_id="integration-covered-lives",
+        )
     )
 
     rows = _fetch_territory_rollup(db_conn, synthetic_dataset["test_run_id"])
@@ -433,10 +446,12 @@ def test_active_hcp_count_uses_30_day_window(db_conn: Any, synthetic_dataset: di
     """
     from src.etl.territory_metrics_etl import _run_territory_rollup_impl
 
-    _run_territory_rollup_impl(
-        start_date=synthetic_dataset["start_date"].isoformat(),
-        end_date=synthetic_dataset["end_date"].isoformat(),
-        request_id="integration-active-hcp",
+    _reconciled_nothing(
+        _run_territory_rollup_impl(
+            start_date=synthetic_dataset["start_date"].isoformat(),
+            end_date=synthetic_dataset["end_date"].isoformat(),
+            request_id="integration-active-hcp",
+        )
     )
 
     rows = _fetch_territory_rollup(db_conn, synthetic_dataset["test_run_id"])
@@ -480,10 +495,12 @@ def test_market_potential_and_resource_score_preserved_across_etl(
     from src.etl.territory_metrics_etl import _run_territory_rollup_impl
 
     # Step 1: materialise rows.
-    result = _run_territory_rollup_impl(
-        start_date=synthetic_dataset["start_date"].isoformat(),
-        end_date=synthetic_dataset["end_date"].isoformat(),
-        request_id="integration-mp-ras-1",
+    result = _reconciled_nothing(
+        _run_territory_rollup_impl(
+            start_date=synthetic_dataset["start_date"].isoformat(),
+            end_date=synthetic_dataset["end_date"].isoformat(),
+            request_id="integration-mp-ras-1",
+        )
     )
     assert result["status"] == "completed", f"ETL failed: {result}"
 
@@ -501,10 +518,12 @@ def test_market_potential_and_resource_score_preserved_across_etl(
             )
 
     # Step 3: re-run ETL -- this hits the ON CONFLICT path on every row.
-    _run_territory_rollup_impl(
-        start_date=synthetic_dataset["start_date"].isoformat(),
-        end_date=synthetic_dataset["end_date"].isoformat(),
-        request_id="integration-mp-ras-2",
+    _reconciled_nothing(
+        _run_territory_rollup_impl(
+            start_date=synthetic_dataset["start_date"].isoformat(),
+            end_date=synthetic_dataset["end_date"].isoformat(),
+            request_id="integration-mp-ras-2",
+        )
     )
 
     # Step 4: stamps survived the ON CONFLICT SET clause (because the SET
@@ -542,10 +561,12 @@ def test_idempotent_rerun_preserves_market_potential_seed(
     """
     from src.etl.territory_metrics_etl import _run_territory_rollup_impl
 
-    _run_territory_rollup_impl(
-        start_date=synthetic_dataset["start_date"].isoformat(),
-        end_date=synthetic_dataset["end_date"].isoformat(),
-        request_id="idempotency-1",
+    _reconciled_nothing(
+        _run_territory_rollup_impl(
+            start_date=synthetic_dataset["start_date"].isoformat(),
+            end_date=synthetic_dataset["end_date"].isoformat(),
+            request_id="idempotency-1",
+        )
     )
 
     first_snapshot = _fetch_territory_rollup(db_conn, synthetic_dataset["test_run_id"])
@@ -565,10 +586,12 @@ def test_idempotent_rerun_preserves_market_potential_seed(
                 (f"%_{synthetic_dataset['test_run_id']}",),
             )
 
-    _run_territory_rollup_impl(
-        start_date=synthetic_dataset["start_date"].isoformat(),
-        end_date=synthetic_dataset["end_date"].isoformat(),
-        request_id="idempotency-2",
+    _reconciled_nothing(
+        _run_territory_rollup_impl(
+            start_date=synthetic_dataset["start_date"].isoformat(),
+            end_date=synthetic_dataset["end_date"].isoformat(),
+            request_id="idempotency-2",
+        )
     )
 
     second_snapshot = _fetch_territory_rollup(db_conn, synthetic_dataset["test_run_id"])

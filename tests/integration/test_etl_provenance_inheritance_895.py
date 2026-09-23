@@ -42,6 +42,8 @@ import pytest
 
 from tests.integration._prod_write_guard import (
     per_hcp_rollup_spec,
+    require_isolated_windows,
+    require_no_foreign_reconcile,
     require_windows_still_isolated,
     territory_rollup_spec,
 )
@@ -163,6 +165,38 @@ def mixed_substrate(db_conn: Any, test_run_id: str) -> dict:
             "provenance assertions over (or delete) foreign rows"
         )
 
+    # The family's census as well (#2215, codex r2 HIGH-2): the inline proof above never
+    # looked at business_metrics, and _run_per_hcp()'s reconcile DELETEs any obsolete
+    # per_hcp_rollup row in this window, planted or not -- a foreign one would be gone
+    # before the post-teardown report could count it. The same specs are re-read after
+    # the teardown. The guard FAILS rather than skips; the lock must not outlive that.
+    guard_specs = (
+        per_hcp_rollup_spec(
+            test_file=__file__,
+            start=WINDOW_START,
+            end=WINDOW_END,
+            hcp_like=f"hcp895_{rid}_%",
+            trigger_like=f"tr895_{rid}_%",
+        ),
+        territory_rollup_spec(
+            test_file=__file__,
+            start=WINDOW_START,
+            end=WINDOW_END,
+            territory_like=f"T%_{rid}",
+            teardown_deletes_window=True,
+        ),
+    )
+    try:
+        require_isolated_windows(db_conn, *guard_specs)
+    except BaseException:
+        with db_conn:
+            with db_conn.cursor() as cur:
+                cur.execute(
+                    "SELECT pg_advisory_unlock(hashtext(%s))",
+                    (_WINDOW_ADVISORY_LOCK_KEY,),
+                )
+        raise
+
     with db_conn:
         with db_conn.cursor() as cur:
             for key, hcp in hcps.items():
@@ -283,23 +317,7 @@ def mixed_substrate(db_conn: Any, test_run_id: str) -> dict:
         # #2215: with our rows gone, anything the family's census still reaches in the
         # window landed while this file was writing -- REPORTED as a teardown failure,
         # never deleted.
-        require_windows_still_isolated(
-            db_conn,
-            per_hcp_rollup_spec(
-                test_file=__file__,
-                start=WINDOW_START,
-                end=WINDOW_END,
-                hcp_like=f"hcp895_{rid}_%",
-                trigger_like=f"tr895_{rid}_%",
-            ),
-            territory_rollup_spec(
-                test_file=__file__,
-                start=WINDOW_START,
-                end=WINDOW_END,
-                territory_like=f"T%_{rid}",
-                teardown_deletes_window=True,
-            ),
-        )
+        require_windows_still_isolated(db_conn, *guard_specs)
     finally:
         with db_conn:
             with db_conn.cursor() as cur:
@@ -312,11 +330,16 @@ def mixed_substrate(db_conn: Any, test_run_id: str) -> dict:
 def _run_per_hcp(window_suffix: str = "") -> dict:
     from src.etl.business_metrics_per_hcp_etl import _run_per_hcp_rollup_impl
 
-    return _run_per_hcp_rollup_impl(
+    result = _run_per_hcp_rollup_impl(
         start_date=WINDOW_START.isoformat(),
         end_date=WINDOW_END.isoformat(),
         request_id=f"integration-895{window_suffix}",
     )
+    # #2215 (codex r2 HIGH-1): the window was censused clean and every rerun reproduces
+    # the same three cells, so the reconcile must delete nothing; a count is a foreign
+    # row that landed after the census and is already gone.
+    require_no_foreign_reconcile(result)
+    return result
 
 
 def _fetch_tags(db_conn: Any, rid: str) -> dict[str, bool]:
@@ -373,6 +396,7 @@ def test_territory_rollup_composes_provenance(db_conn: Any, mixed_substrate: dic
         request_id="integration-895-territory",
     )
     assert result["status"] == "completed", f"territory ETL failed: {result}"
+    require_no_foreign_reconcile(result)  # #2215: the window held no territory row before
 
     rid = mixed_substrate["run_id"]
     with db_conn.cursor() as cur:

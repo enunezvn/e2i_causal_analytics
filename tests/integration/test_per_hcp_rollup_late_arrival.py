@@ -25,6 +25,7 @@ from tests.integration._prod_write_guard import (
     adherence_spec,
     per_hcp_rollup_spec,
     require_isolated_windows,
+    require_no_foreign_reconcile,
     require_windows_still_isolated,
     selected_metric_dates,
     territory_arrival_spec,
@@ -305,6 +306,11 @@ def test_a_late_weekly_batch_rolls_up_under_each_triggers_own_date(
 
     _land_batch(db_conn, rid, EARLY_BATCH, [("b1", b, TUESDAY)])
     first = _run_per_hcp_rollup_impl(arrived_before=FIRST_ARRIVAL_RUN, request_id="late-arrival-1")
+    # #2215 (codex r2 HIGH-1): nothing on the affected dates pre-existed (censused), and
+    # the second run re-rolls the same (hcp, brand, date) keys with more triggers, so
+    # neither arrival run's reconcile deletes anything; a count is a foreign row that
+    # landed after the census and is already gone.
+    require_no_foreign_reconcile(first)
     assert first["status"] == "completed" and first["selected_by"] == "arrival", first
     assert _rows(db_conn, rid) == {(b, TUESDAY): (1, 1.0)}
 
@@ -322,6 +328,7 @@ def test_a_late_weekly_batch_rolls_up_under_each_triggers_own_date(
     second = _run_per_hcp_rollup_impl(
         arrived_before="2019-01-14T03:15:00+00:00", request_id="late-arrival-2"
     )
+    require_no_foreign_reconcile(second)
     assert second["status"] == "completed" and second["rows_affected"] == 3, second
     rows = _rows(db_conn, rid)
     assert rows[(a, TUESDAY)] == pytest.approx((2, 2 / 3))
@@ -396,6 +403,8 @@ def test_a_late_weekly_batch_rolls_up_under_each_triggers_own_date(
     territory = _run_territory_rollup_impl(
         arrived_before=TERRITORY_ARRIVAL_RUN, request_id="late-arrival-territory"
     )
+    # #2215: no territory row on the selected dates pre-existed (leg 3 was 0).
+    require_no_foreign_reconcile(territory)
     # The run's transaction id, read off our own keyed row it just wrote: the teardown
     # deletes by it, and every row on the recorded dates must carry it -- a row that does
     # not was written by someone else and is reported, not swept.
