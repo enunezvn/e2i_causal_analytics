@@ -42,6 +42,11 @@ TEST_CONFIG = {
 }
 
 
+def _mlflow_infra_unavailable(error_msg: str) -> bool:
+    """Whether a trainer error means MLflow itself is unavailable (skip, not fail)."""
+    return "MLflow" in error_msg or "circuit breaker" in error_msg
+
+
 def generate_ml_ready_sample_data(n_samples: int = 100, seed: int = 42) -> pd.DataFrame:
     """Generate ML-ready sample patient data matching the production schema.
 
@@ -586,7 +591,7 @@ class TestModelTrainer:
         # Check for training errors - MLflow issues should skip, not fail
         if result.get("error"):
             error_msg = str(result.get("error", ""))
-            if "MLflow" in error_msg or "circuit breaker" in error_msg:
+            if _mlflow_infra_unavailable(error_msg):
                 pytest.skip(f"MLflow infrastructure issue: {error_msg}")
             else:
                 pytest.fail(f"Model training failed: {error_msg}")
@@ -937,14 +942,14 @@ class TestTier0EndToEnd:
         except RuntimeError as e:
             # MLflow issues should skip, not fail
             error_msg = str(e)
-            if "MLflow" in error_msg or "circuit breaker" in error_msg:
+            if _mlflow_infra_unavailable(error_msg):
                 pytest.skip(f"MLflow infrastructure issue: {error_msg}")
             raise
 
         # Check for training errors in result
         if trainer_result.get("error"):
             error_msg = str(trainer_result.get("error", ""))
-            if "MLflow" in error_msg or "circuit breaker" in error_msg:
+            if _mlflow_infra_unavailable(error_msg):
                 pytest.skip(f"MLflow infrastructure issue: {error_msg}")
 
         pipeline_state["trained_model"] = trainer_result.get("trained_model")
