@@ -353,9 +353,13 @@ class ScopeDefinerAgent:
             else:
                 # Persist to database (ml_experiments table); a refreshed scope runs
                 # under the existing row's experiment id (#2257).
-                output = await self._persist_scope_spec(
+                refreshed_id = await self._persist_scope_spec(
                     output, problem_description=final_state.get("problem_description", "")
                 )
+                if refreshed_id:
+                    output = _with_experiment_identity(
+                        output, refreshed_id, output.get("experiment_name", "")
+                    )
 
             # Update procedural memory with successful pattern
             await self._update_procedural_memory(output)
@@ -388,24 +392,25 @@ class ScopeDefinerAgent:
 
     async def _persist_scope_spec(
         self, output: Dict[str, Any], problem_description: str = ""
-    ) -> Dict[str, Any]:
-        """Persist ScopeSpec to ml_experiments table; return the output to run under.
+    ) -> Optional[str]:
+        """Persist ScopeSpec to ml_experiments table.
 
         Graceful degradation: If repository is unavailable,
-        logs a debug message and continues without error (``output`` unchanged).
+        logs a debug message and continues without error.
 
         Args:
             output: Agent output containing scope_spec and success_criteria
 
         Returns:
-            ``output`` — re-keyed to the refreshed row's experiment id when the scope
-            name already exists (#2257), else unchanged.
+            The experiment id the run must use when the scope name already exists (the
+            refreshed row's, #2257); ``None`` when the minted id stands (a new row, or
+            nothing persisted).
         """
         try:
             repo = await _get_experiment_repository()
             if repo is None:
                 logger.debug("Skipping experiment persistence (no repository)")
-                return output
+                return None
 
             scope_spec = output.get("scope_spec", {})
             success_criteria = output.get("success_criteria", {})
@@ -456,7 +461,7 @@ class ScopeDefinerAgent:
                     repo.client, str(existing.id), output.get("experiment_id")
                 )
                 logger.info(f"Refreshed existing experiment scope: {name} ({experiment_id})")
-                return _with_experiment_identity(output, experiment_id, name)
+                return experiment_id
 
             # Create experiment record
             result = await repo.create_experiment(
@@ -478,7 +483,7 @@ class ScopeDefinerAgent:
 
         except Exception as e:
             logger.warning(f"Failed to persist experiment: {e}")
-        return output
+        return None
 
     async def _attach_retrain_scope(
         self, output: Dict[str, Any], retrain_of: Dict[str, Any]
