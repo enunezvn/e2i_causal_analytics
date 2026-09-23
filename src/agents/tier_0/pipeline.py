@@ -684,6 +684,9 @@ class MLFoundationPipeline:
             "target_variable": input_data.get("target_variable"),
             "candidate_features": input_data.get("candidate_features"),
             "feature_manifest_source": feature_manifest_source,
+            # #2248 (codex r1): an explicit clinical|commercial intent selects the
+            # success-criteria bar; absent, scope_definer keeps its clinical default.
+            "deployment_intent": input_data.get("deployment_intent"),
             # D1.1: thread workflow-level audit_workflow_id so per-agent
             # State doesn't mint a fresh UUID via default_factory.
             "audit_workflow_id": result.audit_workflow_id,

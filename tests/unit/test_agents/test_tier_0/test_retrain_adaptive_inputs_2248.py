@@ -316,3 +316,89 @@ async def test_job_c4252b47_is_judged_by_the_adaptive_gates_not_precision_and_f1
     # The one gate the deployed (isotonic-calibrated) model still fails — a finding
     # about the calibrator, reported on #2248, not a threshold this change touches.
     assert results["maximum_calibration_slope_deviation"] is False
+
+
+# ---------------------------------------------------------------------------
+# codex r1 MED: preloaded splits in the trainer's array-like contract
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+def test_array_like_preloaded_splits_are_measured_too():
+    import numpy as np
+
+    splits = {
+        "train_data": {"X": np.zeros((8, 4)), "y": np.array([1, 0, 0, 1, 0, 0, 1, 0])},
+        "validation_data": {"X": np.zeros((5, 4)), "y": [1, 0, 0, 0, 1]},
+        "test_data": {"X": np.zeros((4, 4)), "y": np.array([[0], [1], [0], [0]])},
+        "holdout_data": {"X": np.zeros((3, 4)), "y": (1, 0, 0)},
+    }
+    assert adaptive_inputs_from_splits(splits) == {
+        "n_samples": 20,
+        "prevalence": pytest.approx(7 / 20),
+        "feature_count": 4,
+    }
+
+
+@pytest.mark.unit
+def test_a_one_dimensional_training_matrix_yields_no_inputs():
+    import numpy as np
+
+    splits = {"train_data": {"X": np.zeros(8), "y": np.array([1, 0] * 4)}}
+    assert adaptive_inputs_from_splits(splits) is None
+
+
+# ---------------------------------------------------------------------------
+# codex r1 MED: an explicit deployment intent reaches scope_definer on this path
+# ---------------------------------------------------------------------------
+
+
+class _StopAfterScopeInput(Exception):
+    pass
+
+
+async def _scope_input(input_data: Dict[str, Any]) -> Dict[str, Any]:
+    pipeline = MLFoundationPipeline(config=PipelineConfig(enable_feast=False))
+    captured: Dict[str, Any] = {}
+
+    async def _capture(scope_input):
+        captured.update(scope_input)
+        raise _StopAfterScopeInput()
+
+    fake_scope = MagicMock()
+    fake_scope.run = _capture
+    base = {"problem_description": "p", "business_objective": "b", "target_outcome": TARGET}
+    with patch.object(pipeline, "_get_agent", return_value=fake_scope):
+        with pytest.raises(_StopAfterScopeInput):
+            await pipeline._run_scope_definition({**base, **input_data}, _result({}), None)
+    return captured
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_an_explicit_deployment_intent_is_forwarded_to_scope_definer():
+    captured = await _scope_input(
+        {"data_source": "patient_journeys", "deployment_intent": "commercial"}
+    )
+    assert captured["deployment_intent"] == "commercial"
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_no_intent_is_invented_when_the_caller_gives_none():
+    captured = await _scope_input({"data_source": "patient_journeys"})
+    assert captured.get("deployment_intent") is None  # scope_definer defaults to clinical
+
+
+@pytest.mark.unit
+def test_the_retrain_contract_passes_an_explicit_deployment_intent_through():
+    from src.tasks.drift_monitoring_tasks import _cohort_input_from_training_config
+
+    contract = {"data_source": "patient_journeys", "target_outcome": TARGET}
+    assert "deployment_intent" not in _cohort_input_from_training_config(contract)
+    assert (
+        _cohort_input_from_training_config({**contract, "deployment_intent": "commercial"})[
+            "deployment_intent"
+        ]
+        == "commercial"
+    )

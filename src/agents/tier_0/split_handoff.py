@@ -50,6 +50,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
+import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -204,11 +205,20 @@ def adaptive_inputs_from_splits(splits: Mapping[str, Any]) -> Optional[Dict[str,
     for key in SPLIT_KEYS:
         split = splits.get(key)
         y = split.get("y") if isinstance(split, Mapping) else None
-        if isinstance(y, pd.Series) and len(y) > 0:
-            ys.append(y)
+        if y is None:
+            continue
+        # The trainer's split contract also takes array-likes (caller-preloaded splits).
+        y_arr = np.asarray(y, dtype=object) if not isinstance(y, pd.Series) else y.to_numpy()
+        if y_arr.ndim == 2 and y_arr.shape[1] == 1:
+            y_arr = y_arr.ravel()
+        if y_arr.ndim != 1:
+            return None
+        if len(y_arr) > 0:
+            ys.append(pd.Series(y) if isinstance(y, pd.Series) else pd.Series(list(y_arr)))
     train = splits.get("train_data")
     X_train = train.get("X") if isinstance(train, Mapping) else None
-    if not ys or not isinstance(X_train, pd.DataFrame) or X_train.shape[1] == 0:
+    x_shape = getattr(X_train, "shape", None)
+    if not ys or x_shape is None or len(x_shape) != 2 or x_shape[1] == 0:
         return None
     labels = pd.concat(ys, ignore_index=True)
     if labels.isna().any():
@@ -221,7 +231,7 @@ def adaptive_inputs_from_splits(splits: Mapping[str, Any]) -> Optional[Dict[str,
     return {
         "n_samples": int(len(labels)),
         "prevalence": float(labels.mean()),
-        "feature_count": int(X_train.shape[1]),
+        "feature_count": int(x_shape[1]),
     }
 
 

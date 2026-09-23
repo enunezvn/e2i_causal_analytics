@@ -864,10 +864,12 @@ def _cohort_input_from_training_config(training_config: Dict[str, Any]) -> Dict[
         "target_outcome": target_outcome,
         "data_source": data_source,
     }
-    # Optional pass-through: brand context, the Layer-5 manifest opt-in, and the
-    # deployment target. feature_manifest_source flows into scope_spec via the
-    # pipeline's scope stage (Phase B), engaging Layer-1 contracts + #544.
-    for opt in ("brand", "feature_manifest_source", "target_environment"):
+    # Optional pass-through: brand context, the Layer-5 manifest opt-in, the
+    # deployment target and an explicit clinical|commercial deployment intent (#2248;
+    # absent, scope_definer keeps its clinical default — never inferred here).
+    # feature_manifest_source flows into scope_spec via the pipeline's scope stage
+    # (Phase B), engaging Layer-1 contracts + #544.
+    for opt in ("brand", "feature_manifest_source", "target_environment", "deployment_intent"):
         if training_config.get(opt) is not None:
             input_data[opt] = training_config[opt]
     # #2207 split contract (codex r3 HIGH on PR #2241): the sweep's contract carries no
