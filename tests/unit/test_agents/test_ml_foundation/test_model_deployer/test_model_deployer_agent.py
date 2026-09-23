@@ -42,8 +42,42 @@ def mock_external_dependencies():
         yield
 
 
+def _provenance_gate_passes():
+    """Let promote_stage's #2259 provenance gate pass for a production workflow test.
+
+    The gate reads the model's ml_model_registry row, which CI cannot reach (no database), so a
+    production promotion here has no row and is refused (fail closed; see
+    test_production_promotion_without_a_registry_row_is_refused). Tests about OTHER behaviour
+    of a production deploy patch the gate open; the gate itself is tested against real MLflow and
+    a real registry in tests/unit/test_database/learning_loop/test_ml_registry_promotion_gate_realdb.py.
+    """
+    return patch(
+        "src.agents.ml_foundation.model_deployer.nodes.registry_manager.production_gate",
+        new=AsyncMock(return_value=None),
+    )
+
+
 class TestModelDeployerAgent:
     """Integration tests for complete model_deployer workflow."""
+
+    @pytest.mark.asyncio
+    async def test_production_promotion_without_a_registry_row_is_refused(self):
+        """#2259: no registry row -> no provable training provenance -> no production."""
+        agent = ModelDeployerAgent()
+        input_data = {
+            "model_uri": "mlflow://models/test_model/2",
+            "experiment_id": "exp_2259",
+            "validation_metrics": {"accuracy": 0.95},
+            "success_criteria_met": True,
+            "deployment_name": "prod_refused",
+            "target_environment": "production",
+            "shadow_mode_duration_hours": 48,
+            "shadow_mode_requests": 5000,
+            "shadow_mode_error_rate": 0.005,
+            "shadow_mode_latency_p99_ms": 100,
+        }
+        with pytest.raises(RuntimeError, match="promotion_refused: .*training_provenance"):
+            await agent.run(input_data)
 
     @pytest.mark.asyncio
     async def test_completed_deployment_honestly_reports_persistence(self):
@@ -134,7 +168,8 @@ class TestModelDeployerAgent:
             "shadow_mode_latency_p99_ms": 100,
         }
 
-        result = await agent.run(input_data)
+        with _provenance_gate_passes():
+            result = await agent.run(input_data)
 
         assert result["status"] == "completed"
         assert result["deployment_successful"] is True
@@ -276,7 +311,8 @@ class TestModelDeployerAgent:
             "shadow_mode_latency_p99_ms": 80,
         }
 
-        result = await agent.run(input_data)
+        with _provenance_gate_passes():
+            result = await agent.run(input_data)
 
         assert result["status"] == "completed"
         assert result["rollback_available"] is False

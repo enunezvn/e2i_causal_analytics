@@ -1121,6 +1121,28 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
 
         return model
 
+    @classmethod
+    def production_refusal(cls, model_id: Any, provenance: Optional[str]) -> Optional[str]:
+        """Why ``provenance`` may not enter production, or None when it may.
+
+        The ONE statement of the #968/#2259 gate: transition_stage (the DB write) and
+        model_deployer's promote_stage (before MLflow moves) both apply it.
+        """
+        if provenance in cls._PROMOTABLE_PROVENANCE:
+            return None
+        if provenance == "synthetic_gold":
+            return (
+                f"Refusing to promote model {model_id} to production: "
+                "training_provenance='synthetic_gold' (trained only on the "
+                "synthetic-gold cohort, #968). Retrain on real data before promotion."
+            )
+        return (
+            f"Refusing to promote model {model_id} to production: "
+            f"training_provenance is {provenance!r} (unknown training data, #2259). Only a "
+            "model whose provenance is proven ('real' or 'mixed') may serve; "
+            "register it from a cohort contract that pins is_synthetic."
+        )
+
     @staticmethod
     def normalize_stage(stage: str) -> str:
         """Map an MLflow or DB stage name to its ``model_stage_enum`` value, or raise ValueError.
@@ -1194,20 +1216,9 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
             return False
 
         if new_stage == "production":
-            provenance = getattr(current, "training_provenance", None)
-            if provenance == "synthetic_gold":
-                raise ValueError(
-                    f"Refusing to promote model {model_id} to production: "
-                    "training_provenance='synthetic_gold' (trained only on the "
-                    "synthetic-gold cohort, #968). Retrain on real data before promotion."
-                )
-            if provenance is None:
-                raise ValueError(
-                    f"Refusing to promote model {model_id} to production: "
-                    "training_provenance is NULL (unknown training data, #2259). Only a "
-                    "model whose provenance is proven ('real' or 'mixed') may serve; "
-                    "register it from a cohort contract that pins is_synthetic."
-                )
+            refusal = self.production_refusal(model_id, current.training_provenance)
+            if refusal:
+                raise ValueError(refusal)
 
         # Promote FIRST, with the gate repeated as a predicate on the write itself: the check
         # above read a snapshot, and the row may have changed since. A write that matches no row
