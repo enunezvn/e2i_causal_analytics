@@ -182,6 +182,49 @@ def frames_to_trainer_splits(
     return splits
 
 
+def adaptive_inputs_from_splits(splits: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """The adaptive success criteria's pre-eval inputs, measured on the trainer's splits.
+
+    #2248: scope_definer runs before any data is loaded, so on the API / retrain path
+    (``MLFoundationPipeline.run``) it never has ``n_samples`` / ``prevalence`` /
+    ``feature_count`` and falls back to the fixed thresholds even though
+    ``ADAPTIVE_CRITERIA`` is on. ``scripts/run_tier0_test.py`` computes them on its full
+    frame; this is the same measurement on the four splits the model is trained and
+    evaluated on: every row (``n_samples``), the positive rate over all of them
+    (``prevalence``) and the train split's feature columns (``feature_count``). The
+    feature count is taken BEFORE the trainer's one-hot encoding — the runner's
+    convention; a larger count only widens the train/val-delta cap, so the pre-encoding
+    count is the stricter of the two.
+
+    Returns ``None`` — leave the fixed fallback in force — when the labels are not a
+    clean two-class 0/1 (or bool) target: a prevalence computed on anything else would
+    be a guess.
+    """
+    ys: List[pd.Series] = []
+    for key in SPLIT_KEYS:
+        split = splits.get(key)
+        y = split.get("y") if isinstance(split, Mapping) else None
+        if isinstance(y, pd.Series) and len(y) > 0:
+            ys.append(y)
+    train = splits.get("train_data")
+    X_train = train.get("X") if isinstance(train, Mapping) else None
+    if not ys or not isinstance(X_train, pd.DataFrame) or X_train.shape[1] == 0:
+        return None
+    labels = pd.concat(ys, ignore_index=True)
+    if labels.isna().any():
+        return None
+    if not pd.api.types.is_bool_dtype(labels) and not pd.api.types.is_numeric_dtype(labels):
+        return None
+    labels = labels.astype(float)
+    if set(labels.unique()) != {0.0, 1.0}:
+        return None
+    return {
+        "n_samples": int(len(labels)),
+        "prevalence": float(labels.mean()),
+        "feature_count": int(X_train.shape[1]),
+    }
+
+
 def preloaded_splits(input_data: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
     """The caller's pre-loaded splits when ALL four are present, else None."""
     if all(input_data.get(k) for k in SPLIT_KEYS):
@@ -191,6 +234,7 @@ def preloaded_splits(input_data: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
 
 __all__ = [
     "IDENTIFIER_CARDINALITY_RATIO",
+    "adaptive_inputs_from_splits",
     "SPLIT_KEYS",
     "TRAINER_MAX_CATEGORIES",
     "feature_columns_to_drop",
