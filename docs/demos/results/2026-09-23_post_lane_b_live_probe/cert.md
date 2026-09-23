@@ -32,3 +32,25 @@ Raw: `raw_post_b_discontinued_180d.json` (response + `_probe` block: request, po
 ## Deploy ledger (committed with this evidence)
 
 `docs/demos/results/2026-09-15_trx_canonical/rollback/attempts/{causal_program_20260922,lane_c_20260922,lane_b_2232_20260922}.{pre,env,sha256}` — the three program deploys (44d310f0f run 35771791513 attempt 2; c0860bbf4 run 35781866332; 814eaa959 run 35796394678). The `.log` job logs are not committed (445 KB each; re-derivable from GitHub by `RUN_ID`/`JOB_ID` in the `.env`). A peer session recorded the 814eaa959 run under its own label (`lane_b_814eaa959`, same `RUN_ID`) 21 s earlier; left untouched.
+
+## Re-probe after PR #2237 (F1 fix) — deployed main `2ccf2f9a5`
+
+**PASS — the `structural prior not applied` warning now appears exactly once.**
+
+Same request, same script logic (`post_2237/post2237_probe.py`, a copy of `post_b_probe.py`), run at 2026-09-23T03:17:05Z against `ghcr.io/enunezvn/e2i-api:2ccf2f9a5…` (container StartedAt 2026-09-23T03:08:49Z, unchanged before/after the run).
+
+| field | pre-B cert | post-B probe (814eaa959) | post-#2237 (2ccf2f9a5) |
+|---|---|---|---|
+| `structural prior not applied` occurrences | — | 2 (F1) | **1** |
+| `warnings` length / duplicates | — | 2 / 1 | 2 / 0 |
+| `ate` | 0.007056123869614513 | identical | identical |
+| `ate_ci` | [-0.00537280…, 0.01948505…] | identical | identical |
+| `p_value` | — | 0.26583454458398803 | identical |
+| `data_source` | synthetic (showcase flag) | database | database |
+| `dag_source` | — | domain_knowledge | domain_knowledge |
+
+The second `warnings` entry is a different line (No detectable effect at this sample size: The 95 % CI [-0.005, 0.019] includes zero at n = 15209. The estimate is reported as a null finding; no unmeasured confounder is needed to explain it.), not a duplicate.
+
+Root cause (measured, PR #2237): the `audit_init` entry node returned the whole input state, and LangGraph appended the seeded `warnings` accumulator a second time. The node now returns only its delta. Codex r1 also found the same echo pattern in other nodes of the prediction-synthesizer, orchestrator, explainer and health-score graphs; filed as #2238, not exercised by this probe (causal_impact uses `spread_safe`).
+
+Raw: `post_2237/raw_post_2237_discontinued_180d.json` (response + `_probe` block); log: `post_2237/probe.log` (294.7 19 s wall, polls in the log).

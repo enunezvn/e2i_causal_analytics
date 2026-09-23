@@ -870,6 +870,20 @@ def _cohort_input_from_training_config(training_config: Dict[str, Any]) -> Dict[
     for opt in ("brand", "feature_manifest_source", "target_environment"):
         if training_config.get(opt) is not None:
             input_data[opt] = training_config[opt]
+    # #2207 split contract (codex r3 HIGH on PR #2241): the sweep's contract carries no
+    # brand, so a scheduled retrain from a migration-151 row ran as scope
+    # "unknown - <label>". A table cohort dict already names its partition —
+    # derive the brand from its filters when no explicit brand was given (an explicit
+    # brand still wins; string / file sources are unchanged).
+    if (
+        "brand" not in input_data
+        and isinstance(data_source, dict)
+        and data_source.get("type") == "table"
+        and isinstance(data_source.get("filters"), dict)
+    ):
+        contract_brand = data_source["filters"].get("brand")
+        if isinstance(contract_brand, str) and contract_brand:
+            input_data["brand"] = contract_brand
     return input_data
 
 
@@ -1097,7 +1111,10 @@ def check_retraining_for_all_models(
             # #894: the registry projection uses the live column names
             # (model_name, not name)
             model_id = model.get("id") or model.get("model_name")
-            # #2207: the row's cohort contract (None-free; {} -> None = unknown)
+            # #2207: the row's cohort contract (None-free; {} -> None = unknown).
+            # It carries no brand column: a table cohort dict's filters name the
+            # partition and _cohort_input_from_training_config derives brand from
+            # them at execution time (codex r3 HIGH on PR #2241).
             cohort = contract_from_registry_row(model) or None
             try:
                 # Queue evaluation task

@@ -4,14 +4,86 @@ This node runs Great Expectations validation after data loading.
 It uses the DataQualityValidator from src/mlops/data_quality.py.
 """
 
+import json
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
-from src.mlops.data_quality import get_data_quality_validator
+from src.mlops.data_quality import ExpectationSuiteBuilder, get_data_quality_validator
 
 from ..state import DataPreparerState
 
 logger = logging.getLogger(__name__)
+
+
+def _register_contract_suite(
+    validator: Any,
+    table: str,
+    base_suite: Optional[str],
+    columns: List[str],
+    target: Optional[str],
+) -> str:
+    """Register (idempotently) the suite a COLUMN-SCOPED table contract is held to.
+
+    #2207 split contract (codex r1 HIGH on PR #2241, owner decision 2026-09-23): the
+    per-table suites describe the WHOLE table — ``patient_journeys`` expects
+    ``event_type`` / ``event_date`` / ``patient_id`` — while a contract's ``columns`` is a
+    deliberate PROJECTION (measured on the live Kisqali initiation contract: 3/18,
+    blocking, against the whole-table suite). So the table's suite is kept but
+    FILTERED: table-level expectations and those on projected columns stay and still
+    block; expectations on columns outside the projection are NOT APPLICABLE — skipped
+    and logged at INFO, never failed and never dropped as a whole. The contract adds its
+    own checks: every declared column exists and the prediction target is non-null.
+    Re-registering the same name just overwrites it.
+    """
+    suite_name = f"{table}__contract"
+    projection = set(columns)
+    kept: List[Dict[str, Any]] = []
+    seen: set = set()
+
+    def _add(expectation: Dict[str, Any]) -> None:
+        # Serialised key: expectation kwargs may be list-valued (e.g. the ml_patients
+        # suite's ``value_set``), which a tuple-of-items key cannot hash (codex r2 MED).
+        key = json.dumps(expectation, sort_keys=True, default=str)
+        if key not in seen:
+            seen.add(key)
+            kept.append(expectation)
+
+    skipped: List[str] = []
+    base = list(validator.SUITES.get(base_suite, [])) if base_suite else []
+    for expectation in base:
+        column = (expectation.get("kwargs", {}) or {}).get("column")
+        if column is None or column in projection:
+            _add(expectation)
+        else:
+            skipped.append(f"{expectation.get('expectation_type')} on {column}")
+    for name in skipped:
+        logger.info(
+            "GE suite %r: skipping %s — not in contract projection (table %s)",
+            base_suite,
+            name,
+            table,
+        )
+
+    builder = ExpectationSuiteBuilder(suite_name).expect_table_row_count_to_be_between(min_value=1)
+    for column in columns:
+        builder = builder.expect_column_to_exist(column)
+    if target and target in columns:
+        builder = builder.expect_column_values_to_not_be_null(target)
+    for expectation in builder.build():
+        _add(expectation)
+
+    validator.register_suite(suite_name, kept)
+    n_kept_base = len(base) - len(skipped)
+    logger.info(
+        "GE contract suite %s: %d expectation(s) (%d kept from %r, %d skipped, %d contract checks)",
+        suite_name,
+        len(kept),
+        n_kept_base,
+        base_suite,
+        len(skipped),
+        len(kept) - n_kept_base,
+    )
+    return suite_name
 
 
 async def run_ge_validation(state: DataPreparerState) -> Dict[str, Any]:
@@ -60,10 +132,19 @@ async def run_ge_validation(state: DataPreparerState) -> Dict[str, Any]:
         # explicit error so a future shape change is loud, not silent.
         scope_spec = state.get("scope_spec", {})
         _ds_raw = state.get("data_source") or scope_spec.get("data_source", "business_metrics")
+        contract_columns: Optional[List[str]] = None
         if isinstance(_ds_raw, str):
             data_source: str = _ds_raw
         elif isinstance(_ds_raw, dict) and _ds_raw.get("type") in ("file_dir", "files"):
             data_source = "patient_journeys"
+        elif isinstance(_ds_raw, dict) and _ds_raw.get("type") == "table":
+            # #2207 split contract: a table cohort dict validates against its table's
+            # own suite; a column-scoped one against a suite derived from the contract
+            # (see _register_contract_suite).
+            data_source = str(_ds_raw.get("table") or "")
+            raw_columns = _ds_raw.get("columns")
+            if raw_columns:
+                contract_columns = [str(c) for c in raw_columns]
         elif isinstance(_ds_raw, dict):
             return {
                 "ge_validation_status": "error",
@@ -87,6 +168,9 @@ async def run_ge_validation(state: DataPreparerState) -> Dict[str, Any]:
         # Check if suite exists for this data source
         available_suites = list(validator.SUITES.keys())
 
+        contract_table = data_source
+        contract_suite: Optional[str] = None
+
         # Auto-detect ML patient data format vs event-level patient_journeys
         # ML patient data has patient_journey_id and discontinuation_flag but no event_type
         if data_source == "patient_journeys" and train_df is not None:
@@ -99,7 +183,16 @@ async def run_ge_validation(state: DataPreparerState) -> Dict[str, Any]:
                 logger.info("Detected ML patient data format, using 'ml_patients' suite")
                 data_source = "ml_patients"
 
-        if data_source not in available_suites:
+        if contract_columns:
+            contract_suite = _register_contract_suite(
+                validator,
+                contract_table,
+                data_source if data_source in available_suites else None,
+                contract_columns,
+                scope_spec.get("prediction_target"),
+            )
+            suite_name = contract_suite
+        elif data_source not in available_suites:
             logger.info(
                 f"No GE suite for '{data_source}', using generic validation. "
                 f"Available suites: {available_suites}"
@@ -133,11 +226,16 @@ async def run_ge_validation(state: DataPreparerState) -> Dict[str, Any]:
             total_expectations += result.expectations_evaluated
             total_passed += result.expectations_passed
 
-            if result.blocking:
+            # A contract suite is a SPECIFICATION, not a quality score: one missing
+            # declared column or a null target is a contract violation even though it
+            # scores above the validator's 0.8 success-rate threshold (5/6 = 83 %).
+            contract_violation = contract_suite is not None and result.expectations_failed > 0
+            if result.blocking or contract_violation:
                 all_passed = False
                 blocking_issues.append(
                     f"GE validation failed for {split_name}: "
                     f"{result.expectations_failed} expectations failed"
+                    + (" (table cohort contract violated)" if contract_violation else "")
                 )
 
                 # Add details of failed expectations
@@ -150,8 +248,16 @@ async def run_ge_validation(state: DataPreparerState) -> Dict[str, Any]:
         overall_success_rate = total_passed / total_expectations if total_expectations > 0 else 1.0
 
         # Determine overall status
+        ge_note: Optional[str] = None
         if all_passed:
-            if overall_success_rate >= 0.95:
+            if contract_suite is not None and total_expectations == 0:
+                # Never "passed" on zero applicable expectations.
+                ge_status = "warning"
+                ge_note = (
+                    f"contract suite {contract_suite} has zero applicable expectations "
+                    "for this projection"
+                )
+            elif overall_success_rate >= 0.95:
                 ge_status = "passed"
             else:
                 ge_status = "warning"
@@ -170,6 +276,7 @@ async def run_ge_validation(state: DataPreparerState) -> Dict[str, Any]:
 
         return {
             "ge_validation_status": ge_status,
+            **({"ge_validation_note": ge_note} if ge_note else {}),
             "ge_validation_results": ge_results,
             "ge_expectations_evaluated": total_expectations,
             "ge_expectations_passed": total_passed,

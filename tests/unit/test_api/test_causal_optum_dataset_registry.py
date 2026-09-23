@@ -378,3 +378,21 @@ def test_discovery_leaderboard_uses_the_per_dataset_default():
     src = inspect.getsource(discovery)
     assert "auto_discover=True" not in src
     assert "auto_discover=_default_auto_discover(dataset)" in src
+
+
+def test_spec_declares_the_optum_mart_feature_manifest():
+    """Lane B item 1 (owner GO 2026-09-23): the real dataset names the manifest
+    its feature-role panel and structural-author review are built under
+    (``scripts/measure_feature_role_panel.py --manifest-source optum_mart``). Two
+    consumers arm on it in src/api/routes/causal/agent.py: the structural-prior
+    lookup (an APPROVED review is matched by (T, Y, brand, manifest) — with no
+    approved row it stays silent) and the request-panel check (a panel built
+    under another manifest is refused with a 400). Lane C's
+    ``csu_escalation_causal`` and the synthetic datasets declare nothing."""
+    from src.data.manifests import MANIFEST_SOURCES
+
+    spec = _CAUSAL_DATASET_SPECS[DATASET]
+    assert spec["feature_manifest_source"] == "optum_mart"
+    assert "optum_mart" in MANIFEST_SOURCES  # a registered manifest key, not a label
+    for other in ("csu_escalation_causal", "patient_journeys", "hcp_adoption", "nba_triggers"):
+        assert "feature_manifest_source" not in _CAUSAL_DATASET_SPECS[other], other

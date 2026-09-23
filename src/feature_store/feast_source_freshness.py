@@ -44,9 +44,18 @@ RecencyQuery = Callable[[str], Awaitable[Optional[datetime]]]
 
 
 def source_table_of(data_source: Any) -> Optional[str]:
-    """The Supabase table a run loads from, or ``None`` for file / absent sources."""
+    """The Supabase table a run loads from, or ``None`` for file / absent sources.
+
+    A table cohort dict (``{"type": "table", "table": ..., ...}``, #2207 split
+    contract) loads from its ``table`` exactly as the bare string does, so it is
+    Feast-backed by the same views.
+    """
     if isinstance(data_source, str) and data_source.strip():
         return data_source.strip()
+    if isinstance(data_source, dict) and data_source.get("type") == "table":
+        table = data_source.get("table")
+        if isinstance(table, str) and table.strip():
+            return table.strip()
     return None
 
 
@@ -54,7 +63,9 @@ def describe_source(data_source: Any) -> str:
     """``table`` | ``file_dir`` | ``files`` | ``dict`` | ``none`` — for log lines / results."""
     if isinstance(data_source, dict):
         kind = data_source.get("type")
-        return str(kind) if kind in ("file_dir", "files") else "dict"
+        if kind in ("file_dir", "files"):
+            return str(kind)
+        return "table" if source_table_of(data_source) else "dict"
     if source_table_of(data_source):
         return "table"
     return "none"

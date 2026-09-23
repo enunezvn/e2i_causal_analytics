@@ -40,6 +40,7 @@ from ._common import (
 )
 from .datasets import (
     _CAUSAL_DATASET_SPECS,
+    CausalDatasetSpec,
     _brand_scoped_covariates,
     _default_auto_discover,
     _is_randomized_treatment,
@@ -74,7 +75,7 @@ def _normalised_panel(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def _validate_feature_role_panel(
     request: AgentCausalAnalysisRequest,
-    spec: Dict[str, Any],
+    spec: CausalDatasetSpec,
     covariates: List[str],
 ) -> None:
     """Refuse (400) a panel that does not answer THIS question (codex r2)."""
@@ -341,7 +342,7 @@ async def _apply_approved_structural_prior(
 
     # The run's dataset must declare the feature manifest the review was
     # authored for; (T, Y) names alone are not a dataset identity (codex r2).
-    spec = _CAUSAL_DATASET_SPECS.get(request.dataset or "") or {}
+    spec: CausalDatasetSpec = _CAUSAL_DATASET_SPECS.get(request.dataset or "") or {}
     declared = spec.get("feature_manifest_source")
     prior, notes = await resolve_structural_prior_for_run(
         treatment=request.treatment_var,

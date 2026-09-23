@@ -20138,7 +20138,7 @@ export interface components {
             auto_approve: boolean;
             /**
              * Data Source
-             * @description Committed cohort: a table name or a file-source dict
+             * @description Committed cohort: table name, file-source dict or table cohort dict
              */
             data_source?: string | {
                 [key: string]: unknown;

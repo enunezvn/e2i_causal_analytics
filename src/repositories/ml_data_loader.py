@@ -11,6 +11,7 @@ Version: 1.0.0
 """
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
@@ -359,6 +360,35 @@ class MLDataLoader(SplitAwareRepository):
             logger.error(f"Failed to load sample from {table}: {e}")
             return pd.DataFrame()
 
+    async def has_column(self, table: str, column: str) -> bool:
+        """Whether ``table`` carries ``column`` — PostgREST's answer, not a guess.
+
+        The ONE place SQLSTATE 42703 ("undefined column") is told apart from every
+        other failure (#2207 split contract, codex r1 MED on PR #2241): a real 42703
+        is ``False``; any other error — transport, auth, timeout, RLS — propagates so
+        the caller fails closed instead of reading "unknown" as "absent". ``limit(1)``
+        keeps the probe to one row; an empty result with no error still means the
+        column exists.
+
+        Raises:
+            ValueError: table not in ML_TABLES
+            RuntimeError: no Supabase client (cannot establish presence)
+        """
+        if table not in ML_TABLES:
+            raise ValueError(f"Table '{table}' not supported. Use one of: {ML_TABLES}")
+        if not self.client:
+            raise RuntimeError(
+                f"No Supabase client available: cannot establish whether {table}.{column} exists"
+            )
+        try:
+            self.client.table(table).select(column).limit(1).execute()
+        except Exception as e:
+            if _is_undefined_column_error(e, column):
+                logger.info("Table %s has no column %s (PostgREST 42703)", table, column)
+                return False
+            raise
+        return True
+
     async def get_table_schema(self, table: str) -> Dict[str, str]:
         """
         Get column names and types for a table.
@@ -455,6 +485,22 @@ class MLDataLoader(SplitAwareRepository):
         except Exception as e:
             logger.error(f"Failed to count records in {table}: {e}")
             return 0
+
+
+def _is_undefined_column_error(error: BaseException, column: str) -> bool:
+    """True only for PostgreSQL's undefined-column error (SQLSTATE 42703).
+
+    postgrest-py raises ``APIError`` carrying the PostgREST body (``code`` /
+    ``message``); the message form is ``column <table>.<col> does not exist``.
+    """
+    code = getattr(error, "code", None)
+    if code == "42703":
+        return True
+    # No structured code (older postgrest bodies): only the undefined-column message for
+    # THIS column counts — never a bare "42703" substring, which an unrelated transport
+    # or proxy error could carry (codex r2 LOW).
+    message = str(getattr(error, "message", None) or "")
+    return bool(re.search(rf"column\b.*\b{re.escape(column)}\b.*does not exist", message))
 
 
 # Convenience function for getting a loader instance

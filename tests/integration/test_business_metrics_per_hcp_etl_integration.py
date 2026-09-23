@@ -54,6 +54,8 @@ import pytest
 from tests.integration._prod_write_guard import (
     per_hcp_rollup_spec,
     require_isolated_windows,
+    require_no_foreign_reconcile,
+    require_windows_still_isolated,
 )
 
 psycopg2 = pytest.importorskip("psycopg2")
@@ -110,8 +112,7 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
 
     # Prod-write guard (owner-approved, 2026-09-17): refuse before writing if this
     # window holds rows we did not plant. See tests/integration/_prod_write_guard.py.
-    require_isolated_windows(
-        db_conn,
+    guard_specs = (
         per_hcp_rollup_spec(
             test_file=__file__,
             start=start_dt,
@@ -120,6 +121,7 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
             trigger_like=f"tr_{test_run_id}_%",
         ),
     )
+    require_isolated_windows(db_conn, *guard_specs)
 
     hcps = []
     for terr_idx, (territory_id, region) in enumerate(TERRITORIES):
@@ -255,6 +257,18 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
                 "DELETE FROM hcp_profiles WHERE hcp_id LIKE %s",
                 (f"hcp_{test_run_id}_%",),
             )
+    # #2215: the census, the runs and this teardown are separate transactions. With our
+    # rows gone, anything the same census still reaches landed inside the window while
+    # this file was writing -- REPORTED as a teardown failure, never deleted here.
+    require_windows_still_isolated(db_conn, *guard_specs)
+
+
+def _reconciled_nothing(result: dict) -> dict:
+    """#2215 (codex r2 HIGH-1): the window was censused clean and every row this file
+    plants is reproduced by each recompute, so the reconcile must delete nothing; a count
+    is a foreign row that landed after the census and is already gone."""
+    require_no_foreign_reconcile(result)
+    return result
 
 
 def test_per_hcp_rollup_materialises_rows(db_conn: Any, synthetic_dataset: dict) -> None:
@@ -263,10 +277,12 @@ def test_per_hcp_rollup_materialises_rows(db_conn: Any, synthetic_dataset: dict)
 
     # Use the implementation helper directly so we bypass the Celery
     # wrapper / broker; the wrapper is exercised in the unit tests.
-    result = _run_per_hcp_rollup_impl(
-        start_date=synthetic_dataset["start_date"].isoformat(),
-        end_date=synthetic_dataset["end_date"].isoformat(),
-        request_id="integration-test",
+    result = _reconciled_nothing(
+        _run_per_hcp_rollup_impl(
+            start_date=synthetic_dataset["start_date"].isoformat(),
+            end_date=synthetic_dataset["end_date"].isoformat(),
+            request_id="integration-test",
+        )
     )
 
     assert result["status"] == "completed", f"ETL failed: {result}"
@@ -295,10 +311,12 @@ def test_market_share_sums_to_one_per_territory(db_conn: Any, synthetic_dataset:
     market_shares add up to 1.0 (modulo float epsilon)."""
     from src.etl.business_metrics_per_hcp_etl import _run_per_hcp_rollup_impl
 
-    _run_per_hcp_rollup_impl(
-        start_date=synthetic_dataset["start_date"].isoformat(),
-        end_date=synthetic_dataset["end_date"].isoformat(),
-        request_id="integration-test",
+    _reconciled_nothing(
+        _run_per_hcp_rollup_impl(
+            start_date=synthetic_dataset["start_date"].isoformat(),
+            end_date=synthetic_dataset["end_date"].isoformat(),
+            request_id="integration-test",
+        )
     )
 
     with db_conn.cursor() as cur:
@@ -326,10 +344,12 @@ def test_idempotent_rerun(db_conn: Any, synthetic_dataset: dict) -> None:
     """Running the ETL twice produces the same row count (no duplicates)."""
     from src.etl.business_metrics_per_hcp_etl import _run_per_hcp_rollup_impl
 
-    _run_per_hcp_rollup_impl(
-        start_date=synthetic_dataset["start_date"].isoformat(),
-        end_date=synthetic_dataset["end_date"].isoformat(),
-        request_id="integration-test-1",
+    _reconciled_nothing(
+        _run_per_hcp_rollup_impl(
+            start_date=synthetic_dataset["start_date"].isoformat(),
+            end_date=synthetic_dataset["end_date"].isoformat(),
+            request_id="integration-test-1",
+        )
     )
 
     with db_conn.cursor() as cur:
@@ -340,10 +360,12 @@ def test_idempotent_rerun(db_conn: Any, synthetic_dataset: dict) -> None:
         row = cur.fetchone()
         first_count = row[0] if row else 0
 
-    _run_per_hcp_rollup_impl(
-        start_date=synthetic_dataset["start_date"].isoformat(),
-        end_date=synthetic_dataset["end_date"].isoformat(),
-        request_id="integration-test-2",
+    _reconciled_nothing(
+        _run_per_hcp_rollup_impl(
+            start_date=synthetic_dataset["start_date"].isoformat(),
+            end_date=synthetic_dataset["end_date"].isoformat(),
+            request_id="integration-test-2",
+        )
     )
 
     with db_conn.cursor() as cur:

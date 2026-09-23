@@ -6,7 +6,12 @@ the committed cohort it retrains on — ``data_source`` (the Supabase table or f
 closed without them. Migration 150 persists that identity on the entity the daily sweep
 iterates, ``ml_model_registry``:
 
-    cohort_data_source TEXT             table name, or the JSON of a file-source dict
+    cohort_data_source TEXT             table name, OR the JSON of a file-source dict
+                                        ({"type": "file_dir"|"files", ...}), OR the JSON
+                                        of a table cohort dict ({"type": "table",
+                                        "table": ..., "filters": {...}, "columns": [...]},
+                                        #2207 split contract — migration 151 seeds the
+                                        9 goldstd patient rows with one)
     cohort_target_outcome TEXT          prediction target
     cohort_feature_manifest_source TEXT resolved Layer-5 manifest source (optional)
 

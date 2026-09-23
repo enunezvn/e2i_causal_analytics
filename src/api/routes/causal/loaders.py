@@ -37,6 +37,7 @@ from .datasets import (
     _CAUSAL_NUMERIC_DERIVATIONS,
     _CAUSAL_PHYSICAL_TABLE,
     _NBA_JOINED_COVARIATES,
+    CausalDatasetSpec,
     apply_dataset_provenance_filter,
 )
 
@@ -169,9 +170,7 @@ async def _te_paged_select_all_brands(client: Any) -> List[Dict[str, Any]]:
     return rows
 
 
-def _require_covariate_role(
-    dataset: str, spec: Dict[str, List[str]], covariates: List[str]
-) -> None:
+def _require_covariate_role(dataset: str, spec: CausalDatasetSpec, covariates: List[str]) -> None:
     """Role-aware covariate validation (recovery-benchmark gap 3).
 
     The union allowlist admits any spec column into any slot, so an analyst's
@@ -360,7 +359,7 @@ def _resolve_requested_baselines(dataset: str, adjust_baselines: bool) -> List[s
     no-op that would mislabel an unadjusted run as adjusted."""
     if not adjust_baselines:
         return []
-    spec = _CAUSAL_DATASET_SPECS.get(dataset) or {}
+    spec: CausalDatasetSpec = _CAUSAL_DATASET_SPECS.get(dataset) or {}
     baselines = list(spec.get("baseline_covariate", []))
     if not baselines:
         raise HTTPException(
