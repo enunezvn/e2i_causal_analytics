@@ -117,16 +117,35 @@ def test_contract_conflict_precheck_raises():
     assert "cohort_data_source" in sql and "RAISE EXCEPTION" in sql
 
 
-def test_rollback_restores_remibrutinib_on_the_same_scope():
+def test_rollback_reverts_only_what_154_wrote():
+    """The rollback mirrors the forward derivation and touches only 154's exact output.
+
+    Codex r1 (MED): a rollback keyed on the name alone would also revert rows 154
+    skipped (target mismatch), rows corrected to another value, and rows created
+    later by the fixed code. Each rollback UPDATE must (a) reuse the forward name
+    pattern + target equality, (b) require the post-154 value (derived brand / NULL),
+    and (c) be bounded to rows that existed when 154 was written.
+    """
     sql = _code(_ROLLBACK)
     updates = _updates(sql)
-    assert len(updates) == 1
-    u = updates[0]
-    assert re.search(r"SET\s+brand\s*=\s*'Remibrutinib'", u)
-    assert re.search(r"created_by\s*=\s*'gold_standard_eval'", u)
-    assert set(re.findall(r"\('([^']+)',\s*'([^']+)'\)", u)) == _null_pairs()
-    rb_pattern = re.search(r"experiment_name\s*~\s*'([^']+)'", u)
-    assert rb_pattern
-    for cohort in (*PATIENT_COHORTS, HCP_ADOPTION_COHORT):
-        for brand in BRANDS:
-            assert re.match(rb_pattern.group(1), goldstd_experiment_name(cohort, brand))
+    assert len(updates) == 2, updates
+    for u in updates:
+        assert re.search(r"SET\s+brand\s*=\s*'Remibrutinib'", u), u
+        assert re.search(r"created_by\s*=\s*'gold_standard_eval'", u), u
+        # all 15 rows 154 corrects were created 2026-06-14 (measured 2026-09-23)
+        assert re.search(r"created_at\s*<\s*'2026-06-15T00:00:00Z'", u), u
+
+    per_brand = [u for u in updates if "enum_range" in u]
+    assert len(per_brand) == 1
+    rb_patterns = set(re.findall(r"FROM '(\^\(\?:[^']+)'\)", per_brand[0]))
+    assert rb_patterns == {_per_brand_pattern()}
+    assert re.search(
+        r"prediction_target\s*=\s*substring\(e\.experiment_name FROM '\^\(\.\*\)_goldstd_eval_v1\$'\)",
+        per_brand[0],
+    )
+    assert re.search(r"e\.brand\s*=\s*b\.label::brand_type", per_brand[0])
+
+    pooled = [u for u in updates if "enum_range" not in u]
+    assert len(pooled) == 1
+    assert set(re.findall(r"\('([^']+)',\s*'([^']+)'\)", pooled[0])) == _null_pairs()
+    assert re.search(r"\bbrand\s+IS\s+NULL", pooled[0])
