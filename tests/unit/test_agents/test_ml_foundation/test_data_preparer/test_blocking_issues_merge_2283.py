@@ -11,11 +11,25 @@ two that rule out the alternative fixes considered in the issue:
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, patch
+
+import numpy as np
+import pandas as pd
+import pytest
+
 from src.agents.ml_foundation.data_preparer.blocking_issues import (
     KIND_GE_VALIDATION,
+    KIND_LEAKAGE,
     KIND_QUALITY_CHECK,
     merge_blocking_issues,
     tag_blocking_issue,
+)
+from src.agents.ml_foundation.data_preparer.nodes.leakage_remediation import (
+    review_and_remediate_leakage,
+)
+
+_ANALYZE_LEAKAGE_LLM = (
+    "src.agents.ml_foundation.data_preparer.nodes.leakage_remediation._analyze_leakage_with_llm"
 )
 
 
@@ -71,3 +85,71 @@ def test_one_kind_does_not_evict_another() -> None:
     # ...and a later quality_check pass leaves the GE entry alone.
     after_qc_again = merge_blocking_issues(after_ge, [], kind=KIND_QUALITY_CHECK)
     assert after_qc_again == [tag_blocking_issue(KIND_GE_VALIDATION, "failed for train")]
+
+
+@pytest.mark.asyncio
+async def test_leakage_remediation_cannot_evict_a_foreign_entry() -> None:
+    """Drives the REAL ``review_and_remediate_leakage`` node.
+
+    Its prune used to drop ANY entry containing a leaked feature's name. A
+    ``sampling_frame_drift:`` entry names its drifting columns, and a column can
+    be both drifting and leaked — so remediating leakage silently retracted an
+    unrelated, still-unresolved gate reason. That was the last surviving
+    justification for the ``finalize_output`` re-promotion this PR deletes, so
+    it is asserted against the node itself rather than a copy of its predicate.
+    """
+    sampling_entry = (
+        "sampling_frame_drift: max_drift_score=0.91 > 0.3000 "
+        "(worst column: 'age', columns_with_drift=['age'])"
+    )
+    schema_entry = "Schema validation failed: 6 error(s)"
+    leakage_entry = tag_blocking_issue(
+        KIND_LEAKAGE, "[CRITICAL] target_leakage: age correlates with target"
+    )
+
+    rng = np.random.default_rng(2283)
+    n = 120
+    target = rng.integers(0, 2, n)
+    train_df = pd.DataFrame(
+        {
+            "age": target * 1.0,  # perfectly correlated -> the leaked feature
+            # The node requires >= 2 surviving clean features to call the
+            # remediation viable, so give it three.
+            "clean_a": rng.standard_normal(n),
+            "clean_b": rng.standard_normal(n),
+            "clean_c": rng.standard_normal(n),
+            "target": target,
+        }
+    )
+    state: dict = {
+        "experiment_id": "exp-2283-leakage-prune",
+        "leakage_severity": "critical",
+        "leakage_remediation_attempts": 0,
+        "leaked_features": ["age"],
+        "leakage_findings": [
+            {"feature": "age", "severity": "critical", "check_name": "target_leakage"}
+        ],
+        "blocking_issues": [leakage_entry, sampling_entry, schema_entry],
+        "train_df": train_df,
+        "validation_df": None,
+        "test_df": None,
+        "holdout_df": None,
+        "scope_spec": {"prediction_target": "target"},
+    }
+    analysis = {
+        "leakage_classifications": {"age": "target_leakage"},
+        "features_to_drop": ["age"],
+        "replacement_candidates": [],
+        "recommended_feature_set": ["clean_a", "clean_b", "clean_c"],
+        "reasoning": "test-injected",
+    }
+
+    with patch(_ANALYZE_LEAKAGE_LLM, new=AsyncMock(return_value=analysis)):
+        result = await review_and_remediate_leakage(state)  # type: ignore[arg-type]
+
+    assert result["leakage_remediation_status"] == "applied", (
+        f"fixture did not reach the prune branch: {result!r}"
+    )
+    assert result["blocking_issues"] == [sampling_entry, schema_entry], (
+        "the prune must retract only its own kind; it evicted a foreign entry"
+    )

@@ -37,6 +37,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from ..blocking_issues import KIND_LEAKAGE, KIND_SEPARATOR
 from ..state import DataPreparerState
 
 logger = logging.getLogger(__name__)
@@ -331,11 +332,23 @@ async def review_and_remediate_leakage(state: DataPreparerState) -> Dict[str, An
                 "leakage_findings": [],
                 "leakage_severity": "none",
                 "leaked_features": [],
-                # Update blocking_issues: remove leakage-related entries
+                # Update blocking_issues: remove the leakage-related entries
+                # for the features we just remediated.
+                #
+                # The ``startswith`` guard is load-bearing (#2283). Matching a
+                # feature name anywhere in the string evicted entries this node
+                # does not own: a ``sampling_frame_drift:`` entry names its
+                # drifting columns, and a column can be both drifting and
+                # leaked, so remediating leakage silently dropped an unrelated,
+                # unresolved gate reason. Only ``leakage:``-kind entries are
+                # ours to retract.
                 "blocking_issues": [
                     issue
                     for issue in (state.get("blocking_issues") or [])
-                    if not any(lf in issue for lf in leaked)
+                    if not (
+                        issue.startswith(f"{KIND_LEAKAGE}{KIND_SEPARATOR}")
+                        and any(lf in issue for lf in leaked)
+                    )
                 ],
             }
         else:

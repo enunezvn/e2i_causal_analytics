@@ -24,10 +24,14 @@ run_quality_checks -> run_ge_validation``) onto the REAL ``finalize_output``
 gate, over the REAL ``DataPreparerState`` schema. The nodes between
 ``run_ge_validation`` and ``finalize_output`` in production (feature
 engineering, leakage, transform, Feast, baseline, sufficiency, KG enrichment)
-are omitted deliberately: none of them is a producer or a clobberer of
-``blocking_issues`` on the path under test, and several require external
-services. Every node that touches the channel between the producer and the
-gate IS present.
+are omitted because several need external services. Several of them ARE
+producers of ``blocking_issues`` — ``detect_leakage``, ``transform_data``,
+``register_features_in_feast`` and ``sufficiency_check`` all write the channel
+— so this file does NOT claim to cover the whole channel. What it covers is
+the seam #2283 is about: the two nodes that DESTROYED other producers' entries
+between the schema validator and the gate. ``leakage_remediation``'s prune,
+the one other node that could evict a foreign entry, is covered in
+``test_blocking_issues_merge_2283.py`` against the real node.
 
 Data is ingested from a real local CSV through ``load_data``'s file path, so no
 part of the chain is mocked and nothing touches Supabase, Redis or MLflow.
@@ -77,7 +81,7 @@ def _build_validation_chain():
     return graph.compile()
 
 
-def _write_patient_journeys_csv(tmp_path: Path) -> Path:
+def _write_patient_journeys_csv(tmp_path: Path, *, with_nulls: bool = False) -> Path:
     """A frame that FAILS Pandera and PASSES Great Expectations.
 
     ``PatientJourneysSchema`` (``src/mlops/pandera_schemas.py:191``) requires a
@@ -106,6 +110,14 @@ def _write_patient_journeys_csv(tmp_path: Path) -> Path:
             "data_split": (["train"] * 36 + ["validation"] * 12 + ["test"] * 6 + ["holdout"] * 6),
         }
     )
+    if with_nulls:
+        # Nulls in a NON-required column: they drag ``completeness_score``
+        # (and so ``overall_score``) down without taking the required-column
+        # branch, which lets a caller pin ``qc_min_overall_score`` high enough
+        # that ``run_quality_checks`` emits a blocking entry OF ITS OWN. The
+        # re-entry tests need that to avoid being vacuous.
+        frame["sparse_flag"] = [None if i % 3 == 0 else 1 for i in range(n)]
+
     path = tmp_path / "patient_journeys.csv"
     frame.to_csv(path, index=False)
     return path
@@ -212,11 +224,18 @@ async def test_sampling_frame_entry_reaches_the_gate_without_re_promotion(
 ) -> None:
     """``graph.py`` used to re-derive ``audit_sampling_frame``'s blocking entry
     at the gate because ``run_quality_checks`` destroyed it. That workaround is
-    deleted by #2283; this pins the property it was protecting — the audit's
-    own entry now survives quality_checker and ge_validator unaided.
+    deleted by #2283; this pins the property it was protecting on THIS chain —
+    the audit's own entry survives quality_checker and ge_validator unaided,
+    because it is a FOREIGN entry to both and ``merge_blocking_issues`` carries
+    it through untouched.
 
-    It is a FOREIGN entry to both of those nodes, so ``merge_blocking_issues``
-    carries it through untouched.
+    Scope, stated plainly: this does not by itself prove the re-promotion is
+    unnecessary across the whole production graph. The other way the entry
+    could be lost is ``leakage_remediation``'s prune, which is on a branch this
+    chain omits; that is covered directly against the real node by
+    ``test_blocking_issues_merge_2283.py::
+    test_leakage_remediation_cannot_evict_a_foreign_entry``. Together the two
+    cover both loss paths.
     """
     csv_path = _write_patient_journeys_csv(tmp_path)
     state = _base_state(csv_path)
@@ -246,15 +265,28 @@ async def test_sampling_frame_entry_reaches_the_gate_without_re_promotion(
 
 
 @pytest.mark.asyncio
-async def test_re_entry_neither_duplicates_nor_strands_entries(tmp_path: Path) -> None:
+async def test_re_entry_replaces_a_nodes_own_blocker_instead_of_appending(
+    tmp_path: Path,
+) -> None:
     """``graph.py`` routes ``finalize_output -> qc_remediation --retry-->
-    run_quality_checks -> run_ge_validation``, so both clobber sites can run
-    twice in one invocation. This pins the property that rules out an
-    ``operator.add`` reducer (#2238 / PR #2251): a second pass must REPLACE
-    each node's own entries, not append to them, while leaving the upstream
-    schema entry alone.
+        run_quality_checks -> run_ge_validation ...``, so a QC retry re-runs the
+        whole downstream chain. This pins the property that rules out both an
+        ``operator.add`` reducer (#2238 / PR #2251) and a plain ``incoming + own``
+        merge: a second pass must REPLACE each node's own entries, not append.
+
+    ``sparse_flag`` is declared required and carries nulls, so
+        ``run_quality_checks`` genuinely emits an entry OF ITS OWN on every pass.
+        Without that this test would be vacuous — with only the upstream schema
+        entry in the channel there is nothing a naive concatenation could
+        duplicate, so it would pass against the very implementation it is meant to
+        reject.
     """
-    csv_path = _write_patient_journeys_csv(tmp_path)
+    csv_path = _write_patient_journeys_csv(tmp_path, with_nulls=True)
+    state = _base_state(csv_path)
+    # Pinned on the STATE, not on scope_spec: ``scope_spec`` is a typed
+    # contract (ScopeSpecSchema) and an undeclared key is dropped at the
+    # channel boundary, so a scope_spec override silently does nothing here.
+    state["qc_min_overall_score"] = 0.99
 
     graph = StateGraph(DataPreparerState)
     graph.add_node("load_data", load_data)  # type: ignore[arg-type]
@@ -273,19 +305,66 @@ async def test_re_entry_neither_duplicates_nor_strands_entries(tmp_path: Path) -
     graph.add_edge("run_quality_checks_retry", "run_ge_validation_retry")
     graph.add_edge("run_ge_validation_retry", END)
 
-    single_pass = await _build_two_pass_reference(csv_path)
-    final_state = await graph.compile().ainvoke(_base_state(csv_path))
-
+    final_state = await graph.compile().ainvoke(state)
     blocking_issues = final_state["blocking_issues"]
-    assert blocking_issues == single_pass, (
-        "a second pass changed the channel; entries were duplicated or dropped: "
-        f"two_pass={blocking_issues!r} one_pass={single_pass!r}"
+
+    # The precondition this test turns on: QC really did contribute its own
+    # entry, so a naive concatenation would have something to duplicate.
+    qc_entries = [i for i in blocking_issues if i.startswith("quality_check: ")]
+    assert len(qc_entries) == 1, (
+        f"expected exactly one quality_check entry after two passes: {blocking_issues!r}"
     )
-    assert len(set(blocking_issues)) == len(blocking_issues)
     assert sum("Schema validation failed" in i for i in blocking_issues) == 1
+    assert len(set(blocking_issues)) == len(blocking_issues)
+
+    # And a single pass over the same fixture yields the identical channel.
+    single = await _build_single_pass_reference(state)
+    assert blocking_issues == single, f"two_pass={blocking_issues!r} one_pass={single!r}"
 
 
-async def _build_two_pass_reference(csv_path: Path) -> list:
+@pytest.mark.asyncio
+async def test_a_nodes_stale_own_entry_is_retracted_when_it_passes(
+    tmp_path: Path,
+) -> None:
+    """The other half of the ownership contract, on real nodes: an entry this
+    node wrote on a previous pass must disappear once the condition clears.
+
+    Without this, a QC retry could never clear the gate — the blocker that
+    remediation actually fixed would sit in the channel forever. A plain
+    ``incoming + own`` merge fails exactly here.
+    """
+    csv_path = _write_patient_journeys_csv(tmp_path)
+    state = _base_state(csv_path)
+    # Stand in for a previous pass's contributions, alongside a foreign entry.
+    state["blocking_issues"] = [
+        "quality_check: Overall QC score (0.42) below minimum threshold (0.80)",
+        "ge_validation: failed for train: 3 expectations failed",
+        "sampling_frame_drift: some earlier, still-unresolved drift",
+    ]
+
+    graph = StateGraph(DataPreparerState)
+    graph.add_node("load_data", load_data)  # type: ignore[arg-type]
+    graph.add_node("run_quality_checks", run_quality_checks)  # type: ignore[arg-type]
+    graph.add_node("run_ge_validation", run_ge_validation)  # type: ignore[arg-type]
+    graph.set_entry_point("load_data")
+    graph.add_edge("load_data", "run_quality_checks")
+    graph.add_edge("run_quality_checks", "run_ge_validation")
+    graph.add_edge("run_ge_validation", END)
+
+    final_state = await graph.compile().ainvoke(state)
+    blocking_issues = final_state["blocking_issues"]
+
+    assert not [i for i in blocking_issues if i.startswith("quality_check: ")], (
+        f"stale quality_check entry survived a clean pass: {blocking_issues!r}"
+    )
+    assert not [i for i in blocking_issues if i.startswith("ge_validation: ")], (
+        f"stale ge_validation entry survived a clean pass: {blocking_issues!r}"
+    )
+    # The foreign entry is untouched — retraction is per-owner, not a wipe.
+    assert "sampling_frame_drift: some earlier, still-unresolved drift" in blocking_issues
+
+
+async def _build_single_pass_reference(state: Dict[str, Any]) -> list:
     """The single-pass channel the two-pass run above must reproduce exactly."""
     graph = StateGraph(DataPreparerState)
     graph.add_node("load_data", load_data)  # type: ignore[arg-type]
@@ -297,7 +376,7 @@ async def _build_two_pass_reference(csv_path: Path) -> list:
     graph.add_edge("run_schema_validation", "run_quality_checks")
     graph.add_edge("run_quality_checks", "run_ge_validation")
     graph.add_edge("run_ge_validation", END)
-    final_state = await graph.compile().ainvoke(_base_state(csv_path))
+    final_state = await graph.compile().ainvoke(dict(state))
     return list(final_state["blocking_issues"])
 
 

@@ -20,13 +20,26 @@ grow can never retract an issue that was subsequently remediated.
 
 Why not a plain ``incoming + own`` merge
 ----------------------------------------
-Two of the writers are **re-entrant**. ``graph.py`` routes
-``finalize_output -> qc_remediation --retry--> run_quality_checks ->
-run_ge_validation``, so both nodes can run more than once in a single graph
-invocation. A plain concatenation would duplicate each node's own entries on
-the second pass, and — worse — would make them permanently sticky: an issue
+Most of the writers are **re-entrant**. ``graph.py`` routes ``finalize_output
+-> qc_remediation --retry--> run_quality_checks``, and the retry then follows
+the *entire* downstream chain again — GE, feature engineering, leakage,
+transform, Feast, baseline, sufficiency. Only ``run_schema_validation`` and
+``audit_sampling_frame``, which sit upstream of ``run_quality_checks``, run
+once. A plain concatenation would duplicate each re-entrant node's own entries
+on the second pass, and — worse — would make them permanently sticky: an issue
 that remediation actually fixed would still be in the channel, so the gate
 would stay blocked and the remediation loop would be pointless.
+
+Adoption status (be precise about this)
+---------------------------------------
+``quality_checker``, ``ge_validator``, ``data_loader``, ``data_transformer``
+and ``leakage_detector`` route through this helper, and
+``leakage_remediation`` prunes by kind. ``feast_registrar`` and
+``sufficiency_check`` still concatenate naively; on a QC retry they can
+duplicate and fail to retract their own entries. That is a *fail-closed*
+defect (a stale blocker keeps the gate shut) of a different class from the
+fail-open bug #2283 fixed, and it is tracked separately rather than folded in
+here. This module does NOT yet describe every writer.
 
 The contract implemented here
 -----------------------------
@@ -48,6 +61,7 @@ __all__ = [
     "KIND_DATA_LOADING",
     "KIND_DATA_TRANSFORM",
     "KIND_GE_VALIDATION",
+    "KIND_LEAKAGE",
     "KIND_QUALITY_CHECK",
     "KIND_SEPARATOR",
     "merge_blocking_issues",
@@ -62,6 +76,7 @@ KIND_QUALITY_CHECK = "quality_check"
 KIND_GE_VALIDATION = "ge_validation"
 KIND_DATA_LOADING = "data_loading"
 KIND_DATA_TRANSFORM = "data_transform"
+KIND_LEAKAGE = "leakage"
 
 
 def tag_blocking_issue(kind: str, message: str) -> str:
