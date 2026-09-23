@@ -284,7 +284,9 @@ def test_a_sidecar_the_mirror_skips_makes_the_run_degraded_not_ok(
         {
             "schema_version": "1.0",
             "experiment_id": "exp_lost_2273",
-            "written_at": "20260923T000000Z",
+            # Clock-relative: a fixed stamp falls behind the module DB's cursor once an
+            # earlier test has imported rows, and the reader would never look at it.
+            "written_at": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
             "adaptive_verdicts": {"feature": "age"},
         },
     ],

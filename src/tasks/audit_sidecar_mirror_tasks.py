@@ -39,8 +39,15 @@ logger = logging.getLogger(__name__)
 ENABLE_FLAG: Final = "AUDIT_SIDECAR_MIRROR_ENABLED"
 MIRROR_TIMEOUT_SECONDS: Final = 900
 
-# src/data/audit_sidecar_reader.py logs this when it drops an unreadable sidecar.
-_SKIPPED_SIDECAR_MARKER: Final = "SidecarReader: skipping malformed sidecar"
+# The src/data/audit_sidecar_reader.py warnings that mean a sidecar's verdicts did
+# NOT reach the table: an unreadable file, an unparseable written_at (both skipped),
+# and a non-list adaptive_verdicts (read as empty). Its other warnings (schema
+# drift, unknown keys) are about rows that still land.
+_DROPPED_SIDECAR_MARKERS: Final = (
+    "SidecarReader: skipping malformed sidecar",
+    "has unparseable written_at=",
+    "has non-list adaptive_verdicts=",
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _MIRROR_SCRIPT = _REPO_ROOT / "scripts" / "mirror_audit_sidecar_to_supabase.py"
@@ -56,8 +63,11 @@ def _enabled() -> bool:
 
 @celery_app.task(
     name="src.tasks.mirror_audit_sidecars",
-    # No retries: the next nightly tick is the retry, and the cursor's 1 h overlap
-    # plus the idempotent upsert make a re-run over the same sidecars a no-op.
+    # No retries: a FAILED run rolls its batch back and leaves max(imported_at) where
+    # it was, so the next nightly tick re-reads the same sidecars (the upsert is
+    # idempotent). A sidecar the reader DROPS is different: once later imports move
+    # the cursor past its written_at, no nightly run reads it again, which is why a
+    # drop is reported "degraded" at ERROR with the file named.
     max_retries=0,
 )
 def mirror_audit_sidecars() -> Dict[str, Any]:
@@ -112,7 +122,7 @@ def mirror_audit_sidecars() -> Dict[str, Any]:
     # exits 0, so that canonical record never reaches the table. Say so at ERROR and
     # report the run degraded; other reader warnings (schema drift on a row that did
     # land) are relayed at WARNING.
-    skipped = [line for line in lines if _SKIPPED_SIDECAR_MARKER in line]
+    skipped = [line for line in lines if any(m in line for m in _DROPPED_SIDECAR_MARKERS)]
     warnings = [line for line in lines if " WARNING " in line and line not in skipped]
     for line in warnings:
         logger.warning("audit-sidecar mirror: %s", line)
