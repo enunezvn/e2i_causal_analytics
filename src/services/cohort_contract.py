@@ -130,6 +130,58 @@ async def load_registry_cohort_contract(
     return model_id, contract_from_registry_row(rows[0] if rows else None)
 
 
+async def load_registry_model_identity(client: Any, model_id: Optional[str]) -> Dict[str, Any]:
+    """The LOGICAL identity of the registry row a retrain refreshes (#2242), or ``{}``.
+
+    ``{model_id, model_name, model_version, experiment_id, experiment_name,
+    prediction_target}`` — the registered model the candidate becomes a new version of and
+    the ``ml_experiments`` row it attaches to (``prediction_target`` is that experiment's
+    logical target, e.g. ``initiation_kisqali``; the cohort contract's
+    ``target_outcome`` stays the physical frame column the loader needs). ``{}`` when any
+    part is missing — a retrain without the full identity keeps today's behaviour.
+
+    The experiment's ``brand`` is deliberately NOT read: it is 'Remibrutinib' on all 12
+    goldstd experiments (pre-existing data defect); a table contract's filters name the
+    brand instead (``_cohort_input_from_training_config``).
+    """
+    if client is None or not model_id:
+        return {}
+    try:
+        reg = await (
+            client.table("ml_model_registry")
+            .select("id, model_name, model_version, experiment_id")
+            .eq("id", model_id)
+            .limit(1)
+            .execute()
+        )
+        rows = getattr(reg, "data", None) or []
+        row = rows[0] if rows else {}
+        if not (row.get("model_name") and row.get("model_version") and row.get("experiment_id")):
+            return {}
+        exp = await (
+            client.table("ml_experiments")
+            .select("id, experiment_name, prediction_target")
+            .eq("id", row["experiment_id"])
+            .limit(1)
+            .execute()
+        )
+        exp_rows = getattr(exp, "data", None) or []
+    except Exception as e:  # noqa: BLE001 — identity unknown; the retrain keeps today's shape
+        logger.warning("Registry identity for %s could not be read (%s)", model_id, e)
+        return {}
+    if not exp_rows or not exp_rows[0].get("experiment_name"):
+        return {}
+    identity = {
+        "model_id": str(row["id"]),
+        "model_name": row["model_name"],
+        "model_version": str(row["model_version"]),
+        "experiment_id": str(row["experiment_id"]),
+        "experiment_name": exp_rows[0]["experiment_name"],
+        "prediction_target": exp_rows[0].get("prediction_target") or None,
+    }
+    return {k: v for k, v in identity.items() if v is not None}
+
+
 def contract_from_training_config(training_config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """The None-free cohort contract a retraining job's ``training_config`` carries."""
     if not training_config:
@@ -228,5 +280,6 @@ __all__ = [
     "contract_from_training_config",
     "heal_registry_cohort_contract",
     "load_registry_cohort_contract",
+    "load_registry_model_identity",
     "merge_contracts",
 ]
