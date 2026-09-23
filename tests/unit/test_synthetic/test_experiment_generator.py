@@ -15,6 +15,10 @@ from src.ml.synthetic.generators.experiment_generator import (
     _exp_id,
 )
 
+# The namespaced HCP universe (hcp_profiles.hcp_id) every A/B panel is sampled
+# from — the unit contract (see the parity/namespace tests at the bottom).
+_HCP_IDS = [f"scvhcp_{i:05d}" for i in range(5000)]
+
 
 def test_experiments_running_and_branded_and_tagged():
     g = ExperimentGenerator(GeneratorConfig(seed=7, n_records=30, brand=Brand.KISQALI))
@@ -99,7 +103,7 @@ def test_channel_taxonomy_mirrors_digital_twin_catalog():
 
 def test_ab_known_per_channel_uplift_recoverable_and_enum_safe():
     exp = ExperimentGenerator(GeneratorConfig(seed=7, n_records=16, brand=Brand.KISQALI)).generate()
-    ab = ABExperimentGenerator(GeneratorConfig(seed=9), experiments_df=exp)
+    ab = ABExperimentGenerator(GeneratorConfig(seed=9), experiments_df=exp, hcp_ids=_HCP_IDS)
     out = ab.generate()
     asn, enr, res = (
         out["ab_experiment_assignments"],
@@ -143,7 +147,9 @@ def test_ab_statistics_are_honest_and_enrollment_rolls_to_frontier():
     exp = ExperimentGenerator(
         GeneratorConfig(seed=7, n_records=16, brand=Brand.FABHALTA)
     ).generate()
-    out = ABExperimentGenerator(GeneratorConfig(seed=9), experiments_df=exp).generate()
+    out = ABExperimentGenerator(
+        GeneratorConfig(seed=9), experiments_df=exp, hcp_ids=_HCP_IDS
+    ).generate()
     asn, res = out["ab_experiment_assignments"], out["ab_experiment_results"]
     merged = res.merge(
         exp[["id", "intervention_channel", "created_at"]],
@@ -202,7 +208,11 @@ def test_ab_ids_deterministic_across_runs():
 
     def gen():
         return ABExperimentGenerator(
-            GeneratorConfig(seed=9), experiments_df=exp, units_per_experiment=20, true_uplift=0.15
+            GeneratorConfig(seed=9),
+            experiments_df=exp,
+            units_per_experiment=20,
+            true_uplift=0.15,
+            hcp_ids=_HCP_IDS,
         ).generate()
 
     o1, o2 = gen(), gen()
@@ -224,3 +234,150 @@ def test_ab_ids_deterministic_across_runs():
     assert res["experiment_id"].isin(exp["id"]).all()
     # the (experiment_id, unit_id) natural key is unique within a run (matches the DB UNIQUE)
     assert not asn.duplicated(subset=["experiment_id", "unit_id"]).any()
+
+
+# --------------------------------------------------------------------------
+# unit_id namespace contract (2026-09-23, Part of #2207).
+#
+# Measured on prod 2026-09-23: 185,532 assignments / 360 experiments carried
+# unit_id = f"hcp_{u:05d}" where u was a per-experiment loop counter, so
+# (a) no unit_id was ever an hcp_profiles.hcp_id (scvhcp_NNNNN) and the
+#     ExperimentOutcomeRepository join unit_id == business_metrics.hcp_id
+#     matched ZERO rows for every experiment, and
+# (b) variant == counter parity, so hcp_00000 was treatment in all 360
+#     experiments — HCP identity perfectly confounded with arm.
+# The generator must draw each experiment's panel from the supplied
+# namespaced HCP universe WITHOUT replacement and draw the arm from the rng,
+# independent of HCP identity and of enrollment position.
+# --------------------------------------------------------------------------
+
+
+def _exp_without_created_at(n_records: int, brand=Brand.KISQALI, seed: int = 7):
+    """Experiments frame that routes ABExperimentGenerator through its
+    ``units_per_experiment`` fallback (no created_at -> no age x rate sizing),
+    so a test can pin the exact panel size."""
+    return (
+        ExperimentGenerator(GeneratorConfig(seed=seed, n_records=n_records, brand=brand))
+        .generate()
+        .drop(columns=["created_at"])
+    )
+
+
+def test_ab_unit_ids_are_drawn_from_the_namespaced_hcp_universe():
+    """(i) every unit_id IS an id from the supplied hcp_ids (an
+    hcp_profiles.hcp_id), so the unit_id == business_metrics.hcp_id join in
+    src/repositories/experiment_outcome.py can match."""
+    exp = ExperimentGenerator(GeneratorConfig(seed=7, n_records=16, brand=Brand.KISQALI)).generate()
+    out = ABExperimentGenerator(
+        GeneratorConfig(id_prefix="scv", seed=9), experiments_df=exp, hcp_ids=_HCP_IDS
+    ).generate()
+    asn = out["ab_experiment_assignments"]
+    assert asn["unit_id"].isin(_HCP_IDS).all(), "unit_id must be an hcp_profiles.hcp_id"
+    assert asn["unit_id"].str.startswith("scvhcp_").all()
+    assert not asn["unit_id"].str.match(r"^hcp_\d{5}$").any(), "old counter ids leaked"
+
+
+def test_ab_no_experiment_reuses_a_unit_and_panels_are_samples():
+    """(ii) sampling WITHOUT replacement per experiment: every experiment's
+    panel has exactly n distinct HCPs; panels differ across experiments
+    (a fixed prefix of the universe would be the old confound in disguise)."""
+    exp = ExperimentGenerator(
+        GeneratorConfig(seed=7, n_records=16, brand=Brand.FABHALTA)
+    ).generate()
+    out = ABExperimentGenerator(
+        GeneratorConfig(id_prefix="scv", seed=9), experiments_df=exp, hcp_ids=_HCP_IDS
+    ).generate()
+    asn = out["ab_experiment_assignments"]
+    per_exp = asn.groupby("experiment_id")["unit_id"].agg(["size", "nunique"])
+    assert (per_exp["size"] == per_exp["nunique"]).all()
+    assert not asn.duplicated(subset=["experiment_id", "unit_id"]).any()
+    panels = asn.groupby("experiment_id")["unit_id"].apply(frozenset)
+    assert panels.nunique() == len(panels), "every experiment must draw its own panel"
+
+
+def test_ab_arm_is_independent_of_hcp_identity_and_enrollment_position():
+    """(iii) parity guard. Old bug: variant = counter parity -> the same unit
+    was treatment in EVERY experiment. Now, for HCPs seen in >= 6 experiments
+    the treatment share must be strictly inside (0, 1) for >= 95% of them
+    (P(all-one-arm | k >= 6 draws) <= 2 * 0.5**6 = 3.1%, and most HCPs here
+    are drawn ~10x, so the expected violation rate is well under 1%). Arms
+    stay balanced within an experiment (SRM sees 50/50, +-1 unit), and the
+    arm is NOT a function of enrollment position either (a 'first half =
+    treatment' rule would confound arm with assigned_at)."""
+    exp = _exp_without_created_at(16, brand=Brand.KISQALI)
+    hcp_ids = [f"scvhcp_{i:05d}" for i in range(300)]
+    asn = ABExperimentGenerator(
+        GeneratorConfig(id_prefix="scv", seed=9),
+        experiments_df=exp,
+        units_per_experiment=200,
+        hcp_ids=hcp_ids,
+    ).generate()["ab_experiment_assignments"]
+    asn = asn.assign(is_t=(asn["variant"] == "treatment").astype(int))
+    # per-HCP mixing across experiments
+    per_hcp = asn.groupby("unit_id")["is_t"].agg(["size", "mean"])
+    seen = per_hcp[per_hcp["size"] >= 6]
+    assert len(seen) >= 200, f"test setup: only {len(seen)} HCPs drawn >= 6 times"
+    mixed = ((seen["mean"] > 0) & (seen["mean"] < 1)).mean()
+    assert mixed >= 0.95, f"only {mixed:.1%} of frequently-drawn HCPs appear in both arms"
+    # balanced arms within each experiment (odd n -> treatment gets the extra)
+    per_exp = asn.groupby("experiment_id")["is_t"].agg(["size", "sum"])
+    assert ((per_exp["sum"] - (per_exp["size"] - per_exp["sum"])).abs() <= 1).all()
+    assert (per_exp["sum"] >= per_exp["size"] - per_exp["sum"]).all()
+    # arm independent of enrollment position: pooled treatment share among the
+    # FIRST half of each experiment's panel is ~0.5 (1600 units -> sd ~0.0125)
+    asn["pos"] = asn.groupby("experiment_id").cumcount()
+    asn["n"] = asn.groupby("experiment_id")["unit_id"].transform("size")
+    first_half = asn[asn["pos"] < asn["n"] // 2]
+    share = float(first_half["is_t"].mean())
+    assert 0.45 <= share <= 0.55, f"arm follows enrollment position: first-half share {share:.3f}"
+
+
+def test_ab_requires_hcp_universe_and_caps_panels_at_its_size(caplog):
+    """(iv) fail LOUD, never fall back to the counter: no hcp_ids -> ValueError
+    at generate(). A universe SMALLER than the requested panel (never at
+    production scale: FULL_SIZES hcp=5000 >= the 1400 clamp; but --small has
+    500 and the hermetic loader tests 50) caps the panel at the universe —
+    still without replacement, every HCP drawn exactly once — and warns."""
+    import logging
+
+    import pytest
+
+    exp = _exp_without_created_at(3)
+    with pytest.raises(ValueError, match="hcp_ids"):
+        ABExperimentGenerator(GeneratorConfig(seed=9), experiments_df=exp).generate()
+    with pytest.raises(ValueError, match="hcp_ids"):
+        ABExperimentGenerator(GeneratorConfig(seed=9), experiments_df=exp, hcp_ids=[]).generate()
+    small = [f"scvhcp_{i:05d}" for i in range(10)]
+    with caplog.at_level(
+        logging.WARNING, logger="src.ml.synthetic.generators.experiment_generator"
+    ):
+        asn = ABExperimentGenerator(
+            GeneratorConfig(seed=9), experiments_df=exp, units_per_experiment=20, hcp_ids=small
+        ).generate()["ab_experiment_assignments"]
+    per_exp = asn.groupby("experiment_id")["unit_id"].agg(["size", "nunique"])
+    assert (per_exp["size"] == 10).all() and (per_exp["nunique"] == 10).all()
+    assert "capped at the universe size" in caplog.text
+
+
+def test_ab_panels_deterministic_for_same_seed_and_hcp_order():
+    """(v) reseed idempotency extends to the panel: same seed + same hcp_ids
+    ORDER -> identical (id, experiment_id, unit_id, variant). The caller's
+    order is part of the seed contract (the generator does NOT sort), which is
+    why both loader paths feed hcp_profiles ids in PK order."""
+    import pandas as pd
+
+    exp = ExperimentGenerator(GeneratorConfig(seed=7, n_records=3, brand=Brand.KISQALI)).generate()
+    cols = ["id", "experiment_id", "unit_id", "variant"]
+
+    def gen(ids):
+        return (
+            ABExperimentGenerator(
+                GeneratorConfig(id_prefix="scv", seed=9), experiments_df=exp, hcp_ids=ids
+            )
+            .generate()["ab_experiment_assignments"][cols]
+            .reset_index(drop=True)
+        )
+
+    pd.testing.assert_frame_equal(gen(_HCP_IDS), gen(list(_HCP_IDS)))
+    # a different order is a different draw (documented contract, not an accident)
+    assert not gen(_HCP_IDS)["unit_id"].equals(gen(list(reversed(_HCP_IDS)))["unit_id"])

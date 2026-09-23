@@ -1,0 +1,21 @@
+# read-only psql read-back of prod public.expert_reviews, 2026-09-23T06:58:51Z (container supabase-db)
+
+## rows by review_type × approval_status (the 41 pre-existing dag_approval rows = 1 approved + 2 rejected + 38 superseded; the 2 initial_dag rows are this lane's)
+ review_type  | approval_status | count 
+--------------+-----------------+-------
+ dag_approval | approved        |     1
+ dag_approval | rejected        |     2
+ dag_approval | superseded      |    38
+ initial_dag  | pending         |     2
+(4 rows)
+
+## the two initial_dag rows
+              review_id               | review_type | approval_status |    reviewer_id    | reviewer_role | brand | treatment_variable  |    outcome_variable     |                 estimand_key                 |   dag_hash   |   adj_hash   |          created_at           | approved_at | has_sa_evidence | n_nodes 
+--------------------------------------+-------------+-----------------+-------------------+---------------+-------+---------------------+-------------------------+----------------------------------------------+--------------+--------------+-------------------------------+-------------+-----------------+---------
+ 2fa5a4a5-4035-4511-9fa1-1aedf1bd6645 | initial_dag | pending         | structural_author | data_science  |       | biologic_initiation | initiated_biologic_180d | :biologic_initiation:initiated_biologic_180d | 1107933f1274 | 9df4e23b2ddf | 2026-09-23 06:41:32.549169+00 |             | t               |     112
+ b54d7c32-00c2-440f-9ff3-8f0baa52bbc6 | initial_dag | pending         | structural_author | data_science  |       | treatment_dupixent  | persistent_at_180d_g28  | :treatment_dupixent:persistent_at_180d_g28   | 1fe5b4797227 | 0adbe0ae6366 | 2026-09-23 06:41:32.642939+00 |             | t               |      66
+(2 rows)
+
+## enum + ledger
+{dag_approval,methodology_review,quarterly_audit,ad_hoc_validation,initial_dag}
+152_expert_review_type_initial_dag.sql|2026-09-23 06:29:00.941869+00

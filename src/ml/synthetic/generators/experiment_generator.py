@@ -33,12 +33,25 @@ IDEMPOTENT (reseed-safe): all ids are DETERMINISTIC uuid5 from their natural key
 360 rows (and their entire FK fan-out: assignments, enrollments, results, and the
 MLOps registry rows generated off the same ids) UPDATE in place across reseeds
 instead of accumulating. Do NOT re-key the id on the display name.
+
+UNIT CONTRACT (2026-09-23, Part of #2207): ``ab_experiment_assignments.unit_id``
+IS an ``hcp_profiles.hcp_id`` from the namespaced synthetic universe
+(``scvhcp_NNNNN``). ``ExperimentOutcomeRepository.load_arrays``
+(src/repositories/experiment_outcome.py) joins ``unit_id == business_metrics.hcp_id``
+and depends on it. Until this date the generator emitted ``f"hcp_{u:05d}"`` from a
+per-experiment loop counter (measured on prod: 185,532 rows, 1,335 distinct
+``hcp_00000..hcp_01334``, ZERO joinable) and set the arm from the counter's parity
+(``hcp_00000`` treatment in all 360 experiments — identity confounded with arm).
+Now each experiment SAMPLES its panel from the caller-supplied ``hcp_ids`` without
+replacement and the arm is drawn from the rng, independent of HCP identity and of
+enrollment position. There is no fallback: a missing universe fails loud.
 """
 
+import logging
 import math
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Optional
+from typing import Dict, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -57,6 +70,8 @@ from .base import BaseGenerator, GeneratorConfig
 # that key is stable, so the assignment id MUST key on the same natural key or the upsert
 # would collide (23505) instead of updating.
 _EXP_ID_NS = uuid.UUID("5d3a8c14-6e2b-4f70-9a18-2b7c4e9f01a3")
+
+logger = logging.getLogger(__name__)
 
 
 def _exp_id(*parts: str) -> str:
@@ -258,6 +273,12 @@ class ABExperimentGenerator(BaseGenerator[pd.DataFrame]):
     Result rows carry HONESTLY computed statistics: a two-proportion z-test
     p-value (erfc-based, no scipy), a CI from the unpooled standard error, and
     is_significant = p < 0.05 — the null channel really does come out null.
+
+    ``hcp_ids`` is the namespaced HCP universe (``hcp_profiles.hcp_id``, e.g.
+    ``scvhcp_00000..``) every panel is sampled from (see the module docstring's
+    UNIT CONTRACT). It is used AS GIVEN — the caller's order is part of the seed
+    contract (same seed + same order => same panels), which is why both loader
+    paths feed it in hcp_id (PK) order. It is required at ``generate()`` time.
     """
 
     def __init__(
@@ -266,6 +287,7 @@ class ABExperimentGenerator(BaseGenerator[pd.DataFrame]):
         experiments_df: Optional[pd.DataFrame] = None,
         units_per_experiment: int = 60,
         true_uplift: float = 0.15,
+        hcp_ids: Optional[Sequence[str]] = None,
     ):
         super().__init__(config)
         if experiments_df is None or experiments_df.empty:
@@ -274,6 +296,8 @@ class ABExperimentGenerator(BaseGenerator[pd.DataFrame]):
         # Back-compat fallbacks for frames lacking channel/created_at metadata.
         self.units_per_experiment = units_per_experiment
         self.true_uplift = true_uplift
+        # Kept as a list in the caller's order (NOT sorted) — see class docstring.
+        self.hcp_ids: list[str] = [str(h) for h in hcp_ids] if hcp_ids is not None else []
 
     @property
     def entity_type(self) -> str:
@@ -296,6 +320,15 @@ class ABExperimentGenerator(BaseGenerator[pd.DataFrame]):
         return int(min(1400, max(120, rate * days)))
 
     def generate(self) -> Dict[str, pd.DataFrame]:  # type: ignore[override]
+        if not self.hcp_ids:
+            # Fail loud, never fall back to a counter: a counter id is exactly the
+            # un-joinable hcp_NNNNN substrate this contract removes.
+            raise ValueError(
+                "ABExperimentGenerator requires the namespaced HCP universe (hcp_ids) — "
+                "unit_id must be an hcp_profiles.hcp_id"
+            )
+        hcp_pool = np.array(self.hcp_ids, dtype=object)
+        capped = 0
         now = datetime.now(timezone.utc)
         asn_rows, enr_rows, res_rows = [], [], []
         for _, exp in self.experiments_df.iterrows():
@@ -310,12 +343,38 @@ class ABExperimentGenerator(BaseGenerator[pd.DataFrame]):
                 start = now
                 n_units = self.units_per_experiment
             span_s = max(0.0, (now - start).total_seconds())
+            if n_units > len(hcp_pool):
+                # A panel cannot hold more DISTINCT HCPs than the universe has.
+                # Never fires at production scale (FULL_SIZES hcp=5000 >= the 1400
+                # clamp in _units_for) but --small (hcp=500) and the hermetic
+                # loader tests (hcp=50) would otherwise be unusable. Bound the
+                # panel to the universe (sampling stays without-replacement) and
+                # say so — the fail-loud case is an EMPTY universe, above.
+                capped += 1
+                n_units = len(hcp_pool)
+            # PANEL: a without-replacement sample of REAL namespaced HCP ids, drawn
+            # from the rng in a fixed order per experiment (same seed + same hcp_ids
+            # order => same panel). Every experiment draws its own panel, so an HCP's
+            # presence is not a function of its index (the old counter id restarted
+            # at 0 per experiment, so 'hcp_00000' sat in all 360).
+            panel = self._rng.choice(hcp_pool, size=n_units, replace=False)
+            # ARM: a balanced vector (odd n -> treatment gets the extra, matching the
+            # historical ceil(n/2)/floor(n/2) split the SRM detector sees) shuffled
+            # by the rng, so the arm is independent of HCP identity AND of enrollment
+            # position. The old rule (counter parity) made hcp_00000 treatment in
+            # every experiment; a 'first half = treatment' rule would instead
+            # confound arm with assigned_at.
+            arms = np.array(
+                ["treatment"] * math.ceil(n_units / 2) + ["control"] * (n_units // 2),
+                dtype=object,
+            )
+            self._rng.shuffle(arms)
             base_rate = float(self._rng.uniform(0.20, 0.45))  # control mean in recoverable band
             control_outcomes: list[float] = []
             treatment_outcomes: list[float] = []
             for u in range(n_units):
-                variant = "treatment" if u % 2 == 0 else "control"
-                unit_id = f"hcp_{u:05d}"
+                variant = str(arms[u])
+                unit_id = str(panel[u])
                 # Deterministic id from the UNIQUE(experiment_id, unit_id) natural key so a
                 # reseed UPDATES in place (eid is itself deterministic, so this is stable).
                 aid = _exp_id("asn", eid, unit_id)
@@ -391,8 +450,25 @@ class ABExperimentGenerator(BaseGenerator[pd.DataFrame]):
                     "is_synthetic": True,
                 }
             )
+        if capped:
+            logger.warning(
+                "ABExperimentGenerator: %d/%d experiments asked for more units than the "
+                "HCP universe holds (%d); their panels were capped at the universe size",
+                capped,
+                len(self.experiments_df),
+                len(hcp_pool),
+            )
+        assignments = pd.DataFrame(asn_rows)
+        # Contract guard (trivially true by construction; cheap insurance against a
+        # future edit re-introducing a synthetic counter id).
+        unknown = set(assignments["unit_id"]) - set(self.hcp_ids)
+        if unknown:
+            raise RuntimeError(
+                f"unit_id contract violated: {len(unknown)} ids not in hcp_ids "
+                f"(e.g. {sorted(unknown)[:3]})"
+            )
         return {
-            "ab_experiment_assignments": pd.DataFrame(asn_rows),
+            "ab_experiment_assignments": assignments,
             "ab_experiment_enrollments": pd.DataFrame(enr_rows),
             "ab_experiment_results": pd.DataFrame(res_rows),
         }

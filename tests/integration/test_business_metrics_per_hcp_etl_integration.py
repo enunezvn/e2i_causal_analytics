@@ -53,6 +53,7 @@ import pytest
 # Skip the whole module rather than ImportError when the binary is absent.
 from tests.integration._prod_write_guard import (
     per_hcp_rollup_spec,
+    planted_prefix,
     require_isolated_windows,
     require_no_foreign_reconcile,
     require_windows_still_isolated,
@@ -117,8 +118,8 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
             test_file=__file__,
             start=start_dt,
             end=end_dt,
-            hcp_like=f"hcp_{test_run_id}_%",
-            trigger_like=f"tr_{test_run_id}_%",
+            hcp_like=planted_prefix(f"hcp_{test_run_id}_"),
+            trigger_like=planted_prefix(f"tr_{test_run_id}_"),
         ),
     )
     require_isolated_windows(db_conn, *guard_specs)
@@ -242,20 +243,20 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
     with db_conn:
         with db_conn.cursor() as cur:
             cur.execute(
-                "DELETE FROM business_metrics WHERE hcp_id LIKE %s",
-                (f"hcp_{test_run_id}_%",),
+                "DELETE FROM business_metrics WHERE hcp_id LIKE %s ESCAPE '\\'",
+                (planted_prefix(f"hcp_{test_run_id}_"),),
             )
             cur.execute(
-                "DELETE FROM triggers WHERE trigger_id LIKE %s",
-                (f"tr_{test_run_id}_%",),
+                "DELETE FROM triggers WHERE trigger_id LIKE %s ESCAPE '\\'",
+                (planted_prefix(f"tr_{test_run_id}_"),),
             )
             cur.execute(
-                "DELETE FROM patient_journeys WHERE patient_journey_id LIKE %s",
-                (f"pj_{test_run_id}_%",),
+                "DELETE FROM patient_journeys WHERE patient_journey_id LIKE %s ESCAPE '\\'",
+                (planted_prefix(f"pj_{test_run_id}_"),),
             )
             cur.execute(
-                "DELETE FROM hcp_profiles WHERE hcp_id LIKE %s",
-                (f"hcp_{test_run_id}_%",),
+                "DELETE FROM hcp_profiles WHERE hcp_id LIKE %s ESCAPE '\\'",
+                (planted_prefix(f"hcp_{test_run_id}_"),),
             )
     # #2215: the census, the runs and this teardown are separate transactions. With our
     # rows gone, anything the same census still reaches landed inside the window while
@@ -296,9 +297,9 @@ def test_per_hcp_rollup_materialises_rows(db_conn: Any, synthetic_dataset: dict)
         cur.execute(
             """
             SELECT COUNT(*) FROM business_metrics
-             WHERE hcp_id LIKE %s
+             WHERE hcp_id LIKE %s ESCAPE '\\'
             """,
-            (f"hcp_{synthetic_dataset['test_run_id']}_%",),
+            (planted_prefix(f"hcp_{synthetic_dataset['test_run_id']}_"),),
         )
         row = cur.fetchone()
         count = row[0] if row else 0
@@ -326,10 +327,10 @@ def test_market_share_sums_to_one_per_territory(db_conn: Any, synthetic_dataset:
                    SUM(bm.market_share)
               FROM business_metrics bm
               JOIN hcp_profiles      hp ON bm.hcp_id = hp.hcp_id
-             WHERE bm.hcp_id LIKE %s
+             WHERE bm.hcp_id LIKE %s ESCAPE '\\'
              GROUP BY hp.territory_id, bm.brand, bm.metric_date
             """,
-            (f"hcp_{synthetic_dataset['test_run_id']}_%",),
+            (planted_prefix(f"hcp_{synthetic_dataset['test_run_id']}_"),),
         )
         groups = cur.fetchall()
 
@@ -354,8 +355,8 @@ def test_idempotent_rerun(db_conn: Any, synthetic_dataset: dict) -> None:
 
     with db_conn.cursor() as cur:
         cur.execute(
-            "SELECT COUNT(*) FROM business_metrics WHERE hcp_id LIKE %s",
-            (f"hcp_{synthetic_dataset['test_run_id']}_%",),
+            "SELECT COUNT(*) FROM business_metrics WHERE hcp_id LIKE %s ESCAPE '\\'",
+            (planted_prefix(f"hcp_{synthetic_dataset['test_run_id']}_"),),
         )
         row = cur.fetchone()
         first_count = row[0] if row else 0
@@ -370,8 +371,8 @@ def test_idempotent_rerun(db_conn: Any, synthetic_dataset: dict) -> None:
 
     with db_conn.cursor() as cur:
         cur.execute(
-            "SELECT COUNT(*) FROM business_metrics WHERE hcp_id LIKE %s",
-            (f"hcp_{synthetic_dataset['test_run_id']}_%",),
+            "SELECT COUNT(*) FROM business_metrics WHERE hcp_id LIKE %s ESCAPE '\\'",
+            (planted_prefix(f"hcp_{synthetic_dataset['test_run_id']}_"),),
         )
         row = cur.fetchone()
         second_count = row[0] if row else 0
