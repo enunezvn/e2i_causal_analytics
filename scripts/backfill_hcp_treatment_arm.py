@@ -113,14 +113,15 @@ loader script's regenerated frame does not, ~63 %). On every run it now also
       read 1.0000) and ``adopted`` moves only where the shifted sigmoid crosses
       the SAME uniform (~9.5 % of rows);
   (d) re-dates JOINED rows: ``consideration_date = max(metric_date) + lag``, lag
-      ~ integers(1, 91) from a SPAWNED stream ``default_rng([brand_seed, 1])`` (the
+      ~ integers(1, 61) from a SPAWNED stream ``default_rng([brand_seed, 1])`` (the
       four DGP draws are untouched), CLAMPED to the run date so no row is dated in
-      the future. CONSEQUENCE, not hidden: ~10 % of joined pairs have a September
-      last exposure, so their dates pile up at the frontier (a 1-52 day window),
-      and the gold-standard walk-forward axis (``feature_builder`` aliases
-      ``consideration_date -> journey_start_date``) will see a clump of joined
-      rows in Jun-Sep 2026 instead of 37 even months. Non-joined rows keep their
-      live dates (the writer omits the column for them);
+      the future. CONSEQUENCE, not hidden: the Aug/Sep-exposed pairs (< 10 %) can
+      land past the run date and are clamped onto it (the dry-run prints the count
+      per brand), and the gold-standard walk-forward axis (``feature_builder``
+      aliases ``consideration_date -> journey_start_date``) will see joined rows
+      clumped in Jul-Sep 2026 instead of 37 even months. A 90-day lag was measured
+      and rejected: it clamped ~1/3 of joined rows onto one date. Non-joined rows
+      keep their live dates (the writer omits the column for them);
   (e) stamps ``updated_at = now()`` on every written row (the table has no
       trigger; until now the script left it at 2026-06-14).
 
@@ -208,8 +209,13 @@ _NON_ADOPTER_VALUE = "NON_ADOPTER"
 NULL_CHANNEL_COLUMN = INTERVENTION_TREATMENT_MAP[ADOPTION_NULL_CHANNEL]
 # Lag (days) from a joined pair's last planted exposure to its consideration_date:
 # integers(LAG_MIN, LAG_MAX_EXCLUSIVE) from the spawned stream default_rng([brand_seed, 1]).
+# 1..60, not 1..90 (lead decision 2026-09-23, measured): the plant's 07-21 write date is
+# the last exposure for 9,166 of 10,136 pairs, so a 90-day lag clamped ~1/3 of joined rows
+# (3,253) onto the run date -- one same-date clump on the goldstd walk-forward axis. With
+# 60 days the 07-21 mass lands 07-22..09-19, before the run date; only the Aug/Sep-exposed
+# pairs (< 10 %) can hit the clamp.
 LAG_MIN = 1
-LAG_MAX_EXCLUSIVE = 91
+LAG_MAX_EXCLUSIVE = 61
 # The planted exposure columns read from the rollups, besides the eight channels.
 _ROLLUP_CONTEXT_COLUMNS = (
     "hcp_id",
@@ -399,8 +405,9 @@ def derive(
     ``fetch_channel_rollups``) the rows are collapsed per (hcp_id, brand), binned
     above the within-brand median, turned into the per-HCP logit shift and passed
     to ``_compute_adoption`` (deterministic; the arm stream is untouched). Joined
-    rows get ``consideration_date = max_metric_date + lag`` (lag from the spawned
-    stream ``default_rng([brand_seed, 1])``, clamped to ``run_date``); non-joined
+    rows get ``consideration_date = max_metric_date + lag`` (lag ~ integers(1, 61)
+    from the spawned stream ``default_rng([brand_seed, 1])``, clamped to
+    ``run_date``); non-joined
     rows get NaT (the writer leaves their live date). The output then carries, per
     row: ``joined``, ``channel_shift``, ``adoption_logit``, ``max_metric_date``,
     ``n_metric_rows``, ``consideration_date``, ``specialty``, the collapsed exposure

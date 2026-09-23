@@ -8,7 +8,7 @@ business_metrics per_hcp_rollup rows. Pinned:
     plant a shift on a subset and call the rest non-joined);
   * ``derive(..., channel_rollups=...)`` keeps treatment_arm identical to the no-shift
     derive (the shift consumes no rng draws), gives every joined row
-    ``consideration_date = max(metric_date) + lag`` with lag in [1, 90] and CLAMPED to the run
+    ``consideration_date = max(metric_date) + lag`` with lag in [1, 60] (lead decision 2026-09-23: 1..90 clamped ~1/3 of joined rows onto one date) and CLAMPED to the run
     date, leaves non-joined rows' dates alone (NaT -> the writer omits the column), and never
     dates a row after the run date;
   * the dry-run report carries the fields the owner reads before ``--execute``;
@@ -288,7 +288,15 @@ def test_derive_dates_joined_rows_after_their_last_exposure_and_never_after_the_
     assert (cd > mx).all()
     assert (cd <= pd.Timestamp(_RUN_DATE)).all()
     lag = (cd - mx).dt.days
-    assert lag.min() >= 1 and lag.max() <= 90
+    assert lag.min() >= 1 and lag.max() <= 60
+    # Only exposures within 60 days of the run date can clamp (the 07-21 mass lands
+    # 07-22..09-19, before the run date); at least one such row exists in the fixture.
+    early = joined[
+        pd.to_datetime(joined["max_metric_date"]) < pd.Timestamp(_RUN_DATE) - pd.Timedelta(days=60)
+    ]
+    assert (
+        len(early) and (pd.to_datetime(early["consideration_date"]) < pd.Timestamp(_RUN_DATE)).all()
+    )
     # The Sep-21 exposure (h3/Remibrutinib) must be clamped: only 2 days of room.
     h3 = joined[(joined["hcp_id"] == "h3") & (joined["brand"] == "Remibrutinib")].iloc[0]
     assert pd.Timestamp(h3["consideration_date"]) <= pd.Timestamp(_RUN_DATE)
@@ -308,7 +316,7 @@ def test_derive_lag_stream_is_spawned_not_the_arm_stream(client):
     assert a["treatment_arm"].tolist() == b["treatment_arm"].tolist()
     master = np.random.default_rng(427)
     brand_seed = int(master.integers(0, 2**32))  # Remibrutinib is first
-    lags = np.random.default_rng([brand_seed, 1]).integers(1, 91, size=len(centrality))
+    lags = np.random.default_rng([brand_seed, 1]).integers(1, 61, size=len(centrality))
     rem = b[(b["brand"] == "Remibrutinib") & b["joined"]]
     expect = pd.to_datetime(rem["max_metric_date"]) + pd.to_timedelta(
         lags[rem.index % len(centrality)], unit="D"
