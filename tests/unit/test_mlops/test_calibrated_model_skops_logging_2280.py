@@ -220,3 +220,37 @@ def test_risk_score_trainer_logs_its_calibrated_estimator(tmp_path, monkeypatch,
     assert sorted(flavor["skops_trusted_types"]) == skops_trusted_types_for(model)
     loaded = mlflow.sklearn.load_model(f"runs:/{run_id}/model")
     np.testing.assert_array_equal(loaded.predict_proba(X_test), model.predict_proba(X_test))
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_the_trainer_status_says_the_model_was_not_logged():
+    """log_to_mlflow must not report ``success`` with ``mlflow_model_uri=None``."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from src.agents.ml_foundation.model_trainer.nodes.mlflow_logger import log_to_mlflow
+
+    run = AsyncMock()
+    run.run_id = "run_2280"
+    run.log_model = AsyncMock(return_value=None)  # what the connector returns on failure
+    run.__aenter__ = AsyncMock(return_value=run)
+    run.__aexit__ = AsyncMock(return_value=None)
+    conn = AsyncMock()
+    conn.get_or_create_experiment = AsyncMock(return_value="exp_2280")
+    conn.start_run = MagicMock(return_value=run)
+    state = {
+        "trained_model": object(),
+        "experiment_id": "exp_2280",
+        "algorithm_name": "LogisticRegression",
+        "problem_type": "binary_classification",
+        "framework": "sklearn",
+        "best_hyperparameters": {},
+        "evaluation_metrics": {"test_metrics": {"roc_auc": 0.83}},
+        "enable_mlflow": True,
+        "register_model": False,
+    }
+    with patch("src.mlops.mlflow_connector.get_mlflow_connector", return_value=conn):
+        result = await log_to_mlflow(state)
+    assert result["mlflow_model_uri"] is None
+    assert result["mlflow_status"] == "model_not_logged"
+    assert result["mlflow_run_id"] == "run_2280"

@@ -430,7 +430,7 @@ class ModelTrainerState(BaseAgentSchema):
     # MLflow Integration (populated by log_to_mlflow node)
     mlflow_run_id: Optional[str] = None
     mlflow_experiment_id: Optional[str] = None
-    mlflow_status: Optional[str] = None  # success, disabled, skipped, failed
+    mlflow_status: Optional[str] = None  # success, model_not_logged, disabled, skipped, failed
     mlflow_model_uri: Optional[str] = None  # runs:/<run_id>/model
     mlflow_registered: Optional[bool] = None  # Registered in MLflow registry
     mlflow_model_version: Optional[str] = None

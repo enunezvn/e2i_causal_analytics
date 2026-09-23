@@ -385,7 +385,8 @@ async def log_to_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
         )
 
         return {
-            "mlflow_status": "success",
+            # #2280: the run was logged but the model artifact was not — say so.
+            "mlflow_status": "success" if model_uri else "model_not_logged",
             "mlflow_run_id": mlflow_run_id,
             "mlflow_experiment_id": mlflow_experiment_id,
             "mlflow_model_uri": model_uri,
