@@ -2322,8 +2322,8 @@ async def step_1_scope_definer(
         # rewrote adoption targets: the checked-in run
         # docs/reports/synthetic_csu_e2e_validation_20260610/tier0_hcp_adoption/
         # rwd_pipeline_run_20260610_183649.md shows adopted_target_brand coming
-        # back as will_adopt, which step 1 then persisted to ml_experiments and
-        # the knowledge graph before step 2 repaired the local spec.
+        # back as will_adopt, which step 1 then hands to its ml_experiments /
+        # knowledge-graph writers before step 2 repairs the local spec.
         "target_variable_hint": CONFIG.target_outcome,
         "problem_type_hint": CONFIG.problem_type,
         "brand": CONFIG.brand,

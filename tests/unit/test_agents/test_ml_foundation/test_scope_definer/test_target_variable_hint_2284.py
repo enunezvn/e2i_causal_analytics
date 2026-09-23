@@ -120,8 +120,10 @@ async def test_the_tier0_runners_physical_column_is_no_longer_rewritten():
 
     ``docs/reports/synthetic_csu_e2e_validation_20260610/tier0_hcp_adoption/
     rwd_pipeline_run_20260610_183649.md`` records target ``adopted_target_brand``
-    coming back out of step 1 as ``prediction_target: will_adopt`` — persisted to
-    ml_experiments and the knowledge graph before step 2 repaired the local spec.
+    coming back out of step 1 as ``prediction_target: will_adopt``, which step 1
+    then hands to its ml_experiments / knowledge-graph writers before step 2
+    repairs the local spec. (The report evidences the rewritten value; the
+    persistence of it follows the code path, not the report.)
     ``CONFIG.target_outcome`` is a physical DataFrame column on that runner, so it
     now pins the hint.
     """
