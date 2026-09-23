@@ -112,12 +112,24 @@ rc, wh, _ = in_worker("import urllib.request;print(urllib.request.urlopen('http:
 check("A.sidecar /health from worker_medium", wh == "200", wh)
 
 # ---------------------------------------------------------------- B. schema + data
-mig = psql("SELECT filename FROM schema_migrations WHERE filename LIKE '150_%' OR filename LIKE 'ml/046_%' ORDER BY 1;")
-check("B.migrations 150 + ml/046 in ledger", "150_ml_registry_cohort_contract" in mig and "ml/046" in mig, mig.replace("\n", " ; "))
+mig = psql("SELECT filename FROM schema_migrations WHERE filename LIKE '150_%' OR filename LIKE '151_%' OR filename LIKE 'ml/046_%' ORDER BY 1;")
+check("B.migrations 150 + 151 + ml/046 in ledger", "150_ml_registry_cohort_contract" in mig and "151_registry_cohort_contracts_goldstd" in mig and "ml/046" in mig, mig.replace("\n", " ; "))
 cols = psql("SELECT string_agg(column_name, ',') FROM information_schema.columns WHERE table_name='ml_model_registry' AND column_name LIKE 'cohort_%';")
 check("B.ml_model_registry cohort_* columns", all(c in cols for c in ("cohort_data_source", "cohort_target_outcome", "cohort_feature_manifest_source")), cols)
-nulls = psql("SELECT count(*) || '/' || count(*) FILTER (WHERE cohort_data_source IS NULL AND cohort_target_outcome IS NULL) FROM ml_model_registry WHERE is_synthetic=false;")
-check("B.14 real registry rows carry NULL contracts (no backfill)", nulls == "14/14", nulls)
+# PR #2241 / migration 151 (2026-09-23): the 9 patient goldstd rows carry a PROVABLE contract
+# (table cohort dict + label + the DGP manifest synthetic_csu), the 3 HCP rows only their label
+# (frame is a JOIN; ML_TABLES lacks hcp_brand_adoption; "adopt*" targets are rewritten by the
+# scope_definer), the 2 csu rows stay NULL (in-process generated data). Pinned as counts so a
+# silent backfill of the NULL rows or a lost manifest would fail here.
+contracts = psql(
+    "SELECT count(*) FILTER (WHERE cohort_data_source LIKE '{%' AND cohort_target_outcome IS NOT NULL"
+    " AND cohort_feature_manifest_source='synthetic_csu') || '/' ||"
+    " count(*) FILTER (WHERE cohort_data_source IS NULL AND cohort_target_outcome='adopted'"
+    " AND cohort_feature_manifest_source IS NULL) || '/' ||"
+    " count(*) FILTER (WHERE cohort_data_source IS NULL AND cohort_target_outcome IS NULL) || '/' || count(*)"
+    " FROM ml_model_registry WHERE is_synthetic=false;"
+)
+check("B.14 real registry rows: 9 full contracts + 3 HCP target-only + 2 csu NULL (migration 151)", contracts == "9/3/2/14", contracts)
 idx = psql("SELECT indexdef FROM pg_indexes WHERE indexname='uq_ab_results_one_final_per_experiment';")
 check("B.partial unique index one FINAL per experiment", "WHERE (analysis_type = 'final'" in idx, idx[-80:])
 fin = psql("SELECT count(*) || '/' || count(DISTINCT experiment_id) FROM ab_experiment_results WHERE analysis_type='final';")
