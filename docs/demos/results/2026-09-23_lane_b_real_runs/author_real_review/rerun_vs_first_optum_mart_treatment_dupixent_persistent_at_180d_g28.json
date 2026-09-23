@@ -1,0 +1,26 @@
+{
+  "n_features": 64,
+  "role_agreement": 64,
+  "edge_set_agreement": 64,
+  "ambiguous_flag_agreement": 64,
+  "roles_run1": {
+    "confounder": 44,
+    "ancestor": 20
+  },
+  "roles_run2": {
+    "confounder": 44,
+    "ancestor": 20
+  },
+  "ambiguous_run1": 44,
+  "ambiguous_run2": 44,
+  "role_changes": {},
+  "tree_run1": {
+    "commit": "5e1c969c6a3bd516b9ae9dc4ae2f04fd2855eb29",
+    "dirty_src_scripts_tests": false
+  },
+  "tree_run2": {
+    "commit": "c67f2e5928fad81af3c8dec3ddcfe62174baef00",
+    "dirty_src_scripts_tests": false
+  },
+  "note": "two independent real-LM runs of the same briefs (same prompt hash); differences are LLM run-to-run variance, not code"
+}

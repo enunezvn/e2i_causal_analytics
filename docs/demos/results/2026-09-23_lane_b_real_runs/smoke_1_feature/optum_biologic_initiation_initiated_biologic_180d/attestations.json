@@ -1,0 +1,125 @@
+{
+  "meta": {
+    "authored_at": "2026-09-23T01:22:12.874032+00:00",
+    "manifest": "optum",
+    "treatment": "biologic_initiation",
+    "outcome": "initiated_biologic_180d",
+    "treatment_label": "biologic_initiation",
+    "outcome_label": "initiated_biologic_180d",
+    "lm": "openai/gpt-5.6-terra",
+    "resolver": "live",
+    "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+    "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+    "n_features": 1,
+    "panel": null,
+    "provenance": "machine",
+    "tree": {
+      "commit": "8cbc52ccae904bc16b53de1624d1428d0ff3441d",
+      "dirty_src_scripts_tests": false
+    }
+  },
+  "records": [
+    {
+      "feature_name": "age_at_index",
+      "treatment_node": "T",
+      "outcome_node": "Y",
+      "feature_node": "age_at_index",
+      "edges": [
+        [
+          "T",
+          "Y"
+        ],
+        [
+          "age_at_index",
+          "T"
+        ],
+        [
+          "age_at_index",
+          "Y"
+        ]
+      ],
+      "edge_provenance": [
+        {
+          "from_node": "T",
+          "to_node": "Y",
+          "grade": "estimand",
+          "rationale": "treatment-effect edge (guide \u00a71, convention 6)",
+          "citations": [],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "age_at_index",
+          "to_node": "T",
+          "grade": "unsupported",
+          "rationale": "Age is a pre-treatment determinant of prescribing decisions because it is associated with comorbidity burden, treatment safety considerations, and patient/clinician preferences that affect whether advanced therapies such as biologics are initiated.",
+          "citations": [
+            {
+              "raw": "PMID:24472253",
+              "identifier": "24472253",
+              "identifier_kind": "pmid",
+              "abstract_resolved": true,
+              "entities_found": [],
+              "causal_cue_found": null,
+              "overall_confidence": 0.0,
+              "error": null
+            }
+          ],
+          "constraint_violation": null
+        },
+        {
+          "from_node": "age_at_index",
+          "to_node": "Y",
+          "grade": "unsupported",
+          "rationale": "Age can independently affect treatment uptake over follow-up through age-related differences in access, preferences, comorbidity, and medication use/adherence; therefore it can affect whether biologic initiation is observed by 180 days, apart from the index-treatment intervention.",
+          "citations": [
+            {
+              "raw": "PMID:24472253",
+              "identifier": "24472253",
+              "identifier_kind": "pmid",
+              "abstract_resolved": true,
+              "entities_found": [],
+              "causal_cue_found": null,
+              "overall_confidence": 0.0,
+              "error": null
+            },
+            {
+              "raw": "DOI:10.1001/jama.2005.902",
+              "identifier": "10.1001/jama.2005.902",
+              "identifier_kind": "doi",
+              "abstract_resolved": false,
+              "entities_found": [],
+              "causal_cue_found": null,
+              "overall_confidence": 0.0,
+              "error": null
+            }
+          ],
+          "constraint_violation": null
+        }
+      ],
+      "derived_role": "confounder",
+      "expected_role": "confounder",
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): age_at_index->T, age_at_index->Y"
+      ],
+      "cross_check": {
+        "derived_role": "confounder",
+        "panel_final_role": null,
+        "agrees": null
+      },
+      "constraint_violations": [],
+      "panel_summary": {
+        "present": false
+      },
+      "latents": [],
+      "provenance": "machine",
+      "model_id": "openai/gpt-5.6-terra",
+      "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+      "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+      "authored_at": "2026-09-23T01:22:12.871684+00:00",
+      "author_schema_version": "1",
+      "reasoning": "Age at enrollment is a pre-index patient characteristic. Age can influence the clinical decision to initiate a biologic through age-related comorbidity, safety considerations, eligibility, disease-management preferences, and access. It can also influence whether a patient has initiated biologic treatment by 180 days through those same age-related determinants of treatment uptake and continuation. Thus, the faithful pre-treatment graph treats age as a common cause of index biologic initiation and the 180-day biologic-initiation outcome. The treatment-effect edge is included as required."
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "module": "scripts.measure_feature_role_panel",
+  "argv": [
+    "--parquet",
+    "/home/enunez/Projects/e2i_causal_analytics/data/rwd/mart/persistence_causal/e2i_causal_v1_biologic_persistence.parquet",
+    "--manifest-source",
+    "optum_mart",
+    "--treatment",
+    "treatment_dupixent",
+    "--outcome",
+    "persistent_at_180d_g28",
+    "--covariates",
+    "mart-safe",
+    "--out",
+    "docs/demos/results/2026-09-23_lane_b_real_runs/panel_real",
+    "--layer4",
+    "real",
+    "--i-accept-cost"
+  ],
+  "exit_code": 0,
+  "elapsed_s": 534.8,
+  "n_lm_calls_in_history": 19,
+  "models": {
+    "anthropic/claude-sonnet-4-6": 19
+  },
+  "prompt_tokens_actual": 1625273,
+  "completion_tokens_actual": 12318,
+  "litellm_cost_usd_sum": 5.0606,
+  "history_error": null,
+  "note": "summed from dspy GLOBAL_HISTORY entries' usage; litellm cost is None when the provider/model is unpriced in litellm"
+}

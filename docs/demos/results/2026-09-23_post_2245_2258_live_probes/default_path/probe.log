@@ -1,0 +1,31 @@
+poll 1 t=16s status=running
+poll 2 t=33s status=running
+poll 3 t=49s status=running
+poll 4 t=65s status=running
+poll 5 t=81s status=running
+poll 6 t=98s status=running
+poll 7 t=114s status=running
+poll 8 t=130s status=running
+poll 9 t=145s status=running
+poll 10 t=160s status=running
+poll 11 t=176s status=running
+poll 12 t=191s status=running
+poll 13 t=206s status=running
+poll 14 t=221s status=running
+poll 15 t=237s status=running
+poll 16 t=252s status=running
+poll 17 t=267s status=completed
+status: completed | data_source: database
+  data_source                present=True value=database
+  feature_role_panel         present=False value=None
+  anchored_confounders       present=False value=None
+  approved_structure_roles   present=False value=None
+  approved_leak_exclusions   present=False value=None
+  structural_prior           present=False value=None
+  dag_source                 present=True value=domain_knowledge
+  discovered_confounders     present=True value=[]
+structural/prior warnings: []
+ate: 0.007056123869614513 ci: [-0.0053728049252601395, 0.019485052664489168] p: 0.26583454458398803
+PRE-B  ate: 0.007056123869614513 ci: [-0.0053728049252601395, 0.019485052664489168] data_source: synthetic
+keys only in POST: ['_probe']
+keys only in PRE : ['_cert']

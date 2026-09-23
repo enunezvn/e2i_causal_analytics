@@ -108,6 +108,7 @@ from typing import Any, Mapping, Sequence
 
 __all__ = [
     "CensusQuery",
+    "LIKE_ESCAPE",
     "TERRITORY_ACTIVE_HCP_LOOKBACK_DAYS",
     "WindowCensus",
     "Verdict",
@@ -116,7 +117,10 @@ __all__ = [
     "assess",
     "census_sql",
     "census_windows",
+    "like_literal",
     "per_hcp_rollup_spec",
+    "planted_prefix",
+    "planted_suffix",
     "require_isolated_windows",
     "require_no_foreign_reconcile",
     "require_windows_still_isolated",
@@ -136,6 +140,34 @@ PER_HCP_METRIC_TYPE: str = "per_hcp_rollup"
 #: (``territory_metrics_etl`` active_hcp_per_territory_date). Redeclared like the metric
 #: type; a unit test extracts the number from the ETL's SQL and pins this equal to it.
 TERRITORY_ACTIVE_HCP_LOOKBACK_DAYS: int = 30
+
+#: The escape clause every planted ``LIKE`` carries, in the specs below and in the
+#: consumer files' own statements (#2216). ``'\\'`` is one backslash under
+#: ``standard_conforming_strings`` (Postgres's default since 9.1) and in sqlite, which
+#: the unit test uses as the LIKE oracle. Postgres's *default* escape is already the
+#: backslash; the clause makes the contract visible rather than implied.
+LIKE_ESCAPE: str = "ESCAPE '\\'"
+
+
+def like_literal(literal: str) -> str:
+    """Escape ``literal`` so it matches only itself under ``LIKE ... ESCAPE '\\'``.
+
+    ``_`` is a single-character wildcard and ``%`` a multi-character one, so an
+    unescaped ``hl_<rid>_%`` also matches ``hlX<rid>Y...`` (#2216). Every planted id
+    in the consumer files carries ``_``. The backslash is escaped first so an escaped
+    metacharacter cannot be re-read as an escape.
+    """
+    return literal.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def planted_prefix(prefix: str) -> str:
+    """``LIKE`` pattern matching exactly the ids that start with ``prefix``."""
+    return like_literal(prefix) + "%"
+
+
+def planted_suffix(suffix: str) -> str:
+    """``LIKE`` pattern matching exactly the ids that end with ``suffix``."""
+    return "%" + like_literal(suffix)
 
 
 @dataclass(frozen=True)
@@ -344,7 +376,7 @@ def per_hcp_rollup_spec(
                 "source_rows_planted",
                 "of those, triggers this run planted",
                 f"SELECT count(*) FROM triggers t WHERE DATE(t.trigger_timestamp) "
-                f"IN ({affected}) AND t.trigger_id LIKE %(trigger_like)s",
+                f"IN ({affected}) AND t.trigger_id LIKE %(trigger_like)s {LIKE_ESCAPE}",
                 {**window, "trigger_like": trigger_like},
             ),
             CensusQuery(
@@ -359,7 +391,7 @@ def per_hcp_rollup_spec(
                 "of those, hcp_id this run owns",
                 f"SELECT count(DISTINCT t.hcp_id) FROM triggers t "
                 f"WHERE DATE(t.trigger_timestamp) IN ({affected}) "
-                f"AND t.hcp_id LIKE %(hcp_like)s",
+                f"AND t.hcp_id LIKE %(hcp_like)s {LIKE_ESCAPE}",
                 {**window, "hcp_like": hcp_like},
             ),
             CensusQuery(
@@ -368,7 +400,7 @@ def per_hcp_rollup_spec(
                 "SELECT count(*) FROM business_metrics b "
                 " WHERE b.metric_type = %(metric_type)s AND b.hcp_id IS NOT NULL "
                 f"   AND {reconcile_scope} "
-                "   AND b.hcp_id NOT LIKE %(hcp_like)s",
+                f"   AND b.hcp_id NOT LIKE %(hcp_like)s {LIKE_ESCAPE}",
                 {**window, "hcp_like": hcp_like, "metric_type": PER_HCP_METRIC_TYPE},
             ),
         ),
@@ -436,12 +468,12 @@ def territory_rollup_spec(
         "SELECT count(DISTINCT territory_id) FROM hcp_profiles WHERE false"
         if teardown_deletes_window
         else "SELECT count(DISTINCT territory_id) FROM hcp_profiles "
-        " WHERE territory_id IS NOT NULL AND territory_id LIKE %(territory_like)s"
+        f" WHERE territory_id IS NOT NULL AND territory_id LIKE %(territory_like)s {LIKE_ESCAPE}"
     )
     teardown_sql = (
         "SELECT count(*) FROM territory_metrics m "
         " WHERE m.metric_date >= %(start)s::DATE AND m.metric_date < %(end)s::DATE "
-        "   AND m.territory_id NOT LIKE %(territory_like)s"
+        f"   AND m.territory_id NOT LIKE %(territory_like)s {LIKE_ESCAPE}"
         if teardown_deletes_window
         else "SELECT count(*) FROM territory_metrics m WHERE false"
     )
@@ -464,7 +496,7 @@ def territory_rollup_spec(
                 " JOIN hcp_profiles hp ON hp.hcp_id = bm.hcp_id "
                 " WHERE bm.metric_type = %(metric_type)s AND bm.hcp_id IS NOT NULL "
                 "   AND bm.metric_date >= %(start)s::DATE AND bm.metric_date < %(end)s::DATE "
-                "   AND hp.territory_id LIKE %(territory_like)s",
+                f"   AND hp.territory_id LIKE %(territory_like)s {LIKE_ESCAPE}",
                 {**window, "territory_like": territory_like, "metric_type": PER_HCP_METRIC_TYPE},
             ),
             CensusQuery(
@@ -629,10 +661,11 @@ def territory_arrival_spec(
                 "of those, per-HCP rows on hcp_ids this run owns + triggers it planted",
                 "SELECT (SELECT count(*) FROM business_metrics bm "
                 "         WHERE bm.metric_type = %(per_hcp_metric_type)s AND bm.hcp_id IS NOT NULL "
-                f"          AND bm.metric_date IN {selected} AND bm.hcp_id LIKE %(hcp_like)s) "
+                f"          AND bm.metric_date IN {selected} "
+                f"          AND bm.hcp_id LIKE %(hcp_like)s {LIKE_ESCAPE}) "
                 "     + (SELECT count(*) FROM triggers t "
                 f"         WHERE t.hcp_id IS NOT NULL AND {in_lookback} "
-                "           AND t.trigger_id LIKE %(trigger_like)s)",
+                f"           AND t.trigger_id LIKE %(trigger_like)s {LIKE_ESCAPE})",
                 {**run_params, "hcp_like": hcp_like, "trigger_like": trigger_like},
             ),
             CensusQuery(
@@ -653,7 +686,7 @@ def territory_arrival_spec(
                 "territory_metrics rows already on a selected date that are not ours",
                 "SELECT count(*) FROM territory_metrics m "
                 f" WHERE m.metric_date IN {selected} "
-                "   AND m.territory_id NOT LIKE %(territory_like)s",
+                f"   AND m.territory_id NOT LIKE %(territory_like)s {LIKE_ESCAPE}",
                 {**run_params, "territory_like": territory_like},
             ),
         ),
@@ -700,7 +733,7 @@ def adherence_spec(
                 "source_rows_planted",
                 "of those, journeys this run planted",
                 f"SELECT count(*) FROM patient_journeys pj{sel} "
-                f"AND pj.patient_journey_id LIKE %(journey_like)s",
+                f"AND pj.patient_journey_id LIKE %(journey_like)s {LIKE_ESCAPE}",
                 {**window, "journey_like": journey_like},
             ),
             CensusQuery(
@@ -713,7 +746,7 @@ def adherence_spec(
                 "target_entities_planted",
                 "of those, journeys this run owns",
                 f"SELECT count(DISTINCT pj.patient_journey_id) FROM patient_journeys pj{sel} "
-                f"AND pj.patient_journey_id LIKE %(journey_like)s",
+                f"AND pj.patient_journey_id LIKE %(journey_like)s {LIKE_ESCAPE}",
                 {**window, "journey_like": journey_like},
             ),
             CensusQuery(
