@@ -31,7 +31,10 @@ from src.agents.ml_foundation.data_preparer.nodes.feast_registrar import (
 )
 from src.agents.ml_foundation.data_preparer.state import DataPreparerState
 
-NOW = datetime(2026, 9, 22, 12, 0, tzinfo=timezone.utc)
+# Relative to the real clock: the registrar's probe ages recency against
+# datetime.now() with a 24 h ceiling, so a pinned date turns "fresh" fixtures stale
+# a day after it (the pinned 2026-09-22 value broke every CI run from 2026-09-23 10:00Z).
+NOW = datetime.now(timezone.utc)
 ADAPTER_PATH = (
     "src.agents.ml_foundation.data_preparer.nodes.feast_registrar._get_feature_analyzer_adapter"
 )
