@@ -402,3 +402,32 @@ def test_the_retrain_contract_passes_an_explicit_deployment_intent_through():
         ]
         == "commercial"
     )
+
+
+@pytest.mark.unit
+def test_labels_are_judged_by_value_not_by_the_concatenated_dtype():
+    """codex r2 MED: a bool split next to an int split concatenates to object dtype."""
+    import numpy as np
+
+    splits = {
+        "train_data": {"X": np.zeros((4, 2)), "y": pd.Series([True, False, False, True])},
+        "validation_data": {"X": np.zeros((3, 2)), "y": pd.Series([1, 0, 0])},
+        "test_data": {"X": np.zeros((3, 2)), "y": np.array([0.0, 1.0, 0.0], dtype=object)},
+    }
+    assert adaptive_inputs_from_splits(splits) == {
+        "n_samples": 10,
+        "prevalence": pytest.approx(4 / 10),
+        "feature_count": 2,
+    }
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("bad", ["1", float("nan"), None, 2])
+def test_one_non_binary_value_among_clean_labels_yields_no_inputs(bad):
+    import numpy as np
+
+    splits = {
+        "train_data": {"X": np.zeros((4, 2)), "y": pd.Series([True, False, False, True])},
+        "validation_data": {"X": np.zeros((3, 2)), "y": np.array([1, 0, bad], dtype=object)},
+    }
+    assert adaptive_inputs_from_splits(splits) is None

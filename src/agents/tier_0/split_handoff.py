@@ -220,13 +220,12 @@ def adaptive_inputs_from_splits(splits: Mapping[str, Any]) -> Optional[Dict[str,
     x_shape = getattr(X_train, "shape", None)
     if not ys or x_shape is None or len(x_shape) != 2 or x_shape[1] == 0:
         return None
-    labels = pd.concat(ys, ignore_index=True)
-    if labels.isna().any():
+    # Judged by VALUE: a bool split next to an int split concatenates to object dtype.
+    values = [v for y in ys for v in y.tolist()]
+    if any(isinstance(v, str) or not isinstance(v, (bool, int, float, np.number)) for v in values):
         return None
-    if not pd.api.types.is_bool_dtype(labels) and not pd.api.types.is_numeric_dtype(labels):
-        return None
-    labels = labels.astype(float)
-    if set(labels.unique()) != {0.0, 1.0}:
+    labels = np.asarray(values, dtype=float)
+    if np.isnan(labels).any() or set(np.unique(labels)) != {0.0, 1.0}:
         return None
     return {
         "n_samples": int(len(labels)),
