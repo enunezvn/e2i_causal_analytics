@@ -970,6 +970,7 @@ async def _persist_model_registry_row(
     cohort: Optional[Dict[str, Any]] = None,
     version_label: Optional[str] = None,
     expected_experiment_id: Optional[str] = None,
+    training_provenance: Optional[str] = None,
 ) -> Optional[str]:
     """Write (idempotently) a REAL ``ml_model_registry`` row; return its id (str).
 
@@ -989,6 +990,10 @@ async def _persist_model_registry_row(
     ``expected_experiment_id`` (the retrained model's ``ml_experiments`` uuid) must be
     the experiment the pipeline's id resolves to — else FAIL CLOSED, never a candidate
     filed under another model's experiment.
+
+    ``training_provenance`` (#968/#2255): what the candidate was trained on — written
+    on the new row, healed onto a reused row's NULL column (never overwritten); it is
+    what ``transition_stage``'s synthetic_gold -> production gate reads.
     """
     row_version = version_label or str(model_version)
     if client is None:
@@ -1107,6 +1112,14 @@ async def _persist_model_registry_row(
         )
         if cohort:  # #2207: heal NULL contract columns on the reused row
             await heal_registry_cohort_contract(client, str(existing.id), cohort)
+        if training_provenance:  # #2255: same NULL-only heal
+            await (
+                client.table("ml_model_registry")
+                .update({"training_provenance": training_provenance})
+                .eq("id", str(existing.id))
+                .is_("training_provenance", "null")
+                .execute()
+            )
         return str(existing.id)
 
     # 4. Source the NOT-NULL ``algorithm`` + ``hyperparameters`` from the REAL
@@ -1140,6 +1153,7 @@ async def _persist_model_registry_row(
             cohort_data_source=(cohort or {}).get("data_source"),
             cohort_target_outcome=(cohort or {}).get("target_outcome"),
             cohort_feature_manifest_source=(cohort or {}).get("feature_manifest_source"),
+            training_provenance=training_provenance,
         )
     except Exception as e:
         # Only a genuine UNIQUE(model_name, model_version) violation is a benign
@@ -1216,6 +1230,24 @@ def _cohort_contract_from_state(state: Any) -> Dict[str, Any]:
         "feature_manifest_source": manifest,
     }
     return {k: v for k, v in fields.items() if v is not None}
+
+
+def _candidate_training_provenance(state: Any) -> Optional[str]:
+    """What the candidate was trained on (#2255), for the #968 promotion gate.
+
+    Derived from the load first (``training_provenance_from_contract``: a table
+    contract pinning ``is_synthetic``). Only when the load does not pin it does a
+    retrain inherit its parent's provenance — it trains on the parent's contract. The
+    order matters: a retrain of a ``synthetic_gold`` parent on a REAL cohort (the
+    remedy #968 prescribes) is ``real``, not the parent's block. A non-retrain run with
+    an unpinned load stays ``None`` (unknown) — never guessed.
+    """
+    from src.services.cohort_contract import training_provenance_from_contract
+
+    derived = training_provenance_from_contract(state.get("data_source"))
+    if derived:
+        return derived
+    return (state.get("retrain_of") or {}).get("training_provenance") or None
 
 
 async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -1326,6 +1358,7 @@ async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
                     cohort=_cohort_contract_from_state(state),
                     version_label=(retrain_of or {}).get("new_model_version"),
                     expected_experiment_id=(retrain_of or {}).get("experiment_id"),
+                    training_provenance=_candidate_training_provenance(state),
                 )
             except Exception as e:
                 logger.error("ml_model_registry persistence raised (fail-closed): %s", e)
