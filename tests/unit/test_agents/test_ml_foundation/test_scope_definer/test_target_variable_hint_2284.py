@@ -115,6 +115,27 @@ async def test_the_hint_covers_every_rewrite_family(
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_the_tier0_runners_physical_column_is_no_longer_rewritten():
+    """The symptom in a checked-in run of ``scripts/run_tier0_test.py``.
+
+    ``docs/reports/synthetic_csu_e2e_validation_20260610/tier0_hcp_adoption/
+    rwd_pipeline_run_20260610_183649.md`` records target ``adopted_target_brand``
+    coming back out of step 1 as ``prediction_target: will_adopt`` — persisted to
+    ml_experiments and the knowledge graph before step 2 repaired the local spec.
+    ``CONFIG.target_outcome`` is a physical DataFrame column on that runner, so it
+    now pins the hint.
+    """
+    column = "adopted_target_brand"
+
+    without_hint = await classify_problem({"target_outcome": column})
+    assert without_hint["inferred_target_variable"] == "will_adopt"
+
+    with_hint = await classify_problem({"target_outcome": column, "target_variable_hint": column})
+    assert with_hint["inferred_target_variable"] == column
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_the_hint_is_taken_verbatim_not_sanitised():
     """A physical column name is case- and punctuation-sensitive; only whitespace is trimmed."""
     result = await classify_problem(

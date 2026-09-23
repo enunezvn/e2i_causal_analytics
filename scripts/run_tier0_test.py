@@ -2316,6 +2316,15 @@ async def step_1_scope_definer(
         "problem_description": f"Predict patient discontinuation risk for {CONFIG.brand}",
         "business_objective": "Identify high-risk patients early for intervention",
         "target_outcome": CONFIG.target_outcome,
+        # #2284: CONFIG.target_outcome is a physical DataFrame column here — the
+        # runner indexes frames with it and step 2 already overwrites
+        # scope_spec["prediction_target"] with it. Without the pin scope_definer
+        # rewrote adoption targets: the checked-in run
+        # docs/reports/synthetic_csu_e2e_validation_20260610/tier0_hcp_adoption/
+        # rwd_pipeline_run_20260610_183649.md shows adopted_target_brand coming
+        # back as will_adopt, which step 1 then persisted to ml_experiments and
+        # the knowledge graph before step 2 repaired the local spec.
+        "target_variable_hint": CONFIG.target_outcome,
         "problem_type_hint": CONFIG.problem_type,
         "brand": CONFIG.brand,
     }
