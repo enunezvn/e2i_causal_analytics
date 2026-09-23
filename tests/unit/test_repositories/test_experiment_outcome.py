@@ -360,8 +360,15 @@ class _FeedClient:
         return [t for t, op, _ in self.log if op == "execute"]
 
 
-def _uo(unit, value, observed):
-    return {"unit_id": unit, "outcome_value": value, "observed_at": observed}
+def _uo(unit, value, observed, synthetic=True):
+    # Generator-written rows are is_synthetic=true (the one-row-per-assignment
+    # contract); a real feed's rows are false.
+    return {
+        "unit_id": unit,
+        "outcome_value": value,
+        "observed_at": observed,
+        "is_synthetic": synthetic,
+    }
 
 
 class TestLoadArraysUnitOutcomeFeed:
@@ -533,6 +540,56 @@ class TestLoadArraysUnitOutcomeFeed:
         # no window -> every unit
         control, treatment = self._run(client)
         assert control.size == 2 and treatment.size == 2
+
+    def test_partial_synthetic_feed_fails_loud_instead_of_a_subset_ate(self):
+        """codex r3 HIGH: the weekly refresh purges and reloads non-transactionally
+        and the loader tolerates a failed batch, so a generator-written feed can be
+        INCOMPLETE for an experiment. The generator's contract is one row per
+        assignment; a synthetic feed whose unit set differs from the assignments'
+        must fail loud, never aggregate the subset (even when both arms still
+        clear the >= 2 gate)."""
+        assign = [
+            {"unit_id": f"scvhcp_{i:05d}", "variant": "control" if i % 2 else "treatment"}
+            for i in range(8)
+        ]
+        rows = [_uo(f"scvhcp_{i:05d}", float(i % 2), "2026-09-01T00:00:00+00:00") for i in range(6)]
+        client = _FeedClient(
+            {"ab_experiment_assignments": assign, "ab_experiment_unit_outcomes": rows}
+        )
+        with pytest.raises(RuntimeError, match=r"6 of 8 assigned units"):
+            self._run(client)
+        # outcomes for units that are NOT assigned are the same contract breach
+        rows = [
+            _uo(f"scvhcp_{i:05d}", float(i % 2), "2026-09-01T00:00:00+00:00") for i in range(8)
+        ] + [_uo("scvhcp_99999", 1.0, "2026-09-01T00:00:00+00:00")]
+        client = _FeedClient(
+            {"ab_experiment_assignments": assign, "ab_experiment_unit_outcomes": rows}
+        )
+        with pytest.raises(RuntimeError, match=r"1 outcome unit\(s\) not assigned"):
+            self._run(client)
+
+    def test_partial_real_feed_warns_and_uses_the_observed_units(self, caplog):
+        """A REAL feed (is_synthetic=false rows) may legitimately lack outcomes for
+        some units (lost to follow-up); it proceeds on the observed units — the
+        legacy business_metrics feed drops unit-less rows the same way — but the
+        coverage is logged at WARNING so the gap is visible in the worker log."""
+        import logging
+
+        assign = [
+            {"unit_id": f"scvhcp_{i:05d}", "variant": "control" if i % 2 else "treatment"}
+            for i in range(8)
+        ]
+        rows = [
+            _uo(f"scvhcp_{i:05d}", float(i % 2), "2026-09-01T00:00:00+00:00", synthetic=False)
+            for i in range(6)
+        ]
+        client = _FeedClient(
+            {"ab_experiment_assignments": assign, "ab_experiment_unit_outcomes": rows}
+        )
+        with caplog.at_level(logging.WARNING, logger="src.repositories.experiment_outcome"):
+            control, treatment = self._run(client)
+        assert control.size == 3 and treatment.size == 3
+        assert any("6 of 8 assigned units" in r.getMessage() for r in caplog.records)
 
     def test_empty_metric_never_queries_unit_outcomes(self):
         """A blank primary_metric cannot name a unit-outcome metric: go straight to

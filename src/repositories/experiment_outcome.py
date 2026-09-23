@@ -243,8 +243,8 @@ class ExperimentOutcomeRepository:
         include_synthetic: bool = False,
     ) -> List[Dict[str, Any]]:
         """Read the experiment's rows from ``ab_experiment_unit_outcomes`` for
-        ``metric_name`` (``unit_id, outcome_value, observed_at``), paged to
-        exhaustion with the exact-count check (see ``_page_to_exhaustion``).
+        ``metric_name`` (``unit_id, outcome_value, observed_at, is_synthetic``),
+        paged to exhaustion with the exact-count check (see ``_page_to_exhaustion``).
         Provenance: the table is is_synthetic-tagged (migration 155) and the same
         ``include_synthetic`` opt-in as the assignments leg governs it.
         """
@@ -255,7 +255,7 @@ class ExperimentOutcomeRepository:
         def _build() -> Any:
             q = (
                 self.client.table(UNIT_OUTCOMES_TABLE)
-                .select("unit_id,outcome_value,observed_at", count="exact")
+                .select("unit_id,outcome_value,observed_at,is_synthetic", count="exact")
                 .eq("experiment_id", str(experiment_id))
                 .eq("metric_name", metric_name)
             )
@@ -293,6 +293,18 @@ class ExperimentOutcomeRepository:
         ``window_days`` anchored on the newest ``metric_date`` (no per-assignment
         window is possible there). The feed used and the row counts are logged
         at INFO and recorded in ``self.last_outcome_source``.
+
+        Completeness (codex r3 HIGH): the weekly ``--refresh-ab`` purges and
+        reloads non-transactionally and the loader tolerates a failed batch, so a
+        generator-written feed can be INCOMPLETE for an experiment while every
+        row it does hold is fetched. The generator's contract is one row per
+        assignment: when the feed for the experiment is synthetic
+        (``is_synthetic`` rows) its unit set must EQUAL the assigned unit set or
+        this raises ``RuntimeError`` (the task reports ``failed``) — never an ATE
+        over a subset. A real feed (``is_synthetic=false``) may legitimately lack
+        outcomes for some units (lost to follow-up); it proceeds on the observed
+        units, as the legacy feed drops unit-less rows, with the coverage logged
+        at WARNING.
 
         Returns empty arrays (caller bails ``insufficient_data``) when there are no
         assignments or no matching outcome rows on either feed.
@@ -338,6 +350,7 @@ class ExperimentOutcomeRepository:
                 experiment_id, metric_name, include_synthetic=include_synthetic
             )
         if unit_rows:
+            self._check_feed_coverage(experiment_id, metric_name, assignments, unit_rows)
             # Present the rows in aggregate_to_arrays' shape (hcp_id / column /
             # date) so the ONE aggregation is reused, not forked. One row per
             # unit by the UNIQUE key, so MEAN is an identity; it stays the
@@ -416,6 +429,35 @@ class ExperimentOutcomeRepository:
             control_label=control_label,
             treatment_label=treatment_label,
         )
+
+    @staticmethod
+    def _check_feed_coverage(
+        experiment_id: UUID,
+        metric_name: str,
+        assignments: Sequence[Tuple[str, str]],
+        unit_rows: Sequence[Dict[str, Any]],
+    ) -> None:
+        """Enforce the one-row-per-assignment contract on a synthetic feed; warn on
+        an incomplete real feed (see ``load_arrays``)."""
+        assigned = {str(uid) for uid, _ in assignments}
+        observed = {str(r.get("unit_id")) for r in unit_rows if r.get("unit_id") is not None}
+        if observed == assigned:
+            return
+        missing = assigned - observed
+        extra = observed - assigned
+        synthetic_feed = any(bool(r.get("is_synthetic")) for r in unit_rows)
+        detail = (
+            f"{UNIT_OUTCOMES_TABLE}[{experiment_id}, {metric_name!r}]: outcomes cover "
+            f"{len(assigned) - len(missing)} of {len(assigned)} assigned units"
+            f"{f', {len(extra)} outcome unit(s) not assigned' if extra else ''}"
+        )
+        if synthetic_feed:
+            raise RuntimeError(
+                f"{detail} — the generator writes one outcome per assignment, so this feed "
+                "is incomplete (refresh in progress or a failed load batch); refusing to "
+                "compute an ATE over a subset"
+            )
+        logger.warning("%s — real feed; proceeding on the observed units", detail)
 
     @staticmethod
     def _filter_post_assignment_window(
