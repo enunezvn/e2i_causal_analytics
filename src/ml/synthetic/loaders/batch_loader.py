@@ -94,6 +94,8 @@ LOADING_ORDER = [
     "ab_experiment_assignments",  # parent of ab_experiment_enrollments.assignment_id
     "ab_experiment_enrollments",
     "ab_experiment_results",
+    # migration 156 (option d1): FK -> ab_experiment_assignments, so after it
+    "ab_experiment_unit_outcomes",
     "ml_observability_spans",
     "causal_paths",  # CM-003/CM-005 substrate (Task 5c)
     "agent_activities",  # #1355 chat agent-analysis / ROI-KPI / RAG substrate
@@ -500,6 +502,18 @@ TABLE_COLUMNS = {
         "p_value",
         "is_significant",
         "observed_power",
+        "is_synthetic",
+    ],
+    # migration 156 (option d1, Part of #2207): the per-experiment unit outcome
+    # feed the generator writes from the same draw as ab_experiment_results.
+    "ab_experiment_unit_outcomes": [
+        "id",
+        "assignment_id",
+        "experiment_id",
+        "unit_id",
+        "metric_name",
+        "outcome_value",
+        "observed_at",
         "is_synthetic",
     ],
     "ml_observability_spans": [
