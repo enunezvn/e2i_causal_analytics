@@ -112,6 +112,23 @@ def _blas_thread_limit(input_data: Optional[Dict[str, Any]] = None):
     return _threadpool_limits(limits=cap, user_api="blas")
 
 
+def hyperparameters_of_record(output: Dict[str, Any]) -> Dict[str, Any]:
+    """The training run's hyperparameters plus the post-hoc calibration it DEPLOYED.
+
+    #2248 option (a): a pipeline deploy copies the run's hyperparameters onto the
+    ``ml_model_registry`` row (``registry_manager``), which is where a later retrain reads
+    the parent's calibration method. Only a method actually applied to the deployed
+    estimator is recorded; the trainer's own ``best_hyperparameters`` are not mutated.
+    """
+    record = dict(output.get("best_hyperparameters") or {})
+    cal = output.get("post_hoc_calibration") or {}
+    method = cal.get("calibration_method_resolved")
+    applied = output.get("calibration_applied") and cal.get("calibration_applied")
+    if applied and method in ("sigmoid", "isotonic"):
+        record["calibration_method"] = method
+    return record
+
+
 class ModelTrainerAgent:
     """Model Trainer: Train ML models with HPO and validation.
 
@@ -274,6 +291,9 @@ class ModelTrainerAgent:
             "hpo_timeout_hours": hpo_timeout_hours,
             "early_stopping": early_stopping,
             "early_stopping_patience": early_stopping_patience,
+            # #2248 option (a): post-hoc calibration method override (None = the
+            # evaluator's intent-aware auto policy)
+            "calibration_method": input_data.get("calibration_method"),
             # IDs
             "training_run_id": training_run_id,
             "model_id": model_id,
@@ -505,8 +525,8 @@ class ModelTrainerAgent:
         mlflow_model_version = final_state.get("mlflow_model_version")
         mlflow_model_name = final_state.get("mlflow_model_name")
 
-        # Log warning if MLflow logging failed (#2267: including a run whose
-        # model artifact was not logged — it has a run id but no model URI)
+        # Log warning if MLflow logging failed (#2267: including
+        # ``model_not_logged`` — a run id but no model URI)
         if mlflow_status != "success":
             logger.warning(
                 f"MLflow logging not completed for training run {training_run_id}. "
@@ -724,7 +744,7 @@ class ModelTrainerAgent:
                 run_name=output.get("training_run_id", f"run_{uuid4().hex[:8]}"),
                 mlflow_run_id=output.get("mlflow_run_id", ""),
                 algorithm=output.get("algorithm_name", "unknown"),
-                hyperparameters=output.get("best_hyperparameters", {}),
+                hyperparameters=hyperparameters_of_record(output),
                 training_samples=output.get("train_samples", 0),
                 feature_names=output.get("feature_names", []),
                 optuna_study_name=output.get("hpo_study_name"),

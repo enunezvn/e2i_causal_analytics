@@ -50,6 +50,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
+import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -182,6 +183,96 @@ def frames_to_trainer_splits(
     return splits
 
 
+def adaptive_inputs_from_splits(splits: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """The adaptive success criteria's pre-eval inputs, measured on the trainer's splits.
+
+    #2248: scope_definer runs before any data is loaded, so on the API / retrain path
+    (``MLFoundationPipeline.run``) it never has ``n_samples`` / ``prevalence`` /
+    ``feature_count`` and falls back to the fixed thresholds even though
+    ``ADAPTIVE_CRITERIA`` is on. ``scripts/run_tier0_test.py`` computes them on its full
+    frame; this is the same measurement on the four splits the model is trained and
+    evaluated on: every row (``n_samples``), the positive rate over all of them
+    (``prevalence``) and the train split's feature columns (``feature_count``). The
+    feature count is taken BEFORE the trainer's one-hot encoding — the runner's
+    convention; a larger count only widens the train/val-delta cap, so the pre-encoding
+    count is the stricter of the two.
+
+    Returns ``None`` — leave the fixed fallback in force — when the labels are not a
+    clean two-class 0/1 (or bool) target: a prevalence computed on anything else would
+    be a guess.
+    """
+    ys: List[pd.Series] = []
+    for key in SPLIT_KEYS:
+        split = splits.get(key)
+        y = split.get("y") if isinstance(split, Mapping) else None
+        if y is None:
+            continue
+        # The trainer's split contract also takes array-likes (caller-preloaded splits).
+        y_arr = np.asarray(y, dtype=object) if not isinstance(y, pd.Series) else y.to_numpy()
+        if y_arr.ndim == 2 and y_arr.shape[1] == 1:
+            y_arr = y_arr.ravel()
+        if y_arr.ndim != 1:
+            return None
+        if len(y_arr) > 0:
+            ys.append(pd.Series(y) if isinstance(y, pd.Series) else pd.Series(list(y_arr)))
+    train = splits.get("train_data")
+    X_train = train.get("X") if isinstance(train, Mapping) else None
+    x_shape = getattr(X_train, "shape", None)
+    if not ys or x_shape is None or len(x_shape) != 2 or x_shape[1] == 0:
+        return None
+    # Judged by VALUE: a bool split next to an int split concatenates to object dtype.
+    values = [v for y in ys for v in y.tolist()]
+    if any(isinstance(v, str) or not isinstance(v, (bool, int, float, np.number)) for v in values):
+        return None
+    labels = np.asarray(values, dtype=float)
+    if np.isnan(labels).any() or set(np.unique(labels)) != {0.0, 1.0}:
+        return None
+    return {
+        "n_samples": int(len(labels)),
+        "prevalence": float(labels.mean()),
+        "feature_count": int(x_shape[1]),
+    }
+
+
+def with_adaptive_inputs_from_splits(
+    success_criteria: Optional[Dict[str, Any]], splits: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """Stash the adaptive criteria's pre-eval inputs, measured on the trainer's splits.
+
+    #2248: scope_definer runs before any data is loaded, so on this path it never has
+    ``n_samples`` / ``prevalence`` / ``feature_count``; with ``ADAPTIVE_CRITERIA`` on it
+    records ``criteria_source="adaptive_fallback_to_fixed"`` and the fixed thresholds
+    judge the model (every retrain was refused on precision / F1 >= 0.70). Only that
+    state is completed here — the same ``_adaptive_inputs`` stash the validator writes
+    when a caller supplies the inputs, so the evaluator's
+    ``_apply_adaptive_criteria_overlay`` computes the thresholds at eval time. The
+    fixed-scheme opt-out (``criteria_source="fixed"``) and caller-supplied inputs are
+    left untouched; a target that is not a clean 0/1 keeps the fixed fallback.
+    """
+    if not success_criteria or "_adaptive_inputs" in success_criteria:
+        return success_criteria
+    if success_criteria.get("criteria_source") != "adaptive_fallback_to_fixed":
+        return success_criteria
+    inputs = adaptive_inputs_from_splits(splits)
+    if inputs is None:
+        logger.warning(
+            "ADAPTIVE_CRITERIA fallback kept: the trainer's splits carry no clean binary "
+            "target to measure n_samples / prevalence / feature_count on"
+        )
+        return success_criteria
+    stashed = dict(success_criteria)
+    stashed["_adaptive_inputs"] = {
+        **inputs,
+        # Not derivable from data: the data-difficulty regime is a synthetic-harness label
+        # (None = "clean"), and the intent is the one scope_definer stamped.
+        "regime": None,
+        "deployment_intent": success_criteria.get("deployment_intent"),
+    }
+    stashed["criteria_source"] = "adaptive"
+    logger.info("Adaptive success criteria inputs measured on the trainer's splits: %s", inputs)
+    return stashed
+
+
 def preloaded_splits(input_data: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
     """The caller's pre-loaded splits when ALL four are present, else None."""
     if all(input_data.get(k) for k in SPLIT_KEYS):
@@ -191,9 +282,11 @@ def preloaded_splits(input_data: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
 
 __all__ = [
     "IDENTIFIER_CARDINALITY_RATIO",
+    "adaptive_inputs_from_splits",
     "SPLIT_KEYS",
     "TRAINER_MAX_CATEGORIES",
     "feature_columns_to_drop",
     "frames_to_trainer_splits",
     "preloaded_splits",
+    "with_adaptive_inputs_from_splits",
 ]

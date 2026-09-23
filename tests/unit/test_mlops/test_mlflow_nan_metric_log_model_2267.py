@@ -139,7 +139,7 @@ async def test_trainer_logger_returns_a_model_uri_when_test_metrics_carry_nan(
 async def test_trainer_logger_does_not_report_success_when_the_model_is_not_logged(
     real_sqlite_mlflow: str, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """A real model-logging failure is reported as a failure, never as success."""
+    """A real model-logging failure is reported as ``model_not_logged``, never as success."""
     from src.agents.ml_foundation.model_trainer.nodes.mlflow_logger import log_to_mlflow
 
     model = _UnpicklableModel()
@@ -149,7 +149,8 @@ async def test_trainer_logger_does_not_report_success_when_the_model_is_not_logg
         result = await log_to_mlflow(_logger_state(model))
 
     assert result["mlflow_model_uri"] is None
-    assert result["mlflow_status"] != "success"
+    # #2280 on main names this status; see state.py mlflow_status.
+    assert result["mlflow_status"] == "model_not_logged"
     assert result["mlflow_run_id"], "the run itself (params, metrics) was still logged"
     assert not any("Successfully logged model" in r.getMessage() for r in caplog.records), (
         "a None model URI must never be logged as a success"
