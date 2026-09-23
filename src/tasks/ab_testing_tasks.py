@@ -259,8 +259,8 @@ def scheduled_interim_analysis(
                         "fidelity_tracking_enqueued": fidelity_reconciled,
                     }
 
-            # REAL per-unit outcome feed (#705 R5): same assignments ⋈
-            # business_metrics loader as the final-results path. Replaces the #422
+            # REAL per-unit outcome feed (#705 R5): same loader as the final-results
+            # path (unit outcome table first, then business_metrics). Replaces the #422
             # `control_data = []` placeholder. Bails honestly (no NaN) when there
             # are too few outcome-bearing units to run a sequential test.
             from src.repositories.experiment_outcome import ExperimentOutcomeRepository
@@ -799,8 +799,10 @@ def compute_experiment_results(
                         "reason": "final results already computed for this experiment",
                     }
 
-            # REAL per-unit outcome feed (#705 R5): assignments ⋈ business_metrics
-            # per-HCP rollup. Replaces the #422 `control_data = []` placeholder.
+            # REAL per-unit outcome feed (#705 R5): the per-experiment unit outcome
+            # table (migration 156, option d1) first, else assignments ⋈
+            # business_metrics per-HCP rollup. Replaces the #422 `control_data = []`
+            # placeholder.
             outcome_repo = ExperimentOutcomeRepository(supabase_client=client)
             try:
                 control_data, treatment_data = await outcome_repo.load_arrays(
@@ -850,6 +852,9 @@ def compute_experiment_results(
             # resolve the experiment-scoped twin sim and persist a real comparison.
             _enqueue_fidelity_tracking()
 
+            # Which feed produced the arrays ("unit_outcomes" / "business_metrics");
+            # additive, mirrors the repository's INFO log for the task result.
+            outcome_source = getattr(outcome_repo, "last_outcome_source", None)
             return {
                 "status": "completed",
                 "experiment_id": experiment_id,
@@ -860,6 +865,7 @@ def compute_experiment_results(
                 "n_control": int(len(control_data)),
                 "n_treatment": int(len(treatment_data)),
                 "duration_ms": duration_ms,
+                "outcome_source": outcome_source if isinstance(outcome_source, str) else None,
             }
 
         except FinalResultAlreadyPersisted as raced:

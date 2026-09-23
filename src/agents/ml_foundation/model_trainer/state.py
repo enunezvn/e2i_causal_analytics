@@ -94,6 +94,10 @@ class ModelTrainerState(BaseAgentSchema):
     early_stopping_patience: Optional[int] = None
     enable_mlflow: Optional[bool] = None
     enable_checkpointing: Optional[bool] = None
+    # #2248 option (a): post-hoc calibration override read by the evaluator
+    # ("auto" | "isotonic" | "sigmoid"; None = its intent-aware default). Declared so
+    # LangGraph keeps it as a channel — an undeclared key never reached the node.
+    calibration_method: Optional[str] = None
 
     # v5 Gate B2 — survival modeling (Cox + RSF) target derivation.
     # ``enable_survival_modeling`` gates the survival_model_node; when

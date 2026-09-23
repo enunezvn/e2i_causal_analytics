@@ -1,0 +1,7 @@
+assign|185532|5000|scvhcp_00000|scvhcp_04999|t
+unit_outcomes|185532|3|360
+results|360
+enroll|185532
+parity|control|46548|46167
+parity|treatment|46341|46476
+adoption_untouched|15000|0|2026-06-14 23:03:15.62738+00

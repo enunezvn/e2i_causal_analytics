@@ -152,18 +152,29 @@ class _FakeQuery:
     def in_(self, *a, **k):
         return self
 
+    def order(self, *a, **k):
+        return self
+
+    def range(self, start, end):
+        self._range = (start, end)
+        return self
+
     def execute(self):
         class _R:
             pass
 
         r = _R()
-        r.data = self._data
+        rng = getattr(self, "_range", None)
+        r.data = self._data if rng is None else self._data[rng[0] : rng[1] + 1]
+        r.count = len(self._data)
         return r
 
 
 class _FakeClient:
-    """Two-table fake: assignments table yields one assignment, business_metrics
-    records its ``.eq`` calls so the provenance predicate can be asserted."""
+    """Three-table fake: assignments table yields one assignment, the unit
+    outcome feed (migration 156) is EMPTY so the legacy path runs, and
+    business_metrics records its ``.eq`` calls so the provenance predicate can
+    be asserted."""
 
     def __init__(self, bm_eq_log):
         self._bm_eq_log = bm_eq_log
@@ -171,6 +182,8 @@ class _FakeClient:
     def table(self, name):
         if name == "ab_experiment_assignments":
             return _FakeQuery([{"unit_id": "HCP_1", "variant": "control"}], [])
+        if name == "ab_experiment_unit_outcomes":
+            return _FakeQuery([], [])
         # business_metrics
         return _FakeQuery(
             [
@@ -266,3 +279,322 @@ class TestHonestTriggerColumns:
             "conversion_rate",
             "mean",
         )
+
+
+# ------------------------------------------- per-experiment unit outcome feed
+# Option d1 (owner decision 2026-09-23, Part of #2207): load_arrays reads
+# ab_experiment_unit_outcomes FIRST (one observed outcome per (experiment, unit,
+# metric), time-indexed by observed_at) and falls back to the business_metrics
+# per_hcp_rollup join byte-for-byte when the experiment has no unit outcomes.
+class _Page:
+    def __init__(self, data, count=None):
+        self.data = data
+        self.count = count
+
+
+_POSTGREST_MAX_ROWS = 1000
+
+
+class _FeedQuery:
+    """PostgREST-shaped fake for ONE table: records every filter, serves
+    ``.range()`` pages of its rows; an UN-ranged read is capped at PostgREST's
+    max-rows (1,000 on Supabase) exactly like the server (codex r1 HIGH: an
+    unbounded assignments read silently drops units 1,001+)."""
+
+    def __init__(self, table, rows, log):
+        self._table = table
+        self._rows = rows
+        self._log = log
+        self._range = None
+        self._order = None
+
+    def _rec(self, op, *a):
+        self._log.append((self._table, op, a))
+        return self
+
+    def select(self, *a, **k):
+        return self._rec("select", *a)
+
+    def eq(self, *a, **k):
+        return self._rec("eq", *a)
+
+    def in_(self, *a, **k):
+        return self._rec("in_", *a)
+
+    def order(self, *a, **k):
+        self._order = a[0] if a else None
+        return self._rec("order", *a)
+
+    def range(self, start, end):
+        self._range = (start, end)
+        return self._rec("range", start, end)
+
+    def execute(self):
+        self._log.append((self._table, "execute", ()))
+        if self._range is None:
+            return _Page(list(self._rows[:_POSTGREST_MAX_ROWS]), len(self._rows))
+        s, e = self._range
+        # Offset paging is only stable over a total order (codex r2 LOW): a
+        # ranged read without .order(<unique column>) is served in a SHUFFLED
+        # order per call, like a heap scan may, so a reader that drops the
+        # order duplicates/omits rows with the total count unchanged.
+        if self._order in ("unit_id", "id"):
+            rows = sorted(self._rows, key=lambda r: str(r.get(self._order)))
+        else:
+            import random
+
+            rows = list(self._rows)
+            random.Random(len(self._log)).shuffle(rows)
+        return _Page(rows[s : e + 1], len(self._rows))
+
+
+class _FeedClient:
+    def __init__(self, tables):
+        self._tables = tables
+        self.log = []
+
+    def table(self, name):
+        return _FeedQuery(name, self._tables.get(name, []), self.log)
+
+    def tables_queried(self):
+        return [t for t, op, _ in self.log if op == "execute"]
+
+
+def _uo(unit, value, observed, synthetic=True):
+    # Generator-written rows are is_synthetic=true (the one-row-per-assignment
+    # contract); a real feed's rows are false.
+    return {
+        "unit_id": unit,
+        "outcome_value": value,
+        "observed_at": observed,
+        "is_synthetic": synthetic,
+    }
+
+
+class TestLoadArraysUnitOutcomeFeed:
+    _ASSIGN = [
+        {"unit_id": "scvhcp_00001", "variant": "control"},
+        {"unit_id": "scvhcp_00002", "variant": "control"},
+        {"unit_id": "scvhcp_00003", "variant": "treatment"},
+        {"unit_id": "scvhcp_00004", "variant": "treatment"},
+    ]
+
+    def _run(self, client, metric="pnh_persistence", **kw):
+        import asyncio
+        from uuid import uuid4
+
+        from src.repositories.experiment_outcome import ExperimentOutcomeRepository
+
+        repo = ExperimentOutcomeRepository(supabase_client=client)
+        return asyncio.run(repo.load_arrays(uuid4(), metric, brand="Fabhalta", **kw))
+
+    def test_unit_outcomes_present_feed_the_arrays_and_business_metrics_is_not_queried(
+        self, monkeypatch
+    ):
+        """(vi) rows exist -> arrays come from them (mean reducer), the
+        business_metrics join is NOT issued, the provenance predicate and the
+        (experiment, metric) filters are applied to the unit-outcome query."""
+        monkeypatch.delenv("E2I_INCLUDE_SYNTHETIC", raising=False)
+        client = _FeedClient(
+            {
+                "ab_experiment_assignments": self._ASSIGN,
+                "ab_experiment_unit_outcomes": [
+                    _uo("scvhcp_00001", 0.0, "2026-09-01T00:00:00+00:00"),
+                    _uo("scvhcp_00002", 1.0, "2026-09-02T00:00:00+00:00"),
+                    _uo("scvhcp_00003", 1.0, "2026-09-03T00:00:00+00:00"),
+                    _uo("scvhcp_00004", 1.0, "2026-09-04T00:00:00+00:00"),
+                ],
+                # a decoy: if the fallback ran it would produce a DIFFERENT answer
+                "business_metrics": [
+                    {"hcp_id": "scvhcp_00001", "pnh_persistence": 9.0, "metric_date": "2026-09-01"}
+                ],
+            }
+        )
+        control, treatment = self._run(client)
+        assert sorted(control.tolist()) == [0.0, 1.0]
+        assert treatment.tolist() == [1.0, 1.0]
+        assert "business_metrics" not in client.tables_queried()
+        uo_filters = [(op, a) for t, op, a in client.log if t == "ab_experiment_unit_outcomes"]
+        assert ("eq", ("metric_name", "pnh_persistence")) in uo_filters
+        assert ("eq", ("is_synthetic", False)) in uo_filters
+        assert any(op == "eq" and a[0] == "experiment_id" for op, a in uo_filters)
+
+    def test_unit_outcomes_absent_falls_back_to_the_business_metrics_join(self, monkeypatch):
+        """(vii) zero unit-outcome rows -> today's path: resolve_column + the
+        per_hcp_rollup join on business_metrics with the same filters as before."""
+        monkeypatch.delenv("E2I_INCLUDE_SYNTHETIC", raising=False)
+        client = _FeedClient(
+            {
+                "ab_experiment_assignments": self._ASSIGN,
+                "ab_experiment_unit_outcomes": [],
+                "business_metrics": [
+                    {"hcp_id": "scvhcp_00001", "conversion_rate": 0.2, "metric_date": "2026-09-01"},
+                    {"hcp_id": "scvhcp_00001", "conversion_rate": 0.4, "metric_date": "2026-09-02"},
+                    {"hcp_id": "scvhcp_00003", "conversion_rate": 0.8, "metric_date": "2026-09-01"},
+                ],
+            }
+        )
+        control, treatment = self._run(client, metric="conversion_rate")
+        assert control.tolist() == pytest.approx([0.3])
+        assert treatment.tolist() == pytest.approx([0.8])
+        assert "business_metrics" in client.tables_queried()
+        bm = [(op, a) for t, op, a in client.log if t == "business_metrics"]
+        assert ("eq", ("metric_type", "per_hcp_rollup")) in bm
+        assert ("eq", ("is_synthetic", False)) in bm
+        assert ("eq", ("brand", "Fabhalta")) in bm
+        assert any(op == "in_" and a[0] == "hcp_id" for op, a in bm)
+
+    def test_unknown_metric_without_unit_outcomes_still_fails_closed(self):
+        """(viii) the fail-closed contract of the fallback is preserved."""
+        client = _FeedClient(
+            {"ab_experiment_assignments": self._ASSIGN, "ab_experiment_unit_outcomes": []}
+        )
+        with pytest.raises(ValueError, match="Unsupported primary_metric"):
+            self._run(client, metric="pnh_persistence")
+        assert "business_metrics" not in client.tables_queried()
+
+    def test_unit_outcomes_are_paged_to_exhaustion(self):
+        """(ix) 1,400 units over two 1,000-row pages -> 1,400 values, not 1,000 —
+        on BOTH legs: the assignments read is paged too (codex r1 HIGH: an
+        un-ranged assignments read is capped at 1,000 by PostgREST, and the
+        1,000-unit variant map silently dropped the other 400 units' outcomes)."""
+        n = 1400
+        assign = [
+            {"unit_id": f"scvhcp_{i:05d}", "variant": "control" if i % 2 else "treatment"}
+            for i in range(n)
+        ]
+        rows = [_uo(f"scvhcp_{i:05d}", float(i % 2), "2026-09-01T00:00:00+00:00") for i in range(n)]
+        client = _FeedClient(
+            {"ab_experiment_assignments": assign, "ab_experiment_unit_outcomes": rows}
+        )
+        control, treatment = self._run(client)
+        assert control.size + treatment.size == n
+        assert control.size == 700 and treatment.size == 700
+        for table in ("ab_experiment_unit_outcomes", "ab_experiment_assignments"):
+            ranges = [a for t, op, a in client.log if t == table and op == "range"]
+            assert ranges and ranges[0] == (0, 999), table
+            assert len(ranges) >= 2, table
+            orders = [a for t, op, a in client.log if t == table and op == "order"]
+            assert orders and all(a[0] == "unit_id" for a in orders), table
+        # the per-unit values survived paging intact (no duplicate / omitted unit)
+        assert sorted(control.tolist()) == [1.0] * 700
+        assert sorted(treatment.tolist()) == [0.0] * 700
+
+    def test_short_assignments_read_fails_loud_instead_of_a_truncated_atE(self):
+        """A server that reports 1,400 assignments but serves fewer must not feed
+        a partial variant map to the pooled test."""
+        n = 1400
+        assign = [
+            {"unit_id": f"scvhcp_{i:05d}", "variant": "control" if i % 2 else "treatment"}
+            for i in range(n)
+        ]
+        rows = [_uo(f"scvhcp_{i:05d}", float(i % 2), "2026-09-01T00:00:00+00:00") for i in range(n)]
+        client = _FeedClient(
+            {"ab_experiment_assignments": assign, "ab_experiment_unit_outcomes": rows}
+        )
+
+        class _Lying(_FeedQuery):
+            def execute(self):
+                page = super().execute()
+                if self._table == "ab_experiment_assignments":
+                    page.count = n + 1  # server claims one more than it serves
+                return page
+
+        client.table = lambda name: _Lying(name, client._tables.get(name, []), client.log)
+        with pytest.raises(RuntimeError, match="ab_experiment_assignments"):
+            self._run(client)
+
+    def test_window_days_is_a_per_unit_post_assignment_window_on_observed_at(self):
+        """(x) window_days on the time-indexed feed is PER UNIT: keep an outcome
+        iff assigned_at <= observed_at <= assigned_at + window_days, at timestamp
+        precision (codex r1 MED: anchoring on the experiment's newest outcome
+        would select recent ENROLLEES under rolling enrollment, not outcomes
+        observed within each unit's window)."""
+
+        def _asn(unit, variant, assigned):
+            return {"unit_id": unit, "variant": variant, "assigned_at": assigned}
+
+        client = _FeedClient(
+            {
+                "ab_experiment_assignments": [
+                    _asn("scvhcp_00001", "control", "2026-09-01T00:00:00+00:00"),
+                    _asn("scvhcp_00002", "control", "2026-09-10T00:00:00+00:00"),
+                    _asn("scvhcp_00003", "treatment", "2026-09-15T00:00:00+00:00"),
+                    _asn("scvhcp_00004", "treatment", "2026-09-15T12:00:00+00:00"),
+                ],
+                "ab_experiment_unit_outcomes": [
+                    # 20 d after assignment -> outside a 7 d window (though recent)
+                    _uo("scvhcp_00001", 1.0, "2026-09-21T00:00:00+00:00"),
+                    # 2 d after assignment -> inside
+                    _uo("scvhcp_00002", 0.0, "2026-09-12T00:00:00+00:00"),
+                    # exactly 7 d after -> inside (inclusive bound)
+                    _uo("scvhcp_00003", 1.0, "2026-09-22T00:00:00+00:00"),
+                    # 7 d + 1 s after a NOON assignment -> outside at timestamp precision
+                    _uo("scvhcp_00004", 0.0, "2026-09-22T12:00:01+00:00"),
+                ],
+            }
+        )
+        control, treatment = self._run(client, window_days=7)
+        assert control.tolist() == [0.0]  # 00001 outside, 00002 inside
+        assert treatment.tolist() == [1.0]  # 00003 inside, 00004 outside by 1 s
+        # no window -> every unit
+        control, treatment = self._run(client)
+        assert control.size == 2 and treatment.size == 2
+
+    def test_partial_synthetic_feed_fails_loud_instead_of_a_subset_ate(self):
+        """codex r3 HIGH: the weekly refresh purges and reloads non-transactionally
+        and the loader tolerates a failed batch, so a generator-written feed can be
+        INCOMPLETE for an experiment. The generator's contract is one row per
+        assignment; a synthetic feed whose unit set differs from the assignments'
+        must fail loud, never aggregate the subset (even when both arms still
+        clear the >= 2 gate)."""
+        assign = [
+            {"unit_id": f"scvhcp_{i:05d}", "variant": "control" if i % 2 else "treatment"}
+            for i in range(8)
+        ]
+        rows = [_uo(f"scvhcp_{i:05d}", float(i % 2), "2026-09-01T00:00:00+00:00") for i in range(6)]
+        client = _FeedClient(
+            {"ab_experiment_assignments": assign, "ab_experiment_unit_outcomes": rows}
+        )
+        with pytest.raises(RuntimeError, match=r"6 of 8 assigned units"):
+            self._run(client)
+        # outcomes for units that are NOT assigned are the same contract breach
+        rows = [
+            _uo(f"scvhcp_{i:05d}", float(i % 2), "2026-09-01T00:00:00+00:00") for i in range(8)
+        ] + [_uo("scvhcp_99999", 1.0, "2026-09-01T00:00:00+00:00")]
+        client = _FeedClient(
+            {"ab_experiment_assignments": assign, "ab_experiment_unit_outcomes": rows}
+        )
+        with pytest.raises(RuntimeError, match=r"1 outcome unit\(s\) not assigned"):
+            self._run(client)
+
+    def test_partial_real_feed_warns_and_uses_the_observed_units(self, caplog):
+        """A REAL feed (is_synthetic=false rows) may legitimately lack outcomes for
+        some units (lost to follow-up); it proceeds on the observed units — the
+        legacy business_metrics feed drops unit-less rows the same way — but the
+        coverage is logged at WARNING so the gap is visible in the worker log."""
+        import logging
+
+        assign = [
+            {"unit_id": f"scvhcp_{i:05d}", "variant": "control" if i % 2 else "treatment"}
+            for i in range(8)
+        ]
+        rows = [
+            _uo(f"scvhcp_{i:05d}", float(i % 2), "2026-09-01T00:00:00+00:00", synthetic=False)
+            for i in range(6)
+        ]
+        client = _FeedClient(
+            {"ab_experiment_assignments": assign, "ab_experiment_unit_outcomes": rows}
+        )
+        with caplog.at_level(logging.WARNING, logger="src.repositories.experiment_outcome"):
+            control, treatment = self._run(client)
+        assert control.size == 3 and treatment.size == 3
+        assert any("6 of 8 assigned units" in r.getMessage() for r in caplog.records)
+
+    def test_empty_metric_never_queries_unit_outcomes(self):
+        """A blank primary_metric cannot name a unit-outcome metric: go straight to
+        the fallback, which fails closed."""
+        client = _FeedClient({"ab_experiment_assignments": self._ASSIGN})
+        with pytest.raises(ValueError):
+            self._run(client, metric="")
+        assert "ab_experiment_unit_outcomes" not in client.tables_queried()

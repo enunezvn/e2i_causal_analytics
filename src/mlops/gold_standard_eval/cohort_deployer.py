@@ -41,6 +41,8 @@ The REAL prod registration runs in T11's CLI; this module exposes the functions
 from __future__ import annotations
 
 import logging
+import pickle
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -75,6 +77,7 @@ __all__ = [
     "GOLDSTD_MODEL_NAME",
     "GOLDSTD_MODEL_VERSION",
     "GOLDSTD_STAGE",
+    "calibration_method_of",
     "register_cohort_model",
     "serialize_model",
     "train_cohort_model",
@@ -191,7 +194,31 @@ async def register_cohort_model(
         # synthetic-gold cohort — label it so the catalog is self-describing and
         # the promotion gate can refuse synthetic_gold -> production.
         training_provenance="synthetic_gold",
+        # #2248 option (a): a retrain of this row reproduces its calibration method. Read
+        # off the artifact being registered, so the row always describes THAT artifact
+        # (the bare-LR fallback records none, replacing a stale method).
+        hyperparameters=_hyperparameters_of_artifact(artifact_path),
     )
+
+
+def _hyperparameters_of_artifact(artifact_path: str) -> dict[str, str]:
+    """``{"calibration_method": m}`` for a calibrated pickled artifact, else ``{}``."""
+    if not Path(artifact_path).is_file():
+        return {}  # register_model_row refuses the missing artifact
+    with open(artifact_path, "rb") as fh:
+        method = calibration_method_of(pickle.load(fh))  # noqa: S301 — our own artifact
+    return {"calibration_method": method} if method else {}
+
+
+def calibration_method_of(model: Any) -> str | None:
+    """The fitted post-hoc calibration method (``"sigmoid"`` / ``"isotonic"``), else None.
+
+    ``train_cohort_model`` returns a bare ``LogisticRegression`` when the minority class
+    is too small to calibrate by CV — that model records no method (#2248).
+    """
+    if not isinstance(model, CalibratedClassifierCV):
+        return None
+    return model.method if model.method in ("sigmoid", "isotonic") else None
 
 
 async def _resolve_goldstd_experiment(client: Any, spec: Any, experiment_name: str) -> str:

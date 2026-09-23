@@ -32,6 +32,13 @@ depends on the adoption-frame seed, which was NOT committed by the ad-hoc op.
 ``--dry-run`` quantifies the exact agreement against the live table so the verdict
 is data-driven, never assumed.
 
+CHANNEL RE-PLANT (lane T1, 2026-09-23): the planted channel effects on ``adopted``
+(``_compute_adoption(..., channel_shift=...)``) are NOT applied by this loader --
+its regenerated frame does not reproduce the live labels (~63 %). The re-plant
+path is ``scripts/backfill_hcp_treatment_arm.py`` (seed 427 reproduces the live
+arm 100 %), which also re-dates joined rows. This loader is the from-scratch
+reproduction of the table's shape only.
+
 USAGE
 -----
     # DEFAULT: dry-run. Generates in-memory, prints what it WOULD write, and

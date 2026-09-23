@@ -513,3 +513,57 @@ async def test_register_cohort_model_experiment_brand_is_the_cohort_brand(
         f"{spec.target}: experiment brand must be the cohort's brand "
         f"{expected_brand!r}, got {experiment_inserts[0]['brand']!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# #2248 option (a): the registered calibration method is recorded so a retrain can
+# reproduce it (ml_model_registry.hyperparameters.calibration_method)
+# ---------------------------------------------------------------------------
+
+
+def test_calibration_method_of_reads_the_fitted_calibrator():
+    from sklearn.linear_model import LogisticRegression
+
+    from src.mlops.gold_standard_eval.cohort_deployer import calibration_method_of
+
+    X, y, _ = _tiny_gold_standard_xy()
+    assert calibration_method_of(train_cohort_model(INITIATION, X, y)) == "sigmoid"
+    # the bare-LR fallback (minority < 2) is NOT calibrated: nothing to record
+    assert calibration_method_of(LogisticRegression()) is None
+    assert calibration_method_of(None) is None
+
+
+@pytest.mark.asyncio
+async def test_register_cohort_model_records_the_artifacts_calibration_method(tmp_path):
+    X, y, feature_columns = _tiny_gold_standard_xy()
+    model = train_cohort_model(INITIATION, X, y)
+    artifact_path = serialize_model(model, tmp_path / "artifacts", "csu_initiation_goldstd_lr_v1")
+
+    client = FakeClient()
+    await register_cohort_model(
+        client,
+        INITIATION,
+        artifact_path=artifact_path,
+        auc=0.671,
+        feature_count=len(feature_columns),
+    )
+    (row,) = [r for (t, r, _oc) in client.upserts if t == "ml_model_registry"]
+    assert row["hyperparameters"] == {"calibration_method": "sigmoid"}
+
+
+@pytest.mark.asyncio
+async def test_an_uncalibrated_artifact_records_no_method_and_clears_a_stale_one(tmp_path):
+    """codex r1 HIGH: re-registering the bare-LR fallback over a calibrated row must not
+    leave the old "sigmoid" standing — the row describes the artifact just written."""
+    from sklearn.linear_model import LogisticRegression
+
+    X, y, _ = _tiny_gold_standard_xy()
+    bare = LogisticRegression(max_iter=1000).fit(X, y)
+    artifact_path = serialize_model(bare, tmp_path / "artifacts", "csu_initiation_goldstd_lr_v1")
+
+    client = FakeClient()
+    await register_cohort_model(
+        client, INITIATION, artifact_path=artifact_path, auc=0.6, feature_count=3
+    )
+    (row,) = [r for (t, r, _oc) in client.upserts if t == "ml_model_registry"]
+    assert row["hyperparameters"] == {}

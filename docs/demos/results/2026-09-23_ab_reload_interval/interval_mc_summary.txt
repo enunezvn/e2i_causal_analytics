@@ -1,0 +1,49 @@
+== forest mean-CATE point with the SHIPPED ate_interval (RMS of pointwise SEs)
+       brand              channel  planted  seeds  forest_bias  forest_empSD  ai_SE  ai_cov  ai_excl0
+Remibrutinib     engagement_score    0.138     30        0.018         0.016  0.081   1.000     0.433
+Remibrutinib peer_influence_score    0.093     30       -0.001         0.017  0.082   1.000     0.000
+Remibrutinib   rep_training_score    0.000     30        0.002         0.018  0.079   1.000     0.000
+    Fabhalta     engagement_score    0.138     12       -0.001         0.018  0.081   1.000     0.083
+    Fabhalta peer_influence_score    0.093     12       -0.003         0.015  0.083   1.000     0.000
+    Fabhalta   rep_training_score    0.000     12       -0.001         0.013  0.080   1.000     0.000
+     Kisqali     engagement_score    0.138     12       -0.006         0.012  0.080   1.000     0.000
+     Kisqali peer_influence_score    0.093     12        0.013         0.022  0.077   1.000     0.000
+     Kisqali   rep_training_score    0.000     12       -0.001         0.015  0.075   1.000     0.000
+
+== forest doubly-robust ATE (cf.ate_) with cf.ate_stderr_ (free, same fit)
+       brand              channel  planted  seeds  dr_bias  dr_empSD  dr_SE  dr_cov  dr_excl0
+Remibrutinib     engagement_score    0.138     30    0.023     0.014  0.022   0.833     1.000
+Remibrutinib peer_influence_score    0.093     30    0.005     0.021  0.025   1.000     1.000
+Remibrutinib   rep_training_score    0.000     30    0.001     0.018  0.020   0.967     0.033
+    Fabhalta     engagement_score    0.138     12   -0.002     0.020  0.021   0.917     1.000
+    Fabhalta peer_influence_score    0.093     12   -0.010     0.020  0.023   1.000     1.000
+    Fabhalta   rep_training_score    0.000     12    0.003     0.014  0.020   1.000     0.000
+     Kisqali     engagement_score    0.138     12   -0.000     0.019  0.024   1.000     1.000
+     Kisqali peer_influence_score    0.093     12    0.018     0.019  0.024   0.917     1.000
+     Kisqali   rep_training_score    0.000     12   -0.001     0.013  0.019   1.000     0.000
+
+== LinearDML ate_inference (exact SE of the mean; second fit)
+       brand              channel  planted  seeds  ldml_bias  ldml_empSD  ldml_SE  ldml_cov  ldml_excl0
+Remibrutinib     engagement_score    0.138     30      0.018       0.015    0.018     0.833       1.000
+Remibrutinib peer_influence_score    0.093     30      0.005       0.017    0.018     0.933       1.000
+Remibrutinib   rep_training_score    0.000     30      0.004       0.019    0.017     0.967       0.033
+    Fabhalta     engagement_score    0.138     12      0.002       0.018    0.018     0.917       1.000
+    Fabhalta peer_influence_score    0.093     12      0.001       0.014    0.018     1.000       1.000
+    Fabhalta   rep_training_score    0.000     12     -0.000       0.013    0.017     0.917       0.083
+     Kisqali     engagement_score    0.138     12     -0.007       0.012    0.018     1.000       1.000
+     Kisqali peer_influence_score    0.093     12      0.015       0.022    0.018     0.833       1.000
+     Kisqali   rep_training_score    0.000     12      0.003       0.014    0.017     1.000       0.000
+
+== SE / empirical-SD ratio (1.0 = calibrated; >1 = conservative)
+       brand              channel  planted  seeds  ai_ratio  dr_ratio  ldml_ratio
+Remibrutinib     engagement_score    0.138     30     5.098     1.516       1.131
+Remibrutinib peer_influence_score    0.093     30     4.795     1.160       1.070
+Remibrutinib   rep_training_score    0.000     30     4.361     1.111       0.908
+    Fabhalta     engagement_score    0.138     12     4.631     1.055       0.976
+    Fabhalta peer_influence_score    0.093     12     5.392     1.183       1.251
+    Fabhalta   rep_training_score    0.000     12     6.052     1.430       1.306
+     Kisqali     engagement_score    0.138     12     6.628     1.269       1.530
+     Kisqali peer_influence_score    0.093     12     3.516     1.272       0.789
+     Kisqali   rep_training_score    0.000     12     5.008     1.434       1.176
+
+mean fit seconds: forest 2.7s, lineardml 1.2s

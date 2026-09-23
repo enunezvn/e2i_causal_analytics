@@ -29,6 +29,7 @@ from src.agents.tier_0.split_handoff import (
     SPLIT_KEYS,
     frames_to_trainer_splits,
     preloaded_splits,
+    with_adaptive_inputs_from_splits,
 )
 from src.data.manifests.resolution import resolve_manifest_source
 from src.utils.audit_chain import AgentTier, AuditChainService
@@ -644,6 +645,9 @@ class MLFoundationPipeline:
             "target_variable": input_data.get("target_variable"),
             "candidate_features": input_data.get("candidate_features"),
             "feature_manifest_source": feature_manifest_source,
+            # #2248 (codex r1): an explicit clinical|commercial intent selects the
+            # success-criteria bar; absent, scope_definer keeps its clinical default.
+            "deployment_intent": input_data.get("deployment_intent"),
             # D1.1: thread workflow-level audit_workflow_id so per-agent
             # State doesn't mint a fresh UUID via default_factory.
             "audit_workflow_id": result.audit_workflow_id,
@@ -1046,6 +1050,7 @@ class MLFoundationPipeline:
                 ),
             )
         splits = splits or {k: input_data.get(k) for k in SPLIT_KEYS}
+        result.success_criteria = with_adaptive_inputs_from_splits(result.success_criteria, splits)
 
         # Prepare model_trainer input
         trainer_input = {
@@ -1059,6 +1064,8 @@ class MLFoundationPipeline:
             "hpo_timeout_hours": self.config.hpo_timeout_hours,
             "early_stopping": self.config.early_stopping,
             "enable_mlflow": not self.config.skip_mlflow,
+            # #2248 option (a): the parent's calibration method (None = auto policy)
+            "calibration_method": input_data.get("calibration_method"),
             # Pre-loaded splits, else data_preparer's frames (#2207)
             **splits,
             # Opt-in synthetic augmentation cohort path (Phase 3 consumption).
@@ -1342,6 +1349,10 @@ class MLFoundationPipeline:
             "feature_manifest_source": deployer_scope_spec.get("feature_manifest_source"),
             # #2242: register a retrain's candidate as a new version of the retrained model.
             "retrain_of": input_data.get("retrain_of"),
+            # #2255: synthetic augmentation rows are part of the candidate's provenance.
+            "training_augmentation_applied": bool(
+                (result.training_augmentation or {}).get("applied")
+            ),
         }
 
         # Add shadow mode metrics if deploying to production

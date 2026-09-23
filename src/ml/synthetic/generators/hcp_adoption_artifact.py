@@ -5,8 +5,14 @@ Causal structure (no circularity):
     hcp_segment       = centrality tier {high,medium,low}_influence (effect modifier)
     treatment_arm     ~ rep/trigger engagement intensity (confounded by centrality)
     cate_estimate     = segment-scaled per-HCP treatment effect on adoption prob
-    adoption_logit    = a + b*standardized(centrality) + tau(segment)*treatment + noise
+    adoption_logit    = a + b*standardized(centrality) + affinity(brand, specialty)
+                        + channel_shift + tau(segment)*treatment + noise
     adopted           ~ Bernoulli(sigmoid(adoption_logit))
+
+channel_shift (lane T1, 2026-09-23) is an optional deterministic per-HCP term carrying
+the planted effects of the eight business_metrics channels on the hcp_brand_adoption
+grain (src/data/per_hcp_cohort_columns.py::ADOPTION_CHANNEL_LOGIT_BETA); zero when
+absent, so every legacy caller is bit-identical.
     adoption_category = "ADOPTER" if adopted else "NON_ADOPTER"  (canonical column)
 
 The label is written to the canonical hcp_profiles.adoption_category column
@@ -124,18 +130,41 @@ def _compute_adoption(
     centrality_z: np.ndarray,
     brand: str,
     specialty: Optional[Sequence[str]] = None,
+    channel_shift: Optional[np.ndarray] = None,
 ) -> Dict[str, np.ndarray]:
     """Shared adoption DGP on a standardized centrality vector. Returns
-    hcp_segment, treatment_arm, adopted (0/1), and the per-HCP probability-scale
-    cate_estimate. Used by BOTH the standalone optum_hcp frame and the hcp_generator
-    (hcp_profiles grain) so the two grains share one DGP.
+    hcp_segment, treatment_arm, adopted (0/1), the per-HCP probability-scale
+    cate_estimate, plus the realised adoption_logit and the channel_shift used
+    (so a writer can print the realised per-channel effects). Used by BOTH the
+    standalone optum_hcp frame and the hcp_generator (hcp_profiles grain) so the
+    two grains share one DGP.
 
     ``specialty`` (optional, #1551): per-HCP specialty strings aligned to
     ``centrality_z``. When supplied, a deterministic per-(brand, specialty)
     logit shift makes the specialty ordering clinically sensible (see
     ``_BRAND_SPECIALTY_AFFINITY``). When None, behaviour is bit-identical to the
-    pre-#1551 DGP — the shift consumes no RNG draws either way."""
+    pre-#1551 DGP — the shift consumes no RNG draws either way.
+
+    ``channel_shift`` (optional, lane T1 2026-09-23): a per-HCP logit shift
+    aligned to ``centrality_z`` carrying the planted effects of the eight
+    business_metrics channels (``ADOPTION_CHANNEL_LOGIT_BETA`` in
+    ``src.data.per_hcp_cohort_columns``; built by
+    ``src.data.per_hcp_cohort_collapse.adoption_channel_shift``). Same
+    discipline as the affinity: added to the logit deterministically, consuming
+    NO rng draws, so ``None`` or an all-zero vector is bit-identical to the DGP
+    without it (pinned by tests/unit/test_synthetic/
+    test_hcp_adoption_artifact_channel_shift.py). ``cate_estimate`` keeps its
+    meaning (the treatment_arm CATE); its base logit includes the shift."""
     n = len(centrality_z)
+    if channel_shift is None:
+        shift = np.zeros(n, dtype=float)
+    else:
+        shift = np.asarray(channel_shift, dtype=float)
+        if shift.shape != (n,):
+            raise ValueError(
+                f"channel_shift must be a length-{n} vector aligned to centrality_z; "
+                f"got shape {shift.shape}"
+            )
     hcp_segment = np.where(
         centrality_z > 0.5,
         "high_influence",
@@ -152,24 +181,29 @@ def _compute_adoption(
     # a pure table lookup — consumes NO rng draws, so the seeded stream is
     # bit-identical with or without a specialty vector.
     affinity = _specialty_affinity(brand, specialty, n)
+    # Lane T1: the planted channel term is a deterministic shift too (zeros when
+    # absent) — it sits beside the affinity and consumes NO rng draws.
     logit = (
         _ADOPT_INTERCEPT
         + _ADOPT_CENTRALITY_SLOPE * centrality_z
         + affinity
+        + shift
         + scale * seg_treat * treatment_arm
         + rng.normal(0.0, 0.6, n)
     )
     adopted = (rng.random(n) < _sigmoid(logit)).astype(int)
 
-    # per-HCP CATE on the PROBABILITY scale (P(adopt) at T=1 vs T=0, centrality
-    # and specialty fixed).
-    base_logit = _ADOPT_INTERCEPT + _ADOPT_CENTRALITY_SLOPE * centrality_z + affinity
+    # per-HCP CATE on the PROBABILITY scale (P(adopt) at T=1 vs T=0, centrality,
+    # specialty and channel exposure fixed).
+    base_logit = _ADOPT_INTERCEPT + _ADOPT_CENTRALITY_SLOPE * centrality_z + affinity + shift
     cate_estimate = _sigmoid(base_logit + scale * seg_treat) - _sigmoid(base_logit)
     return {
         "hcp_segment": hcp_segment,
         "treatment_arm": treatment_arm,
         "adopted": adopted,
         "cate_estimate": cate_estimate,
+        "adoption_logit": logit,
+        "channel_shift": shift,
     }
 
 

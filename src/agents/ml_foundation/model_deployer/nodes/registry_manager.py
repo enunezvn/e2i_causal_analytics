@@ -24,6 +24,11 @@ from src.agents.ml_foundation.model_deployer.nodes.retrain_linkage import (
     retrain_not_persisted_error,
     retrain_persist_kwargs,
 )
+from src.agents.ml_foundation.model_deployer.nodes.training_provenance import (
+    candidate_training_provenance,
+    cohort_contract_from_state,
+    heal_reused_row,
+)
 from src.agents.ml_foundation.model_deployer.regulatory_audit import (
     LITERATURE_ANCHORED_THRESHOLDS,
     THRESHOLD_PROVENANCE_LITERATURE_ANCHORED,
@@ -855,6 +860,7 @@ async def _persist_model_registry_row(
     cohort: Optional[Dict[str, Any]] = None,
     version_label: Optional[str] = None,
     expected_experiment_id: Optional[str] = None,
+    training_provenance: Optional[str] = None,
 ) -> Optional[str]:
     """Write (idempotently) a REAL ``ml_model_registry`` row; return its id (str).
 
@@ -883,7 +889,6 @@ async def _persist_model_registry_row(
         MLModelRegistryRepository,
         MLTrainingRunRepository,
     )
-    from src.services.cohort_contract import heal_registry_cohort_contract
 
     # 1. Resolve the real ml_experiments UUID: the tier-0 pipeline threads the
     #    ``mlflow_experiment_id`` STRING as ``experiment_id``; resolve it exactly as
@@ -978,8 +983,7 @@ async def _persist_model_registry_row(
             experiment.id,
             existing.id,
         )
-        if cohort:  # #2207: heal NULL contract columns on the reused row
-            await heal_registry_cohort_contract(client, str(existing.id), cohort)
+        await heal_reused_row(client, str(existing.id), cohort, training_provenance)
         return str(existing.id)
 
     # 4. Source the NOT-NULL ``algorithm`` + ``hyperparameters`` from the REAL
@@ -1013,6 +1017,7 @@ async def _persist_model_registry_row(
             cohort_data_source=(cohort or {}).get("data_source"),
             cohort_target_outcome=(cohort or {}).get("target_outcome"),
             cohort_feature_manifest_source=(cohort or {}).get("feature_manifest_source"),
+            training_provenance=training_provenance,
         )
     except Exception as e:
         # Only a genuine UNIQUE(model_name, model_version) violation is a benign
@@ -1075,20 +1080,6 @@ async def _persist_model_registry_row(
         experiment.id,
     )
     return str(model.id)
-
-
-def _cohort_contract_from_state(state: Any) -> Dict[str, Any]:
-    """The #2207 cohort contract the deployer state carries (None-free): the pipeline's
-    ``data_source`` / ``target_outcome`` (via ``ModelDeployerAgent.run``) and the
-    RESOLVED manifest source (flat field, else ``scope_spec``)."""
-    scope_spec = state.get("scope_spec") or {}
-    manifest = state.get("feature_manifest_source") or scope_spec.get("feature_manifest_source")
-    fields = {
-        "data_source": state.get("data_source"),
-        "target_outcome": state.get("target_outcome"),
-        "feature_manifest_source": manifest,
-    }
-    return {k: v for k, v in fields.items() if v is not None}
 
 
 async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
@@ -1164,8 +1155,9 @@ async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
                     registered_model_name=registered_model_name,
                     model_version=int(model_version) if model_version is not None else 1,
                     validation_metrics=state.get("validation_metrics"),
-                    cohort=_cohort_contract_from_state(state),
+                    cohort=cohort_contract_from_state(state),
                     **retrain_persist_kwargs(retrain_of),
+                    training_provenance=candidate_training_provenance(state),
                 )
             except Exception as e:
                 logger.error("ml_model_registry persistence raised (fail-closed): %s", e)
