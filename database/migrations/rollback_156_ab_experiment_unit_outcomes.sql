@@ -9,4 +9,4 @@ DROP TABLE IF EXISTS public.ab_experiment_unit_outcomes;
 -- applied and skips recreating the table on the next deploy while the loader,
 -- --refresh-ab and load_arrays already depend on it. Apply this file with
 -- `psql --single-transaction` so the drop and the ledger retirement commit together.
-DELETE FROM public.schema_migrations WHERE filename = '155_ab_experiment_unit_outcomes.sql';
+DELETE FROM public.schema_migrations WHERE filename = '156_ab_experiment_unit_outcomes.sql';

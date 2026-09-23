@@ -11,8 +11,8 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[3]
-M = REPO / "database" / "migrations" / "155_ab_experiment_unit_outcomes.sql"
-R = REPO / "database" / "migrations" / "rollback_155_ab_experiment_unit_outcomes.sql"
+M = REPO / "database" / "migrations" / "156_ab_experiment_unit_outcomes.sql"
+R = REPO / "database" / "migrations" / "rollback_156_ab_experiment_unit_outcomes.sql"
 TABLE = "ab_experiment_unit_outcomes"
 
 

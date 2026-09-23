@@ -663,7 +663,7 @@ def test_provenance_tagged_tables_match_migrations() -> None:
         "optum_biologic_persistence_causal",
         # 149_csu_escalation_causal.sql (Lane C, 2026-09-22)
         "csu_escalation_causal",
-        # 155_ab_experiment_unit_outcomes.sql (option d1, 2026-09-23, Part of #2207)
+        # 156_ab_experiment_unit_outcomes.sql (option d1, 2026-09-23, Part of #2207)
         "ab_experiment_unit_outcomes",
     }
     assert set(PROVENANCE_TAGGED_TABLES) == expected
