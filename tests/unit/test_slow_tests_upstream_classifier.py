@@ -1,7 +1,7 @@
 """Contract tests: nightly Job A reds caused by an UPSTREAM provider outage are
 routed to a distinct low-priority outcome, not the red alarm (#1804/#1813/#2173).
 
-The clinical-context and UMLS UTS live suites deliberately hit real providers
+The clinical-context, UMLS UTS and RxNav brand-alias live suites deliberately hit real providers
 so that an outage goes RED instead of silently skipping (#1612/#1629). That
 signal has correctly detected transient upstream failures, but each red used to
 file the same "Nightly slow-tests failed" alarm that a real regression files.
@@ -312,6 +312,136 @@ def test_similarly_named_umls_module_is_not_treated_as_the_live_suite(tmp_path: 
             HARD_UMLS_HTTP_500,
         )
     ]
+    _, outputs = _classify(tmp_path, _junit(cases))
+    assert outputs.get("classification") == "real", outputs
+
+
+# ── #2267: the RxNav brand-alias live test (added by #2217) ──────────────────
+# Run 35844937407 (2026-09-23 nightly, job "Slow Tests (tracked)"): RxNav was
+# unreachable and the test died on ``out["Kisqali"]``. The captured WARNING is
+# verbatim from that job log; the assertion shapes are what the rewritten live
+# test emits (measured by running it against a refused port).
+_BRAND_ALIASES_LIVE = "tests.integration.test_rag.test_brand_aliases_live"
+_BRAND_ALIASES_TEST = "test_real_rxnav_resolves_the_three_pairs"
+RXNAV_2267_WARNING = (
+    "WARNING  src.rag.brand_aliases:brand_aliases.py:107 brand_aliases: RxNav unavailable "
+    "while resolving 'Kisqali' (RxNav transport error: [Errno 101] Network is unreachable); "
+    "keeping curated aliases only for the remaining brands"
+)
+RXNAV_2267_KEYERROR = (
+    "KeyError: 'Kisqali'\n"
+    "tests/integration/test_rag/test_brand_aliases_live.py:32: in "
+    "test_real_rxnav_resolves_the_three_pairs\n"
+    '    assert "ribociclib" in out["Kisqali"]\n'
+    "E   KeyError: 'Kisqali'"
+)
+
+
+def _brand_alias_round_failed(reason: str) -> str:
+    warning = (
+        f"brand_aliases: RxNav unavailable while resolving 'Kisqali' ({reason}); "
+        "keeping curated aliases only for the remaining brands"
+    )
+    return (
+        f'AssertionError: RxNav brand-alias round did not complete: ["{warning}"]\n'
+        f'assert not ["{warning}"]'
+    )
+
+
+def test_2267_rxnav_connect_failure_in_the_brand_alias_test_is_upstream_transient(
+    tmp_path: Path,
+) -> None:
+    failure = _brand_alias_round_failed(
+        "RxNav transport error: ConnectError: [Errno 101] Network is unreachable"
+    )
+    result, outputs = _classify(
+        tmp_path,
+        _junit(
+            [(_BRAND_ALIASES_LIVE, _BRAND_ALIASES_TEST, failure)],
+            system_out={_BRAND_ALIASES_TEST: RXNAV_2267_WARNING},
+        ),
+    )
+    assert outputs.get("classification") == "upstream-transient", (outputs, result.stderr)
+
+
+def test_rxnav_5xx_in_the_brand_alias_test_is_upstream_transient(tmp_path: Path) -> None:
+    failure = _brand_alias_round_failed("RxNav HTTP 503: '<html>Service Unavailable</html>'")
+    _, outputs = _classify(tmp_path, _junit([(_BRAND_ALIASES_LIVE, _BRAND_ALIASES_TEST, failure)]))
+    assert outputs.get("classification") == "upstream-transient", outputs
+
+
+def test_2267_bare_keyerror_is_a_real_failure_even_inside_the_family(tmp_path: Path) -> None:
+    """The unreadable pre-fix shape stays a red alarm: the family registration
+    must not absorb a KeyError just because the captured log names an outage."""
+    result, outputs = _classify(
+        tmp_path,
+        _junit(
+            [(_BRAND_ALIASES_LIVE, _BRAND_ALIASES_TEST, RXNAV_2267_KEYERROR)],
+            system_out={_BRAND_ALIASES_TEST: RXNAV_2267_WARNING},
+        ),
+    )
+    assert outputs.get("classification") == "real", outputs
+    assert f"unrecognized {_BRAND_ALIASES_LIVE}.{_BRAND_ALIASES_TEST}" in " ".join(
+        result.stderr.split()
+    ), result.stderr
+
+
+def test_malformed_rxnav_payload_in_the_brand_alias_test_is_real(tmp_path: Path) -> None:
+    """A schema change makes ``_fetch_round`` log "unexpected <Type>" — a client
+    defect, with no upstream evidence."""
+    warning = (
+        "brand_aliases: unexpected TypeError while resolving 'Kisqali' via RxNav; "
+        "keeping curated aliases only for the remaining brands"
+    )
+    failure = (
+        f'AssertionError: RxNav brand-alias round did not complete: ["{warning}"]\n'
+        f'assert not ["{warning}"]'
+    )
+    _, outputs = _classify(tmp_path, _junit([(_BRAND_ALIASES_LIVE, _BRAND_ALIASES_TEST, failure)]))
+    assert outputs.get("classification") == "real", outputs
+
+
+@pytest.mark.parametrize(
+    "warning",
+    [
+        # An httpx error that escaped RxNavClient's RxNavError wrapper lands in
+        # _fetch_round's generic branch — a client defect that happens to carry
+        # a hard token (codex r1 HIGH).
+        "brand_aliases: unexpected ConnectError while resolving 'Kisqali' via RxNav; "
+        "keeping curated aliases only for the remaining brands",
+        "brand_aliases: RxNav client raised ReadTimeout outside the round (complete=False); "
+        "recording what was gathered",
+    ],
+)
+def test_brand_alias_failure_outside_the_rxnav_error_path_is_real(
+    tmp_path: Path, warning: str
+) -> None:
+    failure = (
+        f'AssertionError: RxNav brand-alias round did not complete: ["{warning}"]\n'
+        f'assert not ["{warning}"]'
+    )
+    _, outputs = _classify(tmp_path, _junit([(_BRAND_ALIASES_LIVE, _BRAND_ALIASES_TEST, failure)]))
+    assert outputs.get("classification") == "real", outputs
+
+
+def test_brand_alias_live_test_is_gated_on_an_independent_host() -> None:
+    """A family member must go RED when its provider is down (#1612), so its
+    network gate cannot probe the provider itself: a preflight to
+    rxnav.nlm.nih.gov turned an RxNav outage into a silent skip (codex r1 MED).
+    It shares the clinical-context gate, which probes an unrelated host."""
+    source = (REPO / "tests/integration/test_rag/test_brand_aliases_live.py").read_text()
+    assert "_live_gate import requires_network" in source
+    assert "requires_network" in source.split("pytestmark", 1)[1].split("]", 1)[0]
+    assert "rxnav.nlm.nih.gov" not in source
+
+
+def test_similarly_named_brand_alias_module_is_not_treated_as_the_live_suite(
+    tmp_path: Path,
+) -> None:
+    failure = _brand_alias_round_failed(
+        "RxNav transport error: ConnectError: [Errno 101] Network is unreachable"
+    )
+    cases = [(f"{_BRAND_ALIASES_LIVE}_regression", _BRAND_ALIASES_TEST, failure)]
     _, outputs = _classify(tmp_path, _junit(cases))
     assert outputs.get("classification") == "real", outputs
 

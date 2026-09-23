@@ -48,6 +48,11 @@ _CLINICAL_CLASSNAME_PREFIX = "tests.integration.test_clinical_context"
 _CLINICAL_FILE_PREFIX = "tests/integration/test_clinical_context"
 _UMLS_CLASSNAME = "tests.integration.test_kg.test_umls_uts_live"
 _UMLS_FILE = "tests/integration/test_kg/test_umls_uts_live.py"
+# #2267: the RxNav brand-alias live test. Its outage evidence is the logged
+# RxNav reason it puts in its own assertion message (a transport error names
+# the httpx class, a 5xx says "RxNav HTTP 5xx").
+_BRAND_ALIASES_CLASSNAME = "tests.integration.test_rag.test_brand_aliases_live"
+_BRAND_ALIASES_FILE = "tests/integration/test_rag/test_brand_aliases_live.py"
 
 # Hard evidence: the provider itself misbehaved on the wire. Sources: the
 # 08-24/08-25 outages ("ChEMBL HTTP 500", "HTTP 500 Internal Server Error"
@@ -62,6 +67,14 @@ _HARD = re.compile(
     r"|ConnectError|ReadError|RemoteProtocolError"
     r"|timed out|Timeout >\d",
     re.IGNORECASE,
+)
+
+# Not upstream, whatever tokens follow: brand_aliases logs these only when the
+# failure did NOT come through RxNavClient's RxNavError wrapper (an escaped
+# httpx error, a malformed payload, a constructor/close() crash) — client
+# defects, even when the escaped class is ConnectError (#2267).
+_NOT_UPSTREAM = re.compile(
+    r"brand_aliases: (?:unexpected \w+ while resolving|RxNav client raised \w+ outside the round)"
 )
 
 # Echo evidence: the fan-out degradation assertions report the provider fell
@@ -113,6 +126,8 @@ def _in_family(testcase: ET.Element) -> bool:
         or file_attr == _CLINICAL_FILE_PREFIX
         or file_attr.startswith(f"{_CLINICAL_FILE_PREFIX}/")
         or file_attr == _UMLS_FILE
+        or classname == _BRAND_ALIASES_CLASSNAME
+        or file_attr == _BRAND_ALIASES_FILE
     )
 
 
@@ -166,6 +181,8 @@ def classify(junit_path: Path) -> tuple[str, str]:
         if not _in_family(tc):
             verdict = "foreign"
         elif exception_type is not None and exception_type not in _UPSTREAM_EXCEPTION_TYPES:
+            verdict = "unrecognized"
+        elif _NOT_UPSTREAM.search(failure_text):
             verdict = "unrecognized"
         elif _HARD.search(failure_text):
             verdict = "hard"

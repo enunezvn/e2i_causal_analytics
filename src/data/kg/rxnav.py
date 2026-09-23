@@ -114,7 +114,11 @@ class RxNavClient:
                 headers={"Accept": "application/json"},
             )
         except httpx.HTTPError as exc:
-            raise RxNavError(f"RxNav transport error: {exc}") from exc
+            # Name the class: httpx's text is only the LAST address's errno, so a
+            # connect timeout on every IPv4 address reads "[Errno 101] Network is
+            # unreachable" (the IPv6 address tried last) on a host with no IPv6
+            # route (#2267).
+            raise RxNavError(f"RxNav transport error: {type(exc).__name__}: {exc}") from exc
         if response.status_code >= 400:
             raise RxNavError(f"RxNav HTTP {response.status_code}: {response.text[:200]!r}")
         try:

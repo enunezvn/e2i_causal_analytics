@@ -331,3 +331,27 @@ def test_rxcui_for_name_treats_a_null_id_group_as_no_match() -> None:
     with _client_with_handler(handler) as client:
         assert client.rxcui_for_name("nonesuch") is None
     assert calls == ["0", "2"]  # both stages saw the null and neither raised
+
+
+def test_transport_error_names_the_httpx_error_class() -> None:
+    """#2267: a connect failure must say it WAS a connect failure.
+
+    httpx's message alone is the socket errno of the LAST address tried
+    (``socket.create_connection`` keeps only the last error), so on a runner
+    with no IPv6 route every IPv4 connect timeout surfaces as ``[Errno 101]
+    Network is unreachable``. The class name is the evidence the nightly
+    classifier keys on (``ConnectError``/``ConnectTimeout``/``ReadTimeout``).
+
+    Real socket, not a MockTransport: a port that was just released on
+    loopback refuses the connection, so the real httpx transport raises.
+    """
+    import socket
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+
+    with RxNavClient(base=f"http://127.0.0.1:{port}/REST", timeout=2.0) as client:
+        with pytest.raises(RxNavError) as exc:
+            client.rxcui_for_name("Kisqali")
+    assert str(exc.value).startswith("RxNav transport error: ConnectError: "), str(exc.value)
