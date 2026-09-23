@@ -335,11 +335,6 @@ class RetrainingTriggerService:
         except Exception:
             performance_before = 0.0
 
-        # Generate new model version
-        base_version = model_version.rsplit("_", 1)[0] if "_" in model_version else model_version
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
-        new_version = f"{base_version}_retrained_{timestamp}"
-
         # Build training config
         training_config = self._build_training_config(reason, drift_score, performance_before)
 
@@ -353,6 +348,7 @@ class RetrainingTriggerService:
         # fails closed at execution). The row id becomes ml_retraining_history.model_id.
         from src.services.cohort_contract import (
             load_registry_cohort_contract,
+            load_registry_model_identity,
             merge_contracts,
         )
 
@@ -363,6 +359,25 @@ class RetrainingTriggerService:
         # Cohort identity → reaches execute_model_retraining → MLFoundationPipeline.
         if effective_cohort:
             training_config.update(effective_cohort)
+
+        # #2242: the candidate is a new VERSION of the registered model being retrained,
+        # so derive its version from the row's model_version (a "<uuid>_retrained_<ts>"
+        # from the sweep's uuid handle is 60 chars > ml_model_registry.model_version(50)).
+        # Retrains stay siblings off the base version, never "_retrained_" chains. The
+        # logical identity travels as training_config["retrain_of"]: the pipeline attaches
+        # the scope to the model's experiment and registers the candidate as
+        # (model_name, new_version) — the pair this history row records.
+        identity = await load_registry_model_identity(client, registry_model_id)
+        if identity:
+            base_version = identity["model_version"].split("_retrained_", 1)[0]
+        else:
+            base_version = (
+                model_version.rsplit("_", 1)[0] if "_" in model_version else model_version
+            )
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
+        new_version = f"{base_version}_retrained_{timestamp}"
+        if identity:
+            training_config["retrain_of"] = {**identity, "new_model_version": new_version}
         if config_overrides:
             training_config.update(config_overrides)
         training_config["approved_by"] = approved_by

@@ -166,8 +166,9 @@ class ModelDeployerAgent:
             initial_state["scope_spec"] = scope_spec_input
         if "feature_manifest_source" in input_data:
             initial_state["feature_manifest_source"] = input_data["feature_manifest_source"]
-        # #2207: the cohort contract the register_model node persists (migration 150).
-        for cohort_key in ("data_source", "target_outcome"):
+        # #2207: the cohort contract the register_model node persists (migration 150);
+        # #2242: the retrained model's identity (``retrain_of``) the candidate attaches to.
+        for cohort_key in ("data_source", "target_outcome", "retrain_of"):
             if input_data.get(cohort_key) is not None:
                 initial_state[cohort_key] = input_data[cohort_key]
 

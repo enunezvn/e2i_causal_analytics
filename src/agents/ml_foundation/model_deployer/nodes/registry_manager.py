@@ -968,6 +968,8 @@ async def _persist_model_registry_row(
     model_version: int,
     validation_metrics: Any,
     cohort: Optional[Dict[str, Any]] = None,
+    version_label: Optional[str] = None,
+    expected_experiment_id: Optional[str] = None,
 ) -> Optional[str]:
     """Write (idempotently) a REAL ``ml_model_registry`` row; return its id (str).
 
@@ -981,7 +983,14 @@ async def _persist_model_registry_row(
     ``cohort`` (#2207, migration 150): data_source / target_outcome /
     feature_manifest_source — written on the new row, healed onto a reused row's
     NULL columns (never overwritten).
+
+    #2242 retrain: ``version_label`` replaces ``str(model_version)`` as the row's
+    ``model_version`` (the retraining history's ``new_model_version``), and
+    ``expected_experiment_id`` (the retrained model's ``ml_experiments`` uuid) must be
+    the experiment the pipeline's id resolves to — else FAIL CLOSED, never a candidate
+    filed under another model's experiment.
     """
+    row_version = version_label or str(model_version)
     if client is None:
         logger.error(
             "ml_model_registry NOT written for '%s': no Supabase client (db_persisted=False)",
@@ -1007,6 +1016,17 @@ async def _persist_model_registry_row(
             "ml_experiments (db_persisted=False)",
             registered_model_name,
             experiment_id_str,
+        )
+        return None
+    if expected_experiment_id and str(experiment.id) != str(expected_experiment_id):
+        logger.error(
+            "ml_model_registry NOT written for '%s' v%s: experiment %r resolved to %s, "
+            "not the retrained model's experiment %s (db_persisted=False)",
+            registered_model_name,
+            row_version,
+            experiment_id_str,
+            experiment.id,
+            expected_experiment_id,
         )
         return None
 
@@ -1053,7 +1073,7 @@ async def _persist_model_registry_row(
     #    missing run id on either side is NOT a conflict (legitimate ``models:/``
     #    re-deploys) — name+version+experiment suffice; step 2 proved the pinned run.
     registry_repo = MLModelRegistryRepository(supabase_client=client)
-    existing = await registry_repo.get_by_name_version(registered_model_name, str(model_version))
+    existing = await registry_repo.get_by_name_version(registered_model_name, row_version)
     if existing and existing.id:
         if str(existing.experiment_id) != str(experiment.id):
             logger.error(
@@ -1061,7 +1081,7 @@ async def _persist_model_registry_row(
                 "experiment %s, not the resolved experiment %s — name+version collision "
                 "(db_persisted=False)",
                 registered_model_name,
-                model_version,
+                row_version,
                 existing.experiment_id,
                 experiment.id,
             )
@@ -1073,7 +1093,7 @@ async def _persist_model_registry_row(
                 "from run %s but this deployment references run %s — same name+version+"
                 "experiment, different source run (provenance collision, db_persisted=False)",
                 registered_model_name,
-                model_version,
+                row_version,
                 existing_run_id,
                 run_id,
             )
@@ -1081,7 +1101,7 @@ async def _persist_model_registry_row(
         logger.info(
             "ml_model_registry row already present for %s v%s (experiment %s) — reusing %s",
             registered_model_name,
-            model_version,
+            row_version,
             experiment.id,
             existing.id,
         )
@@ -1111,7 +1131,7 @@ async def _persist_model_registry_row(
         model = await registry_repo.register_model(
             experiment_id=experiment.id,
             model_name=registered_model_name,
-            model_version=str(model_version),
+            model_version=row_version,
             mlflow_run_id=run_id or run.mlflow_run_id or "",
             mlflow_model_uri=model_uri,
             algorithm=run.algorithm,
@@ -1128,9 +1148,7 @@ async def _persist_model_registry_row(
         err = str(e).lower()
         is_unique = "23505" in err or "unique" in err or "duplicate key" in err
         if is_unique:
-            raced = await registry_repo.get_by_name_version(
-                registered_model_name, str(model_version)
-            )
+            raced = await registry_repo.get_by_name_version(registered_model_name, row_version)
             raced_run_id = (
                 ((raced.mlflow_run_id or "").strip() or None) if (raced and raced.id) else None
             )
@@ -1145,7 +1163,7 @@ async def _persist_model_registry_row(
                     "ml_model_registry insert raced for %s v%s — reusing "
                     "concurrently written row %s",
                     registered_model_name,
-                    model_version,
+                    row_version,
                     raced.id,
                 )
                 return str(raced.id)
@@ -1154,13 +1172,13 @@ async def _persist_model_registry_row(
                 "existing row is missing, foreign-experiment, or a different source run "
                 "(db_persisted=False)",
                 registered_model_name,
-                model_version,
+                row_version,
             )
             return None
         logger.error(
             "ml_model_registry NOT written for '%s' v%s: insert failed (%s) (db_persisted=False)",
             registered_model_name,
-            model_version,
+            row_version,
             e,
         )
         return None
@@ -1172,7 +1190,7 @@ async def _persist_model_registry_row(
         logger.error(
             "ml_model_registry row not confirmed in DB for %s v%s (db_persisted=False)",
             registered_model_name,
-            model_version,
+            row_version,
         )
         return None
 
@@ -1180,7 +1198,7 @@ async def _persist_model_registry_row(
         "Wrote ml_model_registry row %s (%s v%s, experiment %s)",
         model.id,
         registered_model_name,
-        model_version,
+        row_version,
         experiment.id,
     )
     return str(model.id)
@@ -1228,9 +1246,30 @@ async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
                 "registration_successful": False,
             }
 
+        # #2242: a retrain's candidate is a new version of the model being retrained —
+        # registered under ITS name (MLflow numbers the version) and written to
+        # ml_model_registry as (model_name, the history's new_model_version) inside ITS
+        # experiment. A partial identity fails closed: registering it under the
+        # generated deployment name would recreate the orphan this replaces.
+        retrain_of = state.get("retrain_of") or None
+        registry_name = deployment_name
+        if retrain_of:
+            missing = [
+                k
+                for k in ("model_name", "new_model_version", "experiment_id")
+                if not retrain_of.get(k)
+            ]
+            if missing:
+                return {
+                    "error": f"retrain_of is missing {missing} — candidate not registered",
+                    "error_type": "incomplete_retrain_identity",
+                    "registration_successful": False,
+                }
+            registry_name = retrain_of["model_name"]
+
         # Try real MLflow registration first
         registered_model_name, model_version, current_stage = await _register_model_mlflow(
-            model_uri, deployment_name
+            model_uri, registry_name
         )
 
         # F4 (audit): capture whether the REAL MLflow registration succeeded BEFORE
@@ -1246,7 +1285,7 @@ async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
                 "(not a real registry write)",
                 model_uri,
             )
-            registered_model_name = deployment_name
+            registered_model_name = registry_name
             model_version = 1
             current_stage = "None"
 
@@ -1266,6 +1305,8 @@ async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
                     model_version=int(model_version) if model_version is not None else 1,
                     validation_metrics=state.get("validation_metrics"),
                     cohort=_cohort_contract_from_state(state),
+                    version_label=(retrain_of or {}).get("new_model_version"),
+                    expected_experiment_id=(retrain_of or {}).get("experiment_id"),
                 )
             except Exception as e:
                 logger.error("ml_model_registry persistence raised (fail-closed): %s", e)

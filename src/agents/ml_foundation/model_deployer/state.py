@@ -262,6 +262,12 @@ class ModelDeployerState(BaseAgentSchema):
     data_source: Optional[Any] = None
     target_outcome: Optional[str] = None
 
+    # #2242: set on a retrain only — the ml_model_registry row being retrained
+    # (model_name / experiment_id / new_model_version, built by the retraining trigger).
+    # register_model registers the candidate as (model_name, new_model_version) inside
+    # that model's experiment instead of a generated "<experiment_id>_deployment" name.
+    retrain_of: Optional[Dict[str, Any]] = None
+
     # === OUTPUT FIELDS (Final) ===
 
     # Deployment manifest (K8s / serving)
