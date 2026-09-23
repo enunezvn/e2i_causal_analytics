@@ -1266,6 +1266,25 @@ async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
                     "registration_successful": False,
                 }
             registry_name = retrain_of["model_name"]
+            # Preflight BEFORE MLflow (codex r1): the pipeline's experiment must be the
+            # retrained model's, else no MLflow version is created under its name.
+            preflight_client = await _get_async_supabase_client_or_none()
+            resolved = None
+            if preflight_client is not None and experiment_id:
+                from src.repositories.ml_experiment import MLExperimentRepository
+
+                resolved = await MLExperimentRepository(
+                    supabase_client=preflight_client
+                ).get_by_mlflow_id(experiment_id)
+            if not (resolved and str(resolved.id) == str(retrain_of["experiment_id"])):
+                return {
+                    "error": (
+                        f"experiment {experiment_id!r} is not the retrained model's "
+                        f"experiment {retrain_of['experiment_id']} — candidate not registered"
+                    ),
+                    "error_type": "retrain_experiment_mismatch",
+                    "registration_successful": False,
+                }
 
         # Try real MLflow registration first
         registered_model_name, model_version, current_stage = await _register_model_mlflow(
@@ -1311,6 +1330,20 @@ async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
             except Exception as e:
                 logger.error("ml_model_registry persistence raised (fail-closed): %s", e)
                 model_registry_id = None
+            if retrain_of and model_registry_id is None:
+                # #2242 (codex r1): a retrain's deliverable IS the linked registry row;
+                # an MLflow version without it must not be promoted as that model.
+                return {
+                    "error": (
+                        f"retrain candidate {registered_model_name} "
+                        f"v{retrain_of['new_model_version']} was not written to "
+                        "ml_model_registry (see the fail-closed log above)"
+                    ),
+                    "error_type": "retrain_candidate_not_persisted",
+                    "registration_successful": False,
+                    "registered_model_name": registered_model_name,
+                    "model_registry_id": None,
+                }
 
         return {
             "registered_model_name": registered_model_name,

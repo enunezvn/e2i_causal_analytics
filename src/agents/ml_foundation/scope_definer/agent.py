@@ -476,6 +476,11 @@ class ScopeDefinerAgent:
             "experiment_id": experiment_id,
             "experiment_name": name,
             "scope_spec": scope_spec,
+            # criteria_validator stamps the minted id here; one identity per scope.
+            "success_criteria": {
+                **(output.get("success_criteria") or {}),
+                "experiment_id": experiment_id,
+            },
         }
 
     async def _update_procedural_memory(self, output: Dict[str, Any]) -> None:

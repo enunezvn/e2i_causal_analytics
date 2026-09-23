@@ -433,7 +433,8 @@ async def test_registration_refuses_a_candidate_outside_the_retrained_models_exp
     scoped = await _scope(db, pipeline_input)
     wrong = dict(pipeline_input["retrain_of"], experiment_id=ids["Remibrutinib"]["exp"])
     out, _ = await _register(db, scoped.experiment_id, wrong, run_id="run-a")
-    assert out["model_registry_id"] is None
+    assert out.get("model_registry_id") is None
+    assert out["registration_successful"] is False
     assert len(db.rows("ml_model_registry")) == 2  # only the two parents
 
 
@@ -455,3 +456,111 @@ async def test_a_non_retrain_run_registers_exactly_as_before():
     row = next(r for r in db.rows("ml_model_registry") if r["id"] == out["model_registry_id"])
     assert row["model_name"] == "exp_kisq_al_20260923054245_ad8158_deployment"
     assert row["model_version"] == "1"
+
+
+# ------------------------------------------------------- codex r1 (2026-09-23) findings
+
+
+async def _trigger_with(db: FakeAsyncSupabase, handle: str, **kwargs: Any) -> Dict[str, Any]:
+    service = RetrainingTriggerService()
+    drift_repo = MagicMock()
+    drift_repo.get_latest_drift_status = AsyncMock(return_value=[])
+    tracker = MagicMock()
+    tracker.get_performance_trend = AsyncMock(side_effect=Exception("no perf"))
+    with (
+        patch(
+            "src.repositories.drift_monitoring.get_drift_monitoring_client",
+            AsyncMock(return_value=db),
+        ),
+        patch("src.repositories.drift_monitoring.DriftHistoryRepository", return_value=drift_repo),
+        patch("src.services.performance_tracking.get_performance_tracker", return_value=tracker),
+        patch("src.tasks.drift_monitoring_tasks.execute_model_retraining") as mock_task,
+    ):
+        mock_task.delay = MagicMock(return_value=MagicMock(id="task-1"))
+        await service.trigger_retraining(
+            model_version=handle, reason=TriggerReason.MANUAL, cohort=None, **kwargs
+        )
+        return mock_task.delay.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_r1_a_registered_row_without_a_resolvable_identity_is_refused():
+    """codex r1 #2: a resolved registry row whose identity cannot be read must not fall
+    back to the orphaning legacy retrain."""
+    db, ids = _goldstd_db()
+    db.rows("ml_experiments")[:] = [
+        r for r in db.rows("ml_experiments") if r["id"] != ids["Kisqali"]["exp"]
+    ]
+    with pytest.raises(RuntimeError, match="identity"):
+        await _trigger_with(db, ids["Kisqali"]["model"])
+    assert db.rows("ml_retraining_history") == []  # nothing recorded, nothing queued
+
+
+@pytest.mark.asyncio
+async def test_r1_config_overrides_cannot_replace_the_retrained_identity():
+    db, ids = _goldstd_db()
+    spoof = {"model_name": "initiation_remibrutinib_goldstd_lr_v1", "experiment_id": "x"}
+    queued = await _trigger_with(
+        db, ids["Kisqali"]["model"], config_overrides={"retrain_of": spoof}
+    )
+    assert queued["training_config"]["retrain_of"]["model_name"] == (
+        "initiation_kisqali_goldstd_lr_v1"
+    )
+    assert queued["training_config"]["retrain_of"]["experiment_id"] == ids["Kisqali"]["exp"]
+
+
+@pytest.mark.asyncio
+async def test_r1_same_minute_retrains_get_distinct_bounded_versions():
+    db, ids = _goldstd_db()
+    first = await _trigger_with(db, ids["Kisqali"]["model"])
+    second = await _trigger_with(db, ids["Kisqali"]["model"])
+    assert first["new_version"] != second["new_version"]
+    db.rows("ml_model_registry")[0]["model_version"] = "v" * 50  # longest legal version
+    long = await _trigger_with(db, ids["Kisqali"]["model"])
+    assert len(long["new_version"]) <= 50
+    assert "_retrained_" in long["new_version"]
+
+
+@pytest.mark.asyncio
+async def test_r1_success_criteria_carry_the_attached_experiment_id():
+    """codex r1 #5: one experiment identity per scope, including the reuse path."""
+    db, ids = _goldstd_db()
+    db.rows("ml_experiments")[0]["mlflow_experiment_id"] = "exp_kisq_al_existing"
+    pipeline_input = _cohort_input_from_training_config(
+        (await _trigger(db, ids["Kisqali"]["model"]))["training_config"]
+    )
+    result = await _scope(db, pipeline_input)
+    assert result.experiment_id == "exp_kisq_al_existing"
+    assert result.success_criteria["experiment_id"] == "exp_kisq_al_existing"
+    assert result.scope_spec["experiment_id"] == "exp_kisq_al_existing"
+
+
+@pytest.mark.asyncio
+async def test_r1_a_retrain_candidate_that_is_not_persisted_fails_registration():
+    """codex r1 #1: for a retrain, a missing ml_model_registry row is a failed
+    registration (the graph must not promote an unlinked MLflow version)."""
+    db, ids = _goldstd_db()
+    pipeline_input = _cohort_input_from_training_config(
+        (await _trigger(db, ids["Kisqali"]["model"]))["training_config"]
+    )
+    scoped = await _scope(db, pipeline_input)
+    out, _ = await _register(db, scoped.experiment_id, pipeline_input["retrain_of"], "run-a")
+    assert out["registration_successful"] is True  # control: the happy path
+    # the same candidate version again from a DIFFERENT run -> provenance collision
+    out2, _ = await _register(db, scoped.experiment_id, pipeline_input["retrain_of"], "run-b")
+    assert out2["model_registry_id"] is None
+    assert out2["registration_successful"] is False
+    assert out2.get("error")
+
+
+@pytest.mark.asyncio
+async def test_r1_experiment_mismatch_is_refused_before_mlflow_is_touched():
+    db, ids = _goldstd_db()
+    pipeline_input = _cohort_input_from_training_config(
+        (await _trigger(db, ids["Kisqali"]["model"]))["training_config"]
+    )
+    scoped = await _scope(db, pipeline_input)
+    wrong = dict(pipeline_input["retrain_of"], experiment_id=ids["Remibrutinib"]["exp"])
+    out, mlflow = await _register(db, scoped.experiment_id, wrong, run_id="run-a")
+    assert out["registration_successful"] is False
+    mlflow.assert_not_awaited()

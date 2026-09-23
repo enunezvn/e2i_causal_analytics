@@ -983,6 +983,32 @@ async def _execute_real_retraining(
             "job marked failed (no metric written)"
         )
 
+    # #2242 (codex r1): a retrain's deliverable is a new version of the retrained model —
+    # the ml_model_registry row (retrain_of.model_name, retrain_of.new_model_version) this
+    # history row points at. The deployer fails closed on it, so read it back: no row ->
+    # the job is NOT completed (a metric with nothing linked to promote).
+    retrain_of = pipeline_input.get("retrain_of")
+    if retrain_of:
+        try:
+            linked = await (
+                repo.client.table("ml_model_registry")
+                .select("id")
+                .eq("model_name", retrain_of.get("model_name"))
+                .eq("model_version", retrain_of.get("new_model_version"))
+                .limit(1)
+                .execute()
+            )
+            linked_rows = getattr(linked, "data", None) or []
+        except Exception as e:  # noqa: BLE001 — unverifiable link is not a completion
+            linked_rows = []
+            logger.error(f"Retraining {retraining_id}: candidate lookup failed ({e})")
+        if not linked_rows:
+            return await _mark_failed(
+                f"validation_auc={performance_after!r} but no ml_model_registry row "
+                f"{retrain_of.get('model_name')!r} v{retrain_of.get('new_model_version')!r} "
+                "— the candidate is not linked to the retrained model; job marked failed"
+            )
+
     # Real metric + success criteria met — record completion. The pipeline also
     # gated deployment on the regulatory AUC/leakage gate.
     await service.complete_retraining(
