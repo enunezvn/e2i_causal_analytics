@@ -84,7 +84,9 @@ def mirror_audit_sidecars() -> Dict[str, Any]:
             "SUPABASE_DB_URL/DATABASE_URL is unset"
         )
 
-    cmd = [sys.executable, str(_MIRROR_SCRIPT), "--artifacts-dir", artifacts_dir]
+    # argv carries nothing from the environment: the script defaults --artifacts-dir
+    # to $ADAPTIVE_VALIDITY_ARTIFACTS_DIR, which the child inherits (checked above).
+    cmd = [sys.executable, str(_MIRROR_SCRIPT)]
     env = {**os.environ, "DATABASE_URL": db_url}
     try:
         proc = subprocess.run(
