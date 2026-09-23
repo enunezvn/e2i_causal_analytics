@@ -535,6 +535,14 @@ async def _log_model_artifact(
             name="model",
             flavor=flavor,
         )
+        if model_uri is None:
+            # #2280: the connector swallows mlflow's error (and logs it) and returns None.
+            logger.error(
+                "Model artifact NOT logged (flavor=%s, model_uri=None); see the "
+                "'Failed to log model' error above",
+                flavor,
+            )
+            return None
         logger.info(f"Successfully logged model: {model_uri}")
         return cast(str, model_uri)
     except Exception as e:
@@ -547,6 +555,9 @@ async def _log_model_artifact(
                 name="model",
                 flavor="sklearn",
             )
+            if model_uri is None:
+                logger.error("Model artifact NOT logged with the sklearn fallback either")
+                return None
             logger.info(f"Successfully logged model with sklearn fallback: {model_uri}")
             return cast(str, model_uri)
         except Exception as e2:
