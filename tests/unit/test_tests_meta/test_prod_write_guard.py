@@ -841,19 +841,123 @@ _GUARDED_FILES: dict[str, bool] = {
 }
 
 
+def _fixture_with_yield(tree: ast.Module, name: str) -> ast.FunctionDef:
+    """The named fixture function, which must contain the ``yield`` the teardown follows."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    raise AssertionError(f"no function {name!r}")
+
+
+def _calls(node: ast.AST, func_name: str) -> list[ast.Call]:
+    return [
+        c
+        for c in ast.walk(node)
+        if isinstance(c, ast.Call) and isinstance(c.func, ast.Name) and c.func.id == func_name
+    ]
+
+
+def _first_yield_line(fn: ast.FunctionDef) -> int:
+    yields = [n for n in ast.walk(fn) if isinstance(n, ast.Yield)]
+    assert len(yields) == 1, f"{fn.name}: expected exactly one yield, got {len(yields)}"
+    return yields[0].lineno
+
+
+#: The live-writing fixture in each file (the one whose teardown follows its ``yield``).
+_LIVE_FIXTURE: dict[str, str] = {
+    "test_per_hcp_rollup_late_arrival.py": "planted",
+    "test_business_metrics_per_hcp_etl_integration.py": "synthetic_dataset",
+    "test_territory_metrics_etl_integration.py": "synthetic_dataset",
+    "test_patient_adherence_etl_integration.py": "synthetic_dataset",
+    "test_etl_provenance_inheritance_895.py": "mixed_substrate",
+}
+
+
 @pytest.mark.parametrize("filename", sorted(_GUARDED_FILES))
 def test_every_live_writing_file_re_censuses_after_its_teardown(filename: str) -> None:
-    """#2215, family-wide: the protocol is only as good as its adoption. Each live-writing
-    file must re-read its specs AFTER its own deletes (a static pin -- the files themselves
-    are CI-only). A file that drops the call drops the report."""
-    source = (_INTEGRATION_DIR / filename).read_text()
+    """#2215, family-wide: the protocol is only as good as its adoption. In each file's
+    live-writing fixture the census comes BEFORE its ``yield`` and the re-census AFTER it
+    (codex r1 on this lane: comparing against the file's first textual ``yield`` -- the
+    ``db_conn`` fixture's -- would let a report moved into setup pass). A static pin: the
+    files themselves are CI-only. A file that drops the call drops the report."""
+    tree = ast.parse((_INTEGRATION_DIR / filename).read_text())
+    fixture = _fixture_with_yield(tree, _LIVE_FIXTURE[filename])
+    yield_line = _first_yield_line(fixture)
     if _GUARDED_FILES[filename]:
-        assert "require_isolated_windows(" in source, filename
-    assert "require_windows_still_isolated(" in source, (
-        f"{filename} does not re-census its windows after its teardown (#2215)"
+        before = _calls(fixture, "require_isolated_windows")
+        assert before and all(c.lineno < yield_line for c in before), (
+            f"{filename}: {fixture.name} must census before its yield"
+        )
+    after = _calls(fixture, "require_windows_still_isolated")
+    assert len(after) == 1, (
+        f"{filename}: {fixture.name} must re-census exactly once after its teardown (#2215)"
     )
-    # The re-census must come after the fixture hands control back, i.e. in the teardown.
-    assert source.index("require_windows_still_isolated(") > source.index("yield"), filename
+    assert after[0].lineno > yield_line, f"{filename}: the re-census must follow the yield"
+
+
+def test_the_territory_file_re_censuses_the_window_for_surviving_foreign_rows() -> None:
+    """codex r1 (HIGH) on this lane: the prefix-teardown territory spec waives leg 3 and
+    carries leg 2 on ``hcp_profiles``. A foreign profile that appears after the census and
+    vanishes before the teardown leaves a run-written ``territory_metrics`` row for its
+    territory that the prefix delete cannot reach and the key-space leg can no longer see.
+    So the post-teardown call must ALSO pass the window-sweeping variant, whose leg 3 counts
+    every foreign ``territory_metrics`` row in the window -- after the teardown, that is
+    exactly "did a foreign row survive"."""
+    tree = ast.parse((_INTEGRATION_DIR / "test_territory_metrics_etl_integration.py").read_text())
+    fixture = _fixture_with_yield(tree, "synthetic_dataset")
+    (after,) = _calls(fixture, "require_windows_still_isolated")
+    sweeping = [
+        c
+        for c in _calls(after, "territory_rollup_spec")
+        if any(
+            k.arg == "teardown_deletes_window"
+            and isinstance(k.value, ast.Constant)
+            and k.value.value is True
+            for k in c.keywords
+        )
+    ]
+    assert sweeping, "the post-teardown census must include teardown_deletes_window=True"
+
+
+def test_the_late_arrival_teardown_re_reads_the_selection_before_it_deletes() -> None:
+    """codex r1 (HIGH) on this lane: a selected date that appeared between the recording
+    and the run fails the in-test assertion, but the teardown then deleted the run's rows
+    only on the RECORDED dates and the fixture's range specs cannot see a date outside
+    [TUESDAY, GUARD_DATE_END). The teardown must re-read the run's own selection (while the
+    planted rows that drive it still exist) and sweep the union, and the arrival spec must
+    be part of the final re-census."""
+    tree = ast.parse((_INTEGRATION_DIR / "test_per_hcp_rollup_late_arrival.py").read_text())
+    fixture = _fixture_with_yield(tree, "planted")
+    yield_line = _first_yield_line(fixture)
+    (after,) = _calls(fixture, "require_windows_still_isolated")
+    re_read = [c for c in _calls(fixture, "selected_metric_dates") if c.lineno > yield_line]
+    assert re_read, "the teardown must re-read the arrival selection before deleting"
+    assert re_read[0].lineno < after.lineno
+    # The arrival spec is built inside the test; the fixture reaches it through its state.
+    assert any(
+        isinstance(a, ast.Starred) and isinstance(a.value, ast.Subscript) for a in after.args
+    ), "the final re-census must include the specs the test recorded in the fixture state"
+
+
+def test_the_895_report_runs_while_the_window_lock_is_still_held() -> None:
+    """codex r1 (MEDIUM) on this lane: the 895 fixture releases its advisory lock in a
+    ``finally``; a waiting invocation could then plant into the window before the first
+    invocation's re-census, which would report the second's rows as its own foreign
+    landing. The report and the re-census must run before the unlock."""
+    tree = ast.parse((_INTEGRATION_DIR / "test_etl_provenance_inheritance_895.py").read_text())
+    fixture = _fixture_with_yield(tree, "mixed_substrate")
+    yield_line = _first_yield_line(fixture)
+    (after,) = _calls(fixture, "require_windows_still_isolated")
+    unlocks = [
+        n.lineno
+        for n in ast.walk(fixture)
+        if isinstance(n, ast.Constant)
+        and isinstance(n.value, str)
+        and "pg_advisory_unlock" in n.value
+        and n.lineno > yield_line
+    ]
+    assert unlocks, "the teardown must release the window lock"
+    assert after.lineno < max(unlocks), "the re-census must run before the lock is released"
 
 
 @pytest.mark.parametrize("filename", sorted(_GUARDED_FILES))
@@ -862,19 +966,23 @@ def test_no_live_writing_file_sweeps_territory_metrics_by_date_without_the_runs_
 ) -> None:
     """A date-scoped DELETE on ``territory_metrics`` destroys whatever landed on those dates
     after the census (#2215's second harm). A date-scoped delete may stay only when it is
-    also keyed -- to the run's own transaction id (``xmin``, as #2213 established: rows the
-    run did not write are reported, not swept) or to the file's own planted territory ids."""
-    # Read the statements as the parser does: adjacent string literals are one constant,
-    # so a predicate on a second line is part of the same statement, not a separate one.
+    also keyed -- to the file's own planted territory ids, or to the run's own inserts. The
+    run's inserts are the rows carrying BOTH the run's transaction id (``xmin``, #2213) and
+    the run's transaction timestamp (``created_at``: the upsert stamps ``NOW()`` on insert
+    and its ON CONFLICT arm never touches it, so a foreign row the run OVERWROTE keeps its
+    own ``created_at`` while taking the run's ``xmin`` -- codex r1 HIGH on this lane: the
+    xid alone would sweep it). The scan is case-insensitive over every string constant."""
     tree = ast.parse((_INTEGRATION_DIR / filename).read_text())
     statements = [
         node.value
         for node in ast.walk(tree)
         if isinstance(node, ast.Constant)
         and isinstance(node.value, str)
-        and node.value.lstrip().startswith("DELETE FROM territory_metrics WHERE metric_date")
+        and re.search(r"delete\s+from\s+territory_metrics", node.value, re.IGNORECASE)
     ]
     for statement in statements:
-        assert "xmin" in statement or "territory_id" in statement, (
-            f"{filename}: {statement!r} sweeps by date alone"
+        keyed_by_id = "territory_id" in statement
+        keyed_by_run = "xmin" in statement and "created_at" in statement
+        assert keyed_by_id or keyed_by_run, (
+            f"{filename}: {statement!r} is not keyed to what the run owns"
         )
