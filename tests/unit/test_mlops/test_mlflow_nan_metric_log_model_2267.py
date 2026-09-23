@@ -151,6 +151,6 @@ async def test_trainer_logger_does_not_report_success_when_the_model_is_not_logg
     assert result["mlflow_model_uri"] is None
     assert result["mlflow_status"] != "success"
     assert result["mlflow_run_id"], "the run itself (params, metrics) was still logged"
-    assert not any(
-        "Successfully logged model" in r.getMessage() for r in caplog.records
-    ), "a None model URI must never be logged as a success"
+    assert not any("Successfully logged model" in r.getMessage() for r in caplog.records), (
+        "a None model URI must never be logged as a success"
+    )

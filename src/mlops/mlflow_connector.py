@@ -48,6 +48,7 @@ Version: 1.0.0 (Phase 5 - Initial Implementation)
 
 import asyncio
 import logging
+import math
 import os
 import threading
 import time
@@ -823,13 +824,28 @@ class MLflowConnector:
     async def _log_metrics(
         self, run_id: str, metrics: Dict[str, float], step: Optional[int] = None
     ) -> None:
-        """Log metrics to a run."""
+        """Log metrics to a run.
+
+        NaN values are not logged (#2267). NaN is how the evaluators mark a
+        metric as undefined (e.g. the calibration slope below its n_pos/n_neg
+        stability guard), and MLflow 3.x cannot carry it: ``log_model`` re-logs
+        every run metric to link it to the LoggedModel, the SQL store's dedup
+        compares values and ``nan != nan``, so the NaN row is re-inserted and
+        the metrics primary key fails the whole ``log_model``. An undefined
+        metric is recorded as absent, the same as a ``None`` metric.
+        """
         if not self._enabled:
             return
+
+        undefined = sorted(k for k, v in metrics.items() if _is_nan(v))
+        if undefined:
+            logger.info(f"Not logging undefined (NaN) metrics: {undefined}")
 
         try:
             assert self._mlflow is not None
             for key, value in metrics.items():
+                if key in undefined:
+                    continue
                 self._mlflow.log_metric(key, value, step=step)
             self.circuit_breaker.record_success()
         except Exception as e:
@@ -1291,6 +1307,14 @@ class AutoLogger:
     async def disable_autolog(self, framework: str = "sklearn") -> None:
         """Disable autologging for a framework."""
         await self.enable_autolog(framework=framework, disable=True)
+
+
+def _is_nan(value: Any) -> bool:
+    """Whether a metric value is NaN (Python, numpy or 0-d array scalars)."""
+    try:
+        return math.isnan(float(value))
+    except (TypeError, ValueError):
+        return False
 
 
 # ============================================================================
