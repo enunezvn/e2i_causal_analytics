@@ -1193,10 +1193,13 @@ class ExpertReviewGate:
         if not self.repository:
             return 0
 
-        pending = await self.repository.get_pending_reviews(brand=brand)
         # The runtime queue only (#2244): pending Lane B initial_dag reviews are
-        # not consults waiting on this gate.
-        return len(runtime_review_queue(pending))
+        # not consults waiting on this gate. Counted by the summary, which reads
+        # every row -- ``get_pending_reviews`` is the UI page reader and applies
+        # its 50-row limit BEFORE any queue filter, so filtering its result
+        # would undercount once the other queue fills the page (codex r4 LOW).
+        summary = await self.repository.get_review_summary(brand, runtime_only=True)
+        return int(summary.get("pending", 0))
 
     async def get_expiring_dag_count(
         self,

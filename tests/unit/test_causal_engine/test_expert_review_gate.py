@@ -769,18 +769,21 @@ class TestExpertReviewGateStatus:
 
     @pytest.mark.asyncio
     async def test_get_pending_review_count(self, mock_repo):
-        """Test get_pending_review_count."""
+        """Test get_pending_review_count -- the runtime-queue summary count, not
+        the UI page reader (whose 50-row limit precedes any queue filter, #2244)."""
+        mock_repo.get_review_summary = AsyncMock(return_value={"pending": 2, "approved": 9})
         mock_repo.get_pending_reviews = AsyncMock(
             return_value=[
-                {"review_id": "rev-1"},
-                {"review_id": "rev-2"},
+                {"review_id": f"page-{i}", "review_type": "initial_dag"} for i in range(50)
             ]
         )
 
         gate = ExpertReviewGate(repository=mock_repo)
-        count = await gate.get_pending_review_count()
+        count = await gate.get_pending_review_count(brand="b")
 
         assert count == 2
+        mock_repo.get_review_summary.assert_awaited_once_with("b", runtime_only=True)
+        mock_repo.get_pending_reviews.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_get_expiring_dag_count(self, mock_repo):
@@ -801,10 +804,6 @@ class TestExpertReviewGateStatus:
     async def test_monitoring_counts_the_runtime_queue_only(self, mock_repo):
         """#2244 (codex r1 LOW): five pending Lane B ``initial_dag`` reviews are
         not five runtime consults waiting on the gate."""
-        mock_repo.get_pending_reviews = AsyncMock(
-            return_value=[{"review_id": f"a{i}", "review_type": "initial_dag"} for i in range(5)]
-            + [{"review_id": "rt", "review_type": "dag_approval"}]
-        )
         mock_repo.get_expiring_reviews = AsyncMock(
             return_value=[
                 {"review_id": "a", "review_type": "initial_dag"},
@@ -827,7 +826,12 @@ class TestExpertReviewGateStatus:
         assert await gate.get_expiring_dag_count(days=14) == 1
         status = await gate.get_gate_status()
         assert status["healthy"] is True
-        mock_repo.get_review_summary.assert_awaited_once_with(None, runtime_only=True)
+        assert status["pending_reviews"] == 1
+        # both the count and the status read the runtime-only summary
+        assert mock_repo.get_review_summary.await_args_list == [
+            ((None,), {"runtime_only": True}),
+            ((None,), {"runtime_only": True}),
+        ]
 
     @pytest.mark.asyncio
     async def test_get_gate_status_healthy(self, mock_repo):
