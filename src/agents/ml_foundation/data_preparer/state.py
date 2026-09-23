@@ -75,11 +75,13 @@ class DataPreparerState(BaseAgentSchema):
     test_df: Optional[Any] = None  # pandas DataFrame (test split)
     holdout_df: Optional[Any] = None  # pandas DataFrame (holdout split)
 
-    # Sampling-frame audit (advisory; emitted by audit_sampling_frame node)
+    # Sampling-frame audit (emitted by audit_sampling_frame node).
     # Compares train_df distribution to scope_spec["deployment_reference"].
-    # Failures are non-blocking: status surfaces in the report, never in
-    # blocking_issues. See nodes/sampling_frame_audit.py for the report
-    # schema.
+    # Drift below scope_spec["sampling_frame_max_drift"] (default 0.3) is
+    # advisory and surfaces only in the report; ABOVE it the node appends a
+    # ``"sampling_frame_drift: ..."`` entry to blocking_issues and mirrors the
+    # detail into report["blocking_detail"] (``5749b974c``). See
+    # nodes/sampling_frame_audit.py for the report schema.
     sampling_frame_audit_report: Optional[Dict[str, Any]] = None
 
     # Schema validation (Pandera)

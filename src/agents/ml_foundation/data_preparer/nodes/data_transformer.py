@@ -15,6 +15,7 @@ import pandas as pd
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import LabelEncoder, MinMaxScaler, OneHotEncoder, StandardScaler
 
+from ..blocking_issues import KIND_DATA_TRANSFORM, merge_blocking_issues
 from ..state import DataPreparerState
 
 logger = logging.getLogger(__name__)
@@ -547,7 +548,14 @@ async def transform_data(state: DataPreparerState) -> Dict[str, Any]:
         return {
             "error": str(e),
             "error_type": "transformation_error",
-            "blocking_issues": [f"Data transformation failed: {str(e)}"],
+            # Merge rather than replace: the channel has no reducer, so a
+            # bare list would wipe the schema / QC / GE entries this node sits
+            # downstream of (#2283).
+            "blocking_issues": merge_blocking_issues(
+                state.get("blocking_issues"),
+                [f"failed: {str(e)}"],
+                kind=KIND_DATA_TRANSFORM,
+            ),
         }
 
 

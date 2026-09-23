@@ -617,10 +617,11 @@ async def finalize_output(state: DataPreparerState) -> Dict[str, Any]:
         # producer-side bug must never block the existing QC gate.
         role_attributions = _derive_role_attributions_safely(state)
 
-        # Update state. ``blocking_issues`` is propagated explicitly so that
-        # the sampling-frame audit's re-promoted entry (if any) survives into
-        # the final state — otherwise ``run_quality_checks``' fresh list
-        # remains the last-write-wins value.
+        # Update state. ``blocking_issues`` is propagated explicitly so the
+        # gate's view of the channel is what the final state carries. (It used
+        # to be echoed here to keep the sampling-frame audit's re-promoted
+        # entry alive against ``run_quality_checks``' fresh list; #2283 removed
+        # that re-promotion by fixing the overwrite at its source.)
         updates = {
             "gate_passed": gate_passed,
             "qc_passed": qc_passed,

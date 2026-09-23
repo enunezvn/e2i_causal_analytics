@@ -45,6 +45,8 @@ from __future__ import annotations
 from typing import Iterable, List, Optional
 
 __all__ = [
+    "KIND_DATA_LOADING",
+    "KIND_DATA_TRANSFORM",
     "KIND_GE_VALIDATION",
     "KIND_QUALITY_CHECK",
     "KIND_SEPARATOR",
@@ -58,6 +60,8 @@ KIND_SEPARATOR = ": "
 
 KIND_QUALITY_CHECK = "quality_check"
 KIND_GE_VALIDATION = "ge_validation"
+KIND_DATA_LOADING = "data_loading"
+KIND_DATA_TRANSFORM = "data_transform"
 
 
 def tag_blocking_issue(kind: str, message: str) -> str:
