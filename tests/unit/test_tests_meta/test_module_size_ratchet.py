@@ -29,7 +29,7 @@ ALLOWLIST: dict[str, int] = {
     # landed, so neither gate saw the sum. Pinned so the ratchet forbids further
     # growth; Lane B lowers it (delegates the backdoor criterion out of the file)
     # and the split by concern is an owner decision.
-    "src/agents/causal_impact/nodes/graph_builder.py": 1560,
+    "src/agents/causal_impact/nodes/graph_builder.py": 1532,
     "src/agents/causal_impact/nodes/refutation.py": 2519,
     "src/agents/feedback_learner/dspy_integration.py": 1836,
     "src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py": 4224,
