@@ -98,6 +98,9 @@ class _ChainableQuery:
     def limit(self, *a: Any) -> "_ChainableQuery":
         return self._record("limit", *a)
 
+    def range(self, *a: Any) -> "_ChainableQuery":
+        return self._record("range", *a)
+
     def offset(self, *a: Any) -> "_ChainableQuery":
         return self._record("offset", *a)
 
@@ -289,10 +292,15 @@ async def test_ab_get_latest_results_excludes_synthetic() -> None:
 async def test_outcome_feed_assignments_exclude_synthetic() -> None:
     from src.repositories.experiment_outcome import ExperimentOutcomeRepository
 
-    client = _RecordingClient(sync=True)
+    client = _RecordingClient(
+        sync=True,
+        data={"ab_experiment_assignments": [{"unit_id": "h1", "variant": "control"}]},
+    )
     repo = ExperimentOutcomeRepository(supabase_client=client)
     await repo.load_arrays(uuid4(), "triggers_delivered")
     _assert_excludes(client.last("ab_experiment_assignments"), "load_arrays assignments")
+    # the unit outcome feed (migration 155) is read first and is tagged too
+    _assert_excludes(client.last("ab_experiment_unit_outcomes"), "load_arrays unit_outcomes")
 
 
 @pytest.mark.asyncio
@@ -310,6 +318,7 @@ async def test_outcome_feed_assignments_opt_in() -> None:
     repo = ExperimentOutcomeRepository(supabase_client=client)
     await repo.load_arrays(uuid4(), "triggers_delivered", include_synthetic=True)
     _assert_no_predicate(client.last("ab_experiment_assignments"), "load_arrays assignments")
+    _assert_no_predicate(client.last("ab_experiment_unit_outcomes"), "load_arrays unit_outcomes")
     # the business_metrics leg honors the same opt-in (pre-existing behavior)
     _assert_no_predicate(client.last("business_metrics"), "load_arrays business_metrics")
 
@@ -608,7 +617,7 @@ async def test_causal_path_get_by_id_filters_path_id() -> None:
 def test_provenance_tagged_tables_match_migrations() -> None:
     """PROVENANCE_TAGGED_TABLES must be the 29 tables migrations 063/067/069
     (+ ml/036, #1974; + migrations/148, Lane A 2026-09-22; + migrations/149,
-    Lane C 2026-09-22) tagged — the loader's stale pre-063 subset hard-excluded
+    Lane C 2026-09-22; + migrations/155, option d1 2026-09-23) tagged — the loader's stale pre-063 subset hard-excluded
     causal_paths and agent_activities on an obsolete 42703 rationale."""
     from src.repositories.provenance import PROVENANCE_TAGGED_TABLES
 
@@ -648,6 +657,8 @@ def test_provenance_tagged_tables_match_migrations() -> None:
         "optum_biologic_persistence_causal",
         # 149_csu_escalation_causal.sql (Lane C, 2026-09-22)
         "csu_escalation_causal",
+        # 155_ab_experiment_unit_outcomes.sql (option d1, 2026-09-23, Part of #2207)
+        "ab_experiment_unit_outcomes",
     }
     assert set(PROVENANCE_TAGGED_TABLES) == expected
 
