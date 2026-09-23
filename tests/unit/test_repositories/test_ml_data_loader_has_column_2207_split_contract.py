@@ -71,6 +71,46 @@ async def test_transport_error_raises() -> None:
 
 
 @pytest.mark.asyncio
+async def test_unrelated_error_mentioning_42703_still_raises() -> None:
+    """codex r2 LOW: a bare substring match read any error containing the digits 42703
+    as "column absent"; only the structured code or the undefined-column message counts."""
+    loader = MLDataLoader(
+        _client(execute_side_effect=ConnectionError("proxy request 42703 failed"))
+    )
+    with pytest.raises(ConnectionError):
+        await loader.has_column("patient_journeys", "data_split")
+
+
+@pytest.mark.asyncio
+async def test_undefined_column_message_without_code_is_false() -> None:
+    err = APIError(
+        {
+            "code": None,
+            "message": "column patient_journeys.data_split does not exist",
+            "details": None,
+            "hint": None,
+        }
+    )
+    loader = MLDataLoader(_client(execute_side_effect=err))
+    assert await loader.has_column("patient_journeys", "data_split") is False
+
+
+@pytest.mark.asyncio
+async def test_undefined_column_message_for_another_column_raises() -> None:
+    err = APIError(
+        {
+            "code": None,
+            "message": "column patient_journeys.other does not exist",
+            "details": None,
+            "hint": None,
+        }
+    )
+    loader = MLDataLoader(_client(execute_side_effect=err))
+    with pytest.raises(APIError):
+        await loader.has_column("patient_journeys", "data_split")
+
+
+@pytest.mark.asyncio
 async def test_no_client_raises_instead_of_guessing() -> None:
     loader = MLDataLoader(MagicMock())
     loader.client = None

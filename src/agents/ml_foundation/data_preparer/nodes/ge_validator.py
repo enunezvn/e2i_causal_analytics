@@ -4,6 +4,7 @@ This node runs Great Expectations validation after data loading.
 It uses the DataQualityValidator from src/mlops/data_quality.py.
 """
 
+import json
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -40,8 +41,9 @@ def _register_contract_suite(
     seen: set = set()
 
     def _add(expectation: Dict[str, Any]) -> None:
-        kwargs = expectation.get("kwargs", {}) or {}
-        key = (expectation.get("expectation_type"), tuple(sorted(kwargs.items())))
+        # Serialised key: expectation kwargs may be list-valued (e.g. the ml_patients
+        # suite's ``value_set``), which a tuple-of-items key cannot hash (codex r2 MED).
+        key = json.dumps(expectation, sort_keys=True, default=str)
         if key not in seen:
             seen.add(key)
             kept.append(expectation)

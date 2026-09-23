@@ -11,6 +11,7 @@ Version: 1.0.0
 """
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
@@ -495,8 +496,11 @@ def _is_undefined_column_error(error: BaseException, column: str) -> bool:
     code = getattr(error, "code", None)
     if code == "42703":
         return True
-    message = str(getattr(error, "message", None) or error)
-    return "42703" in message or (f"{column} does not exist" in message and "column" in message)
+    # No structured code (older postgrest bodies): only the undefined-column message for
+    # THIS column counts — never a bare "42703" substring, which an unrelated transport
+    # or proxy error could carry (codex r2 LOW).
+    message = str(getattr(error, "message", None) or "")
+    return bool(re.search(rf"column\b.*\b{re.escape(column)}\b.*does not exist", message))
 
 
 # Convenience function for getting a loader instance

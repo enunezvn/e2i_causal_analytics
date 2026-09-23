@@ -167,7 +167,65 @@ async def test_bare_table_dict_uses_the_tables_own_suite() -> None:
 
 
 @pytest.mark.asyncio
+async def test_projection_keeping_a_list_valued_suite_expectation_does_not_crash() -> None:
+    """codex r2 MED: the dedupe key hashed raw kwargs; ``ml_patients`` carries
+    ``expect_column_values_to_be_in_set(discontinuation_flag, [0, 1, True, False])``, a
+    list-valued kwarg, so a contract projecting ``discontinuation_flag`` raised
+    ``TypeError: unhashable type: 'list'`` and every such run returned a blocking GE error."""
+    cols = [
+        "patient_journey_id",
+        "patient_id",
+        "brand",
+        "discontinuation_flag",
+        "treatment_initiated",
+    ]
+    contract = {"type": "table", "table": "patient_journeys", "columns": cols}
+    n = 40
+    train = pd.DataFrame(
+        {
+            "patient_journey_id": [f"PJ{i}" for i in range(n)],
+            "patient_id": [f"P{i}" for i in range(n)],
+            "brand": ["Kisqali"] * n,
+            "discontinuation_flag": [i % 2 for i in range(n)],
+            "treatment_initiated": [i % 2 for i in range(n)],
+        }
+    )
+    out = await ge_validator.run_ge_validation(
+        _state(contract, cols, train=train, validation=train.head(20), test=train.head(10))
+    )
+    assert out["ge_validation_status"] == "passed", out
+    assert not out.get("blocking_issues"), out
+    # The auto-detected ml_patients suite's in-set expectation on the projected column
+    # is applicable and kept (alongside the contract checks).
+    assert out["ge_expectations_evaluated"] == 3 * (1 + 5 + 1 + 3), (
+        out
+    )  # row + exists*5 + not-null target + kept ml_patients (2 not-null + in-set)
+
+
+def test_contract_suite_construction_never_yields_zero_expectations() -> None:
+    """codex r2 LOW: the "zero applicable expectations" status guard is defensive — real
+    construction always adds the row-count check plus one existence check per declared
+    column, so it is unreachable for a non-empty projection. Pin that, so the warning path
+    below is understood as an aggregation guard over an impossible validator result."""
+    validator = MagicMock()
+    validator.SUITES = {"patient_journeys": []}
+    name = ge_validator._register_contract_suite(
+        validator, "patient_journeys", "patient_journeys", ["x"], None
+    )
+    registered = validator.register_suite.call_args.args[1]
+    assert name == "patient_journeys__contract"
+    assert len(registered) == 2, registered
+    name2 = ge_validator._register_contract_suite(
+        validator, "patient_journeys", None, ["x", "y"], "y"
+    )
+    registered2 = validator.register_suite.call_args.args[1]
+    assert name2 == name and len(registered2) == 4, registered2
+
+
+@pytest.mark.asyncio
 async def test_zero_applicable_expectations_is_warning_not_passed() -> None:
+    """Aggregation guard only (see the construction pin above): a validator result with
+    zero evaluations must never aggregate to "passed"."""
     validator = MagicMock()
     validator.SUITES = {"patient_journeys": [], "business_metrics": []}
     result = MagicMock(
