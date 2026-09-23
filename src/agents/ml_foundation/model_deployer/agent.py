@@ -293,7 +293,8 @@ class ModelDeployerAgent:
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
         logger.info(
             f"Model deployment complete for {experiment_id}: "
-            f"status={overall_status}, environment={target_environment} "
+            # output["status"], not overall_status: a registry refusal (#2259) changes it.
+            f"status={output['status']}, environment={target_environment} "
             f"in {duration:.2f}s"
         )
 

@@ -45,6 +45,12 @@ SERVING_READERS: Set[str] = {
 # test_serving_readers_never_surface_a_synthetic_production_champion in
 # tests/unit/test_database/learning_loop/test_ml_registry_promotion_gate_realdb.py.
 
+#: Serving resolvers the scan cannot recognise (not production-scoped: they resolve a serving
+#: model by name), checked for the exclusion by name instead.
+NAMED_SERVING_RESOLVERS: Set[str] = {
+    "src/api/routes/explain.py::_resolve_model_registry_id",
+}
+
 #: Functions the scan matches that do not serve, with the reason.
 NOT_SERVING: Dict[str, str] = {
     "src/mlops/prediction_synthesizer_deploy.py::register_model_row": (
@@ -167,3 +173,12 @@ def test_the_scan_sees_an_unguarded_production_reader():
         ".eq('stage', 'production').eq('is_synthetic', False).execute()\n"
     ).body[0]
     assert _classify(guarded, in_repo_class=False) == (True, True)
+
+
+def test_named_serving_resolvers_exclude_synthetic_rows():
+    """codex r2: a resolver by model_name is outside the scan's pattern, so it is pinned by name."""
+    for key in sorted(NAMED_SERVING_RESOLVERS):
+        rel, name = key.split("::")
+        tree = ast.parse((REPO_ROOT / rel).read_text())
+        (fn,) = [f for f in _outer_functions(tree) if getattr(f, "name", None) == name]
+        assert _classify(fn, in_repo_class=False)[1], f"{key} does not exclude is_synthetic rows"
