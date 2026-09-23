@@ -34,9 +34,10 @@ async def test_entity_split_combines_frames_without_dataframe_append(
     train, val, test = _frame(5, "2026-01-01"), _frame(3, "2026-02-01"), _frame(2, "2026-03-01")
 
     loader = MagicMock()
-    # #2207 split contract: the table route first probes one row for a ``data_split``
-    # column; this table has none, so the temporal path under test still runs.
-    loader.load_table_sample = AsyncMock(return_value=pd.DataFrame())
+    # #2207 split contract: the table route first asks the repository whether the
+    # table carries a ``data_split`` column; this one does not, so the temporal path
+    # under test still runs.
+    loader.has_column = AsyncMock(return_value=False)
     loader.load_for_training = AsyncMock(
         return_value=SimpleNamespace(train=train, val=val, test=test)
     )

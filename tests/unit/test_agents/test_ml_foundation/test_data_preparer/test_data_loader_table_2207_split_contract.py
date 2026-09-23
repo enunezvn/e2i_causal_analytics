@@ -93,6 +93,7 @@ def _fake_loader(
 
     loader = MagicMock()
     loader.load_table_sample = AsyncMock(side_effect=_sample)
+    loader.has_column = AsyncMock(return_value=has_data_split)
     loader.load_for_training = AsyncMock(
         return_value=MagicMock(train=source.iloc[:3], val=source.iloc[3:5], test=source.iloc[5:6])
     )
@@ -184,8 +185,9 @@ async def test_string_source_without_data_split_keeps_temporal_path() -> None:
         columns=None,
         include_synthetic=False,
     )
-    # Only the 1-row presence probe touched load_table_sample — never a full load.
-    assert [c["limit"] for c in calls] == [1]
+    # The presence probe asked the repository, and load_table_sample never ran.
+    loader.has_column.assert_awaited_once_with("patient_journeys", "data_split")
+    assert calls == []
     assert out["holdout_df"] is None  # today's behaviour: temporal path has no holdout
 
 
@@ -319,3 +321,21 @@ async def test_unknown_dict_type_still_fails() -> None:
         out = await data_loader.load_data(_state({"type": "s3", "bucket": "x"}))
     assert out["error_type"] == "data_loading_error"
     assert calls == []
+
+
+# --------------------------------------------------------------------------- #
+# codex r1 MED: a probe ERROR must not read as "no data_split column"
+# --------------------------------------------------------------------------- #
+@pytest.mark.asyncio
+async def test_probe_error_fails_loud_instead_of_silently_taking_temporal_path() -> None:
+    """Only a real 42703 means "absent" (``MLDataLoader.has_column``); any other failure
+    propagates, so a transient probe failure can never route a table that DOES carry
+    data_split down the holdout-less temporal path."""
+    df = _labelled_frame(6, 2, 1, 1)
+    loader, _calls = _fake_loader(df)
+    loader.has_column = AsyncMock(side_effect=ConnectionError("PostgREST unreachable"))
+    with patch.object(data_loader, "get_ml_data_loader", return_value=loader):
+        out = await data_loader.load_data(_state("patient_journeys"))
+    assert out.get("error_type") == "data_loading_error", out
+    assert "unreachable" in out["error"]
+    loader.load_for_training.assert_not_awaited()

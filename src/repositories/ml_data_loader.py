@@ -359,6 +359,35 @@ class MLDataLoader(SplitAwareRepository):
             logger.error(f"Failed to load sample from {table}: {e}")
             return pd.DataFrame()
 
+    async def has_column(self, table: str, column: str) -> bool:
+        """Whether ``table`` carries ``column`` — PostgREST's answer, not a guess.
+
+        The ONE place SQLSTATE 42703 ("undefined column") is told apart from every
+        other failure (#2207 split contract, codex r1 MED on PR #2241): a real 42703
+        is ``False``; any other error — transport, auth, timeout, RLS — propagates so
+        the caller fails closed instead of reading "unknown" as "absent". ``limit(1)``
+        keeps the probe to one row; an empty result with no error still means the
+        column exists.
+
+        Raises:
+            ValueError: table not in ML_TABLES
+            RuntimeError: no Supabase client (cannot establish presence)
+        """
+        if table not in ML_TABLES:
+            raise ValueError(f"Table '{table}' not supported. Use one of: {ML_TABLES}")
+        if not self.client:
+            raise RuntimeError(
+                f"No Supabase client available: cannot establish whether {table}.{column} exists"
+            )
+        try:
+            self.client.table(table).select(column).limit(1).execute()
+        except Exception as e:
+            if _is_undefined_column_error(e, column):
+                logger.info("Table %s has no column %s (PostgREST 42703)", table, column)
+                return False
+            raise
+        return True
+
     async def get_table_schema(self, table: str) -> Dict[str, str]:
         """
         Get column names and types for a table.
@@ -455,6 +484,19 @@ class MLDataLoader(SplitAwareRepository):
         except Exception as e:
             logger.error(f"Failed to count records in {table}: {e}")
             return 0
+
+
+def _is_undefined_column_error(error: BaseException, column: str) -> bool:
+    """True only for PostgreSQL's undefined-column error (SQLSTATE 42703).
+
+    postgrest-py raises ``APIError`` carrying the PostgREST body (``code`` /
+    ``message``); the message form is ``column <table>.<col> does not exist``.
+    """
+    code = getattr(error, "code", None)
+    if code == "42703":
+        return True
+    message = str(getattr(error, "message", None) or error)
+    return "42703" in message or (f"{column} does not exist" in message and "column" in message)
 
 
 # Convenience function for getting a loader instance

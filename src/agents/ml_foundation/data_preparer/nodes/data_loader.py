@@ -235,20 +235,17 @@ def _require_target_in_columns(columns: Optional[list[str]], target: Any) -> Non
         )
 
 
-async def _table_has_data_split(
-    loader: Any, table: str, filters: Dict[str, Any], include_synthetic: bool
-) -> bool:
-    """1-row presence probe for a precomputed ``data_split`` column.
+async def _table_has_data_split(loader: Any, table: str) -> bool:
+    """Whether the table carries a precomputed ``data_split`` column.
 
-    Selects ``*`` on one row under the SAME filters / provenance mode as the real
-    load, so a table without the column never raises a PostgREST 42703 (which the
-    loader would log at ERROR and swallow into an empty frame). An empty cohort reads
-    as ``False``; the caller's route then reports it.
+    Delegates to ``MLDataLoader.has_column``, the one place a real PostgREST 42703
+    ("undefined column") is told apart from every other failure (codex r1 MED on PR
+    #2241): only 42703 reads as "absent"; transport / auth / timeout errors
+    propagate, so a failed probe can never route a table that DOES carry
+    ``data_split`` down the holdout-less temporal path. Column presence is a table
+    property, so no cohort filters are applied.
     """
-    probe = await loader.load_table_sample(
-        table, filters=filters, limit=1, include_synthetic=include_synthetic
-    )
-    return "data_split" in probe.columns
+    return bool(await loader.has_column(table, "data_split"))
 
 
 async def _load_precomputed_split(
@@ -332,7 +329,7 @@ async def _load_from_supabase(
     """
     loader = get_ml_data_loader()
 
-    if await _table_has_data_split(loader, data_source, filters, include_synthetic):
+    if await _table_has_data_split(loader, data_source):
         return await _load_precomputed_split(
             loader, data_source, filters, columns, include_synthetic
         )
