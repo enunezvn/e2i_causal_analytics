@@ -1,5 +1,5 @@
 -- ============================================================================
--- Migration 151: add initial_dag to expert_review_type (Lane B structural
+-- Migration 152: add initial_dag to expert_review_type (Lane B structural
 -- author, spec §3 item 4; scaffold PR #2230; found by the real authoring runs
 -- 2026-09-23, docs/demos/results/2026-09-23_lane_b_real_runs/).
 -- ============================================================================
@@ -23,9 +23,11 @@
 -- one-pending-per-estimand index, migration 140, ignores review_type -- that
 -- latent collision is issue #2244, separate from this value.)
 --
--- Pinned by tests/unit/test_scripts/test_expert_review_type_literals_sync.py:
--- every review_type literal the code writes must be a member of this enum as
--- the migrations define it.
+-- Pinned by tests/unit/test_scripts/test_expert_review_type_literals_sync.py
+-- (every review_type the code writes, found by AST, must be a member of this
+-- enum as the migrations define it) and by the vocabulary sync validator
+-- (config/domain_vocabulary.yaml expert_review_types lists initial_dag;
+-- scripts/validate_vocabulary_enum_sync.py reads 010 + this file).
 --
 -- CAVEAT: ALTER TYPE ... ADD VALUE is non-transactional. run_migrations.sh
 -- detects it (after stripping `--` comments) and applies this file UN-wrapped,

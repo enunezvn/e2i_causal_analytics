@@ -274,9 +274,10 @@ class _CapturingRepo:
 class TestAutoCreateReviewTypeEnum:
     """C1: the auto-created review MUST use a VALID expert_review_type member.
 
-    The live ``expert_review_type`` ENUM (010 :53-58) is
-    {dag_approval, methodology_review, quarterly_audit, ad_hoc_validation} —
-    there is NO ``initial_dag`` member. While ``auto_create_review`` defaulted
+    The ``expert_review_type`` ENUM (010 :53-58) is
+    {dag_approval, methodology_review, quarterly_audit, ad_hoc_validation};
+    ``initial_dag`` was added by migration 152 for the Lane B structural-AUTHOR
+    review and is NOT the gate's type. While ``auto_create_review`` defaulted
     False (R5) the call site never ran, so passing ``review_type="initial_dag"``
     was a LATENT bug. F2 wiring sets ``auto_create_review=True``, which ACTIVATES
     it: the INSERT would fail the enum cast -> create_review returns None -> the

@@ -228,7 +228,7 @@ class ExpertReviewRepository(ExpertReviewVersionTimeline):
             reviewer_id: User ID of the reviewer
             review_type: An ``expert_review_type`` enum member: 'dag_approval' (the runtime
                 gate's new-DAG sign-off), 'initial_dag' (Lane B structural-author review,
-                migration 151), 'methodology_review', 'quarterly_audit', 'ad_hoc_validation'.
+                migration 152), 'methodology_review', 'quarterly_audit', 'ad_hoc_validation'.
                 Any other string fails the Postgres enum cast (22P02) at insert.
             dag_version_hash: SHA256 hash of the DAG being reviewed
             reviewer_name: Display name of reviewer
