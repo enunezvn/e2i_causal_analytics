@@ -306,3 +306,37 @@ def test_every_reader_path_that_drops_a_sidecar_makes_the_run_degraded(
     result = _task()()
     assert result["status"] == "degraded", result
     assert any(str(lost) in line for line in result["skipped_sidecars"]), result
+
+
+def test_the_subprocess_argv_carries_nothing_from_the_environment() -> None:
+    """Semgrep ``dangerous-subprocess-use-tainted-env-args``: the argv the task hands
+    ``subprocess.run`` must be exactly ``[sys.executable, str(_MIRROR_SCRIPT)]``. The
+    artifacts dir reaches the script through the inherited environment (the script
+    defaults ``--artifacts-dir`` to ``$ADAPTIVE_VALIDITY_ARTIFACTS_DIR``), never argv.
+    The armed real-Postgres tests above prove the child still finds the sidecars."""
+    import ast
+
+    source = (REPO / "src" / "tasks" / "audit_sidecar_mirror_tasks.py").read_text()
+    tree = ast.parse(source)
+    runs = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "run"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "subprocess"
+    ]
+    assert len(runs) == 1, "expected exactly one subprocess.run in the task module"
+    argv = runs[0].args[0]
+    if isinstance(argv, ast.Name):  # resolve `cmd = [...]`
+        assigns = [
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id == argv.id for t in node.targets)
+        ]
+        assert len(assigns) == 1, f"`{argv.id}` must be assigned exactly once"
+        argv = assigns[0]
+    assert isinstance(argv, ast.List), ast.unparse(argv)
+    assert [ast.unparse(e) for e in argv.elts] == ["sys.executable", "str(_MIRROR_SCRIPT)"]
