@@ -231,10 +231,13 @@ class _CapturingRepo:
     The async repo speaks PostgREST (HTTP) so BEGIN..ROLLBACK is unavailable and
     a real insert would pollute the live ``expert_reviews`` table. This fake
     records the exact kwargs the gate passes to ``create_review`` so we can assert
-    the review_type WITHOUT touching the DB. The DB cast-disproof (a read-only
-    ``SELECT 'initial_dag'::expert_review_type`` ERRORs against the live enum,
-    confirmed faithfully against the droplet) covers the other half: with
-    ``initial_dag`` the real INSERT would fail the enum cast.
+    the review_type WITHOUT touching the DB. When this fix landed, the DB
+    cast-disproof (a read-only ``SELECT 'initial_dag'::expert_review_type``
+    ERRORed against the live enum, confirmed faithfully against the droplet)
+    covered the other half. Since migration 152 ``initial_dag`` IS a member --
+    the Lane B structural-AUTHOR review type -- so the reason the gate must not
+    write it is now semantic: its loader would read a gate consult back as an
+    authored prior.
     """
 
     def __init__(self) -> None:
@@ -280,9 +283,11 @@ class TestAutoCreateReviewTypeEnum:
     review and is NOT the gate's type. While ``auto_create_review`` defaulted
     False (R5) the call site never ran, so passing ``review_type="initial_dag"``
     was a LATENT bug. F2 wiring sets ``auto_create_review=True``, which ACTIVATES
-    it: the INSERT would fail the enum cast -> create_review returns None -> the
-    gate falls through to BLOCKED instead of PENDING_REVIEW (a silent hard-block,
-    zero rows). The fix is ``review_type="dag_approval"``.
+    it: before migration 152 the INSERT failed the enum cast -> create_review
+    returned None -> the gate fell through to BLOCKED instead of PENDING_REVIEW
+    (a silent hard-block, zero rows); since 152 the value casts, but it is the
+    structural-author type and the loader would adopt the consult as an authored
+    prior. Either way the gate writes ``review_type="dag_approval"``.
     """
 
     @pytest.mark.asyncio
@@ -299,8 +304,8 @@ class TestAutoCreateReviewTypeEnum:
         )
 
         assert repo.create_kwargs is not None, "create_review was not called"
-        # The load-bearing assertion: a VALID enum member, NOT the latent
-        # 'initial_dag' that would fail the Postgres enum cast.
+        # The load-bearing assertion: the gate's own type, NOT 'initial_dag'
+        # (pre-152: failed the enum cast; post-152: the structural-author type).
         assert repo.create_kwargs["review_type"] == "dag_approval"
         assert repo.create_kwargs["review_type"] != "initial_dag"
         # And the gate returns PENDING_REVIEW (not BLOCKED) on a successful create.
