@@ -8,7 +8,7 @@ Import rule: may import ``_common`` and non-package modules only; never
 """
 
 import logging
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, TypedDict
 
 from src.data.manifests import MART_SAFE_FEATURES
 
@@ -30,6 +30,23 @@ from src.repositories.provenance import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class CausalDatasetSpec(TypedDict, total=False):
+    """One registry entry: column-role lists plus, for a dataset whose
+    feature-role panel / structural-author review are built under a
+    registered manifest, ``feature_manifest_source`` (Lane B item 1). Typed
+    per key so the role lists stay ``List[str]`` for every reader (a
+    ``Dict[str, Any]`` widening turned ``t not in t_order`` narrowing off in
+    segments.py and cost one new mypy error on PR #2245)."""
+
+    treatment: List[str]
+    outcome: List[str]
+    covariate: List[str]
+    baseline_covariate: List[str]
+    randomized_treatment: List[str]
+    feature_manifest_source: str
+
 
 # patient_journeys is the gold-standard causal frame: a fully-populated,
 # patient-level cohort (treatment_arm -> persistent_180d, controlling for
@@ -63,9 +80,7 @@ logger = logging.getLogger(__name__)
 # feature-store inputs. (Caught in adversarial review, 2026-06-29.)
 # treatment/outcome stay the curated causal columns (the synthetic gold-standard
 # only wires those relationships).
-# Values are column-role lists, plus the optional string
-# ``feature_manifest_source`` (Lane B item 1) — hence ``Dict[str, Any]``.
-_CAUSAL_DATASET_SPECS: Dict[str, Dict[str, Any]] = {
+_CAUSAL_DATASET_SPECS: Dict[str, CausalDatasetSpec] = {
     "patient_journeys": {
         "treatment": [
             "treatment_arm",
@@ -364,7 +379,7 @@ def _is_randomized_treatment(dataset: Optional[str], treatment_var: str) -> bool
     inferred from an empty discovered backdoor (an observational question where
     discovery found nothing still deserves the unmeasured-confounding gate).
     """
-    spec = _CAUSAL_DATASET_SPECS.get(dataset or _DEFAULT_CAUSAL_DATASET, {})
+    spec: CausalDatasetSpec = _CAUSAL_DATASET_SPECS.get(dataset or _DEFAULT_CAUSAL_DATASET) or {}
     return treatment_var in spec.get("randomized_treatment", [])
 
 
