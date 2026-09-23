@@ -99,8 +99,11 @@ class _Table:
         self.updates = []
         self.orders = []
         self.short_by = 0
+        self.fail_select = False
 
     def select(self, cols, count=None):
+        if self.fail_select:
+            raise RuntimeError("simulated PostgREST read failure")
         return _Query(self, "select").select(cols, count=count)
 
     def update(self, payload):
@@ -146,8 +149,10 @@ def _adoption(derived_dates=None):
 
 
 def _rollups():
-    """13 rows over 2 brands: multi-row pairs (h1/Remibrutinib x3, h2/Fabhalta x2) and a
-    Sep-21 exposure for h3/Remibrutinib so an unclamped lag would land after the run date."""
+    """16 rows over 3 brands: multi-row pairs (h1/Remibrutinib x3, h2/Fabhalta x2), a Sep-21
+    exposure for h3/Remibrutinib so an unclamped lag would land after the run date, and 3
+    Kisqali rows. Plus rows the read/derive must EXCLUDE: a non-synthetic row, an other-brand
+    row, and an ORPHAN rollup (hcp_id absent from hcp_profiles) that would move a median."""
     spec = [
         ("h1", "Remibrutinib", "2026-05-01"),
         ("h1", "Remibrutinib", "2026-07-21"),
@@ -162,6 +167,9 @@ def _rollups():
         ("h3", "Fabhalta", "2026-07-21"),
         ("h4", "Fabhalta", "2026-05-15"),
         ("h5", "Fabhalta", "2026-07-21"),
+        ("h1", "Kisqali", "2026-07-21"),
+        ("h2", "Kisqali", "2026-07-21"),
+        ("h4", "Kisqali", "2026-08-02"),
     ]
     rng = np.random.default_rng(1)
     rows = []
@@ -183,6 +191,17 @@ def _rollups():
     # One non-synthetic and one other-brand row that the read must EXCLUDE.
     rows.append({**rows[0], "metric_id": "real0", "is_synthetic": False})
     rows.append({**rows[1], "metric_id": "other0", "brand": "OtherBrand"})
+    # An ORPHAN synthetic rollup: hcp_id not in hcp_profiles. Extreme values so that, if it
+    # were counted, every Kisqali median would move.
+    rows.append(
+        {
+            **rows[-3],
+            "metric_id": "orphan0",
+            "hcp_id": "zz_orphan",
+            "brand": "Kisqali",
+            **dict.fromkeys(_CHANNELS, 999.0),
+        }
+    )
     return rows
 
 
@@ -200,8 +219,8 @@ def client():
 # --------------------------------------------------------------------------- paged read
 def test_fetch_channel_rollups_reads_only_synthetic_rows_of_the_three_brands(client):
     df = bf.fetch_channel_rollups(client, page_size=5)
-    assert len(df) == 13
-    assert set(df["brand"]) == {"Remibrutinib", "Fabhalta"}
+    assert len(df) == 17  # 16 cohort rows + the orphan (the READ is by brand/is_synthetic only)
+    assert set(df["brand"]) == {"Remibrutinib", "Fabhalta", "Kisqali"}
     assert set(df.columns) >= {
         "hcp_id",
         "brand",
@@ -261,8 +280,9 @@ def test_derive_with_channels_keeps_treatment_arm_identical_to_the_no_shift_deri
 def test_derive_dates_joined_rows_after_their_last_exposure_and_never_after_the_run_date(derived):
     joined = derived[derived["joined"]]
     non_joined = derived[~derived["joined"]]
-    assert len(joined) == 10 and len(non_joined) == 8  # 6 HCPs x 3 brands; Kisqali all non-joined
+    assert len(joined) == 13 and len(non_joined) == 5  # 6 HCPs x 3 brands
     assert set(non_joined["hcp_id"]) >= {"h6"}
+    assert "zz_orphan" not in set(derived["hcp_id"])
     cd = pd.to_datetime(joined["consideration_date"])
     mx = pd.to_datetime(joined["max_metric_date"])
     assert (cd > mx).all()
@@ -294,6 +314,44 @@ def test_derive_lag_stream_is_spawned_not_the_arm_stream(client):
         lags[rem.index % len(centrality)], unit="D"
     )
     assert pd.to_datetime(rem["consideration_date"]).tolist() == expect.tolist()
+
+
+def test_derive_excludes_orphan_rollups_from_the_planting_medians(client):
+    """codex r1 (MED): the planted contrast must be the estimator's contrast, and the estimator
+    only sees rows joined to the cohort. An orphan rollup (hcp_id not in hcp_profiles) must
+    not move a within-brand median: with the 999-valued orphan counted, the Kisqali medians
+    over 4 rows would sit between the cohort's values and flip a bit."""
+    centrality = bf.fetch_centrality(client)
+    rollups = bf.fetch_channel_rollups(client, page_size=5)
+    with_orphan = bf.derive(centrality, seed=427, channel_rollups=rollups, run_date=_RUN_DATE)
+    without = bf.derive(
+        centrality,
+        seed=427,
+        channel_rollups=rollups[rollups["hcp_id"] != "zz_orphan"],
+        run_date=_RUN_DATE,
+    )
+    kis = with_orphan[(with_orphan["brand"] == "Kisqali") & with_orphan["joined"]].set_index(
+        "hcp_id"
+    )
+    kis0 = without[(without["brand"] == "Kisqali") & without["joined"]].set_index("hcp_id")
+    for c in _CHANNELS:
+        assert kis[f"tbin_{c}"].tolist() == kis0[f"tbin_{c}"].tolist(), c
+    assert with_orphan["adopted"].tolist() == without["adopted"].tolist()
+
+
+def test_derive_fails_loud_on_a_null_confounder_or_channel(client):
+    """codex r1 (MED): a row null in a confounder is dropped by the estimator but would sit in
+    the planting median. The plant writes every column; a null is corruption -> refuse."""
+    centrality = bf.fetch_centrality(client)
+    rollups = bf.fetch_channel_rollups(client, page_size=5)
+    bad = rollups.copy()
+    bad.loc[bad.index[0], "market_share"] = np.nan
+    with pytest.raises(ValueError, match="null"):
+        bf.derive(centrality, seed=427, channel_rollups=bad, run_date=_RUN_DATE)
+    bad = rollups.copy()
+    bad.loc[bad.index[1], "engagement_score"] = np.nan
+    with pytest.raises(ValueError, match="null"):
+        bf.derive(centrality, seed=427, channel_rollups=bad, run_date=_RUN_DATE)
 
 
 def test_derive_refuses_an_exposure_on_or_after_the_run_date(client):
@@ -343,13 +401,69 @@ def test_main_dry_run_performs_no_update_and_writes_the_frame(client, tmp_path, 
     assert len(frame) == 18 and "consideration_date" in frame.columns and "region" in frame.columns
 
 
+def test_main_refuses_when_a_brand_has_no_planted_rollups(tmp_path):
+    """codex r1 (MED): a brand with no rollups would silently get zero shifts and be written."""
+    rollups = [r for r in _rollups() if r["brand"] != "Kisqali"]
+    c = _Client(
+        {
+            "hcp_profiles": _profiles(),
+            "hcp_brand_adoption": _adoption(),
+            "business_metrics": rollups,
+        }
+    )
+    rc = bf.main(["--run-date", "2026-09-23", "--backup-dir", str(tmp_path)], client=c)
+    assert rc == 1
+    assert c.tables["hcp_brand_adoption"].updates == []
+
+
+def test_execute_refuses_when_the_live_read_fails_but_dry_run_reports(tmp_path, monkeypatch):
+    """codex r1 (MED): --execute was fail-open on a failed live read (no backup, no arm-match
+    precondition). It must abort; the dry-run may still report without the comparison."""
+    c = _Client(
+        {
+            "hcp_profiles": _profiles(),
+            "hcp_brand_adoption": _adoption(),
+            "business_metrics": _rollups(),
+        }
+    )
+    c.tables["hcp_brand_adoption"].fail_select = True
+    monkeypatch.setattr(bf, "ensure_schema", lambda client: None)
+    rc = bf.main(["--execute", "--run-date", "2026-09-23", "--backup-dir", str(tmp_path)], client=c)
+    assert rc == 1
+    assert c.tables["hcp_brand_adoption"].updates == []
+    rc = bf.main(["--run-date", "2026-09-23", "--backup-dir", str(tmp_path)], client=c)
+    assert rc == 0
+
+
+def test_execute_refuses_when_live_keys_do_not_match_the_derived_keys(tmp_path, monkeypatch):
+    rows = [r for r in _adoption() if not (r["hcp_id"] == "h6" and r["brand"] == "Kisqali")]
+    c = _Client(
+        {"hcp_profiles": _profiles(), "hcp_brand_adoption": rows, "business_metrics": _rollups()}
+    )
+    monkeypatch.setattr(bf, "ensure_schema", lambda client: None)
+    rc = bf.main(["--execute", "--run-date", "2026-09-23", "--backup-dir", str(tmp_path)], client=c)
+    assert rc == 1
+    assert c.tables["hcp_brand_adoption"].updates == []
+
+
+def test_write_rows_requires_exactly_one_matched_row_per_key(client, derived):
+    """codex r1 (MED): the count was of ATTEMPTED updates. A key with no live row must abort."""
+    client.tables["hcp_brand_adoption"].rows = [
+        r
+        for r in client.tables["hcp_brand_adoption"].rows
+        if not (r["hcp_id"] == "h3" and r["brand"] == "Fabhalta")
+    ]
+    with pytest.raises(RuntimeError, match="h3"):
+        bf.write_rows(client, derived)
+
+
 def test_write_rows_sends_dates_for_joined_rows_only_and_updated_at_for_all(client, derived):
     n = bf.write_rows(client, derived)
     updates = client.tables["hcp_brand_adoption"].updates
     assert n == len(updates) == 18
     for filters, payload in updates:
         keys = dict(filters)
-        assert set(keys) == {"hcp_id", "brand"}
+        assert set(keys) == {"hcp_id", "brand", "is_synthetic"}
         assert {"treatment_arm", "adopted", "adoption_category", "updated_at"} <= set(payload)
         datetime.fromisoformat(payload["updated_at"])
         row = derived[

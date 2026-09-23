@@ -146,15 +146,27 @@ def _spearman(a: Sequence[float], b: Sequence[float]) -> float:
 
 
 def evaluate_recovery_gate(
-    fits: pd.DataFrame, *, tol: float = DEFAULT_TOL, min_spearman: float = DEFAULT_MIN_SPEARMAN
+    fits: pd.DataFrame,
+    *,
+    tol: float = DEFAULT_TOL,
+    min_spearman: float = DEFAULT_MIN_SPEARMAN,
+    required_brands: Sequence[str] = BRANDS,
 ) -> GateResult:
     """Gate a fits table with columns ``brand, channel, planted_rd, ate, ci_lower, ci_upper,
-    error`` (one row per brand x channel). A missing or errored cell fails its brand."""
+    error`` (one row per brand x channel). The gate iterates ``required_brands`` (all three by
+    default), not the brands present: a brand with no fits FAILS, so a ``--brands`` subset run
+    can never certify (codex r1). A missing or errored cell fails its brand."""
     planted = planted_rd_by_column()
     per_brand: Dict[str, BrandGate] = {}
-    for brand in list(dict.fromkeys(fits["brand"])):
+    for brand in required_brands:
         sub = fits[fits["brand"] == brand].set_index("channel")
         g = BrandGate(brand=brand, n_fits=int(len(sub)))
+        if sub.empty:
+            g.failures.append(
+                "missing: no fits for this brand (a --brands subset is non-certifying)"
+            )
+            per_brand[brand] = g
+            continue
         missing = [c for c in CHANNEL_COLUMNS if c not in sub.index]
         if missing:
             g.failures.append(f"missing fits for {missing}")
@@ -366,7 +378,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "--frame", type=Path, help="dry-run frame parquet from the backfill's --frame-out"
     )
     src.add_argument("--live", action="store_true", help="read the LIVE tables (after --execute)")
-    parser.add_argument("--brands", nargs="*", default=list(BRANDS))
+    parser.add_argument(
+        "--brands",
+        nargs="*",
+        default=list(BRANDS),
+        help="brands to FIT (diagnostic); the gate always requires all three, so a subset "
+        "run reports FAIL for the brands it skipped and is non-certifying",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--tol", type=float, default=DEFAULT_TOL)
     parser.add_argument("--min-spearman", type=float, default=DEFAULT_MIN_SPEARMAN)

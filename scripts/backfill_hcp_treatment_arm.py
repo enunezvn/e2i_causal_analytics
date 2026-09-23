@@ -425,7 +425,29 @@ def derive(
         assert channel_rollups is not None
         if run_date is None:
             run_date = date.today()
-        collapsed = collapse_per_hcp_brand(channel_rollups)
+        # The planted contrast must be the estimator's contrast, and the estimator only sees
+        # rows joined to the cohort with every model input non-null (codex r1): restrict the
+        # rollups to the cohort's HCPs BEFORE the medians, and refuse nulls (the plant writes
+        # every column; a null is corruption, not a value to average around).
+        cohort_rollups = channel_rollups[channel_rollups["hcp_id"].isin(hcp_ids)]
+        n_orphan = int(len(channel_rollups) - len(cohort_rollups))
+        if n_orphan:
+            logger.warning(
+                "%d rollup rows belong to HCPs outside the cohort (orphans); excluded from "
+                "the planting medians and from the join.",
+                n_orphan,
+            )
+        required = ["region", "market_share", "triggers_total_count", *CHANNEL_COLUMNS]
+        if len(cohort_rollups):
+            # Row level, before the collapse: pandas' sum/mean would silently skip a null
+            # inside a multi-row pair and the corruption would vanish into an average.
+            null_counts = {c: int(cohort_rollups[c].isna().sum()) for c in required}
+            if any(null_counts.values()):
+                raise ValueError(
+                    "planted rollups carry null model inputs (the estimator would drop these "
+                    f"rows while they sat in the planting medians): {null_counts}"
+                )
+        collapsed = collapse_per_hcp_brand(cohort_rollups)
         if not collapsed.empty:
             tbin = channel_tbin(collapsed)
             collapsed = collapsed.merge(tbin, on=KEY, how="left")
@@ -769,9 +791,22 @@ def write_rows(client: Any, derived: pd.DataFrame, *, batch_size: int = 500) -> 
             payload["consideration_date"] = (
                 pd.Timestamp(rec["consideration_date"]).date().isoformat()
             )
-        client.table(ADOPTION_TABLE).update(payload).eq("hcp_id", rec["hcp_id"]).eq(
-            "brand", rec["brand"]
-        ).execute()
+        resp = (
+            client.table(ADOPTION_TABLE)
+            .update(payload)
+            .eq("hcp_id", rec["hcp_id"])
+            .eq("brand", rec["brand"])
+            .eq("is_synthetic", True)
+            .execute()
+        )
+        # PostgREST returns the updated rows (return=representation): exactly one per key,
+        # else the count below would be of ATTEMPTS, not writes (codex r1).
+        matched = len(getattr(resp, "data", None) or [])
+        if matched != 1:
+            raise RuntimeError(
+                f"UPDATE matched {matched} rows for ({rec['hcp_id']}, {rec['brand']}); "
+                f"expected exactly 1 -- aborting after {written} rows written"
+            )
         written += 1
         if written % batch_size == 0:
             logger.info("  updated %d/%d rows", written, len(derived))
@@ -881,6 +916,19 @@ def main(argv: Optional[Sequence[str]] = None, *, client: Any = None) -> int:
         write_backup(live, Path(args.backup_dir))
 
     derived = derive(centrality, seed=args.seed, channel_rollups=rollups, run_date=run_date)
+
+    # Every brand must carry a planted population (codex r1): a brand with no rollups would
+    # silently get zero shifts and be written as if planted.
+    joined_by_brand = derived.groupby("brand")["joined"].sum().to_dict()
+    unplanted = [b for b in BRANDS if int(joined_by_brand.get(b, 0)) == 0]
+    if unplanted:
+        logger.error(
+            "REFUSING to proceed: no planted %s rows join the cohort for %s (joined per brand: %s).",
+            ROLLUP_METRIC_TYPE,
+            unplanted,
+            joined_by_brand,
+        )
+        return 1
     logger.info(
         "Derived %d rows (%d HCPs x %d brands): treatment_arm + adopted + channel term; "
         "joined %d / non-joined %d.",
@@ -909,6 +957,37 @@ def main(argv: Optional[Sequence[str]] = None, *, client: Any = None) -> int:
             bad_dates,
         )
         return 1
+    if not dry_run:
+        # --execute preconditions (codex r1: the write path was fail-open when the live read
+        # failed): a complete live snapshot whose keys are exactly the derived keys, backed
+        # up above, with the arm reproduced 1.0000 in EVERY brand.
+        if live is None or not len(live):
+            logger.error(
+                "REFUSING to --execute: the live %s snapshot could not be read.", ADOPTION_TABLE
+            )
+            return 1
+        live_keys = set(zip(live["hcp_id"], live["brand"], strict=True))
+        derived_keys = set(zip(derived["hcp_id"], derived["brand"], strict=True))
+        if len(live_keys) != len(live) or live_keys != derived_keys:
+            logger.error(
+                "REFUSING to --execute: live keys (%d rows, %d unique) != derived keys (%d); "
+                "%d derived keys absent from live, %d live keys not derived.",
+                len(live),
+                len(live_keys),
+                len(derived_keys),
+                len(derived_keys - live_keys),
+                len(live_keys - derived_keys),
+            )
+            return 1
+        unmatched = [b for b, r in report.items() if r["arm_match_vs_live"] != 1.0]
+        if unmatched:
+            logger.error(
+                "REFUSING to --execute: treatment_arm not reproduced 1.0000 vs live in %s "
+                "(%s) -- the seed does not reproduce the live arm; do not overwrite.",
+                unmatched,
+                {b: report[b]["arm_match_vs_live"] for b in unmatched},
+            )
+            return 1
 
     if args.frame_out:
         out = Path(args.frame_out)
