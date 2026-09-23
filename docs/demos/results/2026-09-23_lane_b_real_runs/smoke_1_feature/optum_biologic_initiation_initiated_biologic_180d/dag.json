@@ -1,0 +1,172 @@
+{
+  "meta": {
+    "authored_at": "2026-09-23T01:22:12.874032+00:00",
+    "manifest": "optum",
+    "treatment": "biologic_initiation",
+    "outcome": "initiated_biologic_180d",
+    "treatment_label": "biologic_initiation",
+    "outcome_label": "initiated_biologic_180d",
+    "lm": "openai/gpt-5.6-terra",
+    "resolver": "live",
+    "prompt_hash": "1971d0d38fa1c895360eb48b3f5ab6bb53d8dff95fb9fea9e57eaa3b5c4bac7c",
+    "guide_hash": "04009c46e34c2c457755f8ca322b25510ee8646c5caf32093e14b8ec7223889a",
+    "n_features": 1,
+    "panel": null,
+    "provenance": "machine",
+    "tree": {
+      "commit": "8cbc52ccae904bc16b53de1624d1428d0ff3441d",
+      "dirty_src_scripts_tests": false
+    }
+  },
+  "schema_version": "1",
+  "treatment": "biologic_initiation",
+  "outcome": "initiated_biologic_180d",
+  "merge_latents": true,
+  "is_dag": true,
+  "adjustment_valid": true,
+  "adjustment_set": [
+    "age_at_index"
+  ],
+  "minimal_adjustment_set": [
+    "age_at_index"
+  ],
+  "warnings": [],
+  "dag_structure_json": {
+    "nodes": [
+      "biologic_initiation",
+      "initiated_biologic_180d",
+      "age_at_index"
+    ],
+    "edges": [
+      [
+        "age_at_index",
+        "biologic_initiation"
+      ],
+      [
+        "age_at_index",
+        "initiated_biologic_180d"
+      ],
+      [
+        "biologic_initiation",
+        "initiated_biologic_180d"
+      ]
+    ],
+    "treatment_nodes": [
+      "biologic_initiation"
+    ],
+    "outcome_nodes": [
+      "initiated_biologic_180d"
+    ],
+    "adjustment_sets": [
+      [
+        "age_at_index"
+      ]
+    ],
+    "latent_nodes": [],
+    "edge_provenance": [
+      {
+        "from_node": "age_at_index",
+        "to_node": "biologic_initiation",
+        "authored_by": [
+          "age_at_index"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "age_at_index": "unsupported"
+        },
+        "citations": [
+          {
+            "raw": "PMID:24472253",
+            "identifier": "24472253",
+            "identifier_kind": "pmid",
+            "abstract_resolved": true,
+            "entities_found": [],
+            "causal_cue_found": null,
+            "overall_confidence": 0.0,
+            "error": null
+          }
+        ],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "age_at_index",
+        "to_node": "initiated_biologic_180d",
+        "authored_by": [
+          "age_at_index"
+        ],
+        "grade": "unsupported",
+        "grades_by_feature": {
+          "age_at_index": "unsupported"
+        },
+        "citations": [
+          {
+            "raw": "PMID:24472253",
+            "identifier": "24472253",
+            "identifier_kind": "pmid",
+            "abstract_resolved": true,
+            "entities_found": [],
+            "causal_cue_found": null,
+            "overall_confidence": 0.0,
+            "error": null
+          },
+          {
+            "raw": "DOI:10.1001/jama.2005.902",
+            "identifier": "10.1001/jama.2005.902",
+            "identifier_kind": "doi",
+            "abstract_resolved": false,
+            "entities_found": [],
+            "causal_cue_found": null,
+            "overall_confidence": 0.0,
+            "error": null
+          }
+        ],
+        "dropped": false,
+        "dropped_reason": null
+      },
+      {
+        "from_node": "biologic_initiation",
+        "to_node": "initiated_biologic_180d",
+        "authored_by": [
+          "age_at_index"
+        ],
+        "grade": "estimand",
+        "grades_by_feature": {
+          "age_at_index": "estimand"
+        },
+        "citations": [],
+        "dropped": false,
+        "dropped_reason": null
+      }
+    ],
+    "adjustment_valid": true,
+    "is_dag": true
+  },
+  "features": [
+    {
+      "feature": "age_at_index",
+      "fragment_role": "confounder",
+      "cohort_role": "confounder",
+      "role_drift": false,
+      "ambiguous": false,
+      "review_required": false,
+      "review_reasons": [
+        "unsupported edges (no verified citation): age_at_index->T, age_at_index->Y"
+      ],
+      "leak_verdict": false,
+      "leak_source": null,
+      "panel_final_role": null,
+      "edge_grades": {
+        "T->Y": "estimand",
+        "age_at_index->T": "unsupported",
+        "age_at_index->Y": "unsupported"
+      },
+      "in_adjustment_set": true,
+      "in_minimal_adjustment_set": true,
+      "adjustment_exclusion": null,
+      "provenance": "machine",
+      "model_id": "openai/gpt-5.6-terra",
+      "n_edges": 3
+    }
+  ]
+}
