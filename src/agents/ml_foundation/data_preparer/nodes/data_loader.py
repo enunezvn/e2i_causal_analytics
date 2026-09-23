@@ -1,9 +1,16 @@
 """Data loader node for data_preparer agent.
 
 Supports three ingestion paths:
-  - Supabase tables (default; ``data_source`` is a table name string)
+  - Supabase tables (default; ``data_source`` is a table name string, OR a table
+    dict ``{"type": "table", "table": ..., "filters": {...}, "columns": [...]}`` —
+    see ``_load_from_supabase``)
   - Sample data generator (``use_sample_data=True``)
   - Local files (``data_source`` is a dict — see ``_load_from_files``)
+
+Split policy for tables (#2207 split contract, owner decision 2026-09-23): a table
+that carries a ``data_split`` column declares its own split and it is honoured
+verbatim — exactly as ``_load_from_files`` does via ``_split_from_column``. A table
+without one keeps the temporal ``val_days`` / ``test_days`` split (no holdout).
 """
 
 import logging
@@ -23,6 +30,16 @@ from ..ingestion import FileIngestor, IngestionError
 from ..state import DataPreparerState
 
 logger = logging.getLogger(__name__)
+
+# Hard cap on a table cohort load. PostgREST on this deployment has no
+# PGRST_DB_MAX_ROWS (docker inspect supabase-rest, 2026-09-23), so the loader's
+# ``.limit()`` is the only cap — and a frame that reaches it may be TRUNCATED. A
+# silently truncated cohort is a plausible-wrong model, so ``_load_precomputed_split``
+# fails loud at ``len(df) >= _TABLE_ROW_LIMIT`` instead of training on a prefix.
+_TABLE_ROW_LIMIT = 100_000
+
+# Labels ``_split_from_column`` understands (converter / migration vocabulary).
+_SPLIT_LABELS = ("train", "validation", "val", "test", "holdout")
 
 
 def _legacy_split_config() -> SplitConfig:
@@ -58,6 +75,22 @@ async def load_data(state: DataPreparerState) -> Dict[str, Any]:
     3. Applies appropriate splitting strategy (temporal, entity, or combined)
     4. Populates train_df, validation_df, test_df, holdout_df in state
 
+    ``data_source`` shapes (routed below):
+      - ``str`` — a Supabase table name (temporal split, or the table's own
+        ``data_split`` column when it carries one).
+      - ``{"type": "table", "table": <name>, "filters": {...}, "columns": [...]}`` —
+        the retrain cohort contract (#2207): ``filters`` are merged OVER
+        ``scope_spec.filters`` (the contract wins; ``scope_builder`` never emits
+        filters, so this is the only way a brand partition reaches the query); an
+        explicit ``is_synthetic`` filter forces ``include_synthetic=True`` so the
+        provenance default-exclude cannot contradict the contract; ``columns``
+        scopes the SELECT (a whole-table load of ``patient_journeys`` would learn
+        its own label from ``days_to_treatment`` — see
+        ``gold_standard_eval.feature_builder.LEAKAGE_DENYLIST``) and MUST contain
+        ``scope_spec.prediction_target`` (fail loud otherwise — this also catches
+        the scope_definer's ``adopt* -> will_adopt`` target rewrite).
+      - ``{"type": "file_dir" | "files", ...}`` — local files (``_load_from_files``).
+
     Args:
         state: Current agent state
 
@@ -83,8 +116,10 @@ async def load_data(state: DataPreparerState) -> Dict[str, Any]:
 
         # Route on data_source shape:
         #   - dict with "type" in {"file_dir", "files"} → local file ingestion
+        #   - dict with "type" == "table" → Supabase table cohort contract
+        #   - any other dict → fail loud (never str() a dict into a table name)
         #   - use_sample_data=True → synthetic generator
-        #   - otherwise → Supabase
+        #   - otherwise → Supabase table name
         if isinstance(data_source, dict) and data_source.get("type") in (
             "file_dir",
             "files",
@@ -95,8 +130,44 @@ async def load_data(state: DataPreparerState) -> Dict[str, Any]:
                 entity_column=entity_column,
                 date_column=date_column,
             )
+        elif isinstance(data_source, dict) and data_source.get("type") == "table":
+            table = data_source.get("table")
+            if not table or not isinstance(table, str):
+                raise ValueError("data_source.table required for type='table'")
+            contract_filters = data_source.get("filters") or {}
+            merged_filters = {**filters, **contract_filters}
+            raw_columns = data_source.get("columns")
+            columns = [str(c) for c in raw_columns] if raw_columns is not None else None
+            _require_target_in_columns(columns, scope_spec.get("prediction_target"))
+            logger.info(
+                "Loading table cohort contract: table=%s filters=%s columns=%s",
+                table,
+                merged_filters,
+                columns,
+            )
+            dataset = await _load_from_supabase(
+                data_source=table,
+                filters=merged_filters,
+                date_column=date_column,
+                entity_column=entity_column,
+                split_date=split_date,
+                val_days=val_days,
+                test_days=test_days,
+                columns=columns,
+                include_synthetic="is_synthetic" in merged_filters,
+            )
+            if all(len(dataset[k]) == 0 for k in ("train", "val", "test")):
+                raise ValueError(
+                    f"table cohort {table!r} with filters {merged_filters!r} loaded an "
+                    "empty frame (no rows match, or the loader logged a query error)"
+                )
+        elif isinstance(data_source, dict):
+            raise ValueError(
+                f"Unknown data_source type: {data_source.get('type')!r} "
+                "(expected 'table', 'file_dir' or 'files')"
+            )
         elif use_sample_data:
-            # Narrow to str for the table-name branches (dict path handled above).
+            # Narrow to str for the table-name branches (dict paths handled above).
             ds_str = data_source if isinstance(data_source, str) else str(data_source)
             logger.info("Using sample data generator")
             dataset = await _load_sample_data(
@@ -115,6 +186,7 @@ async def load_data(state: DataPreparerState) -> Dict[str, Any]:
                 split_date=split_date,
                 val_days=val_days,
                 test_days=test_days,
+                include_synthetic="is_synthetic" in filters,
             )
 
         # Calculate loading duration
@@ -147,6 +219,77 @@ async def load_data(state: DataPreparerState) -> Dict[str, Any]:
         }
 
 
+def _require_target_in_columns(columns: Optional[list[str]], target: Any) -> None:
+    """A column-scoped table contract must select its own prediction target."""
+    if columns is None or not isinstance(target, str) or not target:
+        return
+    if target not in columns:
+        raise ValueError(
+            f"contract columns omit the target column {target!r}: columns={columns!r}. "
+            "A table cohort contract must select scope_spec.prediction_target (note the "
+            "scope_definer rewrites some requested targets, e.g. 'adopt*' -> 'will_adopt')."
+        )
+
+
+async def _table_has_data_split(
+    loader: Any, table: str, filters: Dict[str, Any], include_synthetic: bool
+) -> bool:
+    """1-row presence probe for a precomputed ``data_split`` column.
+
+    Selects ``*`` on one row under the SAME filters / provenance mode as the real
+    load, so a table without the column never raises a PostgREST 42703 (which the
+    loader would log at ERROR and swallow into an empty frame). An empty cohort reads
+    as ``False``; the caller's route then reports it.
+    """
+    probe = await loader.load_table_sample(
+        table, filters=filters, limit=1, include_synthetic=include_synthetic
+    )
+    return "data_split" in probe.columns
+
+
+async def _load_precomputed_split(
+    loader: Any,
+    table: str,
+    filters: Dict[str, Any],
+    columns: Optional[list[str]],
+    include_synthetic: bool,
+) -> Dict[str, Any]:
+    """Load a table that carries ``data_split`` and partition on it verbatim."""
+    select: Optional[list[str]] = None
+    if columns:
+        select = list(columns) + ([] if "data_split" in columns else ["data_split"])
+    df = await loader.load_table_sample(
+        table,
+        filters=filters,
+        limit=_TABLE_ROW_LIMIT,
+        columns=select,
+        include_synthetic=include_synthetic,
+    )
+    if df.empty:
+        raise ValueError(
+            f"table cohort {table!r} with filters {filters!r} loaded an empty frame "
+            f"(no rows match, or the loader logged a query error — e.g. a column in "
+            f"{select!r} does not exist)"
+        )
+    if len(df) >= _TABLE_ROW_LIMIT:
+        raise ValueError(
+            f"table cohort {table!r} with filters {filters!r} hit the "
+            f"{_TABLE_ROW_LIMIT}-row load cap: the frame may be truncated, refusing to "
+            "train on a prefix of the cohort"
+        )
+    if "data_split" not in df.columns:
+        raise ValueError(
+            f"table {table!r} probed with a data_split column but the full load has none"
+        )
+    logger.info(
+        "Using precomputed 'data_split' column from table %s (%d rows, %d cols)",
+        table,
+        len(df),
+        len(df.columns),
+    )
+    return _split_from_column(df)
+
+
 async def _load_from_supabase(
     data_source: str,
     filters: Dict[str, Any],
@@ -155,8 +298,17 @@ async def _load_from_supabase(
     split_date: Optional[str],
     val_days: int,
     test_days: int,
+    columns: Optional[list[str]] = None,
+    include_synthetic: bool = False,
 ) -> Dict[str, Any]:
     """Load data from Supabase and split.
+
+    Precomputed split FIRST: if the table carries a ``data_split`` column it is
+    honoured verbatim (``_load_precomputed_split`` -> ``_split_from_column``), which
+    is the only way a table-sourced retrain reaches the trainer's ``split_enforcer``
+    with the non-empty holdout and 60/20/10/10 ratios it requires. Otherwise the
+    temporal path below runs unchanged (``MLDataset`` has no holdout and
+    ``combined_split`` yields none either — measured 2026-09-23).
 
     Args:
         data_source: Table name
@@ -166,11 +318,20 @@ async def _load_from_supabase(
         split_date: Reference date for temporal split
         val_days: Days for validation set
         test_days: Days for test set
+        columns: Columns to SELECT (None = all); the split column is added on the
+            precomputed path
+        include_synthetic: opt out of the provenance default-exclude (the caller
+            sets it when the filters name ``is_synthetic`` explicitly)
 
     Returns:
         Dict with train, val, test, holdout DataFrames
     """
     loader = get_ml_data_loader()
+
+    if await _table_has_data_split(loader, data_source, filters, include_synthetic):
+        return await _load_precomputed_split(
+            loader, data_source, filters, columns, include_synthetic
+        )
 
     # Load with temporal split
     dataset = await loader.load_for_training(
@@ -180,6 +341,8 @@ async def _load_from_supabase(
         split_date=split_date,
         val_days=val_days,
         test_days=test_days,
+        columns=columns,
+        include_synthetic=include_synthetic,
     )
 
     result = {
@@ -368,13 +531,23 @@ def _split_from_column(df: pd.DataFrame) -> Dict[str, Any]:
 
     Accepts converter-produced labels: 'train', 'validation'/'val', 'test',
     'holdout'. Empty splits are returned as empty DataFrames matching the
-    original schema.
+    original schema. Rows whose label is none of those are DROPPED — with a
+    warning naming the count and the stray labels (they used to vanish silently).
     """
     split_col = df["data_split"]
     train = df[split_col == "train"].reset_index(drop=True)
     val = df[split_col.isin(["validation", "val"])].reset_index(drop=True)
     test = df[split_col == "test"].reset_index(drop=True)
     holdout = df[split_col == "holdout"].reset_index(drop=True)
+    dropped = len(df) - (len(train) + len(val) + len(test) + len(holdout))
+    if dropped:
+        stray = split_col[~split_col.isin(_SPLIT_LABELS)].astype(str).unique().tolist()
+        logger.warning(
+            "Dropped %d row(s) whose data_split label is not one of %s (stray labels: %s)",
+            dropped,
+            list(_SPLIT_LABELS),
+            stray[:10],
+        )
     logger.info(
         "Split from 'data_split' column: train=%d, val=%d, test=%d, holdout=%d",
         len(train),
