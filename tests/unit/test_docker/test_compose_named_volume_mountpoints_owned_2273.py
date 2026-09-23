@@ -193,3 +193,18 @@ def test_every_writable_app_volume_mountpoint_is_created_in_each_runtime_stage()
         "user (uid 1000) cannot write to it (#2273: audit_artifacts, never written on "
         "prod). Add each path to that stage's `RUN mkdir -p` list:\n  " + "\n  ".join(missing)
     )
+
+
+def test_dev_only_app_image_services_are_in_scope() -> None:
+    """codex r1 LOW: services that exist only in the dev overlay but build the app image
+    (``falkordb-seeder``, ``test``) must feed the check too, not just the base file's."""
+    base, dev = _load(BASE_COMPOSE), _load(DEV_COMPOSE)
+    dev_only = {
+        name
+        for name, body in (dev.get("services") or {}).items()
+        if name not in (base.get("services") or {})
+        and isinstance((body or {}).get("build"), dict)
+        and body["build"].get("dockerfile") == APP_DOCKERFILE
+    }
+    assert dev_only, "expected dev-only app-image services; did the overlay change?"
+    assert dev_only <= _app_image_services(base, dev)

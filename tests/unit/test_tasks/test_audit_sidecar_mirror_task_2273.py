@@ -256,3 +256,22 @@ def test_the_script_runs_on_psycopg2_when_psycopg3_is_absent(verdicts_db, tmp_pa
     )  # fmt: skip
     assert proc.returncode == 0, proc.stderr[-2000:]
     assert _count(verdicts_db, "exp_pg2_2273") == 1
+
+
+def test_a_sidecar_the_mirror_skips_makes_the_run_degraded_not_ok(
+    verdicts_db, tmp_path, monkeypatch, caplog
+) -> None:
+    """codex r1 MED: the reader skips an unreadable sidecar with a WARNING and the script
+    still exits 0. That canonical record never reaches the table, so the task must not
+    report ``ok``: it reports ``degraded``, names the file, and logs at ERROR."""
+    _write_sidecar(tmp_path, "exp_degraded_2273", "age")
+    broken = tmp_path / "exp_degraded_2273" / "adaptive_verdicts_20260923T000000Z.json"
+    broken.write_text("{ not json")
+    _arm(monkeypatch, verdicts_db, tmp_path)
+
+    with caplog.at_level("WARNING"):
+        result = _task()()
+    assert result["status"] == "degraded", result
+    assert any(str(broken) in line for line in result["skipped_sidecars"]), result
+    assert _count(verdicts_db, "exp_degraded_2273") == 1, "the readable sidecar still lands"
+    assert any(r.levelname == "ERROR" and str(broken) in r.getMessage() for r in caplog.records)
