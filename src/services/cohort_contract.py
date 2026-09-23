@@ -73,6 +73,34 @@ def decode_data_source(text: Optional[str]) -> Any:
     return text
 
 
+def training_provenance_from_contract(data_source: Any) -> Optional[str]:
+    """The ``training_provenance`` a load of ``data_source`` provably has, else ``None``.
+
+    Only a table cohort contract whose ``filters`` pin ``is_synthetic`` fixes what
+    every loaded row is (``data_loader`` applies the filter verbatim): ``true`` ->
+    ``'synthetic_gold'`` (the only synthetic value migration 083 allows; the goldstd
+    cohorts ARE the ``is_synthetic`` rows), ``false`` -> ``'real'``. An unpinned load's
+    row set depends on ``E2I_INCLUDE_SYNTHETIC`` and the table, a bare table name or a
+    file source carries no provenance, so those are ``None`` (unknown), never guessed
+    (#2255). String booleans are parsed, never ``bool("false")``.
+    """
+    if isinstance(data_source, str):
+        data_source = decode_data_source(data_source)
+    if not isinstance(data_source, dict) or data_source.get("type") != "table":
+        return None
+    filters = data_source.get("filters")
+    if not isinstance(filters, dict) or "is_synthetic" not in filters:
+        return None
+    pinned = filters["is_synthetic"]
+    if isinstance(pinned, str):
+        pinned = {"true": True, "false": False}.get(pinned.strip().lower())
+    if pinned is True:
+        return "synthetic_gold"
+    if pinned is False:
+        return "real"
+    return None
+
+
 def contract_from_registry_row(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """The None-free cohort contract a registry row carries."""
     if not row:
@@ -282,4 +310,5 @@ __all__ = [
     "load_registry_cohort_contract",
     "load_registry_model_identity",
     "merge_contracts",
+    "training_provenance_from_contract",
 ]

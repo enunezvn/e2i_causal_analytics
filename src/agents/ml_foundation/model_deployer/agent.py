@@ -171,6 +171,9 @@ class ModelDeployerAgent:
         for cohort_key in ("data_source", "target_outcome", "retrain_of"):
             if input_data.get(cohort_key) is not None:
                 initial_state[cohort_key] = input_data[cohort_key]
+        # #2255: synthetic augmentation rows are part of the candidate's provenance.
+        if input_data.get("training_augmentation_applied"):
+            initial_state["training_augmentation_applied"] = True
 
         # Execute LangGraph workflow with optional Opik tracing
         start_time = datetime.now(timezone.utc)

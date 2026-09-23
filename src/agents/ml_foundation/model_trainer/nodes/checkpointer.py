@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 import os
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -84,7 +85,10 @@ async def save_checkpoint(state: Dict[str, Any]) -> Dict[str, Any]:
 
         # Generate checkpoint name
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        checkpoint_name = f"{algorithm_name.lower()}_{experiment_id}_{timestamp}"
+        # Runs of one scope share its experiment id (#2242/#2257): a per-write suffix
+        # keeps two same-second checkpoints from overwriting each other.
+        suffix = uuid.uuid4().hex[:6]
+        checkpoint_name = f"{algorithm_name.lower()}_{experiment_id}_{timestamp}_{suffix}"
         checkpoint_path = checkpoint_dir / f"{checkpoint_name}.pkl"
         metadata_path = checkpoint_dir / f"{checkpoint_name}_metadata.json"
 
