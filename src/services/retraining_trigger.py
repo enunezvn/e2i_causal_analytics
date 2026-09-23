@@ -15,7 +15,9 @@ Integration Points:
 - Celery for async job execution
 """
 
+import hashlib
 import logging
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -335,11 +337,6 @@ class RetrainingTriggerService:
         except Exception:
             performance_before = 0.0
 
-        # Generate new model version
-        base_version = model_version.rsplit("_", 1)[0] if "_" in model_version else model_version
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
-        new_version = f"{base_version}_retrained_{timestamp}"
-
         # Build training config
         training_config = self._build_training_config(reason, drift_score, performance_before)
 
@@ -353,6 +350,7 @@ class RetrainingTriggerService:
         # fails closed at execution). The row id becomes ml_retraining_history.model_id.
         from src.services.cohort_contract import (
             load_registry_cohort_contract,
+            load_registry_model_identity,
             merge_contracts,
         )
 
@@ -363,8 +361,33 @@ class RetrainingTriggerService:
         # Cohort identity → reaches execute_model_retraining → MLFoundationPipeline.
         if effective_cohort:
             training_config.update(effective_cohort)
+
+        # #2242: the candidate is a new VERSION of the registered model being retrained.
+        # The logical identity travels as training_config["retrain_of"]: the pipeline
+        # attaches the scope to the model's experiment and registers the candidate as
+        # (model_name, new_version) — the pair this history row records. A registered
+        # row whose identity cannot be read is refused rather than retrained as an
+        # unattached orphan (codex r1).
+        identity = await load_registry_model_identity(client, registry_model_id)
+        if registry_model_id and not identity:
+            raise RuntimeError(
+                f"registered model {registry_model_id} has no readable identity (model "
+                "name / version / experiment) — refusing a retrain its candidate could "
+                "not be attached to"
+            )
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
+        if identity:
+            new_version = _candidate_version(identity["model_version"], timestamp)
+        else:
+            base_version = (
+                model_version.rsplit("_", 1)[0] if "_" in model_version else model_version
+            )
+            new_version = f"{base_version}_retrained_{timestamp}"
         if config_overrides:
             training_config.update(config_overrides)
+        if identity:
+            # After the overrides: the retrained identity is authoritative, never a knob.
+            training_config["retrain_of"] = {**identity, "new_model_version": new_version}
         training_config["approved_by"] = approved_by
 
         # Record retraining trigger
@@ -647,6 +670,27 @@ class RetrainingTriggerService:
 # =============================================================================
 # FACTORY
 # =============================================================================
+
+
+_REGISTRY_VERSION_MAX = 50  # ml_model_registry.model_version VARCHAR(50)
+
+
+def _candidate_version(parent_version: str, timestamp: str) -> str:
+    """The registry version of a retrain candidate of ``parent_version`` (#2242).
+
+    ``<base>_retrained_<timestamp>_<6 hex>``: siblings off the parent's base version
+    (a retrained candidate's own ``_retrained_`` suffix is stripped, never chained);
+    the random tail keeps two retrains of one model in the same minute from colliding
+    on UNIQUE(model_name, model_version); a base too long for VARCHAR(50) is cut and
+    tagged with a hash of the full base so distinct bases stay distinct.
+    """
+    base = parent_version.split("_retrained_", 1)[0]
+    suffix = f"_retrained_{timestamp}_{uuid.uuid4().hex[:6]}"
+    room = _REGISTRY_VERSION_MAX - len(suffix)
+    if len(base) > room:
+        digest = hashlib.sha1(base.encode(), usedforsecurity=False).hexdigest()[:8]
+        base = f"{base[: room - len(digest) - 1]}_{digest}"
+    return f"{base}{suffix}"
 
 
 def get_retraining_trigger_service(

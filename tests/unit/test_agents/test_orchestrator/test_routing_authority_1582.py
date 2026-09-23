@@ -153,7 +153,10 @@ class TestIssue1582Scenario:
             "classification": result.model_dump(mode="json", exclude={"stages"}),
             "routing_pattern": result.routing_pattern.value,
         }
-        return result, await _route(state, monkeypatch, "shadow")
+        # The router returns only its delta (#2238); merge it over the input the
+        # way LangGraph's channel update would, so the envelope assertions below
+        # still see the classifier's ``routing_pattern`` next to the router's marker.
+        return result, {**state, **(await _route(state, monkeypatch, "shadow"))}
 
     async def test_confident_pipeline_verdict_is_still_legacy_authority_in_shadow(
         self, monkeypatch

@@ -3159,7 +3159,6 @@ class DispatcherNode:
         dispatch_time = int((time.time() - start_time) * 1000)
 
         return {
-            **state,
             "agent_results": all_results,
             "dispatch_latency_ms": dispatch_time,
             "current_phase": "synthesizing",

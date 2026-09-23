@@ -426,6 +426,7 @@ def _cmp(op: str, col: str, val: str) -> _Pred:
             "lte": v <= val,
             "lt": v < val,
             "eq": v == val,
+            "neq": v != val,
         }[op]
 
     return pred
@@ -466,6 +467,11 @@ class FakeQuery:
     def eq(self, col: str, val: Any) -> "FakeQuery":
         self._log.append(("eq", col, val))
         self._preds.append(_cmp("eq", col, val))
+        return self
+
+    def neq(self, col: str, val: Any) -> "FakeQuery":
+        self._log.append(("neq", col, val))
+        self._preds.append(_cmp("neq", col, val))
         return self
 
     def gte(self, col: str, val: Any) -> "FakeQuery":
@@ -546,6 +552,10 @@ def _row(status: str, valid_until: Optional[str], **extra: Any) -> Dict[str, Any
     base = {
         "review_id": f"rev-{status}-{valid_until}",
         "dag_version_hash": "dag-1",
+        # NOT NULL in the schema; the runtime queue unless a test says otherwise
+        # (migration 153, #2244: the approval readers are the gate's and skip
+        # initial_dag rows).
+        "review_type": "dag_approval",
         "approval_status": status,
         "valid_until": valid_until,
         "approved_at": None if status != "approved" else f"{_iso(-90)}T00:00:00+00:00",
@@ -624,6 +634,31 @@ class TestPureHelpers:
 # --------------------------------------------------------------------------
 # Readers, through the faithful fake
 # --------------------------------------------------------------------------
+
+
+class TestApprovalReadersStayInTheRuntimeQueue:
+    """#2244 (migration 153): ``is_dag_approved`` / ``get_dag_approval`` answer for
+    the GATE, so a Lane B ``initial_dag`` approval of the same hash is not an
+    approval here -- otherwise ``request_renewal`` would renew an authored
+    review as a runtime ``quarterly_audit`` row (codex r1 MED)."""
+
+    async def test_a_structural_author_approval_alone_is_not_the_gates_approval(self):
+        repo, client = _repo([_row("approved", None, review_type="initial_dag")])
+        assert await repo.is_dag_approved("dag-1") is False
+        assert await repo.get_dag_approval("dag-1") is None
+        assert ("neq", "review_type", "initial_dag") in client.log, client.log
+
+    async def test_get_dag_approval_skips_a_newer_structural_author_row(self):
+        authored = _row(
+            "approved",
+            None,
+            review_type="initial_dag",
+            review_id="rev-author",
+            approved_at=f"{_iso(-1)}T00:00:00+00:00",
+        )
+        repo, _ = _repo([authored, PERMANENT])
+        got = await repo.get_dag_approval("dag-1")
+        assert got is not None and got["review_id"] == PERMANENT["review_id"]
 
 
 class TestActiveApprovalReaders:

@@ -170,16 +170,18 @@ class TestEnsembleCombinerNode:
         assert "No predictions" in result["errors"][0]["error"]
 
     @pytest.mark.asyncio
-    async def test_already_failed_passthrough(self, state_with_predictions):
-        """Test that already failed state passes through."""
+    async def test_already_failed_returns_empty_delta(self, state_with_predictions):
+        """An already-failed state gets an EMPTY delta, not an echo (#2238):
+        echoing ``errors`` into the graph's operator.add channel doubled it."""
         state_with_predictions["status"] = "failed"
         state_with_predictions["errors"] = [{"error": "Previous error"}]
 
         node = EnsembleCombinerNode()
         result = await node.execute(state_with_predictions)
 
-        assert result["status"] == "failed"
-        assert result["errors"] == [{"error": "Previous error"}]
+        assert result == {}
+        assert state_with_predictions["status"] == "failed"  # input untouched
+        assert state_with_predictions["errors"] == [{"error": "Previous error"}]
 
     @pytest.mark.asyncio
     async def test_single_prediction(self, state_with_predictions):

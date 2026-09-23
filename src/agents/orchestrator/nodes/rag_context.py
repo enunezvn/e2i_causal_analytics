@@ -104,7 +104,6 @@ class RAGContextNode:
         if not query or primary_intent in ["system_health", "drift_check"]:
             logger.debug("Skipping RAG context - not applicable for this intent")
             return {
-                **state,
                 "rag_context": None,
                 "rag_latency_ms": 0,
             }
@@ -116,7 +115,6 @@ class RAGContextNode:
                 # Mock mode - return empty context
                 logger.debug("RAG retriever not available - skipping context retrieval")
                 return {
-                    **state,
                     "rag_context": None,
                     "rag_latency_ms": int((time.time() - start_time) * 1000),
                 }
@@ -150,7 +148,6 @@ class RAGContextNode:
             logger.info(f"RAG context retrieved: {len(results)} results in {rag_latency_ms}ms")
 
             return {  # type: ignore[typeddict-unknown-key]
-                **state,
                 "rag_context": rag_context,
                 "rag_results": [self._result_to_dict(r) for r in results],
                 "rag_latency_ms": rag_latency_ms,
@@ -163,10 +160,9 @@ class RAGContextNode:
 
             # Don't fail the pipeline - continue without context
             return {
-                **state,
                 "rag_context": None,
                 "rag_latency_ms": rag_latency_ms,
-                "warnings": state.get("warnings", []) + [f"RAG context retrieval failed: {str(e)}"],
+                "warnings": [f"RAG context retrieval failed: {str(e)}"],
             }
 
     async def _extract_entities(

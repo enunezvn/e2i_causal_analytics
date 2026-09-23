@@ -200,7 +200,9 @@ async def _resolve_goldstd_experiment(client: Any, spec: Any, experiment_name: s
     Delegates to the deploy module's ``_get_or_create_experiment``, passing
     ``spec.target`` explicitly so each cohort's experiment is registered under
     its own ``prediction_target`` (e.g. ``pnh_persistence``, ``pnh_discontinuation``),
-    not the serving-deploy module-level constant.
+    not the serving-deploy module-level constant. Likewise ``spec.brand`` (the
+    cohort's brand partition; ``None`` = all brands -> NULL), not the serving
+    deploy's single-brand ``BRAND`` (#2256).
     """
     target = getattr(spec, "target", None)
     if not target:
@@ -211,5 +213,6 @@ async def _resolve_goldstd_experiment(client: Any, spec: Any, experiment_name: s
         created_by="gold_standard_eval",
         description=f"Gold-standard eval pipeline for the {getattr(spec, 'name', target)} cohort.",
         prediction_target=target,
+        brand=spec.brand,
         training_provenance="synthetic_gold",  # #968: synthetic-gold-trained
     )

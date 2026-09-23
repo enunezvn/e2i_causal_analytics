@@ -543,8 +543,12 @@ class TestMetricQuestionReturnsMetrics:
 
     async def test_composite_payload_is_unchanged(self):
         """Narration only — the structured score/grade contract is untouched."""
-        out = await _compose(_measured_models_state())
-        assert out["model_health_score"] == 1.0
+        state = _measured_models_state()
+        out = await _compose(state)
+        # The composer returns only its delta (#2238): the measured dimension
+        # score is an INPUT it neither rewrites nor echoes.
+        assert "model_health_score" not in out
+        assert state["model_health_score"] == 1.0
         assert out["data_provenance"] == "partial"
         assert out["health_grade"] == "A"
 

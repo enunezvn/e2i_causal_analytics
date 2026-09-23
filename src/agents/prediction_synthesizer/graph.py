@@ -115,7 +115,7 @@ def build_prediction_synthesizer_graph(
 
 async def _error_handler_node(
     state: PredictionSynthesizerState,
-) -> PredictionSynthesizerState:
+) -> Dict[str, Any]:
     """Handle errors in the prediction pipeline."""
     errors = state.get("errors", [])
     error_messages = [e.get("error", "Unknown error") for e in errors]
@@ -123,7 +123,6 @@ async def _error_handler_node(
     logger.error(f"Prediction synthesis failed: {error_messages}")
 
     return {
-        **state,
         "prediction_summary": "Prediction could not be generated due to errors.",
         "total_latency_ms": (
             state.get("orchestration_latency_ms", 0) + state.get("ensemble_latency_ms", 0)

@@ -1,0 +1,15 @@
+deploy_run=35843151634
+DEPLOY completed success
+IMAGE ghcr.io/enunezvn/e2i-api:8fdfbab00 2026-09-23T10:29:41.651836454Z
+health=200
+probe_exit=0
+status: completed | data_source: database
+structural/prior warnings: []
+ate: 0.007056123869614513 ci: [-0.0053728049252601395, 0.019485052664489168] p: 0.26583454458398803
+PRE-B  ate: 0.007056123869614513 ci: [-0.0053728049252601395, 0.019485052664489168] data_source: synthetic
+warnings n= 2
+ - Backdoor adjustment-set search: 61 candidate covariates exceed the cap of 40; the minimal-set enumeration was skipped an
+ - No detectable effect at this sample size: The 95 % CI [-0.005, 0.019] includes zero at n = 15209. The estimate is report
+container ghcr.io/enunezvn/e2i-api:8fdfbab00 2026
+
+[exited with code 0]

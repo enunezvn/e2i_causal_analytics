@@ -31,14 +31,15 @@ ALLOWLIST: dict[str, int] = {
     "src/agents/causal_impact/nodes/refutation.py": 2519,
     "src/agents/feedback_learner/dspy_integration.py": 1836,
     "src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py": 4224,
-    "src/agents/ml_foundation/model_deployer/nodes/registry_manager.py": 1669,
+    "src/agents/ml_foundation/model_deployer/nodes/registry_manager.py": 1571,
     "src/agents/ml_foundation/model_trainer/nodes/evaluator.py": 4026,
     # 3710: MEASURED from the merged tree, not either side's pin. The lane's
     # value-lookup mask (#2114) and main's #2139 structural guard both run here,
     # and the guard now receives the structured brand (codex iter10). That costs
     # lines relative to the lane (3700) and saves them relative to main (3770),
     # so the pin still shrinks from main's.
-    "src/agents/orchestrator/nodes/dispatcher.py": 3686,
+    # 3686 -> 3685: #2238 dropped the dispatch node's full-state echo (one line).
+    "src/agents/orchestrator/nodes/dispatcher.py": 3685,
     "src/agents/tool_composer/executor.py": 1627,
     "src/agents/tool_composer/tool_registrations.py": 4843,
     "src/api/main.py": 1692,
