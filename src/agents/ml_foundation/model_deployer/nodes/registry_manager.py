@@ -13,6 +13,17 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
+from src.agents.ml_foundation.model_deployer.nodes.mlflow_registration import (  # noqa: F401
+    _get_mlflow_connector,
+    _register_model_mlflow,
+    _transition_stage_mlflow,
+)
+from src.agents.ml_foundation.model_deployer.nodes.retrain_linkage import (
+    resolve_retrain_registration,
+    retrain_experiment_mismatch,
+    retrain_not_persisted_error,
+    retrain_persist_kwargs,
+)
 from src.agents.ml_foundation.model_deployer.regulatory_audit import (
     LITERATURE_ANCHORED_THRESHOLDS,
     THRESHOLD_PROVENANCE_LITERATURE_ANCHORED,
@@ -772,132 +783,6 @@ def _evaluate_regulatory_eligibility(
     return result
 
 
-def _get_mlflow_connector() -> Optional[Any]:
-    """Get MLflow connector singleton if available.
-
-    Returns:
-        MLflowConnector instance or None if unavailable
-    """
-    try:
-        from src.mlops.mlflow_connector import MLflowConnector
-
-        connector = MLflowConnector()
-        return connector if connector.enabled else None
-    except ImportError:
-        logger.warning("MLflowConnector not available")
-        return None
-    except Exception as e:
-        logger.warning(f"Failed to get MLflow connector: {e}")
-        return None
-
-
-async def _register_model_mlflow(
-    model_uri: str, deployment_name: str
-) -> Tuple[Optional[str], Optional[int], Optional[str]]:
-    """Register model with MLflow via MLflowConnector.
-
-    Args:
-        model_uri: MLflow model URI (runs:/<run_id>/model)
-        deployment_name: Name to register model under
-
-    Returns:
-        Tuple of (registered_name, version, stage) or (None, None, None) on failure
-    """
-    connector = _get_mlflow_connector()
-    if not connector:
-        return None, None, None
-
-    try:
-        # Extract run_id and model_path from model_uri
-        # MLflow 3.x returns models:/m-<hash> format; legacy uses runs:/<run_id>/<path>
-        if model_uri.startswith("runs:/"):
-            parts = model_uri[6:].split("/", 1)
-            run_id = parts[0]
-            model_path = parts[1] if len(parts) > 1 else "model"
-        elif model_uri.startswith("models:/"):
-            # MLflow 3.x model URI — register directly via mlflow.register_model()
-            try:
-                import mlflow
-
-                result = mlflow.register_model(model_uri, deployment_name)
-                logger.info(
-                    f"Registered model from models:/ URI: {deployment_name} v{result.version}"
-                )
-                return deployment_name, int(result.version), "None"
-            except Exception as e:
-                logger.warning(f"Direct registration from models:/ URI failed: {e}")
-                return None, None, None
-        else:
-            logger.warning(f"Unexpected model_uri format: {model_uri}")
-            return None, None, None
-
-        # Use MLflowConnector's async register_model method
-
-        model_version = await connector.register_model(
-            run_id=run_id,
-            model_name=deployment_name,
-            model_path=model_path,
-        )
-
-        if model_version:
-            return (
-                model_version.name,
-                int(model_version.version),
-                model_version.stage.value if model_version.stage else "None",
-            )
-        return None, None, None
-
-    except Exception as e:
-        logger.warning(f"MLflow registration failed via connector: {e}")
-        return None, None, None
-
-
-async def _transition_stage_mlflow(model_name: str, version: int, target_stage: str) -> bool:
-    """Transition model stage via MLflowConnector.
-
-    Args:
-        model_name: Registered model name
-        version: Model version
-        target_stage: Target stage name (Staging, Production, Archived)
-
-    Returns:
-        True if successful, False otherwise
-    """
-    connector = _get_mlflow_connector()
-    if not connector:
-        return False
-
-    try:
-        from src.mlops.mlflow_connector import ModelStage
-
-        # Map MLflow stage names to our enum
-        stage_map = {
-            "None": ModelStage.DEVELOPMENT,
-            "Staging": ModelStage.STAGING,
-            "Shadow": ModelStage.SHADOW,
-            "Production": ModelStage.PRODUCTION,
-            "Archived": ModelStage.ARCHIVED,
-        }
-
-        stage = stage_map.get(target_stage, ModelStage.DEVELOPMENT)
-
-        # Use MLflowConnector's async transition_model_stage method
-        success = await connector.transition_model_stage(
-            model_name=model_name,
-            version=str(version),
-            stage=stage,
-            archive_existing=(target_stage == "Production"),
-        )
-
-        if success:
-            logger.info(f"MLflow: Transitioned {model_name} v{version} to {target_stage}")
-        return cast(bool, success)
-
-    except Exception as e:
-        logger.warning(f"MLflow stage transition failed: {e}")
-        return False
-
-
 def _parse_mlflow_run_id(model_uri: Optional[str]) -> Optional[str]:
     """Extract the MLflow run id from a ``runs:/<run_id>/<path>`` URI.
 
@@ -982,13 +867,8 @@ async def _persist_model_registry_row(
 
     ``cohort`` (#2207, migration 150): data_source / target_outcome /
     feature_manifest_source — written on the new row, healed onto a reused row's
-    NULL columns (never overwritten).
-
-    #2242 retrain: ``version_label`` replaces ``str(model_version)`` as the row's
-    ``model_version`` (the retraining history's ``new_model_version``), and
-    ``expected_experiment_id`` (the retrained model's ``ml_experiments`` uuid) must be
-    the experiment the pipeline's id resolves to — else FAIL CLOSED, never a candidate
-    filed under another model's experiment.
+    NULL columns (never overwritten). #2242 retrain: ``version_label`` / ``expected_
+    experiment_id`` — see ``retrain_linkage`` (mismatch => FAIL CLOSED).
     """
     row_version = version_label or str(model_version)
     if client is None:
@@ -1018,16 +898,9 @@ async def _persist_model_registry_row(
             experiment_id_str,
         )
         return None
-    if expected_experiment_id and str(experiment.id) != str(expected_experiment_id):
-        logger.error(
-            "ml_model_registry NOT written for '%s' v%s: experiment %r resolved to %s, "
-            "not the retrained model's experiment %s (db_persisted=False)",
-            registered_model_name,
-            row_version,
-            experiment_id_str,
-            experiment.id,
-            expected_experiment_id,
-        )
+    if retrain_experiment_mismatch(
+        registered_model_name, row_version, experiment_id_str, experiment.id, expected_experiment_id
+    ):
         return None
 
     # The MLflow run id carried by ``model_uri`` (``runs:/<run_id>/...``), if any.
@@ -1246,45 +1119,13 @@ async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
                 "registration_successful": False,
             }
 
-        # #2242: a retrain's candidate is a new version of the model being retrained —
-        # registered under ITS name (MLflow numbers the version) and written to
-        # ml_model_registry as (model_name, the history's new_model_version) inside ITS
-        # experiment. A partial identity fails closed: registering it under the
-        # generated deployment name would recreate the orphan this replaces.
-        retrain_of = state.get("retrain_of") or None
-        registry_name = deployment_name
-        if retrain_of:
-            missing = [
-                k
-                for k in ("model_name", "new_model_version", "experiment_id")
-                if not retrain_of.get(k)
-            ]
-            if missing:
-                return {
-                    "error": f"retrain_of is missing {missing} — candidate not registered",
-                    "error_type": "incomplete_retrain_identity",
-                    "registration_successful": False,
-                }
-            registry_name = retrain_of["model_name"]
-            # Preflight BEFORE MLflow (codex r1): the pipeline's experiment must be the
-            # retrained model's, else no MLflow version is created under its name.
-            preflight_client = await _get_async_supabase_client_or_none()
-            resolved = None
-            if preflight_client is not None and experiment_id:
-                from src.repositories.ml_experiment import MLExperimentRepository
-
-                resolved = await MLExperimentRepository(
-                    supabase_client=preflight_client
-                ).get_by_mlflow_id(experiment_id)
-            if not (resolved and str(resolved.id) == str(retrain_of["experiment_id"])):
-                return {
-                    "error": (
-                        f"experiment {experiment_id!r} is not the retrained model's "
-                        f"experiment {retrain_of['experiment_id']} — candidate not registered"
-                    ),
-                    "error_type": "retrain_experiment_mismatch",
-                    "registration_successful": False,
-                }
+        # #2242: a retrain registers its candidate as a new version of the retrained
+        # model (retrain_linkage); a partial identity / foreign experiment fails closed.
+        retrain_of, registry_name, retrain_error = await resolve_retrain_registration(
+            state, experiment_id, deployment_name, _get_async_supabase_client_or_none
+        )
+        if retrain_error:
+            return retrain_error
 
         # Try real MLflow registration first
         registered_model_name, model_version, current_stage = await _register_model_mlflow(
@@ -1324,26 +1165,13 @@ async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
                     model_version=int(model_version) if model_version is not None else 1,
                     validation_metrics=state.get("validation_metrics"),
                     cohort=_cohort_contract_from_state(state),
-                    version_label=(retrain_of or {}).get("new_model_version"),
-                    expected_experiment_id=(retrain_of or {}).get("experiment_id"),
+                    **retrain_persist_kwargs(retrain_of),
                 )
             except Exception as e:
                 logger.error("ml_model_registry persistence raised (fail-closed): %s", e)
                 model_registry_id = None
             if retrain_of and model_registry_id is None:
-                # #2242 (codex r1): a retrain's deliverable IS the linked registry row;
-                # an MLflow version without it must not be promoted as that model.
-                return {
-                    "error": (
-                        f"retrain candidate {registered_model_name} "
-                        f"v{retrain_of['new_model_version']} was not written to "
-                        "ml_model_registry (see the fail-closed log above)"
-                    ),
-                    "error_type": "retrain_candidate_not_persisted",
-                    "registration_successful": False,
-                    "registered_model_name": registered_model_name,
-                    "model_registry_id": None,
-                }
+                return retrain_not_persisted_error(retrain_of, registered_model_name)
 
         return {
             "registered_model_name": registered_model_name,
