@@ -31,7 +31,7 @@ from tests.unit.test_database.learning_loop import _pg
 
 pytestmark = [
     pytest.mark.skipif(not _pg.db_integration_enabled(), reason=_pg.OPT_IN_SKIP_REASON),
-    pytest.mark.timeout(600),
+    pytest.mark.timeout(300),
 ]
 
 PROD_REST_CONTAINER = "supabase-rest"
