@@ -244,13 +244,13 @@ async def test_a_reused_row_heals_a_null_provenance_but_never_overwrites_one():
     ],
 )
 def test_synthetic_augmentation_is_part_of_the_provenance(pinned, augmented, expected):
-    from src.agents.ml_foundation.model_deployer.nodes.registry_manager import (
-        _candidate_training_provenance,
+    from src.agents.ml_foundation.model_deployer.nodes.training_provenance import (
+        candidate_training_provenance,
     )
 
     source = _table(brand="Kisqali") if pinned is None else _table(is_synthetic=pinned)
     state = {"data_source": source, "training_augmentation_applied": augmented}
-    assert _candidate_training_provenance(state) == expected
+    assert candidate_training_provenance(state) == expected
 
 
 @pytest.mark.asyncio

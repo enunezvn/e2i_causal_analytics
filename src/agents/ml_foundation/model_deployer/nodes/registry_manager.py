@@ -24,6 +24,11 @@ from src.agents.ml_foundation.model_deployer.nodes.retrain_linkage import (
     retrain_not_persisted_error,
     retrain_persist_kwargs,
 )
+from src.agents.ml_foundation.model_deployer.nodes.training_provenance import (
+    candidate_training_provenance,
+    cohort_contract_from_state,
+    heal_reused_row,
+)
 from src.agents.ml_foundation.model_deployer.regulatory_audit import (
     LITERATURE_ANCHORED_THRESHOLDS,
     THRESHOLD_PROVENANCE_LITERATURE_ANCHORED,
@@ -844,45 +849,6 @@ async def _get_async_supabase_client_or_none() -> Optional[Any]:
         return None
 
 
-async def _heal_training_provenance(client: Any, row_id: str, provenance: str) -> None:
-    """NULL-only heal of a reused row's ``training_provenance`` (#2255, codex r1).
-
-    Only when the row's STORED cohort contract derives the same provenance: a redeploy
-    claiming a different cohort than the artifact was trained on must not relabel it
-    (a synthetic cohort healed ``real`` would pass the #968 gate). A row with no
-    derivable stored contract is left NULL.
-    """
-    from src.services.cohort_contract import training_provenance_from_contract
-
-    res = await (
-        client.table("ml_model_registry")
-        .select("cohort_data_source, training_provenance")
-        .eq("id", row_id)
-        .limit(1)
-        .execute()
-    )
-    rows = getattr(res, "data", None) or []
-    if not rows or rows[0].get("training_provenance"):
-        return
-    stored = training_provenance_from_contract(rows[0].get("cohort_data_source"))
-    if stored != provenance:
-        logger.warning(
-            "ml_model_registry %s: training_provenance %r not healed — the stored cohort "
-            "contract derives %r",
-            row_id,
-            provenance,
-            stored,
-        )
-        return
-    await (
-        client.table("ml_model_registry")
-        .update({"training_provenance": provenance})
-        .eq("id", row_id)
-        .is_("training_provenance", "null")
-        .execute()
-    )
-
-
 async def _persist_model_registry_row(
     client: Optional[Any],
     *,
@@ -908,8 +874,7 @@ async def _persist_model_registry_row(
     ``cohort`` (#2207, migration 150): data_source / target_outcome /
     feature_manifest_source — written on the new row, healed onto a reused row's
     NULL columns (never overwritten). #2242 retrain: ``version_label`` / ``expected_
-    experiment_id`` — see ``retrain_linkage`` (mismatch => FAIL CLOSED). #2255:
-    ``training_provenance`` — healed NULL-only; keys the #968 gate.
+    experiment_id`` — see ``retrain_linkage`` (mismatch => FAIL CLOSED).
     """
     row_version = version_label or str(model_version)
     if client is None:
@@ -924,7 +889,6 @@ async def _persist_model_registry_row(
         MLModelRegistryRepository,
         MLTrainingRunRepository,
     )
-    from src.services.cohort_contract import heal_registry_cohort_contract
 
     # 1. Resolve the real ml_experiments UUID: the tier-0 pipeline threads the
     #    ``mlflow_experiment_id`` STRING as ``experiment_id``; resolve it exactly as
@@ -1019,10 +983,7 @@ async def _persist_model_registry_row(
             experiment.id,
             existing.id,
         )
-        if cohort:  # #2207: heal NULL contract columns on the reused row
-            await heal_registry_cohort_contract(client, str(existing.id), cohort)
-        if training_provenance:
-            await _heal_training_provenance(client, str(existing.id), training_provenance)
+        await heal_reused_row(client, str(existing.id), cohort, training_provenance)
         return str(existing.id)
 
     # 4. Source the NOT-NULL ``algorithm`` + ``hyperparameters`` from the REAL
@@ -1121,39 +1082,6 @@ async def _persist_model_registry_row(
     return str(model.id)
 
 
-def _cohort_contract_from_state(state: Any) -> Dict[str, Any]:
-    """The #2207 cohort contract the deployer state carries (None-free): the pipeline's
-    ``data_source`` / ``target_outcome`` (via ``ModelDeployerAgent.run``) and the
-    RESOLVED manifest source (flat field, else ``scope_spec``)."""
-    scope_spec = state.get("scope_spec") or {}
-    manifest = state.get("feature_manifest_source") or scope_spec.get("feature_manifest_source")
-    fields = {
-        "data_source": state.get("data_source"),
-        "target_outcome": state.get("target_outcome"),
-        "feature_manifest_source": manifest,
-    }
-    return {k: v for k, v in fields.items() if v is not None}
-
-
-def _candidate_training_provenance(state: Any) -> Optional[str]:
-    """What the candidate was trained on (#2255), for the #968 promotion gate.
-
-    Derived from the training data only: the load (``training_provenance_from_contract``
-    — a table contract pinning ``is_synthetic``) plus the trainer's opt-in synthetic
-    augmentation (``real`` rows + synthetic rows = ``mixed``). An unpinned load stays
-    ``None`` (unknown) — never inherited from a retrain's parent (its label says nothing
-    about an unpinned load's rows: real in strict mode, both on a showcase instance), so
-    a retrain of a ``synthetic_gold`` parent on a REAL cohort (the remedy #968
-    prescribes) is ``real``.
-    """
-    from src.services.cohort_contract import training_provenance_from_contract
-
-    loaded = training_provenance_from_contract(state.get("data_source"))
-    if loaded == "real" and state.get("training_augmentation_applied"):
-        return "mixed"
-    return loaded
-
-
 async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
     """Register model in MLflow registry.
 
@@ -1227,9 +1155,9 @@ async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
                     registered_model_name=registered_model_name,
                     model_version=int(model_version) if model_version is not None else 1,
                     validation_metrics=state.get("validation_metrics"),
-                    cohort=_cohort_contract_from_state(state),
+                    cohort=cohort_contract_from_state(state),
                     **retrain_persist_kwargs(retrain_of),
-                    training_provenance=_candidate_training_provenance(state),
+                    training_provenance=candidate_training_provenance(state),
                 )
             except Exception as e:
                 logger.error("ml_model_registry persistence raised (fail-closed): %s", e)
