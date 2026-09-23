@@ -604,8 +604,16 @@ def _read_only_supabase_client():
     return create_client(cfg.supabase_url, cfg.supabase_key)
 
 
-def fetch_synthetic_hcp_ids(client, page_size: int = 1000, max_pages: int = 1000) -> list:
-    """Read EVERY synthetic ``hcp_profiles.hcp_id`` (the A/B unit universe), read-only.
+def fetch_synthetic_hcp_ids(
+    client, id_prefix: str = "scv", page_size: int = 1000, max_pages: int = 1000
+) -> list:
+    """Read EVERY synthetic ``hcp_profiles.hcp_id`` in the ``id_prefix`` namespace
+    (the A/B unit universe), read-only.
+
+    Scoped server-side to ``{id_prefix}hcp_%`` (codex r1 MED): the full load
+    samples from THIS run's tagged hcp_profiles frame, so the refresh must
+    sample from the same namespace — every synthetic HCP that happens to exist
+    would mix a coexisting namespace's cohort into the panels.
 
     PK-ordered ``.range()`` windows paged to exhaustion (cap-agnostic: advance by
     the rows actually returned, stop only on an EMPTY page — PostgREST's default
@@ -625,6 +633,7 @@ def fetch_synthetic_hcp_ids(client, page_size: int = 1000, max_pages: int = 1000
             client.table("hcp_profiles")
             .select("hcp_id", count="exact")
             .eq("is_synthetic", True)
+            .like("hcp_id", f"{id_prefix}hcp_%")
             .order("hcp_id")
             .range(offset, offset + page_size - 1)
             .execute()
@@ -643,8 +652,8 @@ def fetch_synthetic_hcp_ids(client, page_size: int = 1000, max_pages: int = 1000
         )
     if not ids:
         raise ValueError(
-            "hcp_profiles has no is_synthetic rows — no namespaced HCP universe to sample "
-            "A/B panels from (load hcp_profiles first)"
+            f"hcp_profiles has no is_synthetic rows in the '{id_prefix}hcp_' namespace — no "
+            "HCP universe to sample A/B panels from (load hcp_profiles with this --tag first)"
         )
     if expected is None or len(ids) != expected:
         raise ValueError(
@@ -654,8 +663,9 @@ def fetch_synthetic_hcp_ids(client, page_size: int = 1000, max_pages: int = 1000
     if len(set(ids)) != len(ids):
         raise ValueError(f"hcp_profiles read returned duplicate ids ({len(ids) - len(set(ids))})")
     logger.info(
-        "refresh-ab: HCP universe = %d synthetic hcp_profiles ids (%s .. %s)",
+        "refresh-ab: HCP universe = %d synthetic hcp_profiles ids in namespace %shcp_ (%s .. %s)",
         len(ids),
+        id_prefix,
         ids[0],
         ids[-1],
     )
@@ -965,7 +975,7 @@ def main():
             # --append-frontier's documented ignoring of --small.
             # The unit universe is READ from hcp_profiles (never fabricated), even
             # under --dry-run: an unreachable DB fails loud here, before generation.
-            hcp_ids = fetch_synthetic_hcp_ids(_read_only_supabase_client())
+            hcp_ids = fetch_synthetic_hcp_ids(_read_only_supabase_client(), id_prefix=args.tag)
             datasets = build_ab_refresh_datasets(FULL_SIZES, id_prefix=args.tag, hcp_ids=hcp_ids)
             logger.info(
                 "refresh-ab: %d experiments, %d assignments",

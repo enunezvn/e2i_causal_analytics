@@ -29,6 +29,7 @@ class _FakeQuery:
     def __init__(self, ids, log, report_count=None):
         self._ids = ids
         self._log = log
+        self._report_count = report_count
         self._count = len(ids) if report_count is None else report_count
         self._range = None
 
@@ -38,6 +39,16 @@ class _FakeQuery:
 
     def eq(self, *a, **k):
         self._log.append(("eq", a))
+        return self
+
+    def like(self, column, pattern):
+        # PostgREST `like`: '%' wildcard only at the end in this usage
+        assert column == "hcp_id" and pattern.endswith("%"), (column, pattern)
+        self._log.append(("like", (column, pattern)))
+        prefix = pattern[:-1]
+        self._ids = [h for h in self._ids if h.startswith(prefix)]
+        if self._report_count is None:
+            self._count = len(self._ids)
         return self
 
     def order(self, *a, **k):
@@ -73,6 +84,7 @@ def test_fetch_reads_all_5000_ids_across_pages_pk_ordered():
     assert got == ids
     # read-only, synthetic-only, PK-ordered, paged to an empty terminator
     assert ("eq", ("is_synthetic", True)) in client.log
+    assert ("like", ("hcp_id", "scvhcp_%")) in client.log  # scoped to the --tag namespace
     assert ("order", ("hcp_id",)) in client.log
     ranges = [r for kind, r in client.log if kind == "range"]
     assert ranges == [
@@ -84,7 +96,7 @@ def test_fetch_reads_all_5000_ids_across_pages_pk_ordered():
         (5000, 5999),
     ]
     assert ("select", (("hcp_id",), {"count": "exact"})) in client.log
-    assert {kind for kind, _ in client.log} == {"select", "eq", "order", "range"}
+    assert {kind for kind, _ in client.log} == {"select", "eq", "like", "order", "range"}
 
 
 def test_fetch_is_cap_agnostic_advances_by_rows_returned():
@@ -167,3 +179,41 @@ def test_refresh_ab_cli_fails_loud_when_universe_unreadable(monkeypatch):
     monkeypatch.setattr("sys.argv", ["load_synthetic_data.py", "--refresh-ab", "--dry-run"])
     assert load_mod.main() == 1  # main() logs the exception and returns 1
     assert not called, "must not reach the sink with fabricated ids"
+
+
+def test_fetch_is_scoped_to_the_tag_namespace_when_namespaces_coexist():
+    """codex r1 MED: the full load samples from THIS run's tagged hcp_profiles
+    frame; the refresh must sample from the same namespace, not every synthetic
+    HCP that happens to exist. A coexisting 'xyz' namespace is excluded, and
+    the exact-count check is evaluated on the scoped universe."""
+    scv = [f"scvhcp_{i:05d}" for i in range(2000)]
+    xyz = [f"xyzhcp_{i:05d}" for i in range(2000)]
+    client = _FakeClient(sorted(scv + xyz))
+    got = load_mod.fetch_synthetic_hcp_ids(client, id_prefix="scv", page_size=1000)
+    assert got == scv
+    with pytest.raises(ValueError, match="hcp_profiles"):
+        load_mod.fetch_synthetic_hcp_ids(_FakeClient(xyz), id_prefix="scv")
+
+
+def test_refresh_ab_cli_passes_the_tag_to_the_fetch(monkeypatch):
+    seen = {}
+
+    def _fake_fetch(client, id_prefix="scv", **kw):
+        seen["prefix"] = id_prefix
+        return [f"{id_prefix}hcp_{i:05d}" for i in range(5000)]
+
+    monkeypatch.setattr(load_mod, "_read_only_supabase_client", lambda: object())
+    monkeypatch.setattr(load_mod, "fetch_synthetic_hcp_ids", _fake_fetch)
+    monkeypatch.setattr(load_mod, "FULL_SIZES", _TINY_SIZES)
+    captured = {}
+    monkeypatch.setattr(
+        load_mod,
+        "load_to_supabase",
+        lambda d, dry_run=False, verbose=False: captured.update(d) or {},
+    )
+    monkeypatch.setattr(
+        "sys.argv", ["load_synthetic_data.py", "--refresh-ab", "--dry-run", "--tag", "abc"]
+    )
+    load_mod.main()
+    assert seen["prefix"] == "abc"
+    assert captured["ab_experiment_assignments"]["unit_id"].str.startswith("abchcp_").all()
