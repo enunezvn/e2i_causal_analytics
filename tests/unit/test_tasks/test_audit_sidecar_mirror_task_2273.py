@@ -64,7 +64,7 @@ def _task():
     return mirror_audit_sidecars
 
 
-def _write_sidecar(root: Path, experiment_id: str, feature: str) -> Path:
+def _write_sidecar(root: Path, experiment_id: str, *features: str) -> Path:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     sub = root / experiment_id
     sub.mkdir(parents=True, exist_ok=True)
@@ -78,9 +78,10 @@ def _write_sidecar(root: Path, experiment_id: str, feature: str) -> Path:
                 "written_at": stamp,
                 "leakage_severity": "none",
                 "leaked_features": [],
-                "adaptive_flagged_features": [feature],
+                "adaptive_flagged_features": list(features),
                 "adaptive_verdicts": [
-                    {"feature": feature, "layer": "3", "severity": "moderate", "z_score": 4.2}
+                    {"feature": f, "layer": "3", "severity": "moderate", "z_score": 4.2}
+                    for f in features
                 ],
             }
         )
@@ -111,8 +112,14 @@ def test_the_queue_is_consumed_by_a_worker_that_mounts_the_sidecar_volume() -> N
     compose = yaml.safe_load(BASE_COMPOSE.read_text())
     consumers = []
     for name, svc in (compose.get("services") or {}).items():
-        command = " ".join(svc.get("command") or []) if isinstance(svc.get("command"), list) else str(svc.get("command") or "")
-        queues = next((tok.split("=", 1)[1] for tok in command.split() if tok.startswith("--queues=")), "")
+        command = (
+            " ".join(svc.get("command") or [])
+            if isinstance(svc.get("command"), list)
+            else str(svc.get("command") or "")
+        )
+        queues = next(
+            (tok.split("=", 1)[1] for tok in command.split() if tok.startswith("--queues=")), ""
+        )
         if "analytics" in queues.split(","):
             consumers.append(name)
     assert consumers, "no compose service consumes the analytics queue"
@@ -214,8 +221,7 @@ def _count(pg_conn, experiment_id: str) -> int:
 def test_armed_task_mirrors_the_real_sidecars_idempotently(
     verdicts_db, tmp_path, monkeypatch
 ) -> None:
-    _write_sidecar(tmp_path, "exp_real_2273", "age")
-    _write_sidecar(tmp_path, "exp_real_2273", "gender")
+    _write_sidecar(tmp_path, "exp_real_2273", "age", "gender")
     _arm(monkeypatch, verdicts_db, tmp_path)
 
     first = _task()()

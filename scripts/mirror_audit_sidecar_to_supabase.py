@@ -507,7 +507,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     # Lazy import: keeps ``import scripts.mirror_audit_sidecar_to_supabase``
     # working in unit tests that don't have psycopg-v3 installed (the
     # helpers _parse_since / _resolve_cursor have no DB dependency).
-    import psycopg  # noqa: PLC0415
+    try:
+        import psycopg  # noqa: PLC0415
+    except ImportError:  # the app image ships psycopg2 only; the calls below are DB-API (#2273)
+        import psycopg2 as psycopg  # type: ignore[no-redef]  # noqa: PLC0415
 
     logger.info("connecting to Postgres ...")
     with psycopg.connect(database_url) as conn:
