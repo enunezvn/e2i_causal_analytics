@@ -59,7 +59,7 @@ class ComponentHealthNode:
         self.components = components or self.DEFAULT_COMPONENTS
         self.timeout_ms = timeout_ms
 
-    async def execute(self, state: HealthScoreState) -> HealthScoreState:
+    async def execute(self, state: HealthScoreState) -> Dict[str, Any]:
         """Execute component health checks."""
         start_time = time.time()
 
@@ -71,7 +71,6 @@ class ComponentHealthNode:
         if state.get("check_scope") in ("models", "pipelines", "agents"):
             logger.debug("Skipping component health for non-component scope")
             return {
-                **state,
                 "component_statuses": [],
                 "component_health_measured": False,
                 "status": "checking",
@@ -88,7 +87,6 @@ class ComponentHealthNode:
             )
             unknown_statuses = [self._create_unknown_status(comp) for comp in self.components]
             return {
-                **state,
                 "component_statuses": unknown_statuses,
                 "component_health_measured": False,
                 "status": "checking",
@@ -133,7 +131,6 @@ class ComponentHealthNode:
             )
 
             return {
-                **state,
                 "component_statuses": component_statuses,
                 "component_health_score": health_score,
                 "component_health_measured": True,
@@ -144,7 +141,6 @@ class ComponentHealthNode:
         except Exception as e:
             logger.error(f"Component health check failed: {e}")
             return {
-                **state,
                 "errors": [{"node": "component_health", "error": str(e)}],
                 # A failed check measured nothing -> unmeasured, so the composer
                 # excludes it rather than counting a fabricated 0.0 as a real

@@ -72,7 +72,7 @@ class ContextAssemblerNode:
                 return None
         return self._memory_hooks
 
-    async def execute(self, state: ExplainerState) -> ExplainerState:
+    async def execute(self, state: ExplainerState) -> Dict[str, Any]:
         """Execute context assembly.
 
         Retrieves context from:
@@ -85,7 +85,7 @@ class ContextAssemblerNode:
 
         # Check if already failed
         if state.get("status") == "failed":
-            return state
+            return {}  # nothing to add; echoing the state would re-append the accumulators (#2238)
 
         try:
             # === MEMORY RETRIEVAL ===
@@ -126,7 +126,6 @@ class ContextAssemblerNode:
 
             if not analysis_results:
                 return {
-                    **state,
                     "errors": [
                         {"node": "context_assembler", "error": "No analysis results provided"}
                     ],
@@ -142,7 +141,6 @@ class ContextAssemblerNode:
 
             if not contexts:
                 return {
-                    **state,
                     "errors": [
                         {"node": "context_assembler", "error": "No valid contexts extracted"}
                     ],
@@ -165,7 +163,6 @@ class ContextAssemblerNode:
             )
 
             return {
-                **state,
                 "analysis_context": contexts,
                 "user_context": user_context,
                 "conversation_history": history,
@@ -180,7 +177,6 @@ class ContextAssemblerNode:
         except Exception as e:
             logger.error(f"Context assembly failed: {e}")
             return {
-                **state,
                 "errors": [{"node": "context_assembler", "error": str(e)}],
                 "status": "failed",
             }

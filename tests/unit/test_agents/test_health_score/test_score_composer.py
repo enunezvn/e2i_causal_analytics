@@ -582,8 +582,10 @@ class TestDegradedModelNullErrorRate:
         assert not any(
             (e or {}).get("node") == "score_composer" for e in (result.get("errors") or [])
         ), f"score_composer raised on a null error_rate: {result.get('errors')}"
-        # The model dimension stays a REAL, non-null measurement.
-        assert result["model_health_score"] == 0.25
+        # The model dimension stays a REAL, non-null measurement: the composer
+        # returns only its delta (#2238) and never rewrites the input score.
+        assert "model_health_score" not in result
+        assert state["model_health_score"] == 0.25
         # Two measured dims (component + model) -> honest partial provenance.
         assert result["data_provenance"] == "partial"
         assert result["health_grade"] in {"A", "B", "C", "D", "F"}
