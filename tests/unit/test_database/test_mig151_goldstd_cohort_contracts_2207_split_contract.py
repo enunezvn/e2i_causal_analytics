@@ -106,7 +106,18 @@ def test_patient_rows_get_the_exact_goldstd_contract() -> None:
     for model, (cohort, brand) in _PATIENT_MODELS.items():
         assert model in by_model, f"{model} has no UPDATE"
         s = by_model[model]
-        assert set(s["set"]) == {"cohort_data_source", "cohort_target_outcome"}, s["raw"]
+        assert set(s["set"]) == {
+            "cohort_data_source",
+            "cohort_target_outcome",
+            "cohort_feature_manifest_source",
+        }, s["raw"]
+        # Owner decision 2026-09-23 (measured disproof): the manifest of the DGP that
+        # seeded patient_journeys (src/data/manifests/synthetic_csu_feature_manifest.py)
+        # is the provable third column — without it the Layer-3 adversarial check
+        # flags the DESIGNED drivers (disease_severity z=40σ, age_at_diagnosis z=41σ on
+        # initiation) and routes to LLM remediation; with it "Declared-safe immunity"
+        # exempts the 5 declared pre-index covariates and the QC gate passes.
+        assert s["set"]["cohort_feature_manifest_source"] == "synthetic_csu"
         label = _PATIENT_LABELS[cohort]
         assert s["set"]["cohort_target_outcome"] == label
         literal = s["set"]["cohort_data_source"]
@@ -140,8 +151,15 @@ def test_hcp_rows_get_only_the_label_and_csu_rows_nothing() -> None:
     assert set(by_model) == set(_PATIENT_MODELS) | _HCP_MODELS
 
 
-def test_manifest_source_never_set() -> None:
-    assert "cohort_feature_manifest_source =" not in _sql()
+def test_manifest_source_is_a_registered_manifest_and_only_on_patient_rows() -> None:
+    from src.data.manifests import MANIFEST_SOURCES
+
+    for s in _statements():
+        manifest = s["set"].get("cohort_feature_manifest_source")
+        if s["model"] in _PATIENT_MODELS:
+            assert manifest in MANIFEST_SOURCES, (s["model"], manifest)
+        else:
+            assert manifest is None, s["raw"]  # HCP rows: frame is a JOIN, no data_source
 
 
 @pytest.mark.parametrize("model", sorted(_PATIENT_MODELS))

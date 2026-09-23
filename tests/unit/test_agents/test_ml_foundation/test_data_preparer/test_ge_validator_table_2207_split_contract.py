@@ -44,7 +44,8 @@ def _kisqali_initiation_contract() -> Dict[str, Any]:
     """Migration 151's literal for initiation_kisqali_goldstd_lr_v1, decoded."""
     sql = _MIGRATION.read_text()
     m = re.search(
-        r"SET cohort_data_source = '(\{[^']*\})',\s*cohort_target_outcome = 'treatment_initiated'"
+        r"SET cohort_data_source = '(\{[^']*\})',\s*cohort_target_outcome = 'treatment_initiated',"
+        r"\s*cohort_feature_manifest_source = '[a-z_]+'"
         r"\s*WHERE model_name = 'initiation_kisqali_goldstd_lr_v1'",
         sql,
     )

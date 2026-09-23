@@ -34,6 +34,22 @@
 --   * "is_synthetic": true is an explicit filter so the contract does not depend on
 --     the deployment's E2I_INCLUDE_SYNTHETIC env (the loader forces
 --     include_synthetic=True when the contract names the key).
+--   * cohort_feature_manifest_source = 'synthetic_csu' for the 9 patient rows: the
+--     Layer-5 manifest of the very DGP that seeded patient_journeys
+--     (src/data/manifests/synthetic_csu_feature_manifest.py — "declared-safe BY
+--     CONSTRUCTION": confounders/covariates are drawn before the outcome,
+--     patient_generator.py:262-287; its docstring names this exact false positive:
+--     "Without these declarations the statistical/LLM leakage layers false-positively
+--     drop the DESIGNED causal drivers (observed 2026-06-10: disease_severity dropped
+--     on initiation)"). Measured 2026-09-23 on the live Kisqali contracts: without the
+--     manifest the Layer-3 adversarial check flags disease_severity (z=40σ, single-
+--     feature AUC 0.71) and age_at_diagnosis (z=41σ) HIGH and routes the retrain to LLM
+--     remediation; with it "Declared-safe immunity" exempts the 5 declared pre-index
+--     covariates, the 5 undeclared commercial columns stay info/keep, and the
+--     data_preparer QC gate passes (gate_passed=true, blocking_issues=[]) for
+--     initiation / persistence / discontinuation. The manifest source flows
+--     registry -> sweep contract -> MLFoundationPipeline input -> scope_spec
+--     (src/agents/tier_0/pipeline.py resolve_manifest_source).
 --   * 3 HCP rows hcp_adoption_<brand>_goldstd_lr_v1: the label column is `adopted`
 --     (hcp_brand_adoption.adopted) -> cohort_target_outcome is provable and harmless
 --     (the sweep enqueues only when BOTH columns are set).
@@ -47,8 +63,8 @@
 --   * both columns for the 2 archived csu_treatment_initiation_lr_* rows: trained on
 --     an in-process generated dataset (src/mlops/prediction_synthesizer_deploy.py),
 --     not on any table.
---   * cohort_feature_manifest_source everywhere: no goldstd path resolves a Layer-5
---     manifest.
+--   * cohort_feature_manifest_source for the 3 HCP rows (no data_source to pair it
+--     with) and the 2 csu rows (no table).
 --
 -- SAFETY: every UPDATE is a compare-and-set on NULL (never overwrites a contract a
 -- training run or manual trigger has healed), scoped to is_synthetic = false, and
@@ -58,78 +74,96 @@
 --
 -- NOTE: no BEGIN/COMMIT here -- the migration runner wraps each file.
 
--- 9 patient-grain goldstd rows: data_source + target_outcome.
+-- 9 patient-grain goldstd rows: data_source + target_outcome + feature_manifest_source.
 UPDATE ml_model_registry
    SET cohort_data_source = '{"columns": ["disease_severity", "academic_hcp", "geographic_region", "insurance_type", "age_at_diagnosis", "comorbidity_burden", "prior_therapy_lines", "rep_detailing_high", "sample_dropped", "trigger_accepted", "treatment_initiated"], "filters": {"brand": "Remibrutinib", "is_synthetic": true}, "table": "patient_journeys", "type": "table"}',
-       cohort_target_outcome = 'treatment_initiated'
+       cohort_target_outcome = 'treatment_initiated',
+       cohort_feature_manifest_source = 'synthetic_csu'
  WHERE model_name = 'initiation_remibrutinib_goldstd_lr_v1'
    AND is_synthetic = false
    AND cohort_data_source IS NULL
-   AND cohort_target_outcome IS NULL;
+   AND cohort_target_outcome IS NULL
+   AND cohort_feature_manifest_source IS NULL;
 
 UPDATE ml_model_registry
    SET cohort_data_source = '{"columns": ["disease_severity", "academic_hcp", "geographic_region", "insurance_type", "age_at_diagnosis", "comorbidity_burden", "prior_therapy_lines", "rep_detailing_high", "sample_dropped", "trigger_accepted", "treatment_initiated"], "filters": {"brand": "Fabhalta", "is_synthetic": true}, "table": "patient_journeys", "type": "table"}',
-       cohort_target_outcome = 'treatment_initiated'
+       cohort_target_outcome = 'treatment_initiated',
+       cohort_feature_manifest_source = 'synthetic_csu'
  WHERE model_name = 'initiation_fabhalta_goldstd_lr_v1'
    AND is_synthetic = false
    AND cohort_data_source IS NULL
-   AND cohort_target_outcome IS NULL;
+   AND cohort_target_outcome IS NULL
+   AND cohort_feature_manifest_source IS NULL;
 
 UPDATE ml_model_registry
    SET cohort_data_source = '{"columns": ["disease_severity", "academic_hcp", "geographic_region", "insurance_type", "age_at_diagnosis", "comorbidity_burden", "prior_therapy_lines", "rep_detailing_high", "sample_dropped", "trigger_accepted", "treatment_initiated"], "filters": {"brand": "Kisqali", "is_synthetic": true}, "table": "patient_journeys", "type": "table"}',
-       cohort_target_outcome = 'treatment_initiated'
+       cohort_target_outcome = 'treatment_initiated',
+       cohort_feature_manifest_source = 'synthetic_csu'
  WHERE model_name = 'initiation_kisqali_goldstd_lr_v1'
    AND is_synthetic = false
    AND cohort_data_source IS NULL
-   AND cohort_target_outcome IS NULL;
+   AND cohort_target_outcome IS NULL
+   AND cohort_feature_manifest_source IS NULL;
 
 UPDATE ml_model_registry
    SET cohort_data_source = '{"columns": ["disease_severity", "academic_hcp", "geographic_region", "insurance_type", "age_at_diagnosis", "comorbidity_burden", "prior_therapy_lines", "copay_support", "psp_enrolled", "persistent_180d"], "filters": {"brand": "Remibrutinib", "is_synthetic": true}, "table": "patient_journeys", "type": "table"}',
-       cohort_target_outcome = 'persistent_180d'
+       cohort_target_outcome = 'persistent_180d',
+       cohort_feature_manifest_source = 'synthetic_csu'
  WHERE model_name = 'persistence_remibrutinib_goldstd_lr_v1'
    AND is_synthetic = false
    AND cohort_data_source IS NULL
-   AND cohort_target_outcome IS NULL;
+   AND cohort_target_outcome IS NULL
+   AND cohort_feature_manifest_source IS NULL;
 
 UPDATE ml_model_registry
    SET cohort_data_source = '{"columns": ["disease_severity", "academic_hcp", "geographic_region", "insurance_type", "age_at_diagnosis", "comorbidity_burden", "prior_therapy_lines", "copay_support", "psp_enrolled", "persistent_180d"], "filters": {"brand": "Fabhalta", "is_synthetic": true}, "table": "patient_journeys", "type": "table"}',
-       cohort_target_outcome = 'persistent_180d'
+       cohort_target_outcome = 'persistent_180d',
+       cohort_feature_manifest_source = 'synthetic_csu'
  WHERE model_name = 'persistence_fabhalta_goldstd_lr_v1'
    AND is_synthetic = false
    AND cohort_data_source IS NULL
-   AND cohort_target_outcome IS NULL;
+   AND cohort_target_outcome IS NULL
+   AND cohort_feature_manifest_source IS NULL;
 
 UPDATE ml_model_registry
    SET cohort_data_source = '{"columns": ["disease_severity", "academic_hcp", "geographic_region", "insurance_type", "age_at_diagnosis", "comorbidity_burden", "prior_therapy_lines", "copay_support", "psp_enrolled", "persistent_180d"], "filters": {"brand": "Kisqali", "is_synthetic": true}, "table": "patient_journeys", "type": "table"}',
-       cohort_target_outcome = 'persistent_180d'
+       cohort_target_outcome = 'persistent_180d',
+       cohort_feature_manifest_source = 'synthetic_csu'
  WHERE model_name = 'persistence_kisqali_goldstd_lr_v1'
    AND is_synthetic = false
    AND cohort_data_source IS NULL
-   AND cohort_target_outcome IS NULL;
+   AND cohort_target_outcome IS NULL
+   AND cohort_feature_manifest_source IS NULL;
 
 UPDATE ml_model_registry
    SET cohort_data_source = '{"columns": ["disease_severity", "academic_hcp", "geographic_region", "insurance_type", "age_at_diagnosis", "comorbidity_burden", "prior_therapy_lines", "copay_support", "psp_enrolled", "discontinued_180d"], "filters": {"brand": "Remibrutinib", "is_synthetic": true}, "table": "patient_journeys", "type": "table"}',
-       cohort_target_outcome = 'discontinued_180d'
+       cohort_target_outcome = 'discontinued_180d',
+       cohort_feature_manifest_source = 'synthetic_csu'
  WHERE model_name = 'discontinuation_remibrutinib_goldstd_lr_v1'
    AND is_synthetic = false
    AND cohort_data_source IS NULL
-   AND cohort_target_outcome IS NULL;
+   AND cohort_target_outcome IS NULL
+   AND cohort_feature_manifest_source IS NULL;
 
 UPDATE ml_model_registry
    SET cohort_data_source = '{"columns": ["disease_severity", "academic_hcp", "geographic_region", "insurance_type", "age_at_diagnosis", "comorbidity_burden", "prior_therapy_lines", "copay_support", "psp_enrolled", "discontinued_180d"], "filters": {"brand": "Fabhalta", "is_synthetic": true}, "table": "patient_journeys", "type": "table"}',
-       cohort_target_outcome = 'discontinued_180d'
+       cohort_target_outcome = 'discontinued_180d',
+       cohort_feature_manifest_source = 'synthetic_csu'
  WHERE model_name = 'discontinuation_fabhalta_goldstd_lr_v1'
    AND is_synthetic = false
    AND cohort_data_source IS NULL
-   AND cohort_target_outcome IS NULL;
+   AND cohort_target_outcome IS NULL
+   AND cohort_feature_manifest_source IS NULL;
 
 UPDATE ml_model_registry
    SET cohort_data_source = '{"columns": ["disease_severity", "academic_hcp", "geographic_region", "insurance_type", "age_at_diagnosis", "comorbidity_burden", "prior_therapy_lines", "copay_support", "psp_enrolled", "discontinued_180d"], "filters": {"brand": "Kisqali", "is_synthetic": true}, "table": "patient_journeys", "type": "table"}',
-       cohort_target_outcome = 'discontinued_180d'
+       cohort_target_outcome = 'discontinued_180d',
+       cohort_feature_manifest_source = 'synthetic_csu'
  WHERE model_name = 'discontinuation_kisqali_goldstd_lr_v1'
    AND is_synthetic = false
    AND cohort_data_source IS NULL
-   AND cohort_target_outcome IS NULL;
+   AND cohort_target_outcome IS NULL
+   AND cohort_feature_manifest_source IS NULL;
 
 -- 3 HCP-grain goldstd rows: label only (see STAYS NULL above).
 UPDATE ml_model_registry
