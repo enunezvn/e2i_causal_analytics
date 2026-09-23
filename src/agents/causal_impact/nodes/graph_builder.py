@@ -10,6 +10,7 @@ ensemble (GES, PC) and gated acceptance for discovered DAGs.
 Version: 4.4
 """
 
+import asyncio
 import logging
 import time
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, cast
@@ -48,6 +49,11 @@ DISCOVERY_TIME_BUDGET_S = 180.0
 # ``discovery_min_resamples``.
 DISCOVERY_MIN_RESAMPLES = 10
 
+from src.agents.causal_impact.nodes.adjustment_search import (
+    ADJUSTMENT_SEARCH_MAX_CANDIDATES,
+    ADJUSTMENT_SEARCH_TIME_BUDGET_S,
+    find_adjustment_sets,
+)
 from src.agents.causal_impact.state import CausalGraph, CausalImpactState, spread_safe
 from src.causal_engine import compute_dag_hash
 from src.causal_engine.discovery import (
@@ -302,7 +308,27 @@ class GraphBuilderNode:
             # Find valid adjustment sets (backdoor criterion), then enforce the
             # adjustment guarantee: declared (modeled) confounders are unioned
             # into every set regardless of what the DAG shows (fix 4).
-            adjustment_sets = self._find_adjustment_sets(dag, treatment, outcome)
+            # #2233: the size-<=3 enumeration is O(k^3) criterion checks and used to
+            # run on the event-loop thread (76,154 checks / 242-316 s at k = 77;
+            # the live AUGMENT run was aborted by gunicorn's 120 s heartbeat). It
+            # now runs in a worker thread, bounded; a hit bound is a warning.
+            search = await asyncio.to_thread(
+                find_adjustment_sets,
+                dag,
+                treatment,
+                outcome,
+                time_budget_s=state.get(
+                    "adjustment_search_time_budget_s", ADJUSTMENT_SEARCH_TIME_BUDGET_S
+                ),
+                max_candidates=state.get(
+                    "adjustment_search_max_candidates", ADJUSTMENT_SEARCH_MAX_CANDIDATES
+                ),
+                criterion=self._satisfies_backdoor_criterion,
+            )
+            adjustment_sets = search.adjustment_sets
+            search_warning = search.warning()
+            if search_warning is not None:
+                logger.warning(search_warning)
             adjustment_sets = self._apply_adjustment_guarantee(
                 dag, treatment, outcome, state, adjustment_sets
             )
@@ -379,6 +405,8 @@ class GraphBuilderNode:
             # the flag against the E-value sensitivity result (surfacing
             # policy; see test_structural_recovery docstring item 6).
             new_warnings: List[str] = list(panel_warnings)
+            if search_warning is not None:
+                new_warnings.append(search_warning)
             if discovery_result is not None:
                 new_warnings.extend(
                     self._discovery_honesty_warnings(discovery_result, treatment, outcome)
@@ -641,77 +669,21 @@ class GraphBuilderNode:
     def _find_adjustment_sets(
         self, dag: nx.DiGraph, treatment: str, outcome: str
     ) -> List[List[str]]:
-        """Find valid backdoor adjustment sets.
+        """Find valid backdoor adjustment sets (unbounded legacy contract).
 
-        Args:
-            dag: Causal DAG
-            treatment: Treatment node
-            outcome: Outcome node
-
-        Returns:
-            List of adjustment sets (each is a list of variable names)
+        The search itself lives in ``adjustment_search.find_adjustment_sets``
+        (#2233): ``execute`` calls it OFF the event loop under a wall-time budget
+        and a candidate cap and surfaces a hit bound in ``warnings``. This
+        wrapper keeps the direct callers' list contract, unbounded.
         """
-        from itertools import combinations
-
-        # Guard: treatment/outcome must be present and distinct. A degenerate
-        # treatment == outcome query has no meaningful backdoor adjustment and
-        # would make nx.is_d_separator raise (non-disjoint x/y node sets), so
-        # return the trivial empty set rather than hard-failing the node.
-        if treatment not in dag or outcome not in dag or treatment == outcome:
-            return [[]]
-
-        # Backdoor criterion (Pearl 2009, Def. 3.3.1): a set Z is admissible iff
-        # (1) no node in Z is a descendant of the treatment, AND
-        # (2) Z d-separates treatment and outcome in the proper backdoor graph
-        #     obtained by deleting all edges OUT OF the treatment.
-        # This excludes colliders (and their descendants) and prevents M-bias.
-        descendants = nx.descendants(dag, treatment)
-        candidate_nodes = (set(dag.nodes()) - {treatment, outcome}) - descendants
-        # An isolated node lies on no path, so it can neither block nor open
-        # one: no minimal backdoor set contains it and Z ∪ {isolated} is
-        # admissible iff Z is. Enumerating it only multiplies the search —
-        # on the real Optum persistence frame the 57 covariates the discovery
-        # pre-flight keeps away from the learner come back as isolated nodes
-        # of an ACCEPT-path DAG (so the adjustment guarantee can union them),
-        # and a size-<= 3 enumeration over 77 candidates is 76,154 criterion
-        # checks (measured 242-316 s on the same-sized manual DAG, docs/demos/
-        # results/2026-09-22_lane_d_guided_discovery_claims/README.md, item 5).
-        # Declared covariates among them still reach the adjustment set through
-        # _apply_adjustment_guarantee, which unions them by declaration.
-        candidate_nodes = {n for n in candidate_nodes if dag.degree(n) > 0}
-
-        adjustment_sets: List[List[str]] = []
-        max_set_size = min(3, len(candidate_nodes))
-
-        # Search by increasing set size; return the smallest valid sets found
-        # (prefer minimal adjustment sets), capped at 3.
-        for size in range(0, max_set_size + 1):
-            for combo in combinations(sorted(candidate_nodes), size):
-                if self._satisfies_backdoor_criterion(dag, set(combo), treatment, outcome):
-                    adjustment_sets.append(list(combo))
-                    if len(adjustment_sets) >= 3:
-                        return adjustment_sets
-            if adjustment_sets:
-                return adjustment_sets
-
-        if adjustment_sets:
-            return adjustment_sets
-
-        # No MINIMAL admissible set of size <= 3 d-separated treatment and
-        # outcome. Before defaulting to no adjustment (which would silently leave
-        # the estimate CONFOUNDED — the exact harm the backdoor criterion exists
-        # to prevent), try the FULL candidate set: with > 3 independent
-        # confounders the only admissible set is all of them, and any proper
-        # subset leaves a confounded path open. If the full set is admissible,
-        # return it (non-minimal but valid) rather than [[]].
-        if candidate_nodes and self._satisfies_backdoor_criterion(
-            dag, candidate_nodes, treatment, outcome
-        ):
-            return [sorted(candidate_nodes)]
-
-        # Genuinely no admissible set (e.g. an unblockable backdoor path):
-        # documented fallback to no adjustment.
-        return [[]]
+        return find_adjustment_sets(
+            dag,
+            treatment,
+            outcome,
+            time_budget_s=None,
+            max_candidates=None,
+            criterion=self._satisfies_backdoor_criterion,
+        ).adjustment_sets
 
     def _satisfies_backdoor_criterion(
         self, dag: nx.DiGraph, adjustment_set: Set[str], treatment: str, outcome: str
