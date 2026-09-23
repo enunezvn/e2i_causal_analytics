@@ -1054,6 +1054,8 @@ class MLFoundationPipeline:
             "hpo_timeout_hours": self.config.hpo_timeout_hours,
             "early_stopping": self.config.early_stopping,
             "enable_mlflow": not self.config.skip_mlflow,
+            # #2248 option (a): the parent's calibration method (None = auto policy)
+            "calibration_method": input_data.get("calibration_method"),
             # Pre-loaded splits, else data_preparer's frames (#2207)
             **splits,
             # Opt-in synthetic augmentation cohort path (Phase 3 consumption).

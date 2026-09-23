@@ -75,6 +75,7 @@ __all__ = [
     "GOLDSTD_MODEL_NAME",
     "GOLDSTD_MODEL_VERSION",
     "GOLDSTD_STAGE",
+    "calibration_method_of",
     "register_cohort_model",
     "serialize_model",
     "train_cohort_model",
@@ -145,6 +146,7 @@ async def register_cohort_model(
     training_samples: int | None = None,
     stage: str = GOLDSTD_STAGE,
     experiment_name: str = GOLDSTD_EXPERIMENT_NAME,
+    calibration_method: str | None = None,
 ) -> str:
     """Register the gold-standard model row at ``stage='staging'`` (collision-safe).
 
@@ -191,7 +193,20 @@ async def register_cohort_model(
         # synthetic-gold cohort — label it so the catalog is self-describing and
         # the promotion gate can refuse synthetic_gold -> production.
         training_provenance="synthetic_gold",
+        # #2248 option (a): a retrain of this row reproduces its calibration method.
+        hyperparameters={"calibration_method": calibration_method} if calibration_method else None,
     )
+
+
+def calibration_method_of(model: Any) -> str | None:
+    """The fitted post-hoc calibration method (``"sigmoid"`` / ``"isotonic"``), else None.
+
+    ``train_cohort_model`` returns a bare ``LogisticRegression`` when the minority class
+    is too small to calibrate by CV — that model records no method (#2248).
+    """
+    if not isinstance(model, CalibratedClassifierCV):
+        return None
+    return model.method if model.method in ("sigmoid", "isotonic") else None
 
 
 async def _resolve_goldstd_experiment(client: Any, spec: Any, experiment_name: str) -> str:

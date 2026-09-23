@@ -447,3 +447,55 @@ async def test_register_cohort_model_stamps_training_provenance_synthetic_gold(t
     experiment_inserts = [r for (t, r) in client.inserts if t == "ml_experiments"]
     assert len(experiment_inserts) == 1
     assert experiment_inserts[0]["training_provenance"] == "synthetic_gold"
+
+
+# ---------------------------------------------------------------------------
+# #2248 option (a): the registered calibration method is recorded so a retrain can
+# reproduce it (ml_model_registry.hyperparameters.calibration_method)
+# ---------------------------------------------------------------------------
+
+
+def test_calibration_method_of_reads_the_fitted_calibrator():
+    from sklearn.linear_model import LogisticRegression
+
+    from src.mlops.gold_standard_eval.cohort_deployer import calibration_method_of
+
+    X, y, _ = _tiny_gold_standard_xy()
+    assert calibration_method_of(train_cohort_model(INITIATION, X, y)) == "sigmoid"
+    # the bare-LR fallback (minority < 2) is NOT calibrated: nothing to record
+    assert calibration_method_of(LogisticRegression()) is None
+    assert calibration_method_of(None) is None
+
+
+@pytest.mark.asyncio
+async def test_register_cohort_model_records_the_calibration_method(tmp_path):
+    X, y, feature_columns = _tiny_gold_standard_xy()
+    model = train_cohort_model(INITIATION, X, y)
+    artifact_path = serialize_model(model, tmp_path / "artifacts", "csu_initiation_goldstd_lr_v1")
+
+    client = FakeClient()
+    await register_cohort_model(
+        client,
+        INITIATION,
+        artifact_path=artifact_path,
+        auc=0.671,
+        feature_count=len(feature_columns),
+        calibration_method="sigmoid",
+    )
+    (row,) = [r for (t, r, _oc) in client.upserts if t == "ml_model_registry"]
+    assert row["hyperparameters"] == {"calibration_method": "sigmoid"}
+
+
+@pytest.mark.asyncio
+async def test_register_cohort_model_without_a_method_leaves_hyperparameters_alone(tmp_path):
+    """An upsert without the key keeps whatever the row already records."""
+    X, y, feature_columns = _tiny_gold_standard_xy()
+    model = train_cohort_model(INITIATION, X, y)
+    artifact_path = serialize_model(model, tmp_path / "artifacts", "csu_initiation_goldstd_lr_v1")
+
+    client = FakeClient()
+    await register_cohort_model(
+        client, INITIATION, artifact_path=artifact_path, auc=0.671, feature_count=3
+    )
+    (row,) = [r for (t, r, _oc) in client.upserts if t == "ml_model_registry"]
+    assert "hyperparameters" not in row

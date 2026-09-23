@@ -872,6 +872,16 @@ def _cohort_input_from_training_config(training_config: Dict[str, Any]) -> Dict[
     for opt in ("brand", "feature_manifest_source", "target_environment", "deployment_intent"):
         if training_config.get(opt) is not None:
             input_data[opt] = training_config[opt]
+    # #2248 option (a): the parent's calibration method (the registry row's, via the
+    # contract; an explicit training_config value wins). Unrecorded -> the auto policy.
+    if training_config.get("calibration_method") is not None:
+        input_data["calibration_method"] = training_config["calibration_method"]
+    else:
+        logger.warning(
+            "Retrain of %r: the parent's calibration method is not recorded; the "
+            "evaluator's auto policy picks it",
+            target_outcome,
+        )
     # #2207 split contract (codex r3 HIGH on PR #2241): the sweep's contract carries no
     # brand, so a scheduled retrain from a migration-151 row ran as scope
     # "unknown - <label>". A table cohort dict already names its partition —
@@ -976,11 +986,14 @@ async def _execute_real_retraining(
     # success-criteria gate too, else fail closed.
     training_result = getattr(result, "training_result", None) or {}
     success_criteria_met = bool(training_result.get("success_criteria_met"))
+    calibration = pipeline_input.get("calibration_method") or (
+        "auto (the parent's method is not recorded)"
+    )
     if status != "completed" or performance_after is None or not success_criteria_met:
         return await _mark_failed(
             f"pipeline status={status!r}, validation_auc={performance_after!r}, "
-            f"success_criteria_met={success_criteria_met} — not a promotable result; "
-            "job marked failed (no metric written)"
+            f"success_criteria_met={success_criteria_met}, calibration_method={calibration} "
+            "— not a promotable result; job marked failed (no metric written)"
         )
 
     # Real metric + success criteria met — record completion. The pipeline also
@@ -1022,6 +1035,7 @@ async def _execute_real_retraining(
         "old_version": model_version,
         "new_version": new_version,
         "performance_after": performance_after,
+        "calibration_method": calibration,
         "mlflow_model_version": deployment.get("model_version"),
         "deployed": bool(deployment.get("deployment_successful", deployment.get("model_version"))),
         "message": f"Model {new_version} retrained; validation AUC={performance_after:.4f}",

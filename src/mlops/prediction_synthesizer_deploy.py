@@ -290,6 +290,7 @@ async def register_model_row(
     is_synthetic: bool = False,
     training_provenance: str | None = None,
     promoted: bool | None = None,
+    hyperparameters: Dict[str, Any] | None = None,
 ) -> str:
     """Write ONE ``ml_model_registry`` row idempotently, then verify it landed.
 
@@ -341,6 +342,10 @@ async def register_model_row(
         # 'mixed'). NULL = legacy/unknown. Kept SEPARATE from is_synthetic (which
         # stays False so the model remains servable/explainable).
         row["training_provenance"] = training_provenance
+    if hyperparameters is not None:
+        # #2248: e.g. {"calibration_method": "sigmoid"} — what a retrain reproduces.
+        # Omitted, the upsert leaves the row's recorded hyperparameters untouched.
+        row["hyperparameters"] = hyperparameters
     if promoted:
         row["promoted_at"] = now
     # Upsert on the (model_name, model_version) unique key (constraint

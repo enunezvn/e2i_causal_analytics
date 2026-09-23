@@ -1,0 +1,97 @@
+"""Migration 155: the 12 goldstd registry rows record their calibration method (#2248).
+
+Hermetic — reads the migration FILES, never a database (the BEGIN/apply/ROLLBACK
+rehearsal on the PR proves the live effect). Owner decision 2026-09-23, option (a): a
+retrain uses the calibration method of the model it retrains; the method of record is
+``ml_model_registry.hyperparameters.calibration_method``.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+
+import pytest
+
+from src.mlops.gold_standard_eval.cohort_spec import BRANDS, PATIENT_COHORTS
+from src.services.cohort_contract import RECORDED_CALIBRATION_METHODS, contract_from_registry_row
+
+_DIR = Path(__file__).resolve().parents[3] / "database" / "migrations"
+_MIGRATION = _DIR / "155_registry_goldstd_calibration_method.sql"
+_ROLLBACK = _DIR / "rollback_155_registry_goldstd_calibration_method.sql"
+
+_GOLDSTD = {
+    f"{cohort}_{brand.lower()}_goldstd_lr_v1" for cohort in PATIENT_COHORTS for brand in BRANDS
+} | {f"hcp_adoption_{brand.lower()}_goldstd_lr_v1" for brand in BRANDS}
+
+
+def _body(path: Path) -> str:
+    assert path.exists(), f"missing {path}"
+    return "\n".join(
+        line for line in path.read_text().splitlines() if not line.lstrip().startswith("--")
+    )
+
+
+def _names(body: str) -> set:
+    block = re.search(r"model_name\s+IN\s*\((?P<names>.*?)\)", body, re.S)
+    assert block, body
+    return set(re.findall(r"'([^']+)'", block.group("names")))
+
+
+@pytest.mark.unit
+def test_exactly_the_twelve_goldstd_rows_and_nothing_else():
+    body = _body(_MIGRATION)
+    assert len(re.findall(r"\bUPDATE\b", body)) == 1
+    assert _names(body) == _GOLDSTD and len(_GOLDSTD) == 12
+    assert not re.search(r"\b(ALTER|CREATE|DROP|DELETE|INSERT)\b", body, re.I)
+
+
+@pytest.mark.unit
+def test_the_value_is_the_sigmoid_the_goldstd_trainer_fits_and_the_reader_accepts():
+    body = _body(_MIGRATION)
+    literal = re.search(r"\|\|\s*'(?P<json>\{[^']*\})'::jsonb", body)
+    assert literal, body
+    value = json.loads(literal.group("json"))
+    assert value == {"calibration_method": "sigmoid"}
+    assert value["calibration_method"] in RECORDED_CALIBRATION_METHODS
+    # what the contract reader makes of a row carrying it
+    assert contract_from_registry_row({"hyperparameters": value}) == {
+        "calibration_method": "sigmoid"
+    }
+
+
+@pytest.mark.unit
+def test_the_goldstd_trainer_really_fits_sigmoid():
+    """The source the migration encodes: train_cohort_model's calibrator."""
+    import numpy as np
+    import pandas as pd
+
+    from src.mlops.gold_standard_eval.cohort_deployer import (
+        calibration_method_of,
+        train_cohort_model,
+    )
+
+    rng = np.random.default_rng(0)
+    X = pd.DataFrame({"a": rng.normal(size=60), "b": rng.normal(size=60)})
+    y = pd.Series((X["a"] + rng.normal(size=60) > 0).astype(int))
+    assert calibration_method_of(train_cohort_model(None, X, y)) == "sigmoid"
+
+
+@pytest.mark.unit
+def test_it_merges_never_overwrites_and_is_scoped_to_real_calibrated_rows():
+    body = _body(_MIGRATION)
+    assert re.search(r"COALESCE\(hyperparameters,\s*'\{\}'::jsonb\)\s*\|\|", body)
+    assert re.search(
+        r"NOT\s*\(COALESCE\(hyperparameters,\s*'\{\}'::jsonb\)\s*\?\s*'calibration_method'\)", body
+    )
+    assert re.search(r"is_synthetic\s*=\s*false", body)
+    assert re.search(r"algorithm\s*=\s*'logistic_regression_calibrated'", body)
+
+
+@pytest.mark.unit
+def test_the_rollback_removes_only_what_155_wrote():
+    body = _body(_ROLLBACK)
+    assert _names(body) == _GOLDSTD
+    assert re.search(r"hyperparameters\s*-\s*'calibration_method'", body)
+    assert re.search(r"hyperparameters\s*->>\s*'calibration_method'\s*=\s*'sigmoid'", body)

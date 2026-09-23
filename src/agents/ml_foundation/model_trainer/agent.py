@@ -274,6 +274,9 @@ class ModelTrainerAgent:
             "hpo_timeout_hours": hpo_timeout_hours,
             "early_stopping": early_stopping,
             "early_stopping_patience": early_stopping_patience,
+            # #2248 option (a): post-hoc calibration method override (None = the
+            # evaluator's intent-aware auto policy)
+            "calibration_method": input_data.get("calibration_method"),
             # IDs
             "training_run_id": training_run_id,
             "model_id": model_id,

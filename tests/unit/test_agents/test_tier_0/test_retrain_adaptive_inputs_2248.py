@@ -431,3 +431,79 @@ def test_one_non_binary_value_among_clean_labels_yields_no_inputs(bad):
         "validation_data": {"X": np.zeros((3, 2)), "y": np.array([1, 0, bad], dtype=object)},
     }
     assert adaptive_inputs_from_splits(splits) is None
+
+
+# ---------------------------------------------------------------------------
+# option (a), owner decision 2026-09-23: the parent's calibration method reaches the
+# evaluator (the retrain input -> pipeline -> ModelTrainerAgent -> graph state)
+# ---------------------------------------------------------------------------
+
+
+async def _trainer_input(input_data: Dict[str, Any]) -> Dict[str, Any]:
+    pipeline = MLFoundationPipeline(config=PipelineConfig(skip_mlflow=True, enable_hpo=False))
+    captured: Dict[str, Any] = {}
+    fake_trainer = MagicMock()
+
+    async def _run(trainer_input):
+        captured.update(trainer_input)
+        return {"validation_metrics": {}, "success_criteria_met": False}
+
+    fake_trainer.run = AsyncMock(side_effect=_run)
+    with patch.object(pipeline, "_get_agent", return_value=fake_trainer):
+        await pipeline._run_model_training(
+            input_data={"data_source": "patient_journeys", "target_outcome": TARGET, **input_data},
+            result=_result({"minimum_auc": 0.75}),
+            obs_context=None,
+        )
+    return captured
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_the_pipeline_hands_the_trainer_the_calibration_method():
+    assert (await _trainer_input({"calibration_method": "sigmoid"}))["calibration_method"] == (
+        "sigmoid"
+    )
+    assert (await _trainer_input({})).get("calibration_method") is None
+
+
+@pytest.mark.unit
+def test_calibration_method_is_a_trainer_graph_channel():
+    """An undeclared key never reaches a node: LangGraph drops it from channel state."""
+    from src.agents.ml_foundation.model_trainer.graph import create_model_trainer_graph
+
+    assert "calibration_method" in create_model_trainer_graph().channels
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_the_trainer_agent_puts_the_calibration_method_in_graph_state(monkeypatch):
+    from src.agents.ml_foundation.model_trainer.agent import ModelTrainerAgent
+
+    agent = ModelTrainerAgent()
+    seen: Dict[str, Any] = {}
+
+    async def _ainvoke(initial_state, **kwargs):
+        seen.update(dict(initial_state))
+        raise RuntimeError("stop after the initial state")
+
+    monkeypatch.setattr(agent.graph, "ainvoke", _ainvoke)
+    base = {
+        "model_candidate": {
+            "algorithm_name": "LogisticRegression",
+            "algorithm_class": "sklearn.linear_model.LogisticRegression",
+            "hyperparameter_search_space": {},
+            "default_hyperparameters": {},
+        },
+        "qc_report": {"qc_passed": True},
+        "experiment_id": "exp-2248",
+        "enable_mlflow": False,
+        "enable_checkpointing": False,
+    }
+    for given in ("sigmoid", None):
+        seen.clear()
+        try:
+            await agent.run({**base, "calibration_method": given})
+        except Exception:  # noqa: BLE001 — the fake graph stops the run on purpose
+            pass
+        assert seen.get("calibration_method") == given

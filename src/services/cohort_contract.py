@@ -20,6 +20,11 @@ contract by any model handle the monitoring API accepts (registry uuid, model_ve
 model_name — ``_resolve_model_id``), merges an explicit request over the persisted row
 (explicit wins), and heals NULL columns from a complete contract (never overwrites).
 
+The contract also carries the registered model's post-hoc ``calibration_method`` (#2248
+option (a)): read from ``hyperparameters.calibration_method`` (migration 155 for the 12
+goldstd rows; ``register_cohort_model`` records it going forward), never written by
+``heal_registry_cohort_contract`` — it is not a ``cohort_*`` column.
+
 Writers of the contract: the model_deployer's registry writer at training time
 (``registry_manager._persist_model_registry_row``) and ``execute_model_retraining`` on a
 COMPLETED, promotable retrain (``heal_registry_cohort_contract`` — the manual route's
@@ -40,6 +45,9 @@ REGISTRY_CONTRACT_COLUMNS: Tuple[str, str, str] = (
     "cohort_target_outcome",
     "cohort_feature_manifest_source",
 )
+
+# Post-hoc calibration methods the model_trainer evaluator applies (#2248).
+RECORDED_CALIBRATION_METHODS: Tuple[str, str] = ("sigmoid", "isotonic")
 
 # contract key -> registry column
 _KEY_TO_COLUMN: Dict[str, str] = {
@@ -73,8 +81,31 @@ def decode_data_source(text: Optional[str]) -> Any:
     return text
 
 
+def recorded_calibration_method(row: Optional[Dict[str, Any]]) -> Optional[str]:
+    """The registered model's post-hoc calibration method, or ``None`` when unrecorded.
+
+    #2248 option (a) (owner decision 2026-09-23): a retrain uses the calibration method
+    of the model it retrains. The method of record is ``hyperparameters.calibration_method``
+    on the registry row — the ``method`` hyperparameter of the registered
+    ``CalibratedClassifierCV`` (written at registration, migration 155 for the 12
+    goldstd rows). Only a method the evaluator can apply is returned; anything else
+    (absent, ``"auto"`` — a policy, not a method — or unreadable) is ``None`` and the
+    retrain keeps the auto policy. Never guessed.
+    """
+    hyperparameters = (row or {}).get("hyperparameters")
+    if isinstance(hyperparameters, str):
+        try:
+            hyperparameters = json.loads(hyperparameters)
+        except ValueError:
+            return None
+    if not isinstance(hyperparameters, dict):
+        return None
+    method = hyperparameters.get("calibration_method")
+    return method if method in RECORDED_CALIBRATION_METHODS else None
+
+
 def contract_from_registry_row(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """The None-free cohort contract a registry row carries."""
+    """The None-free cohort contract a registry row carries (+ its calibration method)."""
     if not row:
         return {}
     contract: Dict[str, Any] = {}
@@ -85,6 +116,9 @@ def contract_from_registry_row(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         value = row.get(_KEY_TO_COLUMN[key])
         if value:
             contract[key] = value
+    calibration_method = recorded_calibration_method(row)
+    if calibration_method:
+        contract["calibration_method"] = calibration_method
     return contract
 
 
@@ -116,7 +150,7 @@ async def load_registry_cohort_contract(
     try:
         result = await (
             client.table("ml_model_registry")
-            .select("id, " + ", ".join(REGISTRY_CONTRACT_COLUMNS))
+            .select("id, hyperparameters, " + ", ".join(REGISTRY_CONTRACT_COLUMNS))
             .eq("id", model_id)
             .limit(1)
             .execute()

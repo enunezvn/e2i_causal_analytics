@@ -166,6 +166,7 @@ async def _run_one_cohort(
         ``n_train`` (int), ``n_holdout`` (int).
     """
     from src.mlops.gold_standard_eval.cohort_deployer import (
+        calibration_method_of,
         register_cohort_model,
         serialize_model,
         train_cohort_model,
@@ -277,6 +278,7 @@ async def _run_one_cohort(
         auc=holdout_auc,
         feature_count=len(champion_fb.feature_columns),
         training_samples=n_train,
+        calibration_method=calibration_method_of(champion),
     )
     logger.info("[%s] Registered champion handle=%r (staging).", spec.name, model_handle)
 
