@@ -403,6 +403,11 @@ class MLExperimentRepository(BaseRepository[MLExperiment]):
     ) -> Optional[MLExperiment]:
         """Get experiment by name (a synthetic name must not resolve in real mode).
 
+        ``experiment_name`` is not unique (scope_definer blind-inserted one row per run
+        before 2026-07-11; e.g. 8 live ``Remibrutinib - treatment_initiated`` rows), so
+        the OLDEST row is returned (``created_at``, then ``id``) — the same row on every
+        call (#2257).
+
         Args:
             name: Experiment name
             include_synthetic: When True, do not exclude synthetic rows (opt-in).
@@ -416,7 +421,8 @@ class MLExperimentRepository(BaseRepository[MLExperiment]):
         from src.repositories.provenance import apply_provenance_filter
 
         query = self.client.table(self.table_name).select("*").eq("experiment_name", name)
-        result = await apply_provenance_filter(query, include_synthetic).limit(1).execute()
+        query = apply_provenance_filter(query, include_synthetic).order("created_at").order("id")
+        result = await query.limit(1).execute()
         return self._to_model(result.data[0]) if result.data else None
 
     async def get_by_mlflow_id(

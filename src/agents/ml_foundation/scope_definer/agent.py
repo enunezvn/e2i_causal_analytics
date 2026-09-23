@@ -16,7 +16,7 @@ Integration:
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from .graph import create_scope_definer_graph
@@ -73,6 +73,69 @@ def _scope_target(scope_spec: Dict[str, Any]) -> str:
     return str(
         scope_spec.get("prediction_target") or scope_spec.get("target_variable") or ""
     ).strip()
+
+
+async def _claim_experiment_id(client: Any, exp_uuid: str, minted: Optional[str]) -> str:
+    """The ``mlflow_experiment_id`` a run on ``ml_experiments`` row ``exp_uuid`` uses.
+
+    The row's id when set (never overwritten — earlier runs resolve by it); otherwise
+    ``minted`` is written into the NULL column by compare-and-set and the row re-read,
+    so concurrent runs converge on one id. Raises when the row is missing or no id
+    could be set (#2242 retrain attach, #2257 scope refresh).
+    """
+    if client is None:
+        raise RuntimeError("no ml_experiments client")
+
+    async def _current() -> Any:
+        res = await (
+            client.table("ml_experiments")
+            .select("id, mlflow_experiment_id")
+            .eq("id", exp_uuid)
+            .limit(1)
+            .execute()
+        )
+        rows = getattr(res, "data", None) or []
+        if not rows:
+            raise RuntimeError(f"experiment {exp_uuid} not found")
+        return rows[0].get("mlflow_experiment_id")
+
+    experiment_id = await _current()
+    if not experiment_id:
+        if not minted:
+            raise RuntimeError("scope minted no experiment id")
+        await (
+            client.table("ml_experiments")
+            .update({"mlflow_experiment_id": minted})
+            .eq("id", exp_uuid)
+            .is_("mlflow_experiment_id", "null")
+            .execute()
+        )
+        # Re-read: a concurrent run on the same row may have won the write.
+        experiment_id = await _current()
+        if not experiment_id:
+            raise RuntimeError(f"could not set an experiment id on {exp_uuid}")
+    return str(experiment_id)
+
+
+def _with_experiment_identity(
+    output: Dict[str, Any], experiment_id: str, name: str
+) -> Dict[str, Any]:
+    """``output`` re-keyed to ``experiment_id`` / ``name`` everywhere the scope names it."""
+    return {
+        **output,
+        "experiment_id": experiment_id,
+        "experiment_name": name,
+        "scope_spec": {
+            **(output.get("scope_spec") or {}),
+            "experiment_id": experiment_id,
+            "experiment_name": name,
+        },
+        # criteria_validator stamps the minted id here; one identity per scope.
+        "success_criteria": {
+            **(output.get("success_criteria") or {}),
+            "experiment_id": experiment_id,
+        },
+    }
 
 
 class ScopeDefinerAgent:
@@ -288,8 +351,9 @@ class ScopeDefinerAgent:
                         "error_type": "retrain_attach_error",
                     }
             else:
-                # Persist to database (ml_experiments table)
-                await self._persist_scope_spec(
+                # Persist to database (ml_experiments table); a refreshed scope runs
+                # under the existing row's experiment id (#2257).
+                output = await self._persist_scope_spec(
                     output, problem_description=final_state.get("problem_description", "")
                 )
 
@@ -324,20 +388,24 @@ class ScopeDefinerAgent:
 
     async def _persist_scope_spec(
         self, output: Dict[str, Any], problem_description: str = ""
-    ) -> None:
-        """Persist ScopeSpec to ml_experiments table.
+    ) -> Dict[str, Any]:
+        """Persist ScopeSpec to ml_experiments table; return the output to run under.
 
         Graceful degradation: If repository is unavailable,
-        logs a debug message and continues without error.
+        logs a debug message and continues without error (``output`` unchanged).
 
         Args:
             output: Agent output containing scope_spec and success_criteria
+
+        Returns:
+            ``output`` — re-keyed to the refreshed row's experiment id when the scope
+            name already exists (#2257), else unchanged.
         """
         try:
             repo = await _get_experiment_repository()
             if repo is None:
                 logger.debug("Skipping experiment persistence (no repository)")
-                return
+                return output
 
             scope_spec = output.get("scope_spec", {})
             success_criteria = output.get("success_criteria", {})
@@ -378,8 +446,17 @@ class ScopeDefinerAgent:
                         "status": "completed",
                     },
                 )
-                logger.info(f"Refreshed existing experiment scope: {name}")
-                return
+                # #2257: the run's identity IS the refreshed row. Returning under the
+                # freshly minted id left the trainer's and registry writer's
+                # get_by_mlflow_id resolving nothing (no training run, no registry
+                # candidate). The row's id is reused; a NULL column takes the minted
+                # id by compare-and-set, so a set id is never overwritten and earlier
+                # runs' lookups keep resolving.
+                experiment_id = await _claim_experiment_id(
+                    repo.client, str(existing.id), output.get("experiment_id")
+                )
+                logger.info(f"Refreshed existing experiment scope: {name} ({experiment_id})")
+                return _with_experiment_identity(output, experiment_id, name)
 
             # Create experiment record
             result = await repo.create_experiment(
@@ -401,6 +478,7 @@ class ScopeDefinerAgent:
 
         except Exception as e:
             logger.warning(f"Failed to persist experiment: {e}")
+        return output
 
     async def _attach_retrain_scope(
         self, output: Dict[str, Any], retrain_of: Dict[str, Any]
@@ -432,56 +510,12 @@ class ScopeDefinerAgent:
         if not exp_uuid or not name:
             raise RuntimeError(f"retrain_of carries no experiment ({retrain_of!r})")
 
-        async def _current() -> Any:
-            res = await (
-                client.table("ml_experiments")
-                .select("id, mlflow_experiment_id")
-                .eq("id", exp_uuid)
-                .limit(1)
-                .execute()
-            )
-            rows = getattr(res, "data", None) or []
-            if not rows:
-                raise RuntimeError(f"retrained model's experiment {exp_uuid} not found")
-            return rows[0].get("mlflow_experiment_id")
-
-        experiment_id = await _current()
-        if not experiment_id:
-            minted = output.get("experiment_id")
-            if not minted:
-                raise RuntimeError("scope minted no experiment id")
-            await (
-                client.table("ml_experiments")
-                .update({"mlflow_experiment_id": minted})
-                .eq("id", exp_uuid)
-                .is_("mlflow_experiment_id", "null")
-                .execute()
-            )
-            # Re-read: a concurrent retrain of the same model may have won the write.
-            experiment_id = await _current()
-            if not experiment_id:
-                raise RuntimeError(f"could not set an experiment id on {exp_uuid}")
-
-        scope_spec = {
-            **(output.get("scope_spec") or {}),
-            "experiment_id": experiment_id,
-            "experiment_name": name,
-        }
+        experiment_id = await _claim_experiment_id(client, exp_uuid, output.get("experiment_id"))
         logger.info(
             f"Retrain scope attached to experiment {name} ({exp_uuid}) as {experiment_id} "
             f"for model {retrain_of.get('model_name')}"
         )
-        return {
-            **output,
-            "experiment_id": experiment_id,
-            "experiment_name": name,
-            "scope_spec": scope_spec,
-            # criteria_validator stamps the minted id here; one identity per scope.
-            "success_criteria": {
-                **(output.get("success_criteria") or {}),
-                "experiment_id": experiment_id,
-            },
-        }
+        return _with_experiment_identity(output, experiment_id, name)
 
     async def _update_procedural_memory(self, output: Dict[str, Any]) -> None:
         """Update procedural memory with successful scope pattern.
