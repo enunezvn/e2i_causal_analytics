@@ -862,6 +862,13 @@ def _cohort_input_from_training_config(training_config: Dict[str, Any]) -> Dict[
             training_config.get("business_objective") or "Triggered model refresh (drift/manual)"
         ),
         "target_outcome": target_outcome,
+        # #2284: target_outcome IS the physical label on this path (the registry's
+        # cohort_target_outcome), but scope_definer's _infer_target_variable reads
+        # target_outcome as natural language and rewrites whole families of names
+        # — ``adopted`` came out as ``will_adopt``, a column no table defines, and
+        # the data_preparer's target guard refused the load. Pinning it as the hint
+        # makes scope_spec.prediction_target the column the contract actually names.
+        "target_variable_hint": target_outcome,
         "data_source": data_source,
     }
     # Optional pass-through: brand context, the Layer-5 manifest opt-in, the

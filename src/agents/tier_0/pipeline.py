@@ -456,7 +456,9 @@ class MLFoundationPipeline:
                 - brand (str): Brand context
                 - region (str): Region context
                 - problem_type_hint (str): Hint for problem type
-                - target_variable (str): Target variable name if known
+                - target_variable_hint (str): Physical target column name if
+                  known; pins scope_spec.prediction_target verbatim (#2284)
+                - target_variable (str): Alias of target_variable_hint
                 - candidate_features (List[str]): Candidate features
                 - algorithm_preferences (List[str]): Preferred algorithms
                 - target_environment (str): Deployment environment
@@ -642,6 +644,11 @@ class MLFoundationPipeline:
             "region": input_data.get("region", "all"),
             "use_case": input_data.get("use_case", "commercial_targeting"),
             "problem_type_hint": input_data.get("problem_type_hint"),
+            # #2284: the physical target column, when the caller knows it (the
+            # live retrain does — it reads the registry's cohort_target_outcome).
+            # Without it scope_definer rewrites e.g. ``adopted`` -> ``will_adopt``
+            # and the data_preparer target guard refuses the load.
+            "target_variable_hint": input_data.get("target_variable_hint"),
             "target_variable": input_data.get("target_variable"),
             "candidate_features": input_data.get("candidate_features"),
             "feature_manifest_source": feature_manifest_source,
