@@ -493,8 +493,9 @@ def create_workflow_initializer(
         A sync LangGraph node that returns ONLY its delta:
         ``{"audit_workflow_id": ...}`` when the chain started, ``{}`` otherwise.
 
-    The node is the ENTRY point of every audited graph, and ten of those graphs
-    declare ``operator.add`` accumulator channels (``errors``, ``warnings``).
+    The node is the ENTRY point of every audited graph, and eleven of the 15
+    graphs declare accumulator channels (``errors``, ``warnings``: eight with
+    plain ``operator.add``, three with dedup reducers that happen to be idempotent).
     LangGraph APPENDS whatever a node returns for such a channel, so returning
     the whole input state re-submits the accumulators the caller seeded and
     every seeded entry doubles (measured 2026-09-23: the API's structural-prior

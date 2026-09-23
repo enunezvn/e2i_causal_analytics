@@ -348,8 +348,10 @@ class TestCrossTierWorkflow:
         assert "audit_workflow_id" in result
         assert result["audit_workflow_id"] == sample_entry.workflow_id
 
-    def test_initializer_preserves_existing_state(self, audit_service, sample_entry):
-        """Verify initializer doesn't overwrite existing state fields."""
+    def test_initializer_does_not_echo_existing_state(self, audit_service, sample_entry):
+        """The node returns ONLY its delta and never touches the input: keeping the
+        rest of the state is LangGraph's channel merge, and echoing the input
+        re-submits ``operator.add`` accumulators (PR #2237, seeded warnings doubled)."""
         audit_service.start_workflow = MagicMock(return_value=sample_entry)
         set_audit_chain_service(audit_service)
 
@@ -362,9 +364,8 @@ class TestCrossTierWorkflow:
         }
         result = initializer(state)
 
-        assert result["query"] == "original query"
-        assert result["treatment_var"] == "treatment"
-        assert result["custom_field"] == "preserved"
+        assert result == {"audit_workflow_id": sample_entry.workflow_id}
+        assert state["custom_field"] == "preserved"  # input untouched
 
 
 # =============================================================================
@@ -382,9 +383,9 @@ class TestGracefulDegradation:
         state = {"query": "test"}
         result = initializer(state)
 
-        # Should return original state unchanged
-        assert result == state
-        assert "audit_workflow_id" not in result
+        # Nothing to add: an empty delta, never the echoed input
+        assert result == {}
+        assert state == {"query": "test"}
 
     def test_initializer_handles_service_exception(self, audit_service):
         """Initializer should handle exceptions gracefully."""
@@ -397,8 +398,9 @@ class TestGracefulDegradation:
         state = {"query": "test"}
         result = initializer(state)
 
-        # Should return original state, not crash
-        assert result == state
+        # A chain failure never fails the graph: an empty delta, not a crash
+        assert result == {}
+        assert "audit_workflow_id" not in result
 
     def test_agents_work_without_audit_workflow_id(self):
         """Verify agents function when audit_workflow_id is not in state."""
