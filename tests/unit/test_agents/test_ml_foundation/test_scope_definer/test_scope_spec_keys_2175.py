@@ -116,6 +116,7 @@ async def test_refresh_repairs_an_empty_prediction_target(real_output):
     existing = MLExperiment(
         id=uuid4(),
         experiment_name=output["experiment_name"],
+        mlflow_experiment_id="exp-existing",
         prediction_target="",
         created_by="scope_definer",
         status="completed",

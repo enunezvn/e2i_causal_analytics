@@ -516,7 +516,6 @@ class RouterNode:
         routing_time = int((time.time() - start_time) * 1000)
 
         return {
-            **state,
             "dispatch_plan": dispatch_plan,
             "parallel_groups": parallel_groups or [cleaned_names],
             "routing_latency_ms": routing_time,
@@ -627,7 +626,6 @@ class RouterNode:
         cleaned_names = [d["agent_name"] for d in dispatch_plan]
 
         return {
-            **state,
             "dispatch_plan": dispatch_plan,
             "parallel_groups": [cleaned_names],
             "routing_latency_ms": int((time.time() - start_time) * 1000),
@@ -752,7 +750,6 @@ class RouterNode:
         routing_time = int((time.time() - start_time) * 1000)
 
         return {
-            **state,
             "dispatch_plan": dispatch_plan,
             "parallel_groups": [[d["agent_name"] for d in dispatch_plan]],
             "routing_latency_ms": routing_time,

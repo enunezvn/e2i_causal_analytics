@@ -292,7 +292,7 @@ class ScoreComposerNode:
         self.weights = weights or DEFAULT_WEIGHTS
         self.grades = grades or DEFAULT_GRADES
 
-    async def execute(self, state: HealthScoreState) -> HealthScoreState:
+    async def execute(self, state: HealthScoreState) -> Dict[str, Any]:
         """Compose overall health score."""
         start_time = time.time()
 
@@ -426,11 +426,10 @@ class ScoreComposerNode:
                 f"grade={grade}, issues={len(critical_issues)}, warnings={len(warnings)}"
             )
 
-            # Ensure errors is always set (required field, v4.3 fix)
-            errors = state.get("errors", [])
-
+            # ``errors`` is an operator.add channel: LangGraph materialises it as
+            # ``[]`` when nothing writes it, so the v4.3 "contract-required field"
+            # re-emit of state["errors"] only doubled every accumulated row (#2238).
             return {
-                **state,
                 "overall_health_score": overall_score_100,
                 "health_grade": grade,
                 "data_provenance": data_provenance,
@@ -441,13 +440,11 @@ class ScoreComposerNode:
                 "total_latency_ms": check_time,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "status": "completed",
-                "errors": errors,  # Contract-required field
             }
 
         except Exception as e:
             logger.error(f"Score composition failed: {e}")
             return {
-                **state,
                 "errors": [{"node": "score_composer", "error": str(e)}],
                 "overall_health_score": 0.0,
                 "health_grade": "F",

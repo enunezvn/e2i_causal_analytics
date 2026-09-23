@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 from functools import partial
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, StateGraph
@@ -49,10 +49,9 @@ def _get_default_checkpointer() -> Optional[BaseCheckpointSaver]:
         return None
 
 
-async def error_handler_node(state: ExplainerState) -> ExplainerState:
+async def error_handler_node(state: ExplainerState) -> Dict[str, Any]:
     """Handle errors and finalize failed state."""
     return {
-        **state,
         "executive_summary": "Unable to generate explanation due to errors.",
         "detailed_explanation": "Please review the errors and try again.",
         "narrative_sections": [],

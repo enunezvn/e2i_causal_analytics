@@ -53,20 +53,19 @@ class DeepReasonerNode:
         self.use_llm = use_llm
         self.llm = llm
 
-    async def execute(self, state: ExplainerState) -> ExplainerState:
+    async def execute(self, state: ExplainerState) -> Dict[str, Any]:
         """Execute deep reasoning."""
         start_time = time.time()
 
         # Check if already failed
         if state.get("status") == "failed":
-            return state
+            return {}  # nothing to add; echoing the state would re-append the accumulators (#2238)
 
         try:
             analysis_context = state.get("analysis_context", [])
 
             if not analysis_context:
                 return {
-                    **state,
                     "errors": [{"node": "deep_reasoner", "error": "No analysis context available"}],
                     "status": "failed",
                 }
@@ -85,7 +84,6 @@ class DeepReasonerNode:
             )
 
             return {
-                **state,
                 "extracted_insights": result.get("insights", []),
                 "narrative_structure": result.get("structure", []),
                 "key_themes": result.get("themes", []),
@@ -97,7 +95,6 @@ class DeepReasonerNode:
         except Exception as e:
             logger.error(f"Deep reasoning failed: {e}")
             return {
-                **state,
                 "errors": [{"node": "deep_reasoner", "error": str(e)}],
                 "extracted_insights": [],  # Required output default
                 "status": "failed",
