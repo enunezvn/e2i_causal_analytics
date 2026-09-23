@@ -38,7 +38,8 @@ ALLOWLIST: dict[str, int] = {
     # and the guard now receives the structured brand (codex iter10). That costs
     # lines relative to the lane (3700) and saves them relative to main (3770),
     # so the pin still shrinks from main's.
-    "src/agents/orchestrator/nodes/dispatcher.py": 3686,
+    # 3686 -> 3685: #2238 dropped the dispatch node's full-state echo (one line).
+    "src/agents/orchestrator/nodes/dispatcher.py": 3685,
     "src/agents/tool_composer/executor.py": 1627,
     "src/agents/tool_composer/tool_registrations.py": 4843,
     "src/api/main.py": 1692,

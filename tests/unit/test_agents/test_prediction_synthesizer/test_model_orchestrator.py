@@ -104,8 +104,13 @@ class TestModelOrchestratorNode:
         node = ModelOrchestratorNode(model_clients={})
         result = await node.execute(base_state)
 
-        assert result["models_succeeded"] == 0
+        # Delta only (#2238): no prediction ran, so the counters are not in the
+        # delta; the failure is spelled by status + the orchestrator error row.
+        assert "models_succeeded" not in result
         assert result["status"] == "failed"
+        assert result["errors"] == [
+            {"node": "orchestrator", "error": "No models available for this prediction target"}
+        ]
 
     @pytest.mark.asyncio
     async def test_orchestrate_preserves_prediction_values(self, mock_model_clients, base_state):
@@ -122,16 +127,17 @@ class TestModelOrchestratorNode:
 
     @pytest.mark.asyncio
     async def test_orchestrate_already_failed(self, mock_model_clients, base_state):
-        """Test that already failed state is passed through."""
+        """An already-failed state gets an EMPTY delta, not an echo (#2238):
+        echoing ``errors`` into the graph's operator.add channel doubled it."""
         base_state["status"] = "failed"
         base_state["errors"] = [{"error": "Previous error"}]
 
         node = ModelOrchestratorNode(model_clients=mock_model_clients)
         result = await node.execute(base_state)
 
-        # Should pass through without modification
-        assert result["status"] == "failed"
-        assert result["errors"] == [{"error": "Previous error"}]
+        assert result == {}
+        assert base_state["status"] == "failed"  # input untouched
+        assert base_state["errors"] == [{"error": "Previous error"}]
 
     @pytest.mark.asyncio
     async def test_orchestrate_uses_features(self, mock_model_clients, base_state, sample_features):
