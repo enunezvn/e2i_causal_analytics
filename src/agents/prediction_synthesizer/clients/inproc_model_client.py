@@ -16,7 +16,9 @@ tolerant of multiple manifest shapes:
 URIs are resolved as:
 * a local filesystem path → ``pickle.load``
 * ``file://`` prefixed → strip and pickle.load
-* anything else (``runs:/``, ``models:/``, ``s3://`` …) → ``mlflow.pyfunc.load_model``
+* anything else (``runs:/``, ``models:/``, ``s3://`` …) → ``mlflow.sklearn.load_model``
+  when the artifact has the sklearn flavor (keeps ``predict_proba``), else
+  ``mlflow.pyfunc.load_model``
   (skipped silently if MLflow is unavailable).
 """
 
@@ -129,6 +131,15 @@ def _load_model_from_uri(uri: str) -> Any:
             import mlflow.pyfunc  # type: ignore[import-not-found]
         except ImportError as exc:
             raise RuntimeError(f"MLflow URI {uri!r} cannot be loaded — install mlflow") from exc
+        # #2280 (codex r1): pyfunc exposes only ``predict`` (class labels for a
+        # classifier), so a calibrated sklearn model would be served as a 0/1 "risk".
+        # Load the native estimator when the artifact has the sklearn flavor.
+        from mlflow.models import get_model_info  # type: ignore[import-not-found]
+
+        if "sklearn" in (get_model_info(uri).flavors or {}):
+            import mlflow.sklearn  # type: ignore[import-not-found]
+
+            return mlflow.sklearn.load_model(uri)
         return mlflow.pyfunc.load_model(uri)
 
     # Local pickle path.

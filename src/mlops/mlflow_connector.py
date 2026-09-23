@@ -58,6 +58,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
+from src.mlops.skops_trust import sklearn_log_model_kwargs
+
 if TYPE_CHECKING:
     from mlflow.tracking import MlflowClient  # type: ignore[import-untyped]
 
@@ -883,6 +885,8 @@ class MLflowConnector:
 
         try:
             assert self._mlflow is not None
+            if flavor not in ("xgboost", "lightgbm", "pytorch", "tensorflow", "pyfunc"):
+                kwargs = sklearn_log_model_kwargs(self._mlflow, model, kwargs)
             # MLflow 3.x log_model returns ModelInfo with model_uri attribute
             model_info = None
             if flavor == "sklearn":

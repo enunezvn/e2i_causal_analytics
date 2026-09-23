@@ -938,7 +938,13 @@ class RiskScoreTrainer:
                 # Log the calibrated estimator. Wrap in best-effort so a missing
                 # sklearn-flavor doesn't break the run.
                 try:
-                    mlflow.sklearn.log_model(estimator, name="model")
+                    from src.mlops.skops_trust import sklearn_log_model_kwargs
+
+                    # #2280: skops refuses the calibrator's private sklearn classes
+                    # unless they are trusted explicitly.
+                    mlflow.sklearn.log_model(
+                        estimator, name="model", **sklearn_log_model_kwargs(mlflow, estimator, {})
+                    )
                 except Exception as exc:  # pragma: no cover - depends on MLflow
                     logger.warning("risk_score_trainer: mlflow log_model failed: %s", exc)
                 run_id: Optional[str] = str(run.info.run_id) if run is not None else None
