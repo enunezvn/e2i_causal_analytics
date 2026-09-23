@@ -376,8 +376,8 @@ class TestCrossTierWorkflow:
 class TestGracefulDegradation:
     """Tests for graceful degradation when audit service unavailable."""
 
-    def test_initializer_returns_original_state_when_service_unavailable(self):
-        """Initializer should return original state when service not available."""
+    def test_initializer_returns_empty_delta_when_service_unavailable(self):
+        """No chain configured: an empty delta (never the echoed input), no crash."""
         # Service is None (not set)
         initializer = create_workflow_initializer("orchestrator", AgentTier.COORDINATION)
         state = {"query": "test"}

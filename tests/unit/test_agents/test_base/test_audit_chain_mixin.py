@@ -644,8 +644,9 @@ class TestRowToEntry:
 
 
 class TestWorkflowInitializerReturnsOnlyItsDelta:
-    """The initializer is wired as the ENTRY node of 15 graphs, 10 of which declare
-    ``operator.add`` accumulator channels (``errors``, ``warnings``). LangGraph APPENDS
+    """The initializer is wired as the ENTRY node of 15 graphs, eleven of which declare
+    accumulator channels (``errors``, ``warnings``; eight plain ``operator.add``,
+    three idempotent dedup reducers). LangGraph APPENDS
     whatever a node returns for such a channel, so a node that returns the whole input
     state re-submits the seeded accumulators and every seeded entry doubles. Measured
     live on 2026-09-23 (post-Lane-B probe, ``docs/demos/results/2026-09-23_post_lane_b_live_probe``):
