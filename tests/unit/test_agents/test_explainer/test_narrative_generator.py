@@ -34,10 +34,11 @@ class TestNarrativeGeneratorNode:
         """Helper to get a reasoned state for testing generation."""
         assembler = ContextAssemblerNode()
         state = {**base_state, "analysis_results": analysis_results}
-        assembled = await assembler.execute(state)
+        # Nodes return only their delta (#2238); merge each as LangGraph would.
+        assembled = {**state, **(await assembler.execute(state))}
 
         reasoner = DeepReasonerNode(use_llm=False)
-        return await reasoner.execute(assembled)
+        return {**assembled, **(await reasoner.execute(assembled))}
 
     # ========================================================================
     # BASIC EXECUTION TESTS
@@ -227,13 +228,14 @@ class TestNarrativeGeneratorNode:
 
     @pytest.mark.asyncio
     async def test_handles_failed_status(self, base_explainer_state):
-        """Test that already-failed state is passed through."""
+        """An already-failed state gets an EMPTY delta, not an echo (#2238)."""
         node = NarrativeGeneratorNode(use_llm=False)
         state = {**base_explainer_state, "status": "failed"}
 
         result = await node.execute(state)
 
-        assert result["status"] == "failed"
+        assert result == {}
+        assert state["status"] == "failed"  # input untouched
 
     @pytest.mark.asyncio
     async def test_handles_empty_insights(self, base_explainer_state, sample_causal_analysis):
@@ -281,14 +283,17 @@ class TestNarrativeGeneratorNode:
     # ========================================================================
 
     @pytest.mark.asyncio
-    async def test_preserves_model_used(self, base_explainer_state, sample_causal_analysis):
-        """Test that model used is preserved from reasoning phase."""
+    async def test_does_not_touch_model_used(self, base_explainer_state, sample_causal_analysis):
+        """``model_used`` is the reasoner's field; the generator neither rewrites
+        nor echoes it (delta only, #2238) — LangGraph keeps the reasoner's value."""
         reasoned = await self._get_reasoned_state(base_explainer_state, [sample_causal_analysis])
+        assert reasoned["model_used"] == "deterministic"
 
         node = NarrativeGeneratorNode(use_llm=False)
         result = await node.execute(reasoned)
 
-        assert result["model_used"] == "deterministic"
+        assert "model_used" not in result
+        assert reasoned["model_used"] == "deterministic"
 
     # ========================================================================
     # CONTENT QUALITY TESTS

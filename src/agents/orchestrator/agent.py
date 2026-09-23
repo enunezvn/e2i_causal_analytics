@@ -499,9 +499,10 @@ class OrchestratorAgent:
         """
         from .nodes import IntentClassifierNode, RouterNode
 
-        # Classify intent
+        # Classify intent. Nodes return only their delta (#2238), so merge it
+        # over the input the way LangGraph would before handing it to the router.
         classifier = IntentClassifierNode()
-        state_with_intent = await classifier.execute({"query": query})
+        state_with_intent = {"query": query, **(await classifier.execute({"query": query}))}
 
         # Route to agents
         router = RouterNode()

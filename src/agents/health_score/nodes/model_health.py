@@ -56,7 +56,7 @@ class ModelHealthNode:
             "min_predictions_24h": DEFAULT_THRESHOLDS.min_predictions_24h,
         }
 
-    async def execute(self, state: HealthScoreState) -> HealthScoreState:
+    async def execute(self, state: HealthScoreState) -> Dict[str, Any]:
         """Execute model health checks."""
         start_time = time.time()
 
@@ -65,7 +65,6 @@ class ModelHealthNode:
         if state.get("check_scope") not in ["full", "models"]:
             logger.debug("Skipping model health for non-model scope")
             return {
-                **state,
                 "model_metrics": [],
                 "model_health_measured": False,
             }
@@ -79,7 +78,6 @@ class ModelHealthNode:
                 "not fabricated-healthy"
             )
             return {
-                **state,
                 "model_metrics": [],
                 "model_health_measured": False,
             }
@@ -114,7 +112,6 @@ class ModelHealthNode:
             )
 
             return {
-                **state,
                 "model_metrics": metrics_list,
                 "model_health_score": health_score,
                 "model_health_measured": True,
@@ -124,7 +121,6 @@ class ModelHealthNode:
         except Exception as e:
             logger.error(f"Model health check failed: {e}")
             return {
-                **state,
                 "errors": [{"node": "model_health", "error": str(e)}],
                 # A check that FAILED measured nothing: mark unmeasured so the
                 # composer excludes this dimension (-> partial/unknown) rather
