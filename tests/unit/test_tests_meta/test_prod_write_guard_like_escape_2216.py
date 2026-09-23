@@ -17,6 +17,7 @@ live database.
 
 from __future__ import annotations
 
+import ast
 import re
 import sqlite3
 from pathlib import Path
@@ -167,7 +168,7 @@ _SPECS = (
 )
 
 # ``LIKE %(name)s`` optionally preceded by NOT, then the rest of that line.
-_BOUND_LIKE = re.compile(r"\b(?:NOT\s+)?LIKE\s+%\((\w+)\)s([^\n]*)")
+_BOUND_LIKE = re.compile(r"\b(?:NOT\s+)?LIKE\s+%\((\w+)\)s([^\n]*)", re.IGNORECASE)
 
 
 @pytest.mark.parametrize("spec", _SPECS, ids=lambda s: s.test_file)
@@ -188,44 +189,137 @@ def test_no_spec_predicate_carries_a_like_without_a_bound_param() -> None:
     reach. There is none today; keep it that way."""
     for spec in _SPECS:
         for q in spec.queries:
-            for m in re.finditer(r"\bLIKE\b", q.sql):
+            for m in re.finditer(r"\bLIKE\b", q.sql, re.IGNORECASE):
                 assert re.match(r"\s*%\(\w+\)s", q.sql[m.end() :]), (spec.test_file, q.leg)
 
 
 # =============================================================================
 # The consumer files: their own statements go through the same helper
 # =============================================================================
+#
+# An AST walk, not a source regex (codex r1 MED on this lane): a regex over the
+# spelling ``LIKE %s`` is evaded by lowercase SQL, a pattern concatenated with
+# ``+ "%"``, a pattern parked in a variable, or SQL assembled at runtime, and a
+# "helper is used" check is satisfied by the import alone. Here every
+# ``execute()`` call has its SQL resolved from literals, every ``LIKE`` in it must
+# bind a ``%s`` that carries the escape clause, and the tuple element that ``%s``
+# binds must be a call to ``planted_prefix`` / ``planted_suffix`` -- nothing else
+# can reach a planted ``LIKE``. Every ``*_like=`` keyword handed to a spec is held
+# to the same rule.
 
-_POSITIONAL_LIKE = re.compile(r"\bLIKE\s+%s(?P<tail>[^\n]*)")
-#: An f-string literal that carries both an interpolation and a ``%``: a wildcard
-#: pattern built by hand around a planted id, e.g. ``f"hl_{rid}_%"`` or
-#: ``f"%_{test_run_id}"``. (No consumer formats a percentage in an f-string.)
-_HAND_BUILT_PATTERN = re.compile(
-    r"""f"(?=[^"\n]*\{)[^"\n]*%[^"\n]*"|f'(?=[^'\n]*\{)[^'\n]*%[^'\n]*'"""
-)
+_HELPERS = {"planted_prefix", "planted_suffix"}
+_LIKE = re.compile(r"\bLIKE\b", re.IGNORECASE)
+#: psycopg's tokens: ``%%`` is a literal percent and consumes no parameter.
+_PLACEHOLDER = re.compile(r"%%|%s|%\(\w+\)s")
+_EXECUTE_ATTRS = {"execute", "executemany"}
+
+
+def _sql_text(node: ast.AST) -> str | None:
+    """The SQL an ``execute()`` sends, resolved from string literals; ``None`` when it
+    cannot be resolved (a variable, a call), which the test treats as un-auditable."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        # An interpolated fragment could carry the predicate itself (codex r2 MED), so an
+        # f-string resolves only when every part is a literal.
+        if all(isinstance(v, ast.Constant) for v in node.values):
+            return "".join(str(v.value) for v in node.values)
+        return None
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left, right = _sql_text(node.left), _sql_text(node.right)
+        return None if left is None or right is None else left + right
+    return None
+
+
+def _is_helper_call(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _HELPERS
+    )
+
+
+def _parents(tree: ast.AST) -> dict[ast.AST, ast.AST]:
+    return {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+
+
+def _enclosing_function(node: ast.AST, parents: dict) -> ast.FunctionDef | None:
+    while node in parents:
+        node = parents[node]
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return node
+    return None
+
+
+def _execute_calls(tree: ast.AST):
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in _EXECUTE_ATTRS
+            and node.args
+        ):
+            yield node
 
 
 @pytest.mark.parametrize("path", _CONSUMERS, ids=lambda p: p.name)
-def test_consumer_statements_escape_every_positional_like(path: Path) -> None:
-    source = path.read_text(encoding="utf-8")
-    hits = list(_POSITIONAL_LIKE.finditer(source))
-    assert hits, f"{path.name}: expected at least one planted LIKE (teardown deletes by prefix)"
-    for m in hits:
-        line = source.count("\n", 0, m.start()) + 1
-        assert m.group("tail").strip().startswith(_LIKE_ESCAPE_SRC), (
-            f"{path.name}:{line}: 'LIKE %s' without {LIKE_ESCAPE} -- '_' is a wildcard here"
+def test_every_consumer_like_binds_a_helper_pattern_under_the_escape_clause(path: Path) -> None:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    parents = _parents(tree)
+    audited = 0
+    for call in _execute_calls(tree):
+        where = f"{path.name}:{call.lineno}"
+        sql = _sql_text(call.args[0])
+        if sql is None:
+            # The one shape allowed through unresolved: a cursor wrapper's own ``execute``
+            # method forwarding its ``sql`` parameter (codex r2 MED: any other function
+            # taking SQL as a parameter would hide its callers from this walk).
+            fn = _enclosing_function(call, parents)
+            forwarded = (
+                fn is not None
+                and fn.name in _EXECUTE_ATTRS
+                and isinstance(call.args[0], ast.Name)
+                and call.args[0].id in {a.arg for a in fn.args.args}
+            )
+            assert forwarded, f"{where}: SQL is not a literal; the guard cannot audit its LIKEs"
+            continue
+        likes = list(_LIKE.finditer(sql))
+        if not likes:
+            continue
+        audited += 1
+        placeholders = [m for m in _PLACEHOLDER.finditer(sql) if m.group(0) != "%%"]
+        assert len(call.args) > 1 and isinstance(call.args[1], (ast.Tuple, ast.List)), (
+            f"{where}: a LIKE statement must bind its pattern from a literal tuple"
         )
+        elts = call.args[1].elts
+        for like in likes:
+            tail = sql[like.end() :]
+            m = re.match(r"\s*(%s)(.*)", tail, re.DOTALL)
+            assert m, f"{where}: LIKE must bind a positional %s, got {tail[:20]!r}"
+            assert m.group(2).lstrip().startswith(LIKE_ESCAPE), (
+                f"{where}: LIKE %s without {LIKE_ESCAPE} -- '_' is a wildcard here"
+            )
+            index = sum(1 for ph in placeholders if ph.start() < like.end())
+            assert index < len(elts) and _is_helper_call(elts[index]), (
+                f"{where}: the pattern bound to LIKE #{index + 1} is not a "
+                f"planted_prefix/planted_suffix call: {ast.unparse(elts[index]) if index < len(elts) else '<missing>'}"
+            )
+    assert audited >= 1, f"{path.name}: expected at least one LIKE statement (teardown by prefix)"
 
 
 @pytest.mark.parametrize("path", _CONSUMERS, ids=lambda p: p.name)
-def test_consumer_patterns_come_from_the_helper_not_from_an_f_string(path: Path) -> None:
-    source = path.read_text(encoding="utf-8")
-    for m in _HAND_BUILT_PATTERN.finditer(source):
-        line = source.count("\n", 0, m.start()) + 1
-        pytest.fail(
-            f"{path.name}:{line}: hand-built LIKE pattern {m.group(0)!r}; use planted_prefix/planted_suffix"
-        )
-    assert re.search(r"\bplanted_(?:prefix|suffix)\b", source), f"{path.name}: helper not used"
+def test_every_like_keyword_handed_to_a_spec_is_a_helper_call(path: Path) -> None:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    seen = 0
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        for kw in node.keywords:
+            if kw.arg and kw.arg.endswith("_like"):
+                seen += 1
+                assert _is_helper_call(kw.value), (
+                    f"{path.name}:{kw.lineno}: {kw.arg}={ast.unparse(kw.value)} is not a "
+                    f"planted_prefix/planted_suffix call"
+                )
+    assert seen >= 1, f"{path.name}: no spec call with a planted predicate"
 
 
 def test_the_escape_clause_is_the_one_both_engines_parse() -> None:
