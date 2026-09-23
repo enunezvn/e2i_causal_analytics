@@ -28,6 +28,7 @@ from src.agents.ml_foundation.model_deployer.nodes.training_provenance import (
     candidate_training_provenance,
     cohort_contract_from_state,
     heal_reused_row,
+    production_gate,
 )
 from src.agents.ml_foundation.model_deployer.regulatory_audit import (
     LITERATURE_ANCHORED_THRESHOLDS,
@@ -1422,9 +1423,7 @@ async def promote_stage(state: Dict[str, Any]) -> Dict[str, Any]:
                 "promotion_successful": False,
             }
 
-        # Now check if promotion is allowed (default to True if not explicitly set)
-        # This allows promote_stage to work after validate_promotion sets promotion_allowed=True
-        # or when called directly without validation
+        # Defaults True: validate_promotion sets it; a direct caller may not.
         promotion_allowed = state.get("promotion_allowed", True)
 
         if not promotion_allowed:
@@ -1435,7 +1434,9 @@ async def promote_stage(state: Dict[str, Any]) -> Dict[str, Any]:
                 "promotion_successful": False,
             }
 
-        # Try real MLflow stage transition first
+        # #2259: the provenance gate runs BEFORE MLflow moves, not only at the DB write.
+        if refused := await production_gate(state, promotion_target_stage):
+            return refused
         mlflow_success = False
         if registered_model_name and model_version:
             mlflow_success = await _transition_stage_mlflow(
@@ -1447,8 +1448,7 @@ async def promote_stage(state: Dict[str, Any]) -> Dict[str, Any]:
         if not mlflow_success:
             logger.info("Using simulated MLflow stage transition")
 
-        # Record previous stage for version record
-        previous_stage = current_stage
+        previous_stage = current_stage  # for the version record
 
         # Get metrics at promotion time.
         # D2.0: read ``roc_auc`` (the canonical key emitted by

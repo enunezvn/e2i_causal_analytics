@@ -8,6 +8,8 @@
   synthetic-gold cohort landed NULL and passed the gate. Allowed values (migration
   083): ``synthetic_gold`` | ``real`` | ``mixed``; NULL = unknown.
 
+- ``production_gate``: ``promote_stage`` applies the same gate BEFORE MLflow moves (#2259).
+
 Split out of ``registry_manager`` (module-size ratchet).
 """
 
@@ -103,3 +105,43 @@ async def heal_reused_row(
         await heal_registry_cohort_contract(client, row_id, cohort)
     if provenance:
         await heal_training_provenance(client, row_id, provenance)
+
+
+async def production_gate(state: Any, target_stage: str) -> Optional[Dict[str, Any]]:
+    """The #968/#2259 gate for ``promote_stage``, applied BEFORE the MLflow transition.
+
+    MLflow's stage is read on its own (e.g. the KPI calculator's
+    ``get_latest_versions(stages=["Production", ...])``), so a promotion the registry
+    would refuse must not move MLflow either. Returns the node's refusal update, or None
+    when the target is not production or the registry row's provenance is promotable.
+    The predicate is ``MLModelRegistryRepository.production_refusal``, the same one
+    ``transition_stage`` enforces. No registry row (or no client to read it) means nothing
+    proves the training data: refused.
+    """
+    from src.agents.ml_foundation.model_deployer.nodes.registry_manager import (
+        _get_async_supabase_client_or_none,
+    )
+    from src.repositories.ml_experiment import MLModelRegistryRepository
+
+    if MLModelRegistryRepository.normalize_stage(target_stage) != "production":
+        return None
+    model_id = state.get("model_registry_id")
+    client = await _get_async_supabase_client_or_none() if model_id else None
+    row = await MLModelRegistryRepository(client).get_by_id(str(model_id)) if client else None
+    if row is None:
+        reason: Optional[str] = (
+            f"Refusing to promote to production: no readable ml_model_registry row "
+            f"(model_registry_id={model_id!r}), so its training_provenance is unproven (#2259)."
+        )
+    else:
+        reason = MLModelRegistryRepository.production_refusal(model_id, row.training_provenance)
+    if reason is None:
+        return None
+    logger.error("promote_stage REFUSED before the MLflow transition: %s", reason)
+    return {
+        "promotion_successful": False,
+        "promotion_refused_reason": reason,
+        "error": reason,
+        "error_type": "promotion_refused",
+        "current_stage": state.get("current_stage", "None"),
+    }

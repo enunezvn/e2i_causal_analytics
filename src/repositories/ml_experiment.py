@@ -895,16 +895,21 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
         if not self.client:
             return None
 
-        from src.repositories.provenance import apply_provenance_filter
-
         query = self.client.table(self.table_name).select("*").eq("is_champion", True)
 
         if experiment_id:
             query = query.eq("experiment_id", str(experiment_id))
-        query = apply_provenance_filter(query, include_synthetic)
+        # A hard predicate, not apply_provenance_filter: prod runs with
+        # E2I_INCLUDE_SYNTHETIC=true, which makes that filter a no-op, and the synthetic
+        # generator's champion rows must never resolve as a champion (#2259 exemption).
+        if not include_synthetic:
+            query = query.eq("is_synthetic", False)
 
         result = await query.limit(1).execute()
         return self._to_model(result.data[0]) if result.data else None
+
+    # The provenances a production row may carry (#968: not synthetic_gold; #2259: not NULL).
+    _PROMOTABLE_PROVENANCE = ("real", "mixed")
 
     # Only PRODUCTION models back live predictions. Promotion to production is
     # the explicit operator gate (``transition_stage``); staging/shadow/dev
@@ -1116,6 +1121,51 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
 
         return model
 
+    @classmethod
+    def production_refusal(cls, model_id: Any, provenance: Optional[str]) -> Optional[str]:
+        """Why ``provenance`` may not enter production, or None when it may.
+
+        The ONE statement of the #968/#2259 gate: transition_stage (the DB write) and
+        model_deployer's promote_stage (before MLflow moves) both apply it.
+        """
+        if provenance in cls._PROMOTABLE_PROVENANCE:
+            return None
+        if provenance == "synthetic_gold":
+            return (
+                f"Refusing to promote model {model_id} to production: "
+                "training_provenance='synthetic_gold' (trained only on the "
+                "synthetic-gold cohort, #968). Retrain on real data before promotion."
+            )
+        return (
+            f"Refusing to promote model {model_id} to production: "
+            f"training_provenance is {provenance!r} (unknown training data, #2259). Only a "
+            "model whose provenance is proven ('real' or 'mixed') may serve; "
+            "register it from a cohort contract that pins is_synthetic."
+        )
+
+    @staticmethod
+    def normalize_stage(stage: str) -> str:
+        """Map an MLflow or DB stage name to its ``model_stage_enum`` value, or raise ValueError.
+
+        model_deployer's promote_stage leaves the MLflow casing ("Production", "Staging",
+        "Shadow", "Archived") in ``current_stage``. MLflow "None" is an unassigned version, the
+        enum's 'development'. Anything else is refused here: the enum would reject it anyway,
+        and the refusal must come before the archive, not after it (#2259).
+        """
+        if not isinstance(stage, str):
+            # Python None is malformed state, not MLflow's "None" stage.
+            raise ValueError(f"model stage must be a string, got {stage!r}")
+        key = stage.lower()
+        if key == "none":
+            return ModelStage.DEVELOPMENT.value
+        try:
+            return ModelStage(key).value
+        except ValueError:
+            raise ValueError(
+                f"unknown model stage {stage!r}: expected one of "
+                f"{[s.value for s in ModelStage]} (MLflow names accepted)"
+            ) from None
+
     async def transition_stage(
         self,
         model_id: UUID,
@@ -1124,57 +1174,85 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
     ) -> bool:
         """Transition model to new stage.
 
+        #968 / #2259 promotion gate: ``production`` requires a PROVEN training provenance.
+        A model is refused production (``ValueError``, before any write) when its
+        ``training_provenance`` is ``'synthetic_gold'`` (trained only on the synthetic gold
+        cohort; retrain on real data first) or NULL (unknown: nothing proves what it was
+        trained on, so it fails closed). ``'real'`` and ``'mixed'`` promote.
+
+        Exemption (owner decision, #2259): the synthetic MLOps generator
+        (``src/ml/synthetic/generators/mlops_generator.py``) writes its champion rows
+        straight at ``stage='production'`` with NULL provenance and never calls this method.
+        Those rows are fabricated metadata, not trained models: ``is_synthetic=true``, no
+        artifact, no MLflow run, metrics drawn from an RNG, so there is no training
+        provenance to prove. They stay as they are because no serving path can reach them:
+        every production/champion reader of this table excludes ``is_synthetic`` rows, which
+        ``tests/unit/test_repositories/test_registry_serving_readers_exclude_synthetic_2259.py``
+        pins.
+
         Args:
             model_id: Model registry ID
-            new_stage: Target stage
-            archive_existing: Archive existing models in target stage
+            new_stage: Target stage, as a ``model_stage_enum`` value or an MLflow stage name
+                ("Production", "Staging", ...; model_deployer passes the MLflow casing)
+            archive_existing: When promoting to production, archive the other production
+                versions of the SAME ``model_name`` (never another model's rows)
 
         Returns:
             True if successful
+
+        Raises:
+            ValueError: unknown stage, or production refused by the provenance gate
         """
         if not self.client:
             return False
+
+        # Normalise BEFORE the gate: "Production" used to bypass the lowercase gate and then
+        # fail the enum, so no promotion ever persisted and the gate never ran (#2259).
+        new_stage = self.normalize_stage(new_stage)
 
         # Get current model
         current = await self.get_by_id(str(model_id))
         if not current:
             return False
 
-        # #968 promotion gate: a synthetic-gold-trained model must NOT enter
-        # production. register_cohort_model already refuses stage='production' at
-        # its own seam; this closes the GENERIC promotion path (model_deployer ->
-        # transition_stage) so a staged gold-standard model cannot be hand-promoted
-        # into the serving ensemble without a real-data retrain. The single caller
-        # wraps this in try/except and records the failure reason honestly (it does
-        # not crash the deploy agent).
-        if new_stage == "production" and (
-            getattr(current, "training_provenance", None) == "synthetic_gold"
-        ):
-            raise ValueError(
-                f"Refusing to promote model {model_id} to production: "
-                "training_provenance='synthetic_gold' (trained only on the "
-                "synthetic-gold cohort, #968). Retrain on real data before promotion."
-            )
+        if new_stage == "production":
+            refusal = self.production_refusal(model_id, current.training_provenance)
+            if refusal:
+                raise ValueError(refusal)
 
-        # Archive existing models in production if needed
-        if archive_existing and new_stage == "production":
-            await (
-                self.client.table(self.table_name)
-                .update({"stage": "archived", "is_champion": False})
-                .eq("stage", "production")
-                .neq("id", str(model_id))
-                .execute()
-            )
-
-        # Update stage
+        # Promote FIRST, with the gate repeated as a predicate on the write itself: the check
+        # above read a snapshot, and the row may have changed since. A write that matches no row
+        # promoted nothing, and nothing has been archived yet.
         updates: Dict[str, Any] = {
             "stage": new_stage,
             "promoted_at": datetime.now(timezone.utc).isoformat(),
         }
         if new_stage == "production":
             updates["is_champion"] = True
+        query = self.client.table(self.table_name).update(updates).eq("id", str(model_id))
+        if new_stage == "production":
+            query = query.in_("training_provenance", list(self._PROMOTABLE_PROVENANCE))
+        result = await query.execute()
+        if new_stage == "production" and not (result.data or []):
+            raise ValueError(
+                f"Refusing to promote model {model_id} to production: at write time its "
+                "training_provenance is not one of "
+                f"{list(self._PROMOTABLE_PROVENANCE)} (#968/#2259)."
+            )
 
-        await self.client.table(self.table_name).update(updates).eq("id", str(model_id)).execute()
+        # Then archive the model's own earlier production versions. Scoped to model_name:
+        # unscoped, the first real promotion would archive every other model's serving
+        # champion (#2259). If this step fails the model is left with two production
+        # versions (both serve), never with none.
+        if archive_existing and new_stage == "production":
+            await (
+                self.client.table(self.table_name)
+                .update({"stage": "archived", "is_champion": False})
+                .eq("stage", "production")
+                .eq("model_name", current.model_name)
+                .neq("id", str(model_id))
+                .execute()
+            )
 
         return True
 

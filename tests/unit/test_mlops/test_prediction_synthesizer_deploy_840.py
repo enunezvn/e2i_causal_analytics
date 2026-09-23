@@ -89,3 +89,27 @@ async def test_serialize_and_manifest_roundtrips_to_loadable_clients(tmp_path: P
     out = await clients[models[0].model_name].predict("ENTITY_1", feats, "30d")
     assert "prediction" in out
     assert 0.0 <= float(out["prediction"]) <= 1.0
+
+
+@pytest.mark.asyncio
+async def test_register_model_row_refuses_production_without_training_provenance():
+    """#2259: a production row of unknown provenance is refused before any I/O.
+
+    No client and no artifact are needed: the refusal precedes both, so nothing is written and
+    the artifact check cannot mask it. The real-server twin is in
+    tests/unit/test_database/learning_loop/test_ml_registry_promotion_gate_realdb.py.
+    """
+    from src.mlops.prediction_synthesizer_deploy import register_model_row
+
+    with pytest.raises(ValueError, match="training_provenance"):
+        await register_model_row(
+            None,
+            experiment_id="exp",
+            model_name="m",
+            model_version="1.0",
+            algorithm="logistic_regression",
+            artifact_path="/nonexistent/m.pkl",
+            auc=0.7,
+            feature_count=1,
+            stage="production",
+        )

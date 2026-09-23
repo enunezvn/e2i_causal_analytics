@@ -318,7 +318,27 @@ async def register_model_row(
     is responsible for choosing a non-colliding stage (e.g. the gold-standard
     eval deployer uses ``stage='staging'`` so it is not surfaced by
     ``get_models_for_target``'s production-only serving filter).
+
+    A ``stage='production'`` row must say what it was trained on: with
+    ``training_provenance=None`` it is refused before any I/O (``ValueError``), the same
+    fail-closed rule ``MLModelRegistryRepository.transition_stage`` applies (#2259).
     """
+    # Production provenance allowed HERE (#2259, owner decision):
+    #   'real' / 'mixed'  -- promotable anywhere (MLModelRegistryRepository.production_refusal).
+    #   'synthetic_gold'  -- allowed at THIS seam only, deliberately. transition_stage and
+    #       the deployer refuse it (#968), but this primitive's production caller is the
+    #       owner-run ``python -m src.mlops.prediction_synthesizer_deploy`` CLI (no cron/CI
+    #       caller), which trains only on synthetic_v2 and says so. It is the same owner-run
+    #       exemption pattern as #1354's scripts/promote_hcp_adoption_champions.py, and the row
+    #       records the truth, so the gate's other readers can see it. cohort_deployer never
+    #       reaches production (it refuses stage='production' itself).
+    #   None              -- refused: nothing records what the model was trained on.
+    if stage == "production" and training_provenance is None:
+        raise ValueError(
+            f"refusing to register {model_name} at stage='production' with "
+            "training_provenance=None: a production row must record what it was trained "
+            "on (#968/#2259)"
+        )
     if not Path(artifact_path).is_file():
         raise RuntimeError(
             f"artifact for {model_name} missing at {artifact_path} — refusing to "
@@ -423,6 +443,9 @@ async def register_deployed_models(
             stage="production",
             is_champion=True,
             is_synthetic=False,
+            # train_target_models fits ONLY on synthetic_v2 scenario C; the row says so
+            # (#2259). is_synthetic stays False so the model remains servable.
+            training_provenance="synthetic_gold",
         )
         registered.append(m.model_name)
     return registered

@@ -2245,11 +2245,12 @@ async def _resolve_model_registry_id(model_name: str) -> Optional[str]:
     client = await get_async_supabase_client()
     if client is None:
         return None
-    try:
+    try:  # hard is_synthetic predicate: prod's E2I_INCLUDE_SYNTHETIC no-ops the shared one
         result = await (
             client.table("ml_model_registry")
             .select("id,registered_at")
             .eq("model_name", model_name)
+            .eq("is_synthetic", False)
             .order("registered_at", desc=True)
             .limit(1)
             .execute()
@@ -2257,8 +2258,7 @@ async def _resolve_model_registry_id(model_name: str) -> Optional[str]:
     except Exception as e:  # noqa: BLE001
         logger.debug(f"registry id lookup failed for {model_name}: {e}")
         return None
-    rows = result.data or []
-    return rows[0]["id"] if rows else None
+    return result.data[0]["id"] if result.data else None
 
 
 async def _load_global_importance_row(model_registry_id: str) -> Optional[Dict[str, Any]]:

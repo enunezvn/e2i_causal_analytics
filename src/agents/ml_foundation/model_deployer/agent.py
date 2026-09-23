@@ -293,7 +293,8 @@ class ModelDeployerAgent:
         duration = (datetime.now(timezone.utc) - start_time).total_seconds()
         logger.info(
             f"Model deployment complete for {experiment_id}: "
-            f"status={overall_status}, environment={target_environment} "
+            # output["status"], not overall_status: a registry refusal (#2259) changes it.
+            f"status={output['status']}, environment={target_environment} "
             f"in {duration:.2f}s"
         )
 
@@ -478,6 +479,41 @@ class ModelDeployerAgent:
             # Row CONFIRMED present in the DB -> honest to mark persisted.
             output["db_persisted"] = True
 
+            # 2. Update ml_model_registry if promotion occurred. BEFORE the deployment
+            # status: a promotion the registry refuses means the deployment is not active.
+            if model_registry_id and state.get("promotion_successful"):
+                # current_stage carries the MLflow casing ("Production");
+                # transition_stage normalises it and archives only on production.
+                new_stage = state.get("current_stage", "staging")
+                try:
+                    await registry_repo.transition_stage(
+                        model_id=model_registry_id,
+                        new_stage=new_stage,
+                        archive_existing=True,
+                    )
+                except ValueError as refusal:
+                    # The #968/#2259 gate refused the promotion (unproven training
+                    # provenance). An outcome of this deploy, not a storage failure: the
+                    # ml_deployments row IS persisted (and stays 'pending' below), the
+                    # registry row keeps its stage, and the deploy reports what happened
+                    # instead of a success it did not have. The MLflow registry stage has
+                    # already moved; the DB row is what serving reads.
+                    output["promotion_refused_reason"] = str(refusal)
+                    output["deployment_successful"] = False
+                    output["status"] = (
+                        "failed"
+                        if state.get("deployment_action", "deploy") in ("promote", "register")
+                        else "partial"
+                    )
+                    logger.error(
+                        "Promotion of model %s to %s REFUSED by the registry gate: %s",
+                        model_registry_id,
+                        new_stage,
+                        refusal,
+                    )
+                else:
+                    logger.info(f"Updated model {model_registry_id} stage to {new_stage}")
+
             # Update deployment status based on outcome
             if deployment and deployment.id:
                 status = "active" if output.get("deployment_successful") else "pending"
@@ -497,16 +533,6 @@ class ModelDeployerAgent:
                     )
 
                 logger.info(f"Created deployment record: {deployment.id}")
-
-            # 2. Update ml_model_registry table if promotion occurred
-            if model_registry_id and state.get("promotion_successful"):
-                new_stage = state.get("current_stage", "staging")
-                await registry_repo.transition_stage(
-                    model_id=model_registry_id,
-                    new_stage=new_stage,
-                    archive_existing=(new_stage == "production"),
-                )
-                logger.info(f"Updated model {model_registry_id} stage to {new_stage}")
 
         except ImportError as e:
             # Repos unavailable (e.g. offline test env) — no row written.

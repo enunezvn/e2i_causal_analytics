@@ -136,6 +136,8 @@ class ModelDeployerState(BaseAgentSchema):
     promotion_timestamp: Optional[str] = None  # ISO timestamp of promotion
     promotion_error: Optional[str] = None
     promotion_reason: Optional[str] = None
+    # #2259: promote_stage's provenance-gate refusal (declared, or the reducer drops it)
+    promotion_refused_reason: Optional[str] = None
 
     # Previous stage (for version record)
     previous_stage: Optional[str] = None

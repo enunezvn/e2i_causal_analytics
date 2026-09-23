@@ -146,3 +146,29 @@ async def test_simulated_registration_never_produces_registry_id():
     )
     assert result.get("registration_successful") is False
     assert result.get("model_registry_id") is None
+
+
+def test_promotion_refused_reason_is_a_declared_state_field():
+    """#2259: promote_stage's refusal must survive the ``extra="ignore"`` channel reducer."""
+    state = ModelDeployerState(audit_workflow_id=uuid4(), promotion_refused_reason="refused")
+    assert state.promotion_refused_reason == "refused"
+
+
+@pytest.mark.asyncio
+async def test_promote_stage_refuses_production_without_a_registry_row():
+    """#2259: with no ml_model_registry row there is no provenance to prove — fail closed
+    BEFORE MLflow is touched (no client, no row: a real "missing backend", not a stub)."""
+    from src.agents.ml_foundation.model_deployer.nodes.registry_manager import promote_stage
+
+    result = await promote_stage(
+        {
+            "registered_model_name": "f4_2259_unregistered",
+            "model_version": 1,
+            "promotion_target_stage": "Production",
+            "current_stage": "Shadow",
+            "model_registry_id": None,
+        }
+    )
+    assert result["promotion_successful"] is False
+    assert "training_provenance" in result["promotion_refused_reason"]
+    assert result.get("mlflow_transition_success") is not True

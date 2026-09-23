@@ -38,6 +38,21 @@ def _install_select_chain(mock_client, mock_execute):
     return query
 
 
+def _install_transition_chains(mock_client, row):
+    """Self-chaining UPDATE mock for ``transition_stage`` (archive + stage write).
+
+    The archive is filtered by stage AND model_name (#2259), so the chain depth is not pinned.
+    """
+    result = MagicMock()
+    result.data = [row]
+    query = MagicMock()
+    for m in ("eq", "neq", "in_"):
+        getattr(query, m).return_value = query
+    query.execute = AsyncMock(return_value=result)
+    mock_client.table.return_value.update.return_value = query
+    return query
+
+
 @pytest.mark.unit
 class TestMLExperimentDataClass:
     """Tests for MLExperiment data class."""
@@ -648,23 +663,17 @@ class TestMLModelRegistryRepository:
 
     @pytest.mark.asyncio
     async def test_transition_stage_updates_stage(self, repo, mock_client, sample_model_data):
-        """Test that transition_stage updates model stage."""
-        # Mock get_by_id to return a model
+        """Test that transition_stage updates model stage.
+
+        The model carries a proven training provenance: since #2259 a model whose provenance is
+        unknown (NULL) is refused production. The real-server behaviour (enum, archive scope) is
+        pinned in tests/unit/test_database/learning_loop/test_ml_registry_promotion_gate_realdb.py.
+        """
         mock_model = MLModelRegistry.from_dict(sample_model_data)
+        mock_model.training_provenance = "real"
 
         with patch.object(repo, "get_by_id", new=AsyncMock(return_value=mock_model)):
-            mock_result = MagicMock()
-            mock_result.data = [sample_model_data]
-            mock_execute = AsyncMock(return_value=mock_result)
-            mock_client.table.return_value.update.return_value.eq.return_value.execute = (
-                mock_execute
-            )
-
-            # Mock the archive query
-            mock_archive_result = MagicMock()
-            mock_archive_result.data = []
-            mock_archive_execute = AsyncMock(return_value=mock_archive_result)
-            mock_client.table.return_value.update.return_value.eq.return_value.neq.return_value.execute = mock_archive_execute
+            _install_transition_chains(mock_client, sample_model_data)
 
             model_id = UUID(sample_model_data["id"])
             result = await repo.transition_stage(
@@ -674,6 +683,42 @@ class TestMLModelRegistryRepository:
             )
 
             assert result is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("stage", ["production", "Production"])
+    async def test_transition_stage_blocks_null_provenance_promotion(
+        self, repo, mock_client, sample_model_data, stage
+    ):
+        """#2259: unknown (NULL) training provenance must NOT enter production (fail closed).
+
+        The deploy agent passes the MLflow-cased "Production"; the gate must see it too.
+        """
+        mock_model = MLModelRegistry.from_dict(sample_model_data)
+        mock_model.training_provenance = None
+
+        with patch.object(repo, "get_by_id", new=AsyncMock(return_value=mock_model)):
+            _install_transition_chains(mock_client, sample_model_data)
+
+            with pytest.raises(ValueError, match="training_provenance"):
+                await repo.transition_stage(model_id=UUID(sample_model_data["id"]), new_stage=stage)
+            mock_client.table.return_value.update.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_transition_stage_gates_mlflow_cased_production(
+        self, repo, mock_client, sample_model_data
+    ):
+        """#2259: "Production" (what model_deployer passes) used to bypass the #968 gate."""
+        mock_model = MLModelRegistry.from_dict(sample_model_data)
+        mock_model.training_provenance = "synthetic_gold"
+
+        with patch.object(repo, "get_by_id", new=AsyncMock(return_value=mock_model)):
+            _install_transition_chains(mock_client, sample_model_data)
+
+            with pytest.raises(ValueError, match="synthetic"):
+                await repo.transition_stage(
+                    model_id=UUID(sample_model_data["id"]), new_stage="Production"
+                )
+            mock_client.table.return_value.update.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_transition_stage_blocks_synthetic_gold_promotion(
@@ -714,21 +759,16 @@ class TestMLModelRegistryRepository:
     async def test_transition_stage_allows_real_provenance_promotion(
         self, repo, mock_client, sample_model_data
     ):
-        """The gate must NOT over-block: real / unknown provenance still promotes."""
+        """The gate must NOT over-block: a proven 'real' provenance still promotes.
+
+        (Before #2259 this also said "unknown provenance still promotes"; the owner reversed that
+        policy — NULL now fails closed, see test_transition_stage_blocks_null_provenance_promotion.)
+        """
         mock_model = MLModelRegistry.from_dict(sample_model_data)
         mock_model.training_provenance = "real"
 
         with patch.object(repo, "get_by_id", new=AsyncMock(return_value=mock_model)):
-            mock_result = MagicMock()
-            mock_result.data = [sample_model_data]
-            mock_client.table.return_value.update.return_value.eq.return_value.execute = AsyncMock(
-                return_value=mock_result
-            )
-            mock_archive_result = MagicMock()
-            mock_archive_result.data = []
-            mock_client.table.return_value.update.return_value.eq.return_value.neq.return_value.execute = AsyncMock(
-                return_value=mock_archive_result
-            )
+            _install_transition_chains(mock_client, sample_model_data)
 
             result = await repo.transition_stage(
                 model_id=UUID(sample_model_data["id"]),
@@ -841,3 +881,21 @@ class TestRepositoryTableNames:
         """Test that MLModelRegistryRepository has correct table name."""
         repo = MLModelRegistryRepository(supabase_client=None)
         assert repo.table_name == "ml_model_registry"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "given, expected",
+    [("Production", "production"), ("Staging", "staging"), ("Shadow", "shadow"),
+     ("Archived", "archived"), ("None", "development"), ("production", "production")],
+)  # fmt: skip
+def test_normalize_stage_maps_mlflow_names_to_the_enum(given, expected):
+    assert MLModelRegistryRepository.normalize_stage(given) == expected
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("given", [None, "candidate", "", " Production "])
+def test_normalize_stage_refuses_anything_else(given):
+    """#2259 codex r1: Python None is malformed state, not MLflow's "None" stage."""
+    with pytest.raises(ValueError, match="stage"):
+        MLModelRegistryRepository.normalize_stage(given)

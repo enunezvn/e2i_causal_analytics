@@ -295,8 +295,12 @@ class _RegistryQuery:
         self._table = table
         self._update = None
         self._filters = []
+        self._cols = None
 
-    def select(self, _cols):
+    def select(self, cols):
+        # Project like PostgREST: a column the script does not select is absent from the row,
+        # so a decision that needs it cannot pass by accident (#2259 training_provenance).
+        self._cols = [c.strip() for c in cols.split(",")]
         return self
 
     def update(self, payload):
@@ -318,7 +322,7 @@ class _RegistryQuery:
             self._fake.rows[row_id].update(self._update)
             return type("R", (), {"data": [dict(self._fake.rows[row_id])]})()
         matched = [
-            dict(r)
+            {c: r.get(c) for c in self._cols} if self._cols else dict(r)
             for r in self._fake.rows.values()
             if all(r.get(c) == v for c, v in self._filters)
         ]
@@ -348,6 +352,7 @@ def _registry_rows():
             "pr_auc": None,
             "brier_score": None,
             "calibration_slope": None,
+            "training_provenance": "synthetic_gold",
         }
         for b in promo.BRANDS
     }
@@ -490,6 +495,21 @@ def test_run_execute_never_writes_a_held_brand(monkeypatch):
     assert written == {"id-fabhalta", "id-remibrutinib"}
     assert fake.rows["id-kisqali"]["stage"] == "staging"
     assert fake.rows["id-kisqali"]["is_champion"] is False
+
+
+def test_run_holds_a_row_with_unknown_training_provenance(monkeypatch, capsys):
+    """#2259: a NULL-provenance row is HELD loudly, never promoted (the #968 fail-closed rule)."""
+    rows = _registry_rows()
+    rows["id-kisqali"]["training_provenance"] = None
+    fake = _RegistryFake(rows)
+    _patch_scoring(monkeypatch)
+    rc = asyncio.run(promo.run(fake, execute=True, only_brand=None))
+    assert rc == 0  # a HOLD is a reported outcome, not a failure
+    assert {rid for rid, _ in fake.updates} == {"id-fabhalta", "id-remibrutinib"}
+    assert fake.rows["id-kisqali"]["stage"] == "staging"
+    out = capsys.readouterr().out
+    assert "HOLD hcp_adoption_kisqali_goldstd_lr_v1" in out
+    assert "training_provenance" in out
 
 
 def test_run_holds_not_fails_when_slope_is_present_but_none(monkeypatch, capsys):
