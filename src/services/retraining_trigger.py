@@ -688,7 +688,7 @@ def _candidate_version(parent_version: str, timestamp: str) -> str:
     suffix = f"_retrained_{timestamp}_{uuid.uuid4().hex[:6]}"
     room = _REGISTRY_VERSION_MAX - len(suffix)
     if len(base) > room:
-        digest = hashlib.sha1(base.encode()).hexdigest()[:8]
+        digest = hashlib.sha1(base.encode(), usedforsecurity=False).hexdigest()[:8]
         base = f"{base[: room - len(digest) - 1]}_{digest}"
     return f"{base}{suffix}"
 
