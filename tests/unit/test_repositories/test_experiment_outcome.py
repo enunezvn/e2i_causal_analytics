@@ -155,7 +155,8 @@ class _FakeQuery:
     def order(self, *a, **k):
         return self
 
-    def range(self, *a, **k):
+    def range(self, start, end):
+        self._range = (start, end)
         return self
 
     def execute(self):
@@ -163,7 +164,8 @@ class _FakeQuery:
             pass
 
         r = _R()
-        r.data = self._data
+        rng = getattr(self, "_range", None)
+        r.data = self._data if rng is None else self._data[rng[0] : rng[1] + 1]
         r.count = len(self._data)
         return r
 
@@ -290,9 +292,14 @@ class _Page:
         self.count = count
 
 
+_POSTGREST_MAX_ROWS = 1000
+
+
 class _FeedQuery:
     """PostgREST-shaped fake for ONE table: records every filter, serves
-    ``.range()`` pages of its rows (or the whole set when no range is set)."""
+    ``.range()`` pages of its rows; an UN-ranged read is capped at PostgREST's
+    max-rows (1,000 on Supabase) exactly like the server (codex r1 HIGH: an
+    unbounded assignments read silently drops units 1,001+)."""
 
     def __init__(self, table, rows, log):
         self._table = table
@@ -323,7 +330,7 @@ class _FeedQuery:
     def execute(self):
         self._log.append((self._table, "execute", ()))
         if self._range is None:
-            return _Page(list(self._rows), len(self._rows))
+            return _Page(list(self._rows[:_POSTGREST_MAX_ROWS]), len(self._rows))
         s, e = self._range
         return _Page(self._rows[s : e + 1], len(self._rows))
 
@@ -427,7 +434,10 @@ class TestLoadArraysUnitOutcomeFeed:
         assert "business_metrics" not in client.tables_queried()
 
     def test_unit_outcomes_are_paged_to_exhaustion(self):
-        """(ix) 1,400 units over two 1,000-row pages -> 1,400 values, not 1,000."""
+        """(ix) 1,400 units over two 1,000-row pages -> 1,400 values, not 1,000 —
+        on BOTH legs: the assignments read is paged too (codex r1 HIGH: an
+        un-ranged assignments read is capped at 1,000 by PostgREST, and the
+        1,000-unit variant map silently dropped the other 400 units' outcomes)."""
         n = 1400
         assign = [
             {"unit_id": f"scvhcp_{i:05d}", "variant": "control" if i % 2 else "treatment"}
@@ -440,28 +450,71 @@ class TestLoadArraysUnitOutcomeFeed:
         control, treatment = self._run(client)
         assert control.size + treatment.size == n
         assert control.size == 700 and treatment.size == 700
-        ranges = [
-            a for t, op, a in client.log if t == "ab_experiment_unit_outcomes" and op == "range"
-        ]
-        assert ranges[0] == (0, 999)
-        assert len(ranges) >= 2
+        for table in ("ab_experiment_unit_outcomes", "ab_experiment_assignments"):
+            ranges = [a for t, op, a in client.log if t == table and op == "range"]
+            assert ranges and ranges[0] == (0, 999), table
+            assert len(ranges) >= 2, table
 
-    def test_window_days_filters_on_observed_at(self):
-        """(x) window_days is honoured on observed_at (anchor = newest outcome)."""
+    def test_short_assignments_read_fails_loud_instead_of_a_truncated_atE(self):
+        """A server that reports 1,400 assignments but serves fewer must not feed
+        a partial variant map to the pooled test."""
+        n = 1400
+        assign = [
+            {"unit_id": f"scvhcp_{i:05d}", "variant": "control" if i % 2 else "treatment"}
+            for i in range(n)
+        ]
+        rows = [_uo(f"scvhcp_{i:05d}", float(i % 2), "2026-09-01T00:00:00+00:00") for i in range(n)]
+        client = _FeedClient(
+            {"ab_experiment_assignments": assign, "ab_experiment_unit_outcomes": rows}
+        )
+
+        class _Lying(_FeedQuery):
+            def execute(self):
+                page = super().execute()
+                if self._table == "ab_experiment_assignments":
+                    page.count = n + 1  # server claims one more than it serves
+                return page
+
+        client.table = lambda name: _Lying(name, client._tables.get(name, []), client.log)
+        with pytest.raises(RuntimeError, match="ab_experiment_assignments"):
+            self._run(client)
+
+    def test_window_days_is_a_per_unit_post_assignment_window_on_observed_at(self):
+        """(x) window_days on the time-indexed feed is PER UNIT: keep an outcome
+        iff assigned_at <= observed_at <= assigned_at + window_days, at timestamp
+        precision (codex r1 MED: anchoring on the experiment's newest outcome
+        would select recent ENROLLEES under rolling enrollment, not outcomes
+        observed within each unit's window)."""
+
+        def _asn(unit, variant, assigned):
+            return {"unit_id": unit, "variant": variant, "assigned_at": assigned}
+
         client = _FeedClient(
             {
-                "ab_experiment_assignments": self._ASSIGN,
+                "ab_experiment_assignments": [
+                    _asn("scvhcp_00001", "control", "2026-09-01T00:00:00+00:00"),
+                    _asn("scvhcp_00002", "control", "2026-09-10T00:00:00+00:00"),
+                    _asn("scvhcp_00003", "treatment", "2026-09-15T00:00:00+00:00"),
+                    _asn("scvhcp_00004", "treatment", "2026-09-15T12:00:00+00:00"),
+                ],
                 "ab_experiment_unit_outcomes": [
-                    _uo("scvhcp_00001", 1.0, "2026-01-01T00:00:00+00:00"),  # stale
-                    _uo("scvhcp_00002", 0.0, "2026-09-20T00:00:00+00:00"),
-                    _uo("scvhcp_00003", 1.0, "2026-09-21T00:00:00+00:00"),
-                    _uo("scvhcp_00004", 0.0, "2026-09-22T00:00:00+00:00"),
+                    # 20 d after assignment -> outside a 7 d window (though recent)
+                    _uo("scvhcp_00001", 1.0, "2026-09-21T00:00:00+00:00"),
+                    # 2 d after assignment -> inside
+                    _uo("scvhcp_00002", 0.0, "2026-09-12T00:00:00+00:00"),
+                    # exactly 7 d after -> inside (inclusive bound)
+                    _uo("scvhcp_00003", 1.0, "2026-09-22T00:00:00+00:00"),
+                    # 7 d + 1 s after a NOON assignment -> outside at timestamp precision
+                    _uo("scvhcp_00004", 0.0, "2026-09-22T12:00:01+00:00"),
                 ],
             }
         )
         control, treatment = self._run(client, window_days=7)
-        assert control.tolist() == [0.0]  # scvhcp_00001 dropped by the window
-        assert sorted(treatment.tolist()) == [0.0, 1.0]
+        assert control.tolist() == [0.0]  # 00001 outside, 00002 inside
+        assert treatment.tolist() == [1.0]  # 00003 inside, 00004 outside by 1 s
+        # no window -> every unit
+        control, treatment = self._run(client)
+        assert control.size == 2 and treatment.size == 2
 
     def test_empty_metric_never_queries_unit_outcomes(self):
         """A blank primary_metric cannot name a unit-outcome metric: go straight to

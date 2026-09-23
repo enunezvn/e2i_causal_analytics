@@ -106,8 +106,14 @@ class _ChainableQuery:
 
     def execute(self) -> Any:
         result = MagicMock()
-        result.data = list(self._execute_data)
-        result.count = self._count
+        rows = list(self._execute_data)
+        # honour a recorded .range() so paged readers see an empty last page
+        ranges = [args for (name, args) in self.calls if name == "range"]
+        if ranges:
+            start, end = ranges[-1]
+            rows = rows[start : end + 1]
+        result.data = rows
+        result.count = len(self._execute_data) if self._execute_data else self._count
         if self._sync:
             return result
         return AsyncMock(return_value=result)()

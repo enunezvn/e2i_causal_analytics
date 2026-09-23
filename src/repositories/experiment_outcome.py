@@ -84,10 +84,14 @@ METRIC_COLUMN_MAP: Dict[str, str] = {
 
 #: Table of the per-experiment unit outcome feed (migration 155).
 UNIT_OUTCOMES_TABLE = "ab_experiment_unit_outcomes"
-#: PostgREST's default page; paged to exhaustion (an experiment can hold up to
-#: 1,400 units — a silently truncated first page would be a plausible-wrong ATE).
-_UNIT_OUTCOMES_PAGE = 1000
-_UNIT_OUTCOMES_MAX_PAGES = 1000
+#: PostgREST's default page / max-rows (1,000 on Supabase). BOTH reads below are
+#: paged to exhaustion: an experiment can hold up to 1,400 units, and an un-ranged
+#: read is capped at max-rows by the server — a truncated assignments read leaves
+#: a 1,000-unit variant map that silently drops the other units' outcomes in
+#: aggregate_to_arrays (codex r1 HIGH: measured ATE 0.0 vs the full 0.2857), a
+#: truncated outcome page drops arms directly. Either is a plausible-wrong ATE.
+_PAGE_SIZE = 1000
+_MAX_PAGES = 1000
 
 
 class ExperimentOutcomeRepository:
@@ -195,42 +199,24 @@ class ExperimentOutcomeRepository:
         )
 
     # ------------------------------------------------------------------- I/O
-    def load_unit_outcomes(
-        self,
-        experiment_id: UUID,
-        metric_name: str,
-        include_synthetic: bool = False,
+    @staticmethod
+    def _page_to_exhaustion(
+        build_query: Any, *, order_col: str, label: str
     ) -> List[Dict[str, Any]]:
-        """Read the experiment's rows from ``ab_experiment_unit_outcomes`` for
-        ``metric_name`` (``unit_id, outcome_value, observed_at``), paged to
-        exhaustion.
-
-        unit_id-ordered ``.range()`` windows, advancing by the rows actually
-        returned and stopping only on an EMPTY page (the ``fetch_synthetic_hcp_ids``
-        idiom in scripts/load_synthetic_data.py) — PostgREST's default page is
-        1,000 and an experiment can hold up to 1,400 units. The paged total is
-        checked against the server's exact count: a short read fails LOUD rather
-        than feeding a truncated arm to the pooled test. Provenance: the table is
-        is_synthetic-tagged (migration 155) and the same ``include_synthetic``
-        opt-in as the assignments leg governs it.
+        """Read every row of a filtered query with ``order_col``-ordered ``.range()``
+        windows, advancing by the rows actually returned and stopping only on an
+        EMPTY page (the ``fetch_synthetic_hcp_ids`` idiom in
+        scripts/load_synthetic_data.py). ``build_query()`` must return a fresh
+        filtered builder whose ``select`` asked for ``count="exact"``: the paged
+        total is checked against the server's count and a short read fails LOUD
+        (RuntimeError -> the Celery task reports ``failed``, never a truncated ATE).
         """
-        if self.client is None:
-            return []
-        from src.repositories.provenance import apply_provenance_filter
-
         rows: List[Dict[str, Any]] = []
         expected: Optional[int] = None
         offset = 0
         exhausted = False
-        for _page in range(_UNIT_OUTCOMES_MAX_PAGES):
-            query = (
-                self.client.table(UNIT_OUTCOMES_TABLE)
-                .select("unit_id,outcome_value,observed_at", count="exact")
-                .eq("experiment_id", str(experiment_id))
-                .eq("metric_name", metric_name)
-            )
-            query = apply_provenance_filter(query, include_synthetic)
-            resp = query.order("unit_id").range(offset, offset + _UNIT_OUTCOMES_PAGE - 1).execute()
+        for _page in range(_MAX_PAGES):
+            resp = build_query().order(order_col).range(offset, offset + _PAGE_SIZE - 1).execute()
             if expected is None:
                 expected = getattr(resp, "count", None)
             page = resp.data or []
@@ -241,16 +227,43 @@ class ExperimentOutcomeRepository:
             offset += len(page)
         if not exhausted:
             raise RuntimeError(
-                f"{UNIT_OUTCOMES_TABLE} paged read for experiment {experiment_id} hit "
-                f"max_pages={_UNIT_OUTCOMES_MAX_PAGES} before exhausting the rows"
+                f"{label}: paged read hit max_pages={_MAX_PAGES} before exhausting the rows"
             )
         if expected is not None and len(rows) != expected:
             raise RuntimeError(
-                f"{UNIT_OUTCOMES_TABLE} paged read for experiment {experiment_id} returned "
-                f"{len(rows)} rows but the server reports {expected} — refusing to feed a "
-                "truncated arm to the pooled test"
+                f"{label}: paged read returned {len(rows)} rows but the server reports "
+                f"{expected} — refusing to feed a truncated arm to the pooled test"
             )
         return rows
+
+    def load_unit_outcomes(
+        self,
+        experiment_id: UUID,
+        metric_name: str,
+        include_synthetic: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Read the experiment's rows from ``ab_experiment_unit_outcomes`` for
+        ``metric_name`` (``unit_id, outcome_value, observed_at``), paged to
+        exhaustion with the exact-count check (see ``_page_to_exhaustion``).
+        Provenance: the table is is_synthetic-tagged (migration 155) and the same
+        ``include_synthetic`` opt-in as the assignments leg governs it.
+        """
+        if self.client is None:
+            return []
+        from src.repositories.provenance import apply_provenance_filter
+
+        def _build() -> Any:
+            q = (
+                self.client.table(UNIT_OUTCOMES_TABLE)
+                .select("unit_id,outcome_value,observed_at", count="exact")
+                .eq("experiment_id", str(experiment_id))
+                .eq("metric_name", metric_name)
+            )
+            return apply_provenance_filter(q, include_synthetic)
+
+        return self._page_to_exhaustion(
+            _build, order_col="unit_id", label=f"{UNIT_OUTCOMES_TABLE}[{experiment_id}]"
+        )
 
     async def load_arrays(
         self,
@@ -265,15 +278,21 @@ class ExperimentOutcomeRepository:
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Real outcome feed → (control, treatment) per-unit arrays.
 
-        Precedence (option d1, 2026-09-23): after the assignments query, the
-        per-experiment unit outcome feed (``ab_experiment_unit_outcomes``, keyed on
-        the experiment and ``primary_metric`` as ``metric_name``) is read first;
-        with >= 1 row the arrays come from it (MEAN per unit, ``window_days`` on
-        ``observed_at``) and ``business_metrics`` is NOT queried. With 0 rows the
-        legacy path runs unchanged: ``resolve_column`` (fail closed on an unknown
-        metric), assignments ⋈ ``business_metrics`` ``per_hcp_rollup`` (+ brand),
-        ``window_days`` on ``metric_date``. The feed used and the row counts are
-        logged at INFO and recorded in ``self.last_outcome_source``.
+        Precedence (option d1, 2026-09-23): after the (paged) assignments query,
+        the per-experiment unit outcome feed (``ab_experiment_unit_outcomes``,
+        keyed on the experiment and ``primary_metric`` as ``metric_name``) is read
+        first; with >= 1 row the arrays come from it (MEAN per unit) and
+        ``business_metrics`` is NOT queried. On this feed ``window_days`` is a
+        PER-UNIT post-assignment window at timestamp precision: keep an outcome
+        iff ``assigned_at <= observed_at <= assigned_at + window_days`` (the feed
+        carries both timestamps; anchoring on the experiment's newest outcome
+        would select recent ENROLLEES under rolling enrollment, not outcomes
+        observed within each unit's window). With 0 rows the legacy path runs
+        unchanged: ``resolve_column`` (fail closed on an unknown metric),
+        assignments ⋈ ``business_metrics`` ``per_hcp_rollup`` (+ brand),
+        ``window_days`` anchored on the newest ``metric_date`` (no per-assignment
+        window is possible there). The feed used and the row counts are logged
+        at INFO and recorded in ``self.last_outcome_source``.
 
         Returns empty arrays (caller bails ``insufficient_data``) when there are no
         assignments or no matching outcome rows on either feed.
@@ -290,19 +309,26 @@ class ExperimentOutcomeRepository:
 
         from src.repositories.provenance import apply_provenance_filter
 
-        # 1) assignments for the experiment (unit_id, variant). The table is
-        # is_synthetic-tagged (migration 063) — without the predicate a real
-        # experiment's pooled test could ingest synthetic units (#894); the
-        # same include_synthetic opt-in governs every leg of the join.
-        assign_query = (
-            self.client.table("ab_experiment_assignments")
-            .select("unit_id,variant")
-            .eq("experiment_id", str(experiment_id))
+        # 1) assignments for the experiment (unit_id, variant, assigned_at), paged
+        # to exhaustion (up to 1,400 units; an un-ranged read is capped at 1,000
+        # by PostgREST and silently truncated the variant map — codex r1 HIGH).
+        # The table is is_synthetic-tagged (migration 063) — without the
+        # predicate a real experiment's pooled test could ingest synthetic units
+        # (#894); the same include_synthetic opt-in governs every leg of the join.
+        def _build_assignments() -> Any:
+            q = (
+                self.client.table("ab_experiment_assignments")
+                .select("unit_id,variant,assigned_at", count="exact")
+                .eq("experiment_id", str(experiment_id))
+            )
+            return apply_provenance_filter(q, include_synthetic)
+
+        assign_rows = self._page_to_exhaustion(
+            _build_assignments,
+            order_col="unit_id",
+            label=f"ab_experiment_assignments[{experiment_id}]",
         )
-        assign_res = apply_provenance_filter(assign_query, include_synthetic).execute()
-        assignments = [
-            (r["unit_id"], r["variant"]) for r in (assign_res.data or []) if r.get("unit_id")
-        ]
+        assignments = [(r["unit_id"], r["variant"]) for r in assign_rows if r.get("unit_id")]
 
         # 2a) the per-experiment unit outcome feed (migration 155) — FIRST.
         metric_name = (primary_metric or "").strip()
@@ -325,7 +351,10 @@ class ExperimentOutcomeRepository:
                 for r in unit_rows
             ]
             if window_days is not None:
-                rows = self._filter_window(rows, window_days, date_key="observed_at")
+                assigned_at_by_unit = {
+                    str(r["unit_id"]): r.get("assigned_at") for r in assign_rows if r.get("unit_id")
+                }
+                rows = self._filter_post_assignment_window(rows, assigned_at_by_unit, window_days)
             self.last_outcome_source = "unit_outcomes"
             logger.info(
                 "load_arrays(%s, %r): outcome feed = unit_outcomes "
@@ -389,22 +418,56 @@ class ExperimentOutcomeRepository:
         )
 
     @staticmethod
-    def _filter_window(
-        rows: List[Dict[str, Any]], window_days: int, *, date_key: str = "metric_date"
+    def _filter_post_assignment_window(
+        rows: List[Dict[str, Any]],
+        assigned_at_by_unit: Dict[str, Any],
+        window_days: int,
     ) -> List[Dict[str, Any]]:
-        """Keep rows within the most-recent ``window_days`` of observed dates.
+        """Unit-outcome feed window: keep a row iff
+        ``assigned_at <= observed_at <= assigned_at + window_days`` for ITS unit,
+        at timestamp precision (both ISO-8601 timestamps; naive values are read
+        as UTC). Rows whose unit has no parseable ``assigned_at`` or whose
+        ``observed_at`` is unparseable are dropped — a window that cannot be
+        evaluated must not admit the row.
+        """
+        from datetime import datetime, timedelta, timezone
 
-        ``date_key`` names the date column: ``metric_date`` (business_metrics,
-        the default) or ``observed_at`` (the unit outcome feed; an ISO timestamp
-        whose first 10 characters are the date). Conservative, schema-faithful
-        default: anchor on the latest date in the pulled set (no per-assignment
-        start column exists). No-op if dates are absent.
+        def _ts(v: Any) -> Optional[datetime]:
+            if isinstance(v, datetime):
+                d = v
+            elif isinstance(v, str):
+                try:
+                    d = datetime.fromisoformat(v.replace("Z", "+00:00"))
+                except ValueError:
+                    return None
+            else:
+                return None
+            return d if d.tzinfo is not None else d.replace(tzinfo=timezone.utc)
+
+        span = timedelta(days=window_days)
+        kept: List[Dict[str, Any]] = []
+        for r in rows:
+            start = _ts(assigned_at_by_unit.get(str(r.get("hcp_id"))))
+            observed = _ts(r.get("observed_at"))
+            if start is None or observed is None:
+                continue
+            if start <= observed <= start + span:
+                kept.append(r)
+        return kept
+
+    @staticmethod
+    def _filter_window(rows: List[Dict[str, Any]], window_days: int) -> List[Dict[str, Any]]:
+        """Keep rows within the most-recent ``window_days`` of observed metric_dates.
+
+        Conservative, schema-faithful default: anchor on the latest metric_date in
+        the pulled set (no per-assignment start column exists). No-op if dates are
+        absent.
         """
         from datetime import date, timedelta
 
         dates = []
         for r in rows:
-            d = r.get(date_key)
+            d = r.get("metric_date")
             if isinstance(d, str):
                 try:
                     d = date.fromisoformat(d[:10])
@@ -417,7 +480,7 @@ class ExperimentOutcomeRepository:
         cutoff = max(dates) - timedelta(days=window_days)
 
         def _in_window(r: Dict[str, Any]) -> bool:
-            d = r.get(date_key)
+            d = r.get("metric_date")
             if isinstance(d, str):
                 try:
                     d = date.fromisoformat(d[:10])
