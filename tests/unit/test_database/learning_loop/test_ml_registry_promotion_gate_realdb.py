@@ -37,8 +37,12 @@ PROD_REST_CONTAINER = "supabase-rest"
 MIGRATION_158 = (
     _pg.REPO_ROOT / "database" / "migrations" / "158_backfill_provable_training_provenance.sql"
 )
-# The two rows rule D of the #2259 investigation proves (prediction_synthesizer_deploy, 2026-06-10).
-PROVABLE_IDS = ("d765b451-12df-46df-955f-63359b506b52", "5fd7826b-28d7-491b-b9b1-8b5494dbe1ff")
+# The two rows rule D of the #2259 investigation proves (prediction_synthesizer_deploy, 2026-06-10),
+# as (id, model_name) on prod.
+PROVABLE = (
+    ("5fd7826b-28d7-491b-b9b1-8b5494dbe1ff", "csu_treatment_initiation_lr_full_v1"),
+    ("d765b451-12df-46df-955f-63359b506b52", "csu_treatment_initiation_lr_balanced_v1"),
+)
 
 
 def _free_port() -> int:
@@ -57,11 +61,15 @@ class ThrowawayRest:
         self.jwt_secret = secrets.token_hex(32)
 
     def start(self, ready_timeout_s: int = 60) -> None:
-        image = subprocess.run(
-            ["docker", "inspect", PROD_REST_CONTAINER, "--format", "{{.Config.Image}}"],
-            capture_output=True,
-            check=True,
-        ).stdout.decode().strip()
+        image = (
+            subprocess.run(
+                ["docker", "inspect", PROD_REST_CONTAINER, "--format", "{{.Config.Image}}"],
+                capture_output=True,
+                check=True,
+            )
+            .stdout.decode()
+            .strip()
+        )
         pg = self.conn.pg
         db_uri = f"postgres://postgres:{pg._password}@127.0.0.1:{pg.host_port}/{self.conn.db}"
         env = {
@@ -464,7 +472,9 @@ async def test_champion_promotion_holds_a_null_provenance_row(
 # ---------------------------------------------------------------------------
 
 
-def _csu_row(conn: _pg.PgConn, exp: str, model_id: str, name: str, provenance: Optional[str]) -> str:
+def _csu_row(
+    conn: _pg.PgConn, exp: str, model_id: str, name: str, provenance: Optional[str]
+) -> str:
     return _model(conn, exp, name, stage="archived", provenance=provenance, model_id=model_id,
                   artifact_path=f"/app/data/ml_artifacts/csu_treatment_initiation/{name}.pkl")  # fmt: skip
 
@@ -475,10 +485,9 @@ def _provenance(conn: _pg.PgConn, model_id: str) -> str:
 
 def test_migration_158_backfills_only_the_two_provable_rows(registry_db: _pg.PgConn) -> None:
     exp = _experiment(registry_db, "csu_treatment_initiation_live_v1")
-    full = _csu_row(registry_db, exp, PROVABLE_IDS[0], "csu_treatment_initiation_lr_full_v1", None)
-    balanced = _csu_row(registry_db, exp, PROVABLE_IDS[1],
-                        "csu_treatment_initiation_lr_balanced_v1", None)  # fmt: skip
-    # Same shape, different id: provability is per row, the id list is the scope.
+    full = _csu_row(registry_db, exp, *PROVABLE[0], None)
+    balanced = _csu_row(registry_db, exp, *PROVABLE[1], None)
+    # Same writer and experiment, not one of the two ids: the id list is the scope.
     lookalike = _csu_row(registry_db, exp, str(uuid.uuid4()), "csu_treatment_initiation_lr_x_v1",
                          None)  # fmt: skip
     # Rule E: fabricated synthetic-generator metadata has no training to describe.
@@ -500,8 +509,7 @@ def test_migration_158_backfills_only_the_two_provable_rows(registry_db: _pg.PgC
 
 def test_migration_158_never_overwrites_a_provenance_already_set(registry_db: _pg.PgConn) -> None:
     exp = _experiment(registry_db, "csu_treatment_initiation_live_v1")
-    healed = _csu_row(registry_db, exp, PROVABLE_IDS[0], "csu_treatment_initiation_lr_full_v1",
-                      "real")  # fmt: skip
+    healed = _csu_row(registry_db, exp, *PROVABLE[0], "real")
 
     _pg.apply_migration(registry_db, MIGRATION_158)
 
@@ -513,8 +521,7 @@ def test_migration_158_skips_a_row_that_no_longer_matches_the_proof(
 ) -> None:
     """The ids alone are not the proof: the writer's experiment and artifact location are."""
     other = _experiment(registry_db, "some_other_experiment")
-    moved = _csu_row(registry_db, other, PROVABLE_IDS[0], "csu_treatment_initiation_lr_full_v1",
-                     None)  # fmt: skip
+    moved = _csu_row(registry_db, other, *PROVABLE[0], None)
 
     _pg.apply_migration(registry_db, MIGRATION_158)
 

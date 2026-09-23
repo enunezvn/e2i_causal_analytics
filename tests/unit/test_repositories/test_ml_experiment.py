@@ -700,9 +700,7 @@ class TestMLModelRegistryRepository:
             _install_transition_chains(mock_client, sample_model_data)
 
             with pytest.raises(ValueError, match="training_provenance"):
-                await repo.transition_stage(
-                    model_id=UUID(sample_model_data["id"]), new_stage=stage
-                )
+                await repo.transition_stage(model_id=UUID(sample_model_data["id"]), new_stage=stage)
             mock_client.table.return_value.update.assert_not_called()
 
     @pytest.mark.asyncio
@@ -770,16 +768,7 @@ class TestMLModelRegistryRepository:
         mock_model.training_provenance = "real"
 
         with patch.object(repo, "get_by_id", new=AsyncMock(return_value=mock_model)):
-            mock_result = MagicMock()
-            mock_result.data = [sample_model_data]
-            mock_client.table.return_value.update.return_value.eq.return_value.execute = AsyncMock(
-                return_value=mock_result
-            )
-            mock_archive_result = MagicMock()
-            mock_archive_result.data = []
-            mock_client.table.return_value.update.return_value.eq.return_value.neq.return_value.execute = AsyncMock(
-                return_value=mock_archive_result
-            )
+            _install_transition_chains(mock_client, sample_model_data)
 
             result = await repo.transition_stage(
                 model_id=UUID(sample_model_data["id"]),

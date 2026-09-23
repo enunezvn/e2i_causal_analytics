@@ -39,8 +39,9 @@ Why this is a direct registry UPDATE and not ``transition_stage``
 -----------------------------------------------------------------
 ``MLModelRegistryRepository.transition_stage`` (a) refuses
 ``training_provenance='synthetic_gold'`` -> production (#968) and (b) with
-``archive_existing=True`` archives EVERY other production row in the registry
-— which would demote the ~100 per-trigger production champions wholesale.
+``archive_existing=True`` archived EVERY other production row in the registry
+— which would have demoted the other serving champions wholesale (#2259 scoped
+that archive to the promoted row's own model_name).
 The #968 gate exists to stop a synthetic-gold model silently joining a REAL
 serving ensemble; here the owner explicitly ruled promotion for this family
 after calibration verification, the three ``hcp_adoption_{brand}`` prediction
@@ -54,6 +55,11 @@ rows is the only row of its experiment.
 
 Scope guard: only the three ``MODEL_ALLOWLIST`` names can ever be written;
 each write is ``WHERE id = <that row's uuid>``.
+
+Provenance guard (#2259): the owner's exemption covers rows KNOWN to be
+``synthetic_gold``. A row whose ``training_provenance`` is NULL is HELD, never
+promoted: nothing then proves what it was trained on, the case the #968 gate
+fails closed on everywhere else.
 
 Run from a checkout with a loaded ``.env`` (reads are safe anywhere;
 ``--execute`` is the dispatcher's batch-time step):
@@ -239,7 +245,10 @@ async def _apply_update(client: Any, row_id: str, update: dict) -> None:
 async def _fetch_registry_row(client: Any, model_name: str) -> dict | None:
     res = await (
         client.table("ml_model_registry")
-        .select("id,model_name,auc,stage,is_champion,artifact_path,experiment_id,promoted_at")
+        .select(
+            "id,model_name,auc,stage,is_champion,artifact_path,experiment_id,promoted_at,"
+            "training_provenance"
+        )
         .eq("model_name", model_name)
         .execute()
     )
@@ -370,6 +379,14 @@ async def run(client: Any, *, execute: bool, only_brand: str | None) -> int:
             if row is None:
                 print(f"  FAIL {model_name}: no registry row")
                 failed += 1
+                continue
+            if row.get("training_provenance") is None:
+                # #2259: fail closed on unknown provenance, before scoring.
+                print(
+                    f"  HOLD {model_name}: training_provenance is NULL — nothing proves "
+                    "what this row was trained on; refusing to promote it (#968/#2259)"
+                )
+                held += 1
                 continue
             stored = await _stored_holdout(client, row["id"])
             if not stored:

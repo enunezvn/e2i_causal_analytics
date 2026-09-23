@@ -500,12 +500,28 @@ class ModelDeployerAgent:
 
             # 2. Update ml_model_registry table if promotion occurred
             if model_registry_id and state.get("promotion_successful"):
+                # current_stage carries the MLflow casing ("Production"); transition_stage
+                # normalises it, so compare case-insensitively here too (#2259).
                 new_stage = state.get("current_stage", "staging")
-                await registry_repo.transition_stage(
-                    model_id=model_registry_id,
-                    new_stage=new_stage,
-                    archive_existing=(new_stage == "production"),
-                )
+                try:
+                    await registry_repo.transition_stage(
+                        model_id=model_registry_id,
+                        new_stage=new_stage,
+                        archive_existing=(str(new_stage).lower() == "production"),
+                    )
+                except ValueError as refusal:
+                    # The #968/#2259 gate refused the promotion (unproven training
+                    # provenance). That is an outcome of this deploy, not a storage
+                    # failure: the ml_deployments row above IS persisted, and the registry
+                    # row keeps its stage. Surface it on the output and log it loudly.
+                    output["promotion_refused_reason"] = str(refusal)
+                    logger.error(
+                        "Promotion of model %s to %s REFUSED by the registry gate: %s",
+                        model_registry_id,
+                        new_stage,
+                        refusal,
+                    )
+                    return
                 logger.info(f"Updated model {model_registry_id} stage to {new_stage}")
 
         except ImportError as e:

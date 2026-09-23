@@ -317,7 +317,17 @@ async def register_model_row(
     is responsible for choosing a non-colliding stage (e.g. the gold-standard
     eval deployer uses ``stage='staging'`` so it is not surfaced by
     ``get_models_for_target``'s production-only serving filter).
+
+    A ``stage='production'`` row must say what it was trained on: with
+    ``training_provenance=None`` it is refused before any I/O (``ValueError``), the same
+    fail-closed rule ``MLModelRegistryRepository.transition_stage`` applies (#2259).
     """
+    if stage == "production" and training_provenance is None:
+        raise ValueError(
+            f"refusing to register {model_name} at stage='production' with "
+            "training_provenance=None: a production row must record what it was trained "
+            "on (#968/#2259)"
+        )
     if not Path(artifact_path).is_file():
         raise RuntimeError(
             f"artifact for {model_name} missing at {artifact_path} — refusing to "
@@ -418,6 +428,9 @@ async def register_deployed_models(
             stage="production",
             is_champion=True,
             is_synthetic=False,
+            # train_target_models fits ONLY on synthetic_v2 scenario C; the row says so
+            # (#2259). is_synthetic stays False so the model remains servable.
+            training_provenance="synthetic_gold",
         )
         registered.append(m.model_name)
     return registered
