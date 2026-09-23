@@ -673,3 +673,73 @@ async def test_serving_readers_never_surface_a_synthetic_production_champion(
     }
 
     assert surfaced == dict.fromkeys(surfaced, not is_synthetic)
+
+
+# ---------------------------------------------------------------------------
+# promote_stage: the gate runs BEFORE MLflow moves (real MLflow, sqlite store)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "provenance, mlflow_stage",
+    [(None, "None"), ("synthetic_gold", "None"), ("real", "Production")],
+)
+async def test_promote_stage_refuses_before_mlflow_moves(
+    registry_db: _pg.PgConn,
+    rest: ThrowawayRest,
+    monkeypatch,
+    tmp_path,
+    provenance: Optional[str],
+    mlflow_stage: str,
+) -> None:
+    """A refused model must not reach MLflow's Production stage either.
+
+    MLflow's stage is read on its own (e.g. src/kpi/calculators/model_performance.py reads
+    get_latest_versions(stages=["Production", ...])), so a DB-only refusal left a refused model
+    surfacing through MLflow. MLflow here is real, on a sqlite store in tmp_path: never the
+    tracking server.
+    """
+    from mlflow.tracking import MlflowClient
+
+    from src.agents.ml_foundation.model_deployer.nodes import registry_manager
+    from src.memory.services import factories
+    from src.mlops.mlflow_connector import MLflowConnector
+
+    uri = f"sqlite:///{tmp_path}/mlflow.db"
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", uri)
+    monkeypatch.setenv("MLFLOW_REGISTRY_URI", uri)
+    monkeypatch.setattr(MLflowConnector, "_instance", None)
+    mlflow_client = MlflowClient(tracking_uri=uri, registry_uri=uri)
+    name = f"lane_2259_mlflow_{provenance}"
+    mlflow_client.create_registered_model(name)
+    version = mlflow_client.create_model_version(name, source=str(tmp_path / "artifact")).version
+
+    exp = _experiment(registry_db, "lane_2259_mlflow")
+    model_id = _model(registry_db, exp, name, stage="staging", provenance=provenance)
+    client = rest.service_role_client()
+
+    async def _client() -> Any:
+        return client
+
+    monkeypatch.setattr(factories, "get_async_supabase_client", _client)
+
+    result = await registry_manager.promote_stage(
+        {
+            "registered_model_name": name,
+            "model_version": int(version),
+            "promotion_target_stage": "Production",
+            "current_stage": "Shadow",
+            "model_registry_id": model_id,
+        }
+    )
+
+    assert mlflow_client.get_model_version(name, version).current_stage == mlflow_stage
+    if mlflow_stage == "Production":
+        assert result["promotion_successful"] is True
+        assert "promotion_refused_reason" not in result
+    else:
+        assert result["promotion_successful"] is False
+        assert result["current_stage"] == "Shadow"
+        assert "training_provenance" in result["promotion_refused_reason"]
+    # The DB row is only ever moved by the deploy agent's transition_stage, never here.
+    assert _row(registry_db, model_id)["stage"] == "staging"
