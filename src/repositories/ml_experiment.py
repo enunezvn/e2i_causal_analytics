@@ -895,16 +895,21 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
         if not self.client:
             return None
 
-        from src.repositories.provenance import apply_provenance_filter
-
         query = self.client.table(self.table_name).select("*").eq("is_champion", True)
 
         if experiment_id:
             query = query.eq("experiment_id", str(experiment_id))
-        query = apply_provenance_filter(query, include_synthetic)
+        # A hard predicate, not apply_provenance_filter: prod runs with
+        # E2I_INCLUDE_SYNTHETIC=true, which makes that filter a no-op, and the synthetic
+        # generator's champion rows must never resolve as a champion (#2259 exemption).
+        if not include_synthetic:
+            query = query.eq("is_synthetic", False)
 
         result = await query.limit(1).execute()
         return self._to_model(result.data[0]) if result.data else None
+
+    # The provenances a production row may carry (#968: not synthetic_gold; #2259: not NULL).
+    _PROMOTABLE_PROVENANCE = ("real", "mixed")
 
     # Only PRODUCTION models back live predictions. Promotion to production is
     # the explicit operator gate (``transition_stage``); staging/shadow/dev
@@ -1125,7 +1130,10 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
         enum's 'development'. Anything else is refused here: the enum would reject it anyway,
         and the refusal must come before the archive, not after it (#2259).
         """
-        key = str(stage).strip().lower()
+        if not isinstance(stage, str):
+            # Python None is malformed state, not MLflow's "None" stage.
+            raise ValueError(f"model stage must be a string, got {stage!r}")
+        key = stage.lower()
         if key == "none":
             return ModelStage.DEVELOPMENT.value
         try:
@@ -1201,8 +1209,30 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
                     "register it from a cohort contract that pins is_synthetic."
                 )
 
-        # Archive the model's own earlier production versions. Scoped to model_name: unscoped,
-        # the first real promotion would archive every other model's serving champion (#2259).
+        # Promote FIRST, with the gate repeated as a predicate on the write itself: the check
+        # above read a snapshot, and the row may have changed since. A write that matches no row
+        # promoted nothing, and nothing has been archived yet.
+        updates: Dict[str, Any] = {
+            "stage": new_stage,
+            "promoted_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if new_stage == "production":
+            updates["is_champion"] = True
+        query = self.client.table(self.table_name).update(updates).eq("id", str(model_id))
+        if new_stage == "production":
+            query = query.in_("training_provenance", list(self._PROMOTABLE_PROVENANCE))
+        result = await query.execute()
+        if new_stage == "production" and not (result.data or []):
+            raise ValueError(
+                f"Refusing to promote model {model_id} to production: at write time its "
+                "training_provenance is not one of "
+                f"{list(self._PROMOTABLE_PROVENANCE)} (#968/#2259)."
+            )
+
+        # Then archive the model's own earlier production versions. Scoped to model_name:
+        # unscoped, the first real promotion would archive every other model's serving
+        # champion (#2259). If this step fails the model is left with two production
+        # versions (both serve), never with none.
         if archive_existing and new_stage == "production":
             await (
                 self.client.table(self.table_name)
@@ -1212,16 +1242,6 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
                 .neq("id", str(model_id))
                 .execute()
             )
-
-        # Update stage
-        updates: Dict[str, Any] = {
-            "stage": new_stage,
-            "promoted_at": datetime.now(timezone.utc).isoformat(),
-        }
-        if new_stage == "production":
-            updates["is_champion"] = True
-
-        await self.client.table(self.table_name).update(updates).eq("id", str(model_id)).execute()
 
         return True
 

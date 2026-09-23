@@ -597,9 +597,9 @@ def test_migration_158_rollback_undoes_it_and_lets_it_reapply(registry_db: _pg.P
 
     assert _provenance(registry_db, full) == "<null>"
     # The ledger row goes too, so the next deploy re-applies 158 instead of skipping it.
-    assert registry_db.rows(
-        f"select count(*) from schema_migrations where filename = '{key}'"
-    ) == ["0"]
+    assert registry_db.rows(f"select count(*) from schema_migrations where filename = '{key}'") == [
+        "0"
+    ]
 
 
 # ---------------------------------------------------------------------------

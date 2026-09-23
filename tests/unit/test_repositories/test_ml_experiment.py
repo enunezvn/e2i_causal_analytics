@@ -46,7 +46,7 @@ def _install_transition_chains(mock_client, row):
     result = MagicMock()
     result.data = [row]
     query = MagicMock()
-    for m in ("eq", "neq"):
+    for m in ("eq", "neq", "in_"):
         getattr(query, m).return_value = query
     query.execute = AsyncMock(return_value=result)
     mock_client.table.return_value.update.return_value = query

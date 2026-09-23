@@ -2246,10 +2246,13 @@ async def _resolve_model_registry_id(model_name: str) -> Optional[str]:
     if client is None:
         return None
     try:
+        # Provenance (#894/#2259): a synthetic row must never resolve as the serving model's
+        # id. A hard predicate: prod's E2I_INCLUDE_SYNTHETIC=true no-ops the shared filter.
         result = await (
             client.table("ml_model_registry")
             .select("id,registered_at")
             .eq("model_name", model_name)
+            .eq("is_synthetic", False)
             .order("registered_at", desc=True)
             .limit(1)
             .execute()
