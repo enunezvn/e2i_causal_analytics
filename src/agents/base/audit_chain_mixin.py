@@ -490,17 +490,25 @@ def create_workflow_initializer(
         agent_tier: Tier classification of the agent
 
     Returns:
-        A sync function that adds audit_workflow_id to state
+        A sync LangGraph node that returns ONLY its delta:
+        ``{"audit_workflow_id": ...}`` when the chain started, ``{}`` otherwise.
+
+    The node is the ENTRY point of every audited graph, and ten of those graphs
+    declare ``operator.add`` accumulator channels (``errors``, ``warnings``).
+    LangGraph APPENDS whatever a node returns for such a channel, so returning
+    the whole input state re-submits the accumulators the caller seeded and
+    every seeded entry doubles (measured 2026-09-23: the API's structural-prior
+    warning came back twice; a per-node stream named ``audit_init``). No caller
+    uses the return value as a full state (all 15 usages are ``add_node``).
 
     Example:
-        init_audit = create_workflow_initializer("causal_impact", AgentTier.CAUSAL_ANALYTICS)
-        state = init_audit(state)  # Adds audit_workflow_id
+        workflow.add_node("audit_init", create_workflow_initializer(...))
     """
 
     def initializer(state: Dict[str, Any]) -> Dict[str, Any]:
         service = get_audit_chain_service()
         if service is None:
-            return state
+            return {}
 
         try:
             entry = service.start_workflow(
@@ -517,10 +525,10 @@ def create_workflow_initializer(
                 query_text=state.get("query"),
                 brand=state.get("brand"),
             )
-            return {**state, "audit_workflow_id": entry.workflow_id}
+            return {"audit_workflow_id": entry.workflow_id}
         except Exception as e:
             logger.warning(f"Failed to initialize audit workflow: {e}")
-            return state
+            return {}
 
     return initializer
 

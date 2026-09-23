@@ -505,8 +505,10 @@ class TestCreateWorkflowInitializer:
         assert "audit_workflow_id" in result
         assert result["audit_workflow_id"] == sample_entry.workflow_id
 
-    def test_initializer_preserves_existing_state(self, mock_audit_service, sample_entry):
-        """Initializer preserves existing state fields."""
+    def test_initializer_does_not_echo_the_input_state(self, mock_audit_service, sample_entry):
+        """The node returns ONLY its delta; keeping the rest of the state is LangGraph's
+        job (channel merge), and echoing the input re-submits accumulator channels
+        (see TestWorkflowInitializerReturnsOnlyItsDelta)."""
         mock_audit_service.start_workflow.return_value = sample_entry
         set_audit_chain_service(mock_audit_service)
 
@@ -519,20 +521,21 @@ class TestCreateWorkflowInitializer:
         }
         result = initializer(state)
 
-        assert result["extra_field"] == "preserved"
-        assert result["query"] == "test"
+        assert "extra_field" not in result
+        assert "query" not in result
+        assert state["extra_field"] == "preserved"  # input untouched
 
-    def test_initializer_returns_state_when_service_unavailable(self):
-        """Initializer returns original state when service unavailable."""
+    def test_initializer_returns_empty_delta_when_service_unavailable(self):
+        """No chain → nothing to add: an empty delta, never the echoed input."""
         initializer = create_workflow_initializer("causal_impact", AgentTier.CAUSAL_ANALYTICS)
         state = {"query": "test"}
         result = initializer(state)
 
-        assert result == state
+        assert result == {}
         assert "audit_workflow_id" not in result
 
     def test_initializer_handles_exception(self, mock_audit_service):
-        """Initializer returns original state on exception."""
+        """A chain failure never fails the graph: an empty delta."""
         mock_audit_service.start_workflow.side_effect = Exception("DB error")
         set_audit_chain_service(mock_audit_service)
 
@@ -540,7 +543,7 @@ class TestCreateWorkflowInitializer:
         state = {"query": "test"}
         result = initializer(state)
 
-        assert result == state
+        assert result == {}
 
 
 # =============================================================================
@@ -633,3 +636,89 @@ class TestRowToEntry:
         assert result.duration_ms is None
         assert result.previous_entry_id is None
         assert result.session_id is None
+
+
+# =============================================================================
+# create_workflow_initializer as a LangGraph entry node (accumulator channels)
+# =============================================================================
+
+
+class TestWorkflowInitializerReturnsOnlyItsDelta:
+    """The initializer is wired as the ENTRY node of 15 graphs, 10 of which declare
+    ``operator.add`` accumulator channels (``errors``, ``warnings``). LangGraph APPENDS
+    whatever a node returns for such a channel, so a node that returns the whole input
+    state re-submits the seeded accumulators and every seeded entry doubles. Measured
+    live on 2026-09-23 (post-Lane-B probe, ``docs/demos/results/2026-09-23_post_lane_b_live_probe``):
+    the API seeds ``warnings`` with the structural-prior line and the response carried it
+    twice; a per-node stream of the same run named ``audit_init`` as the re-emitter.
+    The node must return ONLY its delta."""
+
+    def test_success_path_returns_only_audit_workflow_id(
+        self, mock_audit_service, sample_workflow_id
+    ):
+        entry = MagicMock()
+        entry.workflow_id = sample_workflow_id
+        mock_audit_service.start_workflow.return_value = entry
+        with patch(
+            "src.agents.base.audit_chain_mixin.get_audit_chain_service",
+            return_value=mock_audit_service,
+        ):
+            init = create_workflow_initializer("causal_impact", AgentTier.CAUSAL_ANALYTICS)
+            out = init({"query": "q", "warnings": ["seed"], "errors": [{"phase": "x"}]})
+        assert out == {"audit_workflow_id": sample_workflow_id}
+
+    def test_no_service_and_failure_paths_return_empty_delta(self, mock_audit_service):
+        with patch("src.agents.base.audit_chain_mixin.get_audit_chain_service", return_value=None):
+            init = create_workflow_initializer("causal_impact", AgentTier.CAUSAL_ANALYTICS)
+            assert init({"query": "q", "warnings": ["seed"]}) == {}
+        mock_audit_service.start_workflow.side_effect = RuntimeError("chain down")
+        with patch(
+            "src.agents.base.audit_chain_mixin.get_audit_chain_service",
+            return_value=mock_audit_service,
+        ):
+            init = create_workflow_initializer("causal_impact", AgentTier.CAUSAL_ANALYTICS)
+            assert init({"query": "q", "warnings": ["seed"]}) == {}
+
+    @pytest.mark.asyncio
+    async def test_seeded_warning_survives_the_entry_node_exactly_once(self, mock_audit_service):
+        """Regression through a real LangGraph with the causal_impact state schema:
+        a warning seeded in the INPUT (as the API's structural-prior hook does) must
+        come out once, not twice, after ``audit_init`` runs."""
+        from langgraph.graph import END, StateGraph
+
+        from src.agents.causal_impact.state import CausalImpactState
+
+        entry = MagicMock()
+        entry.workflow_id = uuid4()
+        mock_audit_service.start_workflow.return_value = entry
+
+        async def next_node(state):
+            return {"current_phase": "done"}
+
+        with patch(
+            "src.agents.base.audit_chain_mixin.get_audit_chain_service",
+            return_value=mock_audit_service,
+        ):
+            g = StateGraph(CausalImpactState)
+            g.add_node(
+                "audit_init",
+                create_workflow_initializer("causal_impact", AgentTier.CAUSAL_ANALYTICS),
+            )  # type: ignore[arg-type]
+            g.add_node("next", next_node)
+            g.set_entry_point("audit_init")
+            g.add_edge("audit_init", "next")
+            g.add_edge("next", END)
+            final = await g.compile().ainvoke(
+                {
+                    "query": "q",
+                    "query_id": "1",
+                    "treatment_var": "t",
+                    "outcome_var": "y",
+                    "confounders": [],
+                    "data_source": "d",
+                    "warnings": ["structural prior not applied: seeded"],
+                    "errors": [],
+                }
+            )
+        assert final["warnings"] == ["structural prior not applied: seeded"]
+        assert final["audit_workflow_id"] == entry.workflow_id
