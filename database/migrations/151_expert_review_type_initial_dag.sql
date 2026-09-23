@@ -1,0 +1,37 @@
+-- ============================================================================
+-- Migration 151: add initial_dag to expert_review_type (Lane B structural
+-- author, spec §3 item 4; scaffold PR #2230; found by the real authoring runs
+-- 2026-09-23, docs/demos/results/2026-09-23_lane_b_real_runs/).
+-- ============================================================================
+-- WHY: scripts/author_cohort_dag.py --review opens an expert_reviews row with
+-- review_type = 'initial_dag' for the OWNER to approve or reject an authored
+-- cohort DAG before it can be loaded as a structural prior, and
+-- src/data/kg/structural_prior_loader.py fail-closes on any other review_type
+-- (REVIEW_TYPE = "initial_dag", plus the structural_author evidence key). The
+-- value never existed in the enum (010 defines dag_approval,
+-- methodology_review, quarterly_audit, ad_hoc_validation); the scaffold was
+-- tested only against an in-memory repository. Both paid authoring runs failed
+-- at the insert with Postgres 22P02 and no review row exists.
+--
+-- WHY a new value and not 'dag_approval': dag_approval is the runtime
+-- ExpertReviewGate's new-DAG sign-off (its own auto-created consult on a live
+-- estimand; 41 rows in prod, expert_review_gate.py C1/R6-F2). A structural-
+-- author review is an offline, pre-run authoring event with different
+-- semantics and its own loader, and the Expert Reviews page shows review_type
+-- as plain text (no filter), so the owner sees both. Keeping them distinct in
+-- the type is what lets the loader refuse a gate consult as a prior. (The
+-- one-pending-per-estimand index, migration 140, ignores review_type -- that
+-- latent collision is issue #2244, separate from this value.)
+--
+-- Pinned by tests/unit/test_scripts/test_expert_review_type_literals_sync.py:
+-- every review_type literal the code writes must be a member of this enum as
+-- the migrations define it.
+--
+-- CAVEAT: ALTER TYPE ... ADD VALUE is non-transactional. run_migrations.sh
+-- detects it (after stripping `--` comments) and applies this file UN-wrapped,
+-- tracking it separately on clean exit. Exactly one statement, nothing that
+-- consumes the new value (precedents: 071, 138). Forward-only: Postgres cannot
+-- drop an enum value, so there is no rollback file (138 has none either).
+-- ----------------------------------------------------------------------------
+
+ALTER TYPE expert_review_type ADD VALUE IF NOT EXISTS 'initial_dag';
