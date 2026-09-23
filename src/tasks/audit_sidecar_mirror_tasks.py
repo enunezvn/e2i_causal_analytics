@@ -39,6 +39,9 @@ logger = logging.getLogger(__name__)
 ENABLE_FLAG: Final = "AUDIT_SIDECAR_MIRROR_ENABLED"
 MIRROR_TIMEOUT_SECONDS: Final = 900
 
+# src/data/audit_sidecar_reader.py logs this when it drops an unreadable sidecar.
+_SKIPPED_SIDECAR_MARKER: Final = "SidecarReader: skipping malformed sidecar"
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _MIRROR_SCRIPT = _REPO_ROOT / "scripts" / "mirror_audit_sidecar_to_supabase.py"
 
@@ -88,9 +91,11 @@ def mirror_audit_sidecars() -> Dict[str, Any]:
             f"audit-sidecar mirror timed out after {MIRROR_TIMEOUT_SECONDS}s"
         ) from exc
 
-    # The script logs through logging's default stream (stderr); its last
-    # "done: read=…, upserted_new=…" line is the run summary.
+    # The script logs through logging's default stream (stderr) as
+    # "<asctime> <LEVEL> <logger> <message>"; its last "done: read=…" line is the
+    # run summary.
     stderr = proc.stderr or ""
+    lines = stderr.splitlines()
     if proc.returncode != 0:
         logger.error(
             "audit-sidecar mirror FAILED rc=%s — adaptive_validity_verdicts is behind "
@@ -102,9 +107,22 @@ def mirror_audit_sidecars() -> Dict[str, Any]:
             f"audit-sidecar mirror exited {proc.returncode}: {stderr[-500:]}"
         )
 
-    summary = next(
-        (line for line in reversed(stderr.splitlines()) if " done: " in line or "nothing" in line),
-        "",
-    )
+    summary = next((line for line in reversed(lines) if " done: " in line or "nothing" in line), "")
+    # The reader skips an unreadable sidecar with a WARNING and the script still
+    # exits 0, so that canonical record never reaches the table. Say so at ERROR and
+    # report the run degraded; other reader warnings (schema drift on a row that did
+    # land) are relayed at WARNING.
+    skipped = [line for line in lines if _SKIPPED_SIDECAR_MARKER in line]
+    warnings = [line for line in lines if " WARNING " in line and line not in skipped]
+    for line in warnings:
+        logger.warning("audit-sidecar mirror: %s", line)
+    if skipped:
+        logger.error(
+            "audit-sidecar mirror SKIPPED %d sidecar(s); those canonical records are "
+            "not in adaptive_validity_verdicts:\n%s",
+            len(skipped),
+            "\n".join(skipped),
+        )
+        return {"status": "degraded", "summary": summary, "skipped_sidecars": skipped}
     logger.info("audit-sidecar mirror OK: %s", summary)
-    return {"status": "ok", "summary": summary}
+    return {"status": "ok", "summary": summary, "warnings": len(warnings)}

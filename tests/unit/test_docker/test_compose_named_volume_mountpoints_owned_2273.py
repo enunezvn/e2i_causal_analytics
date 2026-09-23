@@ -60,13 +60,18 @@ def _load(path: Path) -> dict:
         return yaml.load(fh, Loader=_ComposeLoader) or {}
 
 
-def _app_image_services(base: dict) -> set[str]:
-    """Services whose base definition builds the app image from ``docker/Dockerfile``."""
+def _app_image_services(*composes: dict) -> set[str]:
+    """Services that build the app image from ``docker/Dockerfile`` in any of the files.
+
+    The dev overlay's retargeted services inherit ``dockerfile`` from the base file;
+    its dev-only ones (``falkordb-seeder``, ``test``) declare it themselves.
+    """
     out: set[str] = set()
-    for name, body in (base.get("services") or {}).items():
-        build = (body or {}).get("build")
-        if isinstance(build, dict) and build.get("dockerfile") == APP_DOCKERFILE:
-            out.add(name)
+    for compose in composes:
+        for name, body in (compose.get("services") or {}).items():
+            build = (body or {}).get("build")
+            if isinstance(build, dict) and build.get("dockerfile") == APP_DOCKERFILE:
+                out.add(name)
     return out
 
 
@@ -98,7 +103,7 @@ def _required_mountpoints() -> dict[str, set[str]]:
     """``{container_path: {"service:volume", ...}}`` for app-image writable volumes under /app."""
     base = _load(BASE_COMPOSE)
     dev = _load(DEV_COMPOSE)
-    app_services = _app_image_services(base)
+    app_services = _app_image_services(base, dev)
     required: dict[str, set[str]] = {}
     for compose in (base, dev):
         for name, body in (compose.get("services") or {}).items():
