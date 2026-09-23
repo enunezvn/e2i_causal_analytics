@@ -624,6 +624,14 @@ def fetch_synthetic_hcp_ids(
     generator sample from a partial panel. hcp_id order (PK) is the generator's
     seed contract, so it is preserved.
     """
+    # LIKE metacharacters in the tag would widen the server-side read ('_' is
+    # a one-char wildcard, '%'/'*' any run); refuse rather than escape-and-hope.
+    if not id_prefix or any(c in id_prefix for c in "%_*\\"):
+        raise ValueError(
+            f"--tag {id_prefix!r} is empty or carries a LIKE metacharacter (% _ * \\); "
+            "the HCP-universe read cannot be scoped to it"
+        )
+    namespace = f"{id_prefix}hcp_"
     ids: list = []
     expected: Optional[int] = None
     offset = 0
@@ -633,7 +641,7 @@ def fetch_synthetic_hcp_ids(
             client.table("hcp_profiles")
             .select("hcp_id", count="exact")
             .eq("is_synthetic", True)
-            .like("hcp_id", f"{id_prefix}hcp_%")
+            .like("hcp_id", f"{namespace}%")
             .order("hcp_id")
             .range(offset, offset + page_size - 1)
             .execute()
@@ -650,11 +658,6 @@ def fetch_synthetic_hcp_ids(
         raise RuntimeError(
             f"hcp_profiles paged read hit max_pages={max_pages} before exhausting the universe"
         )
-    if not ids:
-        raise ValueError(
-            f"hcp_profiles has no is_synthetic rows in the '{id_prefix}hcp_' namespace — no "
-            "HCP universe to sample A/B panels from (load hcp_profiles with this --tag first)"
-        )
     if expected is None or len(ids) != expected:
         raise ValueError(
             f"hcp_profiles paged read returned {len(ids)} synthetic ids but the server "
@@ -662,6 +665,23 @@ def fetch_synthetic_hcp_ids(
         )
     if len(set(ids)) != len(ids):
         raise ValueError(f"hcp_profiles read returned duplicate ids ({len(ids) - len(set(ids))})")
+    # LIKE's '_' is a one-char wildcard, so the server-side pattern also admits an
+    # adjacent shape like 'scvhcpX00001' (codex r2 MED). Enforce the EXACT
+    # namespace here, after the count check (which is evaluated on the server's
+    # own match set, so it stays honest).
+    scoped = [h for h in ids if h.startswith(namespace)]
+    if len(scoped) != len(ids):
+        logger.warning(
+            "refresh-ab: dropped %d hcp_profiles ids outside the exact '%s' namespace",
+            len(ids) - len(scoped),
+            namespace,
+        )
+    ids = scoped
+    if not ids:
+        raise ValueError(
+            f"hcp_profiles has no is_synthetic rows in the '{namespace}' namespace — no "
+            "HCP universe to sample A/B panels from (load hcp_profiles with this --tag first)"
+        )
     logger.info(
         "refresh-ab: HCP universe = %d synthetic hcp_profiles ids in namespace %shcp_ (%s .. %s)",
         len(ids),

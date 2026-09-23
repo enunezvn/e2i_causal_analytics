@@ -42,11 +42,18 @@ class _FakeQuery:
         return self
 
     def like(self, column, pattern):
-        # PostgREST `like`: '%' wildcard only at the end in this usage
-        assert column == "hcp_id" and pattern.endswith("%"), (column, pattern)
+        # Faithful SQL LIKE: '%' = any run, '_' = any ONE char (codex r2 MED —
+        # 'scvhcp_%' also matches 'scvhcpX00001').
+        import re
+
+        assert column == "hcp_id", column
         self._log.append(("like", (column, pattern)))
-        prefix = pattern[:-1]
-        self._ids = [h for h in self._ids if h.startswith(prefix)]
+        rx = (
+            "^"
+            + "".join(".*" if c == "%" else "." if c == "_" else re.escape(c) for c in pattern)
+            + "$"
+        )
+        self._ids = [h for h in self._ids if re.match(rx, h)]
         if self._report_count is None:
             self._count = len(self._ids)
         return self
@@ -188,11 +195,24 @@ def test_fetch_is_scoped_to_the_tag_namespace_when_namespaces_coexist():
     the exact-count check is evaluated on the scoped universe."""
     scv = [f"scvhcp_{i:05d}" for i in range(2000)]
     xyz = [f"xyzhcp_{i:05d}" for i in range(2000)]
-    client = _FakeClient(sorted(scv + xyz))
+    # codex r2 MED: LIKE's '_' is a one-char wildcard, so a server-side
+    # 'scvhcp_%' ALSO returns this adjacent shape — it must not reach the panel.
+    adjacent = [f"scvhcpX{i:05d}" for i in range(50)]
+    client = _FakeClient(sorted(scv + xyz + adjacent))
     got = load_mod.fetch_synthetic_hcp_ids(client, id_prefix="scv", page_size=1000)
     assert got == scv
     with pytest.raises(ValueError, match="hcp_profiles"):
         load_mod.fetch_synthetic_hcp_ids(_FakeClient(xyz), id_prefix="scv")
+
+
+@pytest.mark.parametrize("tag", ["s%v", "s_v", "s*v", "s\\v", ""])
+def test_fetch_rejects_wildcard_bearing_or_empty_tags(tag):
+    """A --tag carrying a LIKE metacharacter would widen the server-side read;
+    refuse it rather than escape-and-hope (codex r2 MED)."""
+    with pytest.raises(ValueError, match="tag"):
+        load_mod.fetch_synthetic_hcp_ids(
+            _FakeClient([f"scvhcp_{i:05d}" for i in range(5)]), id_prefix=tag
+        )
 
 
 def test_refresh_ab_cli_passes_the_tag_to_the_fetch(monkeypatch):
