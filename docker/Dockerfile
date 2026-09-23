@@ -124,9 +124,15 @@ COPY scripts/ ./scripts/
 # data/celerybeat (#1645) is the same contract: it backs the celerybeat_state
 # named volume that holds beat's PersistentScheduler last_run_at shelve, and
 # beat runs as e2i under a read_only rootfs.
+# data/audit_artifacts (#2273) backs the audit_artifacts volume that holds the
+# adaptive-validity sidecar (#238's canonical audit record); it was missing here,
+# so the volume came up root-owned and no sidecar was ever written on prod.
+# Every writable app volume under /app is guarded by
+# tests/unit/test_docker/test_compose_named_volume_mountpoints_owned_2273.py.
 RUN mkdir -p /app/data/ml_artifacts \
              /app/data/causal_outputs \
              /app/data/agent_outputs \
+             /app/data/audit_artifacts \
              /app/data/experiment_designs \
              /app/data/feature_cache \
              /app/data/celerybeat \
@@ -233,9 +239,15 @@ RUN /app/.venv/bin/python -m compileall -q -j 0 --invalidation-mode unchecked-ha
 # data/celerybeat (#1645) is the same contract: it backs the celerybeat_state
 # named volume that holds beat's PersistentScheduler last_run_at shelve, and
 # beat runs as e2i under a read_only rootfs.
+# data/audit_artifacts (#2273) backs the audit_artifacts volume that holds the
+# adaptive-validity sidecar (#238's canonical audit record); it was missing here,
+# so the volume came up root-owned and no sidecar was ever written on prod.
+# Every writable app volume under /app is guarded by
+# tests/unit/test_docker/test_compose_named_volume_mountpoints_owned_2273.py.
 RUN mkdir -p /app/data/ml_artifacts \
              /app/data/causal_outputs \
              /app/data/agent_outputs \
+             /app/data/audit_artifacts \
              /app/data/experiment_designs \
              /app/data/feature_cache \
              /app/data/celerybeat \
