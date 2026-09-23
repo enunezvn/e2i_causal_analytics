@@ -59,6 +59,9 @@ def _finalized_app() -> None:
 # Rationale for every slot lives in the WALL-CLOCK SLOT MAP comment above
 # ``celery_app.conf.beat_schedule``; the pairs here are the machine-checkable half.
 DAILY_SLOTS_UTC: dict[str, tuple[int, int]] = {
+    # #2273: the #238 audit-sidecar -> adaptive_validity_verdicts mirror (analytics,
+    # dark until AUDIT_SIDECAR_MIRROR_ENABLED) — quiet band, first in the night.
+    "audit-sidecar-mirror-nightly": (0, 15),
     "drift-history-cleanup": (0, 45),
     "ab-interim-analysis-check": (1, 15),
     # #2207: the retraining evaluation sweep (light DB reads, quick queue) — after

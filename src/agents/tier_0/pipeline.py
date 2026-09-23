@@ -870,6 +870,14 @@ class MLFoundationPipeline:
             data_output.get("remediation") or {}
         ).get("regulatory_adaptation_entry")
 
+        # #2273: the adaptive-validity sidecar is #238's canonical audit record and
+        # its write is non-blocking, so a lost write must at least reach the run.
+        sidecar = data_output.get("adaptive_audit_sidecar") or {}
+        if sidecar.get("status") == "write_failed":
+            result.warnings.append(
+                f"Adaptive-validity audit sidecar NOT written: {sidecar.get('error')}"
+            )
+
         # Check QC gate
         gate_passed = data_output.get("gate_passed", False)
 

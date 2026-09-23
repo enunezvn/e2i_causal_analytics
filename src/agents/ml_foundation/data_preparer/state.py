@@ -112,6 +112,10 @@ class DataPreparerState(BaseAgentSchema):
     # leakage_findings/leaked_features with permutation-baseline-derived verdicts.
     adaptive_verdicts: Optional[List[Dict[str, Any]]] = None  # one record per scored feature
     adaptive_flagged_features: Optional[List[str]] = None  # features at z > 5σ above null
+    # #2273: outcome of the adaptive-validity sidecar write in finalize_output —
+    # {"status": "written"|"skipped"|"write_failed", "path", "error"}. The sidecar is
+    # #238's canonical audit record, so a lost write is reported, not only logged.
+    adaptive_audit_sidecar: Optional[Dict[str, Any]] = None
     adaptive_n_permutations: Optional[int] = None  # override default permutation count
     adaptive_seed: Optional[int] = None  # override default RNG seed
     # Plan v4 Layer B / Phase 2 — dark-launch flag for the deterministic

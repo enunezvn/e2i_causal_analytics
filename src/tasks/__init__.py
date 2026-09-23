@@ -35,6 +35,12 @@ from src.tasks.ab_testing_tasks import (
     srm_detection_sweep,
 )
 
+# Adaptive-validity audit-sidecar mirror (#238, #2273): importing the module fires
+# the @celery_app.task decorator so the "audit-sidecar-mirror-nightly" beat entry is
+# discoverable (guarded by test_beat_schedule_registration.py). The module imports
+# nothing heavy; the mirror script runs as a subprocess, never an import.
+from src.tasks.audit_sidecar_mirror_tasks import mirror_audit_sidecars
+
 # Chatbot DSPy optimization queue drainer (#1515): importing the module fires
 # the @celery_app.task decorator so the "chatbot-optimization-drain" beat
 # entry is discoverable by the Celery worker + beat. Without this line the
@@ -197,6 +203,7 @@ __all__ = [
     "sync_chunk_corpus",
     # Knowledge-graph emptiness sentinel + self-heal reseed (#1761)
     "graph_emptiness_sentinel",
+    "mirror_audit_sidecars",
     # Insight lifecycle subsystem
     "consolidate_insights",
     "sentinel_dispatcher",

@@ -262,6 +262,11 @@ x-common-env: &common-env
   # every service that merges *common-env. Operator opt-in for the Haiku
   # evaluator itself is still ADAPTIVE_VALIDITY_EVALUATOR_ENABLED=1.
   ADAPTIVE_VALIDITY_ARTIFACTS_DIR: /app/data/audit_artifacts
+  # #2273: arms the nightly #238 mirror of those sidecars into
+  # adaptive_validity_verdicts (src/tasks/audit_sidecar_mirror_tasks.py, beat
+  # 00:15 UTC). The task reads "" / unset / false as OFF, so the empty default
+  # keeps it DARK. Set it only after #2260's migration 157 is applied to prod.
+  AUDIT_SIDECAR_MIRROR_ENABLED: ${AUDIT_SIDECAR_MIRROR_ENABLED:-}
   # ...and that opt-in, plus its model pin, now actually arrive (#1931). The
   # sentence above named ADAPTIVE_VALIDITY_EVALUATOR_ENABLED as the operator's
   # switch in the very block that forwards its neighbour, and then never

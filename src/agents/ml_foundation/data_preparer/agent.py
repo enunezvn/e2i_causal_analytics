@@ -328,6 +328,8 @@ class DataPreparerAgent:
                 # evidence, confidence, and remediation.
                 "adaptive_verdicts": final_state.get("adaptive_verdicts", []),
                 "adaptive_flagged_features": final_state.get("adaptive_flagged_features", []),
+                # #2273: whether the canonical audit sidecar was written this run.
+                "adaptive_audit_sidecar": final_state.get("adaptive_audit_sidecar"),
                 # Leakage remediation results
                 "leakage_remediation_status": final_state.get("leakage_remediation_status"),
                 "leakage_remediated_features": final_state.get("leakage_remediated_features", []),

@@ -36,6 +36,7 @@ import json
 import os
 import subprocess
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -222,6 +223,22 @@ def _fetch_imported_at_map(
     return {(r[0], r[1], r[2]): r[3] for r in rows}
 
 
+def _ago(*, days: int = 0, hours: int = 0, minutes: int = 10) -> str:
+    """A sidecar ``written_at`` relative to the REAL clock, in ISO-8601 Z form.
+
+    #2273: these tests used fixed 2026-05 stamps. The mirror's default cursor is
+    ``max(imported_at) - 1h`` and ``imported_at`` is the DB's ``now()``, so once a
+    test's pass-1 had stamped the table, a pass-2 sidecar whose ``written_at`` was a
+    fixed date more than an hour in the past was filtered out. Two tests went red
+    purely by ageing (``test_new_written_at…`` and ``test_changed_verdict…``, the
+    latter being the DO-UPDATE falsifiability anchor). Production sidecars are
+    written moments before they are mirrored, so "a few minutes ago" is also the
+    faithful shape. The default 10 minutes sits inside the 1 h overlap.
+    """
+    stamp = datetime.now(timezone.utc) - timedelta(days=days, hours=hours, minutes=minutes)
+    return stamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 # Fixed-floor cutoff for tests: older than every synthetic written_at the
 # fixtures emit so the reader admits every test sidecar regardless of the
 # in-DB imported_at history. ``--since`` is the production-safe replacement
@@ -262,7 +279,7 @@ def test_two_passes_over_same_sidecars_are_idempotent(
     _write_sidecar(
         tmp_path,
         experiment_id=exp,
-        written_at="2026-05-15T10:00:00Z",
+        written_at=_ago(),
         verdicts=[_make_verdict(feature="age"), _make_verdict(feature="gender")],
     )
 
@@ -285,7 +302,7 @@ def test_new_written_at_for_same_natural_key_inserts_new_row(
     _write_sidecar(
         tmp_path,
         experiment_id=exp,
-        written_at="2026-05-15T10:00:00Z",
+        written_at=_ago(minutes=20),
         verdicts=[_make_verdict(feature="age")],
     )
     _run_mirror(tmp_path)
@@ -296,7 +313,7 @@ def test_new_written_at_for_same_natural_key_inserts_new_row(
     _write_sidecar(
         tmp_path,
         experiment_id=exp,
-        written_at="2026-05-16T10:00:00Z",
+        written_at=_ago(),
         verdicts=[_make_verdict(feature="age")],
     )
     _run_mirror(tmp_path)
@@ -316,7 +333,7 @@ def test_changed_verdict_for_same_natural_key_updates_in_place(
     is what trips that regression.
     """
     exp = f"{test_namespace}-C"
-    written = "2026-05-15T10:00:00Z"
+    written = _ago()
 
     _write_sidecar(
         tmp_path,
@@ -374,7 +391,7 @@ def test_shadow_columns_persist_to_dedicated_columns(
     _write_sidecar(
         tmp_path,
         experiment_id=exp,
-        written_at="2026-05-15T10:00:00Z",
+        written_at=_ago(),
         verdicts=[
             # R1+R2+R3 all fire → all three dedicated columns populated.
             _make_verdict(
@@ -429,7 +446,7 @@ def test_missing_experiment_id_uses_sentinel(
     _write_sidecar(
         tmp_path,
         experiment_id=None,
-        written_at="2026-05-15T12:00:00Z",
+        written_at=_ago(),
         verdicts=[_make_verdict(feature=unique_feature)],
     )
     _run_mirror(tmp_path)
@@ -479,7 +496,7 @@ def test_rerun_on_unchanged_sidecars_does_not_advance_imported_at(
     _write_sidecar(
         tmp_path,
         experiment_id=exp,
-        written_at="2026-05-15T11:00:00Z",
+        written_at=_ago(),
         verdicts=[
             _make_verdict(feature="age"),
             _make_verdict(feature="gender"),
@@ -543,7 +560,7 @@ def test_family_bucket_query_surfaces_unknown_sentinel(
             (
                 exp,
                 "__unknown__",
-                "2026-05-15T13:00:00Z",
+                _ago(),
                 "/dev/null/synthetic",
                 '{"feature": "__unknown__", "severity": "moderate"}',
             ),
@@ -587,7 +604,7 @@ def test_naive_since_does_not_raise_and_matches_zulu(
     _write_sidecar(
         tmp_path,
         experiment_id=exp,
-        written_at="2026-05-15T10:00:00Z",
+        written_at=_ago(),
         verdicts=[_make_verdict(feature="age")],
     )
 
@@ -653,13 +670,13 @@ def test_since_as_floor_blocks_when_floor_is_future(
     _write_sidecar(
         tmp_path,
         experiment_id=exp,
-        written_at="2026-05-15T10:00:00Z",
+        written_at=_ago(),
         verdicts=[_make_verdict(feature="age")],
     )
 
     _run_mirror(tmp_path, since="2099-01-01T00:00:00Z")
     assert _count_rows(db_conn, experiment_id_prefix=test_namespace) == 0, (
-        "sidecar at 2026-05-15 must be filtered out by --since=2099-01-01 floor"
+        "a sidecar written ~now must be filtered out by the --since=2099-01-01 floor"
     )
 
 
@@ -672,9 +689,9 @@ def test_since_acts_as_floor_not_replacement_when_db_cursor_is_later(
     cursor is later, IT wins and old sidecars stay filtered.
 
     Sequence:
-      1. Mirror sidecar-A (written_at=2026-05-15) → DB has row → DB
+      1. Mirror sidecar-A (written_at=~now) → DB has row → DB
          cursor advances to that imported_at (effectively "now").
-      2. Drop sidecar-B (written_at=2026-05-14, EARLIER than A).
+      2. Drop sidecar-B (written_at=a day earlier than A).
       3. Re-run mirror with ``--since=1970-01-01T00:00:00Z``.
          If --since REPLACES the cursor (iter-1 behavior, the bug),
          B is admitted and we get 2 rows.
@@ -694,7 +711,7 @@ def test_since_acts_as_floor_not_replacement_when_db_cursor_is_later(
     _write_sidecar(
         tmp_path,
         experiment_id=exp_a,
-        written_at="2026-05-15T10:00:00Z",
+        written_at=_ago(),
         verdicts=[_make_verdict(feature="age")],
     )
     _run_mirror(tmp_path)
@@ -707,7 +724,7 @@ def test_since_acts_as_floor_not_replacement_when_db_cursor_is_later(
     _write_sidecar(
         tmp_path,
         experiment_id=exp_b,
-        written_at="2026-05-14T10:00:00Z",  # 1 day before A
+        written_at=_ago(days=1),  # 1 day before A
         verdicts=[_make_verdict(feature="age")],
     )
     _run_mirror(tmp_path, since="1970-01-01T00:00:00Z")
@@ -743,7 +760,7 @@ def test_since_without_flag_uses_db_cursor_as_before(
     _write_sidecar(
         tmp_path,
         experiment_id=exp_a,
-        written_at="2026-05-15T10:00:00Z",
+        written_at=_ago(),
         verdicts=[_make_verdict(feature="age")],
     )
 
@@ -767,7 +784,7 @@ def test_since_without_flag_uses_db_cursor_as_before(
     _write_sidecar(
         tmp_path,
         experiment_id=exp_b,
-        written_at="2026-05-14T10:00:00Z",
+        written_at=_ago(days=1),
         verdicts=[_make_verdict(feature="age")],
     )
     rc2 = mirror_main(

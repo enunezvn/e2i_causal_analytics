@@ -319,6 +319,7 @@ celery_app.conf.task_routes = {
 #   05:30        beat:               chatbot-optimization-drain (analytics, GEPA)
 #
 # Daily entries, in firing order:
+#   00:15  audit-sidecar-mirror-nightly     analytics  #238 mirror; DARK until armed (#2273)
 #   00:45  drift-history-cleanup            quick      prune before the 02:00 backup
 #   01:15  ab-interim-analysis-check        quick      quiet hours, clear of the backup
 #   01:45  retraining-evaluation-daily      quick      after the drift prune, pre-backup (#2207)
@@ -431,6 +432,22 @@ celery_app.conf.beat_schedule = {
         "task": "src.tasks.materialize_features",
         "schedule": 604800.0,  # 7 days
         "kwargs": {"feature_views": None},  # All feature views
+        "options": {"queue": "analytics"},
+    },
+    # -------------------------------------------------------------------------
+    # Adaptive-validity audit-sidecar mirror (#238, #2273)
+    # -------------------------------------------------------------------------
+    # #238's "nightly batch" that copies the canonical sidecars on the
+    # audit_artifacts volume into adaptive_validity_verdicts. `analytics` is
+    # consumed by worker_medium, which mounts the volume. The task is a no-op
+    # until AUDIT_SIDECAR_MIRROR_ENABLED is set: #2260's migration 157 changes the
+    # mirror's conflict key and must be applied first (see the task module).
+    # Slot: 00:15, the quiet band ahead of the drift prune; no upstream here —
+    # sidecars are written by whatever runs data_preparer, and the cursor's 1 h
+    # overlap plus the idempotent upsert make the exact hour immaterial.
+    "audit-sidecar-mirror-nightly": {
+        "task": "src.tasks.mirror_audit_sidecars",
+        "schedule": crontab(hour=0, minute=15),
         "options": {"queue": "analytics"},
     },
     # -------------------------------------------------------------------------
