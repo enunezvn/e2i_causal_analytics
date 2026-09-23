@@ -275,3 +275,32 @@ def test_a_sidecar_the_mirror_skips_makes_the_run_degraded_not_ok(
     assert any(str(broken) in line for line in result["skipped_sidecars"]), result
     assert _count(verdicts_db, "exp_degraded_2273") == 1, "the readable sidecar still lands"
     assert any(r.levelname == "ERROR" and str(broken) in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"schema_version": "1.0", "experiment_id": "exp_lost_2273", "written_at": "not-a-date"},
+        {
+            "schema_version": "1.0",
+            "experiment_id": "exp_lost_2273",
+            "written_at": "20260923T000000Z",
+            "adaptive_verdicts": {"feature": "age"},
+        },
+    ],
+    ids=["unparseable_written_at", "non_list_verdicts"],
+)
+def test_every_reader_path_that_drops_a_sidecar_makes_the_run_degraded(
+    payload, verdicts_db, tmp_path, monkeypatch
+) -> None:
+    """codex r2 MED: the reader also drops a whole sidecar on an unparseable
+    ``written_at`` and empties it on a non-list ``adaptive_verdicts`` — both exit 0."""
+    sub = tmp_path / "exp_lost_2273"
+    sub.mkdir()
+    lost = sub / "adaptive_verdicts_lost.json"
+    lost.write_text(json.dumps(payload))
+    _arm(monkeypatch, verdicts_db, tmp_path)
+
+    result = _task()()
+    assert result["status"] == "degraded", result
+    assert any(str(lost) in line for line in result["skipped_sidecars"]), result
