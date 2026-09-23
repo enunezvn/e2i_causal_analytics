@@ -85,9 +85,9 @@ def mirror_audit_sidecars() -> Dict[str, Any]:
         )
 
     # argv carries nothing from the environment: the script defaults --artifacts-dir
-    # to $ADAPTIVE_VALIDITY_ARTIFACTS_DIR, which the child inherits (checked above).
+    # to $ADAPTIVE_VALIDITY_ARTIFACTS_DIR, pinned in the child env to the value checked.
     cmd = [sys.executable, str(_MIRROR_SCRIPT)]
-    env = {**os.environ, "DATABASE_URL": db_url}
+    env = {**os.environ, "ADAPTIVE_VALIDITY_ARTIFACTS_DIR": artifacts_dir, "DATABASE_URL": db_url}
     try:
         proc = subprocess.run(
             cmd,
