@@ -4,9 +4,13 @@
 The per-HCP logit shift is the #1551 ``_specialty_affinity`` pattern: a deterministic term
 added to the adoption logit that consumes NO rng draws. These tests pin
 
-  (i)   the no-shift path is bit-identical to main's DGP (sha256 of all four outputs on a
-        fixed input, baseline computed from main @ c2d0ef303 BEFORE the edit, saved as
-        adgpc_digest_main.txt) -- the four rng draws and their order are untouched;
+  (i)   the no-shift path is identical to main's DGP: main's ``_compute_adoption`` (c2d0ef303)
+        is FROZEN verbatim below as ``_reference_compute_adoption_main`` and every returned
+        array must be exactly equal (``np.array_equal``) for the same seeded inputs -- the
+        four rng draws and their order are untouched. (A first version pinned hard-coded
+        sha256 digests; CI computed different digests for the same inputs on the same numpy
+        2.3.5 -- the float bytes are platform-bound -- so the pin is the reference
+        implementation, evaluated on whatever platform runs the test.)
   (ii)  the shift is deterministic: same inputs + a shift vector keep treatment_arm and
         hcp_segment identical, move the logit by exactly the shift, and flip ``adopted`` only
         where the SAME uniform crossed the moved sigmoid (the uniform is re-derived from the
@@ -26,7 +30,7 @@ Run:
 
 from __future__ import annotations
 
-import hashlib
+from typing import Dict, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -43,7 +47,15 @@ from src.data.per_hcp_cohort_columns import (
     ADOPTION_NULL_CHANNEL,
     INTERVENTION_TREATMENT_MAP,
 )
-from src.ml.synthetic.generators.hcp_adoption_artifact import _compute_adoption, _sigmoid
+from src.ml.synthetic.generators.hcp_adoption_artifact import (
+    _ADOPT_CENTRALITY_SLOPE,
+    _ADOPT_INTERCEPT,
+    _ADOPT_TREATMENT_LOGIT,
+    _BRAND_ADOPT_SCALE,
+    _compute_adoption,
+    _sigmoid,
+    _specialty_affinity,
+)
 
 _SPECIALTIES = (
     "oncology",
@@ -58,18 +70,6 @@ _SPECIALTY_P = (0.33, 0.20, 0.17, 0.12, 0.10, 0.05, 0.03)
 _BRANDS = ("Remibrutinib", "Fabhalta", "Kisqali")
 _DGP_SEED = 427
 
-# Baseline digests of main's _compute_adoption (c2d0ef303) on _fixed_input(n=2000, seed=11),
-# rng = default_rng(427), over (hcp_segment, treatment_arm, adopted, cate_estimate).
-# Regenerate with the recipe in _digest(); a change here means the no-shift DGP moved.
-_MAIN_DIGEST = {
-    ("Remibrutinib", True): "f19a5ab57ac58b2eee2bd2a1c4a86b0cc227c75f0a006c1d954d10cc504dbc0a",
-    ("Remibrutinib", False): "e1208440d98be1dbbe9fabb522e812f41f84dbd387a1a1884732640c9343ae3e",
-    ("Fabhalta", True): "78c6c256191daaabf95e409bbb08f5547ce4888999af44aada4b586ada3d35a4",
-    ("Fabhalta", False): "9ca2508e71151fb54c029a6c3b61792176638a4438f4749d7d908eb7289980cb",
-    ("Kisqali", True): "eb140e0a89f6f5b9e2569b4a17a2731f3ae33289cb9cba12ad92113765441999",
-    ("Kisqali", False): "3e9be2b141ddd3781150b0e6f5bc9a310c10fd49a6977b07b0940dfb7f353ccd",
-}
-
 
 def _fixed_input(n: int = 2000, seed: int = 11) -> tuple[np.ndarray, list[str]]:
     rng = np.random.default_rng(seed)
@@ -79,16 +79,62 @@ def _fixed_input(n: int = 2000, seed: int = 11) -> tuple[np.ndarray, list[str]]:
     return cz, spec
 
 
-def _digest(out: dict) -> str:
-    h = hashlib.sha256()
-    for k in ("hcp_segment", "treatment_arm", "adopted", "cate_estimate"):
-        a = np.asarray(out[k])
-        h.update(k.encode())
-        if a.dtype.kind in ("U", "O"):
-            h.update("|".join(map(str, a)).encode())
-        else:
-            h.update(np.ascontiguousarray(a).tobytes())
-    return h.hexdigest()
+# main's _compute_adoption (origin/main @ c2d0ef303, sha256 of the module
+# 7980bdaac778a17c946f8c61abc4d1e899b54aeb13240a57419cca70a403c31d), FROZEN verbatim. Its
+# helpers (_sigmoid, _specialty_affinity) and constants are imported from the module: the
+# lane did not change them (git diff origin/main..HEAD touches _compute_adoption only).
+def _reference_compute_adoption_main(
+    rng: np.random.Generator,
+    centrality_z: np.ndarray,
+    brand: str,
+    specialty: Optional[Sequence[str]] = None,
+) -> Dict[str, np.ndarray]:
+    """Shared adoption DGP on a standardized centrality vector. Returns
+    hcp_segment, treatment_arm, adopted (0/1), and the per-HCP probability-scale
+    cate_estimate. Used by BOTH the standalone optum_hcp frame and the hcp_generator
+    (hcp_profiles grain) so the two grains share one DGP.
+
+    ``specialty`` (optional, #1551): per-HCP specialty strings aligned to
+    ``centrality_z``. When supplied, a deterministic per-(brand, specialty)
+    logit shift makes the specialty ordering clinically sensible (see
+    ``_BRAND_SPECIALTY_AFFINITY``). When None, behaviour is bit-identical to the
+    pre-#1551 DGP — the shift consumes no RNG draws either way."""
+    n = len(centrality_z)
+    hcp_segment = np.where(
+        centrality_z > 0.5,
+        "high_influence",
+        np.where(centrality_z > -0.5, "medium_influence", "low_influence"),
+    )
+    # treatment_arm ~ rep/trigger engagement intensity, CONFOUNDED by centrality
+    # (central HCPs get more rep attention) -> propensity is estimable.
+    p_treat = _sigmoid(0.8 * centrality_z + rng.normal(0, 0.5, n))
+    treatment_arm = (rng.random(n) < p_treat).astype(int)
+
+    scale = _BRAND_ADOPT_SCALE.get(brand, 1.0)
+    seg_treat = np.array([_ADOPT_TREATMENT_LOGIT[s] for s in hcp_segment], dtype=float)
+    # #1551: deterministic specialty-affinity shift (zeros when specialty=None);
+    # a pure table lookup — consumes NO rng draws, so the seeded stream is
+    # bit-identical with or without a specialty vector.
+    affinity = _specialty_affinity(brand, specialty, n)
+    logit = (
+        _ADOPT_INTERCEPT
+        + _ADOPT_CENTRALITY_SLOPE * centrality_z
+        + affinity
+        + scale * seg_treat * treatment_arm
+        + rng.normal(0.0, 0.6, n)
+    )
+    adopted = (rng.random(n) < _sigmoid(logit)).astype(int)
+
+    # per-HCP CATE on the PROBABILITY scale (P(adopt) at T=1 vs T=0, centrality
+    # and specialty fixed).
+    base_logit = _ADOPT_INTERCEPT + _ADOPT_CENTRALITY_SLOPE * centrality_z + affinity
+    cate_estimate = _sigmoid(base_logit + scale * seg_treat) - _sigmoid(base_logit)
+    return {
+        "hcp_segment": hcp_segment,
+        "treatment_arm": treatment_arm,
+        "adopted": adopted,
+        "cate_estimate": cate_estimate,
+    }
 
 
 def _channel_columns() -> list[str]:
@@ -100,30 +146,42 @@ def _beta_by_column() -> dict[str, float]:
 
 
 # --------------------------------------------------------------------------- (i)
+_OUTPUT_KEYS = ("hcp_segment", "treatment_arm", "adopted", "cate_estimate")
+
+
 @pytest.mark.parametrize("brand", _BRANDS)
 @pytest.mark.parametrize("with_specialty", [True, False])
-def test_no_shift_outputs_are_bit_identical_to_main(brand, with_specialty):
+def test_no_shift_outputs_are_identical_to_the_frozen_main_reference(brand, with_specialty):
     cz, spec = _fixed_input()
-    out = _compute_adoption(
-        np.random.default_rng(_DGP_SEED),
-        cz,
-        brand,
-        specialty=spec if with_specialty else None,
-        channel_shift=None,
+    specialty = spec if with_specialty else None
+    ref = _reference_compute_adoption_main(
+        np.random.default_rng(_DGP_SEED), cz, brand, specialty=specialty
     )
-    assert _digest(out) == _MAIN_DIGEST[(brand, with_specialty)]
+    out = _compute_adoption(
+        np.random.default_rng(_DGP_SEED), cz, brand, specialty=specialty, channel_shift=None
+    )
+    for key in _OUTPUT_KEYS:
+        assert np.array_equal(np.asarray(out[key]), np.asarray(ref[key])), key
+    assert set(ref) == set(
+        _OUTPUT_KEYS
+    )  # the reference is main's contract; the new keys are additive
+    assert set(out) == {*_OUTPUT_KEYS, "adoption_logit", "channel_shift"}
 
 
 def test_zero_shift_vector_is_the_no_shift_path():
     cz, spec = _fixed_input()
-    out = _compute_adoption(
+    none = _compute_adoption(
+        np.random.default_rng(_DGP_SEED), cz, "Fabhalta", specialty=spec, channel_shift=None
+    )
+    zeros = _compute_adoption(
         np.random.default_rng(_DGP_SEED),
         cz,
         "Fabhalta",
         specialty=spec,
         channel_shift=np.zeros(len(cz)),
     )
-    assert _digest(out) == _MAIN_DIGEST[("Fabhalta", True)]
+    for key in (*_OUTPUT_KEYS, "adoption_logit", "channel_shift"):
+        assert np.array_equal(np.asarray(none[key]), np.asarray(zeros[key])), key
 
 
 # --------------------------------------------------------------------------- (ii)
