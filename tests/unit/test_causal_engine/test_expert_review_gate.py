@@ -1396,3 +1396,123 @@ class TestApprovalPrecedenceIsChronological:
         assert result.decision == ReviewGateDecision.PROCEED
         assert result.review_id == "rev-a"
         mock_repo.create_review.assert_not_called()
+
+
+class TestTwoReviewQueues:
+    """#2244 (migration 153): the gate reads ONLY the runtime queue.
+
+    Lane B's structural-author review (``review_type='initial_dag'``) shares the
+    estimand with the gate's consult but is a different review with a different
+    reader (``structural_prior_loader``). A pending one is not the gate's consult
+    (the gate would advance the AUTHORED snapshot to its own structure), an
+    approved one is not the gate's approval, and a rejected one is not the
+    gate's rejection -- in either direction the row belongs to the other queue.
+    """
+
+    @staticmethod
+    def _row(status: str, dag_hash: str = "runtime-hash", **extra):
+        return {
+            "review_id": "r-author",
+            "review_type": "initial_dag",
+            "approval_status": status,
+            "dag_version_hash": dag_hash,
+            "adjustment_set_hash": None,
+            "created_at": "2026-09-23T00:00:00Z",
+            "brand": "b",
+            "treatment_variable": "t",
+            "outcome_variable": "y",
+            **extra,
+        }
+
+    @pytest.mark.asyncio
+    async def test_pending_structural_author_review_is_not_the_gates_consult(self):
+        repo = _PendingRepo(self._row("pending", dag_hash="authored-hash"))
+        gate = ExpertReviewGate(repository=repo, auto_create_review=True)
+
+        result = await gate.check_approval(
+            "runtime-hash",
+            brand="b",
+            treatment="t",
+            outcome="y",
+            requester_id="causal_impact_agent",
+            dag_structure={"nodes": ["t", "y"], "edges": [["t", "y"]]},
+        )
+
+        # The gate minted ITS OWN consult in the runtime queue...
+        assert repo.create_kwargs is not None, "the gate adopted the authored review"
+        assert repo.create_kwargs["review_type"] == "dag_approval"
+        assert result.decision == ReviewGateDecision.PENDING_REVIEW
+        assert result.review_id == "rev-captured"
+        # ...and never wrote to the structural-author row.
+        touched = (
+            [rid for rid, _ in repo.appended]
+            + [rid for rid, _ in repo.recorded]
+            + [rid for rid, _ in repo.advances]
+            + [rid for rid, *_ in repo.structure_updates]
+        )
+        assert "r-author" not in touched, touched
+
+    @pytest.mark.asyncio
+    async def test_approved_structural_author_review_does_not_clear_the_gate(self):
+        repo = MagicMock()
+        repo.get_reviews_for_estimand = AsyncMock(
+            return_value=[
+                self._row(
+                    "approved",
+                    approved_at="2026-09-23T00:00:00Z",
+                    valid_until=(date.today() + timedelta(days=60)).isoformat(),
+                )
+            ]
+        )
+        gate = ExpertReviewGate(repository=repo, auto_create_review=False)
+
+        result = await gate.check_approval("runtime-hash", brand="b", treatment="t", outcome="y")
+
+        assert result.decision == ReviewGateDecision.BLOCKED
+        assert result.is_approved is False
+
+    @pytest.mark.asyncio
+    async def test_rejected_structural_author_review_does_not_reject_the_run(self):
+        repo = MagicMock()
+        repo.get_reviews_for_estimand = AsyncMock(
+            return_value=[self._row("rejected", resolved_at="2026-09-23T00:00:00Z")]
+        )
+        repo.get_reviews_for_dag = AsyncMock(return_value=[])
+        gate = ExpertReviewGate(repository=repo, auto_create_review=False)
+
+        assert (
+            await gate.check_rejection("runtime-hash", brand="b", treatment="t", outcome="y")
+            is None
+        )
+        result = await gate.check_approval("runtime-hash", brand="b", treatment="t", outcome="y")
+        assert result.decision == ReviewGateDecision.BLOCKED
+
+    @pytest.mark.asyncio
+    async def test_hash_keyed_rejection_read_ignores_the_structural_queue_too(self):
+        """``check_rejection`` without an estimand falls back to the hash-keyed
+        read; the queue split applies there as well."""
+        repo = MagicMock()
+        repo.get_reviews_for_estimand = AsyncMock(return_value=[])
+        repo.get_reviews_for_dag = AsyncMock(
+            return_value=[self._row("rejected", resolved_at="2026-09-23T00:00:00Z")]
+        )
+        gate = ExpertReviewGate(repository=repo, auto_create_review=False)
+
+        assert await gate.check_rejection("runtime-hash", brand="b") is None
+
+    @pytest.mark.asyncio
+    async def test_runtime_queue_rows_still_adjudicate(self):
+        """Control: the same rows with the gate's own type keep their meaning."""
+        repo = MagicMock()
+        repo.get_reviews_for_estimand = AsyncMock(
+            return_value=[
+                self._row(
+                    "rejected", review_type="dag_approval", resolved_at="2026-09-23T00:00:00Z"
+                )
+            ]
+        )
+        gate = ExpertReviewGate(repository=repo, auto_create_review=False)
+
+        result = await gate.check_approval("runtime-hash", brand="b", treatment="t", outcome="y")
+
+        assert result.decision == ReviewGateDecision.REJECTED

@@ -17,7 +17,7 @@ helpers below so the gate, the summary and SQL ``is_dag_approved()`` agree.
 
 import logging
 from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Literal, Mapping, Optional
+from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional
 
 from src.repositories.expert_review_versions import ExpertReviewVersionTimeline
 from src.repositories.json_utils import to_plain_json
@@ -123,6 +123,30 @@ def _apply_expiring_window(query: Any, days: int, today: Optional[date] = None) 
     return query.gte("valid_until", start.isoformat()).lte("valid_until", end.isoformat())
 
 
+#: The structural-author review type (Lane B, migration 152): written by
+#: ``scripts/author_cohort_dag.py --review`` and read back ONLY by
+#: ``src/data/kg/structural_prior_loader.py`` (whose ``REVIEW_TYPE`` is pinned equal
+#: to this). Every other ``expert_review_type`` member is the RUNTIME queue: the
+#: gate's ``dag_approval`` consult and the ``quarterly_audit`` renewals minted on it
+#: (#2090). Migration 153 (#2244) keeps one pending row per estimand PER QUEUE
+#: (``uq_er_pending_estimand_runtime`` / ``uq_er_pending_estimand_structural``), so
+#: a 23505 recovery and the gate's history read must both stay inside their queue.
+STRUCTURAL_AUTHOR_REVIEW_TYPE = "initial_dag"
+
+
+def is_structural_author_review(row: Mapping[str, Any]) -> bool:
+    """True for a Lane B ``initial_dag`` row -- the structural-author queue."""
+    return row.get("review_type") == STRUCTURAL_AUTHOR_REVIEW_TYPE
+
+
+def runtime_review_queue(rows: Iterable[Mapping[str, Any]]) -> List[Dict[str, Any]]:
+    """The rows of ``rows`` that belong to the RUNTIME queue (the gate's own): every
+    review that is not a structural-author review. Order is preserved, so a
+    newest-first history stays newest-first and ``ExpertReviewGate`` keeps its
+    "creation order is adjudication order" reading inside the queue."""
+    return [dict(r) for r in rows if not is_structural_author_review(r)]
+
+
 def estimand_key_for(brand: Optional[str], treatment: Optional[str], outcome: Optional[str]) -> str:
     """Review identity (migration 140): ``lower(brand):treatment:outcome``, null-safe.
 
@@ -171,7 +195,9 @@ class ExpertReviewRepository(ExpertReviewVersionTimeline):
 
     Database Schema (expert_reviews):
     - review_id: UUID PRIMARY KEY
-    - review_type: expert_review_type ENUM
+    - review_type: expert_review_type ENUM -- 'initial_dag' is the structural-author
+      QUEUE (STRUCTURAL_AUTHOR_REVIEW_TYPE), every other member the runtime queue;
+      pending uniqueness is per estimand per queue (migration 153, #2244)
     - dag_version_hash: VARCHAR(64)
     - reviewer_id: VARCHAR(100) NOT NULL
     - reviewer_name: VARCHAR(200)
@@ -307,39 +333,46 @@ class ExpertReviewRepository(ExpertReviewVersionTimeline):
             return review_id
         except Exception as e:
             # M-reach1: a concurrent creator may have won the race and inserted the
-            # pending row first — the partial UNIQUE index uq_er_pending_estimand
-            # (mig 140, keyed on the ESTIMAND; it replaced 062's
-            # uq_er_pending_dag_brand) then rejects THIS duplicate with a 23505
-            # unique violation. Recover ONLY for that case (return the winner's
-            # pending review); let any other failure (transient connection/timeout,
-            # schema error) surface via the error log rather than masking it behind
-            # a possibly-stale pending row (codex MEDIUM).
+            # pending row first — the partial UNIQUE index of this row's QUEUE
+            # (mig 153: uq_er_pending_estimand_runtime for the gate's consult and
+            # its renewals, uq_er_pending_estimand_structural for Lane B's
+            # initial_dag review; they replaced 140's estimand-only
+            # uq_er_pending_estimand, which replaced 062's uq_er_pending_dag_brand)
+            # then rejects THIS duplicate with a 23505 unique violation. Recover
+            # ONLY for that case (return the winner's pending review, from the SAME
+            # queue -- a dag_approval consult must never come back holding an
+            # authored review, #2244); let any other failure (transient
+            # connection/timeout, schema error) surface via the error log rather
+            # than masking it behind a possibly-stale pending row (codex MEDIUM).
             err = str(e).lower()
             if "23505" in err or "unique" in err or "duplicate key" in err:
                 key = estimand_key_for(brand, treatment_variable, outcome_variable)
-                existing = await self._find_pending_review_id(key)
+                existing = await self._find_pending_review_id(key, review_type)
                 if existing is not None:
                     logger.info(
                         "create_review: a pending review already exists for estimand "
-                        f"{key}; returning it (concurrent create / unique-violation "
-                        "recovery)."
+                        f"{key} in the {review_type!r} queue; returning it (concurrent "
+                        "create / unique-violation recovery)."
                     )
                     return existing
             logger.error(f"Failed to create expert review: {e}")
             return None
 
-    async def _find_pending_review_id(self, estimand_key: str) -> Optional[str]:
+    async def _find_pending_review_id(self, estimand_key: str, review_type: str) -> Optional[str]:
         """M-reach1: return the review_id of the existing PENDING review of this
-        ESTIMAND, if any -- the row that won the uq_er_pending_estimand race.
+        ESTIMAND in the QUEUE of ``review_type``, if any -- the row that won the
+        race on that queue's partial unique index (migration 153, #2244).
 
-        The lookup is a plain equality on the generated ``estimand_key`` column,
-        which is exactly what the partial unique index keys on, so it cannot
-        disagree with the index that rejected our insert. The old brand
-        normalisation note is obsolete: migration 140's expression already
-        COALESCEs every operand to ``''``, so a NULL brand and an explicit
-        empty-string brand derive the SAME key and both are matched here (the
-        pre-140 ``IS NULL`` lookup could not match a ``brand=''`` winner).
-        Compute the argument with :func:`estimand_key_for`.
+        The lookup is a plain equality on the generated ``estimand_key`` column
+        plus the queue predicate the index itself carries (``review_type =
+        'initial_dag'`` for the structural-author queue, ``<>`` for the runtime
+        queue), so it cannot disagree with the index that rejected our insert
+        and can never return the OTHER queue's row. The old brand normalisation
+        note is obsolete: migration 140's expression already COALESCEs every
+        operand to ``''``, so a NULL brand and an explicit empty-string brand
+        derive the SAME key and both are matched here (the pre-140 ``IS NULL``
+        lookup could not match a ``brand=''`` winner). Compute the argument
+        with :func:`estimand_key_for`.
         """
         if not self.client:
             return None
@@ -350,6 +383,10 @@ class ExpertReviewRepository(ExpertReviewVersionTimeline):
                 .eq("estimand_key", estimand_key)
                 .eq("approval_status", "pending")
             )
+            if review_type == STRUCTURAL_AUTHOR_REVIEW_TYPE:
+                query = query.eq("review_type", STRUCTURAL_AUTHOR_REVIEW_TYPE)
+            else:
+                query = query.neq("review_type", STRUCTURAL_AUTHOR_REVIEW_TYPE)
             result = await query.limit(1).execute()
             if result.data:
                 return str(result.data[0]["review_id"])
@@ -940,7 +977,10 @@ class ExpertReviewRepository(ExpertReviewVersionTimeline):
         only changes which record the gate reports, and the gate's renewal
         warning follows that record's ``valid_until``. The original is not
         checked for being approved or active -- any existing row may be
-        renewed.
+        renewed. The renewal is always a RUNTIME-queue row
+        (``quarterly_audit``): renewing a Lane B ``initial_dag`` review
+        therefore does not extend the structural prior, whose loader accepts
+        only ``initial_dag`` rows (#2244, owner decision pending).
 
         Args:
             original_review_id: UUID of the review to renew
@@ -986,11 +1026,14 @@ class ExpertReviewRepository(ExpertReviewVersionTimeline):
             logger.info(f"Created renewal review {review_id} superseding {original_review_id}")
             return review_id
         except Exception as e:
-            # #2090: the renewal is a pending row of the ORIGINAL's estimand, so
-            # uq_er_pending_estimand (mig 140) rejects it with a 23505 whenever
-            # that estimand already has a pending review (a concurrent mint or
-            # renewal). Recover exactly as create_review does: return the pending
-            # row, and only for a unique violation.
+            # #2090: the renewal is a pending row of the ORIGINAL's estimand in the
+            # RUNTIME queue, so uq_er_pending_estimand_runtime (mig 153; 140's
+            # uq_er_pending_estimand before it) rejects it with a 23505 whenever
+            # that estimand already has a pending runtime review (a concurrent
+            # gate mint or renewal). Recover exactly as create_review does: return
+            # that queue's pending row, and only for a unique violation. A pending
+            # Lane B initial_dag review on the same estimand is the other queue
+            # and is never returned here (#2244).
             err = str(e).lower()
             if "23505" in err or "unique" in err or "duplicate key" in err:
                 key = estimand_key_for(
@@ -998,7 +1041,7 @@ class ExpertReviewRepository(ExpertReviewVersionTimeline):
                     original.get("treatment_variable"),
                     original.get("outcome_variable"),
                 )
-                existing = await self._find_pending_review_id(key)
+                existing = await self._find_pending_review_id(key, row["review_type"])
                 if existing is not None:
                     logger.info(
                         "renew_review: a pending review already exists for estimand "

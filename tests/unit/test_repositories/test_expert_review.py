@@ -67,10 +67,12 @@ class TestExpertReviewRepository:
             )
         )
         # The recovery lookup (_find_pending_review_id, keyed on the estimand) finds
-        # the winner's row: .select().eq().eq().limit().execute()
+        # the winner's row: .select().eq().eq().neq().limit().execute() -- the neq is
+        # the queue filter (migration 153, #2244): a dag_approval consult recovers only
+        # a runtime-queue row, never a Lane B initial_dag review.
         recovery_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-winner"}]))
         (
-            mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute
+            mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.neq.return_value.limit.return_value.execute
         ) = recovery_execute
 
         review_id = await repo.create_review(
@@ -92,7 +94,7 @@ class TestExpertReviewRepository:
         # If recovery were (wrongly) attempted, it would find this row and return it.
         leak_execute = AsyncMock(return_value=MagicMock(data=[{"review_id": "rev-stale"}]))
         (
-            mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute
+            mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.neq.return_value.limit.return_value.execute
         ) = leak_execute
 
         review_id = await repo.create_review(
@@ -117,7 +119,7 @@ class TestExpertReviewRepository:
         )
         recovery_execute = AsyncMock(return_value=MagicMock(data=[]))
         (
-            mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.limit.return_value.execute
+            mock_client.table.return_value.select.return_value.eq.return_value.eq.return_value.neq.return_value.limit.return_value.execute
         ) = recovery_execute
 
         review_id = await repo.create_review(

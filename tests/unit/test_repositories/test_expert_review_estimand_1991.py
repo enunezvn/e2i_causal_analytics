@@ -72,6 +72,10 @@ class _FakeQuery:
         self._filters.append(("eq", key, value))
         return self._rec("eq", (key, value))
 
+    def neq(self, key: str, value: Any) -> "_FakeQuery":
+        self._filters.append(("neq", key, value))
+        return self._rec("neq", (key, value))
+
     def is_(self, key: str, value: Any) -> "_FakeQuery":
         self._filters.append(("is", key, value))
         return self._rec("is_", (key, value))
@@ -96,6 +100,8 @@ class _FakeQuery:
                     "one lives in test_approval_expiry_readers_1972.py"
                 )
             if kind == "eq" and row.get(key) != value:
+                return False
+            if kind == "neq" and row.get(key) == value:
                 return False
             if kind == "is" and row.get(key) is not None:
                 return False
@@ -216,7 +222,14 @@ async def test_create_review_never_sends_the_generated_estimand_key(fake_client)
 async def test_create_review_recovers_pending_by_estimand_on_unique_violation(fake_client):
     fake_client.seed(
         "expert_reviews",
-        [{"review_id": "r-existing", "estimand_key": "b:t:y", "approval_status": "pending"}],
+        [
+            {
+                "review_id": "r-existing",
+                "estimand_key": "b:t:y",
+                "approval_status": "pending",
+                "review_type": "dag_approval",
+            }
+        ],
     )
     fake_client.fail_next_insert(
         "expert_reviews",
@@ -238,6 +251,154 @@ async def test_create_review_recovers_pending_by_estimand_on_unique_violation(fa
         method == "eq" and args[0] == "dag_version_hash"
         for method, args in fake_client.calls("expert_reviews")
     )
+    # ... and scoped to the RUNTIME queue (migration 153, #2244): a dag_approval
+    # consult may only adopt a row the runtime index could have rejected it for.
+    assert ("neq", ("review_type", "initial_dag")) in fake_client.calls("expert_reviews")
+
+
+# --------------------------------------------------------------------------
+# Two review queues (#2244, migration 153): the 23505 recovery never crosses them
+# --------------------------------------------------------------------------
+
+
+def _seed_pending(fake_client, review_id: str, review_type: str) -> None:
+    fake_client.seed(
+        "expert_reviews",
+        [
+            {
+                "review_id": review_id,
+                "estimand_key": "b:t:y",
+                "approval_status": "pending",
+                "review_type": review_type,
+                "brand": "B",
+                "treatment_variable": "T",
+                "outcome_variable": "Y",
+            }
+        ],
+    )
+
+
+_UNIQUE = 'duplicate key value violates unique constraint "uq_er_pending_estimand_runtime"'
+
+
+@pytest.mark.unit
+def test_structural_author_review_type_is_the_loaders_type():
+    """One constant names the structural-author queue on both sides of the split:
+    the repository (recovery + the gate's queue filter) and the loader."""
+    from src.data.kg.structural_prior_loader import REVIEW_TYPE
+    from src.repositories.expert_review import STRUCTURAL_AUTHOR_REVIEW_TYPE
+
+    assert STRUCTURAL_AUTHOR_REVIEW_TYPE == REVIEW_TYPE == "initial_dag"
+
+
+@pytest.mark.unit
+async def test_gate_consult_recovery_never_adopts_a_pending_structural_author_review(
+    fake_client,
+):
+    """A pending Lane B ``initial_dag`` review on the estimand is NOT the gate's
+    consult: a 23505 on the dag_approval insert (a concurrent runtime mint) must
+    recover a runtime row or nothing -- never the authored review, whose
+    snapshot the gate would then advance to its own structure."""
+    _seed_pending(fake_client, "r-author", "initial_dag")
+    fake_client.fail_next_insert("expert_reviews", Exception(_UNIQUE))
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+
+    rid = await repo.create_review(
+        reviewer_id="q1",
+        review_type="dag_approval",
+        dag_version_hash="h9",
+        brand="B",
+        treatment_variable="T",
+        outcome_variable="Y",
+    )
+
+    assert rid is None
+    assert ("neq", ("review_type", "initial_dag")) in fake_client.calls("expert_reviews")
+
+
+@pytest.mark.unit
+async def test_structural_author_recovery_never_adopts_a_pending_gate_consult(fake_client):
+    """The reverse order: Lane B's ``initial_dag`` insert loses a race in ITS queue
+    and must not come back holding the gate's dag_approval row (its evidence
+    write would then match zero rows, or worse, land on the consult)."""
+    _seed_pending(fake_client, "r-gate", "dag_approval")
+    fake_client.fail_next_insert(
+        "expert_reviews",
+        Exception(
+            'duplicate key value violates unique constraint "uq_er_pending_estimand_structural"'
+        ),
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+
+    rid = await repo.create_review(
+        reviewer_id="structural_author",
+        review_type="initial_dag",
+        dag_version_hash="authored",
+        brand="B",
+        treatment_variable="T",
+        outcome_variable="Y",
+    )
+
+    assert rid is None
+    assert ("eq", ("review_type", "initial_dag")) in fake_client.calls("expert_reviews")
+    assert ("neq", ("review_type", "initial_dag")) not in fake_client.calls("expert_reviews")
+
+
+@pytest.mark.unit
+async def test_structural_author_recovery_returns_its_own_queues_pending_row(fake_client):
+    _seed_pending(fake_client, "r-author", "initial_dag")
+    fake_client.fail_next_insert(
+        "expert_reviews",
+        Exception(
+            'duplicate key value violates unique constraint "uq_er_pending_estimand_structural"'
+        ),
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+
+    rid = await repo.create_review(
+        reviewer_id="structural_author",
+        review_type="initial_dag",
+        dag_version_hash="authored-2",
+        brand="B",
+        treatment_variable="T",
+        outcome_variable="Y",
+    )
+
+    assert rid == "r-author"
+
+
+@pytest.mark.unit
+async def test_renewal_recovery_is_the_runtime_queue(fake_client):
+    """A renewal (quarterly_audit, #2090) shares the gate consult's slot, so its
+    recovery reads the runtime queue -- and never the structural one."""
+    fake_client.seed(
+        "expert_reviews",
+        [
+            {
+                "review_id": "r-original",
+                "estimand_key": "b:t:y",
+                "approval_status": "approved",
+                "review_type": "dag_approval",
+                "dag_version_hash": "h1",
+                "brand": "B",
+                "treatment_variable": "T",
+                "outcome_variable": "Y",
+            },
+            {
+                "review_id": "r-author",
+                "estimand_key": "b:t:y",
+                "approval_status": "pending",
+                "review_type": "initial_dag",
+            },
+        ],
+    )
+    fake_client.fail_next_insert("expert_reviews", Exception(_UNIQUE))
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+
+    rid = await repo.renew_review(original_review_id="r-original", reviewer_id="q2")
+
+    assert rid is None
+    assert ("neq", ("review_type", "initial_dag")) in fake_client.calls("expert_reviews")
 
 
 @pytest.mark.unit
@@ -1518,7 +1679,12 @@ def _seed_original_and_pending(fake_client: _FakeClient) -> None:
                 "treatment_variable": "T",
                 "outcome_variable": "Y",
             },
-            {"review_id": "r-pending", "estimand_key": "b:t:y", "approval_status": "pending"},
+            {
+                "review_id": "r-pending",
+                "estimand_key": "b:t:y",
+                "approval_status": "pending",
+                "review_type": "dag_approval",
+            },
         ],
     )
 

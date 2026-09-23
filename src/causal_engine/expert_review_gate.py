@@ -19,6 +19,7 @@ from src.repositories.expert_review import (
     ExpertReviewRepository,
     approval_validity,
     estimand_key_for,
+    runtime_review_queue,
 )
 
 logger = logging.getLogger(__name__)
@@ -266,11 +267,19 @@ class ExpertReviewGate:
         Check whether this ESTIMAND's review clears the DAG under analysis.
 
         Identity is the estimand (``lower(brand):treatment:outcome``, migration
-        140): an estimand holds at most one pending review, and a structure
-        change UPDATES it. Version is ``dag_hash``: a differing hash appends a
-        row to the review's version timeline (migration 141) instead of minting
-        a sibling row, and an approval is only ever an approval OF the hash it
-        was granted on.
+        140): an estimand holds at most one pending review IN THE RUNTIME QUEUE
+        (migration 153, #2244), and a structure change UPDATES it. Version is
+        ``dag_hash``: a differing hash appends a row to the review's version
+        timeline (migration 141) instead of minting a sibling row, and an
+        approval is only ever an approval OF the hash it was granted on.
+
+        The gate reads ONLY the runtime queue (``runtime_review_queue``): Lane
+        B's structural-author review of the same estimand (``initial_dag``,
+        migration 152, read back by ``structural_prior_loader``) is a different
+        review with a different reader. A pending one is not this gate's
+        consult -- adopting it would advance the AUTHORED snapshot to this
+        run's structure -- and an approved or rejected one is neither this
+        gate's approval nor its rejection.
 
         Args:
             dag_hash: SHA256 hash of the DAG structure
@@ -318,7 +327,13 @@ class ExpertReviewGate:
         # returns nothing for a new hash, which is how the old gate minted a
         # second row for the same question.
         estimand_key = estimand_key_for(brand, treatment, outcome)
-        history = await self.repository.get_reviews_for_estimand(estimand_key, include_expired=True)
+        # The RUNTIME queue only (#2244, migration 153): Lane B's initial_dag rows
+        # of this estimand are dropped at the read, so every ranking below --
+        # pending consult, active approval, latest verdict, superseded approval
+        # -- sees only reviews this gate owns.
+        history = runtime_review_queue(
+            await self.repository.get_reviews_for_estimand(estimand_key, include_expired=True)
+        )
 
         # Chronology first (#1971, codex iter-3): the MOST RECENT adjudication
         # wins. An approval that is still unexpired but OLDER than a rejection
@@ -755,11 +770,14 @@ class ExpertReviewGate:
         if self.auto_create_review and requester_id:
             # Auto-create review request. The duplicate-row race the old
             # hash-keyed pre-check could not close is now closed in the DB:
-            # migration 140's partial UNIQUE index uq_er_pending_estimand allows
-            # ONE pending review per estimand, and create_review recovers the
-            # winner's row on the 23505 -- so ``review_id`` below is the id of a
-            # review this call may or may not have inserted, and nothing here
-            # may claim it was newly created.
+            # migration 153's partial UNIQUE index uq_er_pending_estimand_runtime
+            # (140's uq_er_pending_estimand before it) allows ONE pending review
+            # per estimand in the RUNTIME queue, and create_review recovers the
+            # winner's row FROM THAT QUEUE on the 23505 -- so ``review_id`` below
+            # is the id of a review this call may or may not have inserted, and
+            # nothing here may claim it was newly created. A pending Lane B
+            # initial_dag review on this estimand is the other queue's slot and
+            # is neither in ``history`` here nor recoverable by that call.
             review_id = await self.repository.create_review(
                 reviewer_id=requester_id,
                 # C1 (R6-F2): MUST be a valid ``expert_review_type`` ENUM member;
@@ -769,7 +787,8 @@ class ExpertReviewGate:
                 # :53-58). 'initial_dag' exists since migration 152 but is the
                 # Lane B structural-AUTHOR review (offline, pre-run; its loader
                 # refuses any other type) -- the gate keeps writing dag_approval
-                # so a gate consult can never be read back as an authored prior.
+                # so a gate consult can never be read back as an authored prior,
+                # and (migration 153) so it lands in the runtime queue's slot.
                 review_type="dag_approval",
                 dag_version_hash=dag_hash,
                 brand=brand,
@@ -950,8 +969,11 @@ class ExpertReviewGate:
 
         ``history`` is newest-first (``get_reviews_for_estimand`` orders
         created_at DESC; rows are created and resolved in order because the
-        unique-pending index (migration 140) allows one pending review per
-        ESTIMAND at a time, so creation order is adjudication order -- 062's
+        unique-pending index (migration 153; 140 before it) allows one pending
+        review per ESTIMAND at a time in the runtime queue -- callers pass the
+        history through ``runtime_review_queue`` first, since a structural-
+        author row interleaved here would break that ordering -- so creation
+        order is adjudication order -- 062's
         per-structure index, which this replaced, gave the same property for the
         hash-keyed read ``check_rejection`` falls back to when it is given no
         estimand). An exact ``created_at`` tie
@@ -1065,7 +1087,9 @@ class ExpertReviewGate:
             history = await self.repository.get_reviews_for_dag(
                 dag_hash, include_expired=True, brand=brand
             )
-        latest_verdict, reopened = self._latest_adjudication(history)
+        # The runtime queue only (#2244): a Lane B initial_dag rejection is the
+        # structural author's verdict on an AUTHORED structure, not this gate's.
+        latest_verdict, reopened = self._latest_adjudication(runtime_review_queue(history))
         if (
             latest_verdict is not None
             and latest_verdict.get("approval_status") == "rejected"
