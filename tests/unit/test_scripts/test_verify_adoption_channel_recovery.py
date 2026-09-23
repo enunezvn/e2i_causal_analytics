@@ -8,6 +8,7 @@ Spearman(ATE, planted) >= 0.8, and the null channel |ATE| <= 0.06 with its CI co
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
 from scripts.verify_adoption_channel_recovery import evaluate_recovery_gate, planted_rd_by_column
 from src.data.per_hcp_cohort_columns import (
@@ -145,3 +146,15 @@ def test_gate_verdict_text_starts_with_the_verdict_word():
         .verdict()
         .startswith("FAIL")
     )
+
+
+def test_certifying_thresholds_are_not_cli_overridable(tmp_path):
+    """codex r2 (MED): `--tol 1 --min-spearman -1` would certify a structural null. The gate's
+    tolerance, Spearman floor and seed are constants, not flags; argparse must reject them."""
+    from scripts.verify_adoption_channel_recovery import main
+
+    frame = tmp_path / "frame.parquet"
+    for flag in ("--tol", "1"), ("--min-spearman", "-1"), ("--seed", "7"):
+        with pytest.raises(SystemExit) as exc:
+            main(["--frame", str(frame), *flag])
+        assert exc.value.code == 2, flag

@@ -74,6 +74,7 @@ BRANDS = ("Remibrutinib", "Fabhalta", "Kisqali")
 NULL_COLUMN = INTERVENTION_TREATMENT_MAP[ADOPTION_NULL_CHANNEL]
 DEFAULT_TOL = 0.06
 DEFAULT_MIN_SPEARMAN = 0.8
+DEFAULT_SEED = 42
 _FRAME_COLUMNS = (
     "hcp_id",
     "brand",
@@ -385,9 +386,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="brands to FIT (diagnostic); the gate always requires all three, so a subset "
         "run reports FAIL for the brands it skipped and is non-certifying",
     )
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--tol", type=float, default=DEFAULT_TOL)
-    parser.add_argument("--min-spearman", type=float, default=DEFAULT_MIN_SPEARMAN)
+    # The gate's tolerance, Spearman floor and seed are constants (DEFAULT_TOL,
+    # DEFAULT_MIN_SPEARMAN, DEFAULT_SEED), deliberately NOT flags: `--tol 1` would certify a
+    # structural null (codex r2).
     parser.add_argument(
         "--fits-out", type=Path, default=None, help="write the fits table to this CSV"
     )
@@ -424,11 +425,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             len(frame),
         )
 
-    fits = run_fits(frame, brands=args.brands, seed=args.seed)
+    fits = run_fits(frame, brands=args.brands, seed=DEFAULT_SEED)
     if args.fits_out:
         fits.to_csv(args.fits_out, index=False)
         logger.info("fits written to %s", args.fits_out)
-    result = evaluate_recovery_gate(fits, tol=args.tol, min_spearman=args.min_spearman)
+    result = evaluate_recovery_gate(fits)
     print(result.verdict())
     print("\n".join(treatment_arm_summary(all_rows, true_source=true_source)))
     print(f"  peak RSS {_rss_gib():.2f} GiB; {len(fits)} fits, {int(fits['seconds'].sum())} s")
