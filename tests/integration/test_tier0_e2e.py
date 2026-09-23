@@ -20,6 +20,7 @@ Updated: 2026-01-28 - Aligned with agent contract changes from commit 75462ef
 """
 
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -40,6 +41,62 @@ TEST_CONFIG = {
     "min_eligible_patients": 30,
     "min_auc_threshold": 0.55,  # Lower threshold for synthetic data
 }
+
+
+# Messages that mean the MLflow server could not be reached at all (#2267).
+# d6fcc0915 added the MLflow skip "for circuit breaker scenarios"; the old
+# ``"MLflow" in error_msg`` test also skipped every logging / registration
+# DEFECT whose message mentions MLflow, so this must-pass test could go green
+# by skipping. The strings are the real urllib3 / requests / MLflow REST client
+# messages. An exhausted 500 (or 429) is deliberately NOT here: a 500 can be the
+# server rejecting what we sent, which is a defect.
+_MLFLOW_UNAVAILABLE_MARKERS = (
+    "connection refused",
+    "failed to establish a new connection",
+    "name or service not known",
+    "temporary failure in name resolution",
+    "failed to resolve",
+    "connection aborted",
+    "connection reset by peer",
+    "failed with timeout exception",
+    "too many 408 error responses",
+    "too many 502 error responses",
+    "too many 503 error responses",
+    "too many 504 error responses",
+)
+# The connector's breaker counts EVERY exception, defects included, so an open
+# breaker means "MLflow is down" only when the server really does not answer.
+_BREAKER_OPEN_MARKER = "circuit breaker is open"
+
+
+def _mlflow_server_reachable(tracking_uri: str | None = None, timeout: float = 3.0) -> bool:
+    """Whether the MLflow tracking server answers (a local store always does)."""
+    import os
+    import urllib.error
+    import urllib.request
+
+    uri = tracking_uri or os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000")
+    if not uri.startswith(("http://", "https://")):
+        return True
+    try:
+        with urllib.request.urlopen(f"{uri.rstrip('/')}/health", timeout=timeout):
+            return True
+    except urllib.error.HTTPError as e:
+        return e.code not in (502, 503, 504)
+    except (urllib.error.URLError, OSError):
+        return False
+
+
+def _mlflow_infra_unavailable(
+    error_msg: str, server_reachable: Callable[[], bool] = _mlflow_server_reachable
+) -> bool:
+    """Whether a trainer error means MLflow itself is unavailable (skip, not fail)."""
+    lowered = error_msg.lower()
+    if any(marker in lowered for marker in _MLFLOW_UNAVAILABLE_MARKERS):
+        return True
+    if _BREAKER_OPEN_MARKER in lowered:
+        return not server_reachable()
+    return False
 
 
 def generate_ml_ready_sample_data(n_samples: int = 100, seed: int = 42) -> pd.DataFrame:
@@ -586,7 +643,7 @@ class TestModelTrainer:
         # Check for training errors - MLflow issues should skip, not fail
         if result.get("error"):
             error_msg = str(result.get("error", ""))
-            if "MLflow" in error_msg or "circuit breaker" in error_msg:
+            if _mlflow_infra_unavailable(error_msg):
                 pytest.skip(f"MLflow infrastructure issue: {error_msg}")
             else:
                 pytest.fail(f"Model training failed: {error_msg}")
@@ -847,9 +904,14 @@ class TestTier0EndToEnd:
         pipeline_state["qc_report"]["qc_passed"] = pipeline_state["gate_passed"]
         pipeline_state["qc_report"]["qc_errors"] = []
 
-        # QC Gate Check
-        if not pipeline_state["gate_passed"]:
-            pytest.skip("QC gate failed - data quality issues detected")
+        # QC Gate Check. The synthetic sample is built to pass QC (a8aa8ed68), so
+        # a closed gate is a pipeline regression: FAIL, never skip (#2267 — a
+        # QC-gate skip hid this must-pass test for 11 nights).
+        if data_result.get("gate_passed") is not True:
+            pytest.fail(
+                f"QC gate did not pass (gate_passed={data_result.get('gate_passed')!r}): "
+                f"blocking_issues={pipeline_state['qc_report'].get('blocking_issues')}"
+            )
 
         # Step 3: Cohort Construction (use config instead of brand string)
         cohort_agent = CohortConstructorAgent(enable_observability=False)
@@ -937,15 +999,16 @@ class TestTier0EndToEnd:
         except RuntimeError as e:
             # MLflow issues should skip, not fail
             error_msg = str(e)
-            if "MLflow" in error_msg or "circuit breaker" in error_msg:
+            if _mlflow_infra_unavailable(error_msg):
                 pytest.skip(f"MLflow infrastructure issue: {error_msg}")
             raise
 
         # Check for training errors in result
         if trainer_result.get("error"):
             error_msg = str(trainer_result.get("error", ""))
-            if "MLflow" in error_msg or "circuit breaker" in error_msg:
+            if _mlflow_infra_unavailable(error_msg):
                 pytest.skip(f"MLflow infrastructure issue: {error_msg}")
+            pytest.fail(f"Model training failed: {error_msg}")
 
         pipeline_state["trained_model"] = trainer_result.get("trained_model")
         pipeline_state["validation_metrics"] = trainer_result.get("validation_metrics", {})

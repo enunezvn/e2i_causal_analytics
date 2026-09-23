@@ -525,8 +525,9 @@ class ModelTrainerAgent:
         mlflow_model_version = final_state.get("mlflow_model_version")
         mlflow_model_name = final_state.get("mlflow_model_name")
 
-        # Log warning if MLflow logging failed
-        if mlflow_status != "success" and mlflow_run_id is None:
+        # Log warning if MLflow logging failed (#2267: including
+        # ``model_not_logged`` — a run id but no model URI)
+        if mlflow_status != "success":
             logger.warning(
                 f"MLflow logging not completed for training run {training_run_id}. "
                 f"Status: {mlflow_status}"
