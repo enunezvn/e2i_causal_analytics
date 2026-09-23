@@ -201,7 +201,8 @@ def test_case_5_sidecar_round_trip(tmp_path: Path, monkeypatch, caplog) -> None:
     # 1.5 → 1.6 for leakage_fdr, #501 1.4 → 1.5 for the M-structure shadow keys,
     # #508 1.3 → 1.4 for the leak-crosscheck key, #240 Stage 3 1.2 → 1.3 for its
     # soft-gate keys).
-    assert payload["schema_version"] == "1.9"
+    # #2260 bumped 1.9 → 1.10 for the run-level audit_workflow_id.
+    assert payload["schema_version"] == "1.10"
     assert "role_attributions" in payload
     assert len(payload["role_attributions"]) == 2
 

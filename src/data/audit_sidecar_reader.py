@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Optional
+from uuid import UUID
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,10 @@ logger = logging.getLogger(__name__)
 # causal feature-role panel reads them instead of re-deriving the voter. Emitted
 # on every producer path (None / [] on the bypasses); absent on pre-1.9 sidecars
 # (surface as None without a warning). MAJOR=1.
+# 1.10 (#2260): additive run-level ``audit_workflow_id`` (the pipeline run that wrote
+# the sidecar). Runs of one scope share an experiment id and ``written_at`` has second
+# resolution, so the Supabase mirror keys on it. Surfaced on every VerdictRecord; absent
+# on pre-1.10 sidecars and malformed values read as None. MAJOR=1.
 #: THE sidecar schema version. Single source of truth for both sides of the
 #: contract (#1620): the producer
 #: ``src/agents/ml_foundation/data_preparer/graph.py::write_adaptive_verdicts_sidecar``
@@ -81,7 +86,7 @@ logger = logging.getLogger(__name__)
 #: function is to fail on a change and force an explicit, reviewed confirmation
 #: that the new keyset is additive and MAJOR-preserving. Do NOT derive them from
 #: this constant; that would make them ``assert X == X``.
-SIDECAR_SCHEMA_VERSION = "1.9"
+SIDECAR_SCHEMA_VERSION = "1.10"
 
 #: Deprecated alias. Prefer ``SIDECAR_SCHEMA_VERSION``.
 _READER_SCHEMA_VERSION = SIDECAR_SCHEMA_VERSION
@@ -292,6 +297,10 @@ class VerdictRecord:
     citations_unverified: Optional[int] = None
     cited_pmids: Optional[list[str]] = None
     verified_citation_ids: Optional[list[str]] = None
+    # #2260 (schema 1.10): the run that wrote the sidecar, as a canonical UUID
+    # string. Run-level, so every record of one file carries the same value.
+    # ``None`` on pre-1.10 sidecars and on a value that is not a UUID.
+    audit_workflow_id: Optional[str] = None
 
 
 class SidecarReader:
@@ -344,6 +353,7 @@ class SidecarReader:
             # unknown-major → WARN with both versions; both still parse).
             self._check_schema_version(path, payload.get("schema_version"))
             experiment_id = str(payload.get("experiment_id", "<unknown>"))
+            audit_workflow_id = self._parse_run_id(path, payload.get("audit_workflow_id"))
             verdicts_raw = payload.get("adaptive_verdicts", [])
             # codex pass-2 MED-1 (2026-05-15): normalize non-list payloads
             # to ``[]`` after a WARN — a sidecar carrying ``null`` or a
@@ -391,7 +401,27 @@ class SidecarReader:
                     source_path=path,
                     raw=raw,
                     role_attribution=attr,
+                    audit_workflow_id=audit_workflow_id,
                 )
+
+    @staticmethod
+    def _parse_run_id(path: Path, value: Any) -> Optional[str]:
+        """Canonical UUID string for the sidecar's ``audit_workflow_id`` (#2260).
+
+        The mirror column is a UUID, so a malformed value would abort the whole
+        batch's upsert; it reads as ``None`` (the legacy no-run-id key) with a WARN.
+        """
+        if value is None:
+            return None
+        try:
+            return str(UUID(str(value)))
+        except ValueError:
+            logger.warning(
+                "SidecarReader: sidecar %s has non-UUID audit_workflow_id=%r; treating as absent.",
+                path,
+                value,
+            )
+            return None
 
     @staticmethod
     def _warn_unknown_verdict_keys(path: Path, verdicts_raw: Any) -> None:
@@ -479,6 +509,7 @@ class SidecarReader:
         source_path: Path,
         raw: dict[str, Any],
         role_attribution: Optional[dict[str, Any]] = None,
+        audit_workflow_id: Optional[str] = None,
     ) -> VerdictRecord:
         return VerdictRecord(
             experiment_id=experiment_id,
@@ -544,6 +575,7 @@ class SidecarReader:
             citations_unverified=_opt_int(raw.get("citations_unverified")),
             cited_pmids=_opt_str_list(raw.get("cited_pmids")),
             verified_citation_ids=_opt_str_list(raw.get("verified_citation_ids")),
+            audit_workflow_id=audit_workflow_id,
         )
 
 

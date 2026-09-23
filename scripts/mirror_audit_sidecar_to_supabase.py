@@ -6,8 +6,10 @@ Issue #238. Plan precedent: see ``database/migrations/040_adaptive_validity_verd
 Sidecars on the ``audit_artifacts`` named volume are CANONICAL. This script
 mirrors them into the ``adaptive_validity_verdicts`` table for cross-experiment
 queryability. The mirror is upsert-keyed on ``(experiment_id, feature,
-written_at)`` so re-running over the same sidecars produces zero net writes
-(or no-op UPDATEs).
+written_at, audit_workflow_id)`` so re-running over the same sidecars produces
+zero net writes (or no-op UPDATEs). The run id joined the key in migration 157
+(#2260): runs of one scope share an experiment id and ``written_at`` has second
+resolution, so two runs in one second otherwise overwrote each other's rows.
 
 Consistency story
 -----------------
@@ -150,19 +152,27 @@ _EVALUATOR_FIELDS: tuple[str, ...] = (
 # before the voter substitutes (design §5 R-4); the AC3.4 rollback query
 # selects both columns. They join the same DO UPDATE SET + IS DISTINCT FROM
 # set so a row whose only delta is a gate flip still triggers an UPDATE.
+#
+# #2260: the conflict target is migration 157's
+# ``uix_adaptive_validity_verdicts_run_key``, expression for expression (Postgres
+# picks the arbiter index by matching them). ``audit_workflow_id`` is part of the
+# key, so it is never in the DO UPDATE SET; a sidecar without a run id (pre-1.10)
+# folds to the nil UUID and dedups exactly as under 040's key.
 _UPSERT_SQL = """
 INSERT INTO adaptive_validity_verdicts (
     experiment_id, feature, written_at, source_path,
     verdict, evaluator_audit, causal_role_final, causal_role_source,
     would_promote_severity, would_flag_for_review, rationale_incomplete_flag,
     gate_rule_fired, worker_severity_pre_gate,
+    audit_workflow_id,
     imported_at
 )
-VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, now())
+VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s::uuid, now())
 ON CONFLICT (
     COALESCE(experiment_id, '__unknown__'),
     COALESCE(feature, '__unknown__'),
-    written_at
+    written_at,
+    COALESCE(audit_workflow_id, '00000000-0000-0000-0000-000000000000'::uuid)
 ) DO UPDATE SET
     verdict = EXCLUDED.verdict,
     evaluator_audit = EXCLUDED.evaluator_audit,
@@ -390,6 +400,8 @@ def _upsert_records(
                     # predates Stage 3) → column stays NULL.
                     r.gate_rule_fired,
                     r.worker_severity_pre_gate,
+                    # #2260: the run that wrote the sidecar (None pre-1.10).
+                    r.audit_workflow_id,
                 ),
             )
             row = cur.fetchone()

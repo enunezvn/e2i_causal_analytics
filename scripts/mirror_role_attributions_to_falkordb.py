@@ -80,6 +80,11 @@ logger = logging.getLogger("mirror_role_attributions_to_falkordb")
 # ``evaluator_model`` for the provenance string. NULL is tolerated for
 # manifest rows (their evaluator_audit may be NULL); the worker
 # substitutes ``"n/a"`` per the Phase-1 RoleAttribution sentinel.
+#
+# The last row per (experiment_id, feature) wins the MERGE. Since migration 157
+# (#2260) two runs of one scope can share a written_at second; neither is "later"
+# at that resolution, so the tiebreak is only for stability: without it the winner
+# is the heap order, which an in-place UPDATE of one row flips.
 _SELECT_SQL = """
 SELECT
     experiment_id,
@@ -91,7 +96,7 @@ FROM adaptive_validity_verdicts
 WHERE causal_role_final IS NOT NULL
   AND causal_role_source IS NOT NULL
   AND (%s::timestamptz IS NULL OR written_at >= %s::timestamptz)
-ORDER BY written_at;
+ORDER BY written_at, audit_workflow_id NULLS FIRST, source_path;
 """
 
 

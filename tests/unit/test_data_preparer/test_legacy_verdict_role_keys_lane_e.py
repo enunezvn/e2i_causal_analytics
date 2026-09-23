@@ -143,12 +143,13 @@ def test_bypass_paths_emit_the_keys_as_nulls() -> None:
             assert legacy[key] in (None, []), (key, legacy[key])
 
 
-def test_reader_knows_the_keys_and_the_schema_is_1_9() -> None:
+def test_reader_knows_the_keys_and_the_schema_is_1_10() -> None:
     from src.data.audit_sidecar_reader import _KNOWN_VERDICT_KEYS, SIDECAR_SCHEMA_VERSION
 
     for key in _NEW_KEYS:
         assert key in _KNOWN_VERDICT_KEYS, key
-    assert SIDECAR_SCHEMA_VERSION == "1.9"
+    # 1.9 added these keys; #2260 bumped to 1.10 (run-level audit_workflow_id).
+    assert SIDECAR_SCHEMA_VERSION == "1.10"
 
 
 def test_layer_4_dataset_context_names_the_causal_treatment_only_when_asked() -> None:
