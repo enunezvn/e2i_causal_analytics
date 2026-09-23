@@ -76,6 +76,7 @@ import pytest
 # rather than ImportError when the binary is absent.
 from tests.integration._prod_write_guard import (
     adherence_spec,
+    planted_prefix,
     require_isolated_windows,
 )
 
@@ -130,7 +131,7 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
             test_file=__file__,
             start=start_dt,
             end=end_dt,
-            journey_like=f"pj_{test_run_id}_%",
+            journey_like=planted_prefix(f"pj_{test_run_id}_"),
         ),
     )
 
@@ -289,12 +290,12 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
         with db_conn:
             with db_conn.cursor() as cur:
                 cur.execute(
-                    "DELETE FROM triggers WHERE trigger_id LIKE %s",
-                    (f"tr_{test_run_id}_%",),
+                    "DELETE FROM triggers WHERE trigger_id LIKE %s ESCAPE '\\'",
+                    (planted_prefix(f"tr_{test_run_id}_"),),
                 )
                 cur.execute(
-                    "DELETE FROM patient_journeys WHERE patient_journey_id LIKE %s",
-                    (f"pj_{test_run_id}_%",),
+                    "DELETE FROM patient_journeys WHERE patient_journey_id LIKE %s ESCAPE '\\'",
+                    (planted_prefix(f"pj_{test_run_id}_"),),
                 )
 
 

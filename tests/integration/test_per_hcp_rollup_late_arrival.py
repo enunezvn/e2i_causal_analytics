@@ -24,6 +24,7 @@ import pytest
 from tests.integration._prod_write_guard import (
     adherence_spec,
     per_hcp_rollup_spec,
+    planted_prefix,
     require_isolated_windows,
     selected_metric_dates,
     territory_arrival_spec,
@@ -111,30 +112,30 @@ def planted(db_conn: Any) -> Any:
             test_file=__file__,
             start=guard_arrival_start,
             end=GUARD_ARRIVAL_END,
-            hcp_like=f"hl_{rid}_%",
-            trigger_like=f"trlate_{rid}_%",
+            hcp_like=planted_prefix(f"hl_{rid}_"),
+            trigger_like=planted_prefix(f"trlate_{rid}_"),
             window_column="created_at",
         ),
         per_hcp_rollup_spec(
             test_file=__file__,
             start=datetime.fromisoformat(EXPLICIT_START).replace(tzinfo=UTC),
             end=datetime.fromisoformat(EXPLICIT_END).replace(tzinfo=UTC),
-            hcp_like=f"hl_{rid}_%",
-            trigger_like=f"trlate_{rid}_%",
+            hcp_like=planted_prefix(f"hl_{rid}_"),
+            trigger_like=planted_prefix(f"trlate_{rid}_"),
             window_column="trigger_timestamp",
         ),
         territory_rollup_spec(
             test_file=__file__,
             start=TUESDAY,
             end=GUARD_DATE_END,
-            territory_like=f"T_LATE_{rid}%",
+            territory_like=planted_prefix(f"T_LATE_{rid}"),
             teardown_deletes_window=True,
         ),
         adherence_spec(
             test_file=__file__,
             start=guard_arrival_start,
             end=GUARD_ARRIVAL_END,
-            journey_like=f"pj_hl_{rid}_%",
+            journey_like=planted_prefix(f"pj_hl_{rid}_"),
             window_column="created_at",
         ),
     )
@@ -202,7 +203,8 @@ def planted(db_conn: Any) -> Any:
     with db_conn:
         with db_conn.cursor() as cur:
             cur.execute(
-                "DELETE FROM territory_metrics WHERE territory_id LIKE %s", (f"T_LATE_{rid}%",)
+                "DELETE FROM territory_metrics WHERE territory_id LIKE %s ESCAPE '\\'",
+                (planted_prefix(f"T_LATE_{rid}"),),
             )
             if run_xid is not None:
                 cur.execute(
@@ -215,13 +217,22 @@ def planted(db_conn: Any) -> Any:
                 (dates,),
             )
             not_ours = cur.fetchall()
-            cur.execute("DELETE FROM business_metrics WHERE hcp_id LIKE %s", (f"hl_{rid}_%",))
-            cur.execute("DELETE FROM triggers WHERE trigger_id LIKE %s", (f"trlate_{rid}_%",))
             cur.execute(
-                "DELETE FROM patient_journeys WHERE patient_journey_id LIKE %s",
-                (f"pj_hl_{rid}_%",),
+                "DELETE FROM business_metrics WHERE hcp_id LIKE %s ESCAPE '\\'",
+                (planted_prefix(f"hl_{rid}_"),),
             )
-            cur.execute("DELETE FROM hcp_profiles WHERE hcp_id LIKE %s", (f"hl_{rid}_%",))
+            cur.execute(
+                "DELETE FROM triggers WHERE trigger_id LIKE %s ESCAPE '\\'",
+                (planted_prefix(f"trlate_{rid}_"),),
+            )
+            cur.execute(
+                "DELETE FROM patient_journeys WHERE patient_journey_id LIKE %s ESCAPE '\\'",
+                (planted_prefix(f"pj_hl_{rid}_"),),
+            )
+            cur.execute(
+                "DELETE FROM hcp_profiles WHERE hcp_id LIKE %s ESCAPE '\\'",
+                (planted_prefix(f"hl_{rid}_"),),
+            )
     assert not not_ours, (
         f"territory_metrics rows on {dates} were not written by the territory run "
         f"(xid {run_xid}) and were left in place, not deleted: {not_ours}"
@@ -252,8 +263,8 @@ def _rows(db_conn: Any, rid: str) -> dict:
         with db_conn.cursor() as cur:
             cur.execute(
                 "SELECT hcp_id, metric_date, triggers_total_count, market_share FROM business_metrics "
-                "WHERE hcp_id LIKE %s AND metric_type = 'per_hcp_rollup'",
-                (f"hl_{rid}_%",),
+                "WHERE hcp_id LIKE %s ESCAPE '\\' AND metric_type = 'per_hcp_rollup'",
+                (planted_prefix(f"hl_{rid}_"),),
             )
             return {(h, d): (int(n), float(s)) for h, d, n, s in cur.fetchall()}
 
@@ -342,9 +353,9 @@ def test_a_late_weekly_batch_rolls_up_under_each_triggers_own_date(
             test_file=__file__,
             start=arrival_start,
             end=arrival_end,
-            hcp_like=f"hl_{rid}_%",
-            trigger_like=f"trlate_{rid}_%",
-            territory_like=f"T_LATE_{rid}%",
+            hcp_like=planted_prefix(f"hl_{rid}_"),
+            trigger_like=planted_prefix(f"trlate_{rid}_"),
+            territory_like=planted_prefix(f"T_LATE_{rid}"),
         ),
     )
     # Positive control: the census COUNTED our rows (3 per-HCP rows on the two dates + the
@@ -423,8 +434,8 @@ def test_a_late_weekly_batch_rolls_up_under_each_triggers_own_date(
         with db_conn.cursor() as cur:
             cur.execute(
                 "SELECT patient_journey_id, adherence_rate, gap_days FROM patient_journeys "
-                "WHERE patient_journey_id LIKE %s",
-                (f"pj_hl_{rid}_%",),
+                "WHERE patient_journey_id LIKE %s ESCAPE '\\'",
+                (planted_prefix(f"pj_hl_{rid}_"),),
             )
             journeys = {j: (float(rate), gap) for j, rate, gap in cur.fetchall()}
     # The open-ended journeys keep exactly what the fixture wrote. Before the fix, a's would
