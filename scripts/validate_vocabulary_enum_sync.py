@@ -104,7 +104,12 @@ ENUM_CHECKS: List[EnumCheckEntry] = [
     ),
     (
         "expert_review_type",
-        PROJECT_ROOT / "database" / "ml" / "010_causal_validation_tables.sql",
+        # Migration 152 added initial_dag (Lane B structural-author review) via
+        # ALTER TYPE ... ADD VALUE in its own file, the 138 pattern.
+        [
+            PROJECT_ROOT / "database" / "ml" / "010_causal_validation_tables.sql",
+            PROJECT_ROOT / "database" / "migrations" / "152_expert_review_type_initial_dag.sql",
+        ],
         "expert_review_types",
         "values",
     ),
