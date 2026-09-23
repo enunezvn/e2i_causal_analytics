@@ -881,3 +881,21 @@ class TestRepositoryTableNames:
         """Test that MLModelRegistryRepository has correct table name."""
         repo = MLModelRegistryRepository(supabase_client=None)
         assert repo.table_name == "ml_model_registry"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "given, expected",
+    [("Production", "production"), ("Staging", "staging"), ("Shadow", "shadow"),
+     ("Archived", "archived"), ("None", "development"), ("production", "production")],
+)  # fmt: skip
+def test_normalize_stage_maps_mlflow_names_to_the_enum(given, expected):
+    assert MLModelRegistryRepository.normalize_stage(given) == expected
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("given", [None, "candidate", "", " Production "])
+def test_normalize_stage_refuses_anything_else(given):
+    """#2259 codex r1: Python None is malformed state, not MLflow's "None" stage."""
+    with pytest.raises(ValueError, match="stage"):
+        MLModelRegistryRepository.normalize_stage(given)

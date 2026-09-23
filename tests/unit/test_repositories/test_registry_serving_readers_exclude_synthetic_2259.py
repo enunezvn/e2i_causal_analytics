@@ -11,8 +11,9 @@ that picks production (or champion) rows can surface one.
 The scan finds every function in ``src/`` that SELECTs from the registry and scopes the read to
 production (``'production'`` / ``_SERVING_STAGES`` / a caller-chosen ``stage``) or to champions
 (``.eq("is_champion", True)``),
-and requires an ``is_synthetic`` exclusion in it: ``.eq("is_synthetic", False)``,
-``apply_provenance_filter(...)``, or a client-side ``row.get("is_synthetic")`` skip. The set of
+and requires an ``is_synthetic`` exclusion in it: ``.eq("is_synthetic", False)`` or a client-side
+``row.get("is_synthetic")`` skip. ``apply_provenance_filter`` does NOT count: prod runs with
+``E2I_INCLUDE_SYNTHETIC=true`` (measured on e2i_api 2026-09-23), which makes it a no-op. The set of
 such readers is pinned, so a NEW production reader fails here until someone has looked at it.
 """
 
@@ -38,6 +39,11 @@ SERVING_READERS: Set[str] = {
     "src/repositories/ml_experiment.py::get_model_performance_for_target",
     "src/services/hcp_segment_likelihood.py::resolve_hcp_adoption_champion",
 }
+
+# This static scan is the CI ratchet; the behavioural proof (each reader run against a synthetic
+# production champion, with prod's E2I_INCLUDE_SYNTHETIC=true) is
+# test_serving_readers_never_surface_a_synthetic_production_champion in
+# tests/unit/test_database/learning_loop/test_ml_registry_promotion_gate_realdb.py.
 
 #: Functions the scan matches that do not serve, with the reason.
 NOT_SERVING: Dict[str, str] = {
@@ -94,8 +100,6 @@ def _classify(fn: ast.AST, in_repo_class: bool) -> Tuple[bool, bool]:
         ):
             scoped = True  # a caller-chosen stage: production is one of the values it serves
         if name == "eq" and _const_args(node) == ("is_synthetic", False):  # type: ignore[arg-type]
-            excludes = True
-        if name == "apply_provenance_filter":
             excludes = True
         if name == "get" and _const_args(node)[:1] == ("is_synthetic",):  # type: ignore[arg-type]
             excludes = True

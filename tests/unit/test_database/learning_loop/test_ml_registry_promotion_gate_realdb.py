@@ -14,6 +14,7 @@ so it could never show that the gate was dead and no promotion had ever persiste
 
 from __future__ import annotations
 
+import atexit
 import os
 import secrets
 import socket
@@ -61,6 +62,16 @@ class ThrowawayRest:
         self.jwt_secret = secrets.token_hex(32)
 
     def start(self, ready_timeout_s: int = 60) -> None:
+        # Registered BEFORE the container exists; any failure removes it before re-raising
+        # (the ThrowawayPg contract). The name prefix also lets reap_orphans() find a leak.
+        atexit.register(self.stop)
+        try:
+            self._start(ready_timeout_s)
+        except BaseException:
+            self.stop()
+            raise
+
+    def _start(self, ready_timeout_s: int) -> None:
         image = (
             subprocess.run(
                 ["docker", "inspect", PROD_REST_CONTAINER, "--format", "{{.Config.Image}}"],
@@ -107,11 +118,12 @@ class ThrowawayRest:
             except OSError:
                 pass
             time.sleep(0.5)
-        self.stop()
         raise _pg.DbFixtureError(f"{self.name} schema cache not ready after {ready_timeout_s}s")
 
     def stop(self) -> None:
         subprocess.run(["docker", "rm", "-f", self.name], capture_output=True)
+        if subprocess.run(["docker", "inspect", self.name], capture_output=True).returncode == 0:
+            raise _pg.DbFixtureError(f"could not remove throwaway container {self.name}")
 
     def _bearer(self) -> str:
         import jwt
@@ -123,17 +135,23 @@ class ThrowawayRest:
         )
         return f"Bearer {token}"
 
+    def _headers(self) -> Dict[str, str]:
+        return {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Authorization": self._bearer(),
+        }
+
     def service_role_client(self) -> Any:
         from postgrest import AsyncPostgrestClient
 
-        return AsyncPostgrestClient(
-            f"http://127.0.0.1:{self.port}",
-            headers={
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-                "Authorization": self._bearer(),
-            },
-        )
+        return AsyncPostgrestClient(f"http://127.0.0.1:{self.port}", headers=self._headers())
+
+    def sync_service_role_client(self) -> Any:
+        """The sync flavour, for the readers that use the sync Supabase client."""
+        from postgrest import SyncPostgrestClient
+
+        return SyncPostgrestClient(f"http://127.0.0.1:{self.port}", headers=self._headers())
 
 
 @pytest.fixture
@@ -144,8 +162,8 @@ def registry_db(clone_db) -> _pg.PgConn:
 @pytest.fixture
 def rest(registry_db: _pg.PgConn) -> Iterator[ThrowawayRest]:
     server = ThrowawayRest(registry_db)
-    server.start()
     try:
+        server.start()
         yield server
     finally:
         server.stop()
@@ -337,6 +355,7 @@ async def _store(rest: ThrowawayRest, monkeypatch, model_id: str) -> Dict[str, A
         "promotion_successful": True,
         # What promote_stage leaves behind: the MLflow-cased promotion target.
         "current_stage": "Production",
+        "deployment_action": "promote",
     }
     await ModelDeployerAgent()._store_to_database(output, state)
     return output
@@ -355,7 +374,11 @@ async def test_deploy_agent_promotion_reaches_the_registry(
     assert output.get("db_persist_skipped_reason") is None
     assert output["db_persisted"] is True
     assert "promotion_refused_reason" not in output
+    assert output["deployment_successful"] is True
     assert _row(registry_db, model_id)["stage"] == "production"
+    assert registry_db.rows(
+        f"select status from ml_deployments where model_registry_id = '{model_id}'"
+    ) == ["active"]
 
 
 async def test_deploy_agent_surfaces_a_refused_promotion(
@@ -374,6 +397,12 @@ async def test_deploy_agent_surfaces_a_refused_promotion(
     assert output["db_persisted"] is True
     assert output.get("db_persist_skipped_reason") is None
     assert _row(registry_db, model_id)["stage"] == "staging"
+    # ...and the deploy does not report (or record) a success it did not have.
+    assert output["deployment_successful"] is False
+    assert output["status"] == "failed"
+    assert registry_db.rows(
+        f"select status from ml_deployments where model_registry_id = '{model_id}'"
+    ) == ["pending"]
     assert any(
         r.levelname == "ERROR" and "training_provenance" in r.getMessage() for r in caplog.records
     )
@@ -526,3 +555,121 @@ def test_migration_158_skips_a_row_that_no_longer_matches_the_proof(
     _pg.apply_migration(registry_db, MIGRATION_158)
 
     assert _provenance(registry_db, moved) == "<null>"
+
+
+async def test_the_database_write_enforces_the_gate_not_only_the_read(
+    registry_db: _pg.PgConn, rest: ThrowawayRest
+) -> None:
+    """A stale read (provenance changed after get_by_id) must not promote, nor archive anything."""
+    from src.repositories.ml_experiment import MLModelRegistry
+
+    exp = _experiment(registry_db, "lane_2259_stale")
+    serving = _model(registry_db, exp, "lane_2259_stale_model", version="1.0",
+                     stage="production", provenance="real", champion=True)  # fmt: skip
+    candidate = _model(registry_db, exp, "lane_2259_stale_model", version="2.0",
+                       stage="staging", provenance=None)  # fmt: skip
+    repo = MLModelRegistryRepository(supabase_client=rest.service_role_client())
+
+    async def stale(model_id: str, **_: Any) -> MLModelRegistry:
+        return MLModelRegistry(model_name="lane_2259_stale_model", training_provenance="real")
+
+    repo.get_by_id = stale  # type: ignore[method-assign]
+
+    with pytest.raises(ValueError, match="training_provenance"):
+        await repo.transition_stage(uuid.UUID(candidate), "Production")
+
+    assert _row(registry_db, candidate)["stage"] == "staging"
+    assert _row(registry_db, serving)["stage"] == "production"
+
+
+def test_migration_158_rollback_undoes_it_and_lets_it_reapply(registry_db: _pg.PgConn) -> None:
+    exp = _experiment(registry_db, "csu_treatment_initiation_live_v1")
+    full = _csu_row(registry_db, exp, *PROVABLE[0], None)
+    key = MIGRATION_158.name
+    _pg.apply_migration(registry_db, MIGRATION_158, record=key)
+    assert _provenance(registry_db, full) == "synthetic_gold"
+
+    rollback = MIGRATION_158.with_name("rollback_" + MIGRATION_158.name)
+    proc = registry_db.pg.run_script(
+        registry_db.db, rollback.read_bytes(), single_transaction=True, user="postgres"
+    )
+    assert proc.returncode == 0, proc.stderr.decode()
+
+    assert _provenance(registry_db, full) == "<null>"
+    # The ledger row goes too, so the next deploy re-applies 158 instead of skipping it.
+    assert registry_db.rows(
+        f"select count(*) from schema_migrations where filename = '{key}'"
+    ) == ["0"]
+
+
+# ---------------------------------------------------------------------------
+# The generator exemption is safe only if no serving reader can surface its rows
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("is_synthetic", [True, False])
+async def test_serving_readers_never_surface_a_synthetic_production_champion(
+    registry_db: _pg.PgConn, rest: ThrowawayRest, monkeypatch, is_synthetic: bool
+) -> None:
+    """Each serving reader, run as prod runs it, against a row only is_synthetic keeps out.
+
+    Prod sets E2I_INCLUDE_SYNTHETIC=true (measured on e2i_api 2026-09-23), which turns the shared
+    ``apply_provenance_filter`` into a no-op, so the test sets it too. The row is a production
+    champion with an artifact and a real-looking name, so every other predicate admits it. The
+    ``is_synthetic=False`` case is the control: each reader DOES surface that row, so the absence
+    in the synthetic case is the synthetic exclusion at work, not a missed match.
+    """
+    import src.repositories as repositories
+    from src.agents.drift_monitor.connectors.supabase_connector import SupabaseDataConnector
+    from src.agents.orchestrator.nodes import dispatcher
+    from src.api.routes import explain, health_score, predictions
+    from src.memory.services import factories
+    from src.services.hcp_segment_likelihood import (
+        ChampionNotPromotedError,
+        resolve_hcp_adoption_champion,
+    )
+
+    monkeypatch.setenv("E2I_INCLUDE_SYNTHETIC", "true")
+    exp = _experiment(registry_db, "hcp_adoption_kisqali_goldstd_eval_v1")
+    name = "hcp_adoption_kisqali_goldstd_lr_v1"
+    model_id = _model(registry_db, exp, name, stage="production", provenance=None,
+                      champion=True, is_synthetic=is_synthetic)  # fmt: skip
+
+    aclient, sclient = rest.service_role_client(), rest.sync_service_role_client()
+
+    async def _async_client() -> Any:
+        return aclient
+
+    monkeypatch.setattr(factories, "get_async_supabase_client", _async_client)
+    monkeypatch.setattr(repositories, "get_supabase_client", lambda: sclient)
+    monkeypatch.setattr(health_score, "_health_source_client", lambda: sclient)
+    repo = MLModelRegistryRepository(supabase_client=aclient)
+    connector = SupabaseDataConnector()
+    connector._client, connector._initialized = sclient, True
+
+    try:
+        hcp = (await resolve_hcp_adoption_champion("Kisqali", db=aclient))[0]
+    except ChampionNotPromotedError:
+        hcp = None
+    champion = await repo.get_champion_model(experiment_id=uuid.UUID(exp))
+    surfaced = {
+        "get_models_for_target": name in await repo.get_models_for_target("lane_2259_target"),
+        "get_model_performance_for_target": name
+        in await repo.get_model_performance_for_target("lane_2259_target"),
+        "get_champion_model": champion is not None and champion.model_name == name,
+        "resolve_hcp_adoption_champion": hcp == name,
+        "_probe_prediction_champions": any(
+            n == name for n, _ in dispatcher._probe_prediction_champions()
+        ),
+        "_fetch_model_registry_facts": model_id in health_score._fetch_model_registry_facts(),
+        "_resolve_production_model_names": name
+        in await predictions._resolve_production_model_names(),
+        "get_available_models": any(
+            r.get("model_name") == name
+            for r in await connector.get_available_models(stages=["production"])
+        ),
+        "explain._resolve_model_registry_id": await explain._resolve_model_registry_id(name)
+        == model_id,
+    }
+
+    assert surfaced == dict.fromkeys(surfaced, not is_synthetic)
