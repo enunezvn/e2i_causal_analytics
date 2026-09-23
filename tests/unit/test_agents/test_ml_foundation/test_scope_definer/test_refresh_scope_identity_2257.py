@@ -213,3 +213,35 @@ async def test_a_refreshed_scopes_candidate_is_registered():
     (candidate,) = db.rows("ml_model_registry")
     assert out["model_registry_id"] == candidate["id"]
     assert candidate["experiment_id"] == exp["id"]
+
+
+@pytest.mark.asyncio
+async def test_a_refresh_whose_id_cannot_be_bound_fails_closed():
+    """codex r3: once an existing row is chosen, running on under the minted id would
+    recreate the unresolvable identity silently — the scope stage must fail instead."""
+    row = _row(None, "t1")
+    db = FakeAsyncSupabase({"ml_experiments": [row]})
+    with patch(
+        "src.agents.ml_foundation.scope_definer.agent._claim_experiment_id",
+        AsyncMock(side_effect=RuntimeError("db went away")),
+    ):
+        with pytest.raises(RuntimeError, match="could not be bound"):
+            await _scope(db, _input())
+    assert len(db.rows("ml_experiments")) == 1  # nothing created in its place
+
+
+@pytest.mark.asyncio
+async def test_a_failure_before_any_row_is_chosen_still_degrades_gracefully():
+    """The pre-#2257 contract: no usable repository -> the run continues on its minted id."""
+    from src.repositories.ml_experiment import MLExperimentRepository
+
+    repo = MLExperimentRepository(supabase_client=FakeAsyncSupabase({}))
+    repo.get_by_name = AsyncMock(side_effect=RuntimeError("db down"))  # type: ignore[method-assign]
+    with patch(
+        "src.agents.ml_foundation.scope_definer.agent._get_experiment_repository",
+        AsyncMock(return_value=repo),
+    ):
+        from src.agents.ml_foundation.scope_definer.agent import ScopeDefinerAgent
+
+        output = {"experiment_id": "exp_minted", "experiment_name": _NAME}
+        assert await ScopeDefinerAgent()._persist_scope_spec(output) is None

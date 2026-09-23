@@ -404,8 +404,10 @@ class ScopeDefinerAgent:
         Returns:
             The experiment id the run must use when the scope name already exists (the
             refreshed row's, #2257); ``None`` when the minted id stands (a new row, or
-            nothing persisted).
+            nothing persisted). Raises once an existing row is chosen but its id cannot
+            be bound — running on under the minted id would recreate #2257 silently.
         """
+        refreshing = False
         try:
             repo = await _get_experiment_repository()
             if repo is None:
@@ -437,6 +439,7 @@ class ScopeDefinerAgent:
             # the historical duplicates).
             existing = await repo.get_by_name(name)
             if existing and existing.id:
+                refreshing = True
                 await repo.update(
                     str(existing.id),
                     {
@@ -457,7 +460,8 @@ class ScopeDefinerAgent:
                 # candidate). The row's id is reused; a NULL column takes the minted
                 # id by compare-and-set, so a set id is never overwritten and earlier
                 # runs' lookups keep resolving.
-                experiment_id = await _claim_experiment_id(
+                # The column is UNIQUE and set-once, so the row just read is authoritative.
+                experiment_id = existing.mlflow_experiment_id or await _claim_experiment_id(
                     repo.client, str(existing.id), output.get("experiment_id")
                 )
                 logger.info(f"Refreshed existing experiment scope: {name} ({experiment_id})")
@@ -482,6 +486,10 @@ class ScopeDefinerAgent:
                 logger.debug("Experiment not persisted (no result returned)")
 
         except Exception as e:
+            if refreshing:
+                raise RuntimeError(
+                    f"scope {name!r} refreshed but its experiment id could not be bound: {e}"
+                ) from e
             logger.warning(f"Failed to persist experiment: {e}")
         return None
 
