@@ -33,7 +33,7 @@ ALLOWLIST: dict[str, int] = {
     "src/agents/causal_impact/nodes/refutation.py": 2519,
     "src/agents/feedback_learner/dspy_integration.py": 1836,
     "src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py": 4224,
-    "src/agents/ml_foundation/model_deployer/nodes/registry_manager.py": 1669,
+    "src/agents/ml_foundation/model_deployer/nodes/registry_manager.py": 1571,
     "src/agents/ml_foundation/model_trainer/nodes/evaluator.py": 4026,
     # 3710: MEASURED from the merged tree, not either side's pin. The lane's
     # value-lookup mask (#2114) and main's #2139 structural guard both run here,
