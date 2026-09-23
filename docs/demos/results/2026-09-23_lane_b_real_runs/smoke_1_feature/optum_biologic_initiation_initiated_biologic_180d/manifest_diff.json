@@ -1,0 +1,23 @@
+{
+  "manifest": "optum",
+  "n_features": 1,
+  "n_compared": 1,
+  "edge_exact_agreement": 1,
+  "role_agreement": 1,
+  "disagreements": [],
+  "rows": [
+    {
+      "feature": "age_at_index",
+      "compared": true,
+      "edge_exact": true,
+      "edge_jaccard": 1.0,
+      "authored_only": [],
+      "manifest_only": [],
+      "authored_role": "confounder",
+      "manifest_role": "confounder",
+      "role_agree": true,
+      "manifest_provenance": "machine"
+    }
+  ],
+  "note": "no threshold: the owner reads the diff and decides whether to relabel (spec \u00a73 Lane B item 1)"
+}
