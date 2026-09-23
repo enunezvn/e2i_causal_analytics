@@ -678,8 +678,9 @@ class ExpertReviewRepository(ExpertReviewVersionTimeline):
             brand: Optional brand filter
 
         Returns:
-            True if DAG has active approval (permanent or unexpired), False
-            otherwise -- including when there is no client to ask (#1972:
+            True if DAG has an active RUNTIME-queue approval (permanent or
+            unexpired; a Lane B ``initial_dag`` approval never counts, #2244),
+            False otherwise -- including when there is no client to ask (#1972:
             "assuming approved" was a plausible-wrong value a caller could not
             tell apart from a verified one; fail-closed, like every other
             no-client path in this repository).
@@ -701,6 +702,9 @@ class ExpertReviewRepository(ExpertReviewVersionTimeline):
                 .select("review_id")
                 .eq("dag_version_hash", dag_hash)
                 .eq("approval_status", "approved")
+                # The gate's reader: a Lane B initial_dag approval of the same
+                # hash is the structural author's, not this gate's (#2244).
+                .neq("review_type", STRUCTURAL_AUTHOR_REVIEW_TYPE)
             )
 
             if brand:
@@ -726,8 +730,9 @@ class ExpertReviewRepository(ExpertReviewVersionTimeline):
             brand: Optional brand filter
 
         Returns:
-            The newest active approval record (permanent or unexpired --
-            same predicate as ``is_dag_approved``), or None if not approved
+            The newest active RUNTIME-queue approval record (permanent or
+            unexpired -- same predicate as ``is_dag_approved``, so never a Lane
+            B ``initial_dag`` row, #2244), or None if not approved
 
         Raises:
             The underlying client error on a query failure, after logging it
@@ -745,6 +750,9 @@ class ExpertReviewRepository(ExpertReviewVersionTimeline):
                 .select("*")
                 .eq("dag_version_hash", dag_hash)
                 .eq("approval_status", "approved")
+                # Runtime queue only, like is_dag_approved (#2244): the row this
+                # returns is what request_renewal renews as a quarterly_audit.
+                .neq("review_type", STRUCTURAL_AUTHOR_REVIEW_TYPE)
             )
             query = query.order("approved_at", desc=True).limit(1)
 
@@ -977,10 +985,10 @@ class ExpertReviewRepository(ExpertReviewVersionTimeline):
         only changes which record the gate reports, and the gate's renewal
         warning follows that record's ``valid_until``. The original is not
         checked for being approved or active -- any existing row may be
-        renewed. The renewal is always a RUNTIME-queue row
-        (``quarterly_audit``): renewing a Lane B ``initial_dag`` review
-        therefore does not extend the structural prior, whose loader accepts
-        only ``initial_dag`` rows (#2244, owner decision pending).
+        renewed -- except a Lane B ``initial_dag`` review (#2244): the renewal
+        is always a RUNTIME-queue row (``quarterly_audit``), which would turn
+        an authored review into a gate consult no loader reads back, so that
+        original is refused (None, logged).
 
         Args:
             original_review_id: UUID of the review to renew
@@ -999,6 +1007,16 @@ class ExpertReviewRepository(ExpertReviewVersionTimeline):
         original = await self.get_by_id(original_review_id)
         if not original:
             logger.error(f"Original review {original_review_id} not found")
+            return None
+        if is_structural_author_review(original):
+            # A renewal is a RUNTIME-queue row; renewing a Lane B initial_dag
+            # review would turn an authored review into a gate consult that no
+            # loader reads back (#2244). Fail closed -- the author re-runs
+            # scripts/author_cohort_dag.py --review instead.
+            logger.error(
+                f"Original review {original_review_id} is a structural-author "
+                f"({STRUCTURAL_AUTHOR_REVIEW_TYPE}) review; it is not renewable here"
+            )
             return None
 
         # Create renewal review with context from original
@@ -1054,12 +1072,19 @@ class ExpertReviewRepository(ExpertReviewVersionTimeline):
     async def get_review_summary(
         self,
         brand: Optional[str] = None,
+        *,
+        runtime_only: bool = False,
     ) -> Dict[str, Any]:
         """
         Get summary statistics of expert reviews.
 
         Args:
             brand: Optional brand filter
+            runtime_only: Count only the RUNTIME queue (every review that is not
+                a Lane B ``initial_dag`` row, #2244). The operator summary route
+                leaves it False -- the Expert Reviews page shows both queues --
+                while ``ExpertReviewGate.get_gate_status`` passes True, since
+                pending authored reviews are not consults waiting on the gate.
 
         Returns:
             Summary dict with counts by status. ``pending`` / ``approved`` /
@@ -1094,12 +1119,16 @@ class ExpertReviewRepository(ExpertReviewVersionTimeline):
 
         try:
             # Get all reviews for counting
-            query = self.client.table(self.table_name).select("approval_status, valid_until")
+            query = self.client.table(self.table_name).select(
+                "approval_status, valid_until, review_type"
+            )
             if brand:
                 query = query.eq("brand", brand)
 
             result = await query.execute()
             reviews = result.data or []
+            if runtime_only:
+                reviews = runtime_review_queue(reviews)
 
             today = date.today()
             soon = today + timedelta(days=14)

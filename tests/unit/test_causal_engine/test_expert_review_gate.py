@@ -798,6 +798,38 @@ class TestExpertReviewGateStatus:
         mock_repo.get_expiring_reviews.assert_called_with(14, None)
 
     @pytest.mark.asyncio
+    async def test_monitoring_counts_the_runtime_queue_only(self, mock_repo):
+        """#2244 (codex r1 LOW): five pending Lane B ``initial_dag`` reviews are
+        not five runtime consults waiting on the gate."""
+        mock_repo.get_pending_reviews = AsyncMock(
+            return_value=[{"review_id": f"a{i}", "review_type": "initial_dag"} for i in range(5)]
+            + [{"review_id": "rt", "review_type": "dag_approval"}]
+        )
+        mock_repo.get_expiring_reviews = AsyncMock(
+            return_value=[
+                {"review_id": "a", "review_type": "initial_dag"},
+                {"review_id": "q", "review_type": "quarterly_audit"},
+            ]
+        )
+        mock_repo.get_review_summary = AsyncMock(
+            return_value={
+                "pending": 1,
+                "approved": 0,
+                "rejected": 0,
+                "expired": 0,
+                "expiring_soon": 0,
+            }
+        )
+
+        gate = ExpertReviewGate(repository=mock_repo)
+
+        assert await gate.get_pending_review_count() == 1
+        assert await gate.get_expiring_dag_count(days=14) == 1
+        status = await gate.get_gate_status()
+        assert status["healthy"] is True
+        mock_repo.get_review_summary.assert_awaited_once_with(None, runtime_only=True)
+
+    @pytest.mark.asyncio
     async def test_get_gate_status_healthy(self, mock_repo):
         """Test get_gate_status for healthy gate."""
         mock_repo.get_review_summary = AsyncMock(

@@ -1140,6 +1140,11 @@ class ExpertReviewGate:
         """
         Request renewal of an expiring DAG approval.
 
+        The approval renewed is the gate's own: ``get_dag_approval`` reads the
+        runtime queue only, so a Lane B ``initial_dag`` approval of this hash
+        is never renewed as a ``quarterly_audit`` consult (#2244), and
+        ``renew_review`` refuses such an original outright.
+
         Args:
             dag_hash: SHA256 hash of the DAG
             requester_id: User ID requesting renewal
@@ -1189,7 +1194,9 @@ class ExpertReviewGate:
             return 0
 
         pending = await self.repository.get_pending_reviews(brand=brand)
-        return len(pending)
+        # The runtime queue only (#2244): pending Lane B initial_dag reviews are
+        # not consults waiting on this gate.
+        return len(runtime_review_queue(pending))
 
     async def get_expiring_dag_count(
         self,
@@ -1210,7 +1217,7 @@ class ExpertReviewGate:
             return 0
 
         expiring = await self.repository.get_expiring_reviews(days, brand)
-        return len(expiring)
+        return len(runtime_review_queue(expiring))
 
     async def get_gate_status(
         self,
@@ -1234,7 +1241,8 @@ class ExpertReviewGate:
                 "message": "Expert review gate not configured",
             }
 
-        summary = await self.repository.get_review_summary(brand)
+        # This gate's own queue (#2244); the operator summary route counts both.
+        summary = await self.repository.get_review_summary(brand, runtime_only=True)
 
         pending = summary.get("pending", 0)
         expiring = summary.get("expiring_soon", 0)

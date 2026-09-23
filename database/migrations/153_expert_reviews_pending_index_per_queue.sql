@@ -48,11 +48,21 @@
 --   there is no window without pending uniqueness. The old index is dropped
 --   FIRST and the new ones carry NEW names, so IF NOT EXISTS can never no-op on
 --   the old definition. Table lock is brief (41 rows).
---   Python side: ExpertReviewRepository._find_pending_review_id filters the
---   23505 recovery by queue and the gate reads only the runtime queue's rows;
---   both are correct before AND after this file applies (deploy.sh runs
---   migrations before flipping containers), because filtering by queue is a
---   no-op while at most one pending row per estimand exists.
+--   DEPLOY WINDOW (codex r1 HIGH, dispositioned): deploy.sh applies this file
+--   BEFORE flipping containers, so for the length of the flip the OLD image
+--   (whose gate does not filter initial_dag and whose recovery does not filter
+--   by queue) runs on the NEW schema. In that window the old gate behaves
+--   exactly as it does today: if a pending initial_dag row exists on the
+--   estimand of a runtime consult, it adopts it (#2244's status-quo harm). The
+--   split does not create that harm and cannot widen it -- it is the same row
+--   the old gate would adopt under 140 -- and the new image ends it. The other
+--   order (new image on the old schema) is never produced by deploy.sh; it
+--   would fail CLOSED (the new gate ignores the authored row, its own insert
+--   hits 140's index, the queue-scoped recovery finds nothing -> BLOCKED),
+--   never adopt. Prod holds 0 pending and 0 initial_dag rows today; if Lane B's
+--   real runs land first, deploy when no causal run on those estimands is in
+--   flight. A two-deploy rollout (readers first, index second) buys nothing
+--   here: its first stage is that fail-closed state, not a safe one.
 -- REVERSE: database/migrations/rollback_153_expert_reviews_pending_index_per_queue.sql
 --   (restores 140's exact index; refuses while both queues hold a pending row
 --   on one estimand; deletes this file's ledger row so a re-apply is not

@@ -368,6 +368,60 @@ async def test_structural_author_recovery_returns_its_own_queues_pending_row(fak
 
 
 @pytest.mark.unit
+async def test_renew_review_refuses_a_structural_author_original(fake_client):
+    """A renewal is always a runtime-queue ``quarterly_audit`` row; renewing a Lane
+    B ``initial_dag`` review would convert an authored review into a gate
+    consult (codex r1 MED). Fail closed: nothing inserted, None returned."""
+    fake_client.seed(
+        "expert_reviews",
+        [
+            {
+                "review_id": "r-author",
+                "estimand_key": "b:t:y",
+                "approval_status": "approved",
+                "review_type": "initial_dag",
+                "dag_version_hash": "authored",
+                "brand": "B",
+                "treatment_variable": "T",
+                "outcome_variable": "Y",
+            }
+        ],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+
+    rid = await repo.renew_review(original_review_id="r-author", reviewer_id="q2")
+
+    assert rid is None
+    assert fake_client.inserted("expert_reviews") == []
+
+
+@pytest.mark.unit
+async def test_review_summary_can_count_the_runtime_queue_alone(fake_client):
+    """The operator summary counts both queues (the Expert Reviews page shows
+    both); the gate's health read asks for the runtime queue only."""
+    fake_client.seed(
+        "expert_reviews",
+        [
+            {"review_id": "1", "approval_status": "pending", "review_type": "initial_dag"},
+            {"review_id": "2", "approval_status": "pending", "review_type": "dag_approval"},
+            {
+                "review_id": "3",
+                "approval_status": "approved",
+                "review_type": "initial_dag",
+                "valid_until": None,
+            },
+        ],
+    )
+    repo = ExpertReviewRepository(supabase_client=fake_client)
+
+    both = await repo.get_review_summary()
+    runtime = await repo.get_review_summary(runtime_only=True)
+
+    assert (both["pending"], both["approved"]) == (2, 1)
+    assert (runtime["pending"], runtime["approved"]) == (1, 0)
+
+
+@pytest.mark.unit
 async def test_renewal_recovery_is_the_runtime_queue(fake_client):
     """A renewal (quarterly_audit, #2090) shares the gate consult's slot, so its
     recovery reads the runtime queue -- and never the structural one."""
