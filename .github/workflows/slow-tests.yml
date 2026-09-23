@@ -376,6 +376,8 @@ jobs:
         # workflow. The `id: heavy` is kept so the outcome still feeds the
         # heavy_result output for the summary; the `Upload artifacts` step below
         # uses `if: always()` so debug artifacts still upload on failure.
+        # `-rs` prints every skip REASON in the summary (#2267): the tier-0 e2e
+        # sat SKIPPED here for 11 nights with no reason in the log.
         env:
           EXTRA_ARGS: ${{ inputs.extra_pytest_args }}
         run: |
@@ -386,6 +388,7 @@ jobs:
             --junitxml=/tmp/heavy-tests-junit.xml \
             -n 1 \
             --timeout=600 \
+            -rs \
             -v --tb=short ${EXTRA_ARGS}
 
       - name: Upload artifacts on failure or cancel

@@ -42,9 +42,26 @@ TEST_CONFIG = {
 }
 
 
+# Messages that mean the MLflow server could not be reached at all (#2267).
+# d6fcc0915 added the MLflow skip "for circuit breaker scenarios"; the old
+# ``"MLflow" in error_msg`` test also skipped every logging / registration
+# DEFECT whose message mentions MLflow, so this must-pass test could go green
+# by skipping. The strings are the real urllib3 / connector messages.
+_MLFLOW_UNAVAILABLE_MARKERS = (
+    "connection refused",
+    "failed to establish a new connection",
+    "name or service not known",
+    "temporary failure in name resolution",
+    "failed to resolve",
+    "too many 503 error responses",
+    "circuit breaker is open",
+)
+
+
 def _mlflow_infra_unavailable(error_msg: str) -> bool:
     """Whether a trainer error means MLflow itself is unavailable (skip, not fail)."""
-    return "MLflow" in error_msg or "circuit breaker" in error_msg
+    lowered = error_msg.lower()
+    return any(marker in lowered for marker in _MLFLOW_UNAVAILABLE_MARKERS)
 
 
 def generate_ml_ready_sample_data(n_samples: int = 100, seed: int = 42) -> pd.DataFrame:
@@ -951,6 +968,7 @@ class TestTier0EndToEnd:
             error_msg = str(trainer_result.get("error", ""))
             if _mlflow_infra_unavailable(error_msg):
                 pytest.skip(f"MLflow infrastructure issue: {error_msg}")
+            pytest.fail(f"Model training failed: {error_msg}")
 
         pipeline_state["trained_model"] = trainer_result.get("trained_model")
         pipeline_state["validation_metrics"] = trainer_result.get("validation_metrics", {})
