@@ -403,8 +403,11 @@ class CausalPathRepository(BaseRepository):
         runs through the ``promote_causal_path_guarded`` RPC (migration 134),
         which evaluates the expert-review chronology rule INSIDE the same
         UPDATE statement, so a rejection committed after the node's read-only
-        probe can never be promoted over. Without a hash there is no structure
-        to check and the plain conditional update is kept.
+        probe can never be promoted over. Since migration 153 (#2244) that rule
+        reads the RUNTIME queue only, like ``ExpertReviewGate``: a Lane B
+        ``initial_dag`` verdict neither refuses nor permits a promotion.
+        Without a hash there is no structure to check and the plain
+        conditional update is kept.
         """
         if not self.client:
             return False

@@ -106,13 +106,13 @@ class NarrativeGeneratorNode:
                 return None
         return self._memory_hooks
 
-    async def execute(self, state: ExplainerState) -> ExplainerState:
+    async def execute(self, state: ExplainerState) -> Dict[str, Any]:
         """Execute narrative generation."""
         start_time = time.time()
 
         # Check if already failed
         if state.get("status") == "failed":
-            return state
+            return {}  # nothing to add; echoing the state would re-append the accumulators (#2238)
 
         try:
             output_format = state.get("output_format", "narrative")
@@ -162,9 +162,8 @@ class NarrativeGeneratorNode:
 
             # Build updated state - result is Dict[str, Any] from _generate_narrative
             # We spread result dict which mypy can't verify against TypedDict
-            updated_state: ExplainerState = {
-                **state,
-                **result,  # type: ignore[typeddict-item]
+            updated_state: Dict[str, Any] = {
+                **result,
                 "visual_suggestions": visuals,
                 "follow_up_questions": follow_ups,
                 "generation_latency_ms": generation_time,
@@ -176,7 +175,6 @@ class NarrativeGeneratorNode:
         except Exception as e:
             logger.error(f"Narrative generation failed: {e}")
             return {
-                **state,
                 "errors": [{"node": "narrative_generator", "error": str(e)}],
                 "executive_summary": "",  # Required output default
                 "detailed_explanation": "",  # Required output default

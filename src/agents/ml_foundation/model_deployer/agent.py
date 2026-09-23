@@ -166,10 +166,14 @@ class ModelDeployerAgent:
             initial_state["scope_spec"] = scope_spec_input
         if "feature_manifest_source" in input_data:
             initial_state["feature_manifest_source"] = input_data["feature_manifest_source"]
-        # #2207: the cohort contract the register_model node persists (migration 150).
-        for cohort_key in ("data_source", "target_outcome"):
+        # #2207: the cohort contract the register_model node persists (migration 150);
+        # #2242: the retrained model's identity (``retrain_of``) the candidate attaches to.
+        for cohort_key in ("data_source", "target_outcome", "retrain_of"):
             if input_data.get(cohort_key) is not None:
                 initial_state[cohort_key] = input_data[cohort_key]
+        # #2255: synthetic augmentation rows are part of the candidate's provenance.
+        if input_data.get("training_augmentation_applied"):
+            initial_state["training_augmentation_applied"] = True
 
         # Execute LangGraph workflow with optional Opik tracing
         start_time = datetime.now(timezone.utc)
@@ -266,6 +270,9 @@ class ModelDeployerAgent:
             # PR for T2.6c authorization. Signal-only; does NOT mutate
             # promotion_successful.
             "regulatory_deployment_manifest": final_state.get("regulatory_deployment_manifest"),
+            # #2242: the ml_model_registry row THIS run wrote (None when not persisted) —
+            # what a retrain's completion must point at.
+            "model_registry_id": final_state.get("model_registry_id"),
         }
 
         # Store to database (ml_deployments and ml_model_registry)

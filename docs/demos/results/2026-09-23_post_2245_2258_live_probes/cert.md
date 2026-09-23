@@ -32,3 +32,17 @@ Warnings (4): the bounded-search line; discovery pre-flight (77 offered, 20 hand
 What this does and does not prove: it proves the #2258 mechanism (search off the event loop, bounded, FCI diagnostic abandoned deterministically, orphan read-repair) keeps the worker alive and the job terminal on the real cohort at production size on a loaded box. It does not measure the GIL-contention case in isolation (the in-process measurement is in PR #2258's body: 34.9 s alone, 87.8 s with one contending thread).
 
 Raw responses: `default_path/raw_discontinued_180d.json`, `discovery_on/raw_discontinued_180d.json` (image tags shortened to 9 hex for the secret scanner). Logs: `*/probe.log`. Scripts: `default_path/probe.py`, `discovery_on/run_cert.py` (copies of the post-B probe and the Lane A cert runner).
+
+## Probe 3 — post-#2265 graph_builder split (`post_2265_split/`, default path, same estimand)
+
+#2265 split `graph_builder.py` (1532 → 665 lines) into three sibling mixin modules with no intended behaviour change. The claim to disprove was "the split is pure": the same default-path request on the deployed merge commit must return the same estimate and warnings as probe 1. Run against image `8fdfbab00` (deploy run 35843151634 `success`, container started 2026-09-23T10:29:41Z, identical before and after the probe), submitted 10:34Z, `completed` after 347 s (22 polls).
+
+| field | post-#2245/#2258 (4974774db, probe 1) | post-#2265 (8fdfbab00) |
+|---|---|---|
+| `ate` / `ate_ci` / `p_value` | 0.007056123869614513 / [-0.00537280…, 0.01948505…] / 0.26583454… | **identical** (0.007056123869614513 / [-0.0053728049252601395, 0.019485052664489168] / 0.26583454458398803) |
+| `warnings` | 2 | **2**: the #2258 bounded-search line (61 candidates > cap 40) + the null-finding line |
+| `structural prior not applied` occurrences | 0 | **0** |
+| `data_source` / `dag_source` | database / domain_knowledge | database / domain_knowledge |
+| `structural_prior` field | absent | absent (the two `initial_dag` reviews are still PENDING) |
+
+Verdict: **PASS** — the split is pure on the real cohort's default path; nothing to revert. Raw response `post_2265_split/raw_discontinued_180d.json` (image tag shortened to 9 hex), chain log `post_2265_split/probe.log`.

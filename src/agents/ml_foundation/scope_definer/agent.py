@@ -16,7 +16,7 @@ Integration:
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from .graph import create_scope_definer_graph
@@ -73,6 +73,69 @@ def _scope_target(scope_spec: Dict[str, Any]) -> str:
     return str(
         scope_spec.get("prediction_target") or scope_spec.get("target_variable") or ""
     ).strip()
+
+
+async def _claim_experiment_id(client: Any, exp_uuid: str, minted: Optional[str]) -> str:
+    """The ``mlflow_experiment_id`` a run on ``ml_experiments`` row ``exp_uuid`` uses.
+
+    The row's id when set (never overwritten — earlier runs resolve by it); otherwise
+    ``minted`` is written into the NULL column by compare-and-set and the row re-read,
+    so concurrent runs converge on one id. Raises when the row is missing or no id
+    could be set (#2242 retrain attach, #2257 scope refresh).
+    """
+    if client is None:
+        raise RuntimeError("no ml_experiments client")
+
+    async def _current() -> Any:
+        res = await (
+            client.table("ml_experiments")
+            .select("id, mlflow_experiment_id")
+            .eq("id", exp_uuid)
+            .limit(1)
+            .execute()
+        )
+        rows = getattr(res, "data", None) or []
+        if not rows:
+            raise RuntimeError(f"experiment {exp_uuid} not found")
+        return rows[0].get("mlflow_experiment_id")
+
+    experiment_id = await _current()
+    if not experiment_id:
+        if not minted:
+            raise RuntimeError("scope minted no experiment id")
+        await (
+            client.table("ml_experiments")
+            .update({"mlflow_experiment_id": minted})
+            .eq("id", exp_uuid)
+            .is_("mlflow_experiment_id", "null")
+            .execute()
+        )
+        # Re-read: a concurrent run on the same row may have won the write.
+        experiment_id = await _current()
+        if not experiment_id:
+            raise RuntimeError(f"could not set an experiment id on {exp_uuid}")
+    return str(experiment_id)
+
+
+def _with_experiment_identity(
+    output: Dict[str, Any], experiment_id: str, name: str
+) -> Dict[str, Any]:
+    """``output`` re-keyed to ``experiment_id`` / ``name`` everywhere the scope names it."""
+    return {
+        **output,
+        "experiment_id": experiment_id,
+        "experiment_name": name,
+        "scope_spec": {
+            **(output.get("scope_spec") or {}),
+            "experiment_id": experiment_id,
+            "experiment_name": name,
+        },
+        # criteria_validator stamps the minted id here; one identity per scope.
+        "success_criteria": {
+            **(output.get("success_criteria") or {}),
+            "experiment_id": experiment_id,
+        },
+    }
 
 
 class ScopeDefinerAgent:
@@ -275,10 +338,28 @@ class ScopeDefinerAgent:
                 "created_by": final_state.get("created_by", "scope_definer"),
             }
 
-            # Persist to database (ml_experiments table)
-            await self._persist_scope_spec(
-                output, problem_description=final_state.get("problem_description", "")
-            )
+            retrain_of = input_data.get("retrain_of")
+            if retrain_of:
+                # #2242: a retrain's scope IS the retrained model's experiment — attach to
+                # it instead of creating / refreshing a scope row by name.
+                try:
+                    output = await self._attach_retrain_scope(output, retrain_of)
+                except Exception as e:
+                    logger.error(f"Retrain scope not attached to its model: {e}")
+                    return {
+                        "error": f"retrain scope not attached to the retrained model: {e}",
+                        "error_type": "retrain_attach_error",
+                    }
+            else:
+                # Persist to database (ml_experiments table); a refreshed scope runs
+                # under the existing row's experiment id (#2257).
+                refreshed_id = await self._persist_scope_spec(
+                    output, problem_description=final_state.get("problem_description", "")
+                )
+                if refreshed_id:
+                    output = _with_experiment_identity(
+                        output, refreshed_id, output.get("experiment_name", "")
+                    )
 
             # Update procedural memory with successful pattern
             await self._update_procedural_memory(output)
@@ -311,7 +392,7 @@ class ScopeDefinerAgent:
 
     async def _persist_scope_spec(
         self, output: Dict[str, Any], problem_description: str = ""
-    ) -> None:
+    ) -> Optional[str]:
         """Persist ScopeSpec to ml_experiments table.
 
         Graceful degradation: If repository is unavailable,
@@ -319,12 +400,19 @@ class ScopeDefinerAgent:
 
         Args:
             output: Agent output containing scope_spec and success_criteria
+
+        Returns:
+            The experiment id the run must use when the scope name already exists (the
+            refreshed row's, #2257); ``None`` when the minted id stands (a new row, or
+            nothing persisted). Raises once an existing row is chosen but its id cannot
+            be bound — running on under the minted id would recreate #2257 silently.
         """
+        refreshing = False
         try:
             repo = await _get_experiment_repository()
             if repo is None:
                 logger.debug("Skipping experiment persistence (no repository)")
-                return
+                return None
 
             scope_spec = output.get("scope_spec", {})
             success_criteria = output.get("success_criteria", {})
@@ -351,6 +439,7 @@ class ScopeDefinerAgent:
             # the historical duplicates).
             existing = await repo.get_by_name(name)
             if existing and existing.id:
+                refreshing = True
                 await repo.update(
                     str(existing.id),
                     {
@@ -365,8 +454,18 @@ class ScopeDefinerAgent:
                         "status": "completed",
                     },
                 )
-                logger.info(f"Refreshed existing experiment scope: {name}")
-                return
+                # #2257: the run's identity IS the refreshed row. Returning under the
+                # freshly minted id left the trainer's and registry writer's
+                # get_by_mlflow_id resolving nothing (no training run, no registry
+                # candidate). The row's id is reused; a NULL column takes the minted
+                # id by compare-and-set, so a set id is never overwritten and earlier
+                # runs' lookups keep resolving.
+                # The column is UNIQUE and set-once, so the row just read is authoritative.
+                experiment_id = existing.mlflow_experiment_id or await _claim_experiment_id(
+                    repo.client, str(existing.id), output.get("experiment_id")
+                )
+                logger.info(f"Refreshed existing experiment scope: {name} ({experiment_id})")
+                return experiment_id
 
             # Create experiment record
             result = await repo.create_experiment(
@@ -387,7 +486,49 @@ class ScopeDefinerAgent:
                 logger.debug("Experiment not persisted (no result returned)")
 
         except Exception as e:
+            if refreshing:
+                raise RuntimeError(
+                    f"scope {name!r} refreshed but its experiment id could not be bound: {e}"
+                ) from e
             logger.warning(f"Failed to persist experiment: {e}")
+        return None
+
+    async def _attach_retrain_scope(
+        self, output: Dict[str, Any], retrain_of: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Attach a retrain's scope to the retrained model's ``ml_experiments`` row (#2242).
+
+        The graph names a scope from the PHYSICAL label (``<brand> - treatment_initiated``)
+        and mints a fresh experiment id. For a retrain that is the wrong identity, and the
+        get-or-refresh-by-name path in ``_persist_scope_spec`` makes it worse: it never
+        persists the minted id (the trainer's and registry writer's ``get_by_mlflow_id``
+        then resolve nothing), refreshes an arbitrary row of a non-unique name (8 live
+        ``Remibrutinib - treatment_initiated`` rows), and would overwrite the retrained
+        experiment's logical ``prediction_target`` with the physical label.
+
+        Instead the retrained model's experiment row is the scope: its
+        ``mlflow_experiment_id`` becomes the pipeline's experiment id — reused when set,
+        otherwise the minted id is written into the NULL column (compare-and-set, the row
+        is otherwise never modified) so every later retrain of the model resolves the same
+        experiment. ``scope_spec["prediction_target"]`` stays the physical label
+        data_preparer reads. Raises when the experiment cannot be attached (the pipeline
+        then fails closed rather than registering an orphan candidate).
+        """
+        repo = await _get_experiment_repository()
+        client = getattr(repo, "client", None)
+        if client is None:
+            raise RuntimeError("no ml_experiments client")
+        exp_uuid = str(retrain_of.get("experiment_id") or "")
+        name = retrain_of.get("experiment_name")
+        if not exp_uuid or not name:
+            raise RuntimeError(f"retrain_of carries no experiment ({retrain_of!r})")
+
+        experiment_id = await _claim_experiment_id(client, exp_uuid, output.get("experiment_id"))
+        logger.info(
+            f"Retrain scope attached to experiment {name} ({exp_uuid}) as {experiment_id} "
+            f"for model {retrain_of.get('model_name')}"
+        )
+        return _with_experiment_identity(output, experiment_id, name)
 
     async def _update_procedural_memory(self, output: Dict[str, Any]) -> None:
         """Update procedural memory with successful scope pattern.

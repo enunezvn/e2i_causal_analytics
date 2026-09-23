@@ -54,7 +54,7 @@ class PipelineHealthNode:
         self.max_freshness_hours = max_freshness_hours
         self.stale_threshold_hours = stale_threshold_hours
 
-    async def execute(self, state: HealthScoreState) -> HealthScoreState:
+    async def execute(self, state: HealthScoreState) -> Dict[str, Any]:
         """Execute pipeline health checks."""
         start_time = time.time()
 
@@ -63,7 +63,6 @@ class PipelineHealthNode:
         if state.get("check_scope") not in ["full", "pipelines"]:
             logger.debug("Skipping pipeline health for non-pipeline scope")
             return {
-                **state,
                 "pipeline_statuses": [],
                 "pipeline_health_measured": False,
             }
@@ -77,7 +76,6 @@ class PipelineHealthNode:
                 "not fabricated-healthy"
             )
             return {
-                **state,
                 "pipeline_statuses": [],
                 "pipeline_health_measured": False,
             }
@@ -112,7 +110,6 @@ class PipelineHealthNode:
             )
 
             return {
-                **state,
                 "pipeline_statuses": statuses,
                 "pipeline_health_score": health_score,
                 "pipeline_health_measured": True,
@@ -122,7 +119,6 @@ class PipelineHealthNode:
         except Exception as e:
             logger.error(f"Pipeline health check failed: {e}")
             return {
-                **state,
                 "errors": [{"node": "pipeline_health", "error": str(e)}],
                 # A failed check measured nothing -> unmeasured, so the composer
                 # excludes it rather than counting a fabricated 0.5 as real.

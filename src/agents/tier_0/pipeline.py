@@ -647,6 +647,8 @@ class MLFoundationPipeline:
             # D1.1: thread workflow-level audit_workflow_id so per-agent
             # State doesn't mint a fresh UUID via default_factory.
             "audit_workflow_id": result.audit_workflow_id,
+            # #2242: a retrain attaches its scope to the retrained model's experiment.
+            "retrain_of": input_data.get("retrain_of"),
         }
 
         # Execute scope_definer
@@ -1330,6 +1332,12 @@ class MLFoundationPipeline:
             "data_source": input_data.get("data_source"),
             "target_outcome": input_data.get("target_outcome"),
             "feature_manifest_source": deployer_scope_spec.get("feature_manifest_source"),
+            # #2242: register a retrain's candidate as a new version of the retrained model.
+            "retrain_of": input_data.get("retrain_of"),
+            # #2255: synthetic augmentation rows are part of the candidate's provenance.
+            "training_augmentation_applied": bool(
+                (result.training_augmentation or {}).get("applied")
+            ),
         }
 
         # Add shadow mode metrics if deploying to production

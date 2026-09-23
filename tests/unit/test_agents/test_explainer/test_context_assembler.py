@@ -101,13 +101,14 @@ class TestContextAssemblerNode:
 
     @pytest.mark.asyncio
     async def test_execute_handles_failed_status(self, base_explainer_state):
-        """Test that already-failed state is passed through."""
+        """An already-failed state gets an EMPTY delta, not an echo (#2238)."""
         node = ContextAssemblerNode()
         state = {**base_explainer_state, "status": "failed"}
 
         result = await node.execute(state)
 
-        assert result["status"] == "failed"
+        assert result == {}
+        assert state["status"] == "failed"  # input untouched
 
     # ========================================================================
     # CONVERSATION HISTORY TESTS
@@ -187,8 +188,11 @@ class TestContextAssemblerNode:
         assert result["user_context"]["output_format"] == "brief"
 
     @pytest.mark.asyncio
-    async def test_preserves_user_expertise(self, base_explainer_state, sample_causal_analysis):
-        """Test that user expertise level is preserved in state."""
+    async def test_does_not_touch_user_expertise(
+        self, base_explainer_state, sample_causal_analysis
+    ):
+        """The node returns only its delta (#2238): it neither rewrites nor echoes
+        ``user_expertise`` — LangGraph keeps the input value on that channel."""
         node = ContextAssemblerNode()
         state = {
             **base_explainer_state,
@@ -198,11 +202,12 @@ class TestContextAssemblerNode:
 
         result = await node.execute(state)
 
-        assert result["user_expertise"] == "executive"
+        assert "user_expertise" not in result
+        assert state["user_expertise"] == "executive"
 
     @pytest.mark.asyncio
-    async def test_preserves_focus_areas(self, base_explainer_state, sample_causal_analysis):
-        """Test that focus areas are preserved."""
+    async def test_does_not_touch_focus_areas(self, base_explainer_state, sample_causal_analysis):
+        """Same delta-only contract for ``focus_areas`` (#2238)."""
         node = ContextAssemblerNode()
         focus = ["sales", "regional"]
         state = {
@@ -213,7 +218,8 @@ class TestContextAssemblerNode:
 
         result = await node.execute(state)
 
-        assert result["focus_areas"] == focus
+        assert "focus_areas" not in result
+        assert state["focus_areas"] == focus
 
     # ========================================================================
     # LATENCY TRACKING TESTS

@@ -1009,7 +1009,6 @@ class IntentClassifierNode:
         classification_time = int((time.time() - start_time) * 1000)
 
         result_state: OrchestratorState = {
-            **state,
             "intent": intent,
             "classification_latency_ms": classification_time,
             "current_phase": "routing",
