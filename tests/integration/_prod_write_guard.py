@@ -80,7 +80,11 @@ So the gap is closed from the other side, by a protocol every file follows:
 
 1. :func:`require_isolated_windows` BEFORE planting -- REFUSE.
 2. The teardown deletes only what the run owns: by planted prefix, or on swept dates
-   by the run's own transaction id (``xmin``, #2213), and REPORTS any other row there.
+   by the run's own INSERTS -- the rows carrying both the run's transaction id
+   (``xmin``, #2213) and its transaction timestamp (``created_at``: the territory
+   upsert stamps ``NOW()`` on insert and its ON CONFLICT arm never touches it, so a
+   foreign row the run overwrote takes the run's xid but keeps its own
+   ``created_at``) -- and REPORTS any other row there, overwritten ones included.
 3. :func:`require_windows_still_isolated` AFTER the deletes, on the SAME specs --
    REPORT. With ours gone, ``planted`` is 0 on every leg and any row the census still
    reaches was inside the window while the file wrote.
@@ -789,10 +793,12 @@ def require_windows_still_isolated(conn: Any, *specs: WriteWindowSpec) -> tuple[
     file FAIL at teardown, naming the file, the window and the leg with its counts, so a
     run that touched foreign data cannot finish green. What it cannot see, stated so the
     green is not over-read: a foreign row that landed after the census and was removed
-    again before this re-read leaves no count behind; and a foreign row the run itself
-    OVERWROTE on a swept date now carries the run's xid and is indistinguishable from the
-    run's own rows. Both need the single-transaction design the issue weighed and rejected
-    (the family's concurrency tests require a second, committing connection).
+    again before this re-read leaves no count behind -- that needs the single-transaction
+    design the issue weighed and rejected (the family's concurrency tests require a
+    second, committing connection). A foreign row the run OVERWROTE on a swept date is
+    the teardown's to catch, not this census's: it takes the run's xid but keeps its own
+    ``created_at``, so a teardown keyed to both leaves it in place and reports it, and
+    this re-census then counts it. Its overwritten values are reported, not restored.
     """
     import pytest
 

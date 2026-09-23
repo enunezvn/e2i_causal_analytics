@@ -307,7 +307,23 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
         # #2215: the census, the runs and this teardown are separate transactions. With
         # our rows gone, anything the same census still reaches landed inside the window
         # while this file was writing -- REPORTED as a teardown failure, never deleted.
-        require_windows_still_isolated(db_conn, *guard_specs)
+        require_windows_still_isolated(
+            db_conn,
+            *guard_specs,
+            # The prefix-scoped spec waives leg 3 and carries leg 2 on hcp_profiles. A
+            # foreign profile that appeared after the census and vanished before this
+            # teardown leaves a run-written territory_metrics row the prefix delete
+            # cannot reach and leg 2 can no longer see (codex r1 on #2215) -- so ask the
+            # window-sweeping variant too: after the teardown its leg 3 is exactly "did a
+            # foreign territory_metrics row survive in the window".
+            territory_rollup_spec(
+                test_file=__file__,
+                start=start_dt,
+                end=end_dt,
+                territory_like=f"%_{test_run_id}",
+                teardown_deletes_window=True,
+            ),
+        )
 
 
 def _fetch_territory_rollup(db_conn: Any, test_run_id: str) -> list[tuple[Any, ...]]:
