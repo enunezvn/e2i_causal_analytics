@@ -182,7 +182,9 @@ def db(throwaway_pg, request, monkeypatch) -> Iterator[str]:
     yield throwaway_pg.dsn(name)
 
 
-def _write_run_sidecar(artifacts_dir: Path, monkeypatch, *, run_id, feature_severity: str):
+def _write_run_sidecar(
+    artifacts_dir: Path, monkeypatch, *, run_id, feature_severity: str, role: str | None = None
+):
     """One data-preparer run's sidecar, written by the real producer at a frozen second."""
     from src.agents.ml_foundation.data_preparer import graph
 
@@ -201,6 +203,10 @@ def _write_run_sidecar(artifacts_dir: Path, monkeypatch, *, run_id, feature_seve
     }
     if run_id is not None:
         state["audit_workflow_id"] = run_id
+    if role is not None:
+        state["role_attributions"] = [
+            {"feature": "disease_severity", "causal_role": role, "source": "manifest"}
+        ]
     path = graph.write_adaptive_verdicts_sidecar(state)
     assert path is not None
     return path
@@ -317,3 +323,38 @@ def test_rollback_refuses_while_two_runs_share_an_old_key(db, tmp_path, monkeypa
         _apply_rollback(db)
     assert _indexes(db) == {NEW_INDEX}
     assert _count(db) == 2
+
+
+def test_the_falkordb_mirror_reads_two_same_second_runs_in_a_stable_order(
+    db, tmp_path, monkeypatch
+):
+    """codex r1: the FalkorDB mirror replays rows ``ORDER BY written_at`` and the last
+    row per (experiment, feature) wins. Two runs in one second tie on that, so the
+    winner was the heap order, which an in-place UPDATE of one row (a re-mirror of a
+    changed sidecar) flips. The order must not depend on physical row position."""
+    import psycopg
+
+    from scripts.mirror_role_attributions_to_falkordb import _SELECT_SQL
+
+    low, high = sorted([uuid4(), uuid4()], key=str)
+    _write_run_sidecar(
+        tmp_path, monkeypatch, run_id=low, feature_severity="info", role="confounder"
+    )
+    _write_run_sidecar(tmp_path, monkeypatch, run_id=high, feature_severity="info", role="mediator")
+    _mirror(tmp_path, db)
+
+    def roles() -> list[str]:
+        with psycopg.connect(db) as conn, conn.cursor() as cur:
+            cur.execute(_SELECT_SQL, (None, None))
+            return [r[2] for r in cur.fetchall()]
+
+    before = roles()
+    # Rewrite the row that currently reads first in place: its new tuple lands at the
+    # end of the heap.
+    with psycopg.connect(db) as conn:
+        conn.execute(
+            "UPDATE adaptive_validity_verdicts SET imported_at = imported_at "
+            "WHERE causal_role_final = %s",
+            (before[0],),
+        )
+    assert roles() == before
