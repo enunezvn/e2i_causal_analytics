@@ -14,7 +14,10 @@ it loudly rather than this module widening trust.
 
 mlflow stores the trusted list in the model's flavor config, and both
 ``mlflow.sklearn.load_model`` and ``mlflow.pyfunc.load_model`` read it back, so no load
-site needs its own list.
+site needs its own list. The allowlist governs what WE write; loading trusts the
+artifact's own ``MLmodel`` exactly as before (an artifact that declares cloudpickle is
+unpickled by every loader) — hardening the artifact-store trust boundary is out of
+this module's scope.
 """
 
 from __future__ import annotations
@@ -56,17 +59,29 @@ def skops_trusted_types_for(model: Any) -> List[str]:
     return sorted(reported)
 
 
-def sklearn_log_model_kwargs(mlflow: Any, model: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]:
-    """``mlflow.sklearn.log_model`` kwargs: skops format + the model's allowlisted trust.
+def _default_serialization_format(mlflow: Any) -> Any:
+    """``mlflow.sklearn.log_model``'s default format (skops from mlflow 3.15)."""
+    import inspect
 
-    skops is mlflow 3.15's default for sklearn (no pickle); it is set explicitly so every
-    mlflow version serializes the same way. A caller's explicit ``serialization_format``
-    or ``skops_trusted_types`` wins.
+    try:
+        param = inspect.signature(mlflow.sklearn.log_model).parameters["serialization_format"]
+    except (KeyError, TypeError, ValueError):
+        return None
+    return param.default
+
+
+def sklearn_log_model_kwargs(mlflow: Any, model: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """``mlflow.sklearn.log_model`` kwargs plus the model's allowlisted skops trust.
+
+    Only when the EFFECTIVE format is skops (the caller's, else mlflow's default) and the
+    caller gave no trust list of its own. The format itself is never changed: callers that
+    rely on cloudpickle (e.g. the NGBoost / MAPIE wrappers, ``_get_mlflow_flavor``) keep
+    whatever they ask for.
     """
     out = dict(kwargs)
     skops_format = mlflow.sklearn.SERIALIZATION_FORMAT_SKOPS
-    out.setdefault("serialization_format", skops_format)
-    if out["serialization_format"] == skops_format and "skops_trusted_types" not in out:
+    effective = out.get("serialization_format", _default_serialization_format(mlflow))
+    if effective == skops_format and "skops_trusted_types" not in out:
         trusted = skops_trusted_types_for(model)
         if trusted:
             out["skops_trusted_types"] = trusted

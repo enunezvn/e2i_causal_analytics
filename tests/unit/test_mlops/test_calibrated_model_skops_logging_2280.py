@@ -33,8 +33,15 @@ from src.agents.ml_foundation.model_trainer.nodes.advanced_validation import (  
 from src.mlops.mlflow_connector import MLflowConnector  # noqa: E402
 from src.mlops.skops_trust import (  # noqa: E402
     TRUSTED_SKLEARN_CALIBRATION_TYPES,
+    _default_serialization_format,
     skops_trusted_types_for,
 )
+
+# The worker/CI run mlflow 3.15.x, whose sklearn default IS skops. An older local mlflow
+# defaults to cloudpickle; there the caller asks for skops explicitly, which exercises the
+# same trust path.
+_DEFAULT_IS_SKOPS = _default_serialization_format(mlflow) == "skops"
+_SKOPS = {} if _DEFAULT_IS_SKOPS else {"serialization_format": "skops"}
 
 
 def _frame(n: int = 600, seed: int = 0):
@@ -127,7 +134,7 @@ def local_connector(tmp_path, monkeypatch):
 async def test_a_calibrated_model_logs_and_loads_back_identically(local_connector, method):
     model, X_test = _calibrated(method)
     with mlflow.start_run() as run:
-        uri = await local_connector._log_model(run.info.run_id, model, "model", "sklearn")
+        uri = await local_connector._log_model(run.info.run_id, model, "model", "sklearn", **_SKOPS)
     assert uri, "log_model must succeed for a calibrated model"
 
     local = mlflow.artifacts.download_artifacts(uri)
@@ -216,8 +223,9 @@ def test_risk_score_trainer_logs_its_calibrated_estimator(tmp_path, monkeypatch,
     assert run_id
     local = mlflow.artifacts.download_artifacts(f"runs:/{run_id}/model")
     flavor = yaml.safe_load(open(f"{local}/MLmodel"))["flavors"]["sklearn"]
-    assert flavor["serialization_format"] == "skops"  # the worker's format on every mlflow
-    assert sorted(flavor["skops_trusted_types"]) == skops_trusted_types_for(model)
+    if _DEFAULT_IS_SKOPS:  # the worker's mlflow: skops, with the calibration trust
+        assert flavor["serialization_format"] == "skops"
+        assert sorted(flavor["skops_trusted_types"]) == skops_trusted_types_for(model)
     loaded = mlflow.sklearn.load_model(f"runs:/{run_id}/model")
     np.testing.assert_array_equal(loaded.predict_proba(X_test), model.predict_proba(X_test))
 
@@ -254,3 +262,49 @@ async def test_the_trainer_status_says_the_model_was_not_logged():
     assert result["mlflow_model_uri"] is None
     assert result["mlflow_status"] == "model_not_logged"
     assert result["mlflow_run_id"] == "run_2280"
+
+
+# ---------------------------------------------------------------------------
+# codex r1 HIGH: the in-process prediction client must serve the calibrated
+# probability, not pyfunc's class label
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_inproc_client_serves_the_calibrated_probability(local_connector):
+    from src.agents.prediction_synthesizer.clients.inproc_model_client import (
+        InProcessModelClient,
+        _load_model_from_uri,
+    )
+
+    model, X_test = _calibrated("sigmoid")
+    with mlflow.start_run() as run:
+        uri = await local_connector._log_model(run.info.run_id, model, "model", "sklearn", **_SKOPS)
+    loaded = _load_model_from_uri(uri)
+    assert hasattr(loaded, "predict_proba")
+    row = X_test.iloc[0]
+    out = await InProcessModelClient(loaded, feature_names=list(X_test.columns)).predict(
+        "e1", row.to_dict(), "30d"
+    )
+    expected = float(model.predict_proba(X_test.iloc[[0]])[0][1])
+    assert out["prediction"] == pytest.approx(expected)
+    assert 0.0 < out["prediction"] < 1.0  # a probability, not a 0/1 label
+
+
+@pytest.mark.unit
+def test_a_cloudpickle_caller_is_left_alone():
+    """codex r1 MED: the NGBoost/MAPIE wrappers are documented to rely on cloudpickle
+    (_get_mlflow_flavor); the helper never changes a caller's format."""
+    from src.mlops.skops_trust import sklearn_log_model_kwargs
+
+    model, _ = _calibrated("sigmoid")
+    assert sklearn_log_model_kwargs(mlflow, model, {"serialization_format": "cloudpickle"}) == {
+        "serialization_format": "cloudpickle"
+    }
+    assert sklearn_log_model_kwargs(mlflow, model, {"serialization_format": "skops"}) == {
+        "serialization_format": "skops",
+        "skops_trusted_types": skops_trusted_types_for(model),
+    }
+    explicit = {"serialization_format": "skops", "skops_trusted_types": ["x.Y"]}
+    assert sklearn_log_model_kwargs(mlflow, model, dict(explicit)) == explicit
