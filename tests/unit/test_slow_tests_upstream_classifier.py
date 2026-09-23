@@ -401,6 +401,40 @@ def test_malformed_rxnav_payload_in_the_brand_alias_test_is_real(tmp_path: Path)
     assert outputs.get("classification") == "real", outputs
 
 
+@pytest.mark.parametrize(
+    "warning",
+    [
+        # An httpx error that escaped RxNavClient's RxNavError wrapper lands in
+        # _fetch_round's generic branch — a client defect that happens to carry
+        # a hard token (codex r1 HIGH).
+        "brand_aliases: unexpected ConnectError while resolving 'Kisqali' via RxNav; "
+        "keeping curated aliases only for the remaining brands",
+        "brand_aliases: RxNav client raised ReadTimeout outside the round (complete=False); "
+        "recording what was gathered",
+    ],
+)
+def test_brand_alias_failure_outside_the_rxnav_error_path_is_real(
+    tmp_path: Path, warning: str
+) -> None:
+    failure = (
+        f'AssertionError: RxNav brand-alias round did not complete: ["{warning}"]\n'
+        f'assert not ["{warning}"]'
+    )
+    _, outputs = _classify(tmp_path, _junit([(_BRAND_ALIASES_LIVE, _BRAND_ALIASES_TEST, failure)]))
+    assert outputs.get("classification") == "real", outputs
+
+
+def test_brand_alias_live_test_is_gated_on_an_independent_host() -> None:
+    """A family member must go RED when its provider is down (#1612), so its
+    network gate cannot probe the provider itself: a preflight to
+    rxnav.nlm.nih.gov turned an RxNav outage into a silent skip (codex r1 MED).
+    It shares the clinical-context gate, which probes an unrelated host."""
+    source = (REPO / "tests/integration/test_rag/test_brand_aliases_live.py").read_text()
+    assert "_live_gate import requires_network" in source
+    assert "requires_network" in source.split("pytestmark", 1)[1].split("]", 1)[0]
+    assert "rxnav.nlm.nih.gov" not in source
+
+
 def test_similarly_named_brand_alias_module_is_not_treated_as_the_live_suite(
     tmp_path: Path,
 ) -> None:
