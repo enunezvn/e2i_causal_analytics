@@ -9,10 +9,13 @@ Every check prints PASS/FAIL with the measured value; exit 1 if any FAIL.
 --exercise-beats additionally enqueues the two Feast beat tasks (the same calls the scheduler makes
 every 6 h / 4 h) and the daily retraining sweep, then waits for their rows. Those are production
 actions (Redis online-store writes + tracking rows) — run only with owner GO.
+
+No shell is spawned: every external command is an argv list (semgrep subprocess-shell-true).
 """
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -21,6 +24,7 @@ from urllib.error import HTTPError
 
 API = "https://eznomics.site"
 ROOT = "/home/enunez/Projects/e2i_causal_analytics"
+WORKER = "e2i-causal-analytics-worker_medium-1"
 EXERCISE = "--exercise-beats" in sys.argv
 RESULTS = []
 
@@ -30,23 +34,38 @@ def check(name, cond, detail=""):
     print(f"{'PASS' if cond else 'FAIL'}  {name}  {detail}")
 
 
-def sh(cmd, timeout=120):
-    p = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+def run(argv, timeout=120, stdin=None):
+    """Run an argv list (no shell); return (rc, stdout, stderr) stripped."""
+    p = subprocess.run(argv, input=stdin, capture_output=True, text=True, timeout=timeout)
     return p.returncode, (p.stdout or "").strip(), (p.stderr or "").strip()
 
 
+def count_lines(text, pattern):
+    return sum(1 for line in text.splitlines() if re.search(pattern, line))
+
+
+def docker_logs(container, since, pattern=None, last=None):
+    rc, out, err = run(["docker", "logs", "--since", since, container], timeout=120)
+    lines = (out + "\n" + err).splitlines()
+    if pattern:
+        lines = [ln for ln in lines if re.search(pattern, ln)]
+    if last:
+        lines = lines[-last:]
+    return lines
+
+
+def in_worker(code, timeout=240):
+    return run(["docker", "exec", WORKER, "python", "-c", code], timeout=timeout)
+
+
 def psql(sql):
-    rc, out, err = sh(
-        "docker exec -i supabase-db psql -U postgres -d postgres -At -F '|' -v ON_ERROR_STOP=1",
-        timeout=120,
-    ) if False else (None, None, None)
-    p = subprocess.run(
+    rc, out, err = run(
         ["docker", "exec", "-i", "supabase-db", "psql", "-U", "postgres", "-d", "postgres", "-At", "-F", "|", "-v", "ON_ERROR_STOP=1"],
-        input=sql, capture_output=True, text=True, timeout=120,
+        timeout=120, stdin=sql,
     )
-    if p.returncode != 0:
-        return f"ERR:{p.stderr.strip()[:200]}"
-    return p.stdout.strip()
+    if rc != 0:
+        return f"ERR:{err[:200]}"
+    return out
 
 
 def http(method, url, body=None, headers=None, timeout=180):
@@ -79,17 +98,18 @@ def load_env():
 E = load_env()
 
 # ---------------------------------------------------------------- A. content layer
-rc, main_sha, _ = sh(f"git -C {ROOT} fetch -q origin main && git -C {ROOT} rev-parse origin/main")
-for ctr in ("e2i_api", "e2i-causal-analytics-worker_medium-1", "e2i_scheduler", "e2i_frontend"):
-    rc, img, _ = sh(f"docker inspect {ctr} --format '{{{{.Config.Image}}}}'")
+run(["git", "-C", ROOT, "fetch", "-q", "origin", "main"])
+rc, main_sha, _ = run(["git", "-C", ROOT, "rev-parse", "origin/main"])
+for ctr in ("e2i_api", WORKER, "e2i_scheduler", "e2i_frontend"):
+    rc, img, _ = run(["docker", "inspect", ctr, "--format", "{{.Config.Image}}"])
     check(f"A.image {ctr} == origin/main", img.endswith(main_sha), img[-52:])
 for ctr in ("e2i_feast", "e2i_feast_materializer"):
-    rc, st, _ = sh(f"docker inspect {ctr} --format '{{{{.State.Health.Status}}}} {{{{.State.StartedAt}}}}'")
+    rc, st, _ = run(["docker", "inspect", ctr, "--format", "{{.State.Health.Status}} {{.State.StartedAt}}"])
     check(f"A.sidecar {ctr} healthy", st.startswith("healthy"), st)
-rc, log, _ = sh("docker logs --since 6h e2i_feast 2>&1 | grep -c 'materialize endpoints registry-locked'")
-check("A.e2i_feast log: materialize endpoints registry-locked (serve_locked.py live)", log.strip() not in ("", "0"), f"lines={log.strip()}")
-rc, wh, _ = sh("docker exec e2i-causal-analytics-worker_medium-1 python -c \"import urllib.request;print(urllib.request.urlopen('http://feast:6566/health',timeout=10).status)\"")
-check("A.sidecar /health from worker_medium", wh.strip() == "200", wh)
+locked = docker_logs("e2i_feast", "6h", pattern="materialize endpoints registry-locked")
+check("A.e2i_feast log: materialize endpoints registry-locked (serve_locked.py live)", len(locked) > 0, f"lines={len(locked)}")
+rc, wh, _ = in_worker("import urllib.request;print(urllib.request.urlopen('http://feast:6566/health',timeout=10).status)")
+check("A.sidecar /health from worker_medium", wh == "200", wh)
 
 # ---------------------------------------------------------------- B. schema + data
 mig = psql("SELECT filename FROM schema_migrations WHERE filename LIKE '150_%' OR filename LIKE 'ml/046_%' ORDER BY 1;")
@@ -108,14 +128,14 @@ drafts = psql("SELECT count(*) FROM ml_experiments WHERE status='draft';")
 check("B.no draft experiments created by verification", drafts == "0", f"drafts={drafts}")
 
 # ---------------------------------------------------------------- C. celery routing inside worker_medium
-rc, routes, err = sh(
-    "docker exec e2i-causal-analytics-worker_medium-1 python -c \""
+rc, routes, err = in_worker(
     "from src.workers.celery_app import celery_app as a;import json;"
     "r=a.conf.task_routes;b=a.conf.beat_schedule;"
     "print(json.dumps({'fid':r.get('src.tasks.fidelity_tracking_update'),'retrain':r.get('src.tasks.execute_model_retraining'),"
     "'mat_inc':r.get('src.tasks.materialize_incremental_features'),"
     "'beat_inc':b.get('feast-materialize-incremental',{}).get('options'),'beat_weekly':b.get('feast-materialize-full-weekly',{}).get('options'),"
-    "'beat_retrain':b.get('retraining-evaluation-daily',{}).get('options')}))\"", timeout=240)
+    "'beat_retrain':b.get('retraining-evaluation-daily',{}).get('options')}))"
+)
 try:
     rj = json.loads(routes.splitlines()[-1])
 except Exception:  # noqa: BLE001
@@ -124,10 +144,11 @@ check("C.fidelity_tracking_update -> analytics", (rj.get("fid") or {}).get("queu
 check("C.execute_model_retraining -> analytics", (rj.get("retrain") or {}).get("queue") == "analytics", json.dumps(rj.get("retrain")))
 check("C.feast weekly beat off the ml queue", (rj.get("beat_weekly") or {}).get("queue") not in (None, "ml"), json.dumps(rj.get("beat_weekly")))
 check("C.feast incremental beat on a consumed queue", (rj.get("beat_inc") or {}).get("queue") == "analytics", json.dumps(rj.get("beat_inc")))
-rc, aq, _ = sh("docker exec e2i-causal-analytics-worker_medium-1 celery -A src.workers.celery_app inspect active_queues 2>/dev/null | grep -c \"'name': 'analytics'\"", timeout=240)
-check("C.worker_medium consumes analytics", aq.strip() not in ("", "0"), f"matches={aq.strip()}")
-rc, fu, _ = sh("docker exec e2i-causal-analytics-worker_medium-1 python -c \"import os;print(os.getenv('FEAST_URL'))\"")
-check("C.FEAST_URL set in worker_medium", fu.strip().startswith("http"), fu.strip())
+rc, aq, _ = run(["docker", "exec", WORKER, "celery", "-A", "src.workers.celery_app", "inspect", "active_queues"], timeout=240)
+n_analytics = count_lines(aq, r"'name': 'analytics'")
+check("C.worker_medium consumes analytics", n_analytics > 0, f"matches={n_analytics}")
+rc, fu, _ = in_worker("import os;print(os.getenv('FEAST_URL'))")
+check("C.FEAST_URL set in worker_medium", fu.startswith("http"), fu)
 
 # ---------------------------------------------------------------- D. API (admin JWT)
 st, tok = http("POST", f"{E['SUPABASE_URL']}/auth/v1/token?grant_type=password",
@@ -166,7 +187,6 @@ paths = oa.get("paths", {}) if isinstance(oa, dict) else {}
 check("D.openapi lists proposals + draft routes", any(p_.endswith("/proposed-experiments") for p_ in paths) and any("/draft" in p_ and "proposed-experiments" in p_ for p_ in paths),
       ",".join(p_ for p_ in paths if "proposed-experiments" in p_))
 trig = paths.get("/api/monitoring/retraining/trigger/{model_id}", {}).get("post", {})
-schema_ref = json.dumps(trig)[:1]
 check("D.openapi retraining trigger present", bool(trig), "POST /api/monitoring/retraining/trigger/{model_id}")
 
 # ---------------------------------------------------------------- E. optional: exercise the beats (production actions)
@@ -174,19 +194,17 @@ if EXERCISE:
     before_jobs = psql("SELECT count(*) FROM ml_feast_materialization_jobs;")
     before_fresh = psql("SELECT count(*) FROM ml_feast_feature_freshness;")
     for task in ("src.tasks.materialize_incremental_features", "src.tasks.check_feature_freshness", "src.tasks.check_retraining_for_all_models"):
-        rc, out, err = sh(
-            f"docker exec e2i-causal-analytics-worker_medium-1 python -c \"from src.workers.celery_app import celery_app as a;"
-            f"r=a.send_task('{task}');print(r.id)\"", timeout=240)
-        print(f"enqueued {task}: {out.strip()[-40:]} {err[-120:]}")
+        rc, out, err = in_worker(f"from src.workers.celery_app import celery_app as a;r=a.send_task('{task}');print(r.id)")
+        print(f"enqueued {task}: {out[-40:]} {err[-120:]}")
     time.sleep(150)
     after_jobs = psql("SELECT status || ':' || count(*) FROM ml_feast_materialization_jobs GROUP BY status ORDER BY 1;")
-    after_fresh = psql("SELECT freshness_status || ':' || count(*) FROM ml_feast_feature_freshness GROUP BY 1 ORDER BY 1;")
+    after_fresh = psql("SELECT freshness_status || ':' || count(*) FROM ml_feast_feature_freshness GROUP BY freshness_status ORDER BY 1;")
     check("E.materialization job rows landed", psql("SELECT count(*) FROM ml_feast_materialization_jobs;") != before_jobs, f"before={before_jobs} after={after_jobs.replace(chr(10), ' ')}")
     check("E.freshness rows landed", psql("SELECT count(*) FROM ml_feast_feature_freshness;") != before_fresh, f"before={before_fresh} after={after_fresh.replace(chr(10), ' ')}")
-    rc, wl, _ = sh("docker logs --since 10m e2i-causal-analytics-worker_medium-1 2>&1 | grep -E 'materialize|freshness|retraining|no_cohort_contract|Feast' | tail -25")
-    print("--- worker_medium log tail ---\n" + wl)
-    rc, fl, _ = sh("docker logs --since 10m e2i_feast 2>&1 | grep -iE 'materializ' | tail -8")
-    print("--- e2i_feast log tail ---\n" + fl)
+    print("--- worker_medium log tail ---")
+    print("\n".join(docker_logs(WORKER, "10m", pattern=r"materialize|freshness|retraining|no_cohort_contract|Feast", last=25)))
+    print("--- e2i_feast log tail ---")
+    print("\n".join(docker_logs("e2i_feast", "10m", pattern=r"(?i)materializ", last=8)))
 
 fails = [r for r in RESULTS if not r[1]]
 print(f"\n{len(RESULTS) - len(fails)}/{len(RESULTS)} checks passed")
