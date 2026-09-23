@@ -1,0 +1,35 @@
+2026-09-23 19:29:23,975 - INFO - refresh-ab: HCP universe = 5000 synthetic hcp_profiles ids in namespace scvhcp_ (scvhcp_00000 .. scvhcp_04999)
+2026-09-23 19:29:46,464 - INFO - refresh-ab: 360 experiments, 185532 assignments, 185532 unit outcomes
+2026-09-23 19:29:46,464 - INFO - 
+2026-09-23 19:29:46,465 - INFO - ============================================================
+2026-09-23 19:29:46,465 - INFO - LOADING TO SUPABASE
+2026-09-23 19:29:46,465 - INFO - ============================================================
+2026-09-23 19:29:46,465 - INFO - Validating datasets...
+2026-09-23 19:29:46,465 - INFO -   Validation passed!
+2026-09-23 19:29:46,605 - INFO -   Purged 0 synthetic rows from ab_experiment_unit_outcomes
+2026-09-23 19:29:50,357 - INFO -   Purged 185532 synthetic rows from ab_experiment_enrollments
+2026-09-23 19:29:50,406 - INFO -   Purged 360 synthetic rows from ab_experiment_results
+2026-09-23 19:29:57,992 - INFO -   Purged 185532 synthetic rows from ab_experiment_assignments
+2026-09-23 19:29:57,992 - INFO -   Loading ml_experiments (1/5)...
+2026-09-23 19:29:58,249 - INFO -   Loading ab_experiment_assignments (2/5)...
+2026-09-23 19:31:07,774 - INFO -   Loading ab_experiment_enrollments (3/5)...
+2026-09-23 19:31:58,598 - INFO -   Loading ab_experiment_results (4/5)...
+2026-09-23 19:31:58,770 - INFO -   Loading ab_experiment_unit_outcomes (5/5)...
+2026-09-23 19:32:40,559 - INFO - 
+2026-09-23 19:32:40,560 - INFO - 
+2026-09-23 19:32:40,560 - INFO - ============================================================
+2026-09-23 19:32:40,560 - INFO - SUCCESS! All data loaded in 198.8s
+2026-09-23 19:32:40,560 - INFO - ============================================================
+============================================================
+SYNTHETIC DATA LOADING SUMMARY
+============================================================
+✓ ml_experiments: 360 loaded, 0 failed (100.0%) [0.3s]
+✓ ab_experiment_assignments: 185,532 loaded, 0 failed (100.0%) [69.5s]
+✓ ab_experiment_enrollments: 185,532 loaded, 0 failed (100.0%) [50.8s]
+✓ ab_experiment_results: 360 loaded, 0 failed (100.0%) [0.2s]
+✓ ab_experiment_unit_outcomes: 185,532 loaded, 0 failed (100.0%) [41.8s]
+------------------------------------------------------------
+TOTAL: 557,316 loaded, 0 failed (100.0%) [162.5s]
+============================================================
+exit=0
+2026-09-23T19:32:41+00:00
