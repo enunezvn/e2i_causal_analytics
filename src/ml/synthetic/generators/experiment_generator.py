@@ -1,8 +1,9 @@
 """Synthetic experiment + A/B substrate (Shard 09).
 
 Feeds ml_experiments (running shape like the 621 real), ab_experiment_assignments/
-enrollments/results with KNOWN, recoverable per-channel uplifts. is_synthetic=true
-on all rows.
+enrollments/results — and, since option d1 (2026-09-23), the per-unit outcome feed
+ab_experiment_unit_outcomes (migration 155) — with KNOWN, recoverable per-channel
+uplifts. is_synthetic=true on all rows.
 
 The faithful read path: experiment_monitor selects ml_experiments WHERE
 status='running' then counts ab_experiment_assignments per experiment. We mirror
@@ -279,6 +280,22 @@ class ABExperimentGenerator(BaseGenerator[pd.DataFrame]):
     UNIT CONTRACT). It is used AS GIVEN — the caller's order is part of the seed
     contract (same seed + same order => same panels), which is why both loader
     paths feed it in hcp_id (PK) order. It is required at ``generate()`` time.
+
+    UNIT OUTCOME FEED (option d1, owner decision 2026-09-23, Part of #2207): a
+    fourth frame ``ab_experiment_unit_outcomes`` (migration 155) carries each
+    unit's drawn outcome ``y`` — the SAME draw the aggregate result row is
+    computed from — keyed (experiment_id, unit_id, metric_name) and time-indexed
+    by ``observed_at``. Measured 2026-09-23: the per-HCP outcome tables come from
+    independent DGPs, so a joined ATE was a structural null (adopted -0.032 vs
+    the stored +0.097); each HCP sits in ~12 experiments per brand, so no
+    per-(hcp, brand) column can carry per-experiment outcomes. ``metric_name``
+    == the experiment's ``prediction_target`` == the result row's
+    ``primary_metric`` (the literal ``conversion_rate`` that used to be stamped
+    there named a column no synthetic experiment measures). ``observed_at`` =
+    ``assigned_at`` + a lag drawn from a SEPARATE seeded rng within (1 h, 14 d],
+    clamped to the generation frontier — never before the assignment, never in
+    the future; the separate stream keeps ``y``'s position in the main rng
+    stream unchanged so the pinned uplift/determinism properties hold.
     """
 
     def __init__(
@@ -298,6 +315,12 @@ class ABExperimentGenerator(BaseGenerator[pd.DataFrame]):
         self.true_uplift = true_uplift
         # Kept as a list in the caller's order (NOT sorted) — see class docstring.
         self.hcp_ids: list[str] = [str(h) for h in hcp_ids] if hcp_ids is not None else []
+        # Outcome-observation lag stream, seeded off the config seed but SEPARATE
+        # from self._rng so adding the lag draw does not shift the panel / arm /
+        # y draws that the uplift-recoverability and determinism pins depend on.
+        self._lag_rng = np.random.default_rng(
+            np.random.SeedSequence(self.config.seed, spawn_key=(155,))
+        )
 
     @property
     def entity_type(self) -> str:
@@ -330,9 +353,12 @@ class ABExperimentGenerator(BaseGenerator[pd.DataFrame]):
         hcp_pool = np.array(self.hcp_ids, dtype=object)
         capped = 0
         now = datetime.now(timezone.utc)
-        asn_rows, enr_rows, res_rows = [], [], []
+        asn_rows, enr_rows, res_rows, uo_rows = [], [], [], []
         for _, exp in self.experiments_df.iterrows():
             eid = exp["id"]
+            # The outcome the experiment measures; also the result row's
+            # primary_metric and every unit outcome's metric_name.
+            metric_name = str(exp.get("prediction_target") or "conversion_rate")
             channel = exp.get("intervention_channel")
             uplift = CHANNEL_TRUE_UPLIFT.get(channel, self.true_uplift)
             created = exp.get("created_at")
@@ -389,6 +415,12 @@ class ABExperimentGenerator(BaseGenerator[pd.DataFrame]):
                 p = base_rate + (uplift if variant == "treatment" else 0.0)
                 y = float(self._rng.binomial(1, min(0.99, max(0.01, p))))
                 (treatment_outcomes if variant == "treatment" else control_outcomes).append(y)
+                # Observation lag in (1 h, 14 d] from the SEPARATE lag stream,
+                # clamped so the outcome is never observed after the frontier
+                # (a unit enrolled within the last hour is observed AT the
+                # frontier, still >= its assignment).
+                lag_s = float(self._lag_rng.uniform(3600.0, 14 * 86400.0))
+                observed_at = min(assigned_at + timedelta(seconds=lag_s), now)
                 asn_rows.append(
                     {
                         "id": aid,
@@ -415,6 +447,21 @@ class ABExperimentGenerator(BaseGenerator[pd.DataFrame]):
                         "is_synthetic": True,
                     }
                 )
+                # UNIT OUTCOME FEED (migration 155): the same y the result row
+                # aggregates, keyed on UNIQUE(experiment_id, unit_id, metric_name)
+                # via the assignment id so a reseed UPDATES in place.
+                uo_rows.append(
+                    {
+                        "id": _exp_id("uo", aid, metric_name),
+                        "assignment_id": aid,
+                        "experiment_id": eid,
+                        "unit_id": unit_id,
+                        "metric_name": metric_name,
+                        "outcome_value": y,
+                        "observed_at": observed_at.isoformat(),
+                        "is_synthetic": True,
+                    }
+                )
             c, t = np.array(control_outcomes), np.array(treatment_outcomes)
             effect = float(t.mean() - c.mean())
             # Two-proportion z-test (unpooled SE): honest p-value/CI so the null
@@ -432,7 +479,7 @@ class ABExperimentGenerator(BaseGenerator[pd.DataFrame]):
                     "analysis_type": "final",
                     "analysis_method": "itt",
                     "computed_at": now.isoformat(),
-                    "primary_metric": "conversion_rate",
+                    "primary_metric": metric_name,
                     "control_mean": float(c.mean()),
                     "control_std": float(c.std()),
                     "control_n": int(c.size),
@@ -471,4 +518,5 @@ class ABExperimentGenerator(BaseGenerator[pd.DataFrame]):
             "ab_experiment_assignments": assignments,
             "ab_experiment_enrollments": pd.DataFrame(enr_rows),
             "ab_experiment_results": pd.DataFrame(res_rows),
+            "ab_experiment_unit_outcomes": pd.DataFrame(uo_rows),
         }

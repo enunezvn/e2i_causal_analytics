@@ -381,3 +381,142 @@ def test_ab_panels_deterministic_for_same_seed_and_hcp_order():
     pd.testing.assert_frame_equal(gen(_HCP_IDS), gen(list(_HCP_IDS)))
     # a different order is a different draw (documented contract, not an accident)
     assert not gen(_HCP_IDS)["unit_id"].equals(gen(list(reversed(_HCP_IDS)))["unit_id"])
+
+
+# ---------------------------------------------------------------------------
+# Per-experiment UNIT OUTCOME feed (option d1, owner decision 2026-09-23, Part of
+# #2207). The generator writes each unit's drawn outcome ``y`` — the SAME draw the
+# aggregate ab_experiment_results row is computed from — to a fourth frame keyed
+# (experiment_id, unit_id, metric_name) and time-indexed by observed_at, so
+# ExperimentOutcomeRepository.load_arrays can measure the planted per-channel
+# truth instead of joining an independent outcome DGP (structural null).
+# ---------------------------------------------------------------------------
+
+
+def _ab_with_unit_outcomes(seed_exp: int = 7, seed_ab: int = 9, n: int = 16):
+    exp = ExperimentGenerator(
+        GeneratorConfig(seed=seed_exp, n_records=n, brand=Brand.KISQALI)
+    ).generate()
+    out = ABExperimentGenerator(
+        GeneratorConfig(seed=seed_ab), experiments_df=exp, hcp_ids=_HCP_IDS
+    ).generate()
+    return exp, out
+
+
+def test_unit_outcomes_frame_is_one_row_per_assignment_keyed_and_time_indexed():
+    """(i) exactly one outcome row per assignment; keys match the assignment
+    frame; metric_name is the experiment's prediction_target; observed_at never
+    precedes the assignment and never lands after the generation frontier."""
+    exp, out = _ab_with_unit_outcomes()
+    asn, uo = out["ab_experiment_assignments"], out["ab_experiment_unit_outcomes"]
+    assert len(uo) == len(asn)
+    assert uo["assignment_id"].is_unique
+    assert set(uo["assignment_id"]) == set(asn["id"])
+    assert set(uo.columns) >= {
+        "id",
+        "assignment_id",
+        "experiment_id",
+        "unit_id",
+        "metric_name",
+        "outcome_value",
+        "observed_at",
+        "is_synthetic",
+    }
+    joined = uo.merge(asn, left_on="assignment_id", right_on="id", suffixes=("", "_asn"))
+    assert (joined["unit_id"] == joined["unit_id_asn"]).all()
+    assert (joined["experiment_id"] == joined["experiment_id_asn"]).all()
+    # metric_name == the experiment's prediction_target (Kisqali -> kisqali_dx_adoption)
+    target_by_exp = exp.set_index("id")["prediction_target"]
+    assert (uo["metric_name"] == uo["experiment_id"].map(target_by_exp)).all()
+    assert set(uo["metric_name"]) == {"kisqali_dx_adoption"}
+    # time index: assignment <= observed_at <= now
+    now = datetime.now(timezone.utc)
+    observed = joined["observed_at"].map(datetime.fromisoformat)
+    assigned = joined["assigned_at"].map(datetime.fromisoformat)
+    assert (observed >= assigned).all(), "an outcome must never precede its assignment"
+    assert (observed <= now).all(), "an outcome must never be observed in the future"
+    assert (observed > assigned).any(), "the lag must not be identically zero"
+    assert uo["is_synthetic"].all()
+    assert uo["id"].is_unique
+    # deterministic ids: uuid5 on the natural key (reseed UPDATEs in place)
+    assert (
+        uo["id"]
+        == [
+            _exp_id("uo", a, m) for a, m in zip(uo["assignment_id"], uo["metric_name"], strict=True)
+        ]
+    ).all()
+    # the outcome is the drawn Bernoulli y
+    assert set(uo["outcome_value"].unique()).issubset({0.0, 1.0})
+
+
+def test_unit_outcome_feed_reproduces_the_stored_result_exactly():
+    """(ii) The cheapest disproof of the whole design, in-process, no DB: for every
+    experiment mean(y | treatment) - mean(y | control) from the UNIT frame equals
+    the aggregate row's effect_estimate to 1e-9 and the arm counts match."""
+    exp, out = _ab_with_unit_outcomes()
+    asn, uo, res = (
+        out["ab_experiment_assignments"],
+        out["ab_experiment_unit_outcomes"],
+        out["ab_experiment_results"],
+    )
+    j = uo.merge(asn[["id", "variant"]], left_on="assignment_id", right_on="id")
+    for _, r in res.iterrows():
+        rows = j[j["experiment_id"] == r["experiment_id"]]
+        c = rows[rows["variant"] == "control"]["outcome_value"]
+        t = rows[rows["variant"] == "treatment"]["outcome_value"]
+        assert len(c) == r["control_n"] and len(t) == r["treatment_n"]
+        assert abs((t.mean() - c.mean()) - r["effect_estimate"]) < 1e-9, r["experiment_id"]
+        assert abs(c.mean() - r["control_mean"]) < 1e-9
+        assert abs(t.mean() - r["treatment_mean"]) < 1e-9
+
+
+def test_result_primary_metric_equals_the_experiment_prediction_target():
+    """(iii) ab_experiment_results.primary_metric must name the SAME quantity as
+    ml_experiments.prediction_target (and the unit outcome's metric_name) — the
+    pre-existing literal 'conversion_rate' was a label no synthetic experiment
+    carries."""
+    exp, out = _ab_with_unit_outcomes()
+    res, uo = out["ab_experiment_results"], out["ab_experiment_unit_outcomes"]
+    target_by_exp = exp.set_index("id")["prediction_target"]
+    assert (res["primary_metric"] == res["experiment_id"].map(target_by_exp)).all()
+    assert set(res["primary_metric"]) == set(uo["metric_name"]) == {"kisqali_dx_adoption"}
+
+
+def test_unit_outcome_columns_are_registered_with_the_loader():
+    """(iv) mirror of the ml_experiments pin: BatchLoader silently drops
+    unregistered columns, so every column the frame carries must be whitelisted."""
+    from src.ml.synthetic.loaders.batch_loader import TABLE_COLUMNS
+
+    _, out = _ab_with_unit_outcomes(n=1)
+    uo = out["ab_experiment_unit_outcomes"]
+    assert "ab_experiment_unit_outcomes" in TABLE_COLUMNS
+    missing = set(uo.columns) - set(TABLE_COLUMNS["ab_experiment_unit_outcomes"])
+    assert not missing, f"generator emits columns the loader would silently drop: {missing}"
+
+
+def test_unit_outcomes_are_deterministic_for_a_seed():
+    """Same seed -> same ids, outcomes and observation LAGS. Absolute timestamps
+    roll with the generation frontier (assigned_at already does), so the pin is
+    on the lag (observed_at - assigned_at), which comes from the seeded stream."""
+    _, a = _ab_with_unit_outcomes()
+    _, b = _ab_with_unit_outcomes()
+    ua, ub = a["ab_experiment_unit_outcomes"], b["ab_experiment_unit_outcomes"]
+    assert ua["id"].tolist() == ub["id"].tolist()
+    assert ua["outcome_value"].tolist() == ub["outcome_value"].tolist()
+
+    def _lags(out):
+        uo = out["ab_experiment_unit_outcomes"].merge(
+            out["ab_experiment_assignments"][["id", "assigned_at"]],
+            left_on="assignment_id",
+            right_on="id",
+        )
+        return [
+            (datetime.fromisoformat(o) - datetime.fromisoformat(s)).total_seconds()
+            for o, s in zip(uo["observed_at"], uo["assigned_at"], strict=True)
+        ]
+
+    la, lb = _lags(a), _lags(b)
+    assert (
+        max(abs(x - y) for x, y in zip(la, lb, strict=True)) < 5.0
+    )  # sub-second frontier drift only
+    assert 3600.0 <= max(la) <= 14 * 86400.0
