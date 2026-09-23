@@ -51,6 +51,8 @@ import pytest
 # but unit-only environments may install without it. Skip the whole module
 # rather than ImportError when the binary is absent.
 from tests.integration._prod_write_guard import (
+    planted_prefix,
+    planted_suffix,
     require_isolated_windows,
     require_no_foreign_reconcile,
     require_windows_still_isolated,
@@ -149,7 +151,7 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
             test_file=__file__,
             start=start_dt,
             end=end_dt,
-            territory_like=f"%_{test_run_id}",
+            territory_like=planted_suffix(f"_{test_run_id}"),
             teardown_deletes_window=False,
         ),
     )
@@ -288,22 +290,22 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
                 # territory_metrics keyed by (territory_id, metric_date) --
                 # filter on territory_id pattern.
                 cur.execute(
-                    "DELETE FROM territory_metrics WHERE territory_id LIKE %s",
-                    (f"%_{test_run_id}",),
+                    "DELETE FROM territory_metrics WHERE territory_id LIKE %s ESCAPE '\\'",
+                    (planted_suffix(f"_{test_run_id}"),),
                 )
                 # business_metrics has hcp_id FK with ON DELETE SET NULL,
                 # but we want the rows gone. Filter by metric_id prefix.
                 cur.execute(
-                    "DELETE FROM business_metrics WHERE metric_id LIKE %s",
-                    (f"bm_{test_run_id}_%",),
+                    "DELETE FROM business_metrics WHERE metric_id LIKE %s ESCAPE '\\'",
+                    (planted_prefix(f"bm_{test_run_id}_"),),
                 )
                 cur.execute(
-                    "DELETE FROM triggers WHERE trigger_id LIKE %s",
-                    (f"tr_{test_run_id}_%",),
+                    "DELETE FROM triggers WHERE trigger_id LIKE %s ESCAPE '\\'",
+                    (planted_prefix(f"tr_{test_run_id}_"),),
                 )
                 cur.execute(
-                    "DELETE FROM hcp_profiles WHERE hcp_id LIKE %s",
-                    (f"hcp_{test_run_id}_%",),
+                    "DELETE FROM hcp_profiles WHERE hcp_id LIKE %s ESCAPE '\\'",
+                    (planted_prefix(f"hcp_{test_run_id}_"),),
                 )
         # #2215: the census, the runs and this teardown are separate transactions. With
         # our rows gone, anything the same census still reaches landed inside the window
@@ -321,7 +323,7 @@ def synthetic_dataset(db_conn: Any, test_run_id: str) -> dict:
                 test_file=__file__,
                 start=start_dt,
                 end=end_dt,
-                territory_like=f"%_{test_run_id}",
+                territory_like=planted_suffix(f"_{test_run_id}"),
                 teardown_deletes_window=True,
             ),
         )
@@ -344,10 +346,10 @@ def _fetch_territory_rollup(db_conn: Any, test_run_id: str) -> list[tuple[Any, .
                    active_hcp_count, covered_lives,
                    market_potential, resource_allocation_score
               FROM territory_metrics
-             WHERE territory_id LIKE %s
+             WHERE territory_id LIKE %s ESCAPE '\\'
              ORDER BY territory_id, metric_date
             """,
-            (f"%_{test_run_id}",),
+            (planted_suffix(f"_{test_run_id}"),),
         )
         return cur.fetchall()
 
@@ -512,9 +514,9 @@ def test_market_potential_and_resource_score_preserved_across_etl(
                 UPDATE territory_metrics
                    SET market_potential = 0.123,
                        resource_allocation_score = 0.456
-                 WHERE territory_id LIKE %s
+                 WHERE territory_id LIKE %s ESCAPE '\\'
                 """,
-                (f"%_{synthetic_dataset['test_run_id']}",),
+                (planted_suffix(f"_{synthetic_dataset['test_run_id']}"),),
             )
 
     # Step 3: re-run ETL -- this hits the ON CONFLICT path on every row.
@@ -581,9 +583,9 @@ def test_idempotent_rerun_preserves_market_potential_seed(
                 UPDATE territory_metrics
                    SET market_potential = 0.42,
                        resource_allocation_score = 0.84
-                 WHERE territory_id LIKE %s
+                 WHERE territory_id LIKE %s ESCAPE '\\'
                 """,
-                (f"%_{synthetic_dataset['test_run_id']}",),
+                (planted_suffix(f"_{synthetic_dataset['test_run_id']}"),),
             )
 
     _reconciled_nothing(
