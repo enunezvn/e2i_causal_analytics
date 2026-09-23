@@ -305,7 +305,7 @@ async def test_outcome_feed_assignments_exclude_synthetic() -> None:
     repo = ExperimentOutcomeRepository(supabase_client=client)
     await repo.load_arrays(uuid4(), "triggers_delivered")
     _assert_excludes(client.last("ab_experiment_assignments"), "load_arrays assignments")
-    # the unit outcome feed (migration 155) is read first and is tagged too
+    # the unit outcome feed (migration 156) is read first and is tagged too
     _assert_excludes(client.last("ab_experiment_unit_outcomes"), "load_arrays unit_outcomes")
 
 
@@ -623,7 +623,7 @@ async def test_causal_path_get_by_id_filters_path_id() -> None:
 def test_provenance_tagged_tables_match_migrations() -> None:
     """PROVENANCE_TAGGED_TABLES must be the 29 tables migrations 063/067/069
     (+ ml/036, #1974; + migrations/148, Lane A 2026-09-22; + migrations/149,
-    Lane C 2026-09-22; + migrations/155, option d1 2026-09-23) tagged — the loader's stale pre-063 subset hard-excluded
+    Lane C 2026-09-22; + migrations/156, option d1 2026-09-23) tagged — the loader's stale pre-063 subset hard-excluded
     causal_paths and agent_activities on an obsolete 42703 rationale."""
     from src.repositories.provenance import PROVENANCE_TAGGED_TABLES
 

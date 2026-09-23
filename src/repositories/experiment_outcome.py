@@ -4,7 +4,7 @@ Closes the long-standing #422 placeholder (``control_data = []``) that forced
 ``compute_experiment_results`` / ``scheduled_interim_analysis`` to bail with
 ``insufficient_data``. TWO feeds, in precedence order:
 
-1. ``ab_experiment_unit_outcomes`` (migration 155; option d1, owner decision
+1. ``ab_experiment_unit_outcomes`` (migration 156; option d1, owner decision
    2026-09-23, Part of #2207): ONE observed outcome per (experiment_id, unit_id,
    metric_name), time-indexed by ``observed_at``. Read FIRST for the experiment's
    ``prediction_target``; when >= 1 row exists the arrays come from it (MEAN per
@@ -82,7 +82,7 @@ METRIC_COLUMN_MAP: Dict[str, str] = {
 }
 
 
-#: Table of the per-experiment unit outcome feed (migration 155).
+#: Table of the per-experiment unit outcome feed (migration 156).
 UNIT_OUTCOMES_TABLE = "ab_experiment_unit_outcomes"
 #: PostgREST's default page / max-rows (1,000 on Supabase). BOTH reads below are
 #: paged to exhaustion: an experiment can hold up to 1,400 units, and an un-ranged
@@ -245,7 +245,7 @@ class ExperimentOutcomeRepository:
         """Read the experiment's rows from ``ab_experiment_unit_outcomes`` for
         ``metric_name`` (``unit_id, outcome_value, observed_at, is_synthetic``),
         paged to exhaustion with the exact-count check (see ``_page_to_exhaustion``).
-        Provenance: the table is is_synthetic-tagged (migration 155) and the same
+        Provenance: the table is is_synthetic-tagged (migration 156) and the same
         ``include_synthetic`` opt-in as the assignments leg governs it.
         """
         if self.client is None:
@@ -342,7 +342,7 @@ class ExperimentOutcomeRepository:
         )
         assignments = [(r["unit_id"], r["variant"]) for r in assign_rows if r.get("unit_id")]
 
-        # 2a) the per-experiment unit outcome feed (migration 155) — FIRST.
+        # 2a) the per-experiment unit outcome feed (migration 156) — FIRST.
         metric_name = (primary_metric or "").strip()
         unit_rows: List[Dict[str, Any]] = []
         if assignments and metric_name:

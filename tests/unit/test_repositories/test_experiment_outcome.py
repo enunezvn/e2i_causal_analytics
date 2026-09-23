@@ -172,7 +172,7 @@ class _FakeQuery:
 
 class _FakeClient:
     """Three-table fake: assignments table yields one assignment, the unit
-    outcome feed (migration 155) is EMPTY so the legacy path runs, and
+    outcome feed (migration 156) is EMPTY so the legacy path runs, and
     business_metrics records its ``.eq`` calls so the provenance predicate can
     be asserted."""
 

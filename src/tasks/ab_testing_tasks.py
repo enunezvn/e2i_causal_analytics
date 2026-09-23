@@ -800,7 +800,7 @@ def compute_experiment_results(
                     }
 
             # REAL per-unit outcome feed (#705 R5): the per-experiment unit outcome
-            # table (migration 155, option d1) first, else assignments ⋈
+            # table (migration 156, option d1) first, else assignments ⋈
             # business_metrics per-HCP rollup. Replaces the #422 `control_data = []`
             # placeholder.
             outcome_repo = ExperimentOutcomeRepository(supabase_client=client)

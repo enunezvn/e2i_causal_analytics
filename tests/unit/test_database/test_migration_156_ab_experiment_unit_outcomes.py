@@ -1,4 +1,4 @@
-"""Migration 155 content lock (option d1, owner decision 2026-09-23, Part of #2207):
+"""Migration 156 content lock (option d1, owner decision 2026-09-23, Part of #2207):
 ``ab_experiment_unit_outcomes`` — one observed outcome per (experiment, unit,
 metric), time-indexed by observed_at, the MEASURED side of the twin fidelity loop.
 """

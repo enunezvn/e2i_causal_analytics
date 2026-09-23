@@ -2,7 +2,7 @@
 
 Feeds ml_experiments (running shape like the 621 real), ab_experiment_assignments/
 enrollments/results — and, since option d1 (2026-09-23), the per-unit outcome feed
-ab_experiment_unit_outcomes (migration 155) — with KNOWN, recoverable per-channel
+ab_experiment_unit_outcomes (migration 156) — with KNOWN, recoverable per-channel
 uplifts. is_synthetic=true on all rows.
 
 The faithful read path: experiment_monitor selects ml_experiments WHERE
@@ -282,7 +282,7 @@ class ABExperimentGenerator(BaseGenerator[pd.DataFrame]):
     paths feed it in hcp_id (PK) order. It is required at ``generate()`` time.
 
     UNIT OUTCOME FEED (option d1, owner decision 2026-09-23, Part of #2207): a
-    fourth frame ``ab_experiment_unit_outcomes`` (migration 155) carries each
+    fourth frame ``ab_experiment_unit_outcomes`` (migration 156) carries each
     unit's drawn outcome ``y`` — the SAME draw the aggregate result row is
     computed from — keyed (experiment_id, unit_id, metric_name) and time-indexed
     by ``observed_at``. Measured 2026-09-23: the per-HCP outcome tables come from
@@ -319,7 +319,7 @@ class ABExperimentGenerator(BaseGenerator[pd.DataFrame]):
         # from self._rng so adding the lag draw does not shift the panel / arm /
         # y draws that the uplift-recoverability and determinism pins depend on.
         self._lag_rng = np.random.default_rng(
-            np.random.SeedSequence(self.config.seed, spawn_key=(155,))
+            np.random.SeedSequence(self.config.seed, spawn_key=(156,))
         )
 
     @property
@@ -447,7 +447,7 @@ class ABExperimentGenerator(BaseGenerator[pd.DataFrame]):
                         "is_synthetic": True,
                     }
                 )
-                # UNIT OUTCOME FEED (migration 155): the same y the result row
+                # UNIT OUTCOME FEED (migration 156): the same y the result row
                 # aggregates, keyed on UNIQUE(experiment_id, unit_id, metric_name)
                 # via the assignment id so a reseed UPDATES in place.
                 uo_rows.append(

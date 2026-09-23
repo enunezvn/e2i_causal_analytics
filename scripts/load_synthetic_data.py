@@ -741,7 +741,7 @@ def purge_synthetic_ab_rows(loader) -> None:
     an upsert alone would leave orphaned high-index units from earlier loads
     (stale timestamps, inflated total_enrolled). All AB rows on this deployment
     are is_synthetic-tagged substrate; real rows (is_synthetic=false) are never
-    touched. FK-safe order: unit_outcomes (migration 155, FK -> assignments) ->
+    touched. FK-safe order: unit_outcomes (migration 156, FK -> assignments) ->
     enrollments -> results -> assignments.
 
     returning="minimal" is load-bearing: postgrest's representation default

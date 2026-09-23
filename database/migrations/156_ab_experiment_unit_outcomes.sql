@@ -1,4 +1,4 @@
--- Migration 155: ab_experiment_unit_outcomes — the per-experiment, per-unit,
+-- Migration 156: ab_experiment_unit_outcomes — the per-experiment, per-unit,
 -- time-indexed OUTCOME feed of the twin fidelity loop (option d1, owner decision
 -- 2026-09-23, Part of #2207).
 --

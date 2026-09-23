@@ -26,7 +26,7 @@ PROVENANCE_DROP_COLS: tuple[str, ...] = (PROVENANCE_COLUMN,)
 #   database/migrations/067_kpi_view_synthetic_exclusion.sql   (3 view-backed)
 #   database/migrations/069_synthetic_provenance_shard09_tables.sql (Shard 09, 11)
 #   database/ml/036_move_discovery_tables_to_public.sql         (#1974, 1)
-#   database/migrations/148 / 149 / 155                          (2026-09-22/23, 1 each)
+#   database/migrations/148 / 149 / 156                          (2026-09-22/23, 1 each)
 PROVENANCE_TAGGED_TABLES: frozenset[str] = frozenset(
     {
         # 063
@@ -64,7 +64,7 @@ PROVENANCE_TAGGED_TABLES: frozenset[str] = frozenset(
         "optum_biologic_persistence_causal",
         # migrations/149 (Lane C, 2026-09-22)
         "csu_escalation_causal",
-        # migrations/155 (option d1, 2026-09-23, Part of #2207)
+        # migrations/156 (option d1, 2026-09-23, Part of #2207)
         "ab_experiment_unit_outcomes",
     }
 )

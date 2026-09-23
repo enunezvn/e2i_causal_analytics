@@ -94,7 +94,7 @@ LOADING_ORDER = [
     "ab_experiment_assignments",  # parent of ab_experiment_enrollments.assignment_id
     "ab_experiment_enrollments",
     "ab_experiment_results",
-    # migration 155 (option d1): FK -> ab_experiment_assignments, so after it
+    # migration 156 (option d1): FK -> ab_experiment_assignments, so after it
     "ab_experiment_unit_outcomes",
     "ml_observability_spans",
     "causal_paths",  # CM-003/CM-005 substrate (Task 5c)
@@ -504,7 +504,7 @@ TABLE_COLUMNS = {
         "observed_power",
         "is_synthetic",
     ],
-    # migration 155 (option d1, Part of #2207): the per-experiment unit outcome
+    # migration 156 (option d1, Part of #2207): the per-experiment unit outcome
     # feed the generator writes from the same draw as ab_experiment_results.
     "ab_experiment_unit_outcomes": [
         "id",
