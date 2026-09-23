@@ -152,12 +152,16 @@ def test_hcp_rows_get_only_the_label_and_csu_rows_nothing() -> None:
 
 
 def test_manifest_source_is_a_registered_manifest_and_only_on_patient_rows() -> None:
-    from src.data.manifests import MANIFEST_SOURCES
+    from src.data.manifests.resolution import known_manifest_sources, resolve_manifest_source
 
     for s in _statements():
         manifest = s["set"].get("cohort_feature_manifest_source")
         if s["model"] in _PATIENT_MODELS:
-            assert manifest in MANIFEST_SOURCES, (s["model"], manifest)
+            assert manifest in known_manifest_sources(), (s["model"], manifest)
+            # The sweep's contract reaches tier_0/pipeline.py as
+            # resolve_manifest_source(data_source_dict, manifest): must resolve, no M1/M2.
+            contract = decode_data_source(s["set"]["cohort_data_source"])
+            assert resolve_manifest_source(contract, manifest) == manifest
         else:
             assert manifest is None, s["raw"]  # HCP rows: frame is a JOIN, no data_source
 
