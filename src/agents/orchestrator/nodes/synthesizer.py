@@ -115,7 +115,6 @@ class SynthesizerNode:
         )
 
         return {
-            **state,
             "synthesized_response": synthesized["response"],
             "response_confidence": synthesized.get("confidence", 0.5),
             "recommendations": synthesized.get("recommendations", []),
