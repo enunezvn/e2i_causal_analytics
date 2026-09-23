@@ -135,19 +135,18 @@ class ContextEnricherNode:
         self.enable_online_features = enable_online_features
         self.max_staleness_hours = max_staleness_hours
 
-    async def execute(self, state: PredictionSynthesizerState) -> PredictionSynthesizerState:
+    async def execute(self, state: PredictionSynthesizerState) -> Dict[str, Any]:
         """Enrich prediction with context and online features."""
         start_time = time.time()
 
         if state.get("status") in ["failed", "completed"]:
-            return state
+            return {}  # nothing to add; echoing the state would re-append the accumulators (#2238)
 
         if not state.get("include_context", False):
             total_time = state.get("orchestration_latency_ms", 0) + state.get(
                 "ensemble_latency_ms", 0
             )
             return {
-                **state,
                 "total_latency_ms": total_time,
                 "status": "completed",
             }
@@ -293,7 +292,6 @@ class ContextEnricherNode:
             )
 
             result_state: Dict[str, Any] = {
-                **state,
                 "prediction_context": context,
                 "features": merged_features,
                 "total_latency_ms": total_time,
@@ -308,10 +306,11 @@ class ContextEnricherNode:
             if warnings:
                 result_state["warnings"] = warnings
             if errors_addition:
-                existing_errors = state.get("errors", []) or []
-                result_state["errors"] = list(existing_errors) + errors_addition
+                # Delta only: ``errors`` is an operator.add channel, so the
+                # reducer already holds the existing rows (#2238).
+                result_state["errors"] = list(errors_addition)
 
-            return result_state  # type: ignore[return-value]
+            return result_state
 
         except Exception as e:
             # Catastrophic failure inside the enricher itself (NOT a per-dep
@@ -324,7 +323,6 @@ class ContextEnricherNode:
                 "ensemble_latency_ms", 0
             )
             return {
-                **state,
                 "warnings": [f"Context enrichment failed: {str(e)}"],
                 "total_latency_ms": total_time,
                 "status": "completed",  # Non-fatal

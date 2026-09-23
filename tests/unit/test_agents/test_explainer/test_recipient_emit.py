@@ -200,7 +200,7 @@ def test_signal_reward_heuristic_bounds():
 
 @pytest.mark.asyncio
 async def test_emit_skipped_when_no_insights(monkeypatch):
-    """Failed/empty paths must not crash; node still returns a state."""
+    """Failed/empty paths must not crash; the short-circuit is an empty delta (#2238)."""
     rec = _Recorder()
     monkeypatch.setattr(EMIT_TARGET, rec)
 
@@ -208,7 +208,8 @@ async def test_emit_skipped_when_no_insights(monkeypatch):
     state["status"] = "failed"  # already-failed short-circuit
     node = NarrativeGeneratorNode(use_llm=False)
     result = await node.execute(state)
-    assert result["status"] == "failed"
+    assert result == {}
+    assert state["status"] == "failed"
     # No emission on the short-circuit path.
     assert not rec.calls
 

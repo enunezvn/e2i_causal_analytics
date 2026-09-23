@@ -53,7 +53,7 @@ class AgentHealthNode:
         self.min_success_rate = min_success_rate
         self.max_avg_latency_ms = max_avg_latency_ms
 
-    async def execute(self, state: HealthScoreState) -> HealthScoreState:
+    async def execute(self, state: HealthScoreState) -> Dict[str, Any]:
         """Execute agent health checks."""
         start_time = time.time()
 
@@ -62,7 +62,6 @@ class AgentHealthNode:
         if state.get("check_scope") not in ["full", "agents"]:
             logger.debug("Skipping agent health for non-agent scope")
             return {
-                **state,
                 "agent_statuses": [],
                 "agent_health_measured": False,
             }
@@ -76,7 +75,6 @@ class AgentHealthNode:
                 "not fabricated-healthy"
             )
             return {
-                **state,
                 "agent_statuses": [],
                 "agent_health_measured": False,
             }
@@ -123,7 +121,6 @@ class AgentHealthNode:
             )
 
             return {
-                **state,
                 "agent_statuses": statuses,
                 "agent_health_score": health_score,
                 "agent_health_measured": True,
@@ -133,7 +130,6 @@ class AgentHealthNode:
         except Exception as e:
             logger.error(f"Agent health check failed: {e}")
             return {
-                **state,
                 "errors": [{"node": "agent_health", "error": str(e)}],
                 # A failed check measured nothing -> unmeasured, so the composer
                 # excludes it rather than counting a fabricated 0.5 as real.
