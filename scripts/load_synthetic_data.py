@@ -339,7 +339,7 @@ def generate_datasets(
         true_uplift=0.15,
         hcp_ids=datasets["hcp_profiles"]["hcp_id"].tolist(),
     ).generate()
-    datasets.update(ab)  # ab_experiment_assignments / enrollments / results
+    datasets.update(ab)  # ab_experiment_assignments / enrollments / results / unit_outcomes
 
     # MLOps registry / runs / deployments consistent with the experiments frame.
     mlops = MLOpsGenerator(
@@ -695,7 +695,8 @@ def fetch_synthetic_hcp_ids(
 def build_ab_refresh_datasets(
     sizes: dict, seed: int = 42, id_prefix: str = "scv", *, hcp_ids: Sequence[str]
 ) -> dict:
-    """Shard-09 A/B substrate refresh — experiments + assignments/enrollments/results ONLY.
+    """Shard-09 A/B substrate refresh — experiments + assignments/enrollments/results/
+    unit_outcomes ONLY.
 
     Runs weekly from reseed_synthetic.sh (after the frontier append, which does
     NOT touch these tables — the /experiments staleness review, 2026-07-11,
@@ -726,7 +727,7 @@ def build_ab_refresh_datasets(
         true_uplift=0.15,
         hcp_ids=hcp_ids,
     ).generate()
-    datasets.update(ab)  # ab_experiment_assignments / enrollments / results
+    datasets.update(ab)  # ab_experiment_assignments / enrollments / results / unit_outcomes
     for table_name, df in datasets.items():
         df["is_synthetic"] = True
         datasets[table_name] = df
@@ -740,7 +741,8 @@ def purge_synthetic_ab_rows(loader) -> None:
     an upsert alone would leave orphaned high-index units from earlier loads
     (stale timestamps, inflated total_enrolled). All AB rows on this deployment
     are is_synthetic-tagged substrate; real rows (is_synthetic=false) are never
-    touched. FK-safe order: enrollments -> results -> assignments.
+    touched. FK-safe order: unit_outcomes (migration 155, FK -> assignments) ->
+    enrollments -> results -> assignments.
 
     returning="minimal" is load-bearing: postgrest's representation default
     makes PostgREST json_agg every deleted row inside the same statement, which
@@ -754,6 +756,7 @@ def purge_synthetic_ab_rows(loader) -> None:
     a rerun of --refresh-ab — recover with that, not a partial patch.
     """
     for table in (
+        "ab_experiment_unit_outcomes",
         "ab_experiment_enrollments",
         "ab_experiment_results",
         "ab_experiment_assignments",
@@ -998,9 +1001,10 @@ def main():
             hcp_ids = fetch_synthetic_hcp_ids(_read_only_supabase_client(), id_prefix=args.tag)
             datasets = build_ab_refresh_datasets(FULL_SIZES, id_prefix=args.tag, hcp_ids=hcp_ids)
             logger.info(
-                "refresh-ab: %d experiments, %d assignments",
+                "refresh-ab: %d experiments, %d assignments, %d unit outcomes",
                 len(datasets["ml_experiments"]),
                 len(datasets["ab_experiment_assignments"]),
+                len(datasets["ab_experiment_unit_outcomes"]),
             )
         elif args.append_frontier:
             from src.ml.synthetic.frontier_append import build_frontier_datasets

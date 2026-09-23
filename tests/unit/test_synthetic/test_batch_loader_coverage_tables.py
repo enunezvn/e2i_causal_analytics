@@ -48,6 +48,9 @@ def test_fk_parents_precede_children_in_loading_order():
     # ml_experiments before ab_* and ml_model_registry
     assert idx["ml_experiments"] < idx["ab_experiment_assignments"]
     assert idx["ab_experiment_assignments"] < idx["ab_experiment_enrollments"]  # FK assignment_id
+    assert (
+        idx["ab_experiment_assignments"] < idx["ab_experiment_unit_outcomes"]
+    )  # FK assignment_id (155)
     assert idx["ml_experiments"] < idx["ml_model_registry"]  # FK experiment_id
     assert idx["ml_model_registry"] < idx["ml_training_runs"]  # FK model_registry_id
     assert idx["ml_model_registry"] < idx["ml_deployments"]  # FK model_registry_id

@@ -29,6 +29,7 @@ _NEW_KEYS = (
     "ab_experiment_assignments",
     "ab_experiment_enrollments",
     "ab_experiment_results",
+    "ab_experiment_unit_outcomes",
     "ml_observability_spans",
     "learning_signals",
     "user_sessions",
