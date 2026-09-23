@@ -447,3 +447,69 @@ async def test_register_cohort_model_stamps_training_provenance_synthetic_gold(t
     experiment_inserts = [r for (t, r) in client.inserts if t == "ml_experiments"]
     assert len(experiment_inserts) == 1
     assert experiment_inserts[0]["training_provenance"] == "synthetic_gold"
+
+
+# ---------------------------------------------------------------------------
+# #2256: the experiment row's brand is the COHORT's brand, not the serving
+# deploy module's single-brand constant.
+# ---------------------------------------------------------------------------
+
+
+def _brand_cases() -> list[tuple[str, Any, str | None]]:
+    from src.mlops.gold_standard_eval.cohort_spec import (
+        PERSISTENCE,
+        make_hcp_spec,
+        make_patient_spec,
+    )
+
+    return [
+        ("initiation_kisqali", make_patient_spec("initiation", "Kisqali"), "Kisqali"),
+        ("persistence_fabhalta", make_patient_spec("persistence", "Fabhalta"), "Fabhalta"),
+        ("hcp_adoption_kisqali", make_hcp_spec("Kisqali"), "Kisqali"),
+        (
+            "initiation_remibrutinib",
+            make_patient_spec("initiation", "Remibrutinib"),
+            "Remibrutinib",
+        ),
+        # brand=None = trained on ALL brands (no brand partition) -> NULL, not one brand.
+        ("persistence_all_brands", PERSISTENCE, None),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "spec,expected_brand",
+    [(spec, brand) for (_id, spec, brand) in _brand_cases()],
+    ids=[case_id for (case_id, _s, _b) in _brand_cases()],
+)
+async def test_register_cohort_model_experiment_brand_is_the_cohort_brand(
+    tmp_path, spec, expected_brand
+):
+    """The ml_experiments row must carry ``spec.brand`` (#2256).
+
+    Before the fix every goldstd experiment was inserted with the serving deploy's
+    ``BRAND = "Remibrutinib"`` constant, so the Kisqali/Fabhalta cohorts (and the
+    all-brand persistence/discontinuation cohorts) were mis-attributed on prod.
+    """
+    X, y, _ = _tiny_gold_standard_xy()
+    model = train_cohort_model(INITIATION, X, y)  # estimator shape is irrelevant here
+    artifact_path = serialize_model(model, tmp_path / "artifacts", f"{spec.target}_goldstd_lr_v1")
+
+    client = FakeClient()
+    await register_cohort_model(
+        client,
+        spec,
+        model_name=f"{spec.target}_goldstd_lr_v1",
+        experiment_name=f"{spec.target}_goldstd_eval_v1",
+        artifact_path=artifact_path,
+        auc=0.7,
+        feature_count=4,
+    )
+
+    experiment_inserts = [r for (t, r) in client.inserts if t == "ml_experiments"]
+    assert len(experiment_inserts) == 1
+    assert "brand" in experiment_inserts[0], "brand must be written explicitly"
+    assert experiment_inserts[0]["brand"] == expected_brand, (
+        f"{spec.target}: experiment brand must be the cohort's brand "
+        f"{expected_brand!r}, got {experiment_inserts[0]['brand']!r}"
+    )
