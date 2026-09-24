@@ -59,7 +59,18 @@ class ScopeDefinerState(BaseAgentSchema):
         ]
     ] = None
 
-    # Target variable (optional)
+    # Target variable hint (optional) — the counterpart of problem_type_hint
+    # for the *target column* (#2284). When set, ``classify_problem`` trusts it
+    # verbatim and skips ``_infer_target_variable``'s name rewrite ("likely to
+    # adopt" -> ``will_adopt``), so a caller that knows the physical column can
+    # say so. The retrain path passes the registry's ``cohort_target_outcome``
+    # (the physical label) here; without it ``adopted`` became ``will_adopt``,
+    # a name no table defines, and the data_preparer's target guard refused.
+    target_variable_hint: Optional[str] = None
+
+    # Target variable (optional) — the original spelling of the same input,
+    # declared and documented since the initial commit but never read by any
+    # node. Accepted as ``target_variable_hint``'s alias; prefer the hint name.
     target_variable: Optional[str] = None
 
     # Features (optional)

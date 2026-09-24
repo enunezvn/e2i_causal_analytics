@@ -25,6 +25,7 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, cast
 from uuid import UUID
 
+from src.agents.ml_foundation.scope_definer.nodes import problem_classifier as _classifier
 from src.agents.tier_0.split_handoff import (
     SPLIT_KEYS,
     frames_to_trainer_splits,
@@ -456,7 +457,8 @@ class MLFoundationPipeline:
                 - brand (str): Brand context
                 - region (str): Region context
                 - problem_type_hint (str): Hint for problem type
-                - target_variable (str): Target variable name if known
+                - target_variable_hint (str): physical target column; pins
+                  scope_spec.prediction_target verbatim. Alias: target_variable (#2284)
                 - candidate_features (List[str]): Candidate features
                 - algorithm_preferences (List[str]): Preferred algorithms
                 - target_environment (str): Deployment environment
@@ -642,6 +644,8 @@ class MLFoundationPipeline:
             "region": input_data.get("region", "all"),
             "use_case": input_data.get("use_case", "commercial_targeting"),
             "problem_type_hint": input_data.get("problem_type_hint"),
+            # #2284: caller's physical target column; unset, `adopted` -> `will_adopt`.
+            "target_variable_hint": input_data.get("target_variable_hint"),
             "target_variable": input_data.get("target_variable"),
             "candidate_features": input_data.get("candidate_features"),
             "feature_manifest_source": feature_manifest_source,
@@ -1345,7 +1349,10 @@ class MLFoundationPipeline:
             # sweep can enqueue a retrain of the registered model. The manifest source
             # is the RESOLVED one scope_definer put on scope_spec.
             "data_source": input_data.get("data_source"),
-            "target_outcome": input_data.get("target_outcome"),
+            # #2284: becomes cohort_target_outcome, which the sweep feeds back as the next
+            # retrain's target. Same resolver as the scope stage, so they cannot drift.
+            "target_outcome": _classifier.resolve_target_variable_hint(input_data)
+            or input_data.get("target_outcome"),
             "feature_manifest_source": deployer_scope_spec.get("feature_manifest_source"),
             # #2242: register a retrain's candidate as a new version of the retrained model.
             "retrain_of": input_data.get("retrain_of"),

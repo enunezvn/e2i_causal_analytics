@@ -15,7 +15,10 @@ async def classify_problem(state: Dict[str, Any]) -> Dict[str, Any]:
 
     Args:
         state: ScopeDefinerState with problem_description, business_objective,
-               target_outcome fields
+               target_outcome fields. Optional ``problem_type_hint`` pins the
+               problem type; optional ``target_variable_hint`` (alias:
+               ``target_variable``) pins a physical target column and bypasses
+               the name rewrite.
 
     Returns:
         Dictionary with inferred_problem_type, inferred_target_variable,
@@ -32,8 +35,22 @@ async def classify_problem(state: Dict[str, Any]) -> Dict[str, Any]:
         # Classify from keywords
         inferred_type = _infer_problem_type(business_objective, target_outcome)
 
-    # Infer target variable name
-    inferred_target = _infer_target_variable(target_outcome, inferred_type)
+    # Same contract for the target variable (#2284). ``_infer_target_variable``
+    # invents a canonical name from a natural-language objective ("likely to
+    # adopt" -> ``will_adopt``), which is what this node is for and is still
+    # test-pinned. But a caller that already knows the *physical column* — the
+    # retrain path reads the registry's ``cohort_target_outcome``, the physical
+    # label — had no way to say so, and its ``adopted`` came back out as
+    # ``will_adopt``: a name no table defines, which the data_preparer's target
+    # guard then refuses. A hint bypasses the rewrite wholesale, so it covers
+    # every family (prescribe / churn / convert / adopt / abandon / trx|nrx /
+    # time-to), not just the one that surfaced the bug.
+    target_variable_hint = resolve_target_variable_hint(state)
+    if target_variable_hint:
+        inferred_target = target_variable_hint
+    else:
+        # Infer target variable name
+        inferred_target = _infer_target_variable(target_outcome, inferred_type)
 
     # Infer prediction horizon
     prediction_horizon = _infer_prediction_horizon(target_outcome)
@@ -43,6 +60,34 @@ async def classify_problem(state: Dict[str, Any]) -> Dict[str, Any]:
         "inferred_target_variable": inferred_target,
         "prediction_horizon_days": prediction_horizon,
     }
+
+
+def resolve_target_variable_hint(state: Dict[str, Any]) -> str:
+    """The physical target column a caller pinned, or ``""`` (#2284).
+
+    Public because the pipeline's deployer leg must resolve the hint the SAME way
+    this node does — it records the result as ``cohort_target_outcome``, which the
+    drift sweep feeds back as the next retrain's target. Resolving it twice by hand
+    let the alias and the whitespace rules drift apart (codex r3 HIGH).
+
+    ``target_variable_hint`` is the name that mirrors ``problem_type_hint``.
+    ``target_variable`` is accepted as its alias: it has been on the state and
+    documented in ``ScopeDefinerAgent.run`` as "Target variable name if known"
+    since the initial commit — ``scripts/sample_ml_pipeline.py`` pairs a
+    physical ``target_variable`` with a descriptive ``target_outcome`` — but no
+    node ever read it. Honouring it here resolves the omission rather than
+    leaving a decoy beside a near-identical live field.
+
+    Returned verbatim apart from surrounding whitespace: a physical column name
+    is case- and punctuation-sensitive, so sanitising it would recreate the very
+    bug this closes. Blank / absent -> ``""`` (fall back to inference; never
+    blank the target).
+    """
+    for key in ("target_variable_hint", "target_variable"):
+        value = state.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 def _infer_problem_type(

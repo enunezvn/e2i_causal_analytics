@@ -181,7 +181,12 @@ class ScopeDefinerAgent:
                 - target_outcome (str): Target outcome (e.g., "Increase prescriptions")
                 Optional fields:
                 - problem_type_hint (str): Hint for problem type
-                - target_variable (str): Target variable name if known
+                - target_variable_hint (str): Physical target column name if
+                  known. Trusted verbatim — skips the natural-language name
+                  rewrite ("likely to adopt" -> ``will_adopt``) that would
+                  otherwise produce a column no table defines (#2284).
+                - target_variable (str): Alias of target_variable_hint (the
+                  original spelling; prefer the hint name).
                 - candidate_features (List[str]): Candidate features
                 - time_budget_hours (float): Max training time
                 - performance_requirements (Dict): Performance thresholds
@@ -242,6 +247,10 @@ class ScopeDefinerAgent:
             "target_outcome": input_data["target_outcome"],
             # Optional inputs
             "problem_type_hint": input_data.get("problem_type_hint"),
+            # #2284: a caller that knows the physical target column pins it here
+            # and classify_problem skips the rewrite. ``target_variable`` is the
+            # same input under its original name.
+            "target_variable_hint": input_data.get("target_variable_hint"),
             "target_variable": input_data.get("target_variable"),
             "candidate_features": input_data.get("candidate_features"),
             "time_budget_hours": input_data.get("time_budget_hours"),
