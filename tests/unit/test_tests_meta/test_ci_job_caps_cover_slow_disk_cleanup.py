@@ -7,7 +7,8 @@ category was ~10x slower (Android 11 m 44 s vs 1 m 08 s), i.e. a slow-disk runne
 The same commit's deploy gate passed the same shard in 8.5 min.
 
 Policy, per job that runs the cleanup (measured over the last 15 green runs):
-  * cap >= green max + SLOW_RUNNER_PENALTY  -> a slow-disk runner still completes;
+  * cap >= green max + CLEANUP_STEP_TIMEOUT -> a cleanup that runs right up to its
+    fatal step limit (a slow-disk runner) still leaves the job its normal runtime;
   * cap >= green max + stall-watchdog window -> on a normal runner a late session
     stall is diagnosed by the watchdog before the job is cancelled.
 Every cleanup step carries a FATAL step timeout above the observed 20 m 43 s and
@@ -21,19 +22,24 @@ import yaml
 
 WORKFLOWS = Path(__file__).resolve().parents[3] / ".github" / "workflows"
 
-SLOW_RUNNER_PENALTY_MIN = 20  # measured 20m43s cleanup vs ~2.5 min normal (+18.3)
 CLEANUP_STEP_TIMEOUT_MIN = 25  # fatal; must exceed the observed 20m43s
 
-# (workflow, job id) -> (green max minutes over 15 runs, stall watchdog minutes)
+# (workflow, job id) -> green max minutes over the last 15 green runs
 MEASURED = {
-    ("backend-tests.yml", "type-check"): (14, 0),
-    ("backend-tests.yml", "integration-tests"): (17, 0),
-    ("backend-tests.yml", "agents-tests"): (21, 10),  # E2I_PYTEST_STALL_TIMEOUT 600
-    ("backend-tests.yml", "unit-tests"): (24, 10),  # E2I_PYTEST_STALL_TIMEOUT 600
-    ("backend-tests.yml", "heavy-unit-tests"): (17, 20),  # E2I_PYTEST_STALL_TIMEOUT 1200
-    ("tier1-5-test.yml", "tier1-5-harness"): (9, 0),
-    ("slow-tests.yml", "twin-effect-recovery"): (9, 0),
+    ("backend-tests.yml", "type-check"): 14,
+    ("backend-tests.yml", "integration-tests"): 17,
+    ("backend-tests.yml", "agents-tests"): 21,
+    ("backend-tests.yml", "unit-tests"): 24,
+    ("backend-tests.yml", "heavy-unit-tests"): 17,
+    ("tier1-5-test.yml", "tier1-5-harness"): 9,
+    ("slow-tests.yml", "twin-effect-recovery"): 9,
 }
+
+
+def _watchdog_minutes(job) -> int:
+    """The job's pytest session stall watchdog, read from the workflow (0 if none)."""
+    raw = (job.get("env") or {}).get("E2I_PYTEST_STALL_TIMEOUT")
+    return -(-int(raw) // 60) if raw else 0
 
 
 def _is_cleanup(step) -> bool:
@@ -60,8 +66,8 @@ def test_every_capped_cleanup_job_is_measured():
 def test_caps_fit_a_slow_runner_and_the_stall_watchdog():
     short = {}
     for key, job in _capped_cleanup_jobs().items():
-        green_max, watchdog = MEASURED[key]
-        need = green_max + max(SLOW_RUNNER_PENALTY_MIN, watchdog)
+        green_max = MEASURED[key]
+        need = green_max + max(CLEANUP_STEP_TIMEOUT_MIN, _watchdog_minutes(job))
         if job["timeout-minutes"] < need:
             short[key] = (job["timeout-minutes"], need)
     assert not short, f"(cap, needed) below policy: {short}"
