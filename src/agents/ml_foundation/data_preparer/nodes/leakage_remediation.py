@@ -31,6 +31,7 @@ path, leaving the backstop reading ``None`` and the attestation false.
 
 import logging
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -43,12 +44,30 @@ from ..state import DataPreparerState
 logger = logging.getLogger(__name__)
 
 
+def _names_feature(message: str, feature: str) -> bool:
+    """Whether ``message`` names ``feature`` as a whole identifier.
+
+    Plain ``feature in message`` over-matches badly (codex r3 HIGH on #2283):
+    a feature called ``age`` is a substring of ``Temporal leakage: ...`` and
+    ``train`` of ``train_test_contamination: ...``, so remediating one feature
+    retracted unrelated leakage blockers. Requiring identifier boundaries
+    removes that class of collision. An empty name never matches.
+
+    This is a narrowing, not a proof of identity: two real columns can still
+    share a name fragment at a boundary. Retraction keyed on the structured
+    finding rather than on free text is the actual fix, tracked separately.
+    """
+    if not feature:
+        return False
+    return re.search(rf"(?<![0-9A-Za-z_]){re.escape(feature)}(?![0-9A-Za-z_])", message) is not None
+
+
 def _is_our_leakage_entry_for(issue: str, leaked: List[str]) -> bool:
     """Whether ``issue`` is a ``leakage:`` entry naming one of ``leaked``."""
     message = untag_blocking_issue(KIND_LEAKAGE, issue)
     if message is None:
         return False
-    return any(lf in message for lf in leaked)
+    return any(_names_feature(message, lf) for lf in leaked)
 
 
 # Maximum number of remediation attempts before giving up

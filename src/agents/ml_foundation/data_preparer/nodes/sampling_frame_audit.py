@@ -54,7 +54,7 @@ Blocking gate (Phase-1 Task 1.3):
   ``scope_spec["sampling_frame_max_drift"]``), the node appends a stable
   ``"sampling_frame_drift: ..."`` string to ``state["blocking_issues"]``
   and mirrors structured detail (kind, severity, divergence, threshold)
-  into ``sampling_frame_audit_report["blocking_detail"]``. The entry then
+  into ``sampling_frame_audit_report["blocking_detail"]``. THIS entry then
   travels to the QC gate on its own: no downstream node destroys another
   producer's entries any more — the clobbering ones merge through
   ``blocking_issues.merge_blocking_issues`` and the rest copy the incoming

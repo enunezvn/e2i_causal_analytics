@@ -110,8 +110,12 @@ async def test_leakage_remediation_cannot_evict_a_foreign_entry() -> None:
     # A leakage entry about something ELSE. The leaked feature is ``age`` and
     # the kind prefix ``"leakage: "`` itself contains ``"age"``, so matching
     # the tagged string retracted this too (codex r2 HIGH) — it must survive.
+    # Deliberately chosen so BOTH collision classes would retract it: the kind
+    # prefix "leakage: " contains "age", and so does the message's own word
+    # "leakage". Only identifier-boundary matching on the untagged message
+    # keeps it. (codex r2 + r3 HIGHs.)
     unrelated_leakage_entry = tag_blocking_issue(
-        KIND_LEAKAGE, "[HIGH] train_test_contamination: 12 duplicate rows across splits"
+        KIND_LEAKAGE, "[HIGH] Temporal leakage: event_date precedes the label window"
     )
 
     rng = np.random.default_rng(2283)
