@@ -688,7 +688,11 @@ class ModelTrainerAgent:
         """Persist training run to ml_training_runs table.
 
         Graceful degradation: If repository is unavailable or the parent
-        experiment doesn't exist, logs a message and continues without error.
+        experiment cannot be resolved, logs a message and continues without error.
+        Once the run is being written, a failed create / metrics update / finalise
+        RAISES (#2296): a half-written run used to surface two stages later as
+        "no training run" at registration. Metrics are sanitised by the repository
+        (non-finite -> null) and the run is finalised ``completed``.
 
         Args:
             output: Agent output containing training run details
@@ -762,6 +766,9 @@ class ModelTrainerAgent:
                     validation_metrics=output.get("validation_metrics", {}),
                     test_metrics=output.get("test_metrics", {}),
                 )
+                # #2296: finalise the run so the registry writer's lookup finds it
+                # (it was left ``running`` forever).
+                await repo.complete_run(result.id)
 
                 logger.info(
                     f"Persisted training run: {result.run_name} for experiment {experiment_uuid}"
@@ -772,8 +779,10 @@ class ModelTrainerAgent:
             return False
 
         except Exception as e:
-            logger.warning(f"Failed to persist training run: {e}")
-            return False
+            # #2296: never swallowed — a half-written run (row ``running``, metrics
+            # empty) surfaced two stages later as "no training run" at registration.
+            logger.error(f"Failed to persist training run: {e}")
+            raise RuntimeError(f"training run persistence failed: {e}") from e
 
     async def _update_procedural_memory(self, output: Dict[str, Any]) -> None:
         """Update procedural memory with successful training pattern.
