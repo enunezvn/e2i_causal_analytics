@@ -112,6 +112,14 @@ def _blas_thread_limit(input_data: Optional[Dict[str, Any]] = None):
     return _threadpool_limits(limits=cap, user_api="blas")
 
 
+class TrainingRunPersistenceError(RuntimeError):
+    """The trainer could not write / finalise its ``ml_training_runs`` row (#2296).
+
+    Distinct from modelling failures so ``repeated_k10``'s partial-fold contract (a
+    failed fold is recorded, the run continues) never swallows it.
+    """
+
+
 def hyperparameters_of_record(output: Dict[str, Any]) -> Dict[str, Any]:
     """The training run's hyperparameters plus the post-hoc calibration it DEPLOYED.
 
@@ -702,6 +710,8 @@ class ModelTrainerAgent:
         """
         from uuid import uuid4
 
+        repo = None
+        created_id = None
         try:
             repo = await _get_training_run_repository()
             if repo is None:
@@ -758,31 +768,36 @@ class ModelTrainerAgent:
                 test_samples=output.get("test_samples", 0),
             )
 
-            if result and result.id:
-                # Update with metrics using the returned run's UUID
-                await repo.update_run_metrics(
-                    run_id=result.id,
-                    train_metrics=output.get("train_metrics", {}),
-                    validation_metrics=output.get("validation_metrics", {}),
-                    test_metrics=output.get("test_metrics", {}),
-                )
-                # #2296: finalise the run so the registry writer's lookup finds it
-                # (it was left ``running`` forever).
-                await repo.complete_run(result.id)
+            if not (result and result.id):
+                raise RuntimeError("ml_training_runs insert returned no run")
+            created_id = result.id
+            if not await repo.update_run_metrics(
+                run_id=result.id,
+                train_metrics=output.get("train_metrics", {}),
+                validation_metrics=output.get("validation_metrics", {}),
+                test_metrics=output.get("test_metrics", {}),
+            ):
+                raise RuntimeError(f"metrics update matched no row for run {result.id}")
+            # #2296: finalise the run so the registry writer's lookup finds it
+            # (it was left ``running`` forever).
+            if not await repo.complete_run(result.id):
+                raise RuntimeError(f"finalising run {result.id} matched no row")
 
-                logger.info(
-                    f"Persisted training run: {result.run_name} for experiment {experiment_uuid}"
-                )
-                return True
-
-            logger.debug("Training run not persisted (no result returned)")
-            return False
+            logger.info(
+                f"Persisted training run: {result.run_name} for experiment {experiment_uuid}"
+            )
+            return True
 
         except Exception as e:
             # #2296: never swallowed — a half-written run (row ``running``, metrics
             # empty) surfaced two stages later as "no training run" at registration.
             logger.error(f"Failed to persist training run: {e}")
-            raise RuntimeError(f"training run persistence failed: {e}") from e
+            if created_id is not None and repo is not None:
+                try:  # best effort: a half-written run must not stay ``running``
+                    await repo.complete_run(created_id, status="failed", error_message=str(e))
+                except Exception as mark_err:  # noqa: BLE001 — the original error wins
+                    logger.error(f"Could not mark training run {created_id} failed: {mark_err}")
+            raise TrainingRunPersistenceError(f"training run persistence failed: {e}") from e
 
     async def _update_procedural_memory(self, output: Dict[str, Any]) -> None:
         """Update procedural memory with successful training pattern.
@@ -1045,6 +1060,8 @@ class ModelTrainerAgent:
                     "brier_score": fold_output.get("brier_score"),
                     "mlflow_run_id": fold_output.get("mlflow_run_id"),
                 }
+            except TrainingRunPersistenceError:
+                raise  # #2296: not a modelling failure — never a quiet "failed fold"
             except Exception as exc:  # noqa: BLE001 — cycle-15 I-3 partial contract
                 logger.warning(
                     f"_run_repeated_splits: fold {idx} (seed={spec.seed}) failed: {exc!r}"
@@ -1185,6 +1202,8 @@ class ModelTrainerAgent:
                         # operators without visibility. WARNING (not DEBUG) so
                         # default log levels surface the issue.
                         logger.warning(f"parent aggregate_status tag logging failed: {exc!r}")
+            except TrainingRunPersistenceError:
+                raise  # #2296: never retried as a "wrapper failure"
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     f"_run_repeated_splits: parent MLflow run wrapper failed: {exc!r}; "

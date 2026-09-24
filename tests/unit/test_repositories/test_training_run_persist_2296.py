@@ -197,3 +197,171 @@ async def test_a_failed_training_run_write_is_loud(caplog):
         with pytest.raises(RuntimeError, match="training run"):
             await ModelTrainerAgent()._persist_training_run(_output("exp_kisq_al_x"))
     assert any(r.levelno >= logging.ERROR for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# codex r1 MED: zero-row writes are failures, and a half-written run is marked failed
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_updates_that_match_no_row_report_failure():
+    db = FakeAsyncSupabase({"ml_training_runs": []})
+    repo = MLTrainingRunRepository(supabase_client=db)
+    ghost = uuid4()
+    assert await repo.update_run_metrics(run_id=ghost, test_metrics={"roc_auc": 0.8}) is False
+    assert await repo.complete_run(ghost) is False
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_an_insert_that_returns_no_row_raises():
+    class _NoRepresentation(FakeAsyncSupabase):
+        def table(self, name):
+            q = super().table(name)
+            real = q.execute
+
+            async def _execute():
+                out = await real()
+                if q._op == "insert":
+                    out.data = []
+                return out
+
+            q.execute = _execute  # type: ignore[method-assign]
+            return q
+
+    with pytest.raises(RuntimeError, match="no row"):
+        await _new_run(_NoRepresentation({"ml_training_runs": []}), uuid4())
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_run_whose_metrics_write_fails_is_marked_failed_not_left_running():
+    from src.agents.ml_foundation.model_trainer.agent import (
+        ModelTrainerAgent,
+        TrainingRunPersistenceError,
+    )
+
+    class _MetricsRefused(FakeAsyncSupabase):
+        def table(self, name):
+            q = super().table(name)
+            real = q.execute
+
+            async def _execute():
+                if q._op == "update" and "test_metrics" in (q._payload or {}):
+                    raise ValueError("metrics write refused")
+                return await real()
+
+            q.execute = _execute  # type: ignore[method-assign]
+            return q
+
+    db = _MetricsRefused({"ml_training_runs": []})
+    p1, p2, p3 = _agent_patches(db, uuid4())
+    with p1, p2, p3:
+        with pytest.raises(TrainingRunPersistenceError):
+            await ModelTrainerAgent()._persist_training_run(_output("exp_kisq_al_x"))
+    (row,) = db.rows("ml_training_runs")
+    assert row["status"] == "failed"
+    assert "metrics write refused" in row["error_message"]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_repeated_split_folds_do_not_swallow_a_persistence_failure():
+    """codex r1 MED: the fold handler turned every exception into a 'failed fold'."""
+    import numpy as np
+    import pandas as pd
+
+    from src.agents.ml_foundation.model_trainer.agent import (
+        ModelTrainerAgent,
+        TrainingRunPersistenceError,
+    )
+
+    agent = ModelTrainerAgent()
+
+    async def _run(_fold_input):
+        raise TrainingRunPersistenceError("training run persistence failed: boom")
+
+    X = pd.DataFrame({"a": np.arange(200, dtype=float), "b": np.arange(200, dtype=float) % 7})
+    y = pd.Series(np.arange(200) % 2)
+    with (
+        patch.object(agent, "run", AsyncMock(side_effect=_run)),
+        patch.object(agent, "_get_mlflow_connector_or_none", lambda: None),
+    ):
+        with pytest.raises(TrainingRunPersistenceError):
+            await agent._run_repeated_splits(
+                {
+                    "model_candidate": {
+                        "algorithm_name": "LogisticRegression",
+                        "algorithm_class": "sklearn.linear_model.LogisticRegression",
+                        "hyperparameter_search_space": {},
+                        "default_hyperparameters": {},
+                    },
+                    "qc_report": {"qc_passed": True},
+                    "experiment_id": "exp_repeated",
+                    "evaluation_mode": "repeated_k10",
+                    "enable_mlflow": False,
+                    "full_data": {"X": X, "y": y},
+                }
+            )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_the_parent_mlflow_wrapper_does_not_rerun_folds_on_a_persistence_failure():
+    import contextlib
+
+    import numpy as np
+    import pandas as pd
+
+    from src.agents.ml_foundation.model_trainer.agent import (
+        ModelTrainerAgent,
+        TrainingRunPersistenceError,
+    )
+
+    agent = ModelTrainerAgent()
+    run_mock = AsyncMock(side_effect=TrainingRunPersistenceError("persist failed"))
+
+    class _Run:
+        run_id = "parent"
+
+        async def log_params(self, *_a, **_k):
+            return None
+
+        async def log_metrics(self, *_a, **_k):
+            return None
+
+        async def set_tags(self, *_a, **_k):
+            return None
+
+    class _Conn:
+        async def get_or_create_experiment(self, **_k):
+            return "exp-parent"
+
+        @contextlib.asynccontextmanager
+        async def start_run(self, **_k):
+            yield _Run()
+
+    X = pd.DataFrame({"a": np.arange(200, dtype=float), "b": np.arange(200, dtype=float) % 7})
+    y = pd.Series(np.arange(200) % 2)
+    with (
+        patch.object(agent, "run", run_mock),
+        patch.object(agent, "_get_mlflow_connector_or_none", lambda: _Conn()),
+    ):
+        with pytest.raises(TrainingRunPersistenceError):
+            await agent._run_repeated_splits(
+                {
+                    "model_candidate": {
+                        "algorithm_name": "LogisticRegression",
+                        "algorithm_class": "sklearn.linear_model.LogisticRegression",
+                        "hyperparameter_search_space": {},
+                        "default_hyperparameters": {},
+                    },
+                    "qc_report": {"qc_passed": True},
+                    "experiment_id": "exp_repeated",
+                    "evaluation_mode": "repeated_k10",
+                    "full_data": {"X": X, "y": y},
+                }
+            )
+    assert run_mock.await_count == 1  # not re-run outside the wrapper

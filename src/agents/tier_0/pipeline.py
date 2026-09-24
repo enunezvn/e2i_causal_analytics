@@ -1321,6 +1321,7 @@ class MLFoundationPipeline:
         # Prepare model_deployer input
         deployer_input = {
             "model_uri": training_output.get("model_artifact_uri", "simulated://model"),
+            "mlflow_run_id": training_output.get("mlflow_run_id"),  # #2296 provenance pin
             "experiment_id": result.experiment_id,
             "validation_metrics": training_output.get("validation_metrics", {}),
             "success_criteria_met": training_output.get("success_criteria_met", False),

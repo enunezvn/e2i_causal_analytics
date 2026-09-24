@@ -45,9 +45,14 @@ class TrainingStatus(str, Enum):
 
     RUNNING = "running"
     SCHEDULED = "scheduled"
-    FINISHED = "finished"
+    COMPLETED = "completed"  # #2296: what the trainer writes and every reader filters on
+    FINISHED = "finished"  # legacy value: no writer has ever produced it
     FAILED = "failed"
     KILLED = "killed"
+
+
+# Terminal statuses of a successfully finalised training run (#2296).
+SUCCESSFUL_RUN_STATUSES = frozenset({TrainingStatus.COMPLETED.value, TrainingStatus.FINISHED.value})
 
 
 # ============================================================================
@@ -612,6 +617,8 @@ class MLTrainingRunRepository(BaseRepository[MLTrainingRun]):
             result = await self.client.table(self.table_name).insert(data).execute()
             if result.data:
                 return self._to_model(result.data[0])
+            # #2296: a configured client that wrote no row must not look like a run.
+            raise RuntimeError(f"{self.table_name} insert returned no row for {run.run_name!r}")
 
         return run
 
@@ -649,15 +656,20 @@ class MLTrainingRunRepository(BaseRepository[MLTrainingRun]):
         updates = sanitize_jsonb_payload(updates)
 
         if updates:
-            await self.client.table(self.table_name).update(updates).eq("id", str(run_id)).execute()
-            return True
+            result = (
+                await self.client.table(self.table_name)
+                .update(updates)
+                .eq("id", str(run_id))
+                .execute()
+            )
+            return bool(result.data)  # #2296: no matched row is not a success
 
         return False
 
     async def complete_run(
         self,
         run_id: UUID,
-        status: str = "completed",
+        status: str = TrainingStatus.COMPLETED.value,
         error_message: Optional[str] = None,
     ) -> bool:
         """Mark a run as completed.
@@ -694,8 +706,10 @@ class MLTrainingRunRepository(BaseRepository[MLTrainingRun]):
         if error_message:
             updates["error_message"] = error_message
 
-        await self.client.table(self.table_name).update(updates).eq("id", str(run_id)).execute()
-        return True
+        result = (
+            await self.client.table(self.table_name).update(updates).eq("id", str(run_id)).execute()
+        )
+        return bool(result.data)  # #2296: no matched row is not a success
 
     async def get_runs_for_experiment(
         self,
@@ -731,7 +745,9 @@ class MLTrainingRunRepository(BaseRepository[MLTrainingRun]):
         Returns:
             Best MLTrainingRun or None
         """
-        runs = await self.get_runs_for_experiment(experiment_id, status="completed")
+        runs = await self.get_runs_for_experiment(
+            experiment_id, status=TrainingStatus.COMPLETED.value
+        )
         if not runs:
             return None
 
@@ -841,6 +857,8 @@ class MLTrainingRunRepository(BaseRepository[MLTrainingRun]):
             result = await self.client.table(self.table_name).insert(data).execute()
             if result.data:
                 return self._to_model(result.data[0])
+            # #2296: a configured client that wrote no row must not look like a run.
+            raise RuntimeError(f"{self.table_name} insert returned no row for {run.run_name!r}")
 
         return run
 

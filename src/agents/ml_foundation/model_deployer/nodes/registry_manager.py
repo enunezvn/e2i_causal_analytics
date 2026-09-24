@@ -792,9 +792,8 @@ def _evaluate_regulatory_eligibility(
 def _parse_mlflow_run_id(model_uri: Optional[str]) -> Optional[str]:
     """Extract the MLflow run id from a ``runs:/<run_id>/<path>`` URI.
 
-    Returns ``None`` for ``models:/`` (MLflow 3.x — no run id), empty, or
-    malformed URIs; the caller then falls back to the experiment's best run.
-    """
+    ``None`` for ``models:/`` (MLflow 3.x), empty or malformed URIs (#2296: the caller
+    then pins the trainer's own run, else falls back to the experiment's best run)."""
     if not model_uri or not model_uri.startswith("runs:/"):
         return None
     run_id = model_uri[len("runs:/") :].split("/", 1)[0].strip()
@@ -862,6 +861,7 @@ async def _persist_model_registry_row(
     version_label: Optional[str] = None,
     expected_experiment_id: Optional[str] = None,
     training_provenance: Optional[str] = None,
+    pinned_mlflow_run_id: Optional[str] = None,
 ) -> Optional[str]:
     """Write (idempotently) a REAL ``ml_model_registry`` row; return its id (str).
 
@@ -909,16 +909,15 @@ async def _persist_model_registry_row(
     ):
         return None
 
-    # The MLflow run id carried by ``model_uri`` (``runs:/<run_id>/...``), if any.
-    run_id = _parse_mlflow_run_id(model_uri)
+    # The run id a ``runs:/`` URI carries, else the trainer's own run (#2296).
+    run_id = _parse_mlflow_run_id(model_uri) or pinned_mlflow_run_id
     run_repo = MLTrainingRunRepository(supabase_client=client)
 
     # 2. Validate the EXACT run a ``runs:/<run_id>/...`` URI pins — BEFORE any
     #    idempotent reuse, so a pre-existing same name+version row (even one whose
     #    ``mlflow_run_id`` is NULL) can never let an absent/foreign pinned run be
     #    reused: it must exist AND belong to the resolved experiment, else FAIL
-    #    CLOSED. A ``models:/`` URI pins no run — the experiment's best run is
-    #    resolved below as the honest, experiment-scoped source.
+    #    CLOSED. The trainer's run pins a ``models:/`` URI the same way (#2296).
     pinned_run = None
     if run_id:
         candidate = await run_repo.get_by_mlflow_run_id(run_id)
@@ -1159,6 +1158,7 @@ async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
                     cohort=cohort_contract_from_state(state),
                     **retrain_persist_kwargs(retrain_of),
                     training_provenance=candidate_training_provenance(state),
+                    pinned_mlflow_run_id=state.get("mlflow_run_id"),
                 )
             except Exception as e:
                 logger.error("ml_model_registry persistence raised (fail-closed): %s", e)

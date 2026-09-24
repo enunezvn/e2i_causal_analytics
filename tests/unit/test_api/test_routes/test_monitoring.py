@@ -1734,6 +1734,27 @@ class TestCompleteRetraining:
         _, kwargs = service.complete_retraining.call_args
         assert kwargs["mlflow_run_id"] == "abc123def456"
 
+    def test_complete_success_with_a_run_the_trainer_finalised_persists(self, client):
+        """#2296: the trainer finalises runs as 'completed' (the value every reader of
+        ml_training_runs uses; no writer ever produced 'finished')."""
+        run = _make_training_run(status="completed", auc=0.89)
+        client_patch, repo_patch = _patch_provenance(run)
+        with (
+            patch(
+                "src.services.retraining_trigger.get_retraining_trigger_service"
+            ) as mock_get_service,
+            client_patch,
+            repo_patch,
+        ):
+            service = AsyncMock()
+            service.complete_retraining.return_value = _make_completed_job()
+            mock_get_service.return_value = service
+            response = client.post(
+                "/monitoring/retraining/retrain-job-123/complete",
+                json={"performance_after": 0.89, "success": True, "mlflow_run_id": "abc123def456"},
+            )
+        assert response.status_code == 200, response.text
+
     def test_complete_failure_unchanged(self, client):
         """#546 non-breaking: a FAILURE completion still works with no provenance.
 
