@@ -57,13 +57,20 @@ PHYSICAL_TARGET = "adopted"
 def _no_external_writes():
     """``ScopeDefinerAgent.run`` persists unconditionally — keep that out of here.
 
-    ``run()`` calls ``_persist_scope_spec`` (ml_experiments), ``_update_procedural_memory``,
-    ``_update_semantic_memory`` (knowledge graph) and ``_update_episodic_memory``. All four
-    degrade gracefully when their backend is missing, so these tests passed without this
-    fixture — but only because the runner's environment happened to have no reachable
-    Supabase. That is luck, not isolation: a unit test must not depend on a backend being
-    down. Pinned here so a differently-configured runner (or CI) cannot turn these into
-    writes against a live ml_experiments / FalkorDB.
+    On a successful graph run ``run()`` calls ``_persist_scope_spec`` (ml_experiments),
+    ``_update_procedural_memory``, ``_update_semantic_memory`` (knowledge graph) and
+    ``_update_episodic_memory``, and it opens an Opik trace around the graph regardless.
+    All degrade gracefully when their backend is missing, so these tests passed without
+    this fixture — but only because this runner has no reachable Supabase and CI sets
+    Opik off. That is luck, not isolation: a unit test must not depend on a backend being
+    down or on an env var it does not set itself.
+
+    Scope of the claim, precisely (codex r3 MED): this neutralises the four writers named
+    above plus the Opik connector, for the agent paths these tests drive. It is not a
+    blanket guarantee that nothing anywhere can reach a network — the deployment test
+    replaces the deployer agent and raises before it executes, so that agent's own MLflow
+    / Supabase / memory paths are simply never entered, and the pipeline's audit writes
+    are no-ops because ``_result()`` carries no ``audit_workflow_id``.
 
     Tests that deliberately exercise a writer re-patch these inside the test; the inner
     patch wins.
@@ -77,6 +84,7 @@ def _no_external_writes():
         patch(f"{base}._get_experiment_repository", new=AsyncMock(return_value=None)),
         patch(f"{base}.ScopeDefinerMemoryHooks", return_value=hooks),
         patch(f"{base}._get_procedural_memory", return_value=None),
+        patch(f"{base}._get_opik_connector", return_value=None),
     ):
         yield
 
@@ -439,8 +447,27 @@ async def _deployer_input(input_data: Dict[str, Any]) -> Dict[str, Any]:
             {"target_outcome": "likely to adopt", "target_variable_hint": PHYSICAL_TARGET},
             PHYSICAL_TARGET,
         ),
-        # Every caller today: no hint -> unchanged.
+        # An unpinned caller: unchanged. The NL rewrite is NOT recorded here —
+        # `will_convert` is a name no table defines, so the descriptive outcome
+        # (already imperfect) stays rather than being replaced by a worse one.
         ({"target_outcome": "treatment_initiated"}, "treatment_initiated"),
+        # codex r3 HIGH: the LEGACY ALIAS must resolve here too. `sample_ml_pipeline.py`
+        # really does call `MLFoundationPipeline.run` with `target_variable` set and a
+        # DIFFERENT `target_outcome`, so resolving the hint by hand here left the scope
+        # stage pinning `converted_90d` while the registry recorded `hcp_conversion`.
+        (
+            {"target_outcome": "hcp_conversion", "target_variable": "converted_90d"},
+            "converted_90d",
+        ),
+        # codex r3 HIGH: whitespace must be stripped the SAME way the classifier strips
+        # it, or a padded hint becomes an unmatchable cohort label — and a wrong
+        # non-NULL registry value is sticky (cohort_contract refuses conflicting heals).
+        ({"target_outcome": "adoption", "target_variable_hint": "  adopted  "}, "adopted"),
+        # A blank hint must not blank the label.
+        (
+            {"target_outcome": "treatment_initiated", "target_variable_hint": "   "},
+            "treatment_initiated",
+        ),
     ],
 )
 async def test_the_registry_records_the_pinned_column_as_the_cohort_label(

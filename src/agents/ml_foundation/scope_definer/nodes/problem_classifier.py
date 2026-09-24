@@ -45,7 +45,7 @@ async def classify_problem(state: Dict[str, Any]) -> Dict[str, Any]:
     # guard then refuses. A hint bypasses the rewrite wholesale, so it covers
     # every family (prescribe / churn / convert / adopt / abandon / trx|nrx /
     # time-to), not just the one that surfaced the bug.
-    target_variable_hint = _target_variable_hint(state)
+    target_variable_hint = resolve_target_variable_hint(state)
     if target_variable_hint:
         inferred_target = target_variable_hint
     else:
@@ -62,8 +62,13 @@ async def classify_problem(state: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _target_variable_hint(state: Dict[str, Any]) -> str:
+def resolve_target_variable_hint(state: Dict[str, Any]) -> str:
     """The physical target column a caller pinned, or ``""`` (#2284).
+
+    Public because the pipeline's deployer leg must resolve the hint the SAME way
+    this node does — it records the result as ``cohort_target_outcome``, which the
+    drift sweep feeds back as the next retrain's target. Resolving it twice by hand
+    let the alias and the whitespace rules drift apart (codex r3 HIGH).
 
     ``target_variable_hint`` is the name that mirrors ``problem_type_hint``.
     ``target_variable`` is accepted as its alias: it has been on the state and

@@ -25,6 +25,7 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, cast
 from uuid import UUID
 
+from src.agents.ml_foundation.scope_definer.nodes import problem_classifier as _classifier
 from src.agents.tier_0.split_handoff import (
     SPLIT_KEYS,
     frames_to_trainer_splits,
@@ -456,9 +457,8 @@ class MLFoundationPipeline:
                 - brand (str): Brand context
                 - region (str): Region context
                 - problem_type_hint (str): Hint for problem type
-                - target_variable_hint (str): Physical target column name if
-                  known; pins scope_spec.prediction_target verbatim (#2284)
-                - target_variable (str): Alias of target_variable_hint
+                - target_variable_hint (str): physical target column; pins
+                  scope_spec.prediction_target verbatim. Alias: target_variable (#2284)
                 - candidate_features (List[str]): Candidate features
                 - algorithm_preferences (List[str]): Preferred algorithms
                 - target_environment (str): Deployment environment
@@ -644,10 +644,7 @@ class MLFoundationPipeline:
             "region": input_data.get("region", "all"),
             "use_case": input_data.get("use_case", "commercial_targeting"),
             "problem_type_hint": input_data.get("problem_type_hint"),
-            # #2284: the physical target column, when the caller knows it (the
-            # live retrain does — it reads the registry's cohort_target_outcome).
-            # Without it scope_definer rewrites e.g. ``adopted`` -> ``will_adopt``
-            # and the data_preparer target guard refuses the load.
+            # #2284: caller's physical target column; unset, `adopted` -> `will_adopt`.
             "target_variable_hint": input_data.get("target_variable_hint"),
             "target_variable": input_data.get("target_variable"),
             "candidate_features": input_data.get("candidate_features"),
@@ -1352,14 +1349,9 @@ class MLFoundationPipeline:
             # sweep can enqueue a retrain of the registered model. The manifest source
             # is the RESOLVED one scope_definer put on scope_spec.
             "data_source": input_data.get("data_source"),
-            # #2284: migration 151 calls cohort_target_outcome "the physical label", and
-            # the sweep feeds it straight back in as the next retrain's target. When a
-            # caller pinned the physical column, THAT is the label to record — recording
-            # a natural-language target_outcome instead would hand the next retrain a
-            # name no table defines, which is the bug #2284 fixes, one loop later.
-            # No-op for every caller today (all pass hint == target_outcome); it only
-            # engages for a caller that pins a hint alongside a descriptive outcome.
-            "target_outcome": input_data.get("target_variable_hint")
+            # #2284: becomes cohort_target_outcome, which the sweep feeds back as the next
+            # retrain's target. Same resolver as the scope stage, so they cannot drift.
+            "target_outcome": _classifier.resolve_target_variable_hint(input_data)
             or input_data.get("target_outcome"),
             "feature_manifest_source": deployer_scope_spec.get("feature_manifest_source"),
             # #2242: register a retrain's candidate as a new version of the retrained model.
