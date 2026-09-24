@@ -189,8 +189,12 @@ takes precedence over Supabase (but not over file-based ingestion).
 > This row was **not** true in practice until #2283. `blocking_issues` has no
 > LangGraph reducer, so `run_quality_checks` (fresh `[]`) and `run_ge_validation`
 > (`None` on the happy path) overwrote the schema validator's entry before the
-> gate read it. Every node that writes the channel now merges through
-> `blocking_issues.merge_blocking_issues`; a compiled-graph regression covers it
+> gate read it. No node destroys another producer's entries any more: the
+> clobbering ones merge through `blocking_issues.merge_blocking_issues`, and
+> the rest (`feast_registrar`, `sufficiency_check`) copy the incoming list
+> before appending — those two can still duplicate or strand their OWN entries
+> on a QC retry, which is fail-closed and tracked separately. A compiled-graph
+> regression covers the gate contract
 > (`tests/unit/test_agents/test_ml_foundation/test_data_preparer/test_blocking_issues_channel_2283.py`).
 
 ### Graph Integration

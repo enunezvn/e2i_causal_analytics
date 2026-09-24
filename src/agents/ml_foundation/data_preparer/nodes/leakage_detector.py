@@ -214,12 +214,15 @@ async def detect_leakage(state: DataPreparerState) -> Dict[str, Any]:
             own_blocking = [f.to_issue_string() for f in blocking_findings] + [
                 i for i in leakage_issues if not any(i == f.to_issue_string() for f in findings)
             ]
-        # Always write the channel, even with nothing of our own to add. This
-        # node is RE-ENTRANT (graph.py routes leakage_remediation --recheck-->
-        # detect_leakage), and the channel has no reducer, so merging under our
-        # own kind is what makes a second pass replace this node's previous
-        # entries instead of duplicating them — and what retracts them when a
-        # recheck comes back clean (#2283).
+        # Write the channel on this path even with nothing of our own to add.
+        # This node is RE-ENTRANT (graph.py routes leakage_remediation
+        # --recheck--> detect_leakage), and the channel has no reducer, so
+        # merging under our own kind is what makes a second pass replace this
+        # node's previous entries instead of duplicating them — and what
+        # retracts them when a recheck comes back clean (#2283). The early
+        # ``skip_leakage_check`` return omits the key deliberately (omission
+        # preserves the channel); the exception path below writes its own
+        # blocker.
         blocking_updates["blocking_issues"] = merge_blocking_issues(
             state.get("blocking_issues"), own_blocking, kind=KIND_LEAKAGE
         )
@@ -249,6 +252,17 @@ async def detect_leakage(state: DataPreparerState) -> Dict[str, Any]:
             "leakage_findings": [],
             "leakage_severity": "critical",
             "leaked_features": [],
+            # Without this the gate could PASS on a run whose leakage audit
+            # crashed: ``finalize_output`` reads neither ``leakage_severity``
+            # nor ``error``, so "assume worst case" was recorded nowhere the
+            # gate looks (codex r2 HIGH on #2283). The agent wrapper does raise
+            # on ``error``, but the graph-level gate contract must fail closed
+            # on its own.
+            "blocking_issues": merge_blocking_issues(
+                state.get("blocking_issues"),
+                [f"detection error: {str(e)}"],
+                kind=KIND_LEAKAGE,
+            ),
         }
 
 

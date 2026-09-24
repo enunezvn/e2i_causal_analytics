@@ -24,6 +24,7 @@ from src.agents.ml_foundation.data_preparer.blocking_issues import (
     merge_blocking_issues,
     tag_blocking_issue,
 )
+from src.agents.ml_foundation.data_preparer.nodes.leakage_detector import detect_leakage
 from src.agents.ml_foundation.data_preparer.nodes.leakage_remediation import (
     review_and_remediate_leakage,
 )
@@ -106,6 +107,12 @@ async def test_leakage_remediation_cannot_evict_a_foreign_entry() -> None:
     leakage_entry = tag_blocking_issue(
         KIND_LEAKAGE, "[CRITICAL] target_leakage: age correlates with target"
     )
+    # A leakage entry about something ELSE. The leaked feature is ``age`` and
+    # the kind prefix ``"leakage: "`` itself contains ``"age"``, so matching
+    # the tagged string retracted this too (codex r2 HIGH) — it must survive.
+    unrelated_leakage_entry = tag_blocking_issue(
+        KIND_LEAKAGE, "[HIGH] train_test_contamination: 12 duplicate rows across splits"
+    )
 
     rng = np.random.default_rng(2283)
     n = 120
@@ -129,7 +136,12 @@ async def test_leakage_remediation_cannot_evict_a_foreign_entry() -> None:
         "leakage_findings": [
             {"feature": "age", "severity": "critical", "check_name": "target_leakage"}
         ],
-        "blocking_issues": [leakage_entry, sampling_entry, schema_entry],
+        "blocking_issues": [
+            leakage_entry,
+            unrelated_leakage_entry,
+            sampling_entry,
+            schema_entry,
+        ],
         "train_df": train_df,
         "validation_df": None,
         "test_df": None,
@@ -150,6 +162,41 @@ async def test_leakage_remediation_cannot_evict_a_foreign_entry() -> None:
     assert result["leakage_remediation_status"] == "applied", (
         f"fixture did not reach the prune branch: {result!r}"
     )
-    assert result["blocking_issues"] == [sampling_entry, schema_entry], (
-        "the prune must retract only its own kind; it evicted a foreign entry"
+    assert result["blocking_issues"] == [
+        unrelated_leakage_entry,
+        sampling_entry,
+        schema_entry,
+    ], (
+        "the prune must retract only its OWN-kind entries that name a remediated "
+        "feature: it either evicted a foreign entry or over-matched on the kind prefix"
     )
+
+
+@pytest.mark.asyncio
+async def test_leakage_detection_error_reaches_the_gate() -> None:
+    """A crashed leakage audit must fail the gate CLOSED.
+
+    ``detect_leakage``'s exception path recorded ``leakage_severity="critical"``
+    and an ``error``, but no ``blocking_issues`` entry — and ``finalize_output``
+    reads neither of those, so "assume worst case" was recorded nowhere the
+    gate looks. The graph-level gate could therefore pass on a run whose
+    leakage audit had crashed (codex r2 HIGH on #2283). The agent wrapper does
+    raise on ``error``, but the gate contract must hold on its own.
+    """
+    state: dict = {
+        "experiment_id": "exp-2283-leakage-error",
+        "blocking_issues": ["Schema validation failed: 6 error(s)"],
+        # A non-DataFrame train_df drives the node into its except block.
+        "train_df": object(),
+        "scope_spec": {"prediction_target": "target"},
+    }
+
+    result = await detect_leakage(state)  # type: ignore[arg-type]
+
+    assert result["error_type"] == "leakage_detection_error"
+    blocking = result["blocking_issues"]
+    assert any(i.startswith(f"{KIND_LEAKAGE}: detection error") for i in blocking), (
+        f"a crashed leakage audit left no blocker for the gate: {blocking!r}"
+    )
+    # ...and the upstream schema entry is still there.
+    assert "Schema validation failed: 6 error(s)" in blocking

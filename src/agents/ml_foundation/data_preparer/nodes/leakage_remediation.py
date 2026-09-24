@@ -37,10 +37,19 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from ..blocking_issues import KIND_LEAKAGE, KIND_SEPARATOR
+from ..blocking_issues import KIND_LEAKAGE, untag_blocking_issue
 from ..state import DataPreparerState
 
 logger = logging.getLogger(__name__)
+
+
+def _is_our_leakage_entry_for(issue: str, leaked: List[str]) -> bool:
+    """Whether ``issue`` is a ``leakage:`` entry naming one of ``leaked``."""
+    message = untag_blocking_issue(KIND_LEAKAGE, issue)
+    if message is None:
+        return False
+    return any(lf in message for lf in leaked)
+
 
 # Maximum number of remediation attempts before giving up
 MAX_LEAKAGE_REMEDIATION_ATTEMPTS = 5
@@ -333,22 +342,25 @@ async def review_and_remediate_leakage(state: DataPreparerState) -> Dict[str, An
                 "leakage_severity": "none",
                 "leaked_features": [],
                 # Update blocking_issues: remove the leakage-related entries
-                # for the features we just remediated.
+                # for the features we just remediated. Two guards, both
+                # load-bearing (#2283):
                 #
-                # The ``startswith`` guard is load-bearing (#2283). Matching a
-                # feature name anywhere in the string evicted entries this node
-                # does not own: a ``sampling_frame_drift:`` entry names its
-                # drifting columns, and a column can be both drifting and
-                # leaked, so remediating leakage silently dropped an unrelated,
-                # unresolved gate reason. Only ``leakage:``-kind entries are
-                # ours to retract.
+                # 1. Only ``leakage:``-kind entries are ours to retract.
+                #    Matching a feature name anywhere in the channel evicted
+                #    entries this node does not own: a ``sampling_frame_drift:``
+                #    entry names its drifting columns, and a column can be both
+                #    drifting and leaked, so remediating leakage silently
+                #    dropped an unrelated, unresolved gate reason.
+                # 2. The feature name is matched against the MESSAGE, never the
+                #    tagged string. ``untag_blocking_issue`` strips the prefix
+                #    first because ``"leakage: "`` itself contains ``"age"`` —
+                #    a feature named ``age`` otherwise matched EVERY leakage
+                #    entry, retracting unrelated ones such as train/validation
+                #    contamination (codex r2 HIGH).
                 "blocking_issues": [
                     issue
                     for issue in (state.get("blocking_issues") or [])
-                    if not (
-                        issue.startswith(f"{KIND_LEAKAGE}{KIND_SEPARATOR}")
-                        and any(lf in issue for lf in leaked)
-                    )
+                    if not _is_our_leakage_entry_for(issue, leaked)
                 ],
             }
         else:

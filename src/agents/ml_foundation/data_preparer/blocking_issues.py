@@ -23,9 +23,9 @@ Why not a plain ``incoming + own`` merge
 Most of the writers are **re-entrant**. ``graph.py`` routes ``finalize_output
 -> qc_remediation --retry--> run_quality_checks``, and the retry then follows
 the *entire* downstream chain again — GE, feature engineering, leakage,
-transform, Feast, baseline, sufficiency. Only ``run_schema_validation`` and
-``audit_sampling_frame``, which sit upstream of ``run_quality_checks``, run
-once. A plain concatenation would duplicate each re-entrant node's own entries
+transform, Feast, baseline, sufficiency. The nodes upstream of
+``run_quality_checks`` — ``load_data``, ``audit_sampling_frame`` and
+``run_schema_validation`` — are the ones that run only once. A plain concatenation would duplicate each re-entrant node's own entries
 on the second pass, and — worse — would make them permanently sticky: an issue
 that remediation actually fixed would still be in the channel, so the gate
 would stay blocked and the remediation loop would be pointless.
@@ -66,6 +66,7 @@ __all__ = [
     "KIND_SEPARATOR",
     "merge_blocking_issues",
     "tag_blocking_issue",
+    "untag_blocking_issue",
 ]
 
 #: Separator between an entry's kind and its message. Matches the shape
@@ -82,6 +83,19 @@ KIND_LEAKAGE = "leakage"
 def tag_blocking_issue(kind: str, message: str) -> str:
     """Prefix ``message`` with its producing node's ``kind``."""
     return f"{kind}{KIND_SEPARATOR}{message}"
+
+
+def untag_blocking_issue(kind: str, issue: str) -> Optional[str]:
+    """The message inside ``issue`` if it carries ``kind``, else ``None``.
+
+    Callers that match on an entry's CONTENT must use this rather than
+    searching the whole tagged string: the kind prefix is part of that string
+    and can produce false hits. ``leakage: `` contains ``age``, so a leaked
+    feature named ``age`` matched every leakage entry — including unrelated
+    ones — when the prune searched the tagged form (codex r2 HIGH on #2283).
+    """
+    prefix = f"{kind}{KIND_SEPARATOR}"
+    return issue[len(prefix) :] if issue.startswith(prefix) else None
 
 
 def merge_blocking_issues(

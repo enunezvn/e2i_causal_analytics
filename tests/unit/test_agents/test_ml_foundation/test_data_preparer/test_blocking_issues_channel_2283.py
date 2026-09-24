@@ -274,12 +274,21 @@ async def test_re_entry_replaces_a_nodes_own_blocker_instead_of_appending(
         ``operator.add`` reducer (#2238 / PR #2251) and a plain ``incoming + own``
         merge: a second pass must REPLACE each node's own entries, not append.
 
-    ``sparse_flag`` is declared required and carries nulls, so
-        ``run_quality_checks`` genuinely emits an entry OF ITS OWN on every pass.
-        Without that this test would be vacuous — with only the upstream schema
-        entry in the channel there is nothing a naive concatenation could
-        duplicate, so it would pass against the very implementation it is meant to
-        reject.
+    The fixture's ``sparse_flag`` column carries nulls and is NOT declared
+    required, so it drags ``overall_score`` to ~0.988 without taking the
+    required-column branch; with ``qc_min_overall_score`` pinned at 0.99 on the
+    STATE (not ``scope_spec`` — that is a typed contract and drops the unknown
+    key at the channel boundary, measured), ``run_quality_checks`` genuinely
+    emits an entry OF ITS OWN on every pass. Without that this test would be
+    vacuous: with only the upstream schema entry in the channel there is
+    nothing a naive concatenation could duplicate, so it would pass against the
+    very implementation it is meant to reject.
+
+    The required-column branch is avoided on purpose — it appends a dict to
+    ``failed_expectations``, which ``DataPreparerState`` declares
+    ``Optional[List[str]]``, so the graph dies on a pydantic ValidationError at
+    the next channel boundary. That is a real pre-existing defect, unrelated to
+    this fix and reported separately.
     """
     csv_path = _write_patient_journeys_csv(tmp_path, with_nulls=True)
     state = _base_state(csv_path)

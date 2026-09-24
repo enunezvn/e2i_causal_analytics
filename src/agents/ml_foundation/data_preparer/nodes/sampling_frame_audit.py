@@ -55,10 +55,13 @@ Blocking gate (Phase-1 Task 1.3):
   ``"sampling_frame_drift: ..."`` string to ``state["blocking_issues"]``
   and mirrors structured detail (kind, severity, divergence, threshold)
   into ``sampling_frame_audit_report["blocking_detail"]``. The entry then
-  travels to the QC gate on its own: every downstream node that writes the
-  un-reduced ``blocking_issues`` channel merges through
-  ``blocking_issues.merge_blocking_issues``, which preserves other
-  producers' entries. ``finalize_output`` used to re-promote this entry from
+  travels to the QC gate on its own: no downstream node destroys another
+  producer's entries any more — the clobbering ones merge through
+  ``blocking_issues.merge_blocking_issues`` and the rest copy the incoming
+  list before appending. (``feast_registrar`` and ``sufficiency_check`` do the
+  latter; they can still duplicate or strand their OWN entries on a QC retry,
+  which is fail-closed and tracked separately.) ``finalize_output`` used to
+  re-promote this entry from
   ``blocking_detail`` because ``run_quality_checks`` overwrote the channel
   with a fresh list; #2283 fixed that at the source and removed the
   re-promotion.
