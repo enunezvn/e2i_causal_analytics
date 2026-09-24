@@ -28,6 +28,7 @@ from src.agents.ml_foundation.model_deployer.nodes.training_provenance import (
     candidate_training_provenance,
     cohort_contract_from_state,
     heal_reused_row,
+    pinned_training_run_id,
     production_gate,
 )
 from src.agents.ml_foundation.model_deployer.regulatory_audit import (
@@ -909,8 +910,7 @@ async def _persist_model_registry_row(
     ):
         return None
 
-    # The run id a ``runs:/`` URI carries, else the trainer's own run (#2296).
-    run_id = _parse_mlflow_run_id(model_uri) or pinned_mlflow_run_id
+    run_id = pinned_training_run_id(_parse_mlflow_run_id(model_uri), pinned_mlflow_run_id)
     run_repo = MLTrainingRunRepository(supabase_client=client)
 
     # 2. Validate the EXACT run a ``runs:/<run_id>/...`` URI pins — BEFORE any

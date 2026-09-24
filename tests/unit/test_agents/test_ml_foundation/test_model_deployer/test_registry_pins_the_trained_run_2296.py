@@ -61,13 +61,17 @@ def _db() -> FakeAsyncSupabase:
     )
 
 
-async def _register(db: FakeAsyncSupabase, mlflow_run_id: Optional[str]) -> Dict[str, Any]:
+async def _register(
+    db: FakeAsyncSupabase,
+    mlflow_run_id: Optional[str],
+    model_uri: str = "models:/m-64661e179ccb40058caed24f0b44fe1d",
+) -> Dict[str, Any]:
     from src.agents.ml_foundation.model_deployer.nodes import registry_manager
     from src.agents.ml_foundation.model_deployer.state import ModelDeployerState
 
     state = ModelDeployerState(
         audit_workflow_id=uuid4(),
-        model_uri="models:/m-64661e179ccb40058caed24f0b44fe1d",
+        model_uri=model_uri,
         mlflow_run_id=mlflow_run_id,
         experiment_id=EXP_KEY,
         deployment_name=f"{EXP_KEY}_deployment",
@@ -107,6 +111,26 @@ async def test_a_pinned_run_missing_from_the_table_fails_closed():
     out = await _register(db, "run-never-persisted")
     assert out.get("model_registry_id") is None
     assert db.rows("ml_model_registry") == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_runs_uri_that_contradicts_the_trainers_run_fails_closed():
+    """codex r2 MED: two provenance sources that disagree are never silently resolved."""
+    db = _db()
+    out = await _register(db, "run-sibling", model_uri="runs:/run-this/model")
+    assert out.get("model_registry_id") is None
+    assert db.rows("ml_model_registry") == []
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_runs_uri_that_agrees_with_the_trainers_run_registers():
+    db = _db()
+    out = await _register(db, "run-this", model_uri="runs:/run-this/model")
+    assert out["model_registry_id"] and db.rows("ml_model_registry")[0]["mlflow_run_id"] == (
+        "run-this"
+    )
 
 
 # ---------------------------------------------------------------------------

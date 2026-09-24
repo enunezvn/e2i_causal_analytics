@@ -745,9 +745,11 @@ class MLTrainingRunRepository(BaseRepository[MLTrainingRun]):
         Returns:
             Best MLTrainingRun or None
         """
-        runs = await self.get_runs_for_experiment(
-            experiment_id, status=TrainingStatus.COMPLETED.value
-        )
+        runs = [
+            run
+            for status in sorted(SUCCESSFUL_RUN_STATUSES)
+            for run in await self.get_runs_for_experiment(experiment_id, status=status)
+        ]
         if not runs:
             return None
 

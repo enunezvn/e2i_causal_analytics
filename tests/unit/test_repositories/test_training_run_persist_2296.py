@@ -365,3 +365,43 @@ async def test_the_parent_mlflow_wrapper_does_not_rerun_folds_on_a_persistence_f
                 }
             )
     assert run_mock.await_count == 1  # not re-run outside the wrapper
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_a_legacy_finished_run_is_still_a_best_run_candidate():
+    """codex r2 MED: 'finished' is documented as a successful legacy status."""
+    exp = uuid4()
+    db = FakeAsyncSupabase({"ml_training_runs": []})
+    repo, run = await _new_run(db, exp)
+    await repo.update_run_metrics(run_id=run.id, test_metrics={"roc_auc": 0.8})
+    await repo.complete_run(run.id, status="finished")
+    best = await repo.get_best_run(exp)
+    assert best is not None and str(best.id) == str(run.id)
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_the_mlflow_logger_never_claims_a_database_row_it_did_not_write(caplog):
+    """codex r2 HIGH: its repository has no client, so the 'persisted' id was an
+    in-memory uuid4 — a db_training_run_id no table holds."""
+    from src.agents.ml_foundation.model_trainer.nodes.mlflow_logger import (
+        _persist_training_run,
+    )
+
+    with caplog.at_level(logging.DEBUG):
+        out = await _persist_training_run(
+            experiment_id=str(uuid4()),
+            run_name="r",
+            mlflow_run_id="m",
+            algorithm_name="LogisticRegression",
+            hyperparameters={},
+            training_samples=1,
+            validation_samples=1,
+            test_samples=1,
+            feature_names=[],
+            hpo_study_name=None,
+            hpo_best_trial=None,
+        )
+    assert out is None
+    assert not any("Persisted training run to database" in r.getMessage() for r in caplog.records)
