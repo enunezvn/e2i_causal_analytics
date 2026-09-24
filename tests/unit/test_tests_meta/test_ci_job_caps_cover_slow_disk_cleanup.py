@@ -77,4 +77,6 @@ def test_every_cleanup_step_has_a_fatal_step_timeout():
                 t = step.get("timeout-minutes")
                 if t is None or t < CLEANUP_STEP_TIMEOUT_MIN or step.get("continue-on-error"):
                     bad.append((wf.name, name, t, step.get("continue-on-error")))
-    assert not bad, f"cleanup steps need timeout-minutes >= {CLEANUP_STEP_TIMEOUT_MIN} and no continue-on-error: {bad}"
+    assert not bad, (
+        f"cleanup steps need timeout-minutes >= {CLEANUP_STEP_TIMEOUT_MIN} and no continue-on-error: {bad}"
+    )
