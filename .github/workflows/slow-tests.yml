@@ -669,7 +669,7 @@ jobs:
   twin-effect-recovery:
     name: Phase-2 Twin Effect Recovery (sharded)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35  # green max + max(25-min fatal cleanup step, stall watchdog); see test_ci_job_caps_cover_slow_disk_cleanup.py
     strategy:
       fail-fast: false
       matrix:

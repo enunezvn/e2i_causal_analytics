@@ -104,7 +104,7 @@ jobs:
   tier1-5-harness:
     name: Tier 1-5 agent harness
     runs-on: ubuntu-22.04
-    timeout-minutes: 30
+    timeout-minutes: 35  # green max + max(25-min fatal cleanup step, stall watchdog); see test_ci_job_caps_cover_slow_disk_cleanup.py
     needs: changes
     # GitHub reports a conditionally-skipped job as "Success", so this is what
     # lets the REQUIRED "Tier 1-5 agent harness" context resolve on a PR that
