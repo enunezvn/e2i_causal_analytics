@@ -1352,7 +1352,15 @@ class MLFoundationPipeline:
             # sweep can enqueue a retrain of the registered model. The manifest source
             # is the RESOLVED one scope_definer put on scope_spec.
             "data_source": input_data.get("data_source"),
-            "target_outcome": input_data.get("target_outcome"),
+            # #2284: migration 151 calls cohort_target_outcome "the physical label", and
+            # the sweep feeds it straight back in as the next retrain's target. When a
+            # caller pinned the physical column, THAT is the label to record — recording
+            # a natural-language target_outcome instead would hand the next retrain a
+            # name no table defines, which is the bug #2284 fixes, one loop later.
+            # No-op for every caller today (all pass hint == target_outcome); it only
+            # engages for a caller that pins a hint alongside a descriptive outcome.
+            "target_outcome": input_data.get("target_variable_hint")
+            or input_data.get("target_outcome"),
             "feature_manifest_source": deployer_scope_spec.get("feature_manifest_source"),
             # #2242: register a retrain's candidate as a new version of the retrained model.
             "retrain_of": input_data.get("retrain_of"),
