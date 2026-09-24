@@ -124,6 +124,7 @@ class ModelDeployerAgent:
             ),
             # Input fields
             "model_uri": input_data["model_uri"],
+            "mlflow_run_id": input_data.get("mlflow_run_id"),  # #2296 provenance pin
             "experiment_id": input_data["experiment_id"],
             "validation_metrics": input_data["validation_metrics"],
             "success_criteria_met": input_data["success_criteria_met"],

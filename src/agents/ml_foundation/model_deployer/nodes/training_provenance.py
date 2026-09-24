@@ -145,3 +145,20 @@ async def production_gate(state: Any, target_stage: str) -> Optional[Dict[str, A
         "error_type": "promotion_refused",
         "current_stage": state.get("current_stage", "None"),
     }
+
+
+def pinned_training_run_id(
+    uri_run_id: Optional[str], trainer_run_id: Optional[str]
+) -> Optional[str]:
+    """The MLflow run the registry row must be sourced from (#2296).
+
+    A ``runs:/`` URI's run and the trainer's own run are two views of one fact; when
+    both are known they must agree — a contradiction raises (the caller fails closed)
+    rather than silently preferring one. Either alone pins; neither -> ``None``.
+    """
+    if uri_run_id and trainer_run_id and uri_run_id != trainer_run_id:
+        raise ValueError(
+            f"model_uri pins run {uri_run_id!r} but the trainer reported run "
+            f"{trainer_run_id!r}: contradictory provenance"
+        )
+    return uri_run_id or trainer_run_id

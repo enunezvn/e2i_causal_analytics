@@ -1656,7 +1656,7 @@ export interface paths {
          *     1. a finite ``performance_after`` in the plausible AUC range ``[0.0, 1.0]``
          *        (rejects ``None``/``NaN``/``inf``/out-of-range); AND
          *     2. a non-empty ``mlflow_run_id`` provenance pointer; AND
-         *     3. that pointer resolves to a REAL, ``finished`` training run in
+         *     3. that pointer resolves to a REAL, finished (``completed``) training run in
          *        ``ml_training_runs`` (persisted by the model-trainer) whose recorded
          *        validation AUC matches the submitted ``performance_after`` within
          *        ``_PROVENANCE_AUC_TOL`` (1e-3) — see ``_verify_success_provenance``.
@@ -8393,7 +8393,7 @@ export interface components {
          *     ``mlflow_run_id`` is the provenance pointer to the MLflow run that produced
          *     ``performance_after`` (#546). It is optional on the schema (so failure/abort
          *     completions stay non-breaking), but the endpoint REQUIRES it on a success
-         *     completion AND verifies it resolves to a real ``finished`` training run whose
+         *     completion AND verifies it resolves to a real finished (``completed``) training run whose
          *     recorded validation AUC matches ``performance_after`` — see
          *     ``complete_retraining`` / ``_verify_success_provenance``.
          * @example {
