@@ -153,7 +153,9 @@ class BaseAgentSchema(BaseModel):
         """Dict-like write access for partial-state updates.
 
         Routes declared fields to attribute assignment; routes unknown
-        keys to ``model_extra`` (preserved by ``extra="allow"``). This
+        keys to ``model_extra`` by writing it EXPLICITLY below — note this
+        works even though the class is ``extra="ignore"``, which only
+        governs VALIDATION of incoming data (#2298). This
         matches the TypedDict semantic where any string key was a
         valid update target.
         """

@@ -37,11 +37,12 @@ class ScopeSpecSchema(BaseAgentSchema):
     """Complete ML experiment specification produced by scope_definer.
 
     Round-trips through JSON via ``model_dump_json`` and
-    ``model_validate_json``. ``extra="allow"`` (inherited from
-    ``BaseAgentSchema``) lets unknown keys pass through during the
-    migration's transition window — particularly useful for fields
-    added by future agents that consume scope_spec without round-trip
-    schema discipline yet.
+    ``model_validate_json``. ``extra="ignore"`` (inherited from
+    ``BaseAgentSchema``, tightened from ``allow`` by PR #67) means an
+    unknown key is DROPPED, not passed through: a caller that needs a key
+    to survive scope_spec must have it declared here. Measured #2298; the
+    #2283 lane hit this when a key pinned on scope_spec vanished and had
+    to be pinned on the state instead.
     """
 
     # Identification

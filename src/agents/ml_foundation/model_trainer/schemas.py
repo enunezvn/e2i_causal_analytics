@@ -256,7 +256,7 @@ class MetricsSchema(BaseAgentSchema):
 # ``mlops/optuna_optimizer.py`` reads these as ``config["low"]`` /
 # ``config["high"]`` etc. — the shim makes those reads work transparently.
 #
-# We intentionally OVERRIDE BaseAgentSchema's ``extra="allow"`` with
+# We intentionally OVERRIDE BaseAgentSchema's ``extra="ignore"`` with
 # ``extra="forbid"`` (pydantic v2 merges ``model_config`` in subclasses,
 # so this is safe; ``arbitrary_types_allowed``, ``populate_by_name``, and
 # ``validate_assignment`` continue to inherit from BaseAgentSchema). The
