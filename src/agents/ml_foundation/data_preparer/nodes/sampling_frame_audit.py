@@ -54,10 +54,17 @@ Blocking gate (Phase-1 Task 1.3):
   ``scope_spec["sampling_frame_max_drift"]``), the node appends a stable
   ``"sampling_frame_drift: ..."`` string to ``state["blocking_issues"]``
   and mirrors structured detail (kind, severity, divergence, threshold)
-  into ``sampling_frame_audit_report["blocking_detail"]``. Because
-  ``run_quality_checks`` overwrites ``blocking_issues`` with a fresh list,
-  ``finalize_output`` re-promotes the drift entry from ``blocking_detail``
-  so the gate decision is durable across the pipeline.
+  into ``sampling_frame_audit_report["blocking_detail"]``. THIS entry then
+  travels to the QC gate on its own: no downstream node destroys another
+  producer's entries any more — the clobbering ones merge through
+  ``blocking_issues.merge_blocking_issues`` and the rest copy the incoming
+  list before appending. (``feast_registrar`` and ``sufficiency_check`` do the
+  latter; they can still duplicate or strand their OWN entries on a QC retry,
+  which is fail-closed and tracked separately.) ``finalize_output`` used to
+  re-promote this entry from
+  ``blocking_detail`` because ``run_quality_checks`` overwrote the channel
+  with a fresh list; #2283 fixed that at the source and removed the
+  re-promotion.
 """
 
 from __future__ import annotations

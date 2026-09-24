@@ -26,6 +26,7 @@ from src.repositories.data_splitter import SplitConfig, get_data_splitter
 from src.repositories.ml_data_loader import get_ml_data_loader
 from src.repositories.sample_data import SampleDataGenerator
 
+from ..blocking_issues import KIND_DATA_LOADING, merge_blocking_issues
 from ..ingestion import FileIngestor, IngestionError
 from ..state import DataPreparerState
 
@@ -219,7 +220,13 @@ async def load_data(state: DataPreparerState) -> Dict[str, Any]:
         return {
             "error": str(e),
             "error_type": "data_loading_error",
-            "blocking_issues": [f"Data loading failed: {str(e)}"],
+            # Merge rather than replace: the channel has no reducer, so a
+            # bare list would wipe any upstream producer's entries (#2283).
+            "blocking_issues": merge_blocking_issues(
+                state.get("blocking_issues"),
+                [f"failed: {str(e)}"],
+                kind=KIND_DATA_LOADING,
+            ),
         }
 
 

@@ -182,9 +182,24 @@ takes precedence over Supabase (but not over file-based ingestion).
 |----------|----------|-------------|----------|
 | Errors collected with `lazy=True` | ✅ | ✅ | schema_validator.py:78 |
 | Errors added to `blocking_issues` | ✅ | ✅ | schema_validator.py:96 |
-| Failed status blocks gate | ✅ | ✅ | graph.py:62-68 |
+| Failed status blocks gate | ✅ | ✅ | graph.py `finalize_output` |
 
 **Status**: ✅ **COMPLIANT** - Schema failures properly block downstream training
+
+> This row was **not** true in practice until #2283. `blocking_issues` has no
+> LangGraph reducer, so `run_quality_checks` (fresh `[]`) and `run_ge_validation`
+> (`None` on the happy path) overwrote the schema validator's entry before the
+> gate read it. What #2283 establishes is narrower than this row reads: once
+> an entry is IN the channel, no node destroys another producer's entries —
+> the clobbering ones merge through `blocking_issues.merge_blocking_issues`,
+> and the rest (`feast_registrar`, `sufficiency_check`) copy the incoming list
+> before appending, though those two can still duplicate or strand their OWN
+> entries on a QC retry (fail-closed, tracked separately). It does NOT
+> establish that every condition which should block gets an entry: several
+> producer-side paths still fail open (schema-validator exception returns,
+> swallowed inner leakage checks, the leakage promotion condition). A
+> compiled-graph regression covers the gate contract
+> (`tests/unit/test_agents/test_ml_foundation/test_data_preparer/test_blocking_issues_channel_2283.py`).
 
 ### Graph Integration
 

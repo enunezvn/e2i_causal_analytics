@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
+from ..blocking_issues import KIND_LEAKAGE, merge_blocking_issues
 from ..state import DataPreparerState
 
 logger = logging.getLogger(__name__)
@@ -207,15 +208,24 @@ async def detect_leakage(state: DataPreparerState) -> Dict[str, Any]:
         blocking_findings = [
             f for f in findings if f.severity in (LeakageSeverity.CRITICAL, LeakageSeverity.HIGH)
         ]
+        # Legacy leakage issues (temporal, contamination) also block.
+        own_blocking: List[str] = []
         if blocking_findings or (leakage_detected and not findings):
-            # Legacy leakage issues (temporal, contamination) also block
-            existing_blocking = state.get("blocking_issues") or []
-            new_blocking = [f.to_issue_string() for f in blocking_findings]
-            # Also add legacy string issues that aren't from findings
-            legacy_issues = [
+            own_blocking = [f.to_issue_string() for f in blocking_findings] + [
                 i for i in leakage_issues if not any(i == f.to_issue_string() for f in findings)
             ]
-            blocking_updates["blocking_issues"] = existing_blocking + new_blocking + legacy_issues
+        # Write the channel on this path even with nothing of our own to add.
+        # This node is RE-ENTRANT (graph.py routes leakage_remediation
+        # --recheck--> detect_leakage), and the channel has no reducer, so
+        # merging under our own kind is what makes a second pass replace this
+        # node's previous entries instead of duplicating them — and what
+        # retracts them when a recheck comes back clean (#2283). The early
+        # ``skip_leakage_check`` return omits the key deliberately (omission
+        # preserves the channel); the exception path below writes its own
+        # blocker.
+        blocking_updates["blocking_issues"] = merge_blocking_issues(
+            state.get("blocking_issues"), own_blocking, kind=KIND_LEAKAGE
+        )
 
         logger.info(
             f"Leakage detection completed: "
@@ -242,6 +252,17 @@ async def detect_leakage(state: DataPreparerState) -> Dict[str, Any]:
             "leakage_findings": [],
             "leakage_severity": "critical",
             "leaked_features": [],
+            # Without this the gate could PASS on a run whose leakage audit
+            # crashed: ``finalize_output`` reads neither ``leakage_severity``
+            # nor ``error``, so "assume worst case" was recorded nowhere the
+            # gate looks (codex r2 HIGH on #2283). The agent wrapper does raise
+            # on ``error``, but the graph-level gate contract must fail closed
+            # on its own.
+            "blocking_issues": merge_blocking_issues(
+                state.get("blocking_issues"),
+                [f"detection error: {str(e)}"],
+                kind=KIND_LEAKAGE,
+            ),
         }
 
 

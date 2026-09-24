@@ -31,15 +31,44 @@ path, leaving the backstop reading ``None`` and the attestation false.
 
 import logging
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from ..blocking_issues import KIND_LEAKAGE, untag_blocking_issue
 from ..state import DataPreparerState
 
 logger = logging.getLogger(__name__)
+
+
+def _names_feature(message: str, feature: str) -> bool:
+    """Whether ``message`` names ``feature`` as a whole identifier.
+
+    Plain ``feature in message`` over-matches badly (codex r3 HIGH on #2283):
+    a feature called ``age`` is a substring of ``Temporal leakage: ...`` and
+    ``train`` of ``train_test_contamination: ...``, so remediating one feature
+    retracted unrelated leakage blockers. Requiring identifier boundaries
+    removes that class of collision. An empty name never matches.
+
+    This is a narrowing, not a proof of identity: two real columns can still
+    share a name fragment at a boundary. Retraction keyed on the structured
+    finding rather than on free text is the actual fix, tracked separately.
+    """
+    if not feature:
+        return False
+    return re.search(rf"(?<![0-9A-Za-z_]){re.escape(feature)}(?![0-9A-Za-z_])", message) is not None
+
+
+def _is_our_leakage_entry_for(issue: str, leaked: List[str]) -> bool:
+    """Whether ``issue`` is a ``leakage:`` entry naming one of ``leaked``."""
+    message = untag_blocking_issue(KIND_LEAKAGE, issue)
+    if message is None:
+        return False
+    return any(_names_feature(message, lf) for lf in leaked)
+
 
 # Maximum number of remediation attempts before giving up
 MAX_LEAKAGE_REMEDIATION_ATTEMPTS = 5
@@ -331,11 +360,26 @@ async def review_and_remediate_leakage(state: DataPreparerState) -> Dict[str, An
                 "leakage_findings": [],
                 "leakage_severity": "none",
                 "leaked_features": [],
-                # Update blocking_issues: remove leakage-related entries
+                # Update blocking_issues: remove the leakage-related entries
+                # for the features we just remediated. Two guards, both
+                # load-bearing (#2283):
+                #
+                # 1. Only ``leakage:``-kind entries are ours to retract.
+                #    Matching a feature name anywhere in the channel evicted
+                #    entries this node does not own: a ``sampling_frame_drift:``
+                #    entry names its drifting columns, and a column can be both
+                #    drifting and leaked, so remediating leakage silently
+                #    dropped an unrelated, unresolved gate reason.
+                # 2. The feature name is matched against the MESSAGE, never the
+                #    tagged string. ``untag_blocking_issue`` strips the prefix
+                #    first because ``"leakage: "`` itself contains ``"age"`` —
+                #    a feature named ``age`` otherwise matched EVERY leakage
+                #    entry, retracting unrelated ones such as train/validation
+                #    contamination (codex r2 HIGH).
                 "blocking_issues": [
                     issue
                     for issue in (state.get("blocking_issues") or [])
-                    if not any(lf in issue for lf in leaked)
+                    if not _is_our_leakage_entry_for(issue, leaked)
                 ],
             }
         else:
