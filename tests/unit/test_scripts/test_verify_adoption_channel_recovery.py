@@ -521,7 +521,7 @@ def test_an_fp_rate_of_exactly_the_ceiling_passes_on_the_point_rate():
     cal = evaluate_null_calibration(_null_fits(dict.fromkeys(BRANDS, ates)), reproduction=1.0)
     assert cal.n_fp == 30 and cal.fp_rate == pytest.approx(0.10)
     assert cal.wilson_hi > MAX_NULL_FP_RATE
-    assert not any("false-positive" in f for f in cal.failures)
+    assert cal.passed, cal.failures
 
 
 def test_the_se_ratio_uses_the_within_brand_spread_not_the_spread_of_brand_means():
