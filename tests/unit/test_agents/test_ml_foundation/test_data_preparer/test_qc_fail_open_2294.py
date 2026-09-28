@@ -888,3 +888,59 @@ async def test_the_same_finding_still_blocks_without_a_manifest(
     final_state = await _detect_adaptive_gate_graph(adaptive).ainvoke(_leakage_state(frame))
 
     assert any("lab_claim_count" in i for i in final_state["blocking_issues"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["adapter_unavailable", "registration_raises"])
+async def test_feast_served_run_blocks_when_freshness_is_never_checked(
+    monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    """Codex r1 (MEDIUM): the freshness probe runs only after the adapter
+    initialises and registration succeeds. On a Feast-SERVED run, an
+    unavailable adapter or a registration exception returned before the probe,
+    so freshness was never verified and — on a first pass, with no earlier
+    entry to preserve — nothing blocked. Unverifiable is not fresh (#556)."""
+    from datetime import timedelta
+    from unittest.mock import AsyncMock
+
+    from src.agents.ml_foundation.data_preparer.nodes import feast_registrar
+
+    _feast_seams(monkeypatch, recency_age=timedelta(hours=2))
+    if failure == "adapter_unavailable":
+        monkeypatch.setattr(feast_registrar, "_get_feature_analyzer_adapter", lambda: None)
+    else:
+        adapter = feast_registrar._get_feature_analyzer_adapter()
+        adapter.register_features_from_state = AsyncMock(side_effect=RuntimeError("feast down"))
+
+    final_state = await _single_then_gate(
+        register_features_in_feast, "register_features_in_feast"
+    ).ainvoke(_feast_state())
+
+    blocking = final_state["blocking_issues"]
+    assert any(i.startswith("feast_freshness: Feast features unverifiable") for i in blocking), (
+        blocking
+    )
+    assert final_state["feast_blocked"] is True
+    assert final_state["gate_passed"] is False
+
+
+@pytest.mark.asyncio
+async def test_non_feast_served_run_is_not_blocked_by_an_unavailable_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Control: every run today (nothing sets ``features_served_by_feast``)
+    keeps the documented non-blocking behaviour."""
+    from datetime import timedelta
+
+    from src.agents.ml_foundation.data_preparer.nodes import feast_registrar
+
+    _feast_seams(monkeypatch, recency_age=timedelta(hours=2))
+    monkeypatch.setattr(feast_registrar, "_get_feature_analyzer_adapter", lambda: None)
+    state = _feast_state()
+    state["features_served_by_feast"] = False
+
+    final_state = await _single_then_gate(
+        register_features_in_feast, "register_features_in_feast"
+    ).ainvoke(state)
+
+    assert final_state["blocking_issues"] == ["sampling_frame_drift: an unrelated upstream blocker"]

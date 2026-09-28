@@ -42,8 +42,10 @@ Writers of the channel, and how (re-verified by grep for #2294):
   and ``run_sufficiency_check`` (``data_sufficiency``). Each writes the
   channel on every pass that computes its verdict, so a re-run replaces its
   entry and a resolved condition is retracted; paths that compute NO verdict
-  (sufficiency ``SKIPPED``, Feast's early returns and ``except``) omit the key
-  and leave an earlier pass's entry in place.
+  omit the key and leave an earlier pass's entry in place (sufficiency
+  ``SKIPPED``; Feast's early returns and ``except`` on a run that does not
+  train on Feast-served features — on one that does, they block as
+  "unverifiable").
 * ``audit_sampling_frame`` copies the incoming list and appends its
   ``sampling_frame_drift:`` entry. It runs once (upstream of the QC retry
   edge), so it cannot duplicate or go stale.

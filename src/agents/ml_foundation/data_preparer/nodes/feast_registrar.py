@@ -118,13 +118,13 @@ async def register_features_in_feast(state: DataPreparerState) -> Dict[str, Any]
                 "Feast adapter not available - skipping feature registration"
             )
             logger.warning("Feast adapter not available")
-            return updates
+            return _block_unverified_if_served(state, updates, "Feast adapter not available")
 
         # Get training data
         train_df = state.get("train_df")
         if train_df is None:
             updates["feast_warnings"].append("No training data available for registration")
-            return updates
+            return _block_unverified_if_served(state, updates, "no training data")
 
         # Get scope spec for entity and feature info
         scope_spec = state.get("scope_spec", {})
@@ -228,8 +228,9 @@ async def register_features_in_feast(state: DataPreparerState) -> Dict[str, Any]
         # whether or not it blocks (#2294). A QC retry re-runs this node:
         # merging under its own kind replaces the previous pass's entry instead
         # of duplicating it, and retracts it once features are fresh. The early
-        # returns above and the ``except`` below compute no verdict and omit
-        # the key, which leaves an earlier pass's entry in place (fail closed).
+        # returns above and the ``except`` below compute no verdict: they block
+        # a Feast-served run as unverifiable and otherwise omit the key
+        # (``_block_unverified_if_served``).
         updates["blocking_issues"] = merge_blocking_issues(
             state.get("blocking_issues"), own_blocking, kind=KIND_FEAST_FRESHNESS
         )
@@ -255,7 +256,39 @@ async def register_features_in_feast(state: DataPreparerState) -> Dict[str, Any]
         logger.error(f"Feast registration failed: {e}", exc_info=True)
         updates["feast_registration_status"] = "error"
         updates["feast_warnings"].append(f"Registration error: {str(e)}")
+        return _block_unverified_if_served(state, updates, f"registration error: {e}")
+
+
+def _block_unverified_if_served(
+    state: DataPreparerState, updates: Dict[str, Any], reason: str
+) -> Dict[str, Any]:
+    """Fail closed on a Feast-served run whose freshness was never checked.
+
+    The freshness probe runs only after the adapter initialises and
+    registration succeeds, so the early returns and the ``except`` above reach
+    no verdict. For a Feast-SERVED run that is "unverifiable", which blocks
+    exactly as a failed probe does (#556); before #2294 a first pass through
+    these paths emitted nothing and the gate passed. Every other run keeps the
+    documented non-blocking behaviour, and a path that already merged a
+    verdict (the ``except`` can fire after it) keeps that verdict.
+    """
+    if (
+        "blocking_issues" in updates
+        or not state.get("features_served_by_feast")
+        or os.environ.get("ALLOW_STALE_FEAST") == "1"
+    ):
         return updates
+    updates["feast_blocked"] = True
+    updates["blocking_issues"] = merge_blocking_issues(
+        state.get("blocking_issues"),
+        [f"Feast features unverifiable ({reason}); ALLOW_STALE_FEAST not set"],
+        kind=KIND_FEAST_FRESHNESS,
+    )
+    logger.warning(
+        "Feast QC gate: freshness never verified for a Feast-served run (%s). Blocking.",
+        reason,
+    )
+    return updates
 
 
 async def _check_feature_freshness(
