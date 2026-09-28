@@ -487,15 +487,50 @@ class SimulationRequest(BaseModel):
 OUTCOME_COLUMN_KEY = "outcome_column"
 
 
+#: Provenance of the cohort-estimated runs, the only rows the date rule below applies to.
+_COHORT_PROVENANCE = "cohort_estimated_synthetic_gold_v1"
+#: Migration 147 (``cohort_conversion_outcome``) as recorded in ``public.schema_migrations``,
+#: and the end of the deploy that shipped the code reading it (run 35672404601). A cohort run
+#: saved at or before the first ran on ``conversion_rate``; after the second, on
+#: ``cohort_conversion_outcome``; in between, which image served it is not known.
+_MIGRATION_147_APPLIED = datetime(2026, 9, 22, 1, 4, 43, tzinfo=timezone.utc)
+_MIGRATION_147_DEPLOYED = datetime(2026, 9, 22, 1, 11, 41, tzinfo=timezone.utc)
+
+
+def _created_at(row: Dict[str, Any]) -> Optional[datetime]:
+    value = row.get("created_at")
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if not isinstance(value, datetime):
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
 def stored_outcome_column(row: Dict[str, Any]) -> Optional[str]:
     """The outcome column a stored twin_simulations row's effect was estimated on, or
-    ``None`` when the row does not say.
+    ``None`` when it cannot be known.
 
-    Rows saved before lane T2 recorded none, and it is not recoverable: runs before
-    migration 147 (2026-09-21) were estimated on ``conversion_rate``, later ones on
-    ``cohort_conversion_outcome``, and no stored field tells them apart (the proposals
-    surface labelled them all ``cohort_conversion_outcome`` before; codex r1 #2).
+    A row saved since lane T2 records it (``OUTCOME_COLUMN_KEY``) and that wins. An earlier
+    COHORT row resolves by when it was saved: ``conversion_rate`` up to migration 147's apply,
+    ``cohort_conversion_outcome`` after the deploy that shipped it (commit 4b5957189), unknown
+    in the minutes between. Measured 2026-09-28 over all 30 stored rows: 24 cohort rows
+    before 147, 3 after its deploy, none in the window, and 3 ``synthetic_uplift_v1`` rows,
+    whose outcome is the synthetic DGP's own and names no measurable column (``None``).
     """
     heterogeneity = row.get("effect_heterogeneity")
     recorded = heterogeneity.get(OUTCOME_COLUMN_KEY) if isinstance(heterogeneity, dict) else None
-    return recorded if isinstance(recorded, str) and recorded else None
+    if isinstance(recorded, str) and recorded:
+        return recorded
+    if row.get("data_provenance") != _COHORT_PROVENANCE:
+        return None
+    created = _created_at(row)
+    if created is None:
+        return None
+    if created <= _MIGRATION_147_APPLIED:
+        return "conversion_rate"
+    if created > _MIGRATION_147_DEPLOYED:
+        return "cohort_conversion_outcome"
+    return None

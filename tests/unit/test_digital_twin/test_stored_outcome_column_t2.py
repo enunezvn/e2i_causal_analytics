@@ -3,12 +3,14 @@
 The twin's outcome moved from ``cohort_conversion_outcome`` to ``adopted``. A draft experiment
 made from a stored run must measure what THAT run predicted, so ``save_simulation`` writes the
 run's outcome into the row's ``effect_heterogeneity`` JSON and ``stored_outcome_column`` reads it
-back; a row saved earlier has no known outcome.
+back; a row saved earlier resolves by provenance and date.
 """
 
 from __future__ import annotations
 
 import asyncio
+
+import pytest
 from uuid import uuid4
 
 from src.digital_twin.models.simulation_models import (
@@ -79,8 +81,51 @@ def test_a_run_without_an_outcome_records_none():
     assert OUTCOME_COLUMN_KEY not in client.captured["row"]["effect_heterogeneity"]
 
 
-def test_a_row_saved_before_lane_t2_has_no_known_outcome():
-    """Not recoverable: conversion_rate before migration 147, cohort_conversion_outcome after,
-    and nothing stored says which (codex r1 #2). Unknown, never a guessed label."""
-    for row in ({}, {"effect_heterogeneity": None}, {"effect_heterogeneity": {"by_region": {}}}):
-        assert stored_outcome_column(row) is None
+COHORT = "cohort_estimated_synthetic_gold_v1"
+
+
+@pytest.mark.parametrize(
+    ("created_at", "expected"),
+    [
+        # Measured 2026-09-28 (read-only census of all 30 stored runs): 24 cohort runs from
+        # 2026-06-18 to 2026-09-18, all before migration 147 (public.schema_migrations
+        # applied_at 2026-09-22 01:04:43Z): the twin's outcome was conversion_rate
+        # (cohort_causal_estimator._OUTCOME_COL at every revision until 4b5957189).
+        ("2026-09-18T10:32:55.951155+00:00", "conversion_rate"),
+        ("2026-09-22T01:04:43+00:00", "conversion_rate"),
+        # 3 cohort runs at 2026-09-22 07:00Z, after the deploy that applied 147 finished
+        # (run 35672404601, 01:11:41Z): cohort_conversion_outcome.
+        ("2026-09-22T07:00:12.001592+00:00", "cohort_conversion_outcome"),
+        # Between the migration and its deploy finishing, the running image is unknown.
+        ("2026-09-22T01:08:00+00:00", None),
+        (None, None),
+        ("not a date", None),
+    ],
+)
+def test_a_cohort_run_saved_before_lane_t2_resolves_its_outcome_by_date(created_at, expected):
+    row = {"data_provenance": COHORT, "created_at": created_at, "effect_heterogeneity": {}}
+    assert stored_outcome_column(row) == expected
+
+
+def test_a_datetime_created_at_resolves_too():
+    from datetime import datetime, timezone
+
+    row = {"data_provenance": COHORT, "created_at": datetime(2026, 9, 1, tzinfo=timezone.utc)}
+    assert stored_outcome_column(row) == "conversion_rate"
+
+
+@pytest.mark.parametrize("provenance", ["synthetic_uplift_v1", None, "rwd_uplift"])
+def test_a_non_cohort_run_without_a_record_has_no_known_outcome(provenance):
+    """The synthetic-uplift runs (3, 2026-06-16) estimated on the synthetic DGP's own
+    ``outcome``, which is no measurable column; anything else unrecorded is unknown too."""
+    row = {"data_provenance": provenance, "created_at": "2026-06-16T14:45:07+00:00"}
+    assert stored_outcome_column(row) is None
+
+
+def test_a_recorded_outcome_wins_over_the_date_rule():
+    row = {
+        "data_provenance": COHORT,
+        "created_at": "2026-06-18T00:00:00+00:00",
+        "effect_heterogeneity": {"outcome_column": "adopted"},
+    }
+    assert stored_outcome_column(row) == "adopted"

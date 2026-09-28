@@ -324,11 +324,11 @@ async def create_draft_experiment(
         raise HTTPException(
             status_code=422,
             detail=(
-                f"Simulation {simulation_id} was saved before the twin recorded the outcome its "
-                "effect was estimated on (earlier runs used cohort_conversion_outcome, or "
-                "conversion_rate before migration 147, and the row does not say which). A "
-                "draft names that outcome as its endpoint, so none is created: re-run the "
-                "simulation and draft the experiment from the new run."
+                f"Simulation {simulation_id} does not say which outcome its effect was "
+                "estimated on, and it cannot be resolved (a synthetic-uplift run, whose outcome "
+                "is no measurable column, or a cohort run saved while migration 147 was "
+                "deploying). A draft names that outcome as its endpoint, so none is created: "
+                "re-run the simulation and draft the experiment from the new run."
             ),
         )
     # Every diagnostic read happens BEFORE the mutation (codex r2 #5): a read that
