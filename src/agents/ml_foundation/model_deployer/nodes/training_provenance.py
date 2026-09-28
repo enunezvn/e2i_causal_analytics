@@ -162,3 +162,48 @@ def pinned_training_run_id(
             f"{trainer_run_id!r}: contradictory provenance"
         )
     return uri_run_id or trainer_run_id
+
+
+# Moved from registry_manager (module-size ratchet, #2310); re-exported there.
+def _parse_mlflow_run_id(model_uri: Optional[str]) -> Optional[str]:
+    """Extract the MLflow run id from a ``runs:/<run_id>/<path>`` URI.
+
+    ``None`` for ``models:/`` (MLflow 3.x), empty or malformed URIs (#2296: the caller
+    then pins the trainer's own run, else falls back to the experiment's best run)."""
+    if not model_uri or not model_uri.startswith("runs:/"):
+        return None
+    run_id = model_uri[len("runs:/") :].split("/", 1)[0].strip()
+    return run_id or None
+
+
+def _metrics_to_registry_dict(validation_metrics: Any) -> Dict[str, Optional[float]]:
+    """Map deployer ``validation_metrics`` onto the registry's metric keys.
+
+    ``MLModelRegistryRepository.register_model`` reads ``auc`` / ``pr_auc`` /
+    ``brier_score`` / ``calibration_slope``. The ``MetricsSchema`` python field
+    is ``auc_roc`` (aliased from the modern producer key ``roc_auc``); accept
+    all spellings. ``None`` => all-``None`` (these registry columns are
+    nullable) — an honest absence, NOT a fabricated value.
+    """
+    if validation_metrics is None:
+        data: Dict[str, Any] = {}
+    elif hasattr(validation_metrics, "model_dump"):
+        data = validation_metrics.model_dump()
+    elif isinstance(validation_metrics, dict):
+        data = validation_metrics
+    else:
+        data = {}
+
+    def _first(*keys: str) -> Optional[float]:
+        for k in keys:
+            v = data.get(k)
+            if v is not None:
+                return float(v)
+        return None
+
+    return {
+        "auc": _first("auc", "auc_roc", "roc_auc"),
+        "pr_auc": _first("pr_auc"),
+        "brier_score": _first("brier_score"),
+        "calibration_slope": _first("calibration_slope"),
+    }

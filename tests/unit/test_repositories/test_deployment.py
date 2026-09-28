@@ -32,7 +32,15 @@ class TestDeploymentStatus:
 
     def test_all_statuses_defined(self):
         """Test all expected statuses are defined."""
-        expected_statuses = {"pending", "deploying", "active", "draining", "rolled_back"}
+        # "registered": #2308 / migration 159 (a register-only deploy record, never active).
+        expected_statuses = {
+            "pending",
+            "deploying",
+            "active",
+            "draining",
+            "rolled_back",
+            "registered",
+        }
         actual_statuses = {s.value for s in DeploymentStatus}
         assert actual_statuses == expected_statuses
 

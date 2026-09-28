@@ -7,7 +7,7 @@ Split out of ``registry_manager`` (module-size ratchet, #2242); behaviour unchan
 """
 
 import logging
-from typing import Any, Optional, Tuple, cast
+from typing import Any, Dict, Optional, Tuple, cast
 
 logger = logging.getLogger(__name__)
 
@@ -136,3 +136,24 @@ async def _transition_stage_mlflow(model_name: str, version: int, target_stage: 
     except Exception as e:
         logger.warning(f"MLflow stage transition failed: {e}")
         return False
+
+
+async def _tag_model_version_mlflow(model_name: str, version: int, tags: Dict[str, str]) -> bool:
+    """Set ``tags`` on one MLflow model version (#2310); True only when every tag is set.
+
+    The version must exist: MLflow refuses a tag on a missing version, and that refusal is
+    the answer (False), never a silent success. A disabled connector is False too.
+    """
+    connector = _get_mlflow_connector()
+    client = getattr(connector, "_client", None) if connector else None
+    if client is None:
+        return False
+    try:
+        for key, value in tags.items():
+            client.set_model_version_tag(
+                name=model_name, version=str(version), key=key, value=value
+            )
+    except Exception as e:
+        logger.warning(f"MLflow tag of {model_name} v{version} failed: {e}")
+        return False
+    return True

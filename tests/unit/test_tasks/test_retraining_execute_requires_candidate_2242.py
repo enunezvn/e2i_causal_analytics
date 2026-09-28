@@ -57,6 +57,10 @@ def _db(with_candidate: bool) -> tuple[FakeAsyncSupabase, Dict[str, Any]]:
                 "model_name": MODEL,
                 "model_version": NEW_VERSION,
                 "experiment_id": exp_id,
+                # #2310: what the deployer now writes for a retrain.
+                "stage": "candidate",
+                "retrain_of_id": parent_id,
+                "mlflow_model_version": 4,
             }
         )
     history = {"id": "rt-1", "status": "pending", "model_id": parent_id}

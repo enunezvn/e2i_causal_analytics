@@ -29,6 +29,7 @@ from uuid import UUID, uuid4
 
 from .graph import create_model_deployer_graph
 from .memory_hooks import ModelDeployerMemoryHooks
+from .nodes.retrain_linkage import CANDIDATE_ENVIRONMENT, CANDIDATE_STAGE
 from .state import ModelDeployerState
 
 logger = logging.getLogger(__name__)
@@ -107,6 +108,21 @@ class ModelDeployerAgent:
         for field in required_fields:
             if field not in input_data:
                 raise ValueError(f"Missing required field: {field}")
+        # #2310: a retrain registers a CANDIDATE (register-only, no endpoint), whatever
+        # environment the caller named. No action named -> 'promote' (the pipeline's); an
+        # endpoint-deploying (or rollback) action for a retrain is refused.
+        if input_data.get("retrain_of"):
+            action = input_data.get("deployment_action") or "promote"
+            if action not in ("promote", "register"):
+                raise ValueError(
+                    "a retrain (retrain_of) is register-only: deployment_action must be "
+                    f"'promote' or 'register', got {action!r}"
+                )
+            input_data = {
+                **input_data,
+                "deployment_action": action,
+                "target_environment": CANDIDATE_ENVIRONMENT,
+            }
 
         # Prepare initial state
         initial_state: ModelDeployerState = {
@@ -278,6 +294,15 @@ class ModelDeployerAgent:
             # #2242: the ml_model_registry row THIS run wrote (None when not persisted) —
             # what a retrain's completion must point at.
             "model_registry_id": final_state.get("model_registry_id"),
+            # #2311: the exact MLflow version THIS run registered (None when the
+            # registration was simulated/failed), and the ml_deployments row it recorded
+            # (set by _store_to_database; None until then / when not persisted).
+            "mlflow_model_version": (
+                final_state.get("model_version")
+                if final_state.get("registration_successful")
+                else None
+            ),
+            "deployment_record_id": None,
             # #2157: a register/promote-only action ends after promote_stage, so
             # deployment_successful means "promoted", not "serving". Say so explicitly.
             "deployment_skipped_reason": (
@@ -491,10 +516,17 @@ class ModelDeployerAgent:
 
             # Row CONFIRMED present in the DB -> honest to mark persisted.
             output["db_persisted"] = True
+            output["deployment_record_id"] = str(persisted_row.id)
 
             # 2. Update ml_model_registry if promotion occurred. BEFORE the deployment
             # status: a promotion the registry refuses means the deployment is not active.
-            if model_registry_id and state.get("promotion_successful"):
+            # #2310: a candidate was INSERTED at stage 'candidate' by register_model; its
+            # "promotion" is the MLflow role tag, so there is no stage to transition.
+            if (
+                model_registry_id
+                and state.get("promotion_successful")
+                and state.get("current_stage") != CANDIDATE_STAGE
+            ):
                 # current_stage carries the MLflow casing ("Production");
                 # transition_stage normalises it and archives only on production.
                 new_stage = state.get("current_stage", "staging")
@@ -529,7 +561,14 @@ class ModelDeployerAgent:
 
             # Update deployment status based on outcome
             if deployment and deployment.id:
-                status = "active" if output.get("deployment_successful") else "pending"
+                # #2308: 'active' means something serves it. A successful deploy without an
+                # endpoint (register/promote only) keeps its record as 'registered'.
+                if not output.get("deployment_successful"):
+                    status = "pending"
+                elif state.get("endpoint_url"):
+                    status = "active"
+                else:
+                    status = "registered"
                 await deployment_repo.update_status(
                     deployment_id=deployment.id,
                     new_status=status,

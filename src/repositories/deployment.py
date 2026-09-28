@@ -35,6 +35,9 @@ class DeploymentStatus(str, Enum):
     ACTIVE = "active"
     DRAINING = "draining"
     ROLLED_BACK = "rolled_back"
+    # #2308 (migration 159): a register-only deploy recorded without an endpoint. Kept as a
+    # record of what was deployed (214890aa3), never 'active': nothing serves it.
+    REGISTERED = "registered"
 
 
 class DeploymentEnvironment(str, Enum):
