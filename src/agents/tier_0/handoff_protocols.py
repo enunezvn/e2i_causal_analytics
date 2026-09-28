@@ -112,7 +112,7 @@ class QCReport(TypedDict, total=False):
 
     # Details
     expectation_results: List[Dict[str, Any]]
-    failed_expectations: List[str]
+    failed_expectations: List[Dict[str, Any]]  # structured expectation results (#2292)
     warnings: List[str]
     remediation_steps: List[str]
     blocking_issues: List[str]

@@ -94,7 +94,11 @@ class DataPreparerState(BaseAgentSchema):
 
     # Quality checks
     expectation_results: Optional[List[Dict[str, Any]]] = None  # Great Expectations results
-    failed_expectations: Optional[List[str]] = None
+    # Structured expectation results (``expectation_type``, ``column``,
+    # ``severity``, ``result``) — the same dicts ``quality_checker`` puts in
+    # ``expectation_results``. Was ``List[str]``, which crashed the graph on the
+    # blocking-completeness path (#2292).
+    failed_expectations: Optional[List[Dict[str, Any]]] = None
     warnings: Optional[List[Dict[str, Any]]] = None
 
     # Dimension scores

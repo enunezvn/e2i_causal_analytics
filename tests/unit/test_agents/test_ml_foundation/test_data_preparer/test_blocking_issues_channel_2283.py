@@ -284,11 +284,11 @@ async def test_re_entry_replaces_a_nodes_own_blocker_instead_of_appending(
     nothing a naive concatenation could duplicate, so it would pass against the
     very implementation it is meant to reject.
 
-    The required-column branch is avoided on purpose — it appends a dict to
-    ``failed_expectations``, which ``DataPreparerState`` declares
-    ``Optional[List[str]]``, so the graph dies on a pydantic ValidationError at
-    the next channel boundary. That is a real pre-existing defect, unrelated to
-    this fix and reported separately.
+    The required-column branch is avoided on purpose — it appended a dict to
+    ``failed_expectations`` while ``DataPreparerState`` declared
+    ``Optional[List[str]]``, so the graph died on a pydantic ValidationError at
+    the next channel boundary. That defect is #2292, pinned by
+    ``test_failed_expectations_type_2292.py``.
     """
     csv_path = _write_patient_journeys_csv(tmp_path, with_nulls=True)
     state = _base_state(csv_path)

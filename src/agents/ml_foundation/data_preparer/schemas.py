@@ -53,7 +53,9 @@ class QCReportSchema(BaseAgentSchema):
 
     # Expectation engine output (Great Expectations)
     expectation_results: Optional[List[Dict[str, Any]]] = None
-    failed_expectations: Optional[List[str]] = None
+    # Structured expectation dicts, as ``DataPreparerState.failed_expectations``
+    # (#2292) — ``model_trainer`` / ``model_selector`` validate this report.
+    failed_expectations: Optional[List[Dict[str, Any]]] = None
     warnings: Optional[List[Dict[str, Any]]] = None
 
     # Remediation surface

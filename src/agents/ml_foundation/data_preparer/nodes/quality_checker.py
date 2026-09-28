@@ -286,7 +286,11 @@ def _check_completeness(
             null_count = df[col].isnull().sum()
             col_completeness = 1 - (null_count / len(df)) if len(df) > 0 else 0
 
-            success = null_count == 0
+            # Native bool/float: a failing entry goes to ``failed_expectations``
+            # and on to a JSONB column, and ``json.dumps`` rejects numpy.bool_
+            # (#2292).
+            success = bool(null_count == 0)
+            col_completeness = float(col_completeness)
             results.append(
                 {
                     "expectation_type": "expect_column_values_to_not_be_null",
