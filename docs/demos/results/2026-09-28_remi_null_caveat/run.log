@@ -1,0 +1,381 @@
+===== refit =====
+Remibrutinib  call_frequency               default        ate=+0.0864 (+0.0328,+0.1400) err=+0.0364 2.6s rss=0.57G
+Remibrutinib  call_frequency               +other7_tbins  ate=+0.0714 (+0.0129,+0.1299) err=+0.0214 2.5s rss=0.58G
+Remibrutinib  call_frequency               +dgp_drivers   ate=+0.0771 (+0.0337,+0.1204) err=+0.0271 2.5s rss=0.59G
+Remibrutinib  call_frequency               +both          ate=+0.0568 (+0.0203,+0.0933) err=+0.0068 2.6s rss=0.59G
+Remibrutinib  email_campaign_count         default        ate=+0.0966 (+0.0432,+0.1500) err=+0.0346 2.4s rss=0.59G
+Remibrutinib  email_campaign_count         +other7_tbins  ate=+0.0755 (+0.0316,+0.1194) err=+0.0135 2.6s rss=0.59G
+Remibrutinib  email_campaign_count         +dgp_drivers   ate=+0.0853 (+0.0454,+0.1252) err=+0.0233 2.8s rss=0.59G
+Remibrutinib  email_campaign_count         +both          ate=+0.0565 (+0.0190,+0.0939) err=-0.0055 2.6s rss=0.60G
+Remibrutinib  engagement_score             default        ate=+0.1643 (+0.1213,+0.2072) err=+0.0263 2.4s rss=0.60G
+Remibrutinib  engagement_score             +other7_tbins  ate=+0.1449 (+0.1071,+0.1826) err=+0.0069 2.5s rss=0.60G
+Remibrutinib  engagement_score             +dgp_drivers   ate=+0.1434 (+0.1081,+0.1787) err=+0.0054 2.4s rss=0.61G
+Remibrutinib  engagement_score             +both          ate=+0.1417 (+0.1102,+0.1731) err=+0.0037 2.6s rss=0.61G
+Remibrutinib  patient_support_enrollment   default        ate=+0.0896 (+0.0482,+0.1311) err=+0.0156 2.4s rss=0.61G
+Remibrutinib  patient_support_enrollment   +other7_tbins  ate=+0.0816 (+0.0453,+0.1179) err=+0.0076 2.4s rss=0.61G
+Remibrutinib  patient_support_enrollment   +dgp_drivers   ate=+0.0811 (+0.0467,+0.1155) err=+0.0071 2.6s rss=0.61G
+Remibrutinib  patient_support_enrollment   +both          ate=+0.0780 (+0.0473,+0.1087) err=+0.0040 2.6s rss=0.62G
+Remibrutinib  peer_influence_score         default        ate=+0.0935 (+0.0451,+0.1419) err=+0.0005 2.5s rss=0.62G
+Remibrutinib  peer_influence_score         +other7_tbins  ate=+0.0974 (+0.0609,+0.1339) err=+0.0044 2.5s rss=0.62G
+Remibrutinib  peer_influence_score         +dgp_drivers   ate=+0.0951 (+0.0592,+0.1310) err=+0.0021 2.8s rss=0.62G
+Remibrutinib  peer_influence_score         +both          ate=+0.0854 (+0.0536,+0.1172) err=-0.0076 2.8s rss=0.62G
+Remibrutinib  rep_training_score           default        ate=+0.0472 (+0.0083,+0.0861) err=+0.0472 2.4s rss=0.62G
+Remibrutinib  rep_training_score           +other7_tbins  ate=+0.0342 (-0.0008,+0.0691) err=+0.0342 2.4s rss=0.62G
+Remibrutinib  rep_training_score           +dgp_drivers   ate=+0.0523 (+0.0205,+0.0841) err=+0.0523 2.5s rss=0.62G
+Remibrutinib  rep_training_score           +both          ate=+0.0432 (+0.0136,+0.0729) err=+0.0432 2.6s rss=0.63G
+Remibrutinib  sample_volume                default        ate=+0.0786 (+0.0237,+0.1334) err=+0.0416 2.3s rss=0.63G
+Remibrutinib  sample_volume                +other7_tbins  ate=+0.0526 (+0.0001,+0.1052) err=+0.0156 2.4s rss=0.63G
+Remibrutinib  sample_volume                +dgp_drivers   ate=+0.0547 (+0.0140,+0.0953) err=+0.0177 2.5s rss=0.63G
+Remibrutinib  sample_volume                +both          ate=+0.0295 (-0.0110,+0.0700) err=-0.0075 2.6s rss=0.64G
+Remibrutinib  speaker_program_count        default        ate=+0.0984 (+0.0410,+0.1559) err=-0.0146 2.7s rss=0.64G
+Remibrutinib  speaker_program_count        +other7_tbins  ate=+0.0831 (+0.0403,+0.1258) err=-0.0299 2.3s rss=0.64G
+Remibrutinib  speaker_program_count        +dgp_drivers   ate=+0.1031 (+0.0623,+0.1440) err=-0.0099 2.4s rss=0.64G
+Remibrutinib  speaker_program_count        +both          ate=+0.0948 (+0.0572,+0.1323) err=-0.0182 2.4s rss=0.64G
+Fabhalta      call_frequency               default        ate=+0.0613 (-0.0173,+0.1398) err=+0.0113 2.4s rss=0.65G
+Fabhalta      call_frequency               +other7_tbins  ate=+0.0584 (+0.0126,+0.1042) err=+0.0084 2.6s rss=0.65G
+Fabhalta      call_frequency               +dgp_drivers   ate=+0.0769 (+0.0363,+0.1175) err=+0.0269 2.5s rss=0.65G
+Fabhalta      call_frequency               +both          ate=+0.0630 (+0.0284,+0.0976) err=+0.0130 2.7s rss=0.65G
+Fabhalta      email_campaign_count         default        ate=+0.0975 (+0.0383,+0.1567) err=+0.0355 2.5s rss=0.65G
+Fabhalta      email_campaign_count         +other7_tbins  ate=+0.0884 (+0.0425,+0.1344) err=+0.0264 2.5s rss=0.65G
+Fabhalta      email_campaign_count         +dgp_drivers   ate=+0.0972 (+0.0543,+0.1400) err=+0.0352 2.5s rss=0.65G
+Fabhalta      email_campaign_count         +both          ate=+0.0665 (+0.0312,+0.1019) err=+0.0045 2.6s rss=0.66G
+Fabhalta      engagement_score             default        ate=+0.1560 (+0.1154,+0.1967) err=+0.0180 2.2s rss=0.66G
+Fabhalta      engagement_score             +other7_tbins  ate=+0.1456 (+0.1089,+0.1823) err=+0.0076 2.6s rss=0.66G
+Fabhalta      engagement_score             +dgp_drivers   ate=+0.1502 (+0.1167,+0.1837) err=+0.0122 2.8s rss=0.66G
+Fabhalta      engagement_score             +both          ate=+0.1521 (+0.1217,+0.1826) err=+0.0141 2.9s rss=0.66G
+Fabhalta      patient_support_enrollment   default        ate=+0.0614 (+0.0204,+0.1023) err=-0.0126 2.5s rss=0.66G
+Fabhalta      patient_support_enrollment   +other7_tbins  ate=+0.0653 (+0.0301,+0.1004) err=-0.0087 2.5s rss=0.66G
+Fabhalta      patient_support_enrollment   +dgp_drivers   ate=+0.0779 (+0.0452,+0.1105) err=+0.0039 2.4s rss=0.67G
+Fabhalta      patient_support_enrollment   +both          ate=+0.0776 (+0.0476,+0.1076) err=+0.0036 2.5s rss=0.67G
+Fabhalta      peer_influence_score         default        ate=+0.0726 (+0.0283,+0.1170) err=-0.0204 2.3s rss=0.67G
+Fabhalta      peer_influence_score         +other7_tbins  ate=+0.0854 (+0.0493,+0.1216) err=-0.0076 2.3s rss=0.67G
+Fabhalta      peer_influence_score         +dgp_drivers   ate=+0.1063 (+0.0704,+0.1421) err=+0.0133 2.4s rss=0.67G
+Fabhalta      peer_influence_score         +both          ate=+0.0910 (+0.0605,+0.1214) err=-0.0020 2.5s rss=0.68G
+Fabhalta      rep_training_score           default        ate=+0.0058 (-0.0348,+0.0465) err=+0.0058 2.3s rss=0.68G
+Fabhalta      rep_training_score           +other7_tbins  ate=-0.0105 (-0.0450,+0.0241) err=-0.0105 2.4s rss=0.68G
+Fabhalta      rep_training_score           +dgp_drivers   ate=-0.0180 (-0.0515,+0.0155) err=-0.0180 2.5s rss=0.68G
+Fabhalta      rep_training_score           +both          ate=-0.0180 (-0.0476,+0.0116) err=-0.0180 2.6s rss=0.68G
+Fabhalta      sample_volume                default        ate=-0.0038 (-0.0783,+0.0707) err=-0.0408 2.4s rss=0.68G
+Fabhalta      sample_volume                +other7_tbins  ate=+0.0443 (-0.0138,+0.1024) err=+0.0073 2.5s rss=0.68G
+Fabhalta      sample_volume                +dgp_drivers   ate=+0.0387 (-0.0009,+0.0783) err=+0.0017 2.5s rss=0.68G
+Fabhalta      sample_volume                +both          ate=+0.0427 (+0.0013,+0.0840) err=+0.0057 2.7s rss=0.69G
+Fabhalta      speaker_program_count        default        ate=+0.0896 (+0.0352,+0.1439) err=-0.0234 2.4s rss=0.69G
+Fabhalta      speaker_program_count        +other7_tbins  ate=+0.0767 (+0.0356,+0.1177) err=-0.0363 2.4s rss=0.69G
+Fabhalta      speaker_program_count        +dgp_drivers   ate=+0.1043 (+0.0662,+0.1423) err=-0.0087 2.6s rss=0.69G
+Fabhalta      speaker_program_count        +both          ate=+0.1009 (+0.0668,+0.1350) err=-0.0121 2.7s rss=0.69G
+Kisqali       call_frequency               default        ate=+0.0318 (-0.0270,+0.0907) err=-0.0182 2.4s rss=0.69G
+Kisqali       call_frequency               +other7_tbins  ate=+0.0022 (-0.0414,+0.0459) err=-0.0478 2.5s rss=0.69G
+Kisqali       call_frequency               +dgp_drivers   ate=+0.0659 (+0.0232,+0.1087) err=+0.0159 2.6s rss=0.69G
+Kisqali       call_frequency               +both          ate=+0.0218 (-0.0226,+0.0662) err=-0.0282 2.7s rss=0.70G
+Kisqali       email_campaign_count         default        ate=+0.0477 (-0.0071,+0.1025) err=-0.0143 2.5s rss=0.70G
+Kisqali       email_campaign_count         +other7_tbins  ate=+0.0480 (-0.0031,+0.0990) err=-0.0140 2.6s rss=0.70G
+Kisqali       email_campaign_count         +dgp_drivers   ate=+0.0726 (+0.0315,+0.1137) err=+0.0106 2.5s rss=0.70G
+Kisqali       email_campaign_count         +both          ate=+0.0577 (+0.0230,+0.0924) err=-0.0043 2.5s rss=0.70G
+Kisqali       engagement_score             default        ate=+0.1069 (+0.0607,+0.1531) err=-0.0311 2.5s rss=0.70G
+Kisqali       engagement_score             +other7_tbins  ate=+0.1106 (+0.0709,+0.1503) err=-0.0274 2.5s rss=0.70G
+Kisqali       engagement_score             +dgp_drivers   ate=+0.0972 (+0.0553,+0.1390) err=-0.0408 2.5s rss=0.70G
+Kisqali       engagement_score             +both          ate=+0.0988 (+0.0626,+0.1349) err=-0.0392 2.6s rss=0.71G
+Kisqali       patient_support_enrollment   default        ate=+0.0626 (+0.0211,+0.1041) err=-0.0114 2.3s rss=0.71G
+Kisqali       patient_support_enrollment   +other7_tbins  ate=+0.0746 (+0.0394,+0.1097) err=+0.0006 2.2s rss=0.71G
+Kisqali       patient_support_enrollment   +dgp_drivers   ate=+0.0761 (+0.0429,+0.1093) err=+0.0021 2.3s rss=0.71G
+Kisqali       patient_support_enrollment   +both          ate=+0.0715 (+0.0413,+0.1017) err=-0.0025 2.5s rss=0.72G
+Kisqali       peer_influence_score         default        ate=+0.1107 (+0.0619,+0.1595) err=+0.0177 2.2s rss=0.72G
+Kisqali       peer_influence_score         +other7_tbins  ate=+0.1025 (+0.0655,+0.1395) err=+0.0095 2.2s rss=0.72G
+Kisqali       peer_influence_score         +dgp_drivers   ate=+0.0887 (+0.0503,+0.1271) err=-0.0043 2.5s rss=0.72G
+Kisqali       peer_influence_score         +both          ate=+0.0827 (+0.0510,+0.1145) err=-0.0103 2.4s rss=0.72G
+Kisqali       rep_training_score           default        ate=-0.0109 (-0.0500,+0.0282) err=-0.0109 2.3s rss=0.73G
+Kisqali       rep_training_score           +other7_tbins  ate=-0.0189 (-0.0527,+0.0148) err=-0.0189 2.4s rss=0.73G
+Kisqali       rep_training_score           +dgp_drivers   ate=-0.0294 (-0.0624,+0.0036) err=-0.0294 2.6s rss=0.73G
+Kisqali       rep_training_score           +both          ate=-0.0253 (-0.0543,+0.0037) err=-0.0253 2.6s rss=0.73G
+Kisqali       sample_volume                default        ate=+0.0334 (-0.0167,+0.0836) err=-0.0036 2.4s rss=0.73G
+Kisqali       sample_volume                +other7_tbins  ate=+0.0409 (-0.0008,+0.0826) err=+0.0039 2.7s rss=0.73G
+Kisqali       sample_volume                +dgp_drivers   ate=+0.0382 (+0.0003,+0.0761) err=+0.0012 2.6s rss=0.73G
+Kisqali       sample_volume                +both          ate=+0.0301 (-0.0116,+0.0717) err=-0.0069 2.9s rss=0.73G
+Kisqali       speaker_program_count        default        ate=+0.1373 (+0.0188,+0.2557) err=+0.0243 2.4s rss=0.73G
+Kisqali       speaker_program_count        +other7_tbins  ate=+0.0816 (+0.0411,+0.1220) err=-0.0314 2.4s rss=0.73G
+Kisqali       speaker_program_count        +dgp_drivers   ate=+0.1021 (+0.0596,+0.1445) err=-0.0109 2.3s rss=0.73G
+Kisqali       speaker_program_count        +both          ate=+0.1035 (+0.0666,+0.1404) err=-0.0095 2.5s rss=0.73G
+===== placebo =====
+placebo Remibrutinib k=0 ate=-0.0044 excl0=False rss=0.74G
+placebo Remibrutinib k=1 ate=+0.0488 excl0=True rss=0.74G
+placebo Remibrutinib k=2 ate=+0.0210 excl0=False rss=0.74G
+placebo Remibrutinib k=3 ate=+0.0231 excl0=False rss=0.74G
+placebo Remibrutinib k=4 ate=+0.0013 excl0=False rss=0.74G
+placebo Remibrutinib k=5 ate=+0.0066 excl0=False rss=0.75G
+placebo Remibrutinib k=6 ate=-0.0171 excl0=False rss=0.75G
+placebo Remibrutinib k=7 ate=+0.0036 excl0=False rss=0.75G
+placebo Remibrutinib k=8 ate=-0.0145 excl0=False rss=0.75G
+placebo Remibrutinib k=9 ate=-0.0137 excl0=False rss=0.75G
+placebo Remibrutinib k=10 ate=+0.0158 excl0=False rss=0.75G
+placebo Remibrutinib k=11 ate=-0.0087 excl0=False rss=0.75G
+placebo Remibrutinib k=12 ate=+0.0006 excl0=False rss=0.75G
+placebo Remibrutinib k=13 ate=-0.0060 excl0=False rss=0.75G
+placebo Remibrutinib k=14 ate=-0.0209 excl0=False rss=0.75G
+placebo Remibrutinib k=15 ate=+0.0134 excl0=False rss=0.75G
+placebo Remibrutinib k=16 ate=+0.0029 excl0=False rss=0.75G
+placebo Remibrutinib k=17 ate=-0.0392 excl0=True rss=0.75G
+placebo Remibrutinib k=18 ate=+0.0102 excl0=False rss=0.75G
+placebo Remibrutinib k=19 ate=-0.0152 excl0=False rss=0.75G
+placebo Remibrutinib k=20 ate=+0.0312 excl0=False rss=0.75G
+placebo Remibrutinib k=21 ate=-0.0042 excl0=False rss=0.75G
+placebo Remibrutinib k=22 ate=-0.0394 excl0=True rss=0.75G
+placebo Remibrutinib k=23 ate=-0.0094 excl0=False rss=0.75G
+placebo Remibrutinib k=24 ate=-0.0122 excl0=False rss=0.75G
+placebo Remibrutinib k=25 ate=-0.0072 excl0=False rss=0.75G
+placebo Remibrutinib k=26 ate=+0.0074 excl0=False rss=0.75G
+placebo Remibrutinib k=27 ate=-0.0052 excl0=False rss=0.75G
+placebo Remibrutinib k=28 ate=-0.0056 excl0=False rss=0.75G
+placebo Remibrutinib k=29 ate=-0.0109 excl0=False rss=0.75G
+placebo Remibrutinib k=30 ate=+0.0251 excl0=False rss=0.75G
+placebo Remibrutinib k=31 ate=+0.0136 excl0=False rss=0.75G
+placebo Remibrutinib k=32 ate=+0.0255 excl0=False rss=0.75G
+placebo Remibrutinib k=33 ate=+0.0108 excl0=False rss=0.75G
+placebo Remibrutinib k=34 ate=-0.0441 excl0=True rss=0.75G
+placebo Remibrutinib k=35 ate=-0.0030 excl0=False rss=0.75G
+placebo Remibrutinib k=36 ate=-0.0149 excl0=False rss=0.75G
+placebo Remibrutinib k=37 ate=+0.0046 excl0=False rss=0.75G
+placebo Remibrutinib k=38 ate=+0.0107 excl0=False rss=0.75G
+placebo Remibrutinib k=39 ate=+0.0152 excl0=False rss=0.75G
+placebo Remibrutinib k=40 ate=-0.0131 excl0=False rss=0.75G
+placebo Remibrutinib k=41 ate=-0.0294 excl0=False rss=0.75G
+placebo Remibrutinib k=42 ate=-0.0067 excl0=False rss=0.75G
+placebo Remibrutinib k=43 ate=-0.0305 excl0=False rss=0.75G
+placebo Remibrutinib k=44 ate=-0.0187 excl0=False rss=0.75G
+placebo Remibrutinib k=45 ate=-0.0175 excl0=False rss=0.75G
+placebo Remibrutinib k=46 ate=-0.0063 excl0=False rss=0.75G
+placebo Remibrutinib k=47 ate=-0.0116 excl0=False rss=0.75G
+placebo Remibrutinib k=48 ate=-0.0000 excl0=False rss=0.75G
+placebo Remibrutinib k=49 ate=+0.0182 excl0=False rss=0.75G
+placebo Remibrutinib k=50 ate=+0.0173 excl0=False rss=0.75G
+placebo Remibrutinib k=51 ate=+0.0088 excl0=False rss=0.75G
+placebo Remibrutinib k=52 ate=+0.0122 excl0=False rss=0.75G
+placebo Remibrutinib k=53 ate=-0.0561 excl0=True rss=0.75G
+placebo Remibrutinib k=54 ate=-0.0261 excl0=False rss=0.75G
+placebo Remibrutinib k=55 ate=-0.0145 excl0=False rss=0.75G
+placebo Remibrutinib k=56 ate=+0.0077 excl0=False rss=0.75G
+placebo Remibrutinib k=57 ate=-0.0072 excl0=False rss=0.75G
+placebo Remibrutinib k=58 ate=-0.0008 excl0=False rss=0.75G
+placebo Remibrutinib k=59 ate=+0.0179 excl0=False rss=0.75G
+placebo Remibrutinib k=60 ate=+0.0211 excl0=False rss=0.75G
+placebo Remibrutinib k=61 ate=-0.0172 excl0=False rss=0.75G
+placebo Remibrutinib k=62 ate=+0.0099 excl0=False rss=0.75G
+placebo Remibrutinib k=63 ate=+0.0170 excl0=False rss=0.75G
+placebo Remibrutinib k=64 ate=+0.0080 excl0=False rss=0.75G
+placebo Remibrutinib k=65 ate=-0.0149 excl0=False rss=0.75G
+placebo Remibrutinib k=66 ate=-0.0135 excl0=False rss=0.75G
+placebo Remibrutinib k=67 ate=+0.0092 excl0=False rss=0.75G
+placebo Remibrutinib k=68 ate=-0.0098 excl0=False rss=0.75G
+placebo Remibrutinib k=69 ate=-0.0227 excl0=False rss=0.75G
+placebo Remibrutinib k=70 ate=+0.0168 excl0=False rss=0.75G
+placebo Remibrutinib k=71 ate=-0.0231 excl0=False rss=0.75G
+placebo Remibrutinib k=72 ate=-0.0079 excl0=False rss=0.75G
+placebo Remibrutinib k=73 ate=-0.0183 excl0=False rss=0.75G
+placebo Remibrutinib k=74 ate=-0.0242 excl0=False rss=0.75G
+placebo Remibrutinib k=75 ate=+0.0123 excl0=False rss=0.75G
+placebo Remibrutinib k=76 ate=+0.0128 excl0=False rss=0.75G
+placebo Remibrutinib k=77 ate=+0.0243 excl0=False rss=0.75G
+placebo Remibrutinib k=78 ate=+0.0238 excl0=False rss=0.75G
+placebo Remibrutinib k=79 ate=-0.0224 excl0=False rss=0.75G
+placebo Remibrutinib k=80 ate=+0.0436 excl0=True rss=0.75G
+placebo Remibrutinib k=81 ate=-0.0178 excl0=False rss=0.75G
+placebo Remibrutinib k=82 ate=+0.0288 excl0=False rss=0.75G
+placebo Remibrutinib k=83 ate=+0.0011 excl0=False rss=0.75G
+placebo Remibrutinib k=84 ate=-0.0106 excl0=False rss=0.75G
+placebo Remibrutinib k=85 ate=-0.0148 excl0=False rss=0.75G
+placebo Remibrutinib k=86 ate=-0.0184 excl0=False rss=0.75G
+placebo Remibrutinib k=87 ate=+0.0051 excl0=False rss=0.75G
+placebo Remibrutinib k=88 ate=-0.0294 excl0=False rss=0.75G
+placebo Remibrutinib k=89 ate=-0.0173 excl0=False rss=0.75G
+placebo Remibrutinib k=90 ate=+0.0150 excl0=False rss=0.75G
+placebo Remibrutinib k=91 ate=-0.0252 excl0=False rss=0.75G
+placebo Remibrutinib k=92 ate=-0.0007 excl0=False rss=0.75G
+placebo Remibrutinib k=93 ate=-0.0021 excl0=False rss=0.75G
+placebo Remibrutinib k=94 ate=-0.0090 excl0=False rss=0.75G
+placebo Remibrutinib k=95 ate=-0.0296 excl0=False rss=0.75G
+placebo Remibrutinib k=96 ate=-0.0109 excl0=False rss=0.75G
+placebo Remibrutinib k=97 ate=+0.0086 excl0=False rss=0.75G
+placebo Remibrutinib k=98 ate=-0.0189 excl0=False rss=0.75G
+placebo Remibrutinib k=99 ate=+0.0014 excl0=False rss=0.75G
+placebo Fabhalta k=0 ate=+0.0017 excl0=False rss=0.76G
+placebo Fabhalta k=1 ate=+0.0079 excl0=False rss=0.76G
+placebo Fabhalta k=2 ate=-0.0026 excl0=False rss=0.76G
+placebo Fabhalta k=3 ate=+0.0462 excl0=True rss=0.76G
+placebo Fabhalta k=4 ate=-0.0160 excl0=False rss=0.76G
+placebo Fabhalta k=5 ate=-0.0053 excl0=False rss=0.77G
+placebo Fabhalta k=6 ate=+0.0053 excl0=False rss=0.77G
+placebo Fabhalta k=7 ate=+0.0054 excl0=False rss=0.77G
+placebo Fabhalta k=8 ate=-0.0024 excl0=False rss=0.77G
+placebo Fabhalta k=9 ate=-0.0343 excl0=False rss=0.77G
+placebo Fabhalta k=10 ate=+0.0211 excl0=False rss=0.77G
+placebo Fabhalta k=11 ate=-0.0203 excl0=False rss=0.77G
+placebo Fabhalta k=12 ate=+0.0073 excl0=False rss=0.78G
+placebo Fabhalta k=13 ate=+0.0265 excl0=False rss=0.78G
+placebo Fabhalta k=14 ate=-0.0126 excl0=False rss=0.78G
+placebo Fabhalta k=15 ate=-0.0203 excl0=False rss=0.78G
+placebo Fabhalta k=16 ate=-0.0056 excl0=False rss=0.78G
+placebo Fabhalta k=17 ate=+0.0101 excl0=False rss=0.79G
+placebo Fabhalta k=18 ate=+0.0033 excl0=False rss=0.79G
+placebo Fabhalta k=19 ate=-0.0486 excl0=True rss=0.79G
+placebo Fabhalta k=20 ate=+0.0127 excl0=False rss=0.79G
+placebo Fabhalta k=21 ate=+0.0167 excl0=False rss=0.79G
+placebo Fabhalta k=22 ate=+0.0341 excl0=False rss=0.79G
+placebo Fabhalta k=23 ate=+0.0347 excl0=False rss=0.79G
+placebo Fabhalta k=24 ate=+0.0111 excl0=False rss=0.80G
+placebo Fabhalta k=25 ate=+0.0313 excl0=False rss=0.80G
+placebo Fabhalta k=26 ate=+0.0084 excl0=False rss=0.80G
+placebo Fabhalta k=27 ate=+0.0036 excl0=False rss=0.80G
+placebo Fabhalta k=28 ate=+0.0210 excl0=False rss=0.80G
+placebo Fabhalta k=29 ate=-0.0215 excl0=False rss=0.81G
+placebo Fabhalta k=30 ate=+0.0033 excl0=False rss=0.81G
+placebo Fabhalta k=31 ate=-0.0002 excl0=False rss=0.81G
+placebo Fabhalta k=32 ate=+0.0165 excl0=False rss=0.81G
+placebo Fabhalta k=33 ate=-0.0148 excl0=False rss=0.81G
+placebo Fabhalta k=34 ate=-0.0095 excl0=False rss=0.81G
+placebo Fabhalta k=35 ate=+0.0071 excl0=False rss=0.81G
+placebo Fabhalta k=36 ate=-0.0056 excl0=False rss=0.82G
+placebo Fabhalta k=37 ate=-0.0172 excl0=False rss=0.82G
+placebo Fabhalta k=38 ate=-0.0108 excl0=False rss=0.82G
+placebo Fabhalta k=39 ate=+0.0110 excl0=False rss=0.82G
+placebo Kisqali k=0 ate=-0.0095 excl0=False rss=0.82G
+placebo Kisqali k=1 ate=-0.0218 excl0=False rss=0.83G
+placebo Kisqali k=2 ate=-0.0082 excl0=False rss=0.83G
+placebo Kisqali k=3 ate=-0.0172 excl0=False rss=0.83G
+placebo Kisqali k=4 ate=-0.0118 excl0=False rss=0.83G
+placebo Kisqali k=5 ate=-0.0014 excl0=False rss=0.83G
+placebo Kisqali k=6 ate=+0.0043 excl0=False rss=0.83G
+placebo Kisqali k=7 ate=+0.0030 excl0=False rss=0.83G
+placebo Kisqali k=8 ate=+0.0115 excl0=False rss=0.84G
+placebo Kisqali k=9 ate=+0.0001 excl0=False rss=0.84G
+placebo Kisqali k=10 ate=+0.0202 excl0=False rss=0.84G
+placebo Kisqali k=11 ate=-0.0162 excl0=False rss=0.84G
+placebo Kisqali k=12 ate=+0.0072 excl0=False rss=0.84G
+placebo Kisqali k=13 ate=+0.0212 excl0=False rss=0.85G
+placebo Kisqali k=14 ate=-0.0126 excl0=False rss=0.85G
+placebo Kisqali k=15 ate=+0.0005 excl0=False rss=0.85G
+placebo Kisqali k=16 ate=+0.0307 excl0=False rss=0.85G
+placebo Kisqali k=17 ate=+0.0052 excl0=False rss=0.85G
+placebo Kisqali k=18 ate=+0.0009 excl0=False rss=0.85G
+placebo Kisqali k=19 ate=+0.0278 excl0=False rss=0.85G
+placebo Kisqali k=20 ate=+0.0167 excl0=False rss=0.86G
+placebo Kisqali k=21 ate=-0.0008 excl0=False rss=0.86G
+placebo Kisqali k=22 ate=-0.0280 excl0=False rss=0.86G
+placebo Kisqali k=23 ate=+0.0480 excl0=True rss=0.86G
+placebo Kisqali k=24 ate=-0.0227 excl0=False rss=0.86G
+placebo Kisqali k=25 ate=-0.0099 excl0=False rss=0.87G
+placebo Kisqali k=26 ate=-0.0196 excl0=False rss=0.87G
+placebo Kisqali k=27 ate=+0.0227 excl0=False rss=0.87G
+placebo Kisqali k=28 ate=-0.0047 excl0=False rss=0.87G
+placebo Kisqali k=29 ate=+0.0141 excl0=False rss=0.87G
+placebo Kisqali k=30 ate=-0.0482 excl0=True rss=0.87G
+placebo Kisqali k=31 ate=+0.0063 excl0=False rss=0.87G
+placebo Kisqali k=32 ate=-0.0237 excl0=False rss=0.88G
+placebo Kisqali k=33 ate=-0.0035 excl0=False rss=0.88G
+placebo Kisqali k=34 ate=+0.0391 excl0=True rss=0.88G
+placebo Kisqali k=35 ate=+0.0011 excl0=False rss=0.88G
+placebo Kisqali k=36 ate=-0.0177 excl0=False rss=0.88G
+placebo Kisqali k=37 ate=-0.0153 excl0=False rss=0.88G
+placebo Kisqali k=38 ate=+0.0267 excl0=False rss=0.88G
+placebo Kisqali k=39 ate=+0.0342 excl0=False rss=0.88G
+===== seeds =====
+seed 427 ate=+0.0472 excl0=True rss=0.90G
+seed 2001 ate=-0.0136 excl0=False rss=0.91G
+seed 2002 ate=+0.0062 excl0=False rss=0.91G
+seed 2003 ate=+0.0074 excl0=False rss=0.91G
+seed 2004 ate=-0.0321 excl0=False rss=0.91G
+seed 2005 ate=+0.0095 excl0=False rss=0.91G
+seed 2006 ate=-0.0083 excl0=False rss=0.91G
+seed 2007 ate=+0.0136 excl0=False rss=0.91G
+seed 2008 ate=-0.0208 excl0=False rss=0.91G
+seed 2009 ate=+0.0011 excl0=False rss=0.92G
+seed 2010 ate=+0.0019 excl0=False rss=0.92G
+seed 2011 ate=+0.0297 excl0=False rss=0.92G
+seed 2012 ate=+0.0233 excl0=False rss=0.92G
+seed 2013 ate=+0.0049 excl0=False rss=0.92G
+seed 2014 ate=-0.0074 excl0=False rss=0.93G
+seed 2015 ate=-0.0033 excl0=False rss=0.93G
+seed 2016 ate=+0.0209 excl0=False rss=0.93G
+seed 2017 ate=+0.0056 excl0=False rss=0.93G
+seed 2018 ate=-0.0118 excl0=False rss=0.93G
+seed 2019 ate=-0.0106 excl0=False rss=0.93G
+seed 2020 ate=+0.0008 excl0=False rss=0.93G
+seed 2021 ate=-0.0129 excl0=False rss=0.93G
+seed 2022 ate=+0.0198 excl0=False rss=0.93G
+seed 2023 ate=-0.0070 excl0=False rss=0.93G
+seed 2024 ate=-0.0061 excl0=False rss=0.93G
+seed 2025 ate=-0.0132 excl0=False rss=0.93G
+seed 2026 ate=-0.0156 excl0=False rss=0.93G
+seed 2027 ate=-0.0180 excl0=False rss=0.93G
+seed 2028 ate=-0.0030 excl0=False rss=0.93G
+seed 2029 ate=-0.0485 excl0=True rss=0.93G
+seed 2030 ate=-0.0014 excl0=False rss=0.93G
+seed 2031 ate=+0.0047 excl0=False rss=0.93G
+seed 2032 ate=+0.0041 excl0=False rss=0.93G
+seed 2033 ate=-0.0158 excl0=False rss=0.93G
+seed 2034 ate=-0.0107 excl0=False rss=0.93G
+seed 2035 ate=+0.0113 excl0=False rss=0.93G
+seed 2036 ate=+0.0043 excl0=False rss=0.93G
+seed 2037 ate=+0.0218 excl0=False rss=0.93G
+seed 2038 ate=-0.0376 excl0=True rss=0.93G
+seed 2039 ate=-0.0148 excl0=False rss=0.93G
+seed 2040 ate=-0.0085 excl0=False rss=0.93G
+seed 2041 ate=-0.0085 excl0=False rss=0.93G
+seed 2042 ate=+0.0326 excl0=False rss=0.93G
+seed 2043 ate=+0.0116 excl0=False rss=0.93G
+seed 2044 ate=-0.0143 excl0=False rss=0.93G
+seed 2045 ate=+0.0190 excl0=False rss=0.93G
+seed 2046 ate=+0.0109 excl0=False rss=0.93G
+seed 2047 ate=-0.0162 excl0=False rss=0.93G
+seed 2048 ate=+0.0223 excl0=False rss=0.93G
+seed 2049 ate=-0.0037 excl0=False rss=0.93G
+seed 2050 ate=-0.0199 excl0=False rss=0.93G
+seed 2051 ate=-0.0004 excl0=False rss=0.93G
+seed 2052 ate=-0.0361 excl0=False rss=0.93G
+seed 2053 ate=-0.0065 excl0=False rss=0.93G
+seed 2054 ate=+0.0093 excl0=False rss=0.93G
+seed 2055 ate=+0.0299 excl0=False rss=0.93G
+seed 2056 ate=+0.0045 excl0=False rss=0.93G
+seed 2057 ate=+0.0303 excl0=False rss=0.93G
+seed 2058 ate=-0.0029 excl0=False rss=0.93G
+seed 2059 ate=+0.0341 excl0=False rss=0.93G
+seed 2060 ate=+0.0248 excl0=False rss=0.93G
+seed 2061 ate=-0.0056 excl0=False rss=0.93G
+seed 2062 ate=+0.0198 excl0=False rss=0.93G
+seed 2063 ate=+0.0213 excl0=False rss=0.93G
+seed 2064 ate=-0.0021 excl0=False rss=0.93G
+seed 2065 ate=+0.0257 excl0=False rss=0.93G
+seed 2066 ate=-0.0067 excl0=False rss=0.93G
+seed 2067 ate=+0.0283 excl0=False rss=0.93G
+seed 2068 ate=+0.0160 excl0=False rss=0.93G
+seed 2069 ate=-0.0130 excl0=False rss=0.93G
+seed 2070 ate=-0.0090 excl0=False rss=0.93G
+seed 2071 ate=+0.0197 excl0=False rss=0.93G
+seed 2072 ate=+0.0150 excl0=False rss=0.93G
+seed 2073 ate=+0.0260 excl0=False rss=0.93G
+seed 2074 ate=+0.0188 excl0=False rss=0.93G
+seed 2075 ate=-0.0137 excl0=False rss=0.93G
+seed 2076 ate=+0.0224 excl0=False rss=0.93G
+seed 2077 ate=-0.0154 excl0=False rss=0.93G
+seed 2078 ate=+0.0113 excl0=False rss=0.93G
+seed 2079 ate=+0.0142 excl0=False rss=0.93G
+seed 2080 ate=+0.0160 excl0=False rss=0.93G
+seed 2081 ate=-0.0121 excl0=False rss=0.93G
+seed 2082 ate=+0.0397 excl0=True rss=0.93G
+seed 2083 ate=+0.0200 excl0=False rss=0.93G
+seed 2084 ate=+0.0013 excl0=False rss=0.93G
+seed 2085 ate=-0.0088 excl0=False rss=0.93G
+seed 2086 ate=-0.0202 excl0=False rss=0.93G
+seed 2087 ate=+0.0035 excl0=False rss=0.93G
+seed 2088 ate=-0.0151 excl0=False rss=0.93G
+seed 2089 ate=-0.0259 excl0=False rss=0.93G
+seed 2090 ate=-0.0119 excl0=False rss=0.93G
+seed 2091 ate=-0.0349 excl0=False rss=0.93G
+seed 2092 ate=-0.0218 excl0=False rss=0.93G
+seed 2093 ate=-0.0141 excl0=False rss=0.93G
+seed 2094 ate=-0.0015 excl0=False rss=0.93G
+seed 2095 ate=-0.0006 excl0=False rss=0.93G
+seed 2096 ate=-0.0024 excl0=False rss=0.93G
+seed 2097 ate=+0.0320 excl0=False rss=0.93G
+seed 2098 ate=-0.0139 excl0=False rss=0.93G
+seed 2099 ate=+0.0005 excl0=False rss=0.93G
+seed 2100 ate=-0.0041 excl0=False rss=0.93G
+DONE

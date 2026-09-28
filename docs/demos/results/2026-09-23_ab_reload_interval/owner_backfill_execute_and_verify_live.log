@@ -1,0 +1,335 @@
+2026-09-23 20:02:33,830 - INFO - ========================================================================
+2026-09-23 20:02:33,830 - INFO - hcp_brand_adoption treatment-arm + channel re-plant backfill  (EXECUTE)  seed=427  run_date=2026-09-23
+2026-09-23 20:02:33,830 - INFO -   brand adoption scales: {'Remibrutinib': 1.0, 'Kisqali': 0.8, 'Fabhalta': 1.2}
+2026-09-23 20:02:33,830 - INFO - ========================================================================
+2026-09-23 20:02:36,223 - INFO - Read 5000 synthetic HCP centrality rows from hcp_profiles.
+2026-09-23 20:02:39,601 - INFO - Read 13797 planted per_hcp_rollup rows over 10136 (hcp, brand) pairs from business_metrics (metric_date 2026-05-01..2026-09-21).
+2026-09-23 20:02:41,215 - INFO - Wrote backup of 15000 live label rows to /home/enunez/Projects/e2i_causal_analytics/data/backups/hcp_brand_adoption_label_backup_20260923T200241.tsv
+2026-09-23 20:02:41,595 - INFO - Derived 15000 rows (5000 HCPs x 3 brands): treatment_arm + adopted + channel term; joined 10136 / non-joined 4864.
+2026-09-23 20:02:41,595 - INFO - --- PER-BRAND DGP SUMMARY (treatment -> outcome) ---
+2026-09-23 20:02:41,595 - INFO -   brand          scale   treat_rate  adopt_rate  TRUE_ATE (mean prob CATE)
+2026-09-23 20:02:41,603 - INFO -   Remibrutinib   1.0     0.4984      0.3886      0.1412                
+2026-09-23 20:02:41,611 - INFO -   Fabhalta       1.2     0.4958      0.4074      0.1707                
+2026-09-23 20:02:41,621 - INFO -   Kisqali        0.8     0.5012      0.3944      0.1130                
+2026-09-23 20:02:41,622 - INFO -   ATE ordering (prob scale): Fabhalta(1.2) > Remibrutinib(1.0) > Kisqali(0.8) -- matches _BRAND_ADOPT_SCALE; each ATE = E[P(adopt|do T=1) - P(adopt|do T=0)].
+2026-09-23 20:02:41,622 - INFO - --- NAIVE (confounded) vs treated/untreated adoption ---
+2026-09-23 20:02:41,631 - INFO -   Remibrutinib   treated_adopt=0.5144 untreated_adopt=0.2636 naive_diff=0.2509 (>= TRUE_ATE: confounded by centrality, as designed)
+2026-09-23 20:02:41,639 - INFO -   Fabhalta       treated_adopt=0.5518 untreated_adopt=0.2654 naive_diff=0.2865 (>= TRUE_ATE: confounded by centrality, as designed)
+2026-09-23 20:02:41,646 - INFO -   Kisqali        treated_adopt=0.5008 untreated_adopt=0.2875 naive_diff=0.2133 (>= TRUE_ATE: confounded by centrality, as designed)
+2026-09-23 20:02:41,669 - INFO - --- LABEL MOVEMENT vs live (n=15000) ---
+2026-09-23 20:02:41,674 - INFO -   Remibrutinib   arm_match=1.0  prevalence live=0.3938 -> new=0.3886 (-0.0052)  labels flipped=484/5000 (9.7%)  in live band ~0.38-0.45: YES
+2026-09-23 20:02:41,679 - INFO -   Fabhalta       arm_match=1.0  prevalence live=0.4176 -> new=0.4074 (-0.0102)  labels flipped=479/5000 (9.6%)  in live band ~0.38-0.45: YES
+2026-09-23 20:02:41,683 - INFO -   Kisqali        arm_match=1.0  prevalence live=0.4046 -> new=0.3944 (-0.0102)  labels flipped=453/5000 (9.1%)  in live band ~0.38-0.45: YES
+2026-09-23 20:02:41,684 - INFO -   VERDICT: re-derived label is the HONEST causally-linked outcome (treatment_arm -> adopted via committed DGP, now WITH the planted channel term). arm_match must read 1.0000 (seed 427 reproduces the live arm); labels move only where the shifted sigmoid crosses the same uniform, so the 3 HCP gold-standard models need a one-time RE-TRAIN on the new labels. Aggregate prevalence stays in-band so the AUC ceiling is preserved.
+2026-09-23 20:02:41,684 - INFO - --- PLANTED CHANNEL EFFECTS on adopted (joined rows; RD in probability points) ---
+2026-09-23 20:02:41,684 - INFO -   true_RD is the planted effect (DGP counterfactual, everything else held). naive_RD is the UNADJUSTED mean(adopted | tbin=1) - mean(adopted | tbin=0): the plant drives every channel from one latent (market share + log trigger volume + region), so each channel's naive contrast carries the others' effects and the null reads positive. The estimator adjusts for exactly that latent; compare true_RD to the recovery probe's ATE (scripts/verify_adoption_channel_recovery.py), not to naive_RD.
+2026-09-23 20:02:41,684 - INFO -   brand          channel                      naive_RD  true_RD   P(tbin=1)
+2026-09-23 20:02:41,695 - INFO -   Remibrutinib   call_frequency                 +0.2017   +0.0494    0.4198
+2026-09-23 20:02:41,696 - INFO -   Remibrutinib   email_campaign_count           +0.1960   +0.0620    0.4681
+2026-09-23 20:02:41,696 - INFO -   Remibrutinib   engagement_score               +0.2051   +0.1375    0.5000
+2026-09-23 20:02:41,696 - INFO -   Remibrutinib   patient_support_enrollment     +0.1419   +0.0738    0.5000
+2026-09-23 20:02:41,696 - INFO -   Remibrutinib   peer_influence_score           +0.1670   +0.0928    0.5000
+2026-09-23 20:02:41,696 - INFO -   Remibrutinib   rep_training_score             +0.1085   +0.0000    0.5000   <- NULL
+2026-09-23 20:02:41,696 - INFO -   Remibrutinib   sample_volume                  +0.1692   +0.0369    0.4872
+2026-09-23 20:02:41,697 - INFO -   Remibrutinib   speaker_program_count          +0.2062   +0.1133    0.3915
+2026-09-23 20:02:41,717 - INFO -   Remibrutinib   consideration_date: joined rows dated after last exposure 3354/3354 (must equal), future dates 0 (must be 0), clamped to run date 2026-09-23: 164; non-joined rows (1646) keep their live dates; span 2026-05-04..2026-09-23
+2026-09-23 20:02:41,727 - INFO -   Fabhalta       call_frequency                 +0.1833   +0.0490    0.4127
+2026-09-23 20:02:41,727 - INFO -   Fabhalta       email_campaign_count           +0.1963   +0.0617    0.4571
+2026-09-23 20:02:41,727 - INFO -   Fabhalta       engagement_score               +0.2121   +0.1370    0.5000
+2026-09-23 20:02:41,727 - INFO -   Fabhalta       patient_support_enrollment     +0.1263   +0.0734    0.5000
+2026-09-23 20:02:41,728 - INFO -   Fabhalta       peer_influence_score           +0.1604   +0.0923    0.5000
+2026-09-23 20:02:41,728 - INFO -   Fabhalta       rep_training_score             +0.0382   +0.0000    0.5000   <- NULL
+2026-09-23 20:02:41,728 - INFO -   Fabhalta       sample_volume                  +0.1566   +0.0367    0.4741
+2026-09-23 20:02:41,728 - INFO -   Fabhalta       speaker_program_count          +0.1822   +0.1125    0.3834
+2026-09-23 20:02:41,745 - INFO -   Fabhalta       consideration_date: joined rows dated after last exposure 3404/3404 (must equal), future dates 0 (must be 0), clamped to run date 2026-09-23: 185; non-joined rows (1596) keep their live dates; span 2026-05-23..2026-09-23
+2026-09-23 20:02:41,755 - INFO -   Kisqali        call_frequency                 +0.1576   +0.0500    0.4082
+2026-09-23 20:02:41,756 - INFO -   Kisqali        email_campaign_count           +0.1680   +0.0627    0.4577
+2026-09-23 20:02:41,756 - INFO -   Kisqali        engagement_score               +0.1794   +0.1384    0.5000
+2026-09-23 20:02:41,756 - INFO -   Kisqali        patient_support_enrollment     +0.1226   +0.0745    0.5000
+2026-09-23 20:02:41,756 - INFO -   Kisqali        peer_influence_score           +0.1948   +0.0941    0.5000
+2026-09-23 20:02:41,756 - INFO -   Kisqali        rep_training_score             +0.0361   +0.0000    0.5000   <- NULL
+2026-09-23 20:02:41,756 - INFO -   Kisqali        sample_volume                  +0.1638   +0.0373    0.4734
+2026-09-23 20:02:41,757 - INFO -   Kisqali        speaker_program_count          +0.1937   +0.1143    0.3854
+2026-09-23 20:02:41,774 - INFO -   Kisqali        consideration_date: joined rows dated after last exposure 3378/3378 (must equal), future dates 0 (must be 0), clamped to run date 2026-09-23: 160; non-joined rows (1622) keep their live dates; span 2026-05-10..2026-09-23
+2026-09-23 20:02:41,774 - INFO - DOCUMENTED PER-BRAND TRUE ATE of treatment_arm (prob scale): {'Remibrutinib': 0.1412, 'Fabhalta': 0.1707, 'Kisqali': 0.113}
+2026-09-23 20:02:41,844 - WARNING - Could not apply DDL via RPC ({'message': 'Could not find the function public.exec_sql(sql) in the schema cache', 'code': 'PGRST202', 'hint': None, 'details': 'Searched for the function public.exec_sql with parameter sql or with a single unnamed json/jsonb parameter, but no matches were found in the schema cache.'}). Run this as a sibling migration BEFORE --execute writes:
+    ALTER TABLE hcp_brand_adoption ADD COLUMN IF NOT EXISTS treatment_arm INTEGER;
+2026-09-23 20:02:41,876 - WARNING - Could not apply DDL via RPC ({'message': 'Could not find the function public.exec_sql(sql) in the schema cache', 'code': 'PGRST202', 'hint': None, 'details': 'Searched for the function public.exec_sql with parameter sql or with a single unnamed json/jsonb parameter, but no matches were found in the schema cache.'}). Run this as a sibling migration BEFORE --execute writes:
+    DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_hcp_brand_adoption_treatment_arm') THEN ALTER TABLE hcp_brand_adoption ADD CONSTRAINT ck_hcp_brand_adoption_treatment_arm CHECK (treatment_arm IS NULL OR treatment_arm IN (0, 1)); END IF; END $$;
+2026-09-23 20:02:54,319 - INFO -   updated 500/15000 rows
+2026-09-23 20:03:02,117 - INFO -   updated 1000/15000 rows
+2026-09-23 20:03:13,934 - INFO -   updated 1500/15000 rows
+2026-09-23 20:03:21,204 - INFO -   updated 2000/15000 rows
+2026-09-23 20:03:29,492 - INFO -   updated 2500/15000 rows
+2026-09-23 20:03:35,736 - INFO -   updated 3000/15000 rows
+2026-09-23 20:03:41,446 - INFO -   updated 3500/15000 rows
+2026-09-23 20:03:46,772 - INFO -   updated 4000/15000 rows
+2026-09-23 20:03:51,602 - INFO -   updated 4500/15000 rows
+2026-09-23 20:03:55,650 - INFO -   updated 5000/15000 rows
+2026-09-23 20:04:00,300 - INFO -   updated 5500/15000 rows
+2026-09-23 20:04:06,007 - INFO -   updated 6000/15000 rows
+2026-09-23 20:04:11,176 - INFO -   updated 6500/15000 rows
+2026-09-23 20:04:15,238 - INFO -   updated 7000/15000 rows
+2026-09-23 20:04:19,705 - INFO -   updated 7500/15000 rows
+2026-09-23 20:04:25,205 - INFO -   updated 8000/15000 rows
+2026-09-23 20:04:29,495 - INFO -   updated 8500/15000 rows
+2026-09-23 20:04:33,124 - INFO -   updated 9000/15000 rows
+2026-09-23 20:04:37,212 - INFO -   updated 9500/15000 rows
+2026-09-23 20:04:42,132 - INFO -   updated 10000/15000 rows
+2026-09-23 20:04:46,541 - INFO -   updated 10500/15000 rows
+2026-09-23 20:04:50,656 - INFO -   updated 11000/15000 rows
+2026-09-23 20:04:54,636 - INFO -   updated 11500/15000 rows
+2026-09-23 20:04:58,599 - INFO -   updated 12000/15000 rows
+2026-09-23 20:05:08,699 - INFO -   updated 12500/15000 rows
+2026-09-23 20:05:15,061 - INFO -   updated 13000/15000 rows
+2026-09-23 20:05:20,093 - INFO -   updated 13500/15000 rows
+2026-09-23 20:05:24,655 - INFO -   updated 14000/15000 rows
+2026-09-23 20:05:29,033 - INFO -   updated 14500/15000 rows
+2026-09-23 20:05:33,405 - INFO -   updated 15000/15000 rows
+2026-09-23 20:05:33,424 - INFO - EXECUTE complete: updated 15000 rows in hcp_brand_adoption (idempotent on (hcp_id, brand)).
+2026-09-23 20:05:33,424 - INFO - NEXT: python scripts/verify_adoption_channel_recovery.py --live (must PASS), then re-train the 3 hcp_adoption_*_goldstd_lr_v1 models on the new labels and re-verify AUC before promoting.
+2026-09-23 20:05:41,100 - INFO -   Remibrutinib   live vs DGP(seed 427 + live channels): treatment_arm match 1.0000  adopted match 1.0000  (n=5000)
+2026-09-23 20:05:41,108 - INFO -   Fabhalta       live vs DGP(seed 427 + live channels): treatment_arm match 1.0000  adopted match 1.0000  (n=5000)
+2026-09-23 20:05:41,114 - INFO -   Kisqali        live vs DGP(seed 427 + live channels): treatment_arm match 1.0000  adopted match 1.0000  (n=5000)
+2026-09-23 20:05:41,114 - INFO - live: 15000 hcp_brand_adoption rows, 10136 joined to the collapsed exposure
+2026-09-23 20:05:42,157 - INFO - Skipping registering function get_context because it does not have a class
+2026-09-23 20:05:43,462 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,463 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,463 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,463 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,471 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,471 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,471 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,471 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,478 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,478 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,478 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,478 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,486 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,486 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,486 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,486 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,493 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,493 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,493 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,493 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,653 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,654 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,654 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,654 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,779 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,780 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,780 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,780 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,780 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,780 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,781 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,781 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,781 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,781 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,781 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,781 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,782 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,782 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,782 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,782 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,782 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,782 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,787 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,787 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,787 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,787 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,791 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,792 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,792 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,792 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,792 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,792 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,792 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,793 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,793 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,793 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,793 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,793 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,793 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,794 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,794 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,794 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,794 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,794 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,801 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,801 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,801 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,802 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,802 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,802 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,802 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,802 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,803 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,803 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,803 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,803 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,803 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,803 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,803 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,804 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,804 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,804 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,808 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,809 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,809 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,809 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,809 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,809 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,809 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,810 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,810 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,810 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,810 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,810 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,810 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,810 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:43,810 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,810 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,810 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,811 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,829 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,830 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,830 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,830 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,836 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,836 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,836 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,836 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,842 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,842 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,842 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,842 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,902 - INFO - Multiple declarations of metric table.column_types for engine PandasExecutionEngine.
+2026-09-23 20:05:43,902 - INFO - Multiple declarations of metric table.column_types for engine SparkDFExecutionEngine.
+2026-09-23 20:05:43,911 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,911 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,911 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,911 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,926 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,926 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,926 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:43,926 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,137 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,138 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,138 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,138 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,138 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,138 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,139 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,139 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,139 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,139 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,139 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,140 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,140 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,140 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,140 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,140 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,148 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,148 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,148 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,148 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,158 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,158 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,158 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,158 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,158 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,159 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,159 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,159 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,159 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,159 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,159 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,160 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,160 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,160 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,160 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,160 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,170 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,170 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,171 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,171 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,171 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,171 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,171 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,171 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,172 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,172 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,172 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,172 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,172 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,172 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,172 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,173 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,183 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,183 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,184 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,184 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,184 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,184 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,184 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,185 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,185 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,185 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,185 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,186 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-23 20:05:44,186 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,186 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,186 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,186 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,187 - INFO - Multiple declarations of metric column.standard_deviation for engine PandasExecutionEngine.
+2026-09-23 20:05:44,188 - INFO - Multiple declarations of metric column.standard_deviation.aggregate_fn for engine SparkDFExecutionEngine.
+2026-09-23 20:05:44,188 - INFO - Multiple declarations of metric column.standard_deviation for engine SparkDFExecutionEngine.
+2026-09-23 20:05:44,203 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,203 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,203 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,204 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,215 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,215 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,215 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,216 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,230 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,230 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,230 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:44,230 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-23 20:05:51,712 - INFO - Database query metrics initialized
+2026-09-23 20:05:54,899 - INFO -   Remibrutinib   call_frequency               n=3354  planted=+0.050 ate=+0.084 ci=(-0.107, +0.274) covers=True 2.6s rss=0.59GiB
+2026-09-23 20:05:57,454 - INFO -   Remibrutinib   email_campaign_count         n=3354  planted=+0.062 ate=+0.082 ci=(-0.093, +0.258) covers=True 2.6s rss=0.60GiB
+2026-09-23 20:05:59,899 - INFO -   Remibrutinib   engagement_score             n=3354  planted=+0.138 ate=+0.149 ci=(-0.002, +0.299) covers=True 2.4s rss=0.60GiB
+2026-09-23 20:06:02,502 - INFO -   Remibrutinib   patient_support_enrollment   n=3354  planted=+0.074 ate=+0.083 ci=(-0.080, +0.246) covers=True 2.6s rss=0.61GiB
+2026-09-23 20:06:05,259 - INFO -   Remibrutinib   peer_influence_score         n=3354  planted=+0.093 ate=+0.100 ci=(-0.061, +0.262) covers=True 2.8s rss=0.61GiB
+2026-09-23 20:06:07,877 - INFO -   Remibrutinib   rep_training_score           n=3354  planted=+0.000 ate=+0.054 ci=(-0.092, +0.200) covers=True 2.6s rss=0.62GiB
+2026-09-23 20:06:10,289 - INFO -   Remibrutinib   sample_volume                n=3354  planted=+0.037 ate=+0.041 ci=(-0.145, +0.227) covers=True 2.4s rss=0.62GiB
+2026-09-23 20:06:12,669 - INFO -   Remibrutinib   speaker_program_count        n=3354  planted=+0.113 ate=+0.102 ci=(-0.072, +0.276) covers=True 2.4s rss=0.62GiB
+2026-09-23 20:06:14,823 - INFO -   Fabhalta       call_frequency               n=3404  planted=+0.050 ate=+0.070 ci=(-0.120, +0.259) covers=True 2.2s rss=0.62GiB
+2026-09-23 20:06:17,189 - INFO -   Fabhalta       email_campaign_count         n=3404  planted=+0.062 ate=+0.087 ci=(-0.096, +0.270) covers=True 2.4s rss=0.63GiB
+2026-09-23 20:06:19,805 - INFO -   Fabhalta       engagement_score             n=3404  planted=+0.138 ate=+0.161 ci=(+0.009, +0.313) covers=True 2.6s rss=0.63GiB
+2026-09-23 20:06:22,453 - INFO -   Fabhalta       patient_support_enrollment   n=3404  planted=+0.074 ate=+0.060 ci=(-0.098, +0.217) covers=True 2.6s rss=0.63GiB
+2026-09-23 20:06:25,088 - INFO -   Fabhalta       peer_influence_score         n=3404  planted=+0.093 ate=+0.091 ci=(-0.075, +0.256) covers=True 2.6s rss=0.63GiB
+2026-09-23 20:06:27,602 - INFO -   Fabhalta       rep_training_score           n=3404  planted=+0.000 ate=+0.004 ci=(-0.156, +0.164) covers=True 2.5s rss=0.63GiB
+2026-09-23 20:06:30,024 - INFO -   Fabhalta       sample_volume                n=3404  planted=+0.037 ate=+0.012 ci=(-0.182, +0.206) covers=True 2.4s rss=0.63GiB
+2026-09-23 20:06:32,626 - INFO -   Fabhalta       speaker_program_count        n=3404  planted=+0.113 ate=+0.090 ci=(-0.089, +0.268) covers=True 2.6s rss=0.63GiB
+2026-09-23 20:06:35,066 - INFO -   Kisqali        call_frequency               n=3378  planted=+0.050 ate=+0.025 ci=(-0.174, +0.224) covers=True 2.4s rss=0.63GiB
+2026-09-23 20:06:37,617 - INFO -   Kisqali        email_campaign_count         n=3378  planted=+0.062 ate=+0.057 ci=(-0.117, +0.231) covers=True 2.5s rss=0.64GiB
+2026-09-23 20:06:40,172 - INFO -   Kisqali        engagement_score             n=3378  planted=+0.138 ate=+0.114 ci=(-0.051, +0.279) covers=True 2.6s rss=0.64GiB
+2026-09-23 20:06:42,786 - INFO -   Kisqali        patient_support_enrollment   n=3378  planted=+0.074 ate=+0.060 ci=(-0.084, +0.204) covers=True 2.6s rss=0.64GiB
+2026-09-23 20:06:45,379 - INFO -   Kisqali        peer_influence_score         n=3378  planted=+0.093 ate=+0.120 ci=(-0.026, +0.266) covers=True 2.6s rss=0.64GiB
+2026-09-23 20:06:47,671 - INFO -   Kisqali        rep_training_score           n=3378  planted=+0.000 ate=-0.011 ci=(-0.162, +0.141) covers=True 2.3s rss=0.65GiB
+2026-09-23 20:06:50,044 - INFO -   Kisqali        sample_volume                n=3378  planted=+0.037 ate=+0.042 ci=(-0.139, +0.222) covers=True 2.4s rss=0.65GiB
+2026-09-23 20:06:52,309 - INFO -   Kisqali        speaker_program_count        n=3378  planted=+0.113 ate=+0.091 ci=(-0.095, +0.276) covers=True 2.3s rss=0.65GiB
+PASS: point recovery of the planted channel effects on adopted in 3/3 brands (gate: CI covers planted 8/8, |ATE-planted| <= 0.06, Spearman >= 0.8, null |ATE| <= 0.06 with CI covering 0)
+  Remibrutinib   PASS  covers 8/8  within_tol 8/8  max|err| 0.054  spearman 0.90  null ATE +0.054 (ok)
+  Fabhalta       PASS  covers 8/8  within_tol 8/8  max|err| 0.025  spearman 0.90  null ATE +0.004 (ok)
+  Kisqali        PASS  covers 8/8  within_tol 8/8  max|err| 0.027  spearman 0.90  null ATE -0.011 (ok)
+  Remibrutinib   treatment_arm ATE: DGP-true +0.1412 (mean prob CATE)  naive +0.2509
+  Fabhalta       treatment_arm ATE: DGP-true +0.1707 (mean prob CATE)  naive +0.2865
+  Kisqali        treatment_arm ATE: DGP-true +0.1130 (mean prob CATE)  naive +0.2133
+  peak RSS 0.65 GiB; 24 fits, 60 s
+
+[exited with code 0]

@@ -1,0 +1,1885 @@
+{
+ "health": {
+  "status": "healthy",
+  "service": "digital-twin",
+  "models_available": 3,
+  "brands_simulable": 3,
+  "simulations_pending": 0,
+  "last_simulation_at": null
+ },
+ "intervention_types_Kisqali": {
+  "interventions": [
+   {
+    "value": "email_campaign",
+    "label": "Email Campaign",
+    "effect_basis": "cohort_causal",
+    "available": true,
+    "available_for_effect": true
+   },
+   {
+    "value": "call_frequency_increase",
+    "label": "Increased Call Frequency",
+    "effect_basis": "cohort_causal",
+    "available": true,
+    "available_for_effect": true
+   },
+   {
+    "value": "speaker_program_invitation",
+    "label": "Speaker Program Invitation",
+    "effect_basis": "cohort_causal",
+    "available": true,
+    "available_for_effect": true
+   },
+   {
+    "value": "sample_distribution",
+    "label": "Sample Distribution",
+    "effect_basis": "cohort_causal",
+    "available": true,
+    "available_for_effect": true
+   },
+   {
+    "value": "peer_influence_activation",
+    "label": "Peer Influence Activation",
+    "effect_basis": "cohort_causal",
+    "available": true,
+    "available_for_effect": true
+   },
+   {
+    "value": "digital_engagement",
+    "label": "Digital Engagement",
+    "effect_basis": "cohort_causal",
+    "available": true,
+    "available_for_effect": true
+   },
+   {
+    "value": "patient_support_program",
+    "label": "Patient Support Program",
+    "effect_basis": "cohort_causal",
+    "available": true,
+    "available_for_effect": true
+   },
+   {
+    "value": "rep_training_quality",
+    "label": "Rep Training Quality",
+    "effect_basis": "cohort_causal",
+    "available": true,
+    "available_for_effect": true
+   }
+  ],
+  "model_resolution": "resolved",
+  "effect_availability_status": "measured",
+  "brand": "Kisqali",
+  "twin_type": "hcp",
+  "timestamp": "2026-09-28T20:19:26.805018Z"
+ },
+ "intervention_types_Fabhalta": {
+  "interventions": [
+   {
+    "value": "email_campaign",
+    "label": "Email Campaign",
+    "effect_basis": "cohort_causal",
+    "available": true,
+    "available_for_effect": true
+   },
+   {
+    "value": "call_frequency_increase",
+    "label": "Increased Call Frequency",
+    "effect_basis": "cohort_causal",
+    "available": true,
+    "available_for_effect": true
+   },
+   {
+    "value": "speaker_program_invitation",
+    "label": "Speaker Program Invitation",
+    "effect_basis": "cohort_causal",
+    "available": true,
+    "available_for_effect": true
+   },
+   {
+    "value": "sample_distribution",
+    "label": "Sample Distribution",
+    "effect_basis": "cohort_causal",
+    "available": true,
+    "available_for_effect": true
+   },
+   {
+    "value": "peer_influence_activation",
+    "label": "Peer Influence Activation",
+    "effect_basis": "cohort_causal",
+    "available": true,
+    "available_for_effect": true
+   },
+   {
+    "value": "digital_engagement",
+    "label": "Digital Engagement",
+    "effect_basis": "cohort_causal",
+    "available": true,
+    "available_for_effect": true
+   },
+   {
+    "value": "patient_support_program",
+    "label": "Patient Support Program",
+    "effect_basis": "cohort_causal",
+    "available": true,
+    "available_for_effect": true
+   },
+   {
+    "value": "rep_training_quality",
+    "label": "Rep Training Quality",
+    "effect_basis": "cohort_causal",
+    "available": true,
+    "available_for_effect": true
+   }
+  ],
+  "model_resolution": "resolved",
+  "effect_availability_status": "measured",
+  "brand": "Fabhalta",
+  "twin_type": "hcp",
+  "timestamp": "2026-09-28T20:19:28.933092Z"
+ },
+ "intervention_types_Remibrutinib": {
+  "interventions": [
+   {
+    "value": "email_campaign",
+    "label": "Email Campaign",
+    "effect_basis": "cohort_causal",
+    "available": true,
+    "available_for_effect": true
+   },
+   {
+    "value": "call_frequency_increase",
+    "label": "Increased Call Frequency",
+    "effect_basis": "cohort_causal",
+    "available": true,
+    "available_for_effect": true
+   },
+   {
+    "value": "speaker_program_invitation",
+    "label": "Speaker Program Invitation",
+    "effect_basis": "cohort_causal",
+    "available": true,
+    "available_for_effect": true
+   },
+   {
+    "value": "sample_distribution",
+    "label": "Sample Distribution",
+    "effect_basis": "cohort_causal",
+    "available": true,
+    "available_for_effect": true
+   },
+   {
+    "value": "peer_influence_activation",
+    "label": "Peer Influence Activation",
+    "effect_basis": "cohort_causal",
+    "available": true,
+    "available_for_effect": true
+   },
+   {
+    "value": "digital_engagement",
+    "label": "Digital Engagement",
+    "effect_basis": "cohort_causal",
+    "available": true,
+    "available_for_effect": true
+   },
+   {
+    "value": "patient_support_program",
+    "label": "Patient Support Program",
+    "effect_basis": "cohort_causal",
+    "available": true,
+    "available_for_effect": true
+   },
+   {
+    "value": "rep_training_quality",
+    "label": "Rep Training Quality",
+    "effect_basis": "cohort_causal",
+    "available": true,
+    "available_for_effect": true
+   }
+  ],
+  "model_resolution": "resolved",
+  "effect_availability_status": "measured",
+  "brand": "Remibrutinib",
+  "twin_type": "hcp",
+  "timestamp": "2026-09-28T20:19:31.280778Z"
+ },
+ "simulate_digital_engagement_Kisqali": {
+  "simulation_id": "9eb2cfd8-3e12-4a3a-93f2-3bb9811f1846",
+  "model_id": "428cea1e-fd12-4098-9a19-63480d94bb5e",
+  "intervention_type": "digital_engagement",
+  "brand": "Kisqali",
+  "twin_type": "hcp",
+  "twin_count": 200,
+  "simulated_ate": 0.1069,
+  "simulated_ci_lower": 0.0607,
+  "simulated_ci_upper": 0.1531,
+  "simulated_std_error": 0.0236,
+  "effect_size_cohens_d": null,
+  "statistical_power": null,
+  "recommendation": "deploy",
+  "recommendation_rationale": "CI lower bound 0.061 exceeds min effect 0.050.",
+  "recommended_sample_size": 291,
+  "recommended_duration_weeks": 4,
+  "simulation_confidence": 0.891,
+  "fidelity_warning": true,
+  "fidelity_warning_reason": "Model fidelity is unvalidated: no experiment outcome has been compared against this model yet (fidelity_score is NULL), so its prediction accuracy is unknown. Interpret with caution.",
+  "model_fidelity_score": null,
+  "fidelity_status": "unvalidated",
+  "experiment_design_id": null,
+  "status": "completed",
+  "error_message": null,
+  "execution_time_ms": 2991,
+  "is_significant": true,
+  "effect_direction": "positive",
+  "created_at": "2026-09-28T20:19:39.372554Z",
+  "data_provenance": "cohort_estimated_synthetic_gold_v1",
+  "estimate_scope": "cohort",
+  "target_regions": [],
+  "cohort_effect": null,
+  "cohort_ci_lower": null,
+  "cohort_ci_upper": null,
+  "effect_heterogeneity": {
+   "by_specialty": {
+    "allergy_immunology": {
+     "ate": 0.13757137518005316,
+     "std": 0.0,
+     "n": 385.0
+    },
+    "dermatology": {
+     "ate": 0.1191455697589889,
+     "std": 0.0,
+     "n": 593.0
+    },
+    "hematology": {
+     "ate": 0.1611966028151169,
+     "std": 0.0,
+     "n": 690.0
+    },
+    "internal_medicine": {
+     "ate": 0.12876111688632041,
+     "std": 0.0,
+     "n": 321.0
+    },
+    "neurology": {
+     "ate": 0.08769445991031932,
+     "std": 0.0,
+     "n": 106.0
+    },
+    "oncology": {
+     "ate": 0.08732073610952688,
+     "std": 0.0,
+     "n": 1102.0
+    },
+    "rheumatology": {
+     "ate": 0.013784419730115302,
+     "std": 0.0,
+     "n": 181.0
+    }
+   },
+   "by_decile": {},
+   "by_region": {
+    "midwest": {
+     "ate": 0.12107134694994541,
+     "std": 0.0,
+     "n": 736.0
+    },
+    "northeast": {
+     "ate": 0.1300246660985664,
+     "std": 0.0,
+     "n": 750.0
+    },
+    "south": {
+     "ate": 0.10311953617229136,
+     "std": 0.0,
+     "n": 1209.0
+    },
+    "west": {
+     "ate": 0.07303026600661083,
+     "std": 0.0,
+     "n": 683.0
+    }
+   },
+   "by_adoption_stage": {},
+   "top_segments": [],
+   "axis_provenance": {
+    "specialty": {
+     "basis": "cohort_rows",
+     "source": "hcp_profiles.specialty",
+     "min_group_rows": 100,
+     "min_treated_rows": 20,
+     "min_control_rows": 20,
+     "fallback": "region_then_cohort",
+     "support_unit": "cohort_rows",
+     "estimand": "observed_region_mix_mean_cate",
+     "suppressed_groups": {}
+    }
+   }
+  },
+  "subgroups_basis": "cohort_rows"
+ },
+ "simulate_digital_engagement_Fabhalta": {
+  "simulation_id": "dbf55102-967f-42ef-a611-a08067df8d29",
+  "model_id": "796a07b1-5158-4b66-ad19-4a6eb5f18f5d",
+  "intervention_type": "digital_engagement",
+  "brand": "Fabhalta",
+  "twin_type": "hcp",
+  "twin_count": 200,
+  "simulated_ate": 0.156,
+  "simulated_ci_lower": 0.1154,
+  "simulated_ci_upper": 0.1967,
+  "simulated_std_error": 0.0207,
+  "effect_size_cohens_d": null,
+  "statistical_power": null,
+  "recommendation": "deploy",
+  "recommendation_rationale": "CI lower bound 0.115 exceeds min effect 0.050.",
+  "recommended_sample_size": 138,
+  "recommended_duration_weeks": 4,
+  "simulation_confidence": 0.934,
+  "fidelity_warning": true,
+  "fidelity_warning_reason": "Model fidelity is unvalidated: no experiment outcome has been compared against this model yet (fidelity_score is NULL), so its prediction accuracy is unknown. Interpret with caution.",
+  "model_fidelity_score": null,
+  "fidelity_status": "unvalidated",
+  "experiment_design_id": null,
+  "status": "completed",
+  "error_message": null,
+  "execution_time_ms": 3046,
+  "is_significant": true,
+  "effect_direction": "positive",
+  "created_at": "2026-09-28T20:19:45.669774Z",
+  "data_provenance": "cohort_estimated_synthetic_gold_v1",
+  "estimate_scope": "cohort",
+  "target_regions": [],
+  "cohort_effect": null,
+  "cohort_ci_lower": null,
+  "cohort_ci_upper": null,
+  "effect_heterogeneity": {
+   "by_specialty": {
+    "allergy_immunology": {
+     "ate": 0.03943553023698519,
+     "std": 0.0,
+     "n": 390.0
+    },
+    "dermatology": {
+     "ate": 0.11566284387472688,
+     "std": 0.0,
+     "n": 577.0
+    },
+    "hematology": {
+     "ate": 0.2719717178719223,
+     "std": 0.0,
+     "n": 721.0
+    },
+    "internal_medicine": {
+     "ate": 0.20098268203254865,
+     "std": 0.0,
+     "n": 313.0
+    },
+    "neurology": {
+     "ate": 0.1753520544968979,
+     "std": 0.0,
+     "n": 112.0
+    },
+    "oncology": {
+     "ate": 0.13306444048961563,
+     "std": 0.0,
+     "n": 1111.0
+    },
+    "rheumatology": {
+     "ate": 0.21740321039928345,
+     "std": 0.0,
+     "n": 180.0
+    }
+   },
+   "by_decile": {},
+   "by_region": {
+    "midwest": {
+     "ate": 0.17532963565850734,
+     "std": 0.0,
+     "n": 743.0
+    },
+    "northeast": {
+     "ate": 0.17676364604070463,
+     "std": 0.0,
+     "n": 736.0
+    },
+    "south": {
+     "ate": 0.12109439712909857,
+     "std": 0.0,
+     "n": 1247.0
+    },
+    "west": {
+     "ate": 0.17662364659738305,
+     "std": 0.0,
+     "n": 678.0
+    }
+   },
+   "by_adoption_stage": {},
+   "top_segments": [],
+   "axis_provenance": {
+    "specialty": {
+     "basis": "cohort_rows",
+     "source": "hcp_profiles.specialty",
+     "min_group_rows": 100,
+     "min_treated_rows": 20,
+     "min_control_rows": 20,
+     "fallback": "region_then_cohort",
+     "support_unit": "cohort_rows",
+     "estimand": "observed_region_mix_mean_cate",
+     "suppressed_groups": {}
+    }
+   }
+  },
+  "subgroups_basis": "cohort_rows"
+ },
+ "simulate_digital_engagement_Remibrutinib": {
+  "simulation_id": "d14c85fe-59b4-49ea-b8bc-b02571cc94fc",
+  "model_id": "5141ba73-d926-43ec-b064-9cf717f8a9dd",
+  "intervention_type": "digital_engagement",
+  "brand": "Remibrutinib",
+  "twin_type": "hcp",
+  "twin_count": 200,
+  "simulated_ate": 0.1643,
+  "simulated_ci_lower": 0.1213,
+  "simulated_ci_upper": 0.2072,
+  "simulated_std_error": 0.0219,
+  "effect_size_cohens_d": null,
+  "statistical_power": null,
+  "recommendation": "deploy",
+  "recommendation_rationale": "CI lower bound 0.121 exceeds min effect 0.050.",
+  "recommended_sample_size": 120,
+  "recommended_duration_weeks": 4,
+  "simulation_confidence": 0.934,
+  "fidelity_warning": true,
+  "fidelity_warning_reason": "Model fidelity is unvalidated: no experiment outcome has been compared against this model yet (fidelity_score is NULL), so its prediction accuracy is unknown. Interpret with caution.",
+  "model_fidelity_score": null,
+  "fidelity_status": "unvalidated",
+  "experiment_design_id": null,
+  "status": "completed",
+  "error_message": null,
+  "execution_time_ms": 2632,
+  "is_significant": true,
+  "effect_direction": "positive",
+  "created_at": "2026-09-28T20:19:50.975884Z",
+  "data_provenance": "cohort_estimated_synthetic_gold_v1",
+  "estimate_scope": "cohort",
+  "target_regions": [],
+  "cohort_effect": null,
+  "cohort_ci_lower": null,
+  "cohort_ci_upper": null,
+  "effect_heterogeneity": {
+   "by_specialty": {
+    "allergy_immunology": {
+     "ate": 0.19032624430272824,
+     "std": 0.0,
+     "n": 383.0
+    },
+    "dermatology": {
+     "ate": 0.09536261078309363,
+     "std": 0.0,
+     "n": 580.0
+    },
+    "hematology": {
+     "ate": 0.11473646436722634,
+     "std": 0.0,
+     "n": 680.0
+    },
+    "internal_medicine": {
+     "ate": 0.1823136637893952,
+     "std": 0.0,
+     "n": 332.0
+    },
+    "neurology": {
+     "ate": 0.23388602002921463,
+     "std": 0.0,
+     "n": 108.0
+    },
+    "oncology": {
+     "ate": 0.16479370666641444,
+     "std": 0.0,
+     "n": 1092.0
+    },
+    "rheumatology": {
+     "ate": 0.1475924510467195,
+     "std": 0.0,
+     "n": 179.0
+    }
+   },
+   "by_decile": {},
+   "by_region": {
+    "midwest": {
+     "ate": 0.1587163326027555,
+     "std": 0.0,
+     "n": 747.0
+    },
+    "northeast": {
+     "ate": 0.2156856346967587,
+     "std": 0.0,
+     "n": 715.0
+    },
+    "south": {
+     "ate": 0.1241498205192273,
+     "std": 0.0,
+     "n": 1231.0
+    },
+    "west": {
+     "ate": 0.1895908059125401,
+     "std": 0.0,
+     "n": 661.0
+    }
+   },
+   "by_adoption_stage": {},
+   "top_segments": [],
+   "axis_provenance": {
+    "specialty": {
+     "basis": "cohort_rows",
+     "source": "hcp_profiles.specialty",
+     "min_group_rows": 100,
+     "min_treated_rows": 20,
+     "min_control_rows": 20,
+     "fallback": "region_then_cohort",
+     "support_unit": "cohort_rows",
+     "estimand": "observed_region_mix_mean_cate",
+     "suppressed_groups": {}
+    }
+   }
+  },
+  "subgroups_basis": "cohort_rows"
+ },
+ "simulate_rep_training_quality_Kisqali": {
+  "simulation_id": "e48a514f-129d-4f21-b347-37692eed9524",
+  "model_id": "428cea1e-fd12-4098-9a19-63480d94bb5e",
+  "intervention_type": "rep_training_quality",
+  "brand": "Kisqali",
+  "twin_type": "hcp",
+  "twin_count": 200,
+  "simulated_ate": -0.0109,
+  "simulated_ci_lower": -0.05,
+  "simulated_ci_upper": 0.0282,
+  "simulated_std_error": 0.0199,
+  "effect_size_cohens_d": null,
+  "statistical_power": null,
+  "recommendation": "skip",
+  "recommendation_rationale": "CI upper bound 0.028 is below min effect 0.050.",
+  "recommended_sample_size": 30862,
+  "recommended_duration_weeks": 4,
+  "simulation_confidence": 0.5,
+  "fidelity_warning": true,
+  "fidelity_warning_reason": "Model fidelity is unvalidated: no experiment outcome has been compared against this model yet (fidelity_score is NULL), so its prediction accuracy is unknown. Interpret with caution.",
+  "model_fidelity_score": null,
+  "fidelity_status": "unvalidated",
+  "experiment_design_id": null,
+  "status": "completed",
+  "error_message": null,
+  "execution_time_ms": 2718,
+  "is_significant": false,
+  "effect_direction": "negative",
+  "created_at": "2026-09-28T20:19:56.399171Z",
+  "data_provenance": "cohort_estimated_synthetic_gold_v1",
+  "estimate_scope": "cohort",
+  "target_regions": [],
+  "cohort_effect": null,
+  "cohort_ci_lower": null,
+  "cohort_ci_upper": null,
+  "effect_heterogeneity": {
+   "by_specialty": {
+    "allergy_immunology": {
+     "ate": -0.027901738419326663,
+     "std": 0.0,
+     "n": 385.0
+    },
+    "dermatology": {
+     "ate": 0.09819879194947032,
+     "std": 0.0,
+     "n": 593.0
+    },
+    "hematology": {
+     "ate": 0.042269640442381545,
+     "std": 0.0,
+     "n": 690.0
+    },
+    "internal_medicine": {
+     "ate": -0.02277613814655257,
+     "std": 0.0,
+     "n": 321.0
+    },
+    "neurology": {
+     "ate": -0.02630403965672126,
+     "std": 0.0,
+     "n": 106.0
+    },
+    "oncology": {
+     "ate": -0.07664116175758214,
+     "std": 0.0,
+     "n": 1102.0
+    },
+    "rheumatology": {
+     "ate": -0.097353929721568,
+     "std": 0.0,
+     "n": 181.0
+    }
+   },
+   "by_decile": {},
+   "by_region": {
+    "midwest": {
+     "ate": 0.033755263148688264,
+     "std": 0.0,
+     "n": 736.0
+    },
+    "northeast": {
+     "ate": -0.04953689810143306,
+     "std": 0.0,
+     "n": 750.0
+    },
+    "south": {
+     "ate": -0.019236804272286745,
+     "std": 0.0,
+     "n": 1209.0
+    },
+    "west": {
+     "ate": -0.0019713825767034426,
+     "std": 0.0,
+     "n": 683.0
+    }
+   },
+   "by_adoption_stage": {},
+   "top_segments": [],
+   "axis_provenance": {
+    "specialty": {
+     "basis": "cohort_rows",
+     "source": "hcp_profiles.specialty",
+     "min_group_rows": 100,
+     "min_treated_rows": 20,
+     "min_control_rows": 20,
+     "fallback": "region_then_cohort",
+     "support_unit": "cohort_rows",
+     "estimand": "observed_region_mix_mean_cate",
+     "suppressed_groups": {}
+    }
+   }
+  },
+  "subgroups_basis": "cohort_rows"
+ },
+ "simulate_rep_training_quality_Fabhalta": {
+  "simulation_id": "02b02ed0-ab64-46df-809d-66b1b743ff18",
+  "model_id": "796a07b1-5158-4b66-ad19-4a6eb5f18f5d",
+  "intervention_type": "rep_training_quality",
+  "brand": "Fabhalta",
+  "twin_type": "hcp",
+  "twin_count": 200,
+  "simulated_ate": 0.0058,
+  "simulated_ci_lower": -0.0348,
+  "simulated_ci_upper": 0.0465,
+  "simulated_std_error": 0.0208,
+  "effect_size_cohens_d": null,
+  "statistical_power": null,
+  "recommendation": "skip",
+  "recommendation_rationale": "CI upper bound 0.047 is below min effect 0.050.",
+  "recommended_sample_size": 110137,
+  "recommended_duration_weeks": 4,
+  "simulation_confidence": 0.5,
+  "fidelity_warning": true,
+  "fidelity_warning_reason": "Model fidelity is unvalidated: no experiment outcome has been compared against this model yet (fidelity_score is NULL), so its prediction accuracy is unknown. Interpret with caution.",
+  "model_fidelity_score": null,
+  "fidelity_status": "unvalidated",
+  "experiment_design_id": null,
+  "status": "completed",
+  "error_message": null,
+  "execution_time_ms": 5056,
+  "is_significant": false,
+  "effect_direction": "positive",
+  "created_at": "2026-09-28T20:20:04.365233Z",
+  "data_provenance": "cohort_estimated_synthetic_gold_v1",
+  "estimate_scope": "cohort",
+  "target_regions": [],
+  "cohort_effect": null,
+  "cohort_ci_lower": null,
+  "cohort_ci_upper": null,
+  "effect_heterogeneity": {
+   "by_specialty": {
+    "allergy_immunology": {
+     "ate": 0.01304079903828836,
+     "std": 0.0,
+     "n": 390.0
+    },
+    "dermatology": {
+     "ate": -0.0629998969345315,
+     "std": 0.0,
+     "n": 577.0
+    },
+    "hematology": {
+     "ate": 0.04889703630941214,
+     "std": 0.0,
+     "n": 721.0
+    },
+    "internal_medicine": {
+     "ate": -0.1319491314185848,
+     "std": 0.0,
+     "n": 313.0
+    },
+    "neurology": {
+     "ate": 0.008960263841655141,
+     "std": 0.0,
+     "n": 112.0
+    },
+    "oncology": {
+     "ate": 0.029275897545513345,
+     "std": 0.0,
+     "n": 1111.0
+    },
+    "rheumatology": {
+     "ate": 0.10250463803903784,
+     "std": 0.0,
+     "n": 180.0
+    }
+   },
+   "by_decile": {},
+   "by_region": {
+    "midwest": {
+     "ate": 0.05866733032754884,
+     "std": 0.0,
+     "n": 743.0
+    },
+    "northeast": {
+     "ate": 0.03701076409558228,
+     "std": 0.0,
+     "n": 736.0
+    },
+    "south": {
+     "ate": 0.006215060025425937,
+     "std": 0.0,
+     "n": 1247.0
+    },
+    "west": {
+     "ate": -0.08659930714439569,
+     "std": 0.0,
+     "n": 678.0
+    }
+   },
+   "by_adoption_stage": {},
+   "top_segments": [],
+   "axis_provenance": {
+    "specialty": {
+     "basis": "cohort_rows",
+     "source": "hcp_profiles.specialty",
+     "min_group_rows": 100,
+     "min_treated_rows": 20,
+     "min_control_rows": 20,
+     "fallback": "region_then_cohort",
+     "support_unit": "cohort_rows",
+     "estimand": "observed_region_mix_mean_cate",
+     "suppressed_groups": {}
+    }
+   }
+  },
+  "subgroups_basis": "cohort_rows"
+ },
+ "simulate_rep_training_quality_Remibrutinib": {
+  "simulation_id": "12936055-ae16-4781-ba73-ef328f32d869",
+  "model_id": "5141ba73-d926-43ec-b064-9cf717f8a9dd",
+  "intervention_type": "rep_training_quality",
+  "brand": "Remibrutinib",
+  "twin_type": "hcp",
+  "twin_count": 200,
+  "simulated_ate": 0.0472,
+  "simulated_ci_lower": 0.0083,
+  "simulated_ci_upper": 0.0861,
+  "simulated_std_error": 0.0198,
+  "effect_size_cohens_d": null,
+  "statistical_power": null,
+  "recommendation": "refine",
+  "recommendation_rationale": "CI [0.008, 0.086] straddles min effect 0.050; refine or gather more data.",
+  "recommended_sample_size": 1572,
+  "recommended_duration_weeks": 4,
+  "simulation_confidence": 0.794,
+  "fidelity_warning": true,
+  "fidelity_warning_reason": "Model fidelity is unvalidated: no experiment outcome has been compared against this model yet (fidelity_score is NULL), so its prediction accuracy is unknown. Interpret with caution.",
+  "model_fidelity_score": null,
+  "fidelity_status": "unvalidated",
+  "experiment_design_id": null,
+  "status": "completed",
+  "error_message": null,
+  "execution_time_ms": 4383,
+  "is_significant": true,
+  "effect_direction": "positive",
+  "created_at": "2026-09-28T20:20:15.070316Z",
+  "data_provenance": "cohort_estimated_synthetic_gold_v1",
+  "estimate_scope": "cohort",
+  "target_regions": [],
+  "cohort_effect": null,
+  "cohort_ci_lower": null,
+  "cohort_ci_upper": null,
+  "effect_heterogeneity": {
+   "by_specialty": {
+    "allergy_immunology": {
+     "ate": 0.0736933919822447,
+     "std": 0.0,
+     "n": 383.0
+    },
+    "dermatology": {
+     "ate": 0.051331767362069104,
+     "std": 0.0,
+     "n": 580.0
+    },
+    "hematology": {
+     "ate": 0.04571390463643725,
+     "std": 0.0,
+     "n": 680.0
+    },
+    "internal_medicine": {
+     "ate": 0.006291101031029169,
+     "std": 0.0,
+     "n": 332.0
+    },
+    "neurology": {
+     "ate": 0.051469256219919976,
+     "std": 0.0,
+     "n": 108.0
+    },
+    "oncology": {
+     "ate": 0.0787997927297418,
+     "std": 0.0,
+     "n": 1092.0
+    },
+    "rheumatology": {
+     "ate": -0.010949848093256886,
+     "std": 0.0,
+     "n": 179.0
+    }
+   },
+   "by_decile": {},
+   "by_region": {
+    "midwest": {
+     "ate": 0.05007822493135208,
+     "std": 0.0,
+     "n": 747.0
+    },
+    "northeast": {
+     "ate": 0.02913272649174002,
+     "std": 0.0,
+     "n": 715.0
+    },
+    "south": {
+     "ate": 0.025311463053064778,
+     "std": 0.0,
+     "n": 1231.0
+    },
+    "west": {
+     "ate": 0.10423553013339185,
+     "std": 0.0,
+     "n": 661.0
+    }
+   },
+   "by_adoption_stage": {},
+   "top_segments": [],
+   "axis_provenance": {
+    "specialty": {
+     "basis": "cohort_rows",
+     "source": "hcp_profiles.specialty",
+     "min_group_rows": 100,
+     "min_treated_rows": 20,
+     "min_control_rows": 20,
+     "fallback": "region_then_cohort",
+     "support_unit": "cohort_rows",
+     "estimand": "observed_region_mix_mean_cate",
+     "suppressed_groups": {}
+    }
+   }
+  },
+  "subgroups_basis": "cohort_rows"
+ },
+ "proposed_experiments": {
+  "proposals": [
+   {
+    "simulation_id": "ef28dfea-dbdb-4f04-82b6-27198a4a358e",
+    "model_id": "5141ba73-d926-43ec-b064-9cf717f8a9dd",
+    "brand": "Remibrutinib",
+    "intervention_type": "digital_engagement",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 13,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.3999,
+    "simulated_ci_lower": 0.3985,
+    "simulated_ci_upper": 0.4013,
+    "recommendation": "deploy",
+    "recommendation_rationale": "CI lower bound 0.399 exceeds min effect 0.050.",
+    "recommended_sample_size": 13,
+    "recommended_duration_weeks": 13,
+    "simulation_confidence": 0.6095,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-06-19T00:48:55.026990Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "conversion_rate",
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "64afd055-df9d-4036-8c74-3062f9021bc8",
+    "model_id": "5141ba73-d926-43ec-b064-9cf717f8a9dd",
+    "brand": "Remibrutinib",
+    "intervention_type": "digital_engagement",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 13,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.397,
+    "simulated_ci_lower": 0.3955,
+    "simulated_ci_upper": 0.3985,
+    "recommendation": "deploy",
+    "recommendation_rationale": "CI lower bound 0.395 exceeds min effect 0.050.",
+    "recommended_sample_size": 13,
+    "recommended_duration_weeks": 13,
+    "simulation_confidence": 0.6094,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-06-18T01:11:18.924141Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "conversion_rate",
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "dd5fa9d8-6cb9-4f1d-8ac4-98695e3d0677",
+    "model_id": "5141ba73-d926-43ec-b064-9cf717f8a9dd",
+    "brand": "Remibrutinib",
+    "intervention_type": "digital_engagement",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 13,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.3923,
+    "simulated_ci_lower": 0.3905,
+    "simulated_ci_upper": 0.394,
+    "recommendation": "deploy",
+    "recommendation_rationale": "CI lower bound 0.391 exceeds min effect 0.050.",
+    "recommended_sample_size": 14,
+    "recommended_duration_weeks": 13,
+    "simulation_confidence": 0.6093,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-06-18T01:10:32.456212Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "conversion_rate",
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "4cc0530c-dc9d-4d69-95e8-7ec4d98f68b7",
+    "model_id": "428cea1e-fd12-4098-9a19-63480d94bb5e",
+    "brand": "Kisqali",
+    "intervention_type": "email_campaign",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 8,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.2585,
+    "simulated_ci_lower": 0.1995,
+    "simulated_ci_upper": 0.3174,
+    "recommendation": "deploy",
+    "recommendation_rationale": "CI lower bound 0.200 exceeds min effect 0.050.",
+    "recommended_sample_size": 88,
+    "recommended_duration_weeks": 8,
+    "simulation_confidence": 0.5501,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-09-12T15:59:23.606816Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "conversion_rate",
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "2fb1ebb9-ea94-4cb5-93ee-b418adab2cd6",
+    "model_id": "428cea1e-fd12-4098-9a19-63480d94bb5e",
+    "brand": "Kisqali",
+    "intervention_type": "digital_engagement",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 13,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.2515,
+    "simulated_ci_lower": 0.1533,
+    "simulated_ci_upper": 0.3497,
+    "recommendation": "deploy",
+    "recommendation_rationale": "CI lower bound 0.153 exceeds min effect 0.050.",
+    "recommended_sample_size": 50,
+    "recommended_duration_weeks": 13,
+    "simulation_confidence": 0.8205,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-09-18T04:49:25.560121Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "conversion_rate",
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "0237c0de-8aa5-4894-8c61-a8ca59742fa6",
+    "model_id": "428cea1e-fd12-4098-9a19-63480d94bb5e",
+    "brand": "Kisqali",
+    "intervention_type": "digital_engagement",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 13,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.2515,
+    "simulated_ci_lower": 0.1533,
+    "simulated_ci_upper": 0.3497,
+    "recommendation": "deploy",
+    "recommendation_rationale": "CI lower bound 0.153 exceeds min effect 0.050.",
+    "recommended_sample_size": 50,
+    "recommended_duration_weeks": 13,
+    "simulation_confidence": 0.8205,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-09-18T10:32:55.951155Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "conversion_rate",
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "4e310041-1e46-4628-8181-0a142fb8c1d7",
+    "model_id": "5141ba73-d926-43ec-b064-9cf717f8a9dd",
+    "brand": "Remibrutinib",
+    "intervention_type": "digital_engagement",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 13,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.248,
+    "simulated_ci_lower": 0.198,
+    "simulated_ci_upper": 0.2981,
+    "recommendation": "deploy",
+    "recommendation_rationale": "CI lower bound 0.198 exceeds min effect 0.050.",
+    "recommended_sample_size": 39,
+    "recommended_duration_weeks": 13,
+    "simulation_confidence": 0.5522,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-07-15T02:21:24.947677Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "conversion_rate",
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "cc318055-c55b-4ab0-b7ae-5c91c2aa88d2",
+    "model_id": "5141ba73-d926-43ec-b064-9cf717f8a9dd",
+    "brand": "Remibrutinib",
+    "intervention_type": "digital_engagement",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 13,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.2401,
+    "simulated_ci_lower": 0.2055,
+    "simulated_ci_upper": 0.2747,
+    "recommendation": "deploy",
+    "recommendation_rationale": "CI lower bound 0.205 exceeds min effect 0.050.",
+    "recommended_sample_size": 45,
+    "recommended_duration_weeks": 13,
+    "simulation_confidence": 0.561,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-06-21T17:52:55.116978Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "conversion_rate",
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "510b8f5e-315a-45ab-9df5-44b72f89d9d7",
+    "model_id": "796a07b1-5158-4b66-ad19-4a6eb5f18f5d",
+    "brand": "Fabhalta",
+    "intervention_type": "digital_engagement",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 13,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.2349,
+    "simulated_ci_lower": 0.1955,
+    "simulated_ci_upper": 0.2742,
+    "recommendation": "deploy",
+    "recommendation_rationale": "CI lower bound 0.196 exceeds min effect 0.050.",
+    "recommended_sample_size": 46,
+    "recommended_duration_weeks": 13,
+    "simulation_confidence": 0.5575,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-07-11T00:46:27.312323Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "conversion_rate",
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "cd2314a7-c7ee-4995-9d22-1b16a784bc5c",
+    "model_id": "428cea1e-fd12-4098-9a19-63480d94bb5e",
+    "brand": "Kisqali",
+    "intervention_type": "digital_engagement",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 13,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.2312,
+    "simulated_ci_lower": 0.1978,
+    "simulated_ci_upper": 0.2647,
+    "recommendation": "deploy",
+    "recommendation_rationale": "CI lower bound 0.198 exceeds min effect 0.050.",
+    "recommended_sample_size": 49,
+    "recommended_duration_weeks": 13,
+    "simulation_confidence": 0.561,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-07-08T01:39:06.467460Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "conversion_rate",
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "fbd69884-8184-4354-b1eb-dc2100b9b3f2",
+    "model_id": "5141ba73-d926-43ec-b064-9cf717f8a9dd",
+    "brand": "Remibrutinib",
+    "intervention_type": "speaker_program_invitation",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 13,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.1999,
+    "simulated_ci_lower": 0.1605,
+    "simulated_ci_upper": 0.2393,
+    "recommendation": "deploy",
+    "recommendation_rationale": "CI lower bound 0.160 exceeds min effect 0.050.",
+    "recommended_sample_size": 69,
+    "recommended_duration_weeks": 13,
+    "simulation_confidence": 0.553,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-07-15T02:22:15.932261Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "conversion_rate",
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "eb6b0c12-c592-4d53-94ee-01eca1c81dac",
+    "model_id": "428cea1e-fd12-4098-9a19-63480d94bb5e",
+    "brand": "Kisqali",
+    "intervention_type": "speaker_program_invitation",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 13,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.1821,
+    "simulated_ci_lower": 0.0749,
+    "simulated_ci_upper": 0.2893,
+    "recommendation": "deploy",
+    "recommendation_rationale": "CI lower bound 0.075 exceeds min effect 0.050.",
+    "recommended_sample_size": 155,
+    "recommended_duration_weeks": 13,
+    "simulation_confidence": 0.7904,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-09-18T04:50:42.094177Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "conversion_rate",
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "d14c85fe-59b4-49ea-b8bc-b02571cc94fc",
+    "model_id": "5141ba73-d926-43ec-b064-9cf717f8a9dd",
+    "brand": "Remibrutinib",
+    "intervention_type": "digital_engagement",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 4,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.1643,
+    "simulated_ci_lower": 0.1213,
+    "simulated_ci_upper": 0.2072,
+    "recommendation": "deploy",
+    "recommendation_rationale": "CI lower bound 0.121 exceeds min effect 0.050.",
+    "recommended_sample_size": 120,
+    "recommended_duration_weeks": 4,
+    "simulation_confidence": 0.9337,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-09-28T20:19:50.975884Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "adopted",
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "04033bd3-7a42-4e84-88ee-51cd13a5fde5",
+    "model_id": "5141ba73-d926-43ec-b064-9cf717f8a9dd",
+    "brand": "Remibrutinib",
+    "intervention_type": "patient_support_program",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 13,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.16,
+    "simulated_ci_lower": 0.1186,
+    "simulated_ci_upper": 0.2014,
+    "recommendation": "deploy",
+    "recommendation_rationale": "CI lower bound 0.119 exceeds min effect 0.050.",
+    "recommended_sample_size": 115,
+    "recommended_duration_weeks": 13,
+    "simulation_confidence": 0.5436,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-08-26T23:07:25.797636Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "conversion_rate",
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "cf09987a-4906-4026-9572-32de02703331",
+    "model_id": "5141ba73-d926-43ec-b064-9cf717f8a9dd",
+    "brand": "Remibrutinib",
+    "intervention_type": "patient_support_program",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 8,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.16,
+    "simulated_ci_lower": 0.1186,
+    "simulated_ci_upper": 0.2014,
+    "recommendation": "deploy",
+    "recommendation_rationale": "CI lower bound 0.119 exceeds min effect 0.050.",
+    "recommended_sample_size": 112,
+    "recommended_duration_weeks": 8,
+    "simulation_confidence": 0.5556,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-07-08T11:26:41.855045Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "conversion_rate",
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "83a28a20-ed02-4064-9eff-5b9d47e5e033",
+    "model_id": "5141ba73-d926-43ec-b064-9cf717f8a9dd",
+    "brand": "Remibrutinib",
+    "intervention_type": "digital_engagement",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 8,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.1593,
+    "simulated_ci_lower": 0.1557,
+    "simulated_ci_upper": 0.1629,
+    "recommendation": "deploy",
+    "recommendation_rationale": "CI lower bound 0.156 exceeds min effect 0.050.",
+    "recommended_sample_size": 116,
+    "recommended_duration_weeks": 8,
+    "simulation_confidence": 0.6066,
+    "data_provenance": "synthetic_uplift_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-06-16T14:46:52.335266Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": null,
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "dbf55102-967f-42ef-a611-a08067df8d29",
+    "model_id": "796a07b1-5158-4b66-ad19-4a6eb5f18f5d",
+    "brand": "Fabhalta",
+    "intervention_type": "digital_engagement",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 4,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.156,
+    "simulated_ci_lower": 0.1154,
+    "simulated_ci_upper": 0.1967,
+    "recommendation": "deploy",
+    "recommendation_rationale": "CI lower bound 0.115 exceeds min effect 0.050.",
+    "recommended_sample_size": 138,
+    "recommended_duration_weeks": 4,
+    "simulation_confidence": 0.934,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-09-28T20:19:45.669774Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "adopted",
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "88a39526-6da8-4ca7-a490-6d6ea8521cc2",
+    "model_id": "796a07b1-5158-4b66-ad19-4a6eb5f18f5d",
+    "brand": "Fabhalta",
+    "intervention_type": "email_campaign",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 8,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.1487,
+    "simulated_ci_lower": 0.1447,
+    "simulated_ci_upper": 0.1526,
+    "recommendation": "deploy",
+    "recommendation_rationale": "CI lower bound 0.145 exceeds min effect 0.050.",
+    "recommended_sample_size": 130,
+    "recommended_duration_weeks": 8,
+    "simulation_confidence": 0.579,
+    "data_provenance": "synthetic_uplift_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-06-16T17:21:22.410921Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": null,
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "9a880aae-a76a-4e39-9f07-fe9579d292f6",
+    "model_id": "5141ba73-d926-43ec-b064-9cf717f8a9dd",
+    "brand": "Remibrutinib",
+    "intervention_type": "email_campaign",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 4,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.1474,
+    "simulated_ci_lower": 0.0552,
+    "simulated_ci_upper": 0.2396,
+    "recommendation": "deploy",
+    "recommendation_rationale": "CI lower bound 0.055 exceeds min effect 0.050.",
+    "recommended_sample_size": 280,
+    "recommended_duration_weeks": 4,
+    "simulation_confidence": 0.7849,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-09-22T07:00:28.283878Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "cohort_conversion_outcome",
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "60690509-5536-48b4-a45d-1863d1abcca0",
+    "model_id": "5141ba73-d926-43ec-b064-9cf717f8a9dd",
+    "brand": "Remibrutinib",
+    "intervention_type": "digital_engagement",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 8,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.147,
+    "simulated_ci_lower": 0.1426,
+    "simulated_ci_upper": 0.1514,
+    "recommendation": "deploy",
+    "recommendation_rationale": "CI lower bound 0.143 exceeds min effect 0.050.",
+    "recommended_sample_size": 134,
+    "recommended_duration_weeks": 8,
+    "simulation_confidence": 0.5784,
+    "data_provenance": "synthetic_uplift_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-06-16T14:45:07.573432Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": null,
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "00521978-dcc6-45e0-804f-55e1d6509bd5",
+    "model_id": "428cea1e-fd12-4098-9a19-63480d94bb5e",
+    "brand": "Kisqali",
+    "intervention_type": "email_campaign",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 8,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.1352,
+    "simulated_ci_lower": 0.0924,
+    "simulated_ci_upper": 0.1781,
+    "recommendation": "deploy",
+    "recommendation_rationale": "CI lower bound 0.092 exceeds min effect 0.050.",
+    "recommended_sample_size": 274,
+    "recommended_duration_weeks": 8,
+    "simulation_confidence": 0.5529,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-09-12T15:57:57.969946Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "conversion_rate",
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "241ec84a-b348-46d8-aab7-b3bc548e9f01",
+    "model_id": "428cea1e-fd12-4098-9a19-63480d94bb5e",
+    "brand": "Kisqali",
+    "intervention_type": "email_campaign",
+    "intervention_config": {
+     "channel": "email",
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 8,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.1352,
+    "simulated_ci_lower": 0.0924,
+    "simulated_ci_upper": 0.1781,
+    "recommendation": "deploy",
+    "recommendation_rationale": "CI lower bound 0.092 exceeds min effect 0.050.",
+    "recommended_sample_size": 274,
+    "recommended_duration_weeks": 8,
+    "simulation_confidence": 0.5349,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-09-14T22:14:57.506857Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "conversion_rate",
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "ee520a0d-a9ea-4222-a9b0-e7ef1510cbca",
+    "model_id": "428cea1e-fd12-4098-9a19-63480d94bb5e",
+    "brand": "Kisqali",
+    "intervention_type": "email_campaign",
+    "intervention_config": {
+     "channel": "email",
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 8,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.1352,
+    "simulated_ci_lower": 0.0924,
+    "simulated_ci_upper": 0.1781,
+    "recommendation": "deploy",
+    "recommendation_rationale": "CI lower bound 0.092 exceeds min effect 0.050.",
+    "recommended_sample_size": 274,
+    "recommended_duration_weeks": 8,
+    "simulation_confidence": 0.5619,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-09-14T22:15:07.499742Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "conversion_rate",
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "49cbf120-7560-4206-b77b-368e290d0c8d",
+    "model_id": "428cea1e-fd12-4098-9a19-63480d94bb5e",
+    "brand": "Kisqali",
+    "intervention_type": "email_campaign",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 8,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.1352,
+    "simulated_ci_lower": 0.0924,
+    "simulated_ci_upper": 0.1781,
+    "recommendation": "deploy",
+    "recommendation_rationale": "CI lower bound 0.092 exceeds min effect 0.050.",
+    "recommended_sample_size": 274,
+    "recommended_duration_weeks": 8,
+    "simulation_confidence": 0.8319,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-09-16T02:06:28.595451Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "conversion_rate",
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "c3ef5f08-2f6a-42ba-9856-ac6d746fe6c1",
+    "model_id": "428cea1e-fd12-4098-9a19-63480d94bb5e",
+    "brand": "Kisqali",
+    "intervention_type": "email_campaign",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 8,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.1352,
+    "simulated_ci_lower": 0.0924,
+    "simulated_ci_upper": 0.1781,
+    "recommendation": "deploy",
+    "recommendation_rationale": "CI lower bound 0.092 exceeds min effect 0.050.",
+    "recommended_sample_size": 274,
+    "recommended_duration_weeks": 8,
+    "simulation_confidence": 0.8319,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-09-16T02:06:59.180325Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "conversion_rate",
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "d88534a2-1d18-4029-850f-eedba4876056",
+    "model_id": "5141ba73-d926-43ec-b064-9cf717f8a9dd",
+    "brand": "Remibrutinib",
+    "intervention_type": "email_campaign",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 13,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.1327,
+    "simulated_ci_lower": 0.0849,
+    "simulated_ci_upper": 0.1805,
+    "recommendation": "deploy",
+    "recommendation_rationale": "CI lower bound 0.085 exceeds min effect 0.050.",
+    "recommended_sample_size": 180,
+    "recommended_duration_weeks": 13,
+    "simulation_confidence": 0.5282,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-07-08T13:25:44.089166Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "conversion_rate",
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "44ae9d1c-2cb9-45f8-a06b-3a32b334c1d5",
+    "model_id": "5141ba73-d926-43ec-b064-9cf717f8a9dd",
+    "brand": "Remibrutinib",
+    "intervention_type": "call_frequency_increase",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 13,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.1129,
+    "simulated_ci_lower": 0.0711,
+    "simulated_ci_upper": 0.1548,
+    "recommendation": "deploy",
+    "recommendation_rationale": "CI lower bound 0.071 exceeds min effect 0.050.",
+    "recommended_sample_size": 246,
+    "recommended_duration_weeks": 13,
+    "simulation_confidence": 0.5268,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-07-18T12:51:34.569603Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "conversion_rate",
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "9eb2cfd8-3e12-4a3a-93f2-3bb9811f1846",
+    "model_id": "428cea1e-fd12-4098-9a19-63480d94bb5e",
+    "brand": "Kisqali",
+    "intervention_type": "digital_engagement",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 4,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.1069,
+    "simulated_ci_lower": 0.0607,
+    "simulated_ci_upper": 0.1531,
+    "recommendation": "deploy",
+    "recommendation_rationale": "CI lower bound 0.061 exceeds min effect 0.050.",
+    "recommended_sample_size": 291,
+    "recommended_duration_weeks": 4,
+    "simulation_confidence": 0.8908,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-09-28T20:19:39.372554Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "adopted",
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "fe51c023-93ce-4f4a-ac15-fa4ede327b79",
+    "model_id": "796a07b1-5158-4b66-ad19-4a6eb5f18f5d",
+    "brand": "Fabhalta",
+    "intervention_type": "email_campaign",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 4,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.1317,
+    "simulated_ci_lower": 0.0419,
+    "simulated_ci_upper": 0.2216,
+    "recommendation": "refine",
+    "recommendation_rationale": "CI [0.042, 0.222] straddles min effect 0.050; refine or gather more data.",
+    "recommended_sample_size": 352,
+    "recommended_duration_weeks": 4,
+    "simulation_confidence": 0.7764,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-09-22T07:00:20.685007Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "cohort_conversion_outcome",
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "ac5ba67f-feb4-4527-b620-be8ab53321a7",
+    "model_id": "428cea1e-fd12-4098-9a19-63480d94bb5e",
+    "brand": "Kisqali",
+    "intervention_type": "patient_support_program",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 13,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.1278,
+    "simulated_ci_lower": 0.0136,
+    "simulated_ci_upper": 0.2421,
+    "recommendation": "refine",
+    "recommendation_rationale": "CI [0.014, 0.242] straddles min effect 0.050; refine or gather more data.",
+    "recommended_sample_size": 243,
+    "recommended_duration_weeks": 13,
+    "simulation_confidence": 0.7443,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-09-18T04:49:54.358428Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "conversion_rate",
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "0472a802-b657-4fb5-a7a9-97bd9cd1cf03",
+    "model_id": "428cea1e-fd12-4098-9a19-63480d94bb5e",
+    "brand": "Kisqali",
+    "intervention_type": "email_campaign",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 4,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.1252,
+    "simulated_ci_lower": 0.0219,
+    "simulated_ci_upper": 0.2284,
+    "recommendation": "refine",
+    "recommendation_rationale": "CI [0.022, 0.228] straddles min effect 0.050; refine or gather more data.",
+    "recommended_sample_size": 379,
+    "recommended_duration_weeks": 4,
+    "simulation_confidence": 0.7547,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-09-22T07:00:12.001592Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "cohort_conversion_outcome",
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "855a25e0-d67d-4b49-bf79-4b809d0f2cc8",
+    "model_id": "428cea1e-fd12-4098-9a19-63480d94bb5e",
+    "brand": "Kisqali",
+    "intervention_type": "rep_training_quality",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 13,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.063,
+    "simulated_ci_lower": -0.0352,
+    "simulated_ci_upper": 0.1613,
+    "recommendation": "refine",
+    "recommendation_rationale": "CI [-0.035, 0.161] straddles min effect 0.050; refine or gather more data.",
+    "recommended_sample_size": 1129,
+    "recommended_duration_weeks": 13,
+    "simulation_confidence": 0.6451,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-09-18T04:50:26.894848Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "conversion_rate",
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "12936055-ae16-4781-ba73-ef328f32d869",
+    "model_id": "5141ba73-d926-43ec-b064-9cf717f8a9dd",
+    "brand": "Remibrutinib",
+    "intervention_type": "rep_training_quality",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 4,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.0472,
+    "simulated_ci_lower": 0.0083,
+    "simulated_ci_upper": 0.0861,
+    "recommendation": "refine",
+    "recommendation_rationale": "CI [0.008, 0.086] straddles min effect 0.050; refine or gather more data.",
+    "recommended_sample_size": 1572,
+    "recommended_duration_weeks": 4,
+    "simulation_confidence": 0.7941,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-09-28T20:20:15.070316Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "adopted",
+    "effect_scale": "absolute"
+   },
+   {
+    "simulation_id": "75a2abe0-1a3d-4370-a13e-1652cc0c1be8",
+    "model_id": "428cea1e-fd12-4098-9a19-63480d94bb5e",
+    "brand": "Kisqali",
+    "intervention_type": "email_campaign",
+    "intervention_config": {
+     "channel": null,
+     "frequency": null,
+     "content_type": null,
+     "duration_weeks": 8,
+     "target_segment": null,
+     "intensity_multiplier": 1.0,
+     "personalization_level": "standard"
+    },
+    "simulated_ate": 0.0251,
+    "simulated_ci_lower": -0.0056,
+    "simulated_ci_upper": 0.0558,
+    "recommendation": "refine",
+    "recommendation_rationale": "CI [-0.006, 0.056] straddles min effect 0.050; refine or gather more data.",
+    "recommended_sample_size": 3457,
+    "recommended_duration_weeks": 8,
+    "simulation_confidence": 0.4054,
+    "data_provenance": "cohort_estimated_synthetic_gold_v1",
+    "fidelity_status": "unvalidated",
+    "created_at": "2026-09-12T15:58:41.343501Z",
+    "proposal_basis": "twin_simulation",
+    "outcome_column": "conversion_rate",
+    "effect_scale": "absolute"
+   }
+  ],
+  "outcome_column": "adopted",
+  "outcome_measurable_in_real_mode": false,
+  "total_proposed": 34,
+  "truncated": false,
+  "total_linked": 0,
+  "real_experiments_running": 0
+ }
+}
