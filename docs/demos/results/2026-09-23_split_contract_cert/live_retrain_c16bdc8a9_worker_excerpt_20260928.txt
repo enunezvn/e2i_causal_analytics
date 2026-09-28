@@ -1,0 +1,13 @@
+[2026-09-28 19:34:37,106: INFO/ForkPoolWorker-2] Stage 4: Running model_trainer
+[2026-09-28 19:35:59,945: INFO/ForkPoolWorker-2] Logged model to: models:/m-1dc2ac5f2c5d4c6ebbb6d866a5e603ab
+[2026-09-28 19:36:00,787: INFO/ForkPoolWorker-2] Persisted training run: train_632d80e88865 for experiment 35a2cd41-4d85-4034-b1a0-1c2a61e3766e
+[2026-09-28 19:36:01,945: INFO/ForkPoolWorker-2] Stage 4 complete: training_run_id=train_632d80e88865, success_criteria_met=True, primary_metric=0.8363, hpo_trials=50, duration=84.84s
+[2026-09-28 19:36:02,022: INFO/ForkPoolWorker-2] Stage 5: Running feature_analyzer
+[2026-09-28 19:36:04,138: INFO/ForkPoolWorker-2] Stage 5 complete: top_features=[], duration=2.12s
+[2026-09-28 19:36:04,193: INFO/ForkPoolWorker-2] Stage 6: Running model_deployer
+[2026-09-28 19:36:06,899: WARNING/ForkPoolWorker-2] Created version '4' of model 'initiation_kisqali_goldstd_lr_v1'.
+[2026-09-28 19:36:07,307: INFO/ForkPoolWorker-2] Wrote ml_model_registry row cff4f2b5-a87e-4947-aa2a-243a7fb0ee45 (initiation_kisqali_goldstd_lr_v1 v1.0_retrained_20260928_1934_725a94, experiment 35a2cd41-4d85-4034-b1a0-1c2a61e3766e)
+[2026-09-28 19:36:07,470: INFO/ForkPoolWorker-2] Transitioned initiation_kisqali_goldstd_lr_v1 v4 to staging
+[2026-09-28 19:36:07,470: INFO/ForkPoolWorker-2] MLflow: Transitioned initiation_kisqali_goldstd_lr_v1 v4 to Staging
+[2026-09-28 19:36:08,153: INFO/ForkPoolWorker-2] Stage 6 complete: deployment_successful=True, endpoint_url=, duration=3.96s
+[2026-09-28 19:36:08,345: INFO/ForkPoolWorker-2] Task src.tasks.execute_model_retraining[99b02add-0cd2-4e2b-a36e-f0e902eac029] succeeded in 117.57126400247216s: {'status': 'completed', 'retraining_id': '836578bf-0456-433d-9593-dbd373581579', 'old_version': '4ec55d13-46c8-4df4-9ec8-7723fad67fb3', 'new_version': '1.0_retrained_20260928_1934_725a94', 'performance_after': 0.8359030654056568, 'calibration_method': 'sigmoid', 'mlflow_model_version': None, 'deployed': False, 'deployment_skipped_reason': 'deployment_action=\'promote\': register/promote only — no Bento packaged, no endpoint deployed'
