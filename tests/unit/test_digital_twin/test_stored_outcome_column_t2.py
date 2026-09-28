@@ -9,9 +9,9 @@ back; a row saved earlier resolves by provenance and date.
 from __future__ import annotations
 
 import asyncio
+from uuid import uuid4
 
 import pytest
-from uuid import uuid4
 
 from src.digital_twin.models.simulation_models import (
     OUTCOME_COLUMN_KEY,

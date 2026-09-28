@@ -291,3 +291,34 @@ def test_a_target_region_with_too_few_rows_in_an_arm_is_not_covered(cohort):
         estimate_cohort_effect(skewed, PLANTED, target_regions=["west"])
     assert caught.value.cause is EffectCause.TARGET_REGION_NOT_COVERED
     assert caught.value.details["n_target_regions_one_arm"] == 1
+
+
+def test_the_planted_fit_has_a_dr_pseudo_outcome_for_every_row(mirror):
+    """The weighted identity above holds by row counts only while every row is out-of-bag
+    at least once; pin that it is so on the planted frame."""
+    cf, _x, _work = mirror
+    assert np.isfinite(cf.rlearner_model_final_._oob_preds).all()
+
+
+class _ForestWithSomeRowsNeverOutOfBag(_RealForest):
+    """A row no subforest left out has a NaN DR pseudo-outcome; econml's ``ate_`` is then
+    the mean over the finite rows (``_ate_and_stderr``). Reproduced on a real fit."""
+
+    def fit(self, *args, **kw):
+        super().fit(*args, **kw)
+        final = self.rlearner_model_final_
+        final._oob_preds[::7] = np.nan
+        point, stderr = final._ate_and_stderr(final._oob_preds)
+        final.ate_, final.ate_stderr_ = point, stderr
+        return self
+
+
+def test_region_counts_are_the_rows_with_a_dr_pseudo_outcome(monkeypatch, cohort):
+    """With NaN pseudo-outcomes a region's effect is the mean over its finite rows, so its
+    evidence count is those rows too, and the headline stays the count-weighted mean."""
+    monkeypatch.setattr("econml.dml.CausalForestDML", _ForestWithSomeRowsNeverOutOfBag)
+    eff = estimate_cohort_effect(cohort, PLANTED)
+    total = sum(eff.n_by_region.values())
+    assert total < eff.n
+    weighted = sum(eff.cate_by_region[r] * eff.n_by_region[r] for r in eff.cate_by_region)
+    assert eff.ate == pytest.approx(weighted / total, abs=1e-12)

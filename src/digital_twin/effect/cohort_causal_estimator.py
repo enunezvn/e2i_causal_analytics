@@ -434,8 +434,13 @@ def estimate_cohort_effect(
         ) from e
 
     z = NormalDist().inv_cdf(1.0 - alpha / 2.0)
-    # Evidence base per region: the usable cohort rows the CATE above averages over.
-    n_by_region = {c: int((region_arr == c).sum()) for c in cate_by_region}
+    # Evidence base per region: the rows its DR mean averages over, i.e. those with a finite
+    # pseudo-outcome (econml leaves a row no subforest held out as NaN and ``nanmean`` skips
+    # it), so the headline stays the count-weighted mean of the region effects.
+    # ``_oob_preds`` is (n, 1) for our single binary treatment: a row counts when every
+    # entry on it is finite.
+    has_dr = np.isfinite(dr).reshape(len(dr), -1).all(axis=1)
+    n_by_region = {c: int(((region_arr == c) & has_dr).sum()) for c in cate_by_region}
 
     specialty_arr = work["specialty"].to_numpy(dtype=str)
     report_mask: np.ndarray = np.ones(len(work), dtype=bool)
