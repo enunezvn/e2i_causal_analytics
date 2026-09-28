@@ -533,12 +533,15 @@ async def _log_model_artifact(
         # around a booster; the native xgboost/lightgbm flavors cannot serialize it.
         flavor = "sklearn"
 
+    format_kwargs = _sklearn_serialization_kwargs(framework, model) if flavor == "sklearn" else {}
+
     try:
         logger.info(f"Attempting to log model with flavor={flavor}")
         model_uri = await run.log_model(
             model=model,
             name="model",
             flavor=flavor,
+            **format_kwargs,
         )
         if model_uri is None:
             # #2280: the connector swallows mlflow's error (and logs it) and returns None.
@@ -559,6 +562,7 @@ async def _log_model_artifact(
                 model=model,
                 name="model",
                 flavor="sklearn",
+                **_sklearn_serialization_kwargs(framework, model),
             )
             if model_uri is None:
                 logger.error("Model artifact NOT logged with the sklearn fallback either")
@@ -706,7 +710,10 @@ def _get_mlflow_flavor(algorithm_name: str, framework: str) -> str:
     # not a silent fallthrough. NGBoost and MAPIE conformal wrappers have
     # no native MLflow flavor — they serialize via cloudpickle through
     # the sklearn flavor (works because the wrappers expose
-    # sklearn-compatible fit/predict/predict_proba). Future work: switch
+    # sklearn-compatible fit/predict/predict_proba). The flavor alone does
+    # not pick cloudpickle: from mlflow 3.15 the sklearn default is skops,
+    # which refuses these classes, so _log_model_artifact asks for it
+    # explicitly (_sklearn_serialization_kwargs). Future work: switch
     # to mlflow.pyfunc with a PythonModel adapter when full registry
     # deployment lands (W3-lite or later when k=10 runs surface 10× MLflow
     # artifacts per algorithm).
@@ -716,6 +723,36 @@ def _get_mlflow_flavor(algorithm_name: str, framework: str) -> str:
         return "sklearn"  # cloudpickle: MapieConformalBinaryClassifier wrapper
     else:
         return "sklearn"
+
+
+# The NGBoost / MAPIE wrapper classes, for a model whose ``framework`` label was lost.
+_CLOUDPICKLE_MODEL_MODULES = (
+    "ngboost.",
+    "mapie.",
+    "src.mlops.wrappers.ngboost_wrapper",
+    "src.mlops.wrappers.mapie_wrapper",
+)
+
+
+def _sklearn_serialization_kwargs(framework: str, model: Any = None) -> Dict[str, Any]:
+    """The sklearn-flavor ``serialization_format`` the trainer asks for, if any.
+
+    The NGBoost / MAPIE wrappers are documented to serialize via cloudpickle (see
+    ``_get_mlflow_flavor``), but nothing asked for it. mlflow < 3.15 defaulted to
+    cloudpickle; mlflow 3.15 (the worker's version) defaults to skops, which refuses the
+    wrapper classes (``ngboost.api.NGBClassifier``, ``mapie.classification.MapieClassifier``,
+    the ``src.mlops.wrappers`` classes, ...), so the model was NOT logged (``model_uri=None``,
+    measured 2026-09-28 for all four registry entries). Every other model keeps mlflow's
+    default format.
+    """
+    module = f"{type(model).__module__}." if model is not None else ""
+    if (
+        framework == "ngboost"
+        or framework.startswith("mapie+")
+        or module.startswith(_CLOUDPICKLE_MODEL_MODULES)
+    ):
+        return {"serialization_format": "cloudpickle"}
+    return {}
 
 
 def _get_primary_metric(
