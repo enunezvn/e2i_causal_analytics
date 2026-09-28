@@ -80,7 +80,7 @@ def _cohort_provider():
         {
             "region": regions,
             "engagement_score": eng,
-            "cohort_conversion_outcome": conv,
+            "adopted": conv,  # the twin outcome column (lane T2)
             "market_share": market,
             "triggers_total_count": rng.poisson(80, n).astype(float),
         }
