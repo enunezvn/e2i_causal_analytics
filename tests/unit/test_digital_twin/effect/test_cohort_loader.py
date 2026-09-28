@@ -589,6 +589,27 @@ async def test_availability_advertises_exactly_what_simulate_accepts(n_adopted):
         assert availability[intervention] is (provider is not None), intervention
 
 
+@pytest.mark.parametrize("values", [[0.0], [0.0, 5.0, 5.0, 5.0]], ids=["constant", "tied-at-max"])
+async def test_a_channel_without_a_median_contrast_is_not_advertised(values):
+    """codex r2: 600 usable rows of a channel that never splits at its median (constant, or so
+    tied that every row sits at or below it) pass a non-null count, but the estimator refuses
+    them (NO_TREATMENT_CONTRAST). The gate applies the estimator's own split, so the channel
+    is not advertised and /simulate is not left to 422."""
+    rollups = _cohort_rows(600, with_all_channels=True)
+    for i, row in enumerate(rollups):
+        row["email_campaign_count"] = values[i % len(values)] if len(values) > 1 else values[0]
+    usability = cohort_loader.assess_cohort_frame(
+        await cohort_loader.load_cohort_frame(_FakeClient(rollups), BRAND), "email_campaign"
+    )
+    assert usability.provider is None
+    assert usability.cause is EffectCause.NO_TREATMENT_CONTRAST
+    assert usability.details["n_usable_rows"] == 600
+
+    availability = await cohort_treatment_availability(_FakeClient(rollups), BRAND)
+    assert availability["email_campaign"] is False
+    assert availability["digital_engagement"] is True
+
+
 async def test_availability_reads_the_cohort_once_for_all_channels():
     """Eight channels, one merged read: one rollup read + the adoption pages, not 8x that."""
     client = _FakeClient(_cohort_rows(600, with_all_channels=True))

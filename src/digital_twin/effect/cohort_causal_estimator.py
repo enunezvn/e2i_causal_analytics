@@ -172,6 +172,16 @@ def _usable_rows(
     return work
 
 
+def median_contrast(t_raw: pd.Series) -> np.ndarray:
+    """The pre-registered contrast: 1 for rows above the median treatment intensity, else 0.
+
+    Shared with ``cohort_loader.assess_cohort_frame`` so the availability gate refuses exactly
+    the channels this estimator would (a constant channel, or one tied at its maximum, has no
+    row above its median).
+    """
+    return cast(np.ndarray, (t_raw > float(t_raw.median())).astype(int).to_numpy())
+
+
 def _effect_modifier_matrix(work: pd.DataFrame) -> np.ndarray:
     """One-hot both nominal axes, preserving the legacy region-only matrix when needed."""
     if "specialty" not in work or not work["specialty"].ne(_MISSING_SPECIALTY).any():
@@ -303,8 +313,7 @@ def estimate_cohort_effect(
         )
 
     # Pre-registered contrast: treated = above the cohort median intensity.
-    t_thr = float(work["t_raw"].median())
-    t = (work["t_raw"] > t_thr).astype(int).to_numpy()
+    t = median_contrast(work["t_raw"])
     if len(np.unique(t)) < 2:
         # One distinct value is a constant channel; more than one is a skew onto the median.
         raise EffectDataUnavailable(
