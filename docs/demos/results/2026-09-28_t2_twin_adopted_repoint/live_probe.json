@@ -1,0 +1,508 @@
+{
+  "started_at": "2026-09-28T13:35:42Z",
+  "load": {
+    "Remibrutinib": {
+      "seconds": 1.41,
+      "pairs": 3366,
+      "joined_to_adopted": 3366,
+      "unjoined_pairs": 0,
+      "adopted_rate": 0.3904,
+      "has_max_metric_date": true,
+      "columns": [
+        "adopted",
+        "brand",
+        "call_frequency",
+        "email_campaign_count",
+        "engagement_score",
+        "hcp_id",
+        "market_share",
+        "max_metric_date",
+        "n_metric_rows",
+        "patient_support_enrollment",
+        "peer_influence_score",
+        "region",
+        "rep_training_score",
+        "sample_volume",
+        "speaker_program_count",
+        "specialty",
+        "triggers_total_count"
+      ]
+    },
+    "Fabhalta": {
+      "seconds": 1.2,
+      "pairs": 3420,
+      "joined_to_adopted": 3420,
+      "unjoined_pairs": 0,
+      "adopted_rate": 0.4132,
+      "has_max_metric_date": true,
+      "columns": [
+        "adopted",
+        "brand",
+        "call_frequency",
+        "email_campaign_count",
+        "engagement_score",
+        "hcp_id",
+        "market_share",
+        "max_metric_date",
+        "n_metric_rows",
+        "patient_support_enrollment",
+        "peer_influence_score",
+        "region",
+        "rep_training_score",
+        "sample_volume",
+        "speaker_program_count",
+        "specialty",
+        "triggers_total_count"
+      ]
+    },
+    "Kisqali": {
+      "seconds": 1.12,
+      "pairs": 3397,
+      "joined_to_adopted": 3397,
+      "unjoined_pairs": 0,
+      "adopted_rate": 0.3936,
+      "has_max_metric_date": true,
+      "columns": [
+        "adopted",
+        "brand",
+        "call_frequency",
+        "email_campaign_count",
+        "engagement_score",
+        "hcp_id",
+        "market_share",
+        "max_metric_date",
+        "n_metric_rows",
+        "patient_support_enrollment",
+        "peer_influence_score",
+        "region",
+        "rep_training_score",
+        "sample_volume",
+        "speaker_program_count",
+        "specialty",
+        "triggers_total_count"
+      ]
+    }
+  },
+  "availability": {
+    "Remibrutinib": {
+      "seconds": 1.11,
+      "n_probe_errors": 0,
+      "available": {
+        "email_campaign": true,
+        "call_frequency_increase": true,
+        "speaker_program_invitation": true,
+        "sample_distribution": true,
+        "peer_influence_activation": true,
+        "digital_engagement": true,
+        "patient_support_program": true,
+        "rep_training_quality": true
+      }
+    },
+    "Fabhalta": {
+      "seconds": 1.12,
+      "n_probe_errors": 0,
+      "available": {
+        "email_campaign": true,
+        "call_frequency_increase": true,
+        "speaker_program_invitation": true,
+        "sample_distribution": true,
+        "peer_influence_activation": true,
+        "digital_engagement": true,
+        "patient_support_program": true,
+        "rep_training_quality": true
+      }
+    },
+    "Kisqali": {
+      "seconds": 1.51,
+      "n_probe_errors": 0,
+      "available": {
+        "email_campaign": true,
+        "call_frequency_increase": true,
+        "speaker_program_invitation": true,
+        "sample_distribution": true,
+        "peer_influence_activation": true,
+        "digital_engagement": true,
+        "patient_support_program": true,
+        "rep_training_quality": true
+      }
+    }
+  },
+  "fits": [
+    {
+      "brand": "Remibrutinib",
+      "intervention": "digital_engagement",
+      "treatment": "engagement_score",
+      "outcome": "adopted",
+      "n": 3354,
+      "ate": 0.16714016122772715,
+      "ate_stderr": 0.023769431312559028,
+      "ci_lower": 0.12055293192211285,
+      "ci_upper": 0.21372739053334144,
+      "ci_width": 0.0931744586112286,
+      "excludes_0": true,
+      "interval_method": "dr_ate_stderr",
+      "cate_by_region": {
+        "midwest": 0.15142232364473968,
+        "northeast": 0.2285239836704184,
+        "south": 0.12330969438432278,
+        "west": 0.20013122977870768
+      },
+      "seconds": 3.19,
+      "peak_rss_gib": 0.614
+    },
+    {
+      "brand": "Remibrutinib",
+      "intervention": "speaker_program_invitation",
+      "treatment": "speaker_program_count",
+      "outcome": "adopted",
+      "n": 3354,
+      "ate": 0.08627373583842579,
+      "ate_stderr": 0.029252951478287697,
+      "ci_lower": 0.028939004499484187,
+      "ci_upper": 0.1436084671773674,
+      "ci_width": 0.1146694626778832,
+      "excludes_0": true,
+      "interval_method": "dr_ate_stderr",
+      "cate_by_region": {
+        "midwest": 0.06851481454182733,
+        "northeast": 0.1706313978095218,
+        "south": 0.08177086506618193,
+        "west": 0.023479817260298002
+      },
+      "seconds": 3.44,
+      "peak_rss_gib": 0.621
+    },
+    {
+      "brand": "Remibrutinib",
+      "intervention": "peer_influence_activation",
+      "treatment": "peer_influence_score",
+      "outcome": "adopted",
+      "n": 3354,
+      "ate": 0.10622133047247302,
+      "ate_stderr": 0.021733388507087798,
+      "ci_lower": 0.06362467173656422,
+      "ci_upper": 0.14881798920838182,
+      "ci_width": 0.0851933174718176,
+      "excludes_0": true,
+      "interval_method": "dr_ate_stderr",
+      "cate_by_region": {
+        "midwest": 0.08211643905840808,
+        "northeast": 0.07423655469055673,
+        "south": 0.11395578527373855,
+        "west": 0.15365605771909752
+      },
+      "seconds": 3.14,
+      "peak_rss_gib": 0.621
+    },
+    {
+      "brand": "Remibrutinib",
+      "intervention": "patient_support_program",
+      "treatment": "patient_support_enrollment",
+      "outcome": "adopted",
+      "n": 3354,
+      "ate": 0.0820382720993505,
+      "ate_stderr": 0.020611849557496946,
+      "ci_lower": 0.04163978931189864,
+      "ci_upper": 0.12243675488680235,
+      "ci_width": 0.0807969655749037,
+      "excludes_0": true,
+      "interval_method": "dr_ate_stderr",
+      "cate_by_region": {
+        "midwest": 0.1020145208439823,
+        "northeast": 0.014612482531086456,
+        "south": 0.08182717546153762,
+        "west": 0.1327902262449124
+      },
+      "seconds": 3.84,
+      "peak_rss_gib": 0.623
+    },
+    {
+      "brand": "Remibrutinib",
+      "intervention": "rep_training_quality",
+      "treatment": "rep_training_score",
+      "outcome": "adopted",
+      "n": 3354,
+      "ate": 0.04883828034720591,
+      "ate_stderr": 0.020277204759672495,
+      "ci_lower": 0.00909568931110366,
+      "ci_upper": 0.08858087138330815,
+      "ci_width": 0.0794851820722045,
+      "excludes_0": true,
+      "interval_method": "dr_ate_stderr",
+      "cate_by_region": {
+        "midwest": 0.04777101680195031,
+        "northeast": 0.02067393930062568,
+        "south": 0.03298230146939081,
+        "west": 0.11003867325976437
+      },
+      "seconds": 3.33,
+      "peak_rss_gib": 0.629
+    },
+    {
+      "brand": "Remibrutinib",
+      "intervention": "digital_engagement",
+      "target_regions": [
+        "northeast"
+      ],
+      "target_n": 715,
+      "target_ate": 0.2285239836704184,
+      "target_stderr": 0.07356792571714257,
+      "target_ci_lower": 0.08433349884750097,
+      "target_ci_upper": 0.37271446849333584,
+      "declared_region_cate": 0.2285239836704184
+    },
+    {
+      "brand": "Fabhalta",
+      "intervention": "digital_engagement",
+      "treatment": "engagement_score",
+      "outcome": "adopted",
+      "n": 3404,
+      "ate": 0.16830411683647964,
+      "ate_stderr": 0.02084670875159154,
+      "ci_lower": 0.12744531848716428,
+      "ci_upper": 0.209162915185795,
+      "ci_width": 0.08171759669863071,
+      "excludes_0": true,
+      "interval_method": "dr_ate_stderr",
+      "cate_by_region": {
+        "midwest": 0.19386934313202636,
+        "northeast": 0.19363074098079142,
+        "south": 0.12136857002593886,
+        "west": 0.1991201468732636
+      },
+      "seconds": 3.01,
+      "peak_rss_gib": 0.639
+    },
+    {
+      "brand": "Fabhalta",
+      "intervention": "speaker_program_invitation",
+      "treatment": "speaker_program_count",
+      "outcome": "adopted",
+      "n": 3404,
+      "ate": 0.09811780346357409,
+      "ate_stderr": 0.025747433141346157,
+      "ci_lower": 0.04765376181218264,
+      "ci_upper": 0.14858184511496553,
+      "ci_width": 0.10092808330278288,
+      "excludes_0": true,
+      "interval_method": "dr_ate_stderr",
+      "cate_by_region": {
+        "midwest": 0.03711218423795763,
+        "northeast": 0.09126435679911715,
+        "south": 0.12906181824703936,
+        "west": 0.11549851938494883
+      },
+      "seconds": 3.17,
+      "peak_rss_gib": 0.643
+    },
+    {
+      "brand": "Fabhalta",
+      "intervention": "peer_influence_activation",
+      "treatment": "peer_influence_score",
+      "outcome": "adopted",
+      "n": 3404,
+      "ate": 0.08503981554499793,
+      "ate_stderr": 0.024971151190489174,
+      "ci_lower": 0.03609725855913466,
+      "ci_upper": 0.1339823725308612,
+      "ci_width": 0.09788511397172654,
+      "excludes_0": true,
+      "interval_method": "dr_ate_stderr",
+      "cate_by_region": {
+        "midwest": 0.06073413871828828,
+        "northeast": 0.1283104908553631,
+        "south": 0.0607939400587324,
+        "west": 0.1092972013638616
+      },
+      "seconds": 2.94,
+      "peak_rss_gib": 0.643
+    },
+    {
+      "brand": "Fabhalta",
+      "intervention": "patient_support_program",
+      "treatment": "patient_support_enrollment",
+      "outcome": "adopted",
+      "n": 3404,
+      "ate": 0.06729013313136002,
+      "ate_stderr": 0.020935834188851157,
+      "ci_lower": 0.02625665213490943,
+      "ci_upper": 0.10832361412781061,
+      "ci_width": 0.08206696199290117,
+      "excludes_0": true,
+      "interval_method": "dr_ate_stderr",
+      "cate_by_region": {
+        "midwest": 0.04070964058530052,
+        "northeast": 0.13145213989875934,
+        "south": 0.026189946503978948,
+        "west": 0.10236093210667056
+      },
+      "seconds": 3.02,
+      "peak_rss_gib": 0.647
+    },
+    {
+      "brand": "Fabhalta",
+      "intervention": "rep_training_quality",
+      "treatment": "rep_training_score",
+      "outcome": "adopted",
+      "n": 3404,
+      "ate": 0.0019783252517731344,
+      "ate_stderr": 0.020542104961103112,
+      "ci_lower": -0.03828346063863053,
+      "ci_upper": 0.042240111142176795,
+      "ci_width": 0.08052357178080732,
+      "excludes_0": false,
+      "interval_method": "dr_ate_stderr",
+      "cate_by_region": {
+        "midwest": 0.047993214640444516,
+        "northeast": 0.025519098371725356,
+        "south": 0.008939072243639242,
+        "west": -0.08680504249295357
+      },
+      "seconds": 2.82,
+      "peak_rss_gib": 0.651
+    },
+    {
+      "brand": "Fabhalta",
+      "intervention": "digital_engagement",
+      "target_regions": [
+        "northeast"
+      ],
+      "target_n": 736,
+      "target_ate": 0.19363074098079142,
+      "target_stderr": 0.04332941883521706,
+      "target_ci_lower": 0.10870664059271455,
+      "target_ci_upper": 0.27855484136886827,
+      "declared_region_cate": 0.19363074098079142
+    },
+    {
+      "brand": "Kisqali",
+      "intervention": "digital_engagement",
+      "treatment": "engagement_score",
+      "outcome": "adopted",
+      "n": 3378,
+      "ate": 0.10733791325203722,
+      "ate_stderr": 0.022793836952932044,
+      "ci_lower": 0.06266281375481222,
+      "ci_upper": 0.1520130127492622,
+      "ci_width": 0.08935019899444999,
+      "excludes_0": true,
+      "interval_method": "dr_ate_stderr",
+      "cate_by_region": {
+        "midwest": 0.12542966135136313,
+        "northeast": 0.13345013137399958,
+        "south": 0.10310905568663721,
+        "west": 0.0666541630382641
+      },
+      "seconds": 2.75,
+      "peak_rss_gib": 0.659
+    },
+    {
+      "brand": "Kisqali",
+      "intervention": "speaker_program_invitation",
+      "treatment": "speaker_program_count",
+      "outcome": "adopted",
+      "n": 3378,
+      "ate": 0.11936138353346824,
+      "ate_stderr": 0.05528907985943137,
+      "ci_lower": 0.010996778270623911,
+      "ci_upper": 0.22772598879631256,
+      "ci_width": 0.21672921052568866,
+      "excludes_0": true,
+      "interval_method": "dr_ate_stderr",
+      "cate_by_region": {
+        "midwest": 0.1543424101270759,
+        "northeast": 0.17327612972780784,
+        "south": 0.0765253393729061,
+        "west": 0.09828771174938289
+      },
+      "seconds": 2.51,
+      "peak_rss_gib": 0.66
+    },
+    {
+      "brand": "Kisqali",
+      "intervention": "peer_influence_activation",
+      "treatment": "peer_influence_score",
+      "outcome": "adopted",
+      "n": 3378,
+      "ate": 0.11509918819479269,
+      "ate_stderr": 0.024328241259987594,
+      "ci_lower": 0.06741671151801568,
+      "ci_upper": 0.1627816648715697,
+      "ci_width": 0.09536495335355402,
+      "excludes_0": true,
+      "interval_method": "dr_ate_stderr",
+      "cate_by_region": {
+        "midwest": 0.08354417457069464,
+        "northeast": 0.08781799735067936,
+        "south": 0.10486795119829413,
+        "west": 0.19717085538247628
+      },
+      "seconds": 2.51,
+      "peak_rss_gib": 0.661
+    },
+    {
+      "brand": "Kisqali",
+      "intervention": "patient_support_program",
+      "treatment": "patient_support_enrollment",
+      "outcome": "adopted",
+      "n": 3378,
+      "ate": 0.07061868747529278,
+      "ate_stderr": 0.02150580105367801,
+      "ci_lower": 0.02846809195140034,
+      "ci_upper": 0.1127692829991852,
+      "ci_width": 0.08430119104778486,
+      "excludes_0": true,
+      "interval_method": "dr_ate_stderr",
+      "cate_by_region": {
+        "midwest": 0.10701115004849136,
+        "northeast": 0.004005703060086864,
+        "south": 0.06551581170325162,
+        "west": 0.11358246883097071
+      },
+      "seconds": 2.54,
+      "peak_rss_gib": 0.668
+    },
+    {
+      "brand": "Kisqali",
+      "intervention": "rep_training_quality",
+      "treatment": "rep_training_score",
+      "outcome": "adopted",
+      "n": 3378,
+      "ate": -0.012462261527724365,
+      "ate_stderr": 0.020036314104566338,
+      "ci_lower": -0.05173271555560628,
+      "ci_upper": 0.02680819250015755,
+      "ci_width": 0.07854090805576383,
+      "excludes_0": false,
+      "interval_method": "dr_ate_stderr",
+      "cate_by_region": {
+        "midwest": 0.027187735844673905,
+        "northeast": -0.05473623697769054,
+        "south": -0.02229911944271209,
+        "west": 0.00864439255808776
+      },
+      "seconds": 2.6,
+      "peak_rss_gib": 0.669
+    },
+    {
+      "brand": "Kisqali",
+      "intervention": "digital_engagement",
+      "target_regions": [
+        "northeast"
+      ],
+      "target_n": 750,
+      "target_ate": 0.13345013137399958,
+      "target_stderr": 0.06041923297159004,
+      "target_ci_lower": 0.015030610776148187,
+      "target_ci_upper": 0.25186965197185096,
+      "declared_region_cate": 0.13345013137399958
+    }
+  ],
+  "verdict": {
+    "planted_exclude_0": "12/12",
+    "null_covers_0": "2/3",
+    "null_max_abs_ate": 0.04883828034720591,
+    "rows_meet_min": true,
+    "refusals": []
+  }
+}
