@@ -514,6 +514,7 @@ class RetrainingTriggerService:
         success: bool = True,
         *,
         mlflow_run_id: Optional[str] = None,
+        notes: Optional[str] = None,
     ) -> Optional[RetrainingJob]:
         """
         Mark retraining job as complete.
@@ -538,6 +539,8 @@ class RetrainingTriggerService:
                 ``training_config`` when supplied so a completed metric is
                 auditable back to its run. ``None`` on the automated path, which
                 already certified the metric via the live pipeline.
+            notes: What the completion delivered, written to the history row's
+                ``notes`` (#2157: a retrain registers a candidate, no endpoint).
 
         Returns:
             Updated job or None
@@ -549,7 +552,7 @@ class RetrainingTriggerService:
 
         repo = RetrainingHistoryRepository(await get_drift_monitoring_client())
         record = await repo.complete_retraining(
-            job_id, performance_after, success, mlflow_run_id=mlflow_run_id
+            job_id, performance_after, success, mlflow_run_id=mlflow_run_id, notes=notes
         )
 
         if not record:
