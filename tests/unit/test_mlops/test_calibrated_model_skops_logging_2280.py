@@ -365,13 +365,14 @@ def test_only_calibrated_models_are_inspected(monkeypatch):
 
 
 @pytest.mark.unit
-def test_a_calibrated_booster_is_not_trusted_with_its_booster_classes():
+def test_a_calibrated_booster_is_trusted_with_exactly_its_booster_classes():
     """Measured: skops also reports xgboost.core.Booster / xgboost.sklearn.XGBClassifier.
-    Those are outside the allowlist, so nothing is trusted and mlflow refuses loudly."""
+    #2280 left them untrusted; the owner then approved trusting exactly those types (see
+    test_skops_boosters_and_wrappers_logging.py for the round-trips and the negatives)."""
     xgboost = pytest.importorskip("xgboost")
     X, y = _frame()
     base = xgboost.XGBClassifier(n_estimators=5, max_depth=2, verbosity=0).fit(X[:400], y[:400])
     model, _ = apply_post_hoc_calibration(base, X[400:500], y[400:500], method="sigmoid")
     reported = skops_io.get_untrusted_types(data=skops_io.dumps(model))
     assert "xgboost.sklearn.XGBClassifier" in reported
-    assert skops_trusted_types_for(model) == []
+    assert skops_trusted_types_for(model) == sorted(reported)
