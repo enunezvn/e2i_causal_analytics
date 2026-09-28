@@ -1135,10 +1135,8 @@ class MLFoundationPipeline:
 
         # Log summary
         success = trainer_output.get("success_criteria_met", False)
-        test_metrics = trainer_output.get("test_metrics", {})
-        primary_metric = (
-            test_metrics.get("auc_roc") or test_metrics.get("rmse") or test_metrics.get("r2") or 0.0
-        )
+        m = trainer_output.get("test_metrics", {})  # the evaluator emits roc_auc (#2157)
+        primary_metric = m.get("roc_auc") or m.get("auc_roc") or m.get("rmse") or m.get("r2") or 0.0
 
         feature_refs_info = ""
         if result.feature_refs_used:
@@ -1357,6 +1355,8 @@ class MLFoundationPipeline:
             "feature_manifest_source": deployer_scope_spec.get("feature_manifest_source"),
             # #2242: register a retrain's candidate as a new version of the retrained model.
             "retrain_of": input_data.get("retrain_of"),
+            # #2157: a retrain's deliverable is that registry row + stage; no endpoint.
+            "deployment_action": "promote" if input_data.get("retrain_of") else "deploy",
             # #2255: synthetic augmentation rows are part of the candidate's provenance.
             "training_augmentation_applied": bool(
                 (result.training_augmentation or {}).get("applied")

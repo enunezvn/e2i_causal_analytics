@@ -11,6 +11,7 @@ Version: 1.0.0
 """
 
 import logging
+import re
 import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -410,6 +411,26 @@ def _bento_exists(bento_name: str, version: Optional[str] = None) -> bool:
         return False
 
 
+# The tag on bentoml's "Successfully built Bento..." line. bentoml 1.4.x prints
+# ``Bento(tag="name:version")``; older output was ``Bento(name:version)``, optionally
+# quoted, or ``Bento name:version``. Only the ``name:version`` itself is captured — the
+# earlier ``Bento\(([^)]+)\)`` + end-strip kept ``tag="`` and every 1.4.x build failed
+# validation with "Invalid Tag" (Part of #2157).
+_BUILT_BENTO_TAG_RE = re.compile(
+    r"""Bento(?:\(\s*(?:tag\s*=\s*)?|\s+)["']?([A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+?)["']?\s*\)?\.?\s*$"""
+)
+
+
+def _parse_built_bento_tag(stdout: str) -> Optional[str]:
+    """Return ``name:version`` from ``bentoml build`` stdout, or None if no build line."""
+    for line in stdout.split("\n"):
+        if "Successfully built Bento" in line:
+            match = _BUILT_BENTO_TAG_RE.search(line.strip())
+            if match:
+                return match.group(1)
+    return None
+
+
 def build_bento(
     service_dir: Union[str, Path],
     bento_name: Optional[str] = None,
@@ -480,25 +501,13 @@ def build_bento(
     stdout = result.stdout
     stderr = result.stderr
 
-    # Pattern 1: "Successfully built Bento(name:version)"
+    # Pattern 1: the "Successfully built Bento(...)" line
     import re
 
-    for line in stdout.split("\n"):
-        if "Successfully built Bento" in line:
-            # Try to extract tag from line
-            # Format: "Successfully built Bento(name:version)."
-            match = re.search(r"Bento\(([^)]+)\)", line)
-            if match:
-                tag = match.group(1).strip("'\"")  # Strip any quotes
-                logger.info(f"Built Bento: {tag}")
-                return tag
-            # Fallback: split on Bento and take what's after
-            parts = line.split("Bento")
-            if len(parts) > 1:
-                tag = parts[-1].strip(" (.)'\"").strip()  # Strip quotes
-                if ":" in tag:
-                    logger.info(f"Built Bento: {tag}")
-                    return tag
+    parsed = _parse_built_bento_tag(stdout)
+    if parsed:
+        logger.info(f"Built Bento: {parsed}")
+        return parsed
 
     # Pattern 2: Look for tag in any output containing name:version
     # Only allow alphanumeric, underscore, hyphen, period in version
