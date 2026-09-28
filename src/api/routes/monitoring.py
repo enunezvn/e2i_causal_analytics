@@ -1608,7 +1608,7 @@ class CompleteRetrainingRequest(BaseModel):
     ``mlflow_run_id`` is the provenance pointer to the MLflow run that produced
     ``performance_after`` (#546). It is optional on the schema (so failure/abort
     completions stay non-breaking), but the endpoint REQUIRES it on a success
-    completion AND verifies it resolves to a real ``finished`` training run whose
+    completion AND verifies it resolves to a real finished (``completed``) training run whose
     recorded validation AUC matches ``performance_after`` — see
     ``complete_retraining`` / ``_verify_success_provenance``.
     """
@@ -1941,14 +1941,14 @@ async def _verify_success_provenance(performance_after: float, mlflow_run_id: st
 
     Resolves ``mlflow_run_id`` to the ``ml_training_runs`` row the model-trainer
     persisted (``MLTrainingRunRepository.get_by_mlflow_run_id``) and requires:
-    the run exists, is ``finished``, has a finite validation AUC, and that AUC
+    the run exists, is ``completed``, has a finite validation AUC, and that AUC
     matches the submitted ``performance_after`` within ``_PROVENANCE_AUC_TOL``.
     Raises ``HTTPException(422)`` on any failure (fail-closed). Obtains the async
     Supabase client the same way the live retraining task does
     (``get_async_supabase_client``), so the lookup runs against the real table.
     """
     from src.memory.services.factories import get_async_supabase_client
-    from src.repositories.ml_experiment import MLTrainingRunRepository
+    from src.repositories.ml_experiment import SUCCESSFUL_RUN_STATUSES, MLTrainingRunRepository
 
     client = await get_async_supabase_client()
     repo = MLTrainingRunRepository(client)
@@ -1961,12 +1961,12 @@ async def _verify_success_provenance(performance_after: float, mlflow_run_id: st
                 "cannot certify a manual success completion"
             ),
         )
-    if run.status != "finished":
+    if run.status not in SUCCESSFUL_RUN_STATUSES:  # #2296: the trainer writes 'completed'
         raise HTTPException(
             status_code=422,
             detail=(
                 f"training run {mlflow_run_id!r} has status={run.status!r} "
-                "(expected 'finished'); cannot certify a success completion"
+                "(expected a finished run: 'completed'); cannot certify a success completion"
             ),
         )
     run_auc = _validation_auc_from_metrics(run.validation_metrics or {})
@@ -2013,7 +2013,7 @@ async def complete_retraining(
     1. a finite ``performance_after`` in the plausible AUC range ``[0.0, 1.0]``
        (rejects ``None``/``NaN``/``inf``/out-of-range); AND
     2. a non-empty ``mlflow_run_id`` provenance pointer; AND
-    3. that pointer resolves to a REAL, ``finished`` training run in
+    3. that pointer resolves to a REAL, finished (``completed``) training run in
        ``ml_training_runs`` (persisted by the model-trainer) whose recorded
        validation AUC matches the submitted ``performance_after`` within
        ``_PROVENANCE_AUC_TOL`` (1e-3) — see ``_verify_success_provenance``.

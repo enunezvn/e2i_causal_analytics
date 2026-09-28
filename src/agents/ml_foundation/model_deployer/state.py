@@ -37,6 +37,9 @@ class ModelDeployerState(BaseAgentSchema):
     # === INPUT FIELDS (from model_trainer/feature_analyzer) ===
 
     model_uri: Optional[str] = None  # MLflow model URI (e.g., "runs:/abc123/model")
+    # #2296: the trainer's MLflow run — pins the registry row's provenance when
+    # ``model_uri`` is an MLflow 3 ``models:/m-<id>`` URI (which carries no run id).
+    mlflow_run_id: Optional[str] = None
     experiment_id: Optional[str] = None
 
     # Validation metrics (from model_trainer)

@@ -23,6 +23,7 @@ class _AsyncQuery:
         self._payload: Any = None
         self._filters: List[tuple] = []
         self._limit: Optional[int] = None
+        self._offset = 0
         self._order: List[tuple] = []
         self._negate_next = False
 
@@ -83,6 +84,10 @@ class _AsyncQuery:
 
     def limit(self, n, *_a, **_k):
         self._limit = n
+        return self
+
+    def offset(self, n, *_a, **_k):
+        self._offset = int(n)
         return self
 
     def range(self, start, end, *_a, **_k):
@@ -146,6 +151,7 @@ class _AsyncQuery:
                 reverse=desc,
             )
             out = nulls + present if desc else present + nulls
+        out = out[self._offset :]
         if self._limit is not None:
             out = out[: self._limit]
         return SimpleNamespace(data=out, count=len(out))

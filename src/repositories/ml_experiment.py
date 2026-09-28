@@ -17,6 +17,8 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
 
+from src.memory.jsonb_sanitize import sanitize_jsonb_payload
+
 from .base import BaseRepository
 
 logger = logging.getLogger(__name__)
@@ -43,9 +45,14 @@ class TrainingStatus(str, Enum):
 
     RUNNING = "running"
     SCHEDULED = "scheduled"
-    FINISHED = "finished"
+    COMPLETED = "completed"  # #2296: what the trainer writes and every reader filters on
+    FINISHED = "finished"  # legacy value: no writer has ever produced it
     FAILED = "failed"
     KILLED = "killed"
+
+
+# Terminal statuses of a successfully finalised training run (#2296).
+SUCCESSFUL_RUN_STATUSES = frozenset({TrainingStatus.COMPLETED.value, TrainingStatus.FINISHED.value})
 
 
 # ============================================================================
@@ -604,11 +611,14 @@ class MLTrainingRunRepository(BaseRepository[MLTrainingRun]):
         )
 
         if self.client:
-            data = run.to_dict()
+            # #2296: JSONB-bound — non-finite floats become JSON null, never 0.
+            data = sanitize_jsonb_payload(run.to_dict())
             data.pop("id", None)
             result = await self.client.table(self.table_name).insert(data).execute()
             if result.data:
                 return self._to_model(result.data[0])
+            # #2296: a configured client that wrote no row must not look like a run.
+            raise RuntimeError(f"{self.table_name} insert returned no row for {run.run_name!r}")
 
         return run
 
@@ -640,24 +650,35 @@ class MLTrainingRunRepository(BaseRepository[MLTrainingRun]):
             updates["validation_metrics"] = validation_metrics
         if test_metrics:
             updates["test_metrics"] = test_metrics
+        # #2296: the evaluator emits NaN for metrics it could not compute (e.g.
+        # net_benefit_at_primary_tau without a disease primary_tau); supabase-py's
+        # strict JSON encoder rejected the whole update. Stored as null, never 0.
+        updates = sanitize_jsonb_payload(updates)
 
         if updates:
-            await self.client.table(self.table_name).update(updates).eq("id", str(run_id)).execute()
-            return True
+            result = (
+                await self.client.table(self.table_name)
+                .update(updates)
+                .eq("id", str(run_id))
+                .execute()
+            )
+            return bool(result.data)  # #2296: no matched row is not a success
 
         return False
 
     async def complete_run(
         self,
         run_id: UUID,
-        status: str = "finished",
+        status: str = TrainingStatus.COMPLETED.value,
         error_message: Optional[str] = None,
     ) -> bool:
         """Mark a run as completed.
 
         Args:
             run_id: Training run ID
-            status: Final status (finished, failed, killed)
+            status: Final status (completed, failed, killed). ``completed`` is the value
+                every reader of the table uses (model_selector's historical analyzer,
+                :meth:`get_best_run`, the synthetic generator) — #2296.
             error_message: Error message if failed
 
         Returns:
@@ -671,8 +692,11 @@ class MLTrainingRunRepository(BaseRepository[MLTrainingRun]):
         # Get current run to calculate duration
         current = await self.get_by_id(str(run_id))
         duration = None
-        if current and current.started_at:
-            duration = int((now - current.started_at).total_seconds())
+        started = current.started_at if current else None
+        if isinstance(started, str):  # PostgREST returns ISO strings (#2296)
+            started = datetime.fromisoformat(started.replace("Z", "+00:00"))
+        if started:
+            duration = int((now - started).total_seconds())
 
         updates = {
             "status": status,
@@ -682,8 +706,10 @@ class MLTrainingRunRepository(BaseRepository[MLTrainingRun]):
         if error_message:
             updates["error_message"] = error_message
 
-        await self.client.table(self.table_name).update(updates).eq("id", str(run_id)).execute()
-        return True
+        result = (
+            await self.client.table(self.table_name).update(updates).eq("id", str(run_id)).execute()
+        )
+        return bool(result.data)  # #2296: no matched row is not a success
 
     async def get_runs_for_experiment(
         self,
@@ -719,20 +745,24 @@ class MLTrainingRunRepository(BaseRepository[MLTrainingRun]):
         Returns:
             Best MLTrainingRun or None
         """
-        runs = await self.get_runs_for_experiment(experiment_id, status="finished")
+        runs = [
+            run
+            for status in sorted(SUCCESSFUL_RUN_STATUSES)
+            for run in await self.get_runs_for_experiment(experiment_id, status=status)
+        ]
         if not runs:
             return None
 
-        # Sort by metric (higher is better for AUC-like metrics)
-        best = None
-        best_value = -float("inf")
-        for run in runs:
-            value = run.test_metrics.get(metric, 0)
-            if value > best_value:
-                best_value = value
-                best = run
+        # Sort by metric (higher is better for AUC-like metrics). The evaluator emits
+        # ROC AUC as ``roc_auc`` (#2296): the default ``auc`` key falls back to it.
+        def _value(run: MLTrainingRun) -> float:
+            tm = run.test_metrics or {}
+            raw = tm.get(metric)
+            if raw is None and metric == "auc":
+                raw = tm.get("roc_auc")
+            return float(raw) if isinstance(raw, (int, float)) else -float("inf")
 
-        return best
+        return max(runs, key=_value)
 
     async def set_optuna_info(
         self,
@@ -823,11 +853,14 @@ class MLTrainingRunRepository(BaseRepository[MLTrainingRun]):
         )
 
         if self.client:
-            data = run.to_dict()
+            # #2296: JSONB-bound — non-finite floats become JSON null, never 0.
+            data = sanitize_jsonb_payload(run.to_dict())
             data.pop("id", None)
             result = await self.client.table(self.table_name).insert(data).execute()
             if result.data:
                 return self._to_model(result.data[0])
+            # #2296: a configured client that wrote no row must not look like a run.
+            raise RuntimeError(f"{self.table_name} insert returned no row for {run.run_name!r}")
 
         return run
 
