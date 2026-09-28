@@ -1,11 +1,13 @@
 """The recovery-probe gate of scripts/verify_adoption_channel_recovery.py (lanes T1, T2).
 
 The gate is a pure function of a fits table so its pass and fail cases can be pinned without
-a forest fit. Point gate per brand: |ATE - planted| <= 0.06 8/8 and Spearman(ATE, planted)
->= 0.8. Lane T2 (the estimator's interval is now the forest's doubly-robust one): the four
-focus channels' CIs exclude 0 in every brand; the null channel has |ATE| <= 0.06 in every
-brand and a CI covering 0 in >= 2 of 3 brands, and any null CI excluding 0 is printed. CI
-coverage of the planted RD is reported, not gated.
+a forest fit. Point gate per brand: |ATE - planted| <= 0.06 8/8 (the null included, at 0) and
+Spearman(ATE, planted) >= 0.8. Lane T2 (the estimator's interval is the forest's doubly-robust
+one): the four focus channels' CIs exclude 0 in every brand. The null channel's INTERVAL is
+gated at the family level (owner option A, 2026-09-28): the null is refit on the live design
+under fresh DGP seeds, and the pooled false-positive rate must be <= 0.10 and the reported SE
+>= 0.9x the empirical SD. A realised null CI excluding 0 is printed as a draw, never gated.
+CI coverage of the planted RD is reported, not gated.
 """
 
 from __future__ import annotations
@@ -15,8 +17,14 @@ import pytest
 
 from scripts.verify_adoption_channel_recovery import (
     BRANDS,
+    MAX_NULL_FP_RATE,
+    MIN_SE_RATIO,
+    NULL_CALIBRATION_SEEDS,
+    evaluate_null_calibration,
     evaluate_recovery_gate,
     planted_rd_by_column,
+    redraw_adopted,
+    wilson_interval,
 )
 from src.data.per_hcp_cohort_columns import (
     ADOPTION_CHANNEL_PLANTED_RD,
@@ -51,6 +59,43 @@ def _fits(brand: str, ate_offset: float = 0.0, overrides: dict | None = None) ->
     return df
 
 
+_Z = 1.959963984540054
+
+
+def _null_fits(
+    ates_by_brand: dict | None = None, *, stderr: float = 0.02, brands=BRANDS, seeds=None
+) -> pd.DataFrame:
+    """A null-calibration fits table: one row per brand x seed, CI = ate +- z * stderr.
+
+    Default ATEs are the normal quantiles at SD ``stderr`` (deterministic, so the FP rate and
+    the SE ratio are exact): a calibrated null, ~5% of CIs excluding 0 and SE/empSD ~1."""
+    from statistics import NormalDist
+
+    seeds = list(NULL_CALIBRATION_SEEDS if seeds is None else seeds)
+    k = len(seeds)
+    calibrated = [stderr * NormalDist().inv_cdf((i + 0.5) / k) for i in range(k)]
+    rows = []
+    for brand in brands:
+        ates = (ates_by_brand or {}).get(brand, calibrated)
+        for seed, ate in zip(seeds, ates, strict=True):
+            rows.append(
+                {
+                    "brand": brand,
+                    "seed": seed,
+                    "ate": ate,
+                    "stderr": stderr,
+                    "ci_lower": ate - _Z * stderr,
+                    "ci_upper": ate + _Z * stderr,
+                    "error": None,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def _calibration_ok():
+    return evaluate_null_calibration(_null_fits(), reproduction=1.0)
+
+
 def test_planted_rd_by_column_maps_the_intervention_table_onto_the_planted_columns():
     by_col = planted_rd_by_column()
     assert set(by_col) == set(INTERVENTION_TREATMENT_MAP.values())
@@ -61,7 +106,7 @@ def test_planted_rd_by_column_maps_the_intervention_table_onto_the_planted_colum
 
 def test_gate_passes_when_every_clause_holds_in_all_three_brands():
     fits = pd.concat([_fits("Remibrutinib", 0.01), _fits("Fabhalta", -0.02), _fits("Kisqali")])
-    result = evaluate_recovery_gate(fits)
+    result = evaluate_recovery_gate(fits, null_calibration=_calibration_ok())
     assert set(result.per_brand) == {"Remibrutinib", "Fabhalta", "Kisqali"}
     assert result.passed
     for brand, g in result.per_brand.items():
@@ -150,42 +195,10 @@ def test_a_focus_channel_ci_covering_zero_in_any_brand_fails():
     assert any("patient_support_enrollment" in f for f in result.per_brand["Kisqali"].failures)
 
 
-def test_one_null_ci_excluding_zero_passes_the_two_of_three_clause_but_is_printed():
-    """The live Remibrutinib null (+0.047, CI +0.008..+0.086) is inside the tolerance and one
-    brand of three; the gate passes, and the verdict names it on its own line so the >= 2/3
-    clause can never hide it."""
-    result = evaluate_recovery_gate(_three(Remibrutinib=(0.047, 0.008, 0.086)))
-    assert result.passed
-    assert result.null_covers == 2
-    assert not result.per_brand["Remibrutinib"].null_covers_zero
-    lines = [ln for ln in result.verdict().splitlines() if "null CI excludes 0" in ln]
-    assert len(lines) == 1
-    assert "Remibrutinib" in lines[0] and "+0.047" in lines[0]
-    assert "known per-brand bias" in lines[0]
-
-
-def test_two_null_cis_excluding_zero_fail_the_two_of_three_clause():
-    result = evaluate_recovery_gate(
-        _three(Remibrutinib=(0.047, 0.008, 0.086), Kisqali=(-0.05, -0.09, -0.01))
-    )
-    assert not result.passed
-    assert result.null_covers == 1
-    assert "null covers 0 in 1/3" in result.verdict()
-    excl = [ln for ln in result.verdict().splitlines() if "null CI excludes 0" in ln]
-    assert len(excl) == 2 and "known per-brand bias" not in excl[1]
-
-
 def test_the_null_tolerance_binds_in_every_brand_even_with_a_covering_ci():
     result = evaluate_recovery_gate(_three(Fabhalta=(0.07, -0.02, 0.16)))
     assert not result.passed
     assert not result.per_brand["Fabhalta"].null_ok
-
-
-def test_gate_accepts_the_seed_artefact_null_inside_the_tolerance():
-    # Remibrutinib's null read +0.05 before any planting (twinad_q3_fits.csv); the |ATE| <= 0.06
-    # clause with a CI covering 0 accepts it. This pins that the clause is the tolerance, not 0.
-    fits = _three(Remibrutinib=(0.053, -0.11, 0.21))
-    assert evaluate_recovery_gate(fits).passed
 
 
 def test_gate_fails_loud_on_an_errored_or_missing_fit():
@@ -200,7 +213,11 @@ def test_gate_fails_loud_on_an_errored_or_missing_fit():
 
 def test_gate_verdict_text_starts_with_the_verdict_word():
     all_three = pd.concat([_fits(b) for b in BRANDS], ignore_index=True)
-    assert evaluate_recovery_gate(all_three).verdict().startswith("PASS")
+    assert (
+        evaluate_recovery_gate(all_three, null_calibration=_calibration_ok())
+        .verdict()
+        .startswith("PASS")
+    )
     assert (
         evaluate_recovery_gate(_fits("Kisqali", 0.2), required_brands=_ONE)
         .verdict()
@@ -314,11 +331,161 @@ def test_the_twin_loader_frame_is_what_simulate_estimates_on():
 
 
 def test_a_brand_subset_never_certifies():
-    """codex r6 (MED): the null clause is "covers 0 in >= 2 of the 3 brands". Evaluated on
-    fewer brands it must not shrink to "1 of 1": a subset is diagnostic, never a PASS."""
-    one = evaluate_recovery_gate(_fits("Kisqali"), required_brands=_ONE)
+    """codex r6 (MED): a subset is diagnostic, never a PASS -- even with a passing family-level
+    null calibration, a per-brand table missing a required brand cannot certify."""
+    one = evaluate_recovery_gate(
+        _fits("Kisqali"), required_brands=_ONE, null_calibration=_calibration_ok()
+    )
     assert one.per_brand["Kisqali"].passed
     assert not one.passed
     assert one.verdict().startswith("FAIL")
     two = pd.concat([_fits(b) for b in BRANDS[:2]], ignore_index=True)
-    assert not evaluate_recovery_gate(two, required_brands=BRANDS[:2]).passed
+    assert not evaluate_recovery_gate(
+        two, required_brands=BRANDS[:2], null_calibration=_calibration_ok()
+    ).passed
+
+
+# ---------------------------------------------------------------------------
+# Family-level null calibration (owner option A, 2026-09-28)
+# ---------------------------------------------------------------------------
+
+
+def test_the_calibration_constants_are_the_owner_decision():
+    """The certifying thresholds and the replayable seed list are module constants."""
+    assert MAX_NULL_FP_RATE == 0.10
+    assert MIN_SE_RATIO == 0.9
+    assert len(NULL_CALIBRATION_SEEDS) == len(set(NULL_CALIBRATION_SEEDS)) >= 50
+    assert 427 not in NULL_CALIBRATION_SEEDS  # the live draw is not part of its own null
+
+
+def test_a_calibrated_null_family_passes_and_reports_its_wilson_interval():
+    cal = _calibration_ok()
+    assert cal.passed, cal.failures
+    n = 3 * len(NULL_CALIBRATION_SEEDS)
+    assert cal.n_fits == n
+    assert 0.0 < cal.fp_rate <= MAX_NULL_FP_RATE
+    lo, hi = wilson_interval(cal.n_fp, n)
+    assert (cal.wilson_lo, cal.wilson_hi) == (lo, hi)
+    assert 0.95 <= cal.se_ratio <= 1.1
+    text = "\n".join(cal.lines())
+    assert f"{cal.n_fp}/{n}" in text and "Wilson" in text
+
+
+def test_a_null_false_positive_rate_above_ten_percent_fails():
+    """A biased null (mean +1.5 SE) excludes 0 ~32% of the time with a calibrated SE."""
+    k = len(NULL_CALIBRATION_SEEDS)
+    shifted = [0.03 + a for a in _null_fits()["ate"].iloc[:k]]
+    cal = evaluate_null_calibration(
+        _null_fits({"Remibrutinib": shifted, "Fabhalta": shifted, "Kisqali": shifted}),
+        reproduction=1.0,
+    )
+    assert cal.fp_rate > MAX_NULL_FP_RATE
+    assert cal.se_ratio >= MIN_SE_RATIO
+    assert not cal.passed
+    assert any("false-positive rate" in f for f in cal.failures)
+    fits = pd.concat([_fits(b) for b in BRANDS], ignore_index=True)
+    gate = evaluate_recovery_gate(fits, null_calibration=cal)
+    assert not gate.passed and gate.verdict().startswith("FAIL")
+
+
+def test_an_anti_conservative_interval_fails_with_the_linear_dml_fallback_label():
+    """98 null ATEs at 0 and two at +-0.2: the FP rate is 2%, but the empirical SD (0.028)
+    exceeds the reported SE (0.02), ratio ~0.70 < 0.9 -- the plan's reversal clause."""
+    k = len(NULL_CALIBRATION_SEEDS)
+    ates = [0.0] * (k - 2) + [0.2, -0.2]
+    cal = evaluate_null_calibration(_null_fits(dict.fromkeys(BRANDS, ates)), reproduction=1.0)
+    assert cal.fp_rate <= MAX_NULL_FP_RATE
+    assert cal.se_ratio < MIN_SE_RATIO
+    assert not cal.passed
+    msgs = [f for f in cal.failures if "SE/empirical SD" in f]
+    assert len(msgs) == 1 and "fall back to LinearDML" in msgs[0]
+
+
+def test_the_calibration_never_certifies_on_missing_or_errored_cells():
+    """A brand x seed cell that is absent or errored fails: the FP rate of a subset is not
+    the FP rate of the family."""
+    missing = _null_fits().iloc[:-1]
+    cal = evaluate_null_calibration(missing, reproduction=1.0)
+    assert not cal.passed and any("missing" in f for f in cal.failures)
+    errored = _null_fits()
+    errored.loc[0, "error"] = "TOO_FEW_USABLE_ROWS"
+    cal = evaluate_null_calibration(errored, reproduction=1.0)
+    assert not cal.passed and any("error" in f for f in cal.failures)
+    one_brand = _null_fits(brands=("Kisqali",))
+    assert not evaluate_null_calibration(one_brand, reproduction=1.0).passed
+
+
+def test_the_calibration_fails_when_the_redraw_does_not_reproduce_the_live_labels():
+    """The fresh-seed redraw is the live DGP only if the live seed reproduces the live
+    labels on the gated frame; otherwise it calibrates some other process."""
+    cal = evaluate_null_calibration(_null_fits(), reproduction=0.97)
+    assert not cal.passed
+    assert any("reproduce" in f for f in cal.failures)
+    assert not evaluate_null_calibration(_null_fits(), reproduction=None).passed
+
+
+def test_the_gate_never_certifies_without_the_null_calibration():
+    fits = pd.concat([_fits(b) for b in BRANDS], ignore_index=True)
+    gate = evaluate_recovery_gate(fits)
+    assert not gate.passed
+    assert "null calibration not run" in gate.verdict()
+
+
+def test_a_realised_null_excluding_zero_is_a_draw_line_not_a_bias_line():
+    """The live Remibrutinib null (+0.047, CI +0.008..+0.086) is one realised draw: the gate
+    passes on the family calibration and prints it without the word "bias"."""
+    parts = [
+        _fits(
+            "Remibrutinib",
+            overrides={
+                (_NULL_COL, "ate"): 0.047,
+                (_NULL_COL, "ci_lower"): 0.008,
+                (_NULL_COL, "ci_upper"): 0.086,
+            },
+        ),
+        _fits("Fabhalta"),
+        _fits("Kisqali"),
+    ]
+    cal = _calibration_ok()
+    gate = evaluate_recovery_gate(pd.concat(parts), null_calibration=cal)
+    assert gate.passed
+    lines = [ln for ln in gate.verdict().splitlines() if "null CI excludes 0" in ln]
+    assert len(lines) == 1
+    line = lines[0]
+    assert "Remibrutinib" in line and "+0.047" in line
+    assert "realised draw (seed 427)" in line
+    assert f"family FP rate {cal.n_fp}/{cal.n_fits}" in line
+    assert "bias" not in gate.verdict().lower()
+
+
+def test_wilson_interval_matches_the_closed_form():
+    lo, hi = wilson_interval(9, 300)
+    assert lo == pytest.approx(0.01586, abs=5e-5)
+    assert hi == pytest.approx(0.05602, abs=5e-5)
+    assert wilson_interval(0, 10)[0] == 0.0
+
+
+def test_redraw_adopted_replaces_labels_only_on_the_frame_rows_that_had_one():
+    """The design (rows, treatments, confounders, usable set) is held fixed; only the label
+    moves, keyed on (hcp_id, brand). A pair without a live label stays without one."""
+    frame = pd.DataFrame(
+        {
+            "hcp_id": ["a", "b", "c", "a"],
+            "brand": ["Kisqali", "Kisqali", "Kisqali", "Fabhalta"],
+            "adopted": [1.0, 0.0, None, 1.0],
+            "rep_training_score": [1.0, 2.0, 3.0, 4.0],
+        }
+    )
+    derived = pd.DataFrame(
+        {
+            "hcp_id": ["a", "b", "c", "a"],
+            "brand": ["Fabhalta", "Kisqali", "Kisqali", "Kisqali"],
+            "adopted": [0, 1, 1, 0],
+        }
+    )
+    out = redraw_adopted(frame, derived)
+    assert out["adopted"].tolist()[:2] == [0.0, 1.0]
+    assert pd.isna(out["adopted"].iloc[2])
+    assert out["adopted"].iloc[3] == 0.0
+    assert out["rep_training_score"].tolist() == frame["rep_training_score"].tolist()
+    assert frame["adopted"].tolist()[:2] == [1.0, 0.0]  # input untouched
