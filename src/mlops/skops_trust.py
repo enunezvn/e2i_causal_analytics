@@ -21,8 +21,14 @@ DataFrame input, with or without early stopping:
 * LightGBM: ``lightgbm.basic.Booster``, ``lightgbm.sklearn.LGBMClassifier`` and
   ``collections.OrderedDict``. skops serializes OrderedDict *instances* natively; it
   reports the name only for a reference to the class, here the ``default_factory`` of
-  ``Booster.best_score = defaultdict(OrderedDict)``. That reference is trusted only when
-  the model also reports a LightGBM booster, which is the one place it was measured.
+  ``Booster.best_score = defaultdict(OrderedDict)``. It is trusted only for a calibrated
+  LightGBM, the one place it was measured. (skops's type list cannot say WHERE in the
+  graph a class reference sits; a reference to this stdlib dict subclass constructs
+  nothing on load.)
+
+The booster family is chosen from the calibrated base estimator's exact class, never from
+the reported list: a calibrated LogisticRegression that happens to hold an XGBoost object,
+or a calibrated XGBoost holding LightGBM state, is trusted with nothing.
 
 Loading a trusted booster runs the library's own ``__setstate__`` (xgboost's raw model
 buffer, LightGBM's model string), not pickle. A model that reports any other untrusted
@@ -59,19 +65,44 @@ TRUSTED_LIGHTGBM_TYPES: frozenset[str] = frozenset(
     {"lightgbm.basic.Booster", "lightgbm.sklearn.LGBMClassifier"}
 )
 
-# Trusted only when the model also reports a LightGBM booster (see the module docstring).
+# Trusted only when the calibrated base IS an LGBMClassifier (see the module docstring).
 LIGHTGBM_BOOSTER_STATE_TYPES: frozenset[str] = frozenset({"collections.OrderedDict"})
 
-TRUSTED_CALIBRATED_MODEL_TYPES: frozenset[str] = (
-    TRUSTED_SKLEARN_CALIBRATION_TYPES | TRUSTED_XGBOOST_TYPES | TRUSTED_LIGHTGBM_TYPES
-)
+# The calibrated base estimator's exact class -> the extra types that base brings.
+_BOOSTER_FAMILY_TYPES: Dict[str, frozenset[str]] = {
+    "xgboost.sklearn.XGBClassifier": TRUSTED_XGBOOST_TYPES,
+    "lightgbm.sklearn.LGBMClassifier": TRUSTED_LIGHTGBM_TYPES | LIGHTGBM_BOOSTER_STATE_TYPES,
+}
 
 
-def _allowlist_for(reported: set[str]) -> frozenset[str]:
-    """The allowlist for a model reporting ``reported``: OrderedDict only beside a LightGBM booster."""
-    if "lightgbm.basic.Booster" in reported:
-        return TRUSTED_CALIBRATED_MODEL_TYPES | LIGHTGBM_BOOSTER_STATE_TYPES
-    return TRUSTED_CALIBRATED_MODEL_TYPES
+def _qualname(obj: Any) -> str:
+    return f"{type(obj).__module__}.{type(obj).__qualname__}"
+
+
+def _calibrated_base_classes(model: Any) -> set[str]:
+    """Exact classes of the estimators the calibrator wraps (``FrozenEstimator`` unwrapped)."""
+    wrapped = [getattr(cc, "estimator", None) for cc in model.calibrated_classifiers_]
+    wrapped.append(getattr(model, "estimator", None))
+    bases = set()
+    for est in wrapped:
+        if type(est).__name__ == "FrozenEstimator":
+            est = getattr(est, "estimator", None)
+        if est is not None:
+            bases.add(_qualname(est))
+    return bases
+
+
+def _allowlist_for(model: Any) -> frozenset[str]:
+    """The sklearn calibration classes plus ONE booster family, chosen from the calibrated
+    base estimator itself: a calibrated XGBoost gets the XGBoost types, a calibrated
+    LightGBM the LightGBM types (+ OrderedDict). A base of any other class, or bases of
+    mixed classes, get no booster types at all, so a booster type reported anywhere else
+    in the object graph falls outside the allowlist."""
+    bases = _calibrated_base_classes(model)
+    if len(bases) == 1:
+        (base,) = bases
+        return TRUSTED_SKLEARN_CALIBRATION_TYPES | _BOOSTER_FAMILY_TYPES.get(base, frozenset())
+    return TRUSTED_SKLEARN_CALIBRATION_TYPES
 
 
 def skops_trusted_types_for(model: Any) -> List[str]:
@@ -79,7 +110,7 @@ def skops_trusted_types_for(model: Any) -> List[str]:
 
     Returns ``[]`` for a model that is not a fitted calibrator, when skops is unavailable,
     or when any reported type is outside the allowlist (the sklearn calibration classes,
-    the XGBoost / LightGBM booster classes, and OrderedDict beside a LightGBM booster):
+    plus the booster family of the calibrated base estimator, see ``_allowlist_for``):
     mlflow then refuses the model loudly.
     """
     if not hasattr(model, "calibrated_classifiers_"):
@@ -93,7 +124,7 @@ def skops_trusted_types_for(model: Any) -> List[str]:
     except Exception as e:  # noqa: BLE001 — unserializable: mlflow's own save reports it
         logger.warning("skops could not inspect %s (%s); trusting nothing", type(model).__name__, e)
         return []
-    outside = sorted(set(reported) - _allowlist_for(set(reported)))
+    outside = sorted(set(reported) - _allowlist_for(model))
     if outside:
         logger.warning("skops: not trusting %s (outside the calibrated-model allowlist)", outside)
         return []

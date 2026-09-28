@@ -167,6 +167,29 @@ def test_ordered_dict_is_not_trusted_without_a_lightgbm_booster():
     assert skops_trusted_types_for(lr) == []
 
 
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "calibrated_kind, stray_kind", [(None, "xgboost"), (None, "lightgbm"), ("xgboost", "lightgbm")]
+)
+def test_a_booster_family_is_trusted_only_as_the_calibrated_base(calibrated_kind, stray_kind):
+    """codex r1 MED: the booster family comes from the calibrated base estimator, not from
+    the reported list — an allowlisted-but-unrelated booster elsewhere means nothing trusted."""
+    X, y = _frame()
+    if calibrated_kind is None:
+        model, _ = apply_post_hoc_calibration(
+            LogisticRegression(max_iter=1000).fit(X[:400], y[:400]),
+            X[400:550],
+            y[400:550],
+            "sigmoid",
+        )
+    else:
+        model, _ = _calibrated_booster(calibrated_kind, "sigmoid")
+    model.stray_ = _booster(stray_kind, X[:400], y[:400])
+    reported = set(skops_io.get_untrusted_types(data=skops_io.dumps(model)))
+    assert {t for t in reported if t.startswith(f"{stray_kind}.")}  # the stray is reported
+    assert skops_trusted_types_for(model) == []
+
+
 # ---------------------------------------------------------------------------
 # A. the real round-trip through the connector (local store)
 # ---------------------------------------------------------------------------

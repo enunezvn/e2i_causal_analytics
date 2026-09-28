@@ -7,9 +7,12 @@ failed to log, and the trainer reported "Successfully logged model: None".
 
 These tests use a real local MLflow store (sqlite + file artifacts in tmp_path) and real
 calibrated models built by the trainer's own ``apply_post_hoc_calibration``. The
-connector now logs sklearn models in the skops format explicitly (so every mlflow version
-behaves like the worker's), trusting only the exact sklearn calibration classes skops
-reports for THIS model. mlflow records the trusted list in the model's flavor config, so
+connector keeps the caller's format (else mlflow's default); when that is skops it
+trusts exactly the allowlisted types skops reports for THIS model — the sklearn
+calibration classes, plus (owner decision after #2280) the booster classes of a
+calibrated XGBoost / LightGBM, covered in test_skops_boosters_and_wrappers_logging.py.
+The tests here ask for skops explicitly on an older mlflow, so every version exercises
+the worker's path. mlflow records the trusted list in the model's flavor config, so
 ``mlflow.sklearn.load_model`` and ``mlflow.pyfunc.load_model`` load it back unchanged.
 """
 
