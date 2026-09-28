@@ -208,12 +208,17 @@ async def detect_leakage(state: DataPreparerState) -> Dict[str, Any]:
         blocking_findings = [
             f for f in findings if f.severity in (LeakageSeverity.CRITICAL, LeakageSeverity.HIGH)
         ]
-        # Legacy leakage issues (temporal, contamination) also block.
-        own_blocking: List[str] = []
-        if blocking_findings or (leakage_detected and not findings):
-            own_blocking = [f.to_issue_string() for f in blocking_findings] + [
-                i for i in leakage_issues if not any(i == f.to_issue_string() for f in findings)
-            ]
+        # Legacy leakage issues (temporal, contamination) ALWAYS block. They
+        # carry no severity, and before f953304ea every leakage issue blocked;
+        # that commit filtered STRUCTURED findings by severity and meant to
+        # keep the legacy ones blocking, but approximated "this came from a
+        # legacy check" with ``leakage_detected and not findings``. A single
+        # MODERATE finding broke the approximation and a temporal leak blocked
+        # nothing (#2294). Only structured findings are severity-filtered.
+        finding_strings = {f.to_issue_string() for f in findings}
+        own_blocking: List[str] = [f.to_issue_string() for f in blocking_findings] + [
+            i for i in leakage_issues if i not in finding_strings
+        ]
         # Write the channel on this path even with nothing of our own to add.
         # This node is RE-ENTRANT (graph.py routes leakage_remediation
         # --recheck--> detect_leakage), and the channel has no reducer, so
