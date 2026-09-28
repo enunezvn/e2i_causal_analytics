@@ -1,0 +1,54 @@
+== null channel (rep_training_score), DR ATE and CI by W spec
+       brand          spec     ate      lo     hi     se  excl0
+Remibrutinib       default  0.0472  0.0083 0.0861 0.0198   True
+Remibrutinib +other7_tbins  0.0342 -0.0008 0.0691 0.0178  False
+Remibrutinib  +dgp_drivers  0.0523  0.0205 0.0841 0.0162   True
+Remibrutinib         +both  0.0432  0.0136 0.0729 0.0151   True
+    Fabhalta       default  0.0058 -0.0348 0.0465 0.0208  False
+    Fabhalta +other7_tbins -0.0105 -0.0450 0.0241 0.0176  False
+    Fabhalta  +dgp_drivers -0.0180 -0.0515 0.0155 0.0171  False
+    Fabhalta         +both -0.0180 -0.0476 0.0116 0.0151  False
+     Kisqali       default -0.0109 -0.0500 0.0282 0.0199  False
+     Kisqali +other7_tbins -0.0189 -0.0527 0.0148 0.0172  False
+     Kisqali  +dgp_drivers -0.0294 -0.0624 0.0036 0.0168  False
+     Kisqali         +both -0.0253 -0.0543 0.0037 0.0148  False
+
+== planted channels: error (ate - planted) by W spec
+spec                                     default  +other7_tbins  +dgp_drivers   +both
+brand        channel                                                                 
+Fabhalta     call_frequency               0.0113         0.0084        0.0269  0.0130
+             email_campaign_count         0.0355         0.0264        0.0352  0.0045
+             engagement_score             0.0180         0.0076        0.0122  0.0141
+             patient_support_enrollment  -0.0126        -0.0087        0.0039  0.0036
+             peer_influence_score        -0.0204        -0.0076        0.0133 -0.0020
+             sample_volume               -0.0408         0.0073        0.0017  0.0057
+             speaker_program_count       -0.0234        -0.0363       -0.0087 -0.0121
+Kisqali      call_frequency              -0.0182        -0.0478        0.0159 -0.0282
+             email_campaign_count        -0.0143        -0.0140        0.0106 -0.0043
+             engagement_score            -0.0311        -0.0274       -0.0408 -0.0392
+             patient_support_enrollment  -0.0114         0.0006        0.0021 -0.0025
+             peer_influence_score         0.0177         0.0095       -0.0043 -0.0103
+             sample_volume               -0.0036         0.0039        0.0012 -0.0069
+             speaker_program_count        0.0243        -0.0314       -0.0109 -0.0095
+Remibrutinib call_frequency               0.0364         0.0214        0.0271  0.0068
+             email_campaign_count         0.0346         0.0135        0.0233 -0.0055
+             engagement_score             0.0263         0.0069        0.0054  0.0037
+             patient_support_enrollment   0.0156         0.0076        0.0071  0.0040
+             peer_influence_score         0.0005         0.0044        0.0021 -0.0076
+             sample_volume                0.0416         0.0156        0.0177 -0.0075
+             speaker_program_count       -0.0146        -0.0299       -0.0099 -0.0182
+
+  mean |err| by spec: {'+both': 0.01, '+dgp_drivers': 0.0133, '+other7_tbins': 0.016, 'default': 0.0215}
+  mean err by spec: {'+both': -0.0047, '+dgp_drivers': 0.0062, '+other7_tbins': -0.0033, 'default': 0.0034}
+  coverage of planted by spec: {'+both': 0.952, '+dgp_drivers': 1.0, '+other7_tbins': 0.952, 'default': 1.0}
+  mean SE by spec: {'+both': 0.0176, '+dgp_drivers': 0.0193, '+other7_tbins': 0.0212, 'default': 0.0273}
+
+== placebo (rep_training permuted within region)
+  Fabhalta      K=40 excl0=2 (0.050) mean ate +0.0025 empSD 0.0191 mean SE 0.0196 SE/empSD 1.03
+  Kisqali       K=40 excl0=3 (0.075) mean ate +0.0012 empSD 0.0204 mean SE 0.0197 SE/empSD 0.96
+  Remibrutinib  K=100 excl0=6 (0.060) mean ate -0.0028 empSD 0.0188 mean SE 0.0195 SE/empSD 1.04
+
+== Remibrutinib null under fresh derive seeds (design fixed; arm+noise+coin flips re-drawn)
+  seed427 ate +0.0472 (CI +0.0083,+0.0861)
+  other seeds n=100 mean +0.0009 (SE of mean 0.0018) empSD 0.0179 mean SE 0.0196 excl0 3/100
+  seeds with ate >= seed427: 0/100; |ate| >= : 1/100; z vs seed distribution 2.59
