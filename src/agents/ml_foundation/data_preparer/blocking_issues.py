@@ -55,10 +55,18 @@ Writers of the channel, and how (re-verified by grep for #2294):
   pass; it used to retract entries by matching feature names in free text.
 * ``finalize_output`` echoes the channel it gated on.
 
-Not a writer, by design: ``adaptive_validity_check`` escalates
-``leakage_severity`` (which routes to remediation) but adds no entry, so a
-Layer-3-only flag that survives the final recheck does not block the gate —
-a policy question, not a merge defect, recorded on #2294.
+NOT fixed here, and why: ``adaptive_validity_check`` writes no entry. It
+escalates ``leakage_severity`` (routing to remediation) and ``finalize_output``
+reads no severity, so a feature it still flags after the final recheck, or one
+whose Layer-3 scoring raised, does not block the gate. Layer 3 flags on
+SIGNIFICANCE (z > 5 sigma over a permutation null), which a legitimately
+predictive feature clears at production n — the reason the FDR and delta-AUC
+effect floor exist — and its documented role is to route features to
+remediation review, not to gate. Making it gate would change what a Layer-3
+flag means, at a false-block rate that cannot be measured without the real
+cohorts; that is an owner decision, raised on #2294 (a Layer-1 manifest
+violation, which is definitional rather than statistical, is the strongest
+candidate to block).
 
 The contract implemented here
 -----------------------------
