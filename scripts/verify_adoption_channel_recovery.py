@@ -7,13 +7,16 @@ It builds the collapsed per-(hcp, brand) exposure frame joined to ``adopted``, r
 REAL estimator (``estimate_cohort_effect``, CausalForestDML, outcome ``adopted``, seed 42) on
 every brand x channel cell -- one fit at a time, single-threaded -- and gates the result:
 
-  point gate, per brand:  |ATE - planted| <= 0.06                8/8
+  point gate, per brand:  |ATE - planted| <= 0.06                8/8 (the null at 0 included)
                           Spearman(ATE, planted) >= 0.8 over the 8 channels
   significance (lane T2): the focus channels (engagement, speaker, peer, PSP) CI excludes 0
                           in 3/3 brands
-  null (rep_training_score): |ATE| <= 0.06 in EVERY brand, and CI covers 0 in >= 2/3 brands;
-                          every brand whose null CI excludes 0 gets its own verdict line
-  reported, not gated:    CI covers ADOPTION_CHANNEL_PLANTED_RD (n/8 per brand)
+  null calibration:       the null channel refit on the SAME frame under fresh DGP seeds
+    (family level)        (``NULL_CALIBRATION_SEEDS``; ``adopted`` re-drawn, design fixed),
+                          pooled over brands x seeds: false-positive rate (CI excludes 0)
+                          <= 0.10, and mean reported SE / empirical SD of the null ATEs >= 0.9
+  reported, not gated:    CI covers ADOPTION_CHANNEL_PLANTED_RD (n/8 per brand); a realised
+                          null CI excluding 0 (printed as a draw, with the family FP rate)
 
 plus the treatment_arm ATE (naive treated-minus-control and the DGP-true mean CATE). Verdict
 word first; exit 1 on any failure.
@@ -23,17 +26,38 @@ The CI is the twin estimator's own (lane T2): the causal forest's doubly-robust
 3). Lane T1 wrote this gate against ``CausalForestDML.ate_interval``, econml's conservative
 +-0.17 bound, under which no planted channel could be significant, so its gate was point-based
 and "CI covers planted 8/8" was nearly free. Against a calibrated 95% interval, 24 cells all
-covering happens ~0.95**24 = 29% of the time, so coverage is reported, not gated. The null
-clause is a tolerance, not 0: Remibrutinib's null read +0.05 BEFORE any planting (a seed
-artefact measured in twinad_q3_fits.csv, 2026-09-23); the calibrated interval now excludes 0
-on it (+0.047, CI +0.008..+0.086), which the >= 2/3 clause accepts and the verdict prints.
+covering happens ~0.95**24 = 29% of the time, so coverage is reported, not gated.
+
+WHY THE NULL'S INTERVAL IS GATED AT THE FAMILY LEVEL
+----------------------------------------------------
+History: 900a8318b (lane T1) required the null CI to cover 0 in EVERY brand, against the
+conservative ``ate_interval``. 2a71bf1e4 (lane T2, calibrated DR interval) relaxed it to
+"covers 0 in >= 2/3 brands" with a named Remibrutinib exception, after the live null read
++0.047, CI (+0.008, +0.086). Neither contract is what a calibrated test can promise: a correct
+95% interval excludes 0 on a true null 5% of the time per brand, so "every brand covers" fails
+a correct estimator ~14% of the time over three brands, and "2 of 3" certifies whatever one
+brand happened to draw. The Remibrutinib reading was measured to be a draw, not a defect
+(docs/demos/results/2026-09-28_remi_null_caveat/): its adjusted contrast is +0.0021 in the
+structural adoption probability and +0.0445 in the final Bernoulli coin flips of the live
+seed; placebo permutation excluded 0 in 6/100 fits and 100 fresh DGP seeds in 3/100. The owner
+chose (option A, 2026-09-28) to certify the property that IS promised: the interval's
+operating characteristics on the null, measured on the live design by re-drawing ``adopted``
+with fixed, replayable seeds. The live draw's own exclusion is printed, never gated.
+
+Reversal condition: FP rate > 0.10 means the null is systematically picked up (bias or an
+anti-conservative interval); SE / empirical SD < 0.9 means the DR interval understates the
+null's sampling spread, and the plan's reversal clause applies -- fall back to LinearDML's
+``ate_inference`` interval. The redraw is certifying only if the live seed reproduces the live
+labels exactly on the gated frame (otherwise it calibrates a different process).
 
 ``--via-twin-loader`` (with ``--live``) builds the frame with the twin's own
 ``cohort_loader.load_cohort_frame`` -- the frame ``/simulate`` estimates on (synthetic rows,
 channel-carrying rollups only, paged adoption join) -- instead of re-deriving the plant.
 ``frame_from_live`` refuses rollup rows with NULL channels by design: it re-derives the DGP from
 the rollups, and an un-planted row would move the planting medians. The daily per-HCP ETL
-adds such rows after the plant, so Task 3's acceptance uses ``--via-twin-loader``.
+adds such rows after the plant, so Task 3's acceptance uses ``--via-twin-loader``. The null
+calibration re-derives from the rollup rows that carry a channel (the loader's own row rule).
+``--frame`` has no centrality to re-derive from, so it never certifies (calibration not run).
 
 USAGE
 -----
@@ -101,11 +125,21 @@ FOCUS_COLUMNS: tuple[str, ...] = tuple(
         "patient_support_program",
     )
 )
-#: The null must cover 0 in at least this many of the required brands.
-MIN_NULL_COVERING_BRANDS = 2
-#: Brands whose null channel carries a documented bias, named on the verdict line when its CI
-#: excludes 0 (it read +0.05 before any planting; twinad_q3_fits.csv, 2026-09-23).
-KNOWN_NULL_BIAS: Dict[str, str] = {"Remibrutinib": "known per-brand bias, +0.05 before planting"}
+#: The DGP seed of the live labels (``scripts/backfill_hcp_treatment_arm.DEFAULT_SEED``; checked
+#: at run time, not imported here: that module loads .env on import).
+LIVE_DGP_SEED = 427
+#: Fresh DGP seeds for the family-level null calibration: fixed so a run is replayable, and
+#: disjoint from the live seed. 100 seeds x 3 brands = 300 null fits (~2.5 s each, ~13 min
+#: sequential at ~0.6 GiB); at a 4% FP rate the Wilson 95% interval is ~(0.02, 0.07), clear of
+#: the 0.10 ceiling, and the pooled SD ratio carries ~4% relative error.
+NULL_CALIBRATION_SEEDS: tuple[int, ...] = tuple(range(2001, 2101))
+#: Certifying thresholds of the null calibration (owner option A, 2026-09-28). Constants, not
+#: flags (codex r2): an overridable threshold would certify anything.
+MAX_NULL_FP_RATE = 0.10
+MIN_SE_RATIO = 0.9
+#: The live seed must reproduce the gated frame's labels exactly for the redraw to be the DGP.
+MIN_REDRAW_REPRODUCTION = 1.0
+_Z95 = 1.959963984540054
 _FRAME_COLUMNS = (
     "hcp_id",
     "brand",
@@ -148,23 +182,185 @@ class BrandGate:
         return not self.failures
 
 
+def wilson_interval(k: int, n: int, z: float = _Z95) -> tuple[float, float]:
+    """Wilson score interval for a binomial proportion ``k / n``."""
+    if n <= 0:
+        return float("nan"), float("nan")
+    p = k / n
+    denom = 1.0 + z * z / n
+    centre = (p + z * z / (2 * n)) / denom
+    half = z * float(np.sqrt(p * (1 - p) / n + z * z / (4 * n * n))) / denom
+    return max(0.0, centre - half), min(1.0, centre + half)
+
+
+@dataclass
+class NullCalibration:
+    """Family-level operating characteristics of the null channel's interval."""
+
+    n_expected: int = 0
+    n_fits: int = 0
+    n_fp: int = 0
+    fp_rate: float = float("nan")
+    wilson_lo: float = float("nan")
+    wilson_hi: float = float("nan")
+    se_ratio: float = float("nan")
+    reproduction: Optional[float] = None
+    per_brand: Dict[str, Dict[str, float]] = field(default_factory=dict)
+    failures: List[str] = field(default_factory=list)
+
+    @property
+    def passed(self) -> bool:
+        # Measured, complete and clean: an unevaluated calibration is never a pass (codex r1).
+        return (
+            not self.failures
+            and self.n_expected > 0
+            and self.n_fits == self.n_expected
+            and bool(np.isfinite(self.fp_rate))
+            and bool(np.isfinite(self.se_ratio))
+            and self.reproduction is not None
+            and self.reproduction >= MIN_REDRAW_REPRODUCTION
+        )
+
+    def lines(self) -> List[str]:
+        repro = "not measured" if self.reproduction is None else f"{self.reproduction:.4f}"
+        out = [
+            f"  null calibration {'PASS' if self.passed else 'FAIL'}: {NULL_COLUMN} refit under "
+            f"{self.n_fits}/{self.n_expected} fresh-seed redraws (brands x seeds): "
+            f"FP rate {self.n_fp}/{self.n_fits} = {self.fp_rate:.3f} (Wilson 95% "
+            f"{self.wilson_lo:.3f}..{self.wilson_hi:.3f}; gate <= {MAX_NULL_FP_RATE}), "
+            f"SE/empirical SD {self.se_ratio:.2f} (gate >= {MIN_SE_RATIO}), live-seed "
+            f"reproduction {repro}"
+        ]
+        for brand, b in self.per_brand.items():
+            out.append(
+                f"    {brand:14s} n={int(b['n'])} FP {int(b['n_fp'])} mean ATE {b['mean_ate']:+.4f} "
+                f"mean SE {b['mean_se']:.4f} empirical SD {b['emp_sd']:.4f} ratio {b['ratio']:.2f}"
+            )
+        for f in self.failures:
+            out.append(f"      - {f}")
+        return out
+
+
+def evaluate_null_calibration(
+    null_fits: pd.DataFrame,
+    *,
+    reproduction: Optional[float],
+    required_brands: Sequence[str] = BRANDS,
+    seeds: Sequence[int] = NULL_CALIBRATION_SEEDS,
+) -> NullCalibration:
+    """Gate a null-calibration fits table (``brand, seed, ate, ci_lower, ci_upper, stderr,
+    error``; one row per brand x seed). Pooled over every required brand x seed cell: the FP
+    rate (CI excludes 0) must be <= ``MAX_NULL_FP_RATE`` and the mean reported SE / the
+    empirical SD of the null ATEs (within brand, pooled) >= ``MIN_SE_RATIO``. A missing,
+    duplicated or errored cell fails -- the FP rate of a subset is not the family's -- and so
+    does a ``reproduction`` (share of the gated frame's labels the live seed reproduces) that
+    is unmeasured or below ``MIN_REDRAW_REPRODUCTION``."""
+    cal = NullCalibration(n_expected=len(required_brands) * len(seeds), reproduction=reproduction)
+    df = null_fits[
+        null_fits["brand"].isin(list(required_brands)) & null_fits["seed"].isin(list(seeds))
+    ]
+    n_dup = int(df.duplicated(["brand", "seed"]).sum())
+    if n_dup:
+        cal.failures.append(f"{n_dup} duplicated brand x seed cells")
+    present = set(zip(df["brand"], df["seed"], strict=True))
+    n_missing = sum((b, s) not in present for b in required_brands for s in seeds)
+    if n_missing:
+        cal.failures.append(
+            f"missing {n_missing} of {cal.n_expected} brand x seed cells (a subset never certifies)"
+        )
+    err = df["error"].notna() & df["error"].astype(str).ne("")
+    if err.any():
+        cal.failures.append(
+            f"estimator error in {int(err.sum())} cells: {sorted(set(df.loc[err, 'error'].astype(str)))[:3]}"
+        )
+    ok = df[~err].copy()
+    numeric = ["ate", "ci_lower", "ci_upper", "stderr"]
+    for c in numeric:
+        ok[c] = pd.to_numeric(ok[c], errors="coerce")
+    finite = np.isfinite(ok[numeric].to_numpy(dtype=float)).all(axis=1)
+    if not finite.all():
+        cal.failures.append(
+            f"{int((~finite).sum())} cells with non-finite ATE/CI/stderr (a dropped cell is "
+            "not a measured one)"
+        )
+    ok = ok[finite]
+    cal.n_fits = int(len(ok))
+    if cal.n_fits:
+        fp = (ok["ci_lower"] > 0.0) | (ok["ci_upper"] < 0.0)
+        cal.n_fp = int(fp.sum())
+        cal.fp_rate = cal.n_fp / cal.n_fits
+        cal.wilson_lo, cal.wilson_hi = wilson_interval(cal.n_fp, cal.n_fits)
+        ss, dof = 0.0, 0
+        for brand in required_brands:
+            b = ok[ok["brand"] == brand]
+            if len(b) < 2:
+                continue
+            sd = float(b["ate"].std(ddof=1))
+            ss += float(((b["ate"] - b["ate"].mean()) ** 2).sum())
+            dof += len(b) - 1
+            cal.per_brand[brand] = {
+                "n": len(b),
+                "n_fp": int(fp[b.index].sum()),
+                "mean_ate": float(b["ate"].mean()),
+                "mean_se": float(b["stderr"].mean()),
+                "emp_sd": sd,
+                "ratio": float(b["stderr"].mean()) / sd if sd > 0 else float("inf"),
+            }
+        pooled_sd = float(np.sqrt(ss / dof)) if dof else float("nan")
+        cal.se_ratio = (
+            float(ok["stderr"].mean()) / pooled_sd
+            if dof and pooled_sd > 0
+            else float("inf")
+            if dof
+            else float("nan")
+        )
+        if cal.fp_rate > MAX_NULL_FP_RATE:
+            cal.failures.append(
+                f"null false-positive rate {cal.n_fp}/{cal.n_fits} = {cal.fp_rate:.3f} > "
+                f"{MAX_NULL_FP_RATE}: the null is picked up as an effect across redraws"
+            )
+        if not (cal.se_ratio >= MIN_SE_RATIO):
+            cal.failures.append(
+                f"SE/empirical SD {cal.se_ratio:.2f} < {MIN_SE_RATIO}: the DR interval "
+                "understates the null's sampling spread -- fall back to LinearDML (the plan's "
+                "reversal clause)"
+            )
+    else:
+        cal.failures.append("no usable null-calibration fits")
+    if reproduction is None:
+        cal.failures.append(
+            "live-seed reproduction not measured: the redraw cannot be shown to be the live DGP"
+        )
+    elif not (reproduction >= MIN_REDRAW_REPRODUCTION):
+        cal.failures.append(
+            f"derive(seed {LIVE_DGP_SEED}) does not reproduce the live labels on the gated "
+            f"frame ({reproduction:.4f} < {MIN_REDRAW_REPRODUCTION}); the redraw would "
+            "calibrate a different process"
+        )
+    return cal
+
+
 @dataclass
 class GateResult:
     passed: bool
     per_brand: Dict[str, BrandGate]
     tol: float
     min_spearman: float
-    null_covers: int = 0
+    null_calibration: Optional[NullCalibration] = None
 
     def verdict(self) -> str:
+        cal = self.null_calibration
+        fam = (
+            "not run" if cal is None else f"FP {cal.n_fp}/{cal.n_fits}, SE/empSD {cal.se_ratio:.2f}"
+        )
         lines = [
             f"{'PASS' if self.passed else 'FAIL'}: recovery of the planted channel effects on "
             f"adopted in {sum(g.passed for g in self.per_brand.values())}/{len(self.per_brand)} brands, "
-            f"null covers 0 in {self.null_covers}/{len(self.per_brand)} "
-            f"(gate: |ATE-planted| <= {self.tol} 8/8, Spearman >= {self.min_spearman}, focus "
-            f"channels' CI excludes 0 in every brand, null |ATE| <= {self.tol} in every brand and "
-            f"CI covering 0 in >= {MIN_NULL_COVERING_BRANDS}/{len(self.per_brand)}; coverage of "
-            "the planted RD reported, not gated)"
+            f"null calibration {fam} "
+            f"(gate: |ATE-planted| <= {self.tol} 8/8 incl. the null, Spearman >= "
+            f"{self.min_spearman}, focus channels' CI excludes 0 in every brand, null FP rate "
+            f"<= {MAX_NULL_FP_RATE} and SE/empirical SD >= {MIN_SE_RATIO} over fresh-seed "
+            "redraws; coverage of the planted RD reported, not gated)"
         ]
         for brand, g in self.per_brand.items():
             lines.append(
@@ -176,18 +372,21 @@ class GateResult:
             )
             for f in g.failures:
                 lines.append(f"      - {f}")
+        family = "not measured" if cal is None else f"{cal.n_fp}/{cal.n_fits}"
         for brand, g in self.per_brand.items():
             if g.n_fits and not g.null_covers_zero and not np.isnan(g.null_ate):
-                why = KNOWN_NULL_BIAS.get(brand, "not a documented bias")
                 lines.append(
-                    f"  NOTE: {brand} null CI excludes 0 ({why}): ATE {g.null_ate:+.3f}, "
-                    f"CI ({g.null_lo:+.3f}, {g.null_hi:+.3f})"
+                    f"  NOTE: {brand} null CI excludes 0 in the realised draw (seed "
+                    f"{LIVE_DGP_SEED}): ATE {g.null_ate:+.3f}, CI ({g.null_lo:+.3f}, "
+                    f"{g.null_hi:+.3f}); family FP rate {family}"
                 )
-        if self.null_covers < MIN_NULL_COVERING_BRANDS:
+        if cal is None:
             lines.append(
-                f"  FAIL: null covers 0 in {self.null_covers}/{len(self.per_brand)} brands "
-                f"(< {MIN_NULL_COVERING_BRANDS})"
+                "  FAIL: null calibration not run (it needs --live over all three brands); "
+                "non-certifying"
             )
+        else:
+            lines.extend(cal.lines())
         return "\n".join(lines)
 
 
@@ -205,11 +404,14 @@ def evaluate_recovery_gate(
     tol: float = DEFAULT_TOL,
     min_spearman: float = DEFAULT_MIN_SPEARMAN,
     required_brands: Sequence[str] = BRANDS,
+    null_calibration: Optional[NullCalibration] = None,
 ) -> GateResult:
     """Gate a fits table with columns ``brand, channel, planted_rd, ate, ci_lower, ci_upper,
     error`` (one row per brand x channel). The gate iterates ``required_brands`` (all three by
     default), not the brands present: a brand with no fits FAILS, so a ``--brands`` subset run
-    can never certify (codex r1). A missing or errored cell fails its brand."""
+    can never certify (codex r1). A missing or errored cell fails its brand. The null's
+    interval is certified by ``null_calibration`` (:func:`evaluate_null_calibration`); without
+    one the gate never passes."""
     planted = planted_rd_by_column()
     per_brand: Dict[str, BrandGate] = {}
     for brand in required_brands:
@@ -269,7 +471,8 @@ def evaluate_recovery_gate(
             g.null_lo = float(sub.loc[NULL_COLUMN, "ci_lower"])
             g.null_hi = float(sub.loc[NULL_COLUMN, "ci_upper"])
             g.null_covers_zero = g.null_lo <= 0.0 <= g.null_hi
-            # Per brand the null clause is the tolerance; covering 0 is counted across brands.
+            # Per brand the null clause is the point tolerance; its interval is certified at the
+            # family level (evaluate_null_calibration), and a realised exclusion is printed.
             g.null_ok = abs(g.null_ate) <= tol
             if not g.null_ok:
                 g.failures.append(
@@ -277,20 +480,20 @@ def evaluate_recovery_gate(
                     f"({g.null_lo:+.3f}, {g.null_hi:+.3f}) must satisfy |ATE| <= {tol}"
                 )
         per_brand[brand] = g
-    null_covers = sum(g.null_covers_zero for g in per_brand.values())
-    # Certification is over the full brand set: a subset's per-brand verdicts are diagnostic,
-    # and the null's ">= 2 of 3" is never scaled down to the brands evaluated (codex r6).
+    # Certification is over the full brand set: a subset's per-brand verdicts are diagnostic
+    # (codex r6), and the null's interval certifies only through the family calibration.
     passed = (
         set(BRANDS) <= set(per_brand)
         and all(g.passed for g in per_brand.values())
-        and null_covers >= MIN_NULL_COVERING_BRANDS
+        and null_calibration is not None
+        and null_calibration.passed
     )
     return GateResult(
         passed=passed,
         per_brand=per_brand,
         tol=tol,
         min_spearman=min_spearman,
-        null_covers=null_covers,
+        null_calibration=null_calibration,
     )
 
 
@@ -383,16 +586,33 @@ def _rss_gib() -> float:
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024**2)
 
 
-def run_fits(
-    frame: pd.DataFrame, *, brands: Sequence[str] = BRANDS, seed: int = 42
-) -> pd.DataFrame:
-    """One REAL ``estimate_cohort_effect`` per brand x channel, sequentially."""
+def _fit_one(sub: pd.DataFrame, col: str, *, seed: int) -> Dict[str, Any]:
+    """The twin's REAL estimator on one brand's frame and one channel: ATE, DR CI, stderr."""
     from src.digital_twin.effect.cohort_causal_estimator import (
         DEFAULT_CONFOUNDERS,
         estimate_cohort_effect,
     )
     from src.digital_twin.effect.errors import EffectDataUnavailable
 
+    try:
+        eff = estimate_cohort_effect(
+            sub, col, outcome_col="adopted", confounders=DEFAULT_CONFOUNDERS, seed=seed
+        )
+    except EffectDataUnavailable as e:
+        return {"error": f"{e.cause}: {e}"}
+    return {
+        "n": eff.n,
+        "ate": eff.ate,
+        "ci_lower": eff.ate_ci_lower,
+        "ci_upper": eff.ate_ci_upper,
+        "stderr": eff.ate_stderr,
+    }
+
+
+def run_fits(
+    frame: pd.DataFrame, *, brands: Sequence[str] = BRANDS, seed: int = 42
+) -> pd.DataFrame:
+    """One REAL ``estimate_cohort_effect`` per brand x channel, sequentially."""
     planted = planted_rd_by_column()
     rows: List[dict] = []
     for brand in brands:
@@ -409,20 +629,7 @@ def run_fits(
                 "ci_upper": np.nan,
                 "error": None,
             }
-            try:
-                eff = estimate_cohort_effect(
-                    sub, col, outcome_col="adopted", confounders=DEFAULT_CONFOUNDERS, seed=seed
-                )
-                rec.update(
-                    {
-                        "n": eff.n,
-                        "ate": eff.ate,
-                        "ci_lower": eff.ate_ci_lower,
-                        "ci_upper": eff.ate_ci_upper,
-                    }
-                )
-            except EffectDataUnavailable as e:
-                rec["error"] = f"{e.cause}: {e}"
+            rec.update(_fit_one(sub, col, seed=seed))
             rec["seconds"] = round(time.time() - t0, 1)
             rec["peak_rss_gib"] = round(_rss_gib(), 3)
             rows.append(rec)
@@ -443,6 +650,116 @@ def run_fits(
                 f"  ERR {rec['error']}" if rec["error"] else "",
             )
     return pd.DataFrame(rows)
+
+
+# ---------------------------------------------------------------------------
+# Family-level null calibration (fresh DGP seeds on the gated frame)
+# ---------------------------------------------------------------------------
+
+_KEY = ["hcp_id", "brand"]
+
+
+def redraw_adopted(frame: pd.DataFrame, derived: pd.DataFrame) -> pd.DataFrame:
+    """``frame`` with ``adopted`` replaced by ``derived``'s label on the same (hcp_id, brand).
+
+    Everything else -- rows, treatments, confounders, and which rows carry a label (the
+    estimator's usable set) -- is held fixed: the redraw moves only the outcome."""
+    labels = derived.drop_duplicates(_KEY).set_index(_KEY)["adopted"].astype(float)
+    new = labels.reindex(pd.MultiIndex.from_frame(frame[_KEY])).to_numpy()
+    out = frame.copy()
+    out["adopted"] = np.where(frame["adopted"].notna().to_numpy(), new, np.nan)
+    return out
+
+
+def label_reproduction(frame: pd.DataFrame, derived: pd.DataFrame) -> float:
+    """Share of ``frame``'s labelled rows whose label ``derived`` reproduces exactly."""
+    labelled = frame[frame["adopted"].notna()]
+    if labelled.empty:
+        return float("nan")
+    redrawn = redraw_adopted(labelled, derived)["adopted"].to_numpy()
+    return float(np.mean(redrawn == labelled["adopted"].astype(float).to_numpy()))
+
+
+def run_null_calibration(
+    client: Any,
+    frame: pd.DataFrame,
+    *,
+    seeds: Sequence[int] = NULL_CALIBRATION_SEEDS,
+    brands: Sequence[str] = BRANDS,
+    fit_seed: int = DEFAULT_SEED,
+) -> tuple[pd.DataFrame, float]:
+    """Re-draw ``adopted`` with each fresh DGP seed (``derive`` on the live centrality,
+    specialty and planted rollups -- the design fixed) and refit the null channel per brand on
+    the gated ``frame``. Returns (null fits table, live-seed label reproduction on ``frame``).
+    Read-only: ``client`` is the sync Supabase client, used only for ``.select()`` reads."""
+    from scripts.backfill_hcp_treatment_arm import (
+        DEFAULT_SEED as BACKFILL_SEED,
+    )
+    from scripts.backfill_hcp_treatment_arm import (
+        derive,
+        fetch_centrality,
+        fetch_channel_rollups,
+    )
+
+    if BACKFILL_SEED != LIVE_DGP_SEED:
+        raise SystemExit(
+            f"the backfill's live seed is {BACKFILL_SEED}, this gate assumes {LIVE_DGP_SEED}"
+        )
+    centrality = fetch_centrality(client)
+    if centrality is None or centrality.empty:
+        raise SystemExit("hcp_profiles has no synthetic centrality rows")
+    rollups = fetch_channel_rollups(client)
+    # The loader's row rule: rows with no channel are the per-HCP ETL's post-plant rows, which
+    # the executed re-plant never saw (derive() refuses a partially null row, loudly).
+    rollups = rollups[rollups[list(CHANNEL_COLUMNS)].notna().any(axis=1)]
+    if rollups.empty:
+        raise SystemExit("business_metrics has no planted per_hcp_rollup rows")
+    run_date = max(date.today(), rollups["metric_date"].max().date() + timedelta(days=1))
+
+    live = derive(centrality, seed=LIVE_DGP_SEED, channel_rollups=rollups, run_date=run_date)
+    reproduction = label_reproduction(frame, live)
+    logger.info(
+        "null calibration: derive(seed %d) reproduces %.4f of the gated frame's labels; "
+        "%d seeds x %d brands",
+        LIVE_DGP_SEED,
+        reproduction,
+        len(seeds),
+        len(brands),
+    )
+    rows: List[dict] = []
+    t_start = time.time()
+    for i, seed in enumerate(seeds):
+        redrawn = redraw_adopted(
+            frame, derive(centrality, seed=seed, channel_rollups=rollups, run_date=run_date)
+        )
+        for brand in brands:
+            sub = redrawn[redrawn["brand"] == brand].reset_index(drop=True)
+            t0 = time.time()
+            rec: Dict[str, Any] = {
+                "brand": brand,
+                "seed": seed,
+                "ate": np.nan,
+                "ci_lower": np.nan,
+                "ci_upper": np.nan,
+                "stderr": np.nan,
+                "error": None,
+            }
+            rec.update(_fit_one(sub, NULL_COLUMN, seed=fit_seed))
+            rec["seconds"] = round(time.time() - t0, 1)
+            rows.append(rec)
+        done = pd.DataFrame(rows)
+        fp = int(((done["ci_lower"] > 0) | (done["ci_upper"] < 0)).sum())
+        logger.info(
+            "  null seed %d (%d/%d): FP so far %d/%d  %.0f s  rss=%.2fGiB",
+            seed,
+            i + 1,
+            len(seeds),
+            fp,
+            len(done),
+            time.time() - t_start,
+            _rss_gib(),
+        )
+    return pd.DataFrame(rows), reproduction
 
 
 def treatment_arm_summary(
@@ -495,6 +812,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument(
         "--fits-out", type=Path, default=None, help="write the fits table to this CSV"
     )
+    parser.add_argument(
+        "--null-fits-out",
+        type=Path,
+        default=None,
+        help="write the null-calibration fits (brand x fresh seed) to this CSV",
+    )
+    # The null calibration's seeds and thresholds are constants too (NULL_CALIBRATION_SEEDS,
+    # MAX_NULL_FP_RATE, MIN_SE_RATIO), for the same reason.
     args = parser.parse_args(argv)
     if args.via_twin_loader and not args.live:
         parser.error("--via-twin-loader requires --live")
@@ -519,11 +844,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             if args.fits_out:
                 fits.to_csv(args.fits_out, index=False)
                 logger.info("fits written to %s", args.fits_out)
-            result = evaluate_recovery_gate(fits)
+            client = get_supabase_client()
+            calibration, null_fits = _null_calibration(client, frame, args)
+            result = evaluate_recovery_gate(fits, null_calibration=calibration)
             print(result.verdict())
-            print(
-                f"  peak RSS {_rss_gib():.2f} GiB; {len(fits)} fits, {int(fits['seconds'].sum())} s"
-            )
+            print(_cost_line(fits, null_fits))
             return 0 if result.passed else 1
         client = get_supabase_client()
         frame, live, derived = frame_from_live(client)
@@ -549,11 +874,39 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.fits_out:
         fits.to_csv(args.fits_out, index=False)
         logger.info("fits written to %s", args.fits_out)
-    result = evaluate_recovery_gate(fits)
+    calibration: Optional[NullCalibration] = None
+    null_fits: Optional[pd.DataFrame] = None
+    if args.live:
+        calibration, null_fits = _null_calibration(client, frame, args)
+    result = evaluate_recovery_gate(fits, null_calibration=calibration)
     print(result.verdict())
     print("\n".join(treatment_arm_summary(all_rows, true_source=true_source)))
-    print(f"  peak RSS {_rss_gib():.2f} GiB; {len(fits)} fits, {int(fits['seconds'].sum())} s")
+    print(_cost_line(fits, null_fits))
     return 0 if result.passed else 1
+
+
+def _null_calibration(
+    client: Any, frame: pd.DataFrame, args: argparse.Namespace
+) -> tuple[Optional[NullCalibration], Optional[pd.DataFrame]]:
+    """Run and evaluate the family-level null calibration, unless the fit was a brand subset
+    (non-certifying anyway: skip the ~13 minutes)."""
+    if not set(BRANDS) <= set(args.brands):
+        logger.info("null calibration skipped: --brands %s is a non-certifying subset", args.brands)
+        return None, None
+    null_fits, reproduction = run_null_calibration(client, frame)
+    if args.null_fits_out:
+        null_fits.to_csv(args.null_fits_out, index=False)
+        logger.info("null-calibration fits written to %s", args.null_fits_out)
+    return evaluate_null_calibration(null_fits, reproduction=reproduction), null_fits
+
+
+def _cost_line(fits: pd.DataFrame, null_fits: Optional[pd.DataFrame]) -> str:
+    n_null = 0 if null_fits is None else len(null_fits)
+    s_null = 0 if null_fits is None else int(null_fits["seconds"].sum())
+    return (
+        f"  peak RSS {_rss_gib():.2f} GiB; {len(fits)} gate fits {int(fits['seconds'].sum())} s, "
+        f"{n_null} null-calibration fits {s_null} s (K = {len(NULL_CALIBRATION_SEEDS)} seeds)"
+    )
 
 
 if __name__ == "__main__":
