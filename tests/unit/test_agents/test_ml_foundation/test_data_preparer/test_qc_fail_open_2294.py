@@ -31,12 +31,18 @@ from src.agents.ml_foundation.data_preparer.graph import (
     finalize_output,
 )
 from src.agents.ml_foundation.data_preparer.nodes import leakage_detector as ld
+from src.agents.ml_foundation.data_preparer.nodes.feast_registrar import (
+    register_features_in_feast,
+)
 from src.agents.ml_foundation.data_preparer.nodes.leakage_detector import detect_leakage
 from src.agents.ml_foundation.data_preparer.nodes.leakage_remediation import (
     review_and_remediate_leakage,
 )
 from src.agents.ml_foundation.data_preparer.nodes.schema_validator import (
     run_schema_validation,
+)
+from src.agents.ml_foundation.data_preparer.nodes.sufficiency_check import (
+    run_sufficiency_check,
 )
 from src.agents.ml_foundation.data_preparer.state import DataPreparerState
 
@@ -616,3 +622,165 @@ async def test_final_remediation_pass_is_rechecked_before_the_gate(
     # What remediation genuinely fixed is gone — rebuilt from the recheck.
     assert not any("leak_b" in i for i in blocking), blocking
     assert final_state["gate_passed"] is False
+
+
+# =============================================================================
+# Item 5 — sufficiency_check and feast_registrar onto merge_blocking_issues
+# =============================================================================
+
+
+def _twice_then_gate(node: Any, name: str):
+    """``node -> node -> finalize_output``: the same function wired twice,
+    standing in for the QC retry edge (``qc_remediation --retry-->
+    run_quality_checks`` re-runs the whole downstream chain, these nodes
+    included) without dragging qc_remediation's LLM call into a unit test."""
+    graph = StateGraph(DataPreparerState)
+    graph.add_node(f"{name}_1", node)  # type: ignore[arg-type]
+    graph.add_node(f"{name}_2", node)  # type: ignore[arg-type]
+    graph.add_node("finalize_output", finalize_output)  # type: ignore[arg-type]
+    graph.set_entry_point(f"{name}_1")
+    graph.add_edge(f"{name}_1", f"{name}_2")
+    graph.add_edge(f"{name}_2", "finalize_output")
+    graph.add_edge("finalize_output", END)
+    return graph.compile()
+
+
+def _single_then_gate(node: Any, name: str):
+    graph = StateGraph(DataPreparerState)
+    graph.add_node(name, node)  # type: ignore[arg-type]
+    graph.add_node("finalize_output", finalize_output)  # type: ignore[arg-type]
+    graph.set_entry_point(name)
+    graph.add_edge(name, "finalize_output")
+    graph.add_edge("finalize_output", END)
+    return graph.compile()
+
+
+def _sufficiency_state(n: int) -> Dict[str, Any]:
+    rng = np.random.default_rng(22945)
+    y = np.zeros(n, dtype=int)
+    y[: int(round(n * 0.3))] = 1
+    rng.shuffle(y)
+    frame = pd.DataFrame({f"x{i}": rng.normal(size=n) for i in range(10)})
+    frame["y"] = y
+    return {
+        "experiment_id": "exp-2294-sufficiency",
+        "train_df": frame,
+        "target_rate": 0.30,
+        "scope_spec": {"problem_type": "binary_classification", "prediction_target": "y"},
+        "blocking_issues": ["sampling_frame_drift: an unrelated upstream blocker"],
+        **_CLEAN_UPSTREAM_QC,
+    }
+
+
+@pytest.mark.asyncio
+async def test_sufficiency_entry_is_not_duplicated_on_a_qc_retry() -> None:
+    """HARD_FAIL (n=30, below the absolute floor) on both passes: one entry."""
+    final_state = await _twice_then_gate(run_sufficiency_check, "sufficiency_check").ainvoke(
+        _sufficiency_state(30)
+    )
+
+    blocking = final_state["blocking_issues"]
+    assert final_state["sufficiency_report"]["verdict"] == "HARD_FAIL"
+    assert sum(i.startswith("data_sufficiency: ") for i in blocking) == 1, blocking
+    assert blocking.count("sampling_frame_drift: an unrelated upstream blocker") == 1
+    assert final_state["gate_passed"] is False
+
+
+@pytest.mark.asyncio
+async def test_resolved_sufficiency_entry_is_retracted() -> None:
+    """A previous pass's HARD_FAIL entry must go once the verdict is PASS —
+    otherwise a QC retry that fixed the data could never clear the gate."""
+    state = _sufficiency_state(5000)
+    state["blocking_issues"] = [
+        "data_sufficiency: HARD_FAIL (n=30 below absolute floor). earlier pass",
+        "sampling_frame_drift: an unrelated upstream blocker",
+    ]
+
+    final_state = await _single_then_gate(run_sufficiency_check, "sufficiency_check").ainvoke(state)
+
+    assert final_state["sufficiency_report"]["verdict"] == "PASS"
+    assert final_state["blocking_issues"] == ["sampling_frame_drift: an unrelated upstream blocker"]
+
+
+def _feast_state() -> Dict[str, Any]:
+    return {
+        "experiment_id": "exp-2294-feast",
+        "train_df": pd.DataFrame(
+            {"hcp_id": ["h1", "h2", "h3"], "feature1": np.arange(3.0), "target": [0, 1, 0]}
+        ),
+        # A table that backs Feast views, on a run that trains on Feast-served
+        # features: the one configuration in which the freshness gate blocks.
+        "data_source": "triggers",
+        "features_served_by_feast": True,
+        "scope_spec": {
+            "required_features": ["feature1"],
+            "entity_key": "hcp_id",
+            "prediction_target": "target",
+        },
+        "blocking_issues": ["sampling_frame_drift: an unrelated upstream blocker"],
+        **_CLEAN_UPSTREAM_QC,
+    }
+
+
+def _feast_seams(monkeypatch: pytest.MonkeyPatch, *, recency_age: Any) -> None:
+    """The two external seams ``test_feast_registrar_source_gate_2207.py``
+    already patches: the Feast adapter (registration talks to Feast) and the
+    #559 recency query (reads Supabase). The node and its gate logic are real.
+    """
+    from datetime import datetime, timezone
+    from unittest.mock import AsyncMock, MagicMock
+
+    from src.agents.ml_foundation.data_preparer.nodes import feast_registrar
+
+    adapter = MagicMock()
+    adapter.register_features_from_state = AsyncMock(
+        return_value={"features_registered": 1, "errors": []}
+    )
+    adapter._feast_client = None
+    monkeypatch.setattr(feast_registrar, "_get_feature_analyzer_adapter", lambda: adapter)
+
+    async def _recency(_table: str) -> Any:
+        return datetime.now(timezone.utc) - recency_age
+
+    monkeypatch.setattr(feast_registrar, "_source_recency_query", _recency)
+    monkeypatch.delenv("ALLOW_STALE_FEAST", raising=False)
+
+
+@pytest.mark.asyncio
+async def test_feast_entry_is_not_duplicated_on_a_qc_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import timedelta
+
+    _feast_seams(monkeypatch, recency_age=timedelta(days=40))
+
+    final_state = await _twice_then_gate(
+        register_features_in_feast, "register_features_in_feast"
+    ).ainvoke(_feast_state())
+
+    blocking = final_state["blocking_issues"]
+    assert final_state["feast_blocked"] is True
+    assert sum("Feast features stale" in i for i in blocking) == 1, blocking
+    assert all(
+        i.startswith("feast_freshness: ") for i in blocking if "Feast features stale" in i
+    ), blocking
+    assert final_state["gate_passed"] is False
+
+
+@pytest.mark.asyncio
+async def test_resolved_feast_entry_is_retracted(monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import timedelta
+
+    _feast_seams(monkeypatch, recency_age=timedelta(hours=2))
+    state = _feast_state()
+    state["blocking_issues"] = [
+        "feast_freshness: Feast features stale; ALLOW_STALE_FEAST not set",
+        "sampling_frame_drift: an unrelated upstream blocker",
+    ]
+
+    final_state = await _single_then_gate(
+        register_features_in_feast, "register_features_in_feast"
+    ).ainvoke(state)
+
+    assert final_state["feast_blocked"] is False
+    assert final_state["blocking_issues"] == ["sampling_frame_drift: an unrelated upstream blocker"]

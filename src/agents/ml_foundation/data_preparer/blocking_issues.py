@@ -32,14 +32,31 @@ would stay blocked and the remediation loop would be pointless.
 
 Adoption status (be precise about this)
 ---------------------------------------
-``quality_checker``, ``ge_validator``, ``data_loader``, ``data_transformer``
-and ``leakage_detector`` route through this helper, and
-``leakage_remediation`` prunes by kind. ``feast_registrar`` and
-``sufficiency_check`` still concatenate naively; on a QC retry they can
-duplicate and fail to retract their own entries. That is a *fail-closed*
-defect (a stale blocker keeps the gate shut) of a different class from the
-fail-open bug #2283 fixed, and it is tracked separately rather than folded in
-here. This module does NOT yet describe every writer.
+Writers of the channel, and how (re-verified by grep for #2294):
+
+* Merge through this helper under their own kind: ``data_loader``
+  (``data_loading``), ``run_schema_validation`` (``schema``),
+  ``run_quality_checks`` (``quality_check``), ``run_ge_validation``
+  (``ge_validation``), ``detect_leakage`` (``leakage``), ``transform_data``
+  (``data_transform``), ``register_features_in_feast`` (``feast_freshness``)
+  and ``run_sufficiency_check`` (``data_sufficiency``). Each writes the
+  channel on every pass that computes its verdict, so a re-run replaces its
+  entry and a resolved condition is retracted; paths that compute NO verdict
+  (sufficiency ``SKIPPED``, Feast's early returns and ``except``) omit the key
+  and leave an earlier pass's entry in place.
+* ``audit_sampling_frame`` copies the incoming list and appends its
+  ``sampling_frame_drift:`` entry. It runs once (upstream of the QC retry
+  edge), so it cannot duplicate or go stale.
+* ``leakage_remediation`` does NOT write the channel (#2294). Its
+  ``leakage:`` entries are rebuilt by the ``detect_leakage`` recheck that
+  ``graph._route_after_leakage_remediation`` now takes after EVERY applied
+  pass; it used to retract entries by matching feature names in free text.
+* ``finalize_output`` echoes the channel it gated on.
+
+Not a writer, by design: ``adaptive_validity_check`` escalates
+``leakage_severity`` (which routes to remediation) but adds no entry, so a
+Layer-3-only flag that survives the final recheck does not block the gate —
+a policy question, not a merge defect, recorded on #2294.
 
 The contract implemented here
 -----------------------------
@@ -59,7 +76,9 @@ from typing import Iterable, List, Optional
 
 __all__ = [
     "KIND_DATA_LOADING",
+    "KIND_DATA_SUFFICIENCY",
     "KIND_DATA_TRANSFORM",
+    "KIND_FEAST_FRESHNESS",
     "KIND_GE_VALIDATION",
     "KIND_LEAKAGE",
     "KIND_QUALITY_CHECK",
@@ -79,6 +98,10 @@ KIND_DATA_LOADING = "data_loading"
 KIND_DATA_TRANSFORM = "data_transform"
 KIND_LEAKAGE = "leakage"
 KIND_SCHEMA_VALIDATION = "schema"
+#: ``sufficiency_check`` has emitted ``"data_sufficiency: ..."`` since PR #462;
+#: the kind reuses that prefix so its entries are unchanged on the wire.
+KIND_DATA_SUFFICIENCY = "data_sufficiency"
+KIND_FEAST_FRESHNESS = "feast_freshness"
 
 
 def tag_blocking_issue(kind: str, message: str) -> str:
