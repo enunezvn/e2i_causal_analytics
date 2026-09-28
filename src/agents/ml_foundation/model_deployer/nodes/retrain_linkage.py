@@ -281,8 +281,20 @@ async def register_or_reuse_version(
                 existing.id,
             )
             return registry_name, int(existing.mlflow_model_version), "None", None, False
+        # codex r2: a linked row that records no MLflow version cannot say which version
+        # is its candidate; it is not healed by guessing (fails closed).
+        why = f"row {existing.id} records no MLflow version; the candidate's is not provable"
+        return None, None, None, _reuse_error(registry_name, retrain_of, why), False
+    # codex r2: only a PROVEN absence (a run id and an answered search) permits a new
+    # version; no run id, or MLflow unable to answer, fails closed before registering.
     earlier = await find_run_versions(registry_name, run_id) if run_id else None
-    if earlier and len(earlier) > 1:
+    if earlier is None:
+        why = (
+            f"cannot prove MLflow holds no earlier version of {registry_name} from run "
+            f"{run_id!r} (no run id, or the version search failed)"
+        )
+        return None, None, None, _reuse_error(registry_name, retrain_of, why), False
+    if len(earlier) > 1:
         why = (
             f"MLflow already holds versions {earlier} of {registry_name} from run {run_id}; "
             "which one is the candidate is not determinable"

@@ -108,7 +108,8 @@ async def _run(db: FakeAsyncSupabase, training_config: Dict[str, Any], result: A
     pipeline = MagicMock()
     pipeline.run = AsyncMock(return_value=result)
     service = MagicMock()
-    service.complete_retraining = AsyncMock(return_value=None)
+    # #2310 codex r2: a real completion returns the recorded job (None = nothing written).
+    service.complete_retraining = AsyncMock(return_value=MagicMock(name="recorded_job"))
     with (
         patch("src.agents.tier_0.pipeline.MLFoundationPipeline", MagicMock(return_value=pipeline)),
         patch(

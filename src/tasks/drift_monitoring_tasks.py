@@ -1124,11 +1124,15 @@ async def _execute_real_retraining(
                 + "; job marked failed"
             )
         try:
-            await repo.update(retraining_id, {"deployment_id": record_id})
+            linked_job = await repo.update(retraining_id, {"deployment_id": record_id})
         except Exception as e:  # noqa: BLE001 — an unrecorded link is not a completion
+            linked_job, why = None, str(e)
+        else:
+            why = "no history row was updated"
+        if linked_job is None:  # codex r2: an update that wrote no row is not a link
             return await _mark_failed(
                 f"candidate {deployed_rid} registered but its ml_deployments record "
-                f"{record_id} could not be linked to the job ({e}); job marked failed"
+                f"{record_id} could not be linked to the job ({why}); job marked failed"
             )
         notes = (
             f"candidate {retrain_of.get('model_name')!r} "
@@ -1144,13 +1148,19 @@ async def _execute_real_retraining(
 
     # Real metric + success criteria met — record completion. The pipeline also
     # gated deployment on the regulatory AUC/leakage gate.
-    await service.complete_retraining(
+    completion = await service.complete_retraining(
         job_id=retraining_id,
         performance_after=performance_after,
         success=True,
         # #2157: say plainly what was delivered: the registry row, not an endpoint.
         notes=notes,
     )
+    if retrain_of and completion is None:
+        # codex r2 (#2310): a completion that updated no history row did not happen.
+        return await _mark_failed(
+            f"candidate {deployment.get('model_registry_id')} registered but the job's "
+            "completion was not recorded (no history row updated); job marked failed"
+        )
     # #2207: THIS contract just produced a promotable model — heal the retrained
     # model's registry row (NULL columns only, as a consistent unit; never at
     # trigger time) so the scheduled sweep can retrain it next time. Only once the
