@@ -43,19 +43,31 @@ class TestResolveColumn:
         with pytest.raises(ValueError):
             repo.resolve_column("adoption_propensity")
 
-    def test_the_twin_cohort_outcome_resolves_to_its_own_column_and_means(self):
-        """#2206 item C: a draft experiment created from a twin proposal carries
-        prediction_target = the outcome the twin predicted an effect ON
-        (business_metrics.cohort_conversion_outcome, migration 147). The final
-        results feed must measure the SAME quantity, else the loop terminates in
-        an honest "Unsupported primary_metric" skip. It is a per-HCP numeric
-        outcome (NOT a count), so the per-HCP window collapses by MEAN."""
+    def test_the_legacy_twin_cohort_outcome_still_resolves_to_its_own_column_and_means(self):
+        """#2206 item C: a draft created from a twin proposal BEFORE lane T2 carries
+        prediction_target = business_metrics.cohort_conversion_outcome (migration 147), the
+        outcome those simulations predicted an effect ON. Its final results must still
+        measure that quantity. A per-HCP numeric outcome (NOT a count): MEAN."""
         from src.data.per_hcp_cohort_columns import COHORT_OUTCOME_COLUMN
 
         repo = _repo()
         column, reducer = repo.resolve_column(COHORT_OUTCOME_COLUMN)
         assert column == COHORT_OUTCOME_COLUMN == "cohort_conversion_outcome"
         assert reducer == "mean"
+
+    def test_the_twin_outcome_adopted_fails_closed_on_the_business_metrics_join(self):
+        """Lane T2: the twin now predicts on hcp_brand_adoption.adopted. There is no
+        business_metrics column of that name (a PostgREST 42703 if it were mapped), and
+        hcp_brand_adoption cannot stand in for it either: it holds ONE static label per
+        (hcp, brand) with no post-assignment time index, while each HCP sits in ~12
+        experiments per brand. It is measurable only through the per-experiment unit-outcome
+        feed, and the refusal says so rather than naming an unknown metric."""
+        from src.data.per_hcp_cohort_columns import TWIN_OUTCOME_COLUMN
+
+        with pytest.raises(ValueError, match="ab_experiment_unit_outcomes") as caught:
+            _repo().resolve_column(TWIN_OUTCOME_COLUMN)
+        assert "adopted" in str(caught.value)
+        assert "Known:" not in str(caught.value)  # not the generic unknown-metric refusal
 
 
 class TestAggregateToArrays:
@@ -452,6 +464,36 @@ class TestLoadArraysUnitOutcomeFeed:
         with pytest.raises(ValueError, match="Unsupported primary_metric"):
             self._run(client, metric="pnh_persistence")
         assert "business_metrics" not in client.tables_queried()
+
+    def test_adopted_is_measured_from_the_unit_outcome_feed(self, monkeypatch):
+        """The measured side of a twin-drafted experiment: the feed carries `adopted`."""
+        monkeypatch.delenv("E2I_INCLUDE_SYNTHETIC", raising=False)
+        client = _FeedClient(
+            {
+                "ab_experiment_assignments": self._ASSIGN,
+                "ab_experiment_unit_outcomes": [
+                    _uo("scvhcp_00001", 0.0, "2026-09-01T00:00:00+00:00", synthetic=False),
+                    _uo("scvhcp_00002", 1.0, "2026-09-01T00:00:00+00:00", synthetic=False),
+                    _uo("scvhcp_00003", 1.0, "2026-09-01T00:00:00+00:00", synthetic=False),
+                    _uo("scvhcp_00004", 1.0, "2026-09-01T00:00:00+00:00", synthetic=False),
+                ],
+            }
+        )
+        control, treatment = self._run(client, metric="adopted")
+        assert sorted(control.tolist()) == [0.0, 1.0] and treatment.tolist() == [1.0, 1.0]
+        assert "business_metrics" not in client.tables_queried()
+        assert "hcp_brand_adoption" not in client.tables_queried()
+
+    def test_adopted_without_unit_outcomes_fails_closed_and_never_queries_a_table(self):
+        """No real writer of the feed exists yet: a real twin-drafted experiment is skipped
+        with the reason, never measured off a column that does not exist or a static label."""
+        client = _FeedClient(
+            {"ab_experiment_assignments": self._ASSIGN, "ab_experiment_unit_outcomes": []}
+        )
+        with pytest.raises(ValueError, match="ab_experiment_unit_outcomes"):
+            self._run(client, metric="adopted")
+        assert "business_metrics" not in client.tables_queried()
+        assert "hcp_brand_adoption" not in client.tables_queried()
 
     def test_unit_outcomes_are_paged_to_exhaustion(self):
         """(ix) 1,400 units over two 1,000-row pages -> 1,400 values, not 1,000 —

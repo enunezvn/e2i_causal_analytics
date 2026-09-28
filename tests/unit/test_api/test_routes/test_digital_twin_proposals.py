@@ -73,11 +73,13 @@ def _client(
         getattr(chain, name).return_value = chain
     chain.not_.is_.return_value = chain
 
-    # Count results by TABLE, not by call order: the route reads business_metrics
-    # (measurability) and ml_experiments (running count) in whatever order.
+    # Count results by TABLE, not by call order: the route reads the outcome's real-mode
+    # feed (measurability: ab_experiment_unit_outcomes for `adopted`, business_metrics for a
+    # legacy draft's column) and ml_experiments (running count) in whatever order.
     def _execute():
         table = client.table.call_args.args[0] if client.table.call_args else ""
-        count = measurable_count if table == "business_metrics" else running_count
+        measured = ("business_metrics", "ab_experiment_unit_outcomes")
+        count = measurable_count if table in measured else running_count
         return MagicMock(data=[], count=count)
 
     chain.execute = AsyncMock(side_effect=_execute)
@@ -179,10 +181,28 @@ class TestListProposedExperiments:
         assert item.fidelity_status.value == "unvalidated"
         assert item.proposal_basis == "twin_simulation"
         # codex r1 #5: the ATE is an ABSOLUTE difference on the twin's outcome column,
-        # never a percentage lift; the item names both.
+        # never a percentage lift; the item names both. This row was saved before lane T2
+        # recorded an outcome, so it keeps the column those runs were labelled with; the
+        # envelope names the twin's outcome today.
         assert item.outcome_column == "cohort_conversion_outcome"
         assert item.effect_scale == "absolute"
-        assert resp.outcome_column == "cohort_conversion_outcome"
+        assert resp.outcome_column == "adopted"
+
+    def test_each_item_names_the_outcome_its_own_run_was_estimated_on(self):
+        """Lane T2 moved the twin's outcome to `adopted`. A run saved after that records it;
+        an earlier run must not be relabelled as a prediction about adoption."""
+        from src.api.routes.digital_twin_proposals import list_proposed_experiments
+
+        new = _sim(effect_heterogeneity={"by_region": {}, "outcome_column": "adopted"})
+        old = _sim(effect_heterogeneity={"by_region": {}})
+        repo = _repo([new, old])
+        with _patched(repo):
+            resp = asyncio.run(list_proposed_experiments(brand=None, user=ADMIN))
+        by_id = {p.simulation_id: p.outcome_column for p in resp.proposals}
+        assert by_id == {
+            new["simulation_id"]: "adopted",
+            old["simulation_id"]: "cohort_conversion_outcome",
+        }
 
     def test_a_measured_model_reads_validated(self):
         from src.api.routes.digital_twin_proposals import list_proposed_experiments
@@ -242,10 +262,10 @@ class TestListProposedExperiments:
         chain.eq.assert_any_call("is_synthetic", False)
 
     def test_envelope_says_whether_the_twin_outcome_is_measurable_in_real_mode(self):
-        """codex r1 #1 (measured live): cohort_conversion_outcome is recorded ONLY on the
-        synthetic-gold per-HCP rows (13,797 rows, all is_synthetic=true); the real-mode
-        outcome feed excludes them. A real draft's final analysis therefore cannot
-        measure it today. The envelope states that from a real count, never assumes."""
+        """codex r1 #1, lane T2: the twin's outcome `adopted` is measurable only by the
+        per-experiment unit-outcome feed (the business_metrics join refuses it), and no real
+        row exists there today. The envelope states that from a real count of THAT feed —
+        never from business_metrics, which has no such column."""
         from src.api.routes.digital_twin_proposals import list_proposed_experiments
 
         client, chain = _client(running_count=0, measurable_count=0)
@@ -253,9 +273,10 @@ class TestListProposedExperiments:
         with _patched(repo):
             resp = asyncio.run(list_proposed_experiments(brand=None, user=ADMIN))
         assert resp.outcome_measurable_in_real_mode is False
-        client.table.assert_any_call("business_metrics")
-        chain.eq.assert_any_call("metric_type", "per_hcp_rollup")
-        chain.not_.is_.assert_any_call("cohort_conversion_outcome", "null")
+        client.table.assert_any_call("ab_experiment_unit_outcomes")
+        chain.eq.assert_any_call("metric_name", "adopted")
+        chain.eq.assert_any_call("is_synthetic", False)
+        assert ("business_metrics",) not in [c.args for c in client.table.call_args_list]
 
         client2, _ = _client(running_count=0, measurable_count=42)
         repo2 = _repo([_sim()], client=client2)
@@ -479,6 +500,32 @@ class TestCreateDraftExperiment:
         assert resp.outcome_measurable_in_real_mode is False
         assert "promot" in resp.next_step.lower()
         assert "synthetic-gold" in resp.next_step
+        # A legacy run's column is checked where the final analysis would read it.
+        client.table.assert_any_call("business_metrics")
+        chain.not_.is_.assert_any_call(COHORT_OUTCOME_COLUMN, "null")
+
+    def test_a_draft_from_an_adopted_run_measures_adopted_on_the_unit_outcome_feed(self):
+        """Lane T2: the draft's prediction_target is what the run predicted ON, and its
+        measurability is read from the feed the final analysis would use for it."""
+        from src.api.routes.digital_twin_proposals import create_draft_experiment
+
+        sim = _sim(effect_heterogeneity={"outcome_column": "adopted"})
+        exp_id = str(uuid4())
+        client, chain = _client(insert_rows=[{"id": exp_id}])
+        repo = _repo([], sim=sim, client=client)
+        with _patched(repo):
+            resp = asyncio.run(create_draft_experiment(sim["simulation_id"], user=OPERATOR_KISQALI))
+
+        data = chain.insert.call_args.args[0]
+        assert data["prediction_target"] == "adopted"
+        assert " on adopted;" in data["description"]
+        assert resp.prediction_target == resp.outcome_column == "adopted"
+        assert resp.outcome_measurable_in_real_mode is False
+        client.table.assert_any_call("ab_experiment_unit_outcomes")
+        chain.eq.assert_any_call("metric_name", "adopted")
+        assert ("business_metrics",) not in [c.args for c in client.table.call_args_list]
+        assert "ab_experiment_unit_outcomes" in resp.next_step
+        assert "skipped" in resp.next_step
 
     def test_a_lost_claim_deletes_the_orphan_draft_and_is_a_409(self):
         """codex r1 #2: two concurrent POSTs both pass the pre-check and both insert a

@@ -276,6 +276,11 @@ class SimulationResult(BaseModel):
     # None for error/legacy results. Surfaces whether the ATE came from real or
     # synthetic-DGP-trained uplift, per anti-mocking provenance discipline.
     data_provenance: Optional[str] = None
+    # The outcome column the ATE was estimated ON: the effect provider's frame outcome
+    # (``adopted`` on the cohort path since lane T2). None for error/legacy results. A draft
+    # experiment made from this run measures the same column (twin_repository
+    # ``stored_outcome_column``).
+    outcome_column: Optional[str] = None
 
     # Status
     status: SimulationStatus = SimulationStatus.COMPLETED

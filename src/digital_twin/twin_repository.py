@@ -19,6 +19,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from src.data.per_hcp_cohort_columns import COHORT_OUTCOME_COLUMN
 from src.repositories.base import BaseRepository
 
 from .effect.estimate import PROVENANCE_COHORT, PROVENANCE_RWD, PROVENANCE_SYNTHETIC, SUBGROUP_AXES
@@ -413,6 +414,29 @@ def stored_filter_regions(row: Dict[str, Any]) -> List[str]:
     return [r for r in regions if isinstance(r, str)] if isinstance(regions, list) else []
 
 
+#: Key inside a twin_simulations row's ``effect_heterogeneity`` JSON naming the outcome
+#: column its ATE was estimated ON (lane T2). The twin's outcome moved from
+#: ``cohort_conversion_outcome`` to ``adopted``; a draft experiment made from a stored run
+#: must measure what THAT run predicted. Kept in the JSON the row already carries rather
+#: than a new column, so recording it needs no migration.
+OUTCOME_COLUMN_KEY = "outcome_column"
+
+
+def stored_outcome_column(row: Dict[str, Any]) -> str:
+    """The outcome column a stored twin_simulations row's effect was estimated on.
+
+    Rows saved before lane T2 recorded none. They read as ``cohort_conversion_outcome``, the
+    label the proposals surface has always given them — which is exact for runs after
+    migration 147 (2026-09-21) and NOT for earlier ones, estimated on ``conversion_rate``
+    before the outcome had its own column; no stored field tells the two apart.
+    """
+    heterogeneity = row.get("effect_heterogeneity")
+    recorded = heterogeneity.get(OUTCOME_COLUMN_KEY) if isinstance(heterogeneity, dict) else None
+    if isinstance(recorded, str) and recorded:
+        return recorded
+    return COHORT_OUTCOME_COLUMN
+
+
 # Subgroup axes a cohort-provenance row can only carry if it was stored before #2097, when
 # by_specialty / by_decile / by_adoption_stage averaged region CATEs over the GENERATED
 # TWINS. From #2097 until #2162 the cohort estimator declared region alone. #2162 adds a
@@ -514,7 +538,10 @@ class SimulationRepository(BaseRepository):
             "simulated_ci_lower": result.simulated_ci_lower,
             "simulated_ci_upper": result.simulated_ci_upper,
             "simulated_std_error": result.simulated_std_error,
-            "effect_heterogeneity": result.effect_heterogeneity.model_dump(),
+            "effect_heterogeneity": {
+                **result.effect_heterogeneity.model_dump(),
+                **({OUTCOME_COLUMN_KEY: result.outcome_column} if result.outcome_column else {}),
+            },
             "simulation_status": result.status.value,
             "recommendation": result.recommendation.value,
             "recommendation_rationale": result.recommendation_rationale,
