@@ -1,0 +1,13 @@
+[2026-09-28 16:19:28,867: INFO/ForkPoolWorker-2] Logged model to: models:/m-a74716b2375d4974881425c91a7c9928
+[2026-09-28 16:19:29,609: INFO/ForkPoolWorker-2] Persisted training run: train_4bb629b39daa for experiment 35a2cd41-4d85-4034-b1a0-1c2a61e3766e
+[2026-09-28 16:19:30,192: INFO/ForkPoolWorker-2] Stage 4 complete: training_run_id=train_4bb629b39daa, success_criteria_met=True, primary_metric=0.0000, hpo_trials=50, duration=83.96s
+[2026-09-28 16:19:30,293: INFO/ForkPoolWorker-2] Stage 5: Running feature_analyzer
+[2026-09-28 16:19:31,909: INFO/ForkPoolWorker-2] Stage 5 complete: top_features=[], duration=1.62s
+[2026-09-28 16:19:31,929: INFO/ForkPoolWorker-2] Stage 6: Running model_deployer
+[2026-09-28 16:19:35,621: INFO/ForkPoolWorker-2] Wrote ml_model_registry row c524db0f-1df1-4f21-806f-3b857c5245b9 (initiation_kisqali_goldstd_lr_v1 v1.0_retrained_20260928_1617_d18ac8, experiment 35a2cd41-4d85-4034-b1a0-1c2a61e3766e)
+[2026-09-28 16:19:35,773: INFO/ForkPoolWorker-2] Transitioned initiation_kisqali_goldstd_lr_v1 v3 to staging
+[2026-09-28 16:19:35,774: INFO/ForkPoolWorker-2] MLflow: Transitioned initiation_kisqali_goldstd_lr_v1 v3 to Staging
+[2026-09-28 16:19:52,665: INFO/ForkPoolWorker-2] Built Bento: tag="exp_kisq_al_20260923184034_e9f834_deployment:v3
+[2026-09-28 16:19:52,809: ERROR/ForkPoolWorker-2] Deployment failed: bento_validation_error: Bento validation failed: ['Bento not found: Invalid Tag tag="exp_kisq_al_20260923184034_e9f834_deployment:v3']
+[2026-09-28 16:19:52,809: INFO/ForkPoolWorker-2] Stage 6 complete: deployment_successful=False, endpoint_url=None, duration=20.88s
+[2026-09-28 16:19:52,854: ERROR/ForkPoolWorker-2] Retraining 073c38eb-586b-4f83-adb3-4a7ec0d1d20b failed closed: validation_auc=0.8362325300671112 but no ml_model_registry row 'initiation_kisqali_goldstd_lr_v1' v'1.0_retrained_20260928_1617_d18ac8' written by this run (deployer reported None) — the candidate is not linked to the retrained model; job marked failed
