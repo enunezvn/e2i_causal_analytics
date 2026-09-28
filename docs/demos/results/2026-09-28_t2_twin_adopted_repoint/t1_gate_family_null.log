@@ -1,0 +1,394 @@
+2026-09-28 19:18:03,819 - INFO - Skipping registering function get_context because it does not have a class
+2026-09-28 19:18:05,826 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:05,828 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:05,828 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:05,828 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:05,838 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:05,839 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:05,839 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:05,840 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:05,848 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:05,854 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:05,857 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:05,858 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:05,870 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:05,874 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:05,874 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:05,874 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:05,882 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:05,890 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:05,890 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:05,890 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,102 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,104 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,104 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,104 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,277 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,278 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,278 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,278 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,279 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,279 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,279 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,279 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,279 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,280 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,280 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,280 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,284 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,285 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,285 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,285 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,285 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,285 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,290 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,290 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,290 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,290 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,297 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,300 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,301 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,301 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,301 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,301 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,302 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,302 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,302 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,302 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,303 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,303 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,303 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,303 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,303 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,304 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,304 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,304 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,309 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,309 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,310 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,310 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,310 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,310 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,310 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,310 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,310 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,310 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,311 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,311 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,311 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,311 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,311 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,311 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,311 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,311 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,318 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,319 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,319 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,319 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,319 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,320 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,320 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,320 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,321 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,321 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,321 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,322 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,322 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,322 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,322 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,322 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,322 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,322 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,350 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,351 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,351 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,351 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,358 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,358 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,358 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,358 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,365 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,365 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,365 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,365 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,435 - INFO - Multiple declarations of metric table.column_types for engine PandasExecutionEngine.
+2026-09-28 19:18:06,435 - INFO - Multiple declarations of metric table.column_types for engine SparkDFExecutionEngine.
+2026-09-28 19:18:06,445 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,446 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,446 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,446 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,460 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,460 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,460 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,460 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,711 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,711 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,715 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,716 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,716 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,716 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,716 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,716 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,717 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,720 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,721 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,721 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,721 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,721 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,721 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,721 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,730 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,730 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,730 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,730 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,741 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,741 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,741 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,742 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,742 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,742 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,743 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,743 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,743 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,744 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,744 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,744 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,744 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,744 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,744 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,744 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,755 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,755 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,756 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,756 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,756 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,756 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,756 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,757 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,757 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,757 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,757 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,757 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,758 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,758 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,758 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,758 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,767 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,768 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,768 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,768 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,769 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,769 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,769 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,770 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,770 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,770 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,770 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,770 - INFO - Skipping registering function DataSourceManager._bind_asset_factory_method_if_not_present.<locals>._add_asset_factory because it is a closure
+2026-09-28 19:18:06,770 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,771 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,771 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,771 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,772 - INFO - Multiple declarations of metric column.standard_deviation for engine PandasExecutionEngine.
+2026-09-28 19:18:06,773 - INFO - Multiple declarations of metric column.standard_deviation.aggregate_fn for engine SparkDFExecutionEngine.
+2026-09-28 19:18:06,773 - INFO - Multiple declarations of metric column.standard_deviation for engine SparkDFExecutionEngine.
+2026-09-28 19:18:06,789 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,790 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,790 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,790 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,803 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,804 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,804 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,804 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,828 - INFO - Skipping registering function DataSourceManager._register_add_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,828 - INFO - Skipping registering function DataSourceManager._register_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,828 - INFO - Skipping registering function DataSourceManager._register_add_or_update_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:06,828 - INFO - Skipping registering function DataSourceManager._register_delete_datasource.<locals>.crud_method_info because it is a closure
+2026-09-28 19:18:15,684 - INFO - Database query metrics initialized
+2026-09-28 19:18:15,969 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/business_metrics?select=hcp_id%2Cbrand%2Cmetric_date%2Cregion%2Chcp_profiles%28specialty%29%2Cmarket_share%2Ctriggers_total_count%2Ccall_frequency%2Cemail_campaign_count%2Cengagement_score%2Cpatient_support_enrollment%2Cpeer_influence_score%2Crep_training_score%2Csample_volume%2Cspeaker_program_count&metric_type=eq.per_hcp_rollup&brand=eq.Remibrutinib&is_synthetic=eq.True&limit=20000 "HTTP/1.1 200 OK"
+2026-09-28 19:18:16,638 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/hcp_brand_adoption?select=hcp_id%2Cbrand%2Cadopted&brand=eq.Remibrutinib&is_synthetic=eq.True&order=hcp_id.asc%2Cbrand.asc&offset=0&limit=1000 "HTTP/1.1 206 Partial Content"
+2026-09-28 19:18:16,733 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/hcp_brand_adoption?select=hcp_id%2Cbrand%2Cadopted&brand=eq.Remibrutinib&is_synthetic=eq.True&order=hcp_id.asc%2Cbrand.asc&offset=1000&limit=1000 "HTTP/1.1 206 Partial Content"
+2026-09-28 19:18:16,901 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/hcp_brand_adoption?select=hcp_id%2Cbrand%2Cadopted&brand=eq.Remibrutinib&is_synthetic=eq.True&order=hcp_id.asc%2Cbrand.asc&offset=2000&limit=1000 "HTTP/1.1 206 Partial Content"
+2026-09-28 19:18:17,014 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/hcp_brand_adoption?select=hcp_id%2Cbrand%2Cadopted&brand=eq.Remibrutinib&is_synthetic=eq.True&order=hcp_id.asc%2Cbrand.asc&offset=3000&limit=1000 "HTTP/1.1 206 Partial Content"
+2026-09-28 19:18:17,146 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/hcp_brand_adoption?select=hcp_id%2Cbrand%2Cadopted&brand=eq.Remibrutinib&is_synthetic=eq.True&order=hcp_id.asc%2Cbrand.asc&offset=4000&limit=1000 "HTTP/1.1 206 Partial Content"
+2026-09-28 19:18:17,409 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/business_metrics?select=hcp_id%2Cbrand%2Cmetric_date%2Cregion%2Chcp_profiles%28specialty%29%2Cmarket_share%2Ctriggers_total_count%2Ccall_frequency%2Cemail_campaign_count%2Cengagement_score%2Cpatient_support_enrollment%2Cpeer_influence_score%2Crep_training_score%2Csample_volume%2Cspeaker_program_count&metric_type=eq.per_hcp_rollup&brand=eq.Fabhalta&is_synthetic=eq.True&limit=20000 "HTTP/1.1 200 OK"
+2026-09-28 19:18:17,982 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/hcp_brand_adoption?select=hcp_id%2Cbrand%2Cadopted&brand=eq.Fabhalta&is_synthetic=eq.True&order=hcp_id.asc%2Cbrand.asc&offset=0&limit=1000 "HTTP/1.1 206 Partial Content"
+2026-09-28 19:18:18,026 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/hcp_brand_adoption?select=hcp_id%2Cbrand%2Cadopted&brand=eq.Fabhalta&is_synthetic=eq.True&order=hcp_id.asc%2Cbrand.asc&offset=1000&limit=1000 "HTTP/1.1 206 Partial Content"
+2026-09-28 19:18:18,107 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/hcp_brand_adoption?select=hcp_id%2Cbrand%2Cadopted&brand=eq.Fabhalta&is_synthetic=eq.True&order=hcp_id.asc%2Cbrand.asc&offset=2000&limit=1000 "HTTP/1.1 206 Partial Content"
+2026-09-28 19:18:18,182 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/hcp_brand_adoption?select=hcp_id%2Cbrand%2Cadopted&brand=eq.Fabhalta&is_synthetic=eq.True&order=hcp_id.asc%2Cbrand.asc&offset=3000&limit=1000 "HTTP/1.1 206 Partial Content"
+2026-09-28 19:18:18,260 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/hcp_brand_adoption?select=hcp_id%2Cbrand%2Cadopted&brand=eq.Fabhalta&is_synthetic=eq.True&order=hcp_id.asc%2Cbrand.asc&offset=4000&limit=1000 "HTTP/1.1 206 Partial Content"
+2026-09-28 19:18:18,471 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/business_metrics?select=hcp_id%2Cbrand%2Cmetric_date%2Cregion%2Chcp_profiles%28specialty%29%2Cmarket_share%2Ctriggers_total_count%2Ccall_frequency%2Cemail_campaign_count%2Cengagement_score%2Cpatient_support_enrollment%2Cpeer_influence_score%2Crep_training_score%2Csample_volume%2Cspeaker_program_count&metric_type=eq.per_hcp_rollup&brand=eq.Kisqali&is_synthetic=eq.True&limit=20000 "HTTP/1.1 200 OK"
+2026-09-28 19:18:19,022 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/hcp_brand_adoption?select=hcp_id%2Cbrand%2Cadopted&brand=eq.Kisqali&is_synthetic=eq.True&order=hcp_id.asc%2Cbrand.asc&offset=0&limit=1000 "HTTP/1.1 206 Partial Content"
+2026-09-28 19:18:19,077 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/hcp_brand_adoption?select=hcp_id%2Cbrand%2Cadopted&brand=eq.Kisqali&is_synthetic=eq.True&order=hcp_id.asc%2Cbrand.asc&offset=1000&limit=1000 "HTTP/1.1 206 Partial Content"
+2026-09-28 19:18:19,205 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/hcp_brand_adoption?select=hcp_id%2Cbrand%2Cadopted&brand=eq.Kisqali&is_synthetic=eq.True&order=hcp_id.asc%2Cbrand.asc&offset=2000&limit=1000 "HTTP/1.1 206 Partial Content"
+2026-09-28 19:18:19,315 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/hcp_brand_adoption?select=hcp_id%2Cbrand%2Cadopted&brand=eq.Kisqali&is_synthetic=eq.True&order=hcp_id.asc%2Cbrand.asc&offset=3000&limit=1000 "HTTP/1.1 206 Partial Content"
+2026-09-28 19:18:19,411 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/hcp_brand_adoption?select=hcp_id%2Cbrand%2Cadopted&brand=eq.Kisqali&is_synthetic=eq.True&order=hcp_id.asc%2Cbrand.asc&offset=4000&limit=1000 "HTTP/1.1 206 Partial Content"
+2026-09-28 19:18:19,481 - INFO - twin loader: 10136 joined (hcp, brand) rows
+2026-09-28 19:18:22,465 - INFO -   Remibrutinib   call_frequency               n=3354  planted=+0.050 ate=+0.086 ci=(+0.033, +0.140) covers=True 3.0s rss=0.60GiB
+2026-09-28 19:18:25,699 - INFO -   Remibrutinib   email_campaign_count         n=3354  planted=+0.062 ate=+0.097 ci=(+0.043, +0.150) covers=True 3.2s rss=0.60GiB
+2026-09-28 19:18:28,455 - INFO -   Remibrutinib   engagement_score             n=3354  planted=+0.138 ate=+0.164 ci=(+0.121, +0.207) covers=True 2.8s rss=0.60GiB
+2026-09-28 19:18:31,267 - INFO -   Remibrutinib   patient_support_enrollment   n=3354  planted=+0.074 ate=+0.090 ci=(+0.048, +0.131) covers=True 2.8s rss=0.60GiB
+2026-09-28 19:18:33,815 - INFO -   Remibrutinib   peer_influence_score         n=3354  planted=+0.093 ate=+0.093 ci=(+0.045, +0.142) covers=True 2.5s rss=0.60GiB
+2026-09-28 19:18:36,361 - INFO -   Remibrutinib   rep_training_score           n=3354  planted=+0.000 ate=+0.047 ci=(+0.008, +0.086) covers=False 2.5s rss=0.60GiB
+2026-09-28 19:18:39,077 - INFO -   Remibrutinib   sample_volume                n=3354  planted=+0.037 ate=+0.079 ci=(+0.024, +0.133) covers=True 2.7s rss=0.60GiB
+2026-09-28 19:18:41,547 - INFO -   Remibrutinib   speaker_program_count        n=3354  planted=+0.113 ate=+0.098 ci=(+0.041, +0.156) covers=True 2.5s rss=0.60GiB
+2026-09-28 19:18:44,026 - INFO -   Fabhalta       call_frequency               n=3404  planted=+0.050 ate=+0.061 ci=(-0.017, +0.140) covers=True 2.5s rss=0.60GiB
+2026-09-28 19:18:46,422 - INFO -   Fabhalta       email_campaign_count         n=3404  planted=+0.062 ate=+0.098 ci=(+0.038, +0.157) covers=True 2.4s rss=0.60GiB
+2026-09-28 19:18:48,895 - INFO -   Fabhalta       engagement_score             n=3404  planted=+0.138 ate=+0.156 ci=(+0.115, +0.197) covers=True 2.5s rss=0.60GiB
+2026-09-28 19:18:51,256 - INFO -   Fabhalta       patient_support_enrollment   n=3404  planted=+0.074 ate=+0.061 ci=(+0.020, +0.102) covers=True 2.4s rss=0.60GiB
+2026-09-28 19:18:53,855 - INFO -   Fabhalta       peer_influence_score         n=3404  planted=+0.093 ate=+0.073 ci=(+0.028, +0.117) covers=True 2.6s rss=0.61GiB
+2026-09-28 19:18:56,282 - INFO -   Fabhalta       rep_training_score           n=3404  planted=+0.000 ate=+0.006 ci=(-0.035, +0.047) covers=True 2.4s rss=0.61GiB
+2026-09-28 19:18:58,777 - INFO -   Fabhalta       sample_volume                n=3404  planted=+0.037 ate=-0.004 ci=(-0.078, +0.071) covers=True 2.5s rss=0.61GiB
+2026-09-28 19:19:01,360 - INFO -   Fabhalta       speaker_program_count        n=3404  planted=+0.113 ate=+0.090 ci=(+0.035, +0.144) covers=True 2.6s rss=0.61GiB
+2026-09-28 19:19:04,191 - INFO -   Kisqali        call_frequency               n=3378  planted=+0.050 ate=+0.032 ci=(-0.027, +0.091) covers=True 2.8s rss=0.62GiB
+2026-09-28 19:19:06,782 - INFO -   Kisqali        email_campaign_count         n=3378  planted=+0.062 ate=+0.048 ci=(-0.007, +0.102) covers=True 2.6s rss=0.62GiB
+2026-09-28 19:19:09,518 - INFO -   Kisqali        engagement_score             n=3378  planted=+0.138 ate=+0.107 ci=(+0.061, +0.153) covers=True 2.7s rss=0.62GiB
+2026-09-28 19:19:12,010 - INFO -   Kisqali        patient_support_enrollment   n=3378  planted=+0.074 ate=+0.063 ci=(+0.021, +0.104) covers=True 2.5s rss=0.62GiB
+2026-09-28 19:19:14,467 - INFO -   Kisqali        peer_influence_score         n=3378  planted=+0.093 ate=+0.111 ci=(+0.062, +0.160) covers=True 2.5s rss=0.62GiB
+2026-09-28 19:19:16,813 - INFO -   Kisqali        rep_training_score           n=3378  planted=+0.000 ate=-0.011 ci=(-0.050, +0.028) covers=True 2.3s rss=0.62GiB
+2026-09-28 19:19:19,179 - INFO -   Kisqali        sample_volume                n=3378  planted=+0.037 ate=+0.033 ci=(-0.017, +0.084) covers=True 2.4s rss=0.62GiB
+2026-09-28 19:19:21,525 - INFO -   Kisqali        speaker_program_count        n=3378  planted=+0.113 ate=+0.137 ci=(+0.019, +0.256) covers=True 2.3s rss=0.62GiB
+2026-09-28 19:19:21,532 - INFO - fits written to docs/demos/results/2026-09-28_t2_twin_adopted_repoint/t1_gate_family_null_fits.csv
+2026-09-28 19:19:21,533 - INFO - Creating Supabase client for: http://172.17.0.1:54321 (using service_role key)
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/supabase/_sync/client.py:309: DeprecationWarning: The 'timeout' parameter is deprecated. Please configure it in the http client instead.
+  return SyncPostgrestClient(
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/supabase/_sync/client.py:309: DeprecationWarning: The 'verify' parameter is deprecated. Please configure it in the http client instead.
+  return SyncPostgrestClient(
+2026-09-28 19:19:21,950 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/hcp_profiles?select=hcp_id%2Cpeer_influence_score%2Cspecialty&is_synthetic=eq.True&order=hcp_id.asc&offset=0&limit=1000 "HTTP/1.1 200 OK"
+2026-09-28 19:19:22,139 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/hcp_profiles?select=hcp_id%2Cpeer_influence_score%2Cspecialty&is_synthetic=eq.True&order=hcp_id.asc&offset=1000&limit=1000 "HTTP/1.1 200 OK"
+2026-09-28 19:19:22,258 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/hcp_profiles?select=hcp_id%2Cpeer_influence_score%2Cspecialty&is_synthetic=eq.True&order=hcp_id.asc&offset=2000&limit=1000 "HTTP/1.1 200 OK"
+2026-09-28 19:19:22,380 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/hcp_profiles?select=hcp_id%2Cpeer_influence_score%2Cspecialty&is_synthetic=eq.True&order=hcp_id.asc&offset=3000&limit=1000 "HTTP/1.1 200 OK"
+2026-09-28 19:19:22,507 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/hcp_profiles?select=hcp_id%2Cpeer_influence_score%2Cspecialty&is_synthetic=eq.True&order=hcp_id.asc&offset=4000&limit=1000 "HTTP/1.1 200 OK"
+2026-09-28 19:19:22,677 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/hcp_profiles?select=hcp_id%2Cpeer_influence_score%2Cspecialty&is_synthetic=eq.True&order=hcp_id.asc&offset=5000&limit=1000 "HTTP/1.1 200 OK"
+2026-09-28 19:19:22,821 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/business_metrics?select=hcp_id%2Cbrand%2Cmetric_date%2Cregion%2Cmarket_share%2Ctriggers_total_count%2Ccall_frequency%2Cemail_campaign_count%2Cengagement_score%2Cpatient_support_enrollment%2Cpeer_influence_score%2Crep_training_score%2Csample_volume%2Cspeaker_program_count&metric_type=eq.per_hcp_rollup&is_synthetic=eq.True&brand=in.%28Remibrutinib%2CFabhalta%2CKisqali%29&order=metric_id.asc&offset=0&limit=1000 "HTTP/1.1 206 Partial Content"
+2026-09-28 19:19:23,008 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/business_metrics?select=hcp_id%2Cbrand%2Cmetric_date%2Cregion%2Cmarket_share%2Ctriggers_total_count%2Ccall_frequency%2Cemail_campaign_count%2Cengagement_score%2Cpatient_support_enrollment%2Cpeer_influence_score%2Crep_training_score%2Csample_volume%2Cspeaker_program_count&metric_type=eq.per_hcp_rollup&is_synthetic=eq.True&brand=in.%28Remibrutinib%2CFabhalta%2CKisqali%29&order=metric_id.asc&offset=1000&limit=1000 "HTTP/1.1 206 Partial Content"
+2026-09-28 19:19:23,205 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/business_metrics?select=hcp_id%2Cbrand%2Cmetric_date%2Cregion%2Cmarket_share%2Ctriggers_total_count%2Ccall_frequency%2Cemail_campaign_count%2Cengagement_score%2Cpatient_support_enrollment%2Cpeer_influence_score%2Crep_training_score%2Csample_volume%2Cspeaker_program_count&metric_type=eq.per_hcp_rollup&is_synthetic=eq.True&brand=in.%28Remibrutinib%2CFabhalta%2CKisqali%29&order=metric_id.asc&offset=2000&limit=1000 "HTTP/1.1 206 Partial Content"
+2026-09-28 19:19:23,396 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/business_metrics?select=hcp_id%2Cbrand%2Cmetric_date%2Cregion%2Cmarket_share%2Ctriggers_total_count%2Ccall_frequency%2Cemail_campaign_count%2Cengagement_score%2Cpatient_support_enrollment%2Cpeer_influence_score%2Crep_training_score%2Csample_volume%2Cspeaker_program_count&metric_type=eq.per_hcp_rollup&is_synthetic=eq.True&brand=in.%28Remibrutinib%2CFabhalta%2CKisqali%29&order=metric_id.asc&offset=3000&limit=1000 "HTTP/1.1 206 Partial Content"
+2026-09-28 19:19:23,608 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/business_metrics?select=hcp_id%2Cbrand%2Cmetric_date%2Cregion%2Cmarket_share%2Ctriggers_total_count%2Ccall_frequency%2Cemail_campaign_count%2Cengagement_score%2Cpatient_support_enrollment%2Cpeer_influence_score%2Crep_training_score%2Csample_volume%2Cspeaker_program_count&metric_type=eq.per_hcp_rollup&is_synthetic=eq.True&brand=in.%28Remibrutinib%2CFabhalta%2CKisqali%29&order=metric_id.asc&offset=4000&limit=1000 "HTTP/1.1 206 Partial Content"
+2026-09-28 19:19:24,132 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/business_metrics?select=hcp_id%2Cbrand%2Cmetric_date%2Cregion%2Cmarket_share%2Ctriggers_total_count%2Ccall_frequency%2Cemail_campaign_count%2Cengagement_score%2Cpatient_support_enrollment%2Cpeer_influence_score%2Crep_training_score%2Csample_volume%2Cspeaker_program_count&metric_type=eq.per_hcp_rollup&is_synthetic=eq.True&brand=in.%28Remibrutinib%2CFabhalta%2CKisqali%29&order=metric_id.asc&offset=5000&limit=1000 "HTTP/1.1 206 Partial Content"
+2026-09-28 19:19:24,647 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/business_metrics?select=hcp_id%2Cbrand%2Cmetric_date%2Cregion%2Cmarket_share%2Ctriggers_total_count%2Ccall_frequency%2Cemail_campaign_count%2Cengagement_score%2Cpatient_support_enrollment%2Cpeer_influence_score%2Crep_training_score%2Csample_volume%2Cspeaker_program_count&metric_type=eq.per_hcp_rollup&is_synthetic=eq.True&brand=in.%28Remibrutinib%2CFabhalta%2CKisqali%29&order=metric_id.asc&offset=6000&limit=1000 "HTTP/1.1 206 Partial Content"
+2026-09-28 19:19:25,015 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/business_metrics?select=hcp_id%2Cbrand%2Cmetric_date%2Cregion%2Cmarket_share%2Ctriggers_total_count%2Ccall_frequency%2Cemail_campaign_count%2Cengagement_score%2Cpatient_support_enrollment%2Cpeer_influence_score%2Crep_training_score%2Csample_volume%2Cspeaker_program_count&metric_type=eq.per_hcp_rollup&is_synthetic=eq.True&brand=in.%28Remibrutinib%2CFabhalta%2CKisqali%29&order=metric_id.asc&offset=7000&limit=1000 "HTTP/1.1 206 Partial Content"
+2026-09-28 19:19:25,415 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/business_metrics?select=hcp_id%2Cbrand%2Cmetric_date%2Cregion%2Cmarket_share%2Ctriggers_total_count%2Ccall_frequency%2Cemail_campaign_count%2Cengagement_score%2Cpatient_support_enrollment%2Cpeer_influence_score%2Crep_training_score%2Csample_volume%2Cspeaker_program_count&metric_type=eq.per_hcp_rollup&is_synthetic=eq.True&brand=in.%28Remibrutinib%2CFabhalta%2CKisqali%29&order=metric_id.asc&offset=8000&limit=1000 "HTTP/1.1 206 Partial Content"
+2026-09-28 19:19:25,802 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/business_metrics?select=hcp_id%2Cbrand%2Cmetric_date%2Cregion%2Cmarket_share%2Ctriggers_total_count%2Ccall_frequency%2Cemail_campaign_count%2Cengagement_score%2Cpatient_support_enrollment%2Cpeer_influence_score%2Crep_training_score%2Csample_volume%2Cspeaker_program_count&metric_type=eq.per_hcp_rollup&is_synthetic=eq.True&brand=in.%28Remibrutinib%2CFabhalta%2CKisqali%29&order=metric_id.asc&offset=9000&limit=1000 "HTTP/1.1 206 Partial Content"
+2026-09-28 19:19:26,163 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/business_metrics?select=hcp_id%2Cbrand%2Cmetric_date%2Cregion%2Cmarket_share%2Ctriggers_total_count%2Ccall_frequency%2Cemail_campaign_count%2Cengagement_score%2Cpatient_support_enrollment%2Cpeer_influence_score%2Crep_training_score%2Csample_volume%2Cspeaker_program_count&metric_type=eq.per_hcp_rollup&is_synthetic=eq.True&brand=in.%28Remibrutinib%2CFabhalta%2CKisqali%29&order=metric_id.asc&offset=10000&limit=1000 "HTTP/1.1 206 Partial Content"
+2026-09-28 19:19:26,569 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/business_metrics?select=hcp_id%2Cbrand%2Cmetric_date%2Cregion%2Cmarket_share%2Ctriggers_total_count%2Ccall_frequency%2Cemail_campaign_count%2Cengagement_score%2Cpatient_support_enrollment%2Cpeer_influence_score%2Crep_training_score%2Csample_volume%2Cspeaker_program_count&metric_type=eq.per_hcp_rollup&is_synthetic=eq.True&brand=in.%28Remibrutinib%2CFabhalta%2CKisqali%29&order=metric_id.asc&offset=11000&limit=1000 "HTTP/1.1 206 Partial Content"
+2026-09-28 19:19:26,965 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/business_metrics?select=hcp_id%2Cbrand%2Cmetric_date%2Cregion%2Cmarket_share%2Ctriggers_total_count%2Ccall_frequency%2Cemail_campaign_count%2Cengagement_score%2Cpatient_support_enrollment%2Cpeer_influence_score%2Crep_training_score%2Csample_volume%2Cspeaker_program_count&metric_type=eq.per_hcp_rollup&is_synthetic=eq.True&brand=in.%28Remibrutinib%2CFabhalta%2CKisqali%29&order=metric_id.asc&offset=12000&limit=1000 "HTTP/1.1 206 Partial Content"
+2026-09-28 19:19:27,396 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/business_metrics?select=hcp_id%2Cbrand%2Cmetric_date%2Cregion%2Cmarket_share%2Ctriggers_total_count%2Ccall_frequency%2Cemail_campaign_count%2Cengagement_score%2Cpatient_support_enrollment%2Cpeer_influence_score%2Crep_training_score%2Csample_volume%2Cspeaker_program_count&metric_type=eq.per_hcp_rollup&is_synthetic=eq.True&brand=in.%28Remibrutinib%2CFabhalta%2CKisqali%29&order=metric_id.asc&offset=13000&limit=1000 "HTTP/1.1 206 Partial Content"
+2026-09-28 19:19:27,729 - INFO - HTTP Request: GET http://172.17.0.1:54321/rest/v1/business_metrics?select=hcp_id%2Cbrand%2Cmetric_date%2Cregion%2Cmarket_share%2Ctriggers_total_count%2Ccall_frequency%2Cemail_campaign_count%2Cengagement_score%2Cpatient_support_enrollment%2Cpeer_influence_score%2Crep_training_score%2Csample_volume%2Cspeaker_program_count&metric_type=eq.per_hcp_rollup&is_synthetic=eq.True&brand=in.%28Remibrutinib%2CFabhalta%2CKisqali%29&order=metric_id.asc&offset=14000&limit=1000 "HTTP/1.1 206 Partial Content"
+2026-09-28 19:19:28,298 - INFO - null calibration: derive(seed 427) reproduces 1.0000 of the gated frame's labels; 100 seeds x 3 brands
+2026-09-28 19:19:36,530 - INFO -   null seed 2001 (1/100): FP so far 0/3  8 s  rss=0.65GiB
+2026-09-28 19:19:44,347 - INFO -   null seed 2002 (2/100): FP so far 0/6  16 s  rss=0.66GiB
+2026-09-28 19:19:52,317 - INFO -   null seed 2003 (3/100): FP so far 0/9  24 s  rss=0.66GiB
+2026-09-28 19:20:00,339 - INFO -   null seed 2004 (4/100): FP so far 0/12  32 s  rss=0.67GiB
+2026-09-28 19:20:12,223 - INFO -   null seed 2005 (5/100): FP so far 1/15  44 s  rss=0.67GiB
+2026-09-28 19:20:20,797 - INFO -   null seed 2006 (6/100): FP so far 1/18  52 s  rss=0.68GiB
+2026-09-28 19:20:29,398 - INFO -   null seed 2007 (7/100): FP so far 1/21  61 s  rss=0.68GiB
+2026-09-28 19:20:39,524 - INFO -   null seed 2008 (8/100): FP so far 1/24  71 s  rss=0.69GiB
+2026-09-28 19:20:47,822 - INFO -   null seed 2009 (9/100): FP so far 2/27  80 s  rss=0.69GiB
+2026-09-28 19:20:55,795 - INFO -   null seed 2010 (10/100): FP so far 2/30  87 s  rss=0.70GiB
+2026-09-28 19:21:05,386 - INFO -   null seed 2011 (11/100): FP so far 2/33  97 s  rss=0.70GiB
+2026-09-28 19:21:13,799 - INFO -   null seed 2012 (12/100): FP so far 2/36  106 s  rss=0.70GiB
+2026-09-28 19:21:21,825 - INFO -   null seed 2013 (13/100): FP so far 2/39  114 s  rss=0.71GiB
+2026-09-28 19:21:30,560 - INFO -   null seed 2014 (14/100): FP so far 2/42  122 s  rss=0.71GiB
+2026-09-28 19:21:38,283 - INFO -   null seed 2015 (15/100): FP so far 2/45  130 s  rss=0.72GiB
+2026-09-28 19:21:46,111 - INFO -   null seed 2016 (16/100): FP so far 2/48  138 s  rss=0.73GiB
+2026-09-28 19:21:53,732 - INFO -   null seed 2017 (17/100): FP so far 2/51  145 s  rss=0.73GiB
+2026-09-28 19:22:01,849 - INFO -   null seed 2018 (18/100): FP so far 2/54  154 s  rss=0.73GiB
+2026-09-28 19:22:10,040 - INFO -   null seed 2019 (19/100): FP so far 2/57  162 s  rss=0.74GiB
+2026-09-28 19:22:17,853 - INFO -   null seed 2020 (20/100): FP so far 2/60  170 s  rss=0.74GiB
+2026-09-28 19:22:25,456 - INFO -   null seed 2021 (21/100): FP so far 2/63  177 s  rss=0.75GiB
+2026-09-28 19:22:33,239 - INFO -   null seed 2022 (22/100): FP so far 2/66  185 s  rss=0.75GiB
+2026-09-28 19:22:41,035 - INFO -   null seed 2023 (23/100): FP so far 2/69  193 s  rss=0.76GiB
+2026-09-28 19:22:48,861 - INFO -   null seed 2024 (24/100): FP so far 3/72  201 s  rss=0.76GiB
+2026-09-28 19:22:58,354 - INFO -   null seed 2025 (25/100): FP so far 3/75  210 s  rss=0.77GiB
+2026-09-28 19:23:07,758 - INFO -   null seed 2026 (26/100): FP so far 3/78  219 s  rss=0.77GiB
+2026-09-28 19:23:16,544 - INFO -   null seed 2027 (27/100): FP so far 3/81  228 s  rss=0.77GiB
+2026-09-28 19:23:24,857 - INFO -   null seed 2028 (28/100): FP so far 3/84  237 s  rss=0.78GiB
+2026-09-28 19:23:34,785 - INFO -   null seed 2029 (29/100): FP so far 4/87  246 s  rss=0.78GiB
+2026-09-28 19:23:44,286 - INFO -   null seed 2030 (30/100): FP so far 4/90  256 s  rss=0.78GiB
+2026-09-28 19:23:53,717 - INFO -   null seed 2031 (31/100): FP so far 4/93  265 s  rss=0.78GiB
+2026-09-28 19:24:04,163 - INFO -   null seed 2032 (32/100): FP so far 4/96  276 s  rss=0.78GiB
+2026-09-28 19:24:12,580 - INFO -   null seed 2033 (33/100): FP so far 4/99  284 s  rss=0.78GiB
+2026-09-28 19:24:21,166 - INFO -   null seed 2034 (34/100): FP so far 4/102  293 s  rss=0.78GiB
+2026-09-28 19:24:29,786 - INFO -   null seed 2035 (35/100): FP so far 4/105  301 s  rss=0.78GiB
+2026-09-28 19:24:38,435 - INFO -   null seed 2036 (36/100): FP so far 4/108  310 s  rss=0.78GiB
+2026-09-28 19:24:46,799 - INFO -   null seed 2037 (37/100): FP so far 4/111  319 s  rss=0.78GiB
+2026-09-28 19:24:56,124 - INFO -   null seed 2038 (38/100): FP so far 5/114  328 s  rss=0.78GiB
+2026-09-28 19:25:07,486 - INFO -   null seed 2039 (39/100): FP so far 5/117  339 s  rss=0.78GiB
+2026-09-28 19:25:16,621 - INFO -   null seed 2040 (40/100): FP so far 5/120  348 s  rss=0.78GiB
+2026-09-28 19:25:25,095 - INFO -   null seed 2041 (41/100): FP so far 6/123  357 s  rss=0.78GiB
+2026-09-28 19:25:33,805 - INFO -   null seed 2042 (42/100): FP so far 6/126  366 s  rss=0.78GiB
+2026-09-28 19:25:42,785 - INFO -   null seed 2043 (43/100): FP so far 6/129  374 s  rss=0.78GiB
+2026-09-28 19:25:50,747 - INFO -   null seed 2044 (44/100): FP so far 6/132  382 s  rss=0.78GiB
+2026-09-28 19:25:58,789 - INFO -   null seed 2045 (45/100): FP so far 6/135  390 s  rss=0.78GiB
+2026-09-28 19:26:06,970 - INFO -   null seed 2046 (46/100): FP so far 6/138  399 s  rss=0.78GiB
+2026-09-28 19:26:14,987 - INFO -   null seed 2047 (47/100): FP so far 6/141  407 s  rss=0.78GiB
+2026-09-28 19:26:22,907 - INFO -   null seed 2048 (48/100): FP so far 6/144  415 s  rss=0.78GiB
+2026-09-28 19:26:30,688 - INFO -   null seed 2049 (49/100): FP so far 6/147  422 s  rss=0.78GiB
+2026-09-28 19:26:38,384 - INFO -   null seed 2050 (50/100): FP so far 6/150  430 s  rss=0.78GiB
+2026-09-28 19:26:46,032 - INFO -   null seed 2051 (51/100): FP so far 6/153  438 s  rss=0.78GiB
+2026-09-28 19:26:53,763 - INFO -   null seed 2052 (52/100): FP so far 6/156  445 s  rss=0.78GiB
+2026-09-28 19:27:01,763 - INFO -   null seed 2053 (53/100): FP so far 6/159  453 s  rss=0.78GiB
+2026-09-28 19:27:09,620 - INFO -   null seed 2054 (54/100): FP so far 7/162  461 s  rss=0.78GiB
+2026-09-28 19:27:17,834 - INFO -   null seed 2055 (55/100): FP so far 7/165  470 s  rss=0.78GiB
+2026-09-28 19:27:25,903 - INFO -   null seed 2056 (56/100): FP so far 9/168  478 s  rss=0.78GiB
+2026-09-28 19:27:33,524 - INFO -   null seed 2057 (57/100): FP so far 9/171  485 s  rss=0.78GiB
+2026-09-28 19:27:42,166 - INFO -   null seed 2058 (58/100): FP so far 9/174  494 s  rss=0.78GiB
+2026-09-28 19:27:50,751 - INFO -   null seed 2059 (59/100): FP so far 9/177  502 s  rss=0.78GiB
+2026-09-28 19:27:59,386 - INFO -   null seed 2060 (60/100): FP so far 9/180  511 s  rss=0.78GiB
+2026-09-28 19:28:07,870 - INFO -   null seed 2061 (61/100): FP so far 9/183  520 s  rss=0.78GiB
+2026-09-28 19:28:15,931 - INFO -   null seed 2062 (62/100): FP so far 9/186  528 s  rss=0.78GiB
+2026-09-28 19:28:23,951 - INFO -   null seed 2063 (63/100): FP so far 9/189  536 s  rss=0.78GiB
+2026-09-28 19:28:32,199 - INFO -   null seed 2064 (64/100): FP so far 9/192  544 s  rss=0.78GiB
+2026-09-28 19:28:40,759 - INFO -   null seed 2065 (65/100): FP so far 9/195  552 s  rss=0.78GiB
+2026-09-28 19:28:49,066 - INFO -   null seed 2066 (66/100): FP so far 9/198  561 s  rss=0.78GiB
+2026-09-28 19:28:58,466 - INFO -   null seed 2067 (67/100): FP so far 9/201  570 s  rss=0.78GiB
+2026-09-28 19:29:07,740 - INFO -   null seed 2068 (68/100): FP so far 9/204  579 s  rss=0.78GiB
+2026-09-28 19:29:16,052 - INFO -   null seed 2069 (69/100): FP so far 9/207  588 s  rss=0.78GiB
+2026-09-28 19:29:24,721 - INFO -   null seed 2070 (70/100): FP so far 9/210  596 s  rss=0.78GiB
+2026-09-28 19:29:33,245 - INFO -   null seed 2071 (71/100): FP so far 9/213  605 s  rss=0.78GiB
+2026-09-28 19:29:41,309 - INFO -   null seed 2072 (72/100): FP so far 9/216  613 s  rss=0.78GiB
+2026-09-28 19:29:49,404 - INFO -   null seed 2073 (73/100): FP so far 9/219  621 s  rss=0.78GiB
+2026-09-28 19:29:57,511 - INFO -   null seed 2074 (74/100): FP so far 10/222  629 s  rss=0.78GiB
+2026-09-28 19:30:07,342 - INFO -   null seed 2075 (75/100): FP so far 10/225  639 s  rss=0.78GiB
+2026-09-28 19:30:15,712 - INFO -   null seed 2076 (76/100): FP so far 10/228  647 s  rss=0.78GiB
+2026-09-28 19:30:23,761 - INFO -   null seed 2077 (77/100): FP so far 10/231  655 s  rss=0.78GiB
+2026-09-28 19:30:32,046 - INFO -   null seed 2078 (78/100): FP so far 10/234  664 s  rss=0.78GiB
+2026-09-28 19:30:40,384 - INFO -   null seed 2079 (79/100): FP so far 10/237  672 s  rss=0.78GiB
+2026-09-28 19:30:48,499 - INFO -   null seed 2080 (80/100): FP so far 10/240  680 s  rss=0.78GiB
+2026-09-28 19:30:56,536 - INFO -   null seed 2081 (81/100): FP so far 10/243  688 s  rss=0.78GiB
+2026-09-28 19:31:04,670 - INFO -   null seed 2082 (82/100): FP so far 11/246  696 s  rss=0.78GiB
+2026-09-28 19:31:13,204 - INFO -   null seed 2083 (83/100): FP so far 11/249  705 s  rss=0.78GiB
+2026-09-28 19:31:21,168 - INFO -   null seed 2084 (84/100): FP so far 11/252  713 s  rss=0.78GiB
+2026-09-28 19:31:29,004 - INFO -   null seed 2085 (85/100): FP so far 11/255  721 s  rss=0.78GiB
+2026-09-28 19:31:36,526 - INFO -   null seed 2086 (86/100): FP so far 11/258  728 s  rss=0.78GiB
+2026-09-28 19:31:44,101 - INFO -   null seed 2087 (87/100): FP so far 11/261  736 s  rss=0.78GiB
+2026-09-28 19:31:51,733 - INFO -   null seed 2088 (88/100): FP so far 11/264  743 s  rss=0.78GiB
+2026-09-28 19:31:59,773 - INFO -   null seed 2089 (89/100): FP so far 11/267  751 s  rss=0.78GiB
+2026-09-28 19:32:08,991 - INFO -   null seed 2090 (90/100): FP so far 11/270  761 s  rss=0.78GiB
+2026-09-28 19:32:17,061 - INFO -   null seed 2091 (91/100): FP so far 11/273  769 s  rss=0.78GiB
+2026-09-28 19:32:25,163 - INFO -   null seed 2092 (92/100): FP so far 11/276  777 s  rss=0.78GiB
+2026-09-28 19:32:33,232 - INFO -   null seed 2093 (93/100): FP so far 11/279  785 s  rss=0.78GiB
+2026-09-28 19:32:40,940 - INFO -   null seed 2094 (94/100): FP so far 11/282  793 s  rss=0.78GiB
+2026-09-28 19:32:48,709 - INFO -   null seed 2095 (95/100): FP so far 11/285  800 s  rss=0.78GiB
+2026-09-28 19:32:56,791 - INFO -   null seed 2096 (96/100): FP so far 11/288  808 s  rss=0.78GiB
+2026-09-28 19:33:04,631 - INFO -   null seed 2097 (97/100): FP so far 11/291  816 s  rss=0.78GiB
+2026-09-28 19:33:12,588 - INFO -   null seed 2098 (98/100): FP so far 11/294  824 s  rss=0.78GiB
+2026-09-28 19:33:20,568 - INFO -   null seed 2099 (99/100): FP so far 11/297  832 s  rss=0.78GiB
+2026-09-28 19:33:28,692 - INFO -   null seed 2100 (100/100): FP so far 11/300  840 s  rss=0.78GiB
+2026-09-28 19:33:28,790 - INFO - null-calibration fits written to docs/demos/results/2026-09-28_t2_twin_adopted_repoint/t1_gate_family_null_nullfits.csv
+PASS: recovery of the planted channel effects on adopted in 3/3 brands, null calibration FP 11/300, SE/empSD 1.15 (gate: |ATE-planted| <= 0.06 8/8 incl. the null, Spearman >= 0.8, focus channels' CI excludes 0 in every brand, null FP rate <= 0.1 and SE/empirical SD >= 0.9 over fresh-seed redraws; coverage of the planted RD reported, not gated)
+  Remibrutinib   PASS  focus sig 4/4  covers 7/8  within_tol 8/8  max|err| 0.047  spearman 0.93  null ATE +0.047 CI (+0.008, +0.086) (ok)
+  Fabhalta       PASS  focus sig 4/4  covers 8/8  within_tol 8/8  max|err| 0.041  spearman 0.83  null ATE +0.006 CI (-0.035, +0.047) (ok)
+  Kisqali        PASS  focus sig 4/4  covers 8/8  within_tol 8/8  max|err| 0.031  spearman 0.90  null ATE -0.011 CI (-0.050, +0.028) (ok)
+  NOTE: Remibrutinib null CI excludes 0 in the realised draw (seed 427): ATE +0.047, CI (+0.008, +0.086); family FP rate 11/300
+  null calibration PASS: rep_training_score refit under 300/300 fresh-seed redraws (brands x seeds): FP rate 11/300 = 0.037 (Wilson 95% 0.021..0.064; gate <= 0.1), SE/empirical SD 1.15 (gate >= 0.9), live-seed reproduction 1.0000
+    Remibrutinib   n=100 FP 3 mean ATE +0.0009 mean SE 0.0196 empirical SD 0.0179 ratio 1.09
+    Fabhalta       n=100 FP 4 mean ATE +0.0099 mean SE 0.0204 empirical SD 0.0166 ratio 1.23
+    Kisqali        n=100 FP 4 mean ATE +0.0079 mean SE 0.0194 empirical SD 0.0173 ratio 1.12
+  peak RSS 0.78 GiB; 24 gate fits 62 s, 300 null-calibration fits 790 s (K = 100 seeds)
+
+real	15m36.761s
+user	15m10.701s
+sys	0m5.174s
+exit 0
