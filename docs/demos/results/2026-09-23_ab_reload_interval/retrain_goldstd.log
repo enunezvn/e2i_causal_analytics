@@ -1,0 +1,722 @@
+=== goldstd retrain start 2026-09-23T20:07:34+00:00 (9 patient slots) ===
+INFO Creating async Supabase client for: http://172.17.0.1:54321 (using service_role key)
+INFO === Starting slot: cohort=initiation brand=Remibrutinib target=initiation_remibrutinib ===
+INFO [initiation_remibrutinib] Loaded full frame: 8920 rows, 1111 months.
+INFO [initiation_remibrutinib] Trained champion on 7145 train+val rows (25 encoded features).
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+INFO [initiation_remibrutinib] Holdout headline: n=1775 auc_roc=0.8453
+INFO [initiation_remibrutinib] Re-run cleanup: cleared 298 dependent metric row(s) for prior model_id='2db8b0e0-1d9e-4e18-bf7a-576a4796610d' before re-registering.
+INFO Registered staging model initiation_remibrutinib_goldstd_lr_v1 (auc=0.8453)
+INFO [initiation_remibrutinib] Registered champion handle='initiation_remibrutinib_goldstd_lr_v1' (staging).
+INFO WalkForwardRunner: SKIP month=2023-07-01 (train guard: train_n=0 < min_train_n=50)
+INFO WalkForwardRunner: SKIP month=2023-08-01 (train guard: train_n=26 < min_train_n=50)
+INFO WalkForwardRunner: month=2023-09-01 train_n=118 n_eval=94 pos_rate=0.319 auc_roc=0.8505
+INFO WalkForwardRunner: month=2023-10-01 train_n=212 n_eval=111 pos_rate=0.405 auc_roc=0.8347
+INFO WalkForwardRunner: month=2023-11-01 train_n=323 n_eval=92 pos_rate=0.326 auc_roc=0.8522
+INFO WalkForwardRunner: month=2023-12-01 train_n=415 n_eval=90 pos_rate=0.333 auc_roc=0.8206
+INFO WalkForwardRunner: month=2024-01-01 train_n=505 n_eval=98 pos_rate=0.316 auc_roc=0.8662
+INFO WalkForwardRunner: month=2024-02-01 train_n=603 n_eval=105 pos_rate=0.324 auc_roc=0.8248
+INFO WalkForwardRunner: month=2024-03-01 train_n=708 n_eval=78 pos_rate=0.410 auc_roc=0.8057
+INFO WalkForwardRunner: month=2024-04-01 train_n=786 n_eval=86 pos_rate=0.360 auc_roc=0.8328
+INFO WalkForwardRunner: month=2024-05-01 train_n=872 n_eval=92 pos_rate=0.348 auc_roc=0.8432
+INFO WalkForwardRunner: month=2024-06-01 train_n=964 n_eval=115 pos_rate=0.270 auc_roc=0.8771
+INFO WalkForwardRunner: month=2024-07-01 train_n=1079 n_eval=116 pos_rate=0.267 auc_roc=0.7928
+INFO WalkForwardRunner: month=2024-08-01 train_n=1195 n_eval=93 pos_rate=0.398 auc_roc=0.9242
+INFO WalkForwardRunner: month=2024-09-01 train_n=1288 n_eval=79 pos_rate=0.456 auc_roc=0.9141
+INFO WalkForwardRunner: month=2024-10-01 train_n=1367 n_eval=92 pos_rate=0.446 auc_roc=0.8302
+INFO WalkForwardRunner: month=2024-11-01 train_n=1459 n_eval=74 pos_rate=0.311 auc_roc=0.9344
+INFO WalkForwardRunner: month=2024-12-01 train_n=1533 n_eval=101 pos_rate=0.426 auc_roc=0.8970
+INFO WalkForwardRunner: month=2025-01-01 train_n=1634 n_eval=101 pos_rate=0.297 auc_roc=0.8798
+INFO WalkForwardRunner: month=2025-02-01 train_n=1735 n_eval=89 pos_rate=0.326 auc_roc=0.8874
+INFO WalkForwardRunner: month=2025-03-01 train_n=1824 n_eval=103 pos_rate=0.369 auc_roc=0.8470
+INFO WalkForwardRunner: month=2025-04-01 train_n=1927 n_eval=96 pos_rate=0.292 auc_roc=0.8377
+INFO WalkForwardRunner: month=2025-05-01 train_n=2023 n_eval=111 pos_rate=0.315 auc_roc=0.7729
+INFO WalkForwardRunner: month=2025-06-01 train_n=2134 n_eval=85 pos_rate=0.482 auc_roc=0.8043
+INFO WalkForwardRunner: month=2025-07-01 train_n=2219 n_eval=88 pos_rate=0.341 auc_roc=0.8345
+INFO WalkForwardRunner: month=2025-08-01 train_n=2307 n_eval=101 pos_rate=0.277 auc_roc=0.7221
+INFO WalkForwardRunner: month=2025-09-01 train_n=2408 n_eval=111 pos_rate=0.405 auc_roc=0.7990
+INFO WalkForwardRunner: month=2025-10-01 train_n=2519 n_eval=105 pos_rate=0.381 auc_roc=0.8327
+INFO WalkForwardRunner: month=2025-11-01 train_n=2624 n_eval=95 pos_rate=0.326 auc_roc=0.8241
+INFO WalkForwardRunner: month=2025-12-01 train_n=2719 n_eval=110 pos_rate=0.300 auc_roc=0.8245
+INFO WalkForwardRunner: month=2026-01-01 train_n=2829 n_eval=102 pos_rate=0.333 auc_roc=0.8473
+INFO WalkForwardRunner: month=2026-02-01 train_n=2931 n_eval=79 pos_rate=0.405 auc_roc=0.8085
+INFO WalkForwardRunner: month=2026-03-01 train_n=3010 n_eval=74 pos_rate=0.419 auc_roc=0.8492
+INFO WalkForwardRunner: month=2026-04-01 train_n=3084 n_eval=111 pos_rate=0.396 auc_roc=0.8565
+INFO WalkForwardRunner: month=2026-05-01 train_n=3195 n_eval=102 pos_rate=0.343 auc_roc=0.8273
+INFO WalkForwardRunner: month=2026-06-01 train_n=3297 n_eval=1696 pos_rate=0.353 auc_roc=0.8225
+INFO WalkForwardRunner: month=2026-07-01 train_n=4993 n_eval=3524 pos_rate=0.347 auc_roc=0.8318
+INFO WalkForwardRunner: month=2026-08-01 train_n=8517 n_eval=238 pos_rate=0.345 auc_roc=0.8372
+INFO WalkForwardRunner: SKIP month=2026-09-01 (open month: calendar month not complete as of 2026-09-23 (n_eval so far=165))
+INFO WalkForwardRunner.run: emitted 36 point(s), skipped 3 month(s) (mode=expanding, min_train_n=50, n_min=20).
+INFO [initiation_remibrutinib] Walk-forward emitted 36 point(s); skipped 3.
+INFO MetricRecorder: deleted 0 prior row(s) for model_id='2db8b0e0-1d9e-4e18-bf7a-576a4796610d' source='backtest_wf' split_version=None
+INFO MetricRecorder: deleted 0 prior row(s) for model_id='2db8b0e0-1d9e-4e18-bf7a-576a4796610d' source='holdout' split_version=None
+INFO === Done slot: cohort=initiation brand=Remibrutinib holdout_auc=0.8453 backtest_points=36 ===
+INFO === Starting slot: cohort=initiation brand=Fabhalta target=initiation_fabhalta ===
+INFO [initiation_fabhalta] Loaded full frame: 9025 rows, 1120 months.
+INFO [initiation_fabhalta] Trained champion on 7201 train+val rows (25 encoded features).
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+INFO [initiation_fabhalta] Holdout headline: n=1824 auc_roc=0.8453
+INFO [initiation_fabhalta] Re-run cleanup: cleared 298 dependent metric row(s) for prior model_id='a11a50e2-42ed-4233-8711-bbdf233d3a0d' before re-registering.
+INFO Registered staging model initiation_fabhalta_goldstd_lr_v1 (auc=0.8453)
+INFO [initiation_fabhalta] Registered champion handle='initiation_fabhalta_goldstd_lr_v1' (staging).
+INFO WalkForwardRunner: SKIP month=2023-07-01 (train guard: train_n=0 < min_train_n=50)
+INFO WalkForwardRunner: SKIP month=2023-08-01 (train guard: train_n=32 < min_train_n=50)
+INFO WalkForwardRunner: month=2023-09-01 train_n=132 n_eval=90 pos_rate=0.389 auc_roc=0.7901
+INFO WalkForwardRunner: month=2023-10-01 train_n=222 n_eval=80 pos_rate=0.388 auc_roc=0.9026
+INFO WalkForwardRunner: month=2023-11-01 train_n=302 n_eval=103 pos_rate=0.330 auc_roc=0.8581
+INFO WalkForwardRunner: month=2023-12-01 train_n=405 n_eval=85 pos_rate=0.412 auc_roc=0.8589
+INFO WalkForwardRunner: month=2024-01-01 train_n=490 n_eval=104 pos_rate=0.365 auc_roc=0.8884
+INFO WalkForwardRunner: month=2024-02-01 train_n=594 n_eval=104 pos_rate=0.385 auc_roc=0.8051
+INFO WalkForwardRunner: month=2024-03-01 train_n=698 n_eval=104 pos_rate=0.260 auc_roc=0.8278
+INFO WalkForwardRunner: month=2024-04-01 train_n=802 n_eval=82 pos_rate=0.232 auc_roc=0.8338
+INFO WalkForwardRunner: month=2024-05-01 train_n=884 n_eval=97 pos_rate=0.320 auc_roc=0.8348
+INFO WalkForwardRunner: month=2024-06-01 train_n=981 n_eval=105 pos_rate=0.324 auc_roc=0.8355
+INFO WalkForwardRunner: month=2024-07-01 train_n=1086 n_eval=85 pos_rate=0.388 auc_roc=0.8491
+INFO WalkForwardRunner: month=2024-08-01 train_n=1171 n_eval=95 pos_rate=0.316 auc_roc=0.7605
+INFO WalkForwardRunner: month=2024-09-01 train_n=1266 n_eval=104 pos_rate=0.346 auc_roc=0.8456
+INFO WalkForwardRunner: month=2024-10-01 train_n=1370 n_eval=106 pos_rate=0.283 auc_roc=0.8561
+INFO WalkForwardRunner: month=2024-11-01 train_n=1476 n_eval=81 pos_rate=0.358 auc_roc=0.8561
+INFO WalkForwardRunner: month=2024-12-01 train_n=1557 n_eval=119 pos_rate=0.353 auc_roc=0.7786
+INFO WalkForwardRunner: month=2025-01-01 train_n=1676 n_eval=77 pos_rate=0.312 auc_roc=0.7555
+INFO WalkForwardRunner: month=2025-02-01 train_n=1753 n_eval=85 pos_rate=0.329 auc_roc=0.8214
+INFO WalkForwardRunner: month=2025-03-01 train_n=1838 n_eval=105 pos_rate=0.295 auc_roc=0.8235
+INFO WalkForwardRunner: month=2025-04-01 train_n=1943 n_eval=92 pos_rate=0.337 auc_roc=0.8916
+INFO WalkForwardRunner: month=2025-05-01 train_n=2035 n_eval=99 pos_rate=0.455 auc_roc=0.8634
+INFO WalkForwardRunner: month=2025-06-01 train_n=2134 n_eval=93 pos_rate=0.387 auc_roc=0.8309
+INFO WalkForwardRunner: month=2025-07-01 train_n=2227 n_eval=97 pos_rate=0.320 auc_roc=0.8436
+INFO WalkForwardRunner: month=2025-08-01 train_n=2324 n_eval=104 pos_rate=0.327 auc_roc=0.8643
+INFO WalkForwardRunner: month=2025-09-01 train_n=2428 n_eval=99 pos_rate=0.374 auc_roc=0.8858
+INFO WalkForwardRunner: month=2025-10-01 train_n=2527 n_eval=88 pos_rate=0.352 auc_roc=0.8115
+INFO WalkForwardRunner: month=2025-11-01 train_n=2615 n_eval=95 pos_rate=0.263 auc_roc=0.8549
+INFO WalkForwardRunner: month=2025-12-01 train_n=2710 n_eval=98 pos_rate=0.398 auc_roc=0.7558
+INFO WalkForwardRunner: month=2026-01-01 train_n=2808 n_eval=83 pos_rate=0.289 auc_roc=0.8863
+INFO WalkForwardRunner: month=2026-02-01 train_n=2891 n_eval=81 pos_rate=0.284 auc_roc=0.8958
+INFO WalkForwardRunner: month=2026-03-01 train_n=2972 n_eval=103 pos_rate=0.311 auc_roc=0.8785
+INFO WalkForwardRunner: month=2026-04-01 train_n=3075 n_eval=109 pos_rate=0.303 auc_roc=0.8581
+INFO WalkForwardRunner: month=2026-05-01 train_n=3184 n_eval=80 pos_rate=0.338 auc_roc=0.7918
+INFO WalkForwardRunner: month=2026-06-01 train_n=3264 n_eval=1696 pos_rate=0.335 auc_roc=0.8337
+INFO WalkForwardRunner: month=2026-07-01 train_n=4960 n_eval=3671 pos_rate=0.351 auc_roc=0.8456
+INFO WalkForwardRunner: month=2026-08-01 train_n=8631 n_eval=234 pos_rate=0.368 auc_roc=0.8765
+INFO WalkForwardRunner: SKIP month=2026-09-01 (open month: calendar month not complete as of 2026-09-23 (n_eval so far=160))
+INFO WalkForwardRunner.run: emitted 36 point(s), skipped 3 month(s) (mode=expanding, min_train_n=50, n_min=20).
+INFO [initiation_fabhalta] Walk-forward emitted 36 point(s); skipped 3.
+INFO MetricRecorder: deleted 0 prior row(s) for model_id='a11a50e2-42ed-4233-8711-bbdf233d3a0d' source='backtest_wf' split_version=None
+INFO MetricRecorder: deleted 0 prior row(s) for model_id='a11a50e2-42ed-4233-8711-bbdf233d3a0d' source='holdout' split_version=None
+INFO === Done slot: cohort=initiation brand=Fabhalta holdout_auc=0.8453 backtest_points=36 ===
+INFO === Starting slot: cohort=initiation brand=Kisqali target=initiation_kisqali ===
+INFO [initiation_kisqali] Loaded full frame: 8838 rows, 1104 months.
+INFO [initiation_kisqali] Trained champion on 7085 train+val rows (25 encoded features).
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+INFO [initiation_kisqali] Holdout headline: n=1753 auc_roc=0.8505
+INFO [initiation_kisqali] Re-run cleanup: cleared 298 dependent metric row(s) for prior model_id='4ec55d13-46c8-4df4-9ec8-7723fad67fb3' before re-registering.
+INFO Registered staging model initiation_kisqali_goldstd_lr_v1 (auc=0.8505)
+INFO [initiation_kisqali] Registered champion handle='initiation_kisqali_goldstd_lr_v1' (staging).
+INFO WalkForwardRunner: SKIP month=2023-07-01 (train guard: train_n=0 < min_train_n=50)
+INFO WalkForwardRunner: SKIP month=2023-08-01 (train guard: train_n=32 < min_train_n=50)
+INFO WalkForwardRunner: month=2023-09-01 train_n=153 n_eval=69 pos_rate=0.406 auc_roc=0.7909
+INFO WalkForwardRunner: month=2023-10-01 train_n=222 n_eval=89 pos_rate=0.303 auc_roc=0.8292
+INFO WalkForwardRunner: month=2023-11-01 train_n=311 n_eval=86 pos_rate=0.326 auc_roc=0.8861
+INFO WalkForwardRunner: month=2023-12-01 train_n=397 n_eval=71 pos_rate=0.352 auc_roc=0.8017
+INFO WalkForwardRunner: month=2024-01-01 train_n=468 n_eval=93 pos_rate=0.323 auc_roc=0.8905
+INFO WalkForwardRunner: month=2024-02-01 train_n=561 n_eval=90 pos_rate=0.344 auc_roc=0.8229
+INFO WalkForwardRunner: month=2024-03-01 train_n=651 n_eval=111 pos_rate=0.369 auc_roc=0.8753
+INFO WalkForwardRunner: month=2024-04-01 train_n=762 n_eval=93 pos_rate=0.366 auc_roc=0.9377
+INFO WalkForwardRunner: month=2024-05-01 train_n=855 n_eval=80 pos_rate=0.325 auc_roc=0.8953
+INFO WalkForwardRunner: month=2024-06-01 train_n=935 n_eval=92 pos_rate=0.348 auc_roc=0.8083
+INFO WalkForwardRunner: month=2024-07-01 train_n=1027 n_eval=74 pos_rate=0.311 auc_roc=0.8440
+INFO WalkForwardRunner: month=2024-08-01 train_n=1101 n_eval=105 pos_rate=0.343 auc_roc=0.9147
+INFO WalkForwardRunner: month=2024-09-01 train_n=1206 n_eval=103 pos_rate=0.301 auc_roc=0.7702
+INFO WalkForwardRunner: month=2024-10-01 train_n=1309 n_eval=85 pos_rate=0.329 auc_roc=0.9079
+INFO WalkForwardRunner: month=2024-11-01 train_n=1394 n_eval=90 pos_rate=0.367 auc_roc=0.8182
+INFO WalkForwardRunner: month=2024-12-01 train_n=1484 n_eval=103 pos_rate=0.369 auc_roc=0.8818
+INFO WalkForwardRunner: month=2025-01-01 train_n=1587 n_eval=114 pos_rate=0.342 auc_roc=0.8513
+INFO WalkForwardRunner: month=2025-02-01 train_n=1701 n_eval=90 pos_rate=0.278 auc_roc=0.8449
+INFO WalkForwardRunner: month=2025-03-01 train_n=1791 n_eval=91 pos_rate=0.418 auc_roc=0.8396
+INFO WalkForwardRunner: month=2025-04-01 train_n=1882 n_eval=89 pos_rate=0.315 auc_roc=0.9174
+INFO WalkForwardRunner: month=2025-05-01 train_n=1971 n_eval=93 pos_rate=0.290 auc_roc=0.8395
+INFO WalkForwardRunner: month=2025-06-01 train_n=2064 n_eval=113 pos_rate=0.354 auc_roc=0.8712
+INFO WalkForwardRunner: month=2025-07-01 train_n=2177 n_eval=100 pos_rate=0.360 auc_roc=0.8411
+INFO WalkForwardRunner: month=2025-08-01 train_n=2277 n_eval=87 pos_rate=0.391 auc_roc=0.8330
+INFO WalkForwardRunner: month=2025-09-01 train_n=2364 n_eval=98 pos_rate=0.378 auc_roc=0.8644
+INFO WalkForwardRunner: month=2025-10-01 train_n=2462 n_eval=101 pos_rate=0.337 auc_roc=0.8306
+INFO WalkForwardRunner: month=2025-11-01 train_n=2563 n_eval=90 pos_rate=0.544 auc_roc=0.8442
+INFO WalkForwardRunner: month=2025-12-01 train_n=2653 n_eval=99 pos_rate=0.343 auc_roc=0.8330
+INFO WalkForwardRunner: month=2026-01-01 train_n=2752 n_eval=96 pos_rate=0.385 auc_roc=0.8850
+INFO WalkForwardRunner: month=2026-02-01 train_n=2848 n_eval=80 pos_rate=0.312 auc_roc=0.7731
+INFO WalkForwardRunner: month=2026-03-01 train_n=2928 n_eval=100 pos_rate=0.300 auc_roc=0.8105
+INFO WalkForwardRunner: month=2026-04-01 train_n=3028 n_eval=81 pos_rate=0.407 auc_roc=0.8396
+INFO WalkForwardRunner: month=2026-05-01 train_n=3109 n_eval=93 pos_rate=0.312 auc_roc=0.8642
+INFO WalkForwardRunner: month=2026-06-01 train_n=3202 n_eval=1698 pos_rate=0.342 auc_roc=0.8417
+INFO WalkForwardRunner: month=2026-07-01 train_n=4900 n_eval=3544 pos_rate=0.339 auc_roc=0.8417
+INFO WalkForwardRunner: month=2026-08-01 train_n=8444 n_eval=238 pos_rate=0.395 auc_roc=0.7929
+INFO WalkForwardRunner: SKIP month=2026-09-01 (open month: calendar month not complete as of 2026-09-23 (n_eval so far=156))
+INFO WalkForwardRunner.run: emitted 36 point(s), skipped 3 month(s) (mode=expanding, min_train_n=50, n_min=20).
+INFO [initiation_kisqali] Walk-forward emitted 36 point(s); skipped 3.
+INFO MetricRecorder: deleted 0 prior row(s) for model_id='4ec55d13-46c8-4df4-9ec8-7723fad67fb3' source='backtest_wf' split_version=None
+INFO MetricRecorder: deleted 0 prior row(s) for model_id='4ec55d13-46c8-4df4-9ec8-7723fad67fb3' source='holdout' split_version=None
+INFO === Done slot: cohort=initiation brand=Kisqali holdout_auc=0.8505 backtest_points=36 ===
+INFO === Starting slot: cohort=persistence brand=Remibrutinib target=persistence_remibrutinib ===
+INFO [persistence_remibrutinib] Loaded full frame: 8920 rows, 1111 months.
+INFO [persistence_remibrutinib] Trained champion on 7145 train+val rows (23 encoded features).
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+INFO [persistence_remibrutinib] Holdout headline: n=1775 auc_roc=0.7541
+INFO [persistence_remibrutinib] Re-run cleanup: cleared 298 dependent metric row(s) for prior model_id='64728d92-378a-407b-b670-4eb3337a63c1' before re-registering.
+INFO Registered staging model persistence_remibrutinib_goldstd_lr_v1 (auc=0.7541)
+INFO [persistence_remibrutinib] Registered champion handle='persistence_remibrutinib_goldstd_lr_v1' (staging).
+INFO WalkForwardRunner: SKIP month=2023-07-01 (train guard: train_n=0 < min_train_n=50)
+INFO WalkForwardRunner: SKIP month=2023-08-01 (train guard: train_n=26 < min_train_n=50)
+INFO WalkForwardRunner: month=2023-09-01 train_n=118 n_eval=94 pos_rate=0.596 auc_roc=0.7340
+INFO WalkForwardRunner: month=2023-10-01 train_n=212 n_eval=111 pos_rate=0.613 auc_roc=0.7633
+INFO WalkForwardRunner: month=2023-11-01 train_n=323 n_eval=92 pos_rate=0.663 auc_roc=0.7451
+INFO WalkForwardRunner: month=2023-12-01 train_n=415 n_eval=90 pos_rate=0.533 auc_roc=0.7118
+INFO WalkForwardRunner: month=2024-01-01 train_n=505 n_eval=98 pos_rate=0.633 auc_roc=0.8401
+INFO WalkForwardRunner: month=2024-02-01 train_n=603 n_eval=105 pos_rate=0.486 auc_roc=0.8696
+INFO WalkForwardRunner: month=2024-03-01 train_n=708 n_eval=78 pos_rate=0.551 auc_roc=0.8392
+INFO WalkForwardRunner: month=2024-04-01 train_n=786 n_eval=86 pos_rate=0.593 auc_roc=0.7031
+INFO WalkForwardRunner: month=2024-05-01 train_n=872 n_eval=92 pos_rate=0.565 auc_roc=0.8260
+INFO WalkForwardRunner: month=2024-06-01 train_n=964 n_eval=115 pos_rate=0.504 auc_roc=0.6918
+INFO WalkForwardRunner: month=2024-07-01 train_n=1079 n_eval=116 pos_rate=0.603 auc_roc=0.8245
+INFO WalkForwardRunner: month=2024-08-01 train_n=1195 n_eval=93 pos_rate=0.473 auc_roc=0.6943
+INFO WalkForwardRunner: month=2024-09-01 train_n=1288 n_eval=79 pos_rate=0.557 auc_roc=0.6662
+INFO WalkForwardRunner: month=2024-10-01 train_n=1367 n_eval=92 pos_rate=0.630 auc_roc=0.6699
+INFO WalkForwardRunner: month=2024-11-01 train_n=1459 n_eval=74 pos_rate=0.554 auc_roc=0.6851
+INFO WalkForwardRunner: month=2024-12-01 train_n=1533 n_eval=101 pos_rate=0.554 auc_roc=0.7421
+INFO WalkForwardRunner: month=2025-01-01 train_n=1634 n_eval=101 pos_rate=0.554 auc_roc=0.7813
+INFO WalkForwardRunner: month=2025-02-01 train_n=1735 n_eval=89 pos_rate=0.506 auc_roc=0.8167
+INFO WalkForwardRunner: month=2025-03-01 train_n=1824 n_eval=103 pos_rate=0.573 auc_roc=0.7504
+INFO WalkForwardRunner: month=2025-04-01 train_n=1927 n_eval=96 pos_rate=0.562 auc_roc=0.8355
+INFO WalkForwardRunner: month=2025-05-01 train_n=2023 n_eval=111 pos_rate=0.595 auc_roc=0.8121
+INFO WalkForwardRunner: month=2025-06-01 train_n=2134 n_eval=85 pos_rate=0.400 auc_roc=0.7999
+INFO WalkForwardRunner: month=2025-07-01 train_n=2219 n_eval=88 pos_rate=0.602 auc_roc=0.7795
+INFO WalkForwardRunner: month=2025-08-01 train_n=2307 n_eval=101 pos_rate=0.634 auc_roc=0.7808
+INFO WalkForwardRunner: month=2025-09-01 train_n=2408 n_eval=111 pos_rate=0.586 auc_roc=0.7458
+INFO WalkForwardRunner: month=2025-10-01 train_n=2519 n_eval=105 pos_rate=0.533 auc_roc=0.7150
+INFO WalkForwardRunner: month=2025-11-01 train_n=2624 n_eval=95 pos_rate=0.505 auc_roc=0.8444
+INFO WalkForwardRunner: month=2025-12-01 train_n=2719 n_eval=110 pos_rate=0.555 auc_roc=0.8254
+INFO WalkForwardRunner: month=2026-01-01 train_n=2829 n_eval=102 pos_rate=0.637 auc_roc=0.7655
+INFO WalkForwardRunner: month=2026-02-01 train_n=2931 n_eval=79 pos_rate=0.456 auc_roc=0.6641
+INFO WalkForwardRunner: month=2026-03-01 train_n=3010 n_eval=74 pos_rate=0.500 auc_roc=0.8232
+INFO WalkForwardRunner: month=2026-04-01 train_n=3084 n_eval=111 pos_rate=0.568 auc_roc=0.7642
+INFO WalkForwardRunner: month=2026-05-01 train_n=3195 n_eval=102 pos_rate=0.637 auc_roc=0.7626
+INFO WalkForwardRunner: month=2026-06-01 train_n=3297 n_eval=1696 pos_rate=0.571 auc_roc=0.7423
+INFO WalkForwardRunner: month=2026-07-01 train_n=4993 n_eval=3524 pos_rate=0.565 auc_roc=0.7514
+INFO WalkForwardRunner: month=2026-08-01 train_n=8517 n_eval=238 pos_rate=0.597 auc_roc=0.7551
+INFO WalkForwardRunner: SKIP month=2026-09-01 (open month: calendar month not complete as of 2026-09-23 (n_eval so far=165))
+INFO WalkForwardRunner.run: emitted 36 point(s), skipped 3 month(s) (mode=expanding, min_train_n=50, n_min=20).
+INFO [persistence_remibrutinib] Walk-forward emitted 36 point(s); skipped 3.
+INFO MetricRecorder: deleted 0 prior row(s) for model_id='64728d92-378a-407b-b670-4eb3337a63c1' source='backtest_wf' split_version=None
+INFO MetricRecorder: deleted 0 prior row(s) for model_id='64728d92-378a-407b-b670-4eb3337a63c1' source='holdout' split_version=None
+INFO === Done slot: cohort=persistence brand=Remibrutinib holdout_auc=0.7541 backtest_points=36 ===
+INFO === Starting slot: cohort=persistence brand=Fabhalta target=persistence_fabhalta ===
+INFO [persistence_fabhalta] Loaded full frame: 9025 rows, 1120 months.
+INFO [persistence_fabhalta] Trained champion on 7201 train+val rows (23 encoded features).
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+INFO [persistence_fabhalta] Holdout headline: n=1824 auc_roc=0.7743
+INFO [persistence_fabhalta] Re-run cleanup: cleared 298 dependent metric row(s) for prior model_id='3f5011b5-b16a-4ee7-afd8-4be9862e15d4' before re-registering.
+INFO Registered staging model persistence_fabhalta_goldstd_lr_v1 (auc=0.7743)
+INFO [persistence_fabhalta] Registered champion handle='persistence_fabhalta_goldstd_lr_v1' (staging).
+INFO WalkForwardRunner: SKIP month=2023-07-01 (train guard: train_n=0 < min_train_n=50)
+INFO WalkForwardRunner: SKIP month=2023-08-01 (train guard: train_n=32 < min_train_n=50)
+INFO WalkForwardRunner: month=2023-09-01 train_n=132 n_eval=90 pos_rate=0.556 auc_roc=0.8315
+INFO WalkForwardRunner: month=2023-10-01 train_n=222 n_eval=80 pos_rate=0.588 auc_roc=0.6609
+INFO WalkForwardRunner: month=2023-11-01 train_n=302 n_eval=103 pos_rate=0.573 auc_roc=0.7847
+INFO WalkForwardRunner: month=2023-12-01 train_n=405 n_eval=85 pos_rate=0.553 auc_roc=0.7402
+INFO WalkForwardRunner: month=2024-01-01 train_n=490 n_eval=104 pos_rate=0.635 auc_roc=0.7652
+INFO WalkForwardRunner: month=2024-02-01 train_n=594 n_eval=104 pos_rate=0.538 auc_roc=0.7671
+INFO WalkForwardRunner: month=2024-03-01 train_n=698 n_eval=104 pos_rate=0.500 auc_roc=0.7056
+INFO WalkForwardRunner: month=2024-04-01 train_n=802 n_eval=82 pos_rate=0.537 auc_roc=0.7434
+INFO WalkForwardRunner: month=2024-05-01 train_n=884 n_eval=97 pos_rate=0.536 auc_roc=0.7842
+INFO WalkForwardRunner: month=2024-06-01 train_n=981 n_eval=105 pos_rate=0.590 auc_roc=0.7404
+INFO WalkForwardRunner: month=2024-07-01 train_n=1086 n_eval=85 pos_rate=0.482 auc_roc=0.8548
+INFO WalkForwardRunner: month=2024-08-01 train_n=1171 n_eval=95 pos_rate=0.653 auc_roc=0.6769
+INFO WalkForwardRunner: month=2024-09-01 train_n=1266 n_eval=104 pos_rate=0.596 auc_roc=0.8153
+INFO WalkForwardRunner: month=2024-10-01 train_n=1370 n_eval=106 pos_rate=0.519 auc_roc=0.7879
+INFO WalkForwardRunner: month=2024-11-01 train_n=1476 n_eval=81 pos_rate=0.605 auc_roc=0.7073
+INFO WalkForwardRunner: month=2024-12-01 train_n=1557 n_eval=119 pos_rate=0.538 auc_roc=0.7599
+INFO WalkForwardRunner: month=2025-01-01 train_n=1676 n_eval=77 pos_rate=0.519 auc_roc=0.7027
+INFO WalkForwardRunner: month=2025-02-01 train_n=1753 n_eval=85 pos_rate=0.518 auc_roc=0.7251
+INFO WalkForwardRunner: month=2025-03-01 train_n=1838 n_eval=105 pos_rate=0.524 auc_roc=0.7764
+INFO WalkForwardRunner: month=2025-04-01 train_n=1943 n_eval=92 pos_rate=0.565 auc_roc=0.7322
+INFO WalkForwardRunner: month=2025-05-01 train_n=2035 n_eval=99 pos_rate=0.525 auc_roc=0.7729
+INFO WalkForwardRunner: month=2025-06-01 train_n=2134 n_eval=93 pos_rate=0.624 auc_roc=0.7271
+INFO WalkForwardRunner: month=2025-07-01 train_n=2227 n_eval=97 pos_rate=0.546 auc_roc=0.7646
+INFO WalkForwardRunner: month=2025-08-01 train_n=2324 n_eval=104 pos_rate=0.519 auc_roc=0.7796
+INFO WalkForwardRunner: month=2025-09-01 train_n=2428 n_eval=99 pos_rate=0.576 auc_roc=0.7761
+INFO WalkForwardRunner: month=2025-10-01 train_n=2527 n_eval=88 pos_rate=0.568 auc_roc=0.6726
+INFO WalkForwardRunner: month=2025-11-01 train_n=2615 n_eval=95 pos_rate=0.579 auc_roc=0.8114
+INFO WalkForwardRunner: month=2025-12-01 train_n=2710 n_eval=98 pos_rate=0.531 auc_roc=0.7312
+INFO WalkForwardRunner: month=2026-01-01 train_n=2808 n_eval=83 pos_rate=0.578 auc_roc=0.6958
+INFO WalkForwardRunner: month=2026-02-01 train_n=2891 n_eval=81 pos_rate=0.556 auc_roc=0.8019
+INFO WalkForwardRunner: month=2026-03-01 train_n=2972 n_eval=103 pos_rate=0.534 auc_roc=0.8989
+INFO WalkForwardRunner: month=2026-04-01 train_n=3075 n_eval=109 pos_rate=0.560 auc_roc=0.7698
+INFO WalkForwardRunner: month=2026-05-01 train_n=3184 n_eval=80 pos_rate=0.487 auc_roc=0.7448
+INFO WalkForwardRunner: month=2026-06-01 train_n=3264 n_eval=1696 pos_rate=0.555 auc_roc=0.7902
+INFO WalkForwardRunner: month=2026-07-01 train_n=4960 n_eval=3671 pos_rate=0.563 auc_roc=0.7764
+INFO WalkForwardRunner: month=2026-08-01 train_n=8631 n_eval=234 pos_rate=0.543 auc_roc=0.7840
+INFO WalkForwardRunner: SKIP month=2026-09-01 (open month: calendar month not complete as of 2026-09-23 (n_eval so far=160))
+INFO WalkForwardRunner.run: emitted 36 point(s), skipped 3 month(s) (mode=expanding, min_train_n=50, n_min=20).
+INFO [persistence_fabhalta] Walk-forward emitted 36 point(s); skipped 3.
+INFO MetricRecorder: deleted 0 prior row(s) for model_id='3f5011b5-b16a-4ee7-afd8-4be9862e15d4' source='backtest_wf' split_version=None
+INFO MetricRecorder: deleted 0 prior row(s) for model_id='3f5011b5-b16a-4ee7-afd8-4be9862e15d4' source='holdout' split_version=None
+INFO === Done slot: cohort=persistence brand=Fabhalta holdout_auc=0.7743 backtest_points=36 ===
+INFO === Starting slot: cohort=persistence brand=Kisqali target=persistence_kisqali ===
+INFO [persistence_kisqali] Loaded full frame: 8838 rows, 1104 months.
+INFO [persistence_kisqali] Trained champion on 7085 train+val rows (23 encoded features).
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+INFO [persistence_kisqali] Holdout headline: n=1753 auc_roc=0.7750
+INFO [persistence_kisqali] Re-run cleanup: cleared 298 dependent metric row(s) for prior model_id='d3a926ac-e24a-4847-ac15-152d2983e466' before re-registering.
+INFO Registered staging model persistence_kisqali_goldstd_lr_v1 (auc=0.7750)
+INFO [persistence_kisqali] Registered champion handle='persistence_kisqali_goldstd_lr_v1' (staging).
+INFO WalkForwardRunner: SKIP month=2023-07-01 (train guard: train_n=0 < min_train_n=50)
+INFO WalkForwardRunner: SKIP month=2023-08-01 (train guard: train_n=32 < min_train_n=50)
+INFO WalkForwardRunner: month=2023-09-01 train_n=153 n_eval=69 pos_rate=0.464 auc_roc=0.8285
+INFO WalkForwardRunner: month=2023-10-01 train_n=222 n_eval=89 pos_rate=0.562 auc_roc=0.7097
+INFO WalkForwardRunner: month=2023-11-01 train_n=311 n_eval=86 pos_rate=0.570 auc_roc=0.7849
+INFO WalkForwardRunner: month=2023-12-01 train_n=397 n_eval=71 pos_rate=0.648 auc_roc=0.9139
+INFO WalkForwardRunner: month=2024-01-01 train_n=468 n_eval=93 pos_rate=0.613 auc_roc=0.7690
+INFO WalkForwardRunner: month=2024-02-01 train_n=561 n_eval=90 pos_rate=0.544 auc_roc=0.7491
+INFO WalkForwardRunner: month=2024-03-01 train_n=651 n_eval=111 pos_rate=0.577 auc_roc=0.8025
+INFO WalkForwardRunner: month=2024-04-01 train_n=762 n_eval=93 pos_rate=0.581 auc_roc=0.7070
+INFO WalkForwardRunner: month=2024-05-01 train_n=855 n_eval=80 pos_rate=0.725 auc_roc=0.8174
+INFO WalkForwardRunner: month=2024-06-01 train_n=935 n_eval=92 pos_rate=0.554 auc_roc=0.7556
+INFO WalkForwardRunner: month=2024-07-01 train_n=1027 n_eval=74 pos_rate=0.608 auc_roc=0.7502
+INFO WalkForwardRunner: month=2024-08-01 train_n=1101 n_eval=105 pos_rate=0.581 auc_roc=0.7623
+INFO WalkForwardRunner: month=2024-09-01 train_n=1206 n_eval=103 pos_rate=0.612 auc_roc=0.7968
+INFO WalkForwardRunner: month=2024-10-01 train_n=1309 n_eval=85 pos_rate=0.671 auc_roc=0.7757
+INFO WalkForwardRunner: month=2024-11-01 train_n=1394 n_eval=90 pos_rate=0.589 auc_roc=0.7904
+INFO WalkForwardRunner: month=2024-12-01 train_n=1484 n_eval=103 pos_rate=0.534 auc_roc=0.8492
+INFO WalkForwardRunner: month=2025-01-01 train_n=1587 n_eval=114 pos_rate=0.509 auc_roc=0.8233
+INFO WalkForwardRunner: month=2025-02-01 train_n=1701 n_eval=90 pos_rate=0.522 auc_roc=0.7927
+INFO WalkForwardRunner: month=2025-03-01 train_n=1791 n_eval=91 pos_rate=0.582 auc_roc=0.7239
+INFO WalkForwardRunner: month=2025-04-01 train_n=1882 n_eval=89 pos_rate=0.584 auc_roc=0.6850
+INFO WalkForwardRunner: month=2025-05-01 train_n=1971 n_eval=93 pos_rate=0.624 auc_roc=0.7828
+INFO WalkForwardRunner: month=2025-06-01 train_n=2064 n_eval=113 pos_rate=0.637 auc_roc=0.8001
+INFO WalkForwardRunner: month=2025-07-01 train_n=2177 n_eval=100 pos_rate=0.550 auc_roc=0.7851
+INFO WalkForwardRunner: month=2025-08-01 train_n=2277 n_eval=87 pos_rate=0.621 auc_roc=0.7581
+INFO WalkForwardRunner: month=2025-09-01 train_n=2364 n_eval=98 pos_rate=0.612 auc_roc=0.7053
+INFO WalkForwardRunner: month=2025-10-01 train_n=2462 n_eval=101 pos_rate=0.465 auc_roc=0.7691
+INFO WalkForwardRunner: month=2025-11-01 train_n=2563 n_eval=90 pos_rate=0.500 auc_roc=0.6928
+INFO WalkForwardRunner: month=2025-12-01 train_n=2653 n_eval=99 pos_rate=0.535 auc_roc=0.7322
+INFO WalkForwardRunner: month=2026-01-01 train_n=2752 n_eval=96 pos_rate=0.542 auc_roc=0.8894
+INFO WalkForwardRunner: month=2026-02-01 train_n=2848 n_eval=80 pos_rate=0.562 auc_roc=0.6997
+INFO WalkForwardRunner: month=2026-03-01 train_n=2928 n_eval=100 pos_rate=0.520 auc_roc=0.7179
+INFO WalkForwardRunner: month=2026-04-01 train_n=3028 n_eval=81 pos_rate=0.506 auc_roc=0.7287
+INFO WalkForwardRunner: month=2026-05-01 train_n=3109 n_eval=93 pos_rate=0.613 auc_roc=0.8114
+INFO WalkForwardRunner: month=2026-06-01 train_n=3202 n_eval=1698 pos_rate=0.577 auc_roc=0.7861
+INFO WalkForwardRunner: month=2026-07-01 train_n=4900 n_eval=3544 pos_rate=0.581 auc_roc=0.7682
+INFO WalkForwardRunner: month=2026-08-01 train_n=8444 n_eval=238 pos_rate=0.639 auc_roc=0.7720
+INFO WalkForwardRunner: SKIP month=2026-09-01 (open month: calendar month not complete as of 2026-09-23 (n_eval so far=156))
+INFO WalkForwardRunner.run: emitted 36 point(s), skipped 3 month(s) (mode=expanding, min_train_n=50, n_min=20).
+INFO [persistence_kisqali] Walk-forward emitted 36 point(s); skipped 3.
+INFO MetricRecorder: deleted 0 prior row(s) for model_id='d3a926ac-e24a-4847-ac15-152d2983e466' source='backtest_wf' split_version=None
+INFO MetricRecorder: deleted 0 prior row(s) for model_id='d3a926ac-e24a-4847-ac15-152d2983e466' source='holdout' split_version=None
+INFO === Done slot: cohort=persistence brand=Kisqali holdout_auc=0.7750 backtest_points=36 ===
+INFO === Starting slot: cohort=discontinuation brand=Remibrutinib target=discontinuation_remibrutinib ===
+INFO [discontinuation_remibrutinib] Loaded full frame: 8920 rows, 1111 months.
+INFO [discontinuation_remibrutinib] Trained champion on 7145 train+val rows (23 encoded features).
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+INFO [discontinuation_remibrutinib] Holdout headline: n=1775 auc_roc=0.7541
+INFO [discontinuation_remibrutinib] Re-run cleanup: cleared 298 dependent metric row(s) for prior model_id='5d0486b4-fd74-463e-aab0-d91ac9fe0fca' before re-registering.
+INFO Registered staging model discontinuation_remibrutinib_goldstd_lr_v1 (auc=0.7541)
+INFO [discontinuation_remibrutinib] Registered champion handle='discontinuation_remibrutinib_goldstd_lr_v1' (staging).
+INFO WalkForwardRunner: SKIP month=2023-07-01 (train guard: train_n=0 < min_train_n=50)
+INFO WalkForwardRunner: SKIP month=2023-08-01 (train guard: train_n=26 < min_train_n=50)
+INFO WalkForwardRunner: month=2023-09-01 train_n=118 n_eval=94 pos_rate=0.404 auc_roc=0.7340
+INFO WalkForwardRunner: month=2023-10-01 train_n=212 n_eval=111 pos_rate=0.387 auc_roc=0.7630
+INFO WalkForwardRunner: month=2023-11-01 train_n=323 n_eval=92 pos_rate=0.337 auc_roc=0.7456
+INFO WalkForwardRunner: month=2023-12-01 train_n=415 n_eval=90 pos_rate=0.467 auc_roc=0.7118
+INFO WalkForwardRunner: month=2024-01-01 train_n=505 n_eval=98 pos_rate=0.367 auc_roc=0.8409
+INFO WalkForwardRunner: month=2024-02-01 train_n=603 n_eval=105 pos_rate=0.514 auc_roc=0.8696
+INFO WalkForwardRunner: month=2024-03-01 train_n=708 n_eval=78 pos_rate=0.449 auc_roc=0.8399
+INFO WalkForwardRunner: month=2024-04-01 train_n=786 n_eval=86 pos_rate=0.407 auc_roc=0.7031
+INFO WalkForwardRunner: month=2024-05-01 train_n=872 n_eval=92 pos_rate=0.435 auc_roc=0.8260
+INFO WalkForwardRunner: month=2024-06-01 train_n=964 n_eval=115 pos_rate=0.496 auc_roc=0.6921
+INFO WalkForwardRunner: month=2024-07-01 train_n=1079 n_eval=116 pos_rate=0.397 auc_roc=0.8245
+INFO WalkForwardRunner: month=2024-08-01 train_n=1195 n_eval=93 pos_rate=0.527 auc_roc=0.6948
+INFO WalkForwardRunner: month=2024-09-01 train_n=1288 n_eval=79 pos_rate=0.443 auc_roc=0.6662
+INFO WalkForwardRunner: month=2024-10-01 train_n=1367 n_eval=92 pos_rate=0.370 auc_roc=0.6694
+INFO WalkForwardRunner: month=2024-11-01 train_n=1459 n_eval=74 pos_rate=0.446 auc_roc=0.6851
+INFO WalkForwardRunner: month=2024-12-01 train_n=1533 n_eval=101 pos_rate=0.446 auc_roc=0.7425
+INFO WalkForwardRunner: month=2025-01-01 train_n=1634 n_eval=101 pos_rate=0.446 auc_roc=0.7802
+INFO WalkForwardRunner: month=2025-02-01 train_n=1735 n_eval=89 pos_rate=0.494 auc_roc=0.8167
+INFO WalkForwardRunner: month=2025-03-01 train_n=1824 n_eval=103 pos_rate=0.427 auc_roc=0.7500
+INFO WalkForwardRunner: month=2025-04-01 train_n=1927 n_eval=96 pos_rate=0.438 auc_roc=0.8360
+INFO WalkForwardRunner: month=2025-05-01 train_n=2023 n_eval=111 pos_rate=0.405 auc_roc=0.8125
+INFO WalkForwardRunner: month=2025-06-01 train_n=2134 n_eval=85 pos_rate=0.600 auc_roc=0.7999
+INFO WalkForwardRunner: month=2025-07-01 train_n=2219 n_eval=88 pos_rate=0.398 auc_roc=0.7795
+INFO WalkForwardRunner: month=2025-08-01 train_n=2307 n_eval=101 pos_rate=0.366 auc_roc=0.7812
+INFO WalkForwardRunner: month=2025-09-01 train_n=2408 n_eval=111 pos_rate=0.414 auc_roc=0.7462
+INFO WalkForwardRunner: month=2025-10-01 train_n=2519 n_eval=105 pos_rate=0.467 auc_roc=0.7147
+INFO WalkForwardRunner: month=2025-11-01 train_n=2624 n_eval=95 pos_rate=0.495 auc_roc=0.8444
+INFO WalkForwardRunner: month=2025-12-01 train_n=2719 n_eval=110 pos_rate=0.445 auc_roc=0.8250
+INFO WalkForwardRunner: month=2026-01-01 train_n=2829 n_eval=102 pos_rate=0.363 auc_roc=0.7647
+INFO WalkForwardRunner: month=2026-02-01 train_n=2931 n_eval=79 pos_rate=0.544 auc_roc=0.6641
+INFO WalkForwardRunner: month=2026-03-01 train_n=3010 n_eval=74 pos_rate=0.500 auc_roc=0.8232
+INFO WalkForwardRunner: month=2026-04-01 train_n=3084 n_eval=111 pos_rate=0.432 auc_roc=0.7642
+INFO WalkForwardRunner: month=2026-05-01 train_n=3195 n_eval=102 pos_rate=0.363 auc_roc=0.7630
+INFO WalkForwardRunner: month=2026-06-01 train_n=3297 n_eval=1696 pos_rate=0.429 auc_roc=0.7423
+INFO WalkForwardRunner: month=2026-07-01 train_n=4993 n_eval=3524 pos_rate=0.435 auc_roc=0.7514
+INFO WalkForwardRunner: month=2026-08-01 train_n=8517 n_eval=238 pos_rate=0.403 auc_roc=0.7549
+INFO WalkForwardRunner: SKIP month=2026-09-01 (open month: calendar month not complete as of 2026-09-23 (n_eval so far=165))
+INFO WalkForwardRunner.run: emitted 36 point(s), skipped 3 month(s) (mode=expanding, min_train_n=50, n_min=20).
+INFO [discontinuation_remibrutinib] Walk-forward emitted 36 point(s); skipped 3.
+INFO MetricRecorder: deleted 0 prior row(s) for model_id='5d0486b4-fd74-463e-aab0-d91ac9fe0fca' source='backtest_wf' split_version=None
+INFO MetricRecorder: deleted 0 prior row(s) for model_id='5d0486b4-fd74-463e-aab0-d91ac9fe0fca' source='holdout' split_version=None
+INFO === Done slot: cohort=discontinuation brand=Remibrutinib holdout_auc=0.7541 backtest_points=36 ===
+INFO === Starting slot: cohort=discontinuation brand=Fabhalta target=discontinuation_fabhalta ===
+INFO [discontinuation_fabhalta] Loaded full frame: 9025 rows, 1120 months.
+INFO [discontinuation_fabhalta] Trained champion on 7201 train+val rows (23 encoded features).
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+INFO [discontinuation_fabhalta] Holdout headline: n=1824 auc_roc=0.7743
+INFO [discontinuation_fabhalta] Re-run cleanup: cleared 298 dependent metric row(s) for prior model_id='b933a5d0-cf0d-44cd-ac75-d34fab2259ea' before re-registering.
+INFO Registered staging model discontinuation_fabhalta_goldstd_lr_v1 (auc=0.7743)
+INFO [discontinuation_fabhalta] Registered champion handle='discontinuation_fabhalta_goldstd_lr_v1' (staging).
+INFO WalkForwardRunner: SKIP month=2023-07-01 (train guard: train_n=0 < min_train_n=50)
+INFO WalkForwardRunner: SKIP month=2023-08-01 (train guard: train_n=32 < min_train_n=50)
+INFO WalkForwardRunner: month=2023-09-01 train_n=132 n_eval=90 pos_rate=0.444 auc_roc=0.8315
+INFO WalkForwardRunner: month=2023-10-01 train_n=222 n_eval=80 pos_rate=0.412 auc_roc=0.6609
+INFO WalkForwardRunner: month=2023-11-01 train_n=302 n_eval=103 pos_rate=0.427 auc_roc=0.7847
+INFO WalkForwardRunner: month=2023-12-01 train_n=405 n_eval=85 pos_rate=0.447 auc_roc=0.7396
+INFO WalkForwardRunner: month=2024-01-01 train_n=490 n_eval=104 pos_rate=0.365 auc_roc=0.7652
+INFO WalkForwardRunner: month=2024-02-01 train_n=594 n_eval=104 pos_rate=0.462 auc_roc=0.7675
+INFO WalkForwardRunner: month=2024-03-01 train_n=698 n_eval=104 pos_rate=0.500 auc_roc=0.7053
+INFO WalkForwardRunner: month=2024-04-01 train_n=802 n_eval=82 pos_rate=0.463 auc_roc=0.7434
+INFO WalkForwardRunner: month=2024-05-01 train_n=884 n_eval=97 pos_rate=0.464 auc_roc=0.7833
+INFO WalkForwardRunner: month=2024-06-01 train_n=981 n_eval=105 pos_rate=0.410 auc_roc=0.7401
+INFO WalkForwardRunner: month=2024-07-01 train_n=1086 n_eval=85 pos_rate=0.518 auc_roc=0.8548
+INFO WalkForwardRunner: month=2024-08-01 train_n=1171 n_eval=95 pos_rate=0.347 auc_roc=0.6769
+INFO WalkForwardRunner: month=2024-09-01 train_n=1266 n_eval=104 pos_rate=0.404 auc_roc=0.8153
+INFO WalkForwardRunner: month=2024-10-01 train_n=1370 n_eval=106 pos_rate=0.481 auc_roc=0.7879
+INFO WalkForwardRunner: month=2024-11-01 train_n=1476 n_eval=81 pos_rate=0.395 auc_roc=0.7073
+INFO WalkForwardRunner: month=2024-12-01 train_n=1557 n_eval=119 pos_rate=0.462 auc_roc=0.7605
+INFO WalkForwardRunner: month=2025-01-01 train_n=1676 n_eval=77 pos_rate=0.481 auc_roc=0.7027
+INFO WalkForwardRunner: month=2025-02-01 train_n=1753 n_eval=85 pos_rate=0.482 auc_roc=0.7251
+INFO WalkForwardRunner: month=2025-03-01 train_n=1838 n_eval=105 pos_rate=0.476 auc_roc=0.7764
+INFO WalkForwardRunner: month=2025-04-01 train_n=1943 n_eval=92 pos_rate=0.435 auc_roc=0.7322
+INFO WalkForwardRunner: month=2025-05-01 train_n=2035 n_eval=99 pos_rate=0.475 auc_roc=0.7729
+INFO WalkForwardRunner: month=2025-06-01 train_n=2134 n_eval=93 pos_rate=0.376 auc_roc=0.7266
+INFO WalkForwardRunner: month=2025-07-01 train_n=2227 n_eval=97 pos_rate=0.454 auc_roc=0.7646
+INFO WalkForwardRunner: month=2025-08-01 train_n=2324 n_eval=104 pos_rate=0.481 auc_roc=0.7800
+INFO WalkForwardRunner: month=2025-09-01 train_n=2428 n_eval=99 pos_rate=0.424 auc_roc=0.7761
+INFO WalkForwardRunner: month=2025-10-01 train_n=2527 n_eval=88 pos_rate=0.432 auc_roc=0.6726
+INFO WalkForwardRunner: month=2025-11-01 train_n=2615 n_eval=95 pos_rate=0.421 auc_roc=0.8114
+INFO WalkForwardRunner: month=2025-12-01 train_n=2710 n_eval=98 pos_rate=0.469 auc_roc=0.7308
+INFO WalkForwardRunner: month=2026-01-01 train_n=2808 n_eval=83 pos_rate=0.422 auc_roc=0.6958
+INFO WalkForwardRunner: month=2026-02-01 train_n=2891 n_eval=81 pos_rate=0.444 auc_roc=0.8012
+INFO WalkForwardRunner: month=2026-03-01 train_n=2972 n_eval=103 pos_rate=0.466 auc_roc=0.8989
+INFO WalkForwardRunner: month=2026-04-01 train_n=3075 n_eval=109 pos_rate=0.440 auc_roc=0.7698
+INFO WalkForwardRunner: month=2026-05-01 train_n=3184 n_eval=80 pos_rate=0.512 auc_roc=0.7448
+INFO WalkForwardRunner: month=2026-06-01 train_n=3264 n_eval=1696 pos_rate=0.445 auc_roc=0.7902
+INFO WalkForwardRunner: month=2026-07-01 train_n=4960 n_eval=3671 pos_rate=0.437 auc_roc=0.7764
+INFO WalkForwardRunner: month=2026-08-01 train_n=8631 n_eval=234 pos_rate=0.457 auc_roc=0.7842
+INFO WalkForwardRunner: SKIP month=2026-09-01 (open month: calendar month not complete as of 2026-09-23 (n_eval so far=160))
+INFO WalkForwardRunner.run: emitted 36 point(s), skipped 3 month(s) (mode=expanding, min_train_n=50, n_min=20).
+INFO [discontinuation_fabhalta] Walk-forward emitted 36 point(s); skipped 3.
+INFO MetricRecorder: deleted 0 prior row(s) for model_id='b933a5d0-cf0d-44cd-ac75-d34fab2259ea' source='backtest_wf' split_version=None
+INFO MetricRecorder: deleted 0 prior row(s) for model_id='b933a5d0-cf0d-44cd-ac75-d34fab2259ea' source='holdout' split_version=None
+INFO === Done slot: cohort=discontinuation brand=Fabhalta holdout_auc=0.7743 backtest_points=36 ===
+INFO === Starting slot: cohort=discontinuation brand=Kisqali target=discontinuation_kisqali ===
+INFO [discontinuation_kisqali] Loaded full frame: 8838 rows, 1104 months.
+INFO [discontinuation_kisqali] Trained champion on 7085 train+val rows (23 encoded features).
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+INFO [discontinuation_kisqali] Holdout headline: n=1753 auc_roc=0.7750
+INFO [discontinuation_kisqali] Re-run cleanup: cleared 298 dependent metric row(s) for prior model_id='f2da0bd5-4d6b-47c4-9d30-6c8b4b59de46' before re-registering.
+INFO Registered staging model discontinuation_kisqali_goldstd_lr_v1 (auc=0.7750)
+INFO [discontinuation_kisqali] Registered champion handle='discontinuation_kisqali_goldstd_lr_v1' (staging).
+INFO WalkForwardRunner: SKIP month=2023-07-01 (train guard: train_n=0 < min_train_n=50)
+INFO WalkForwardRunner: SKIP month=2023-08-01 (train guard: train_n=32 < min_train_n=50)
+INFO WalkForwardRunner: month=2023-09-01 train_n=153 n_eval=69 pos_rate=0.536 auc_roc=0.8285
+INFO WalkForwardRunner: month=2023-10-01 train_n=222 n_eval=89 pos_rate=0.438 auc_roc=0.7103
+INFO WalkForwardRunner: month=2023-11-01 train_n=311 n_eval=86 pos_rate=0.430 auc_roc=0.7843
+INFO WalkForwardRunner: month=2023-12-01 train_n=397 n_eval=71 pos_rate=0.352 auc_roc=0.9139
+INFO WalkForwardRunner: month=2024-01-01 train_n=468 n_eval=93 pos_rate=0.387 auc_roc=0.7700
+INFO WalkForwardRunner: month=2024-02-01 train_n=561 n_eval=90 pos_rate=0.456 auc_roc=0.7491
+INFO WalkForwardRunner: month=2024-03-01 train_n=651 n_eval=111 pos_rate=0.423 auc_roc=0.8025
+INFO WalkForwardRunner: month=2024-04-01 train_n=762 n_eval=93 pos_rate=0.419 auc_roc=0.7070
+INFO WalkForwardRunner: month=2024-05-01 train_n=855 n_eval=80 pos_rate=0.275 auc_roc=0.8174
+INFO WalkForwardRunner: month=2024-06-01 train_n=935 n_eval=92 pos_rate=0.446 auc_roc=0.7556
+INFO WalkForwardRunner: month=2024-07-01 train_n=1027 n_eval=74 pos_rate=0.392 auc_roc=0.7502
+INFO WalkForwardRunner: month=2024-08-01 train_n=1101 n_eval=105 pos_rate=0.419 auc_roc=0.7627
+INFO WalkForwardRunner: month=2024-09-01 train_n=1206 n_eval=103 pos_rate=0.388 auc_roc=0.7968
+INFO WalkForwardRunner: month=2024-10-01 train_n=1309 n_eval=85 pos_rate=0.329 auc_roc=0.7757
+INFO WalkForwardRunner: month=2024-11-01 train_n=1394 n_eval=90 pos_rate=0.411 auc_roc=0.7904
+INFO WalkForwardRunner: month=2024-12-01 train_n=1484 n_eval=103 pos_rate=0.466 auc_roc=0.8492
+INFO WalkForwardRunner: month=2025-01-01 train_n=1587 n_eval=114 pos_rate=0.491 auc_roc=0.8233
+INFO WalkForwardRunner: month=2025-02-01 train_n=1701 n_eval=90 pos_rate=0.478 auc_roc=0.7932
+INFO WalkForwardRunner: month=2025-03-01 train_n=1791 n_eval=91 pos_rate=0.418 auc_roc=0.7239
+INFO WalkForwardRunner: month=2025-04-01 train_n=1882 n_eval=89 pos_rate=0.416 auc_roc=0.6850
+INFO WalkForwardRunner: month=2025-05-01 train_n=1971 n_eval=93 pos_rate=0.376 auc_roc=0.7828
+INFO WalkForwardRunner: month=2025-06-01 train_n=2064 n_eval=113 pos_rate=0.363 auc_roc=0.8001
+INFO WalkForwardRunner: month=2025-07-01 train_n=2177 n_eval=100 pos_rate=0.450 auc_roc=0.7859
+INFO WalkForwardRunner: month=2025-08-01 train_n=2277 n_eval=87 pos_rate=0.379 auc_roc=0.7581
+INFO WalkForwardRunner: month=2025-09-01 train_n=2364 n_eval=98 pos_rate=0.388 auc_roc=0.7053
+INFO WalkForwardRunner: month=2025-10-01 train_n=2462 n_eval=101 pos_rate=0.535 auc_roc=0.7691
+INFO WalkForwardRunner: month=2025-11-01 train_n=2563 n_eval=90 pos_rate=0.500 auc_roc=0.6928
+INFO WalkForwardRunner: month=2025-12-01 train_n=2653 n_eval=99 pos_rate=0.465 auc_roc=0.7317
+INFO WalkForwardRunner: month=2026-01-01 train_n=2752 n_eval=96 pos_rate=0.458 auc_roc=0.8894
+INFO WalkForwardRunner: month=2026-02-01 train_n=2848 n_eval=80 pos_rate=0.438 auc_roc=0.7003
+INFO WalkForwardRunner: month=2026-03-01 train_n=2928 n_eval=100 pos_rate=0.480 auc_roc=0.7179
+INFO WalkForwardRunner: month=2026-04-01 train_n=3028 n_eval=81 pos_rate=0.494 auc_roc=0.7287
+INFO WalkForwardRunner: month=2026-05-01 train_n=3109 n_eval=93 pos_rate=0.387 auc_roc=0.8114
+INFO WalkForwardRunner: month=2026-06-01 train_n=3202 n_eval=1698 pos_rate=0.423 auc_roc=0.7861
+INFO WalkForwardRunner: month=2026-07-01 train_n=4900 n_eval=3544 pos_rate=0.419 auc_roc=0.7682
+INFO WalkForwardRunner: month=2026-08-01 train_n=8444 n_eval=238 pos_rate=0.361 auc_roc=0.7719
+INFO WalkForwardRunner: SKIP month=2026-09-01 (open month: calendar month not complete as of 2026-09-23 (n_eval so far=156))
+INFO WalkForwardRunner.run: emitted 36 point(s), skipped 3 month(s) (mode=expanding, min_train_n=50, n_min=20).
+INFO [discontinuation_kisqali] Walk-forward emitted 36 point(s); skipped 3.
+INFO MetricRecorder: deleted 0 prior row(s) for model_id='f2da0bd5-4d6b-47c4-9d30-6c8b4b59de46' source='backtest_wf' split_version=None
+INFO MetricRecorder: deleted 0 prior row(s) for model_id='f2da0bd5-4d6b-47c4-9d30-6c8b4b59de46' source='holdout' split_version=None
+INFO === Done slot: cohort=discontinuation brand=Kisqali holdout_auc=0.7750 backtest_points=36 ===
+INFO [Remibrutinib] Complement validation: persistence holdout_auc=0.7541  discontinuation holdout_auc=0.7541  delta=0.0000
+INFO [Fabhalta] Complement validation: persistence holdout_auc=0.7743  discontinuation holdout_auc=0.7743  delta=0.0000
+INFO [Kisqali] Complement validation: persistence holdout_auc=0.7750  discontinuation holdout_auc=0.7750  delta=0.0000
+INFO === gold-standard per-brand patient cohort eval report ===
+INFO   slot                                     model                                         holdout_auc  backtest_points
+INFO   initiation_Remibrutinib                  initiation_remibrutinib_goldstd_lr_v1         0.8453       36             
+INFO   initiation_Fabhalta                      initiation_fabhalta_goldstd_lr_v1             0.8453       36             
+INFO   initiation_Kisqali                       initiation_kisqali_goldstd_lr_v1              0.8505       36             
+INFO   persistence_Remibrutinib                 persistence_remibrutinib_goldstd_lr_v1        0.7541       36             
+INFO   persistence_Fabhalta                     persistence_fabhalta_goldstd_lr_v1            0.7743       36             
+INFO   persistence_Kisqali                      persistence_kisqali_goldstd_lr_v1             0.7750       36             
+INFO   discontinuation_Remibrutinib             discontinuation_remibrutinib_goldstd_lr_v1    0.7541       36             
+INFO   discontinuation_Fabhalta                 discontinuation_fabhalta_goldstd_lr_v1        0.7743       36             
+INFO   discontinuation_Kisqali                  discontinuation_kisqali_goldstd_lr_v1         0.7750       36             
+=== goldstd retrain patient slots done 2026-09-23T20:15:45+00:00 (3 HCP slots) ===
+INFO Creating async Supabase client for: http://172.17.0.1:54321 (using service_role key)
+INFO === Starting slot: cohort=hcp_adoption brand=Remibrutinib target=hcp_adoption_remibrutinib ===
+INFO [hcp_adoption_remibrutinib] Loaded full frame: 5000 rows, 140 months.
+INFO [hcp_adoption_remibrutinib] Trained champion on 4000 train+val rows (19 encoded features).
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+INFO [hcp_adoption_remibrutinib] Holdout headline: n=1000 auc_roc=0.7773
+INFO [hcp_adoption_remibrutinib] Re-run cleanup: cleared 298 dependent metric row(s) for prior model_id='8b7a1e4e-be3c-469f-822b-46d9ab3dad81' before re-registering.
+INFO Registered staging model hcp_adoption_remibrutinib_goldstd_lr_v1 (auc=0.7773)
+INFO [hcp_adoption_remibrutinib] Registered champion handle='hcp_adoption_remibrutinib_goldstd_lr_v1' (staging).
+INFO WalkForwardRunner: SKIP month=2023-06-01 (train guard: train_n=0 < min_train_n=50)
+INFO WalkForwardRunner: SKIP month=2023-07-01 (train guard: train_n=34 < min_train_n=50)
+INFO WalkForwardRunner: month=2023-08-01 train_n=83 n_eval=41 pos_rate=0.463 auc_roc=0.7057
+INFO WalkForwardRunner: month=2023-09-01 train_n=124 n_eval=47 pos_rate=0.426 auc_roc=0.7574
+INFO WalkForwardRunner: month=2023-10-01 train_n=171 n_eval=39 pos_rate=0.205 auc_roc=0.9194
+INFO WalkForwardRunner: month=2023-11-01 train_n=210 n_eval=48 pos_rate=0.333 auc_roc=0.8027
+INFO WalkForwardRunner: month=2023-12-01 train_n=258 n_eval=42 pos_rate=0.310 auc_roc=0.8833
+INFO WalkForwardRunner: month=2024-01-01 train_n=300 n_eval=49 pos_rate=0.429 auc_roc=0.8180
+INFO WalkForwardRunner: month=2024-02-01 train_n=349 n_eval=55 pos_rate=0.364 auc_roc=0.8229
+INFO WalkForwardRunner: month=2024-03-01 train_n=404 n_eval=59 pos_rate=0.373 auc_roc=0.7236
+INFO WalkForwardRunner: month=2024-04-01 train_n=463 n_eval=42 pos_rate=0.405 auc_roc=0.6824
+INFO WalkForwardRunner: month=2024-05-01 train_n=505 n_eval=39 pos_rate=0.308 auc_roc=0.7654
+INFO WalkForwardRunner: month=2024-06-01 train_n=544 n_eval=65 pos_rate=0.446 auc_roc=0.7874
+INFO WalkForwardRunner: month=2024-07-01 train_n=609 n_eval=37 pos_rate=0.459 auc_roc=0.7735
+INFO WalkForwardRunner: month=2024-08-01 train_n=646 n_eval=52 pos_rate=0.365 auc_roc=0.9187
+INFO WalkForwardRunner: month=2024-09-01 train_n=698 n_eval=47 pos_rate=0.447 auc_roc=0.8040
+INFO WalkForwardRunner: month=2024-10-01 train_n=745 n_eval=51 pos_rate=0.373 auc_roc=0.8865
+INFO WalkForwardRunner: month=2024-11-01 train_n=796 n_eval=53 pos_rate=0.472 auc_roc=0.7571
+INFO WalkForwardRunner: month=2024-12-01 train_n=849 n_eval=42 pos_rate=0.381 auc_roc=0.7356
+INFO WalkForwardRunner: month=2025-01-01 train_n=891 n_eval=51 pos_rate=0.333 auc_roc=0.7215
+INFO WalkForwardRunner: month=2025-02-01 train_n=942 n_eval=51 pos_rate=0.392 auc_roc=0.8710
+INFO WalkForwardRunner: month=2025-03-01 train_n=993 n_eval=54 pos_rate=0.519 auc_roc=0.7569
+INFO WalkForwardRunner: month=2025-04-01 train_n=1047 n_eval=42 pos_rate=0.286 auc_roc=0.6778
+INFO WalkForwardRunner: month=2025-05-01 train_n=1089 n_eval=45 pos_rate=0.356 auc_roc=0.7672
+INFO WalkForwardRunner: month=2025-06-01 train_n=1134 n_eval=26 pos_rate=0.500 auc_roc=0.7751
+INFO WalkForwardRunner: month=2025-07-01 train_n=1160 n_eval=42 pos_rate=0.405 auc_roc=0.7294
+INFO WalkForwardRunner: month=2025-08-01 train_n=1202 n_eval=38 pos_rate=0.237 auc_roc=0.6667
+INFO WalkForwardRunner: month=2025-09-01 train_n=1240 n_eval=43 pos_rate=0.419 auc_roc=0.6422
+INFO WalkForwardRunner: month=2025-10-01 train_n=1283 n_eval=41 pos_rate=0.317 auc_roc=0.6374
+INFO WalkForwardRunner: month=2025-11-01 train_n=1324 n_eval=40 pos_rate=0.400 auc_roc=0.8281
+INFO WalkForwardRunner: month=2025-12-01 train_n=1364 n_eval=35 pos_rate=0.257 auc_roc=0.7479
+INFO WalkForwardRunner: month=2026-01-01 train_n=1399 n_eval=41 pos_rate=0.415 auc_roc=0.7966
+INFO WalkForwardRunner: month=2026-02-01 train_n=1440 n_eval=46 pos_rate=0.435 auc_roc=0.8231
+INFO WalkForwardRunner: month=2026-03-01 train_n=1486 n_eval=42 pos_rate=0.357 auc_roc=0.8494
+INFO WalkForwardRunner: month=2026-04-01 train_n=1528 n_eval=34 pos_rate=0.412 auc_roc=0.8036
+INFO WalkForwardRunner: month=2026-05-01 train_n=1562 n_eval=54 pos_rate=0.370 auc_roc=0.8118
+INFO WalkForwardRunner: month=2026-06-01 train_n=1616 n_eval=60 pos_rate=0.600 auc_roc=0.7164
+INFO WalkForwardRunner: month=2026-07-01 train_n=1676 n_eval=558 pos_rate=0.339 auc_roc=0.7565
+INFO WalkForwardRunner: month=2026-08-01 train_n=2234 n_eval=1603 pos_rate=0.376 auc_roc=0.7729
+INFO WalkForwardRunner: SKIP month=2026-09-01 (open month: calendar month not complete as of 2026-09-23 (n_eval so far=1163))
+INFO WalkForwardRunner.run: emitted 37 point(s), skipped 3 month(s) (mode=expanding, min_train_n=50, n_min=20).
+INFO [hcp_adoption_remibrutinib] Walk-forward emitted 37 point(s); skipped 3.
+INFO MetricRecorder: deleted 0 prior row(s) for model_id='8b7a1e4e-be3c-469f-822b-46d9ab3dad81' source='backtest_wf' split_version=None
+INFO MetricRecorder: deleted 0 prior row(s) for model_id='8b7a1e4e-be3c-469f-822b-46d9ab3dad81' source='holdout' split_version=None
+INFO === Done slot: cohort=hcp_adoption brand=Remibrutinib holdout_auc=0.7773 backtest_points=37 ===
+INFO === Starting slot: cohort=hcp_adoption brand=Fabhalta target=hcp_adoption_fabhalta ===
+INFO [hcp_adoption_fabhalta] Loaded full frame: 5000 rows, 139 months.
+INFO [hcp_adoption_fabhalta] Trained champion on 4000 train+val rows (19 encoded features).
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+INFO [hcp_adoption_fabhalta] Holdout headline: n=1000 auc_roc=0.7880
+INFO [hcp_adoption_fabhalta] Re-run cleanup: cleared 298 dependent metric row(s) for prior model_id='dab9a91b-708d-4b0a-a332-803cef3d3245' before re-registering.
+INFO Registered staging model hcp_adoption_fabhalta_goldstd_lr_v1 (auc=0.7880)
+INFO [hcp_adoption_fabhalta] Registered champion handle='hcp_adoption_fabhalta_goldstd_lr_v1' (staging).
+INFO WalkForwardRunner: SKIP month=2023-06-01 (train guard: train_n=0 < min_train_n=50)
+INFO WalkForwardRunner: SKIP month=2023-07-01 (train guard: train_n=39 < min_train_n=50)
+INFO WalkForwardRunner: month=2023-08-01 train_n=76 n_eval=32 pos_rate=0.375 auc_roc=0.8125
+INFO WalkForwardRunner: month=2023-09-01 train_n=108 n_eval=35 pos_rate=0.514 auc_roc=0.6895
+INFO WalkForwardRunner: month=2023-10-01 train_n=143 n_eval=45 pos_rate=0.356 auc_roc=0.8168
+INFO WalkForwardRunner: month=2023-11-01 train_n=188 n_eval=39 pos_rate=0.436 auc_roc=0.6952
+INFO WalkForwardRunner: month=2023-12-01 train_n=227 n_eval=38 pos_rate=0.237 auc_roc=0.8582
+INFO WalkForwardRunner: month=2024-01-01 train_n=265 n_eval=52 pos_rate=0.442 auc_roc=0.7901
+INFO WalkForwardRunner: month=2024-02-01 train_n=317 n_eval=34 pos_rate=0.353 auc_roc=0.8977
+INFO WalkForwardRunner: month=2024-03-01 train_n=351 n_eval=34 pos_rate=0.382 auc_roc=0.8425
+INFO WalkForwardRunner: month=2024-04-01 train_n=385 n_eval=42 pos_rate=0.500 auc_roc=0.7415
+INFO WalkForwardRunner: month=2024-05-01 train_n=427 n_eval=54 pos_rate=0.352 auc_roc=0.7353
+INFO WalkForwardRunner: month=2024-06-01 train_n=481 n_eval=45 pos_rate=0.311 auc_roc=0.7972
+INFO WalkForwardRunner: month=2024-07-01 train_n=526 n_eval=40 pos_rate=0.375 auc_roc=0.8693
+INFO WalkForwardRunner: month=2024-08-01 train_n=566 n_eval=38 pos_rate=0.421 auc_roc=0.9006
+INFO WalkForwardRunner: month=2024-09-01 train_n=604 n_eval=38 pos_rate=0.553 auc_roc=0.8739
+INFO WalkForwardRunner: month=2024-10-01 train_n=642 n_eval=43 pos_rate=0.419 auc_roc=0.8022
+INFO WalkForwardRunner: month=2024-11-01 train_n=685 n_eval=44 pos_rate=0.409 auc_roc=0.7735
+INFO WalkForwardRunner: month=2024-12-01 train_n=729 n_eval=40 pos_rate=0.475 auc_roc=0.7719
+INFO WalkForwardRunner: month=2025-01-01 train_n=769 n_eval=47 pos_rate=0.468 auc_roc=0.8509
+INFO WalkForwardRunner: month=2025-02-01 train_n=816 n_eval=50 pos_rate=0.440 auc_roc=0.8084
+INFO WalkForwardRunner: month=2025-03-01 train_n=866 n_eval=50 pos_rate=0.280 auc_roc=0.7976
+INFO WalkForwardRunner: month=2025-04-01 train_n=916 n_eval=47 pos_rate=0.319 auc_roc=0.8083
+INFO WalkForwardRunner: month=2025-05-01 train_n=963 n_eval=52 pos_rate=0.346 auc_roc=0.7516
+INFO WalkForwardRunner: month=2025-06-01 train_n=1015 n_eval=40 pos_rate=0.500 auc_roc=0.7525
+INFO WalkForwardRunner: month=2025-07-01 train_n=1055 n_eval=49 pos_rate=0.347 auc_roc=0.7022
+INFO WalkForwardRunner: month=2025-08-01 train_n=1104 n_eval=40 pos_rate=0.425 auc_roc=0.7673
+INFO WalkForwardRunner: month=2025-09-01 train_n=1144 n_eval=49 pos_rate=0.388 auc_roc=0.7877
+INFO WalkForwardRunner: month=2025-10-01 train_n=1193 n_eval=48 pos_rate=0.271 auc_roc=0.7846
+INFO WalkForwardRunner: month=2025-11-01 train_n=1241 n_eval=54 pos_rate=0.407 auc_roc=0.7557
+INFO WalkForwardRunner: month=2025-12-01 train_n=1295 n_eval=47 pos_rate=0.511 auc_roc=0.7736
+INFO WalkForwardRunner: month=2026-01-01 train_n=1342 n_eval=41 pos_rate=0.220 auc_roc=0.9618
+INFO WalkForwardRunner: month=2026-02-01 train_n=1383 n_eval=43 pos_rate=0.442 auc_roc=0.7675
+INFO WalkForwardRunner: month=2026-03-01 train_n=1426 n_eval=38 pos_rate=0.421 auc_roc=0.7898
+INFO WalkForwardRunner: month=2026-04-01 train_n=1464 n_eval=34 pos_rate=0.353 auc_roc=0.8902
+INFO WalkForwardRunner: month=2026-05-01 train_n=1498 n_eval=56 pos_rate=0.482 auc_roc=0.8186
+INFO WalkForwardRunner: month=2026-06-01 train_n=1554 n_eval=72 pos_rate=0.417 auc_roc=0.7167
+INFO WalkForwardRunner: month=2026-07-01 train_n=1626 n_eval=556 pos_rate=0.401 auc_roc=0.7608
+INFO WalkForwardRunner: month=2026-08-01 train_n=2182 n_eval=1642 pos_rate=0.400 auc_roc=0.7642
+INFO WalkForwardRunner: SKIP month=2026-09-01 (open month: calendar month not complete as of 2026-09-23 (n_eval so far=1176))
+INFO WalkForwardRunner.run: emitted 37 point(s), skipped 3 month(s) (mode=expanding, min_train_n=50, n_min=20).
+INFO [hcp_adoption_fabhalta] Walk-forward emitted 37 point(s); skipped 3.
+INFO MetricRecorder: deleted 0 prior row(s) for model_id='dab9a91b-708d-4b0a-a332-803cef3d3245' source='backtest_wf' split_version=None
+INFO MetricRecorder: deleted 0 prior row(s) for model_id='dab9a91b-708d-4b0a-a332-803cef3d3245' source='holdout' split_version=None
+INFO === Done slot: cohort=hcp_adoption brand=Fabhalta holdout_auc=0.7880 backtest_points=37 ===
+INFO === Starting slot: cohort=hcp_adoption brand=Kisqali target=hcp_adoption_kisqali ===
+INFO [hcp_adoption_kisqali] Loaded full frame: 5000 rows, 138 months.
+INFO [hcp_adoption_kisqali] Trained champion on 4000 train+val rows (19 encoded features).
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/sklearn/utils/validation.py:2739: UserWarning: X does not have valid feature names, but LogisticRegression was fitted with feature names
+  warnings.warn(
+INFO [hcp_adoption_kisqali] Holdout headline: n=1000 auc_roc=0.7849
+INFO [hcp_adoption_kisqali] Re-run cleanup: cleared 298 dependent metric row(s) for prior model_id='8d1244df-7c38-435e-820f-1f201e51af24' before re-registering.
+INFO Registered staging model hcp_adoption_kisqali_goldstd_lr_v1 (auc=0.7849)
+INFO [hcp_adoption_kisqali] Registered champion handle='hcp_adoption_kisqali_goldstd_lr_v1' (staging).
+INFO WalkForwardRunner: SKIP month=2023-06-01 (train guard: train_n=0 < min_train_n=50)
+INFO WalkForwardRunner: SKIP month=2023-07-01 (train guard: train_n=42 < min_train_n=50)
+INFO WalkForwardRunner: month=2023-08-01 train_n=81 n_eval=46 pos_rate=0.348 auc_roc=0.7333
+INFO WalkForwardRunner: month=2023-09-01 train_n=127 n_eval=32 pos_rate=0.531 auc_roc=0.8039
+INFO WalkForwardRunner: month=2023-10-01 train_n=159 n_eval=34 pos_rate=0.471 auc_roc=0.6701
+INFO WalkForwardRunner: month=2023-11-01 train_n=193 n_eval=50 pos_rate=0.280 auc_roc=0.6766
+INFO WalkForwardRunner: month=2023-12-01 train_n=243 n_eval=43 pos_rate=0.395 auc_roc=0.8213
+INFO WalkForwardRunner: month=2024-01-01 train_n=286 n_eval=52 pos_rate=0.346 auc_roc=0.8627
+INFO WalkForwardRunner: month=2024-02-01 train_n=338 n_eval=53 pos_rate=0.415 auc_roc=0.6290
+INFO WalkForwardRunner: month=2024-03-01 train_n=391 n_eval=44 pos_rate=0.432 auc_roc=0.7263
+INFO WalkForwardRunner: month=2024-04-01 train_n=435 n_eval=42 pos_rate=0.381 auc_roc=0.8101
+INFO WalkForwardRunner: month=2024-05-01 train_n=477 n_eval=52 pos_rate=0.500 auc_roc=0.8225
+INFO WalkForwardRunner: month=2024-06-01 train_n=529 n_eval=48 pos_rate=0.375 auc_roc=0.7611
+INFO WalkForwardRunner: month=2024-07-01 train_n=577 n_eval=44 pos_rate=0.432 auc_roc=0.7811
+INFO WalkForwardRunner: month=2024-08-01 train_n=621 n_eval=38 pos_rate=0.526 auc_roc=0.8028
+INFO WalkForwardRunner: month=2024-09-01 train_n=659 n_eval=45 pos_rate=0.289 auc_roc=0.8942
+INFO WalkForwardRunner: month=2024-10-01 train_n=704 n_eval=43 pos_rate=0.442 auc_roc=0.8268
+INFO WalkForwardRunner: month=2024-11-01 train_n=747 n_eval=36 pos_rate=0.417 auc_roc=0.6921
+INFO WalkForwardRunner: month=2024-12-01 train_n=783 n_eval=34 pos_rate=0.324 auc_roc=0.9447
+INFO WalkForwardRunner: month=2025-01-01 train_n=817 n_eval=48 pos_rate=0.479 auc_roc=0.7513
+INFO WalkForwardRunner: month=2025-02-01 train_n=865 n_eval=55 pos_rate=0.309 auc_roc=0.8963
+INFO WalkForwardRunner: month=2025-03-01 train_n=920 n_eval=53 pos_rate=0.396 auc_roc=0.8557
+INFO WalkForwardRunner: month=2025-04-01 train_n=973 n_eval=49 pos_rate=0.286 auc_roc=0.7469
+INFO WalkForwardRunner: month=2025-05-01 train_n=1022 n_eval=43 pos_rate=0.372 auc_roc=0.8866
+INFO WalkForwardRunner: month=2025-06-01 train_n=1065 n_eval=36 pos_rate=0.500 auc_roc=0.6975
+INFO WalkForwardRunner: month=2025-07-01 train_n=1101 n_eval=36 pos_rate=0.472 auc_roc=0.7245
+INFO WalkForwardRunner: month=2025-08-01 train_n=1137 n_eval=39 pos_rate=0.410 auc_roc=0.8315
+INFO WalkForwardRunner: month=2025-09-01 train_n=1176 n_eval=38 pos_rate=0.368 auc_roc=0.7262
+INFO WalkForwardRunner: month=2025-10-01 train_n=1214 n_eval=38 pos_rate=0.316 auc_roc=0.9455
+INFO WalkForwardRunner: month=2025-11-01 train_n=1252 n_eval=55 pos_rate=0.345 auc_roc=0.7807
+INFO WalkForwardRunner: month=2025-12-01 train_n=1307 n_eval=51 pos_rate=0.314 auc_roc=0.7964
+INFO WalkForwardRunner: month=2026-01-01 train_n=1358 n_eval=48 pos_rate=0.396 auc_roc=0.6824
+INFO WalkForwardRunner: month=2026-02-01 train_n=1406 n_eval=48 pos_rate=0.417 auc_roc=0.8893
+INFO WalkForwardRunner: month=2026-03-01 train_n=1454 n_eval=40 pos_rate=0.475 auc_roc=0.6792
+INFO WalkForwardRunner: month=2026-04-01 train_n=1494 n_eval=40 pos_rate=0.475 auc_roc=0.8371
+INFO WalkForwardRunner: month=2026-05-01 train_n=1534 n_eval=53 pos_rate=0.321 auc_roc=0.8203
+INFO WalkForwardRunner: month=2026-06-01 train_n=1587 n_eval=63 pos_rate=0.540 auc_roc=0.7748
+INFO WalkForwardRunner: month=2026-07-01 train_n=1650 n_eval=565 pos_rate=0.393 auc_roc=0.7821
+INFO WalkForwardRunner: month=2026-08-01 train_n=2215 n_eval=1624 pos_rate=0.390 auc_roc=0.7605
+INFO WalkForwardRunner: SKIP month=2026-09-01 (open month: calendar month not complete as of 2026-09-23 (n_eval so far=1161))
+INFO WalkForwardRunner.run: emitted 37 point(s), skipped 3 month(s) (mode=expanding, min_train_n=50, n_min=20).
+INFO [hcp_adoption_kisqali] Walk-forward emitted 37 point(s); skipped 3.
+INFO MetricRecorder: deleted 0 prior row(s) for model_id='8d1244df-7c38-435e-820f-1f201e51af24' source='backtest_wf' split_version=None
+INFO MetricRecorder: deleted 0 prior row(s) for model_id='8d1244df-7c38-435e-820f-1f201e51af24' source='holdout' split_version=None
+INFO === Done slot: cohort=hcp_adoption brand=Kisqali holdout_auc=0.7849 backtest_points=37 ===
+INFO === gold-standard per-brand HCP adoption eval report ===
+INFO   brand                          model                                         holdout_auc  backtest_points
+INFO   remibrutinib                   hcp_adoption_remibrutinib_goldstd_lr_v1       0.7773       37             
+INFO   fabhalta                       hcp_adoption_fabhalta_goldstd_lr_v1           0.7880       37             
+INFO   kisqali                        hcp_adoption_kisqali_goldstd_lr_v1            0.7849       37             
+=== goldstd retrain HCP slots done 2026-09-23T20:17:44+00:00 (re-promote hcp_adoption champions) ===
+hcp_adoption champion promotion (#1354): 3 brand(s); mode=EXECUTE
+  DONE hcp_adoption_fabhalta_goldstd_lr_v1: promoted + metrics recorded
+       n=1000 prevalence=0.4120 auc=0.788009 pr_auc=0.736830 brier=0.182247 slope=1.015718 citl_intercept=-0.058264 (report-only)
+  DONE hcp_adoption_kisqali_goldstd_lr_v1: promoted + metrics recorded
+       n=1000 prevalence=0.3910 auc=0.784927 pr_auc=0.712233 brier=0.180680 slope=1.064325 citl_intercept=-0.122946 (report-only)
+  DONE hcp_adoption_remibrutinib_goldstd_lr_v1: promoted + metrics recorded
+       n=1000 prevalence=0.3760 auc=0.777337 pr_auc=0.679011 brier=0.183711 slope=1.020435 citl_intercept=-0.192813 (report-only)
+summary: promoted=3 held=0 failed=0 mode=EXECUTE
+=== goldstd retrain done 2026-09-23T20:18:05+00:00 ===
+exit=0
+2026-09-23T20:18:05+00:00
