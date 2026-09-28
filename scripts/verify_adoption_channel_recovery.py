@@ -210,7 +210,16 @@ class NullCalibration:
 
     @property
     def passed(self) -> bool:
-        return not self.failures
+        # Measured, complete and clean: an unevaluated calibration is never a pass (codex r1).
+        return (
+            not self.failures
+            and self.n_expected > 0
+            and self.n_fits == self.n_expected
+            and bool(np.isfinite(self.fp_rate))
+            and bool(np.isfinite(self.se_ratio))
+            and self.reproduction is not None
+            and self.reproduction >= MIN_REDRAW_REPRODUCTION
+        )
 
     def lines(self) -> List[str]:
         repro = "not measured" if self.reproduction is None else f"{self.reproduction:.4f}"
@@ -265,9 +274,16 @@ def evaluate_null_calibration(
             f"estimator error in {int(err.sum())} cells: {sorted(set(df.loc[err, 'error'].astype(str)))[:3]}"
         )
     ok = df[~err].copy()
-    for c in ("ate", "ci_lower", "ci_upper", "stderr"):
+    numeric = ["ate", "ci_lower", "ci_upper", "stderr"]
+    for c in numeric:
         ok[c] = pd.to_numeric(ok[c], errors="coerce")
-    ok = ok.dropna(subset=["ate", "ci_lower", "ci_upper", "stderr"])
+    finite = np.isfinite(ok[numeric].to_numpy(dtype=float)).all(axis=1)
+    if not finite.all():
+        cal.failures.append(
+            f"{int((~finite).sum())} cells with non-finite ATE/CI/stderr (a dropped cell is "
+            "not a measured one)"
+        )
+    ok = ok[finite]
     cal.n_fits = int(len(ok))
     if cal.n_fits:
         fp = (ok["ci_lower"] > 0.0) | (ok["ci_upper"] < 0.0)
@@ -315,7 +331,7 @@ def evaluate_null_calibration(
         cal.failures.append(
             "live-seed reproduction not measured: the redraw cannot be shown to be the live DGP"
         )
-    elif reproduction < MIN_REDRAW_REPRODUCTION:
+    elif not (reproduction >= MIN_REDRAW_REPRODUCTION):
         cal.failures.append(
             f"derive(seed {LIVE_DGP_SEED}) does not reproduce the live labels on the gated "
             f"frame ({reproduction:.4f} < {MIN_REDRAW_REPRODUCTION}); the redraw would "
