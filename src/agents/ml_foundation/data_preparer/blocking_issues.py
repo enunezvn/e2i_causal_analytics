@@ -64,7 +64,7 @@ predictive feature clears at production n — the reason the FDR and delta-AUC
 effect floor exist — and its documented role is to route features to
 remediation review, not to gate. Making it gate would change what a Layer-3
 flag means, at a false-block rate that cannot be measured without the real
-cohorts; that is an owner decision, raised on #2294 (a Layer-1 manifest
+cohorts; that is an owner decision, raised in the #2294 PR (a Layer-1 manifest
 violation, which is definitional rather than statistical, is the strongest
 candidate to block).
 
