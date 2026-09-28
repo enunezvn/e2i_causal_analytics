@@ -412,10 +412,12 @@ async def test_crashed_structural_check_blocks(
 
 
 @pytest.mark.asyncio
-async def test_crashed_temporal_ordering_blocks() -> None:
-    """Comparing a tz-aware event date with a naive label date raises
-    ``TypeError``; ``_check_date_ordering`` returned ``(0, 0.0)`` — "no
-    temporal leakage" — for every row, including rows that do leak."""
+async def test_tz_aware_event_dates_are_compared_with_naive_label_dates() -> None:
+    """Comparing a tz-aware event date with a naive label date raised
+    ``TypeError`` and ``_check_date_ordering`` returned ``(0, 0.0)`` — "no
+    temporal leakage" — for every row, including rows that do leak. Both sides
+    are now normalised alike (aware -> UTC, naive stays naive) and compared, so
+    the leak on every row is FOUND."""
     frame = _noise_frame()
     n = len(frame)
     event = pd.date_range("2024-01-01", periods=n, freq="D", tz="UTC")
@@ -434,9 +436,10 @@ async def test_crashed_temporal_ordering_blocks() -> None:
     final_state = await _leakage_gate_graph().ainvoke(state)
 
     blocking = final_state["blocking_issues"] or []
-    assert any(i.startswith("leakage: Temporal leakage check incomplete") for i in blocking), (
-        blocking
-    )
+    assert any(
+        i.startswith(f"leakage: Temporal leakage: {n} rows") and "event_date > target_date" in i
+        for i in blocking
+    ), blocking
     assert final_state["gate_passed"] is False
 
 
@@ -554,23 +557,41 @@ async def test_string_labelled_binary_target_leak_is_found() -> None:
     assert final_state["gate_passed"] is False
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("scale", [1, 1_000], ids=["epoch_seconds", "epoch_millis"])
-async def test_epoch_timestamp_feature_dates_are_audited(scale: int) -> None:
-    """Codex r3: ``pd.to_datetime`` reads a bare integer as NANOseconds, so an
-    epoch-seconds 2025 date became 1970-01-01 and never looked "after
-    split_date" — a real temporal leak read as clean."""
+def _epoch_state(values: list, split_date: str, **scope: Any) -> Dict[str, Any]:
     frame = _noise_frame()
-    feb_2025 = 1_738_368_000  # 2025-02-01T00:00:00Z in epoch seconds
-    frame["event_ts"] = [feb_2025 * scale] * len(frame)
-    state = _leakage_state(
+    frame["event_ts"] = (values * len(frame))[: len(frame)]
+    return _leakage_state(
         frame,
         scope_spec={
             "required_features": ["noise_a"],
-            "split_date": "2025-01-01",
+            "split_date": split_date,
             "feature_date_columns": ["event_ts"],
+            **scope,
         },
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("values", "unit", "split_date"),
+    [
+        # 2025-02-01T00:00:00Z in epoch seconds and millis (codex r3).
+        ([1_738_368_000], "s", "2025-01-01"),
+        ([1_738_368_000_000], "ms", "2025-01-01"),
+        # 1969-12-30 in epoch millis, after a 1969-01-01 split: magnitude-based
+        # inference read it as SECONDS (1964) and missed it (codex r4).
+        ([-172_800_000], "ms", "1969-01-01"),
+    ],
+    ids=["epoch_seconds", "epoch_millis", "pre_1970_millis"],
+)
+async def test_numeric_date_column_with_declared_unit_is_audited(
+    values: list, unit: str, split_date: str
+) -> None:
+    """``pd.to_datetime`` reads a bare integer as NANOseconds, so an epoch date
+    became 1970 and a real temporal leak read as clean. With the unit DECLARED
+    (``scope_spec.epoch_units``, which the typed ScopeSpecSchema carries) the
+    leak is found."""
+    state = _epoch_state(values, split_date, epoch_units={"event_ts": unit})
 
     final_state = await _leakage_gate_graph().ainvoke(state)
 
@@ -582,17 +603,55 @@ async def test_epoch_timestamp_feature_dates_are_audited(scale: int) -> None:
 
 
 @pytest.mark.asyncio
-async def test_small_integer_date_column_is_an_incomplete_audit() -> None:
-    """An integer column too small to be any epoch unit (e.g. a year, or days
-    since some origin) cannot be interpreted; that is an incomplete audit, not
-    a clean one."""
+@pytest.mark.parametrize("values", [[1_738_368_000], [2025]], ids=["epoch_like", "year_like"])
+async def test_numeric_date_column_without_declared_unit_is_unverifiable(values: list) -> None:
+    """No unit is ever guessed: a numeric configured date column without a
+    declared unit is an unverifiable temporal audit, which blocks loudly."""
+    final_state = await _leakage_gate_graph().ainvoke(_epoch_state(values, "2025-01-01"))
+
+    blocking = final_state["blocking_issues"] or []
+    assert any(
+        i.startswith("leakage: Temporal leakage check incomplete")
+        and "'event_ts' is numeric with no declared epoch unit" in i
+        for i in blocking
+    ), blocking
+    assert final_state["gate_passed"] is False
+
+
+@pytest.mark.asyncio
+async def test_numeric_duration_named_like_a_date_is_not_auto_detected() -> None:
+    """Strategy 3 auto-detects date columns by NAME; ``time_on_therapy``
+    matches ``time_`` but is a duration. A numeric column is a date only with a
+    declared unit, so this neither hides as 1970 nor blocks the run."""
     frame = _noise_frame()
-    frame["event_ts"] = [2025] * len(frame)
+    frame["time_on_therapy"] = np.arange(len(frame)) % 90
     state = _leakage_state(
         frame,
         scope_spec={
             "required_features": ["noise_a"],
             "split_date": "2025-01-01",
+            "date_column": "event_date",
+        },
+    )
+
+    final_state = await _leakage_gate_graph().ainvoke(state)
+
+    assert final_state["blocking_issues"] == [], final_state["blocking_issues"]
+
+
+@pytest.mark.asyncio
+async def test_offset_aware_split_date_is_compared_in_utc() -> None:
+    """Codex r4: the event dates were converted to UTC but the split date only
+    had its offset STRIPPED. ``2025-01-01T00:00+05:00`` is 2024-12-31T19:00Z,
+    so events at 22:00Z / 23:00Z are after it — and were all missed against a
+    naive 2025-01-01T00:00."""
+    frame = _noise_frame()
+    frame["event_ts"] = ["2024-12-31T22:00:00Z", "2024-12-31T23:00:00Z"] * (len(frame) // 2)
+    state = _leakage_state(
+        frame,
+        scope_spec={
+            "required_features": ["noise_a"],
+            "split_date": "2025-01-01T00:00:00+05:00",
             "feature_date_columns": ["event_ts"],
         },
     )
@@ -600,9 +659,11 @@ async def test_small_integer_date_column_is_an_incomplete_audit() -> None:
     final_state = await _leakage_gate_graph().ainvoke(state)
 
     blocking = final_state["blocking_issues"] or []
-    assert any(i.startswith("leakage: Temporal leakage check incomplete") for i in blocking), (
-        blocking
-    )
+    assert any(
+        i.startswith(f"leakage: Temporal leakage: {len(frame)} rows") and "event_ts" in i
+        for i in blocking
+    ), blocking
+    assert final_state["gate_passed"] is False
 
 
 @pytest.mark.asyncio

@@ -190,6 +190,10 @@ class ScopeSpecSchema(BaseAgentSchema):
     event_date_column: Optional[str] = None
     target_date_column: Optional[str] = None
     feature_date_columns: Optional[List[str]] = None
+    # Unit of each NUMERIC (epoch) date column above, e.g. {"event_ts": "s"}.
+    # The leakage detector parses a numeric date column only with a declared
+    # unit and otherwise records an unverifiable temporal audit (#2294).
+    epoch_units: Optional[Dict[str, Literal["s", "ms", "us", "ns"]]] = None
 
     # Feast registrar (data_preparer/nodes/feast_registrar.py:90-93)
     entity_key: Optional[str] = None

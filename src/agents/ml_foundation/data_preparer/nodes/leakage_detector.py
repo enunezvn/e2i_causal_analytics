@@ -418,6 +418,10 @@ def check_temporal_leakage(df: Any, scope_spec: Dict[str, Any]) -> List[str]:
         return issues
 
     try:
+        # Declared units for numeric (epoch) date columns; see
+        # ``_parse_configured_dates``.
+        epoch_units = scope_spec.get("epoch_units") or {}
+
         # Strategy 1: Explicit event_date vs target_date comparison
         event_date_col = scope_spec.get("event_date_column")
         target_date_col = scope_spec.get("target_date_column")
@@ -425,7 +429,7 @@ def check_temporal_leakage(df: Any, scope_spec: Dict[str, Any]) -> List[str]:
         if event_date_col and target_date_col:
             if event_date_col in df.columns and target_date_col in df.columns:
                 leakage_count, leakage_pct = _check_date_ordering(
-                    df, event_date_col, target_date_col
+                    df, event_date_col, target_date_col, epoch_units
                 )
                 if leakage_count > 0:
                     issues.append(
@@ -454,7 +458,9 @@ def check_temporal_leakage(df: Any, scope_spec: Dict[str, Any]) -> List[str]:
             if split_date:
                 for col in feature_date_columns:
                     if col in df.columns:
-                        future_count, future_pct = _check_future_dates(df, col, split_date)
+                        future_count, future_pct = _check_future_dates(
+                            df, col, split_date, epoch_units
+                        )
                         if future_count > 0:
                             issues.append(
                                 f"Temporal leakage: {future_count} rows ({future_pct:.2f}%) "
@@ -467,9 +473,9 @@ def check_temporal_leakage(df: Any, scope_spec: Dict[str, Any]) -> List[str]:
             split_date = _parse_date(split_date_str)
             if split_date:
                 # Find all date-like columns (excluding the main date column)
-                date_cols = _detect_date_columns(df, exclude=[date_column])
+                date_cols = _detect_date_columns(df, exclude=[date_column], epoch_units=epoch_units)
                 for col in date_cols:
-                    future_count, future_pct = _check_future_dates(df, col, split_date)
+                    future_count, future_pct = _check_future_dates(df, col, split_date, epoch_units)
                     if future_count > 0:
                         issues.append(
                             f"Potential temporal leakage: {future_count} rows ({future_pct:.2f}%) "
@@ -1354,61 +1360,67 @@ def check_categorical_class_separation(
 # =============================================================================
 
 
-def _parse_configured_dates(df: Any, col: str) -> Any:
-    """``pd.to_datetime(errors="coerce")`` that refuses to turn data into "clean".
+def _parse_configured_dates(df: Any, col: str, epoch_units: Optional[Dict[str, str]] = None) -> Any:
+    """Parse a date column for a temporal comparison, as NAIVE timestamps.
 
-    Coercion maps an unparseable value to ``NaT``, and ``NaT`` rows are
-    excluded from every temporal comparison. A column whose values ALL fail to
-    parse therefore compared nothing and reported zero leakage (codex r2 on
-    #2294). That raises instead, so the caller records an incomplete audit. A
-    column with no values at all is left alone — there is nothing to leak —
-    and so is a partly-parseable one, whose parseable rows are still audited.
+    Refuses every way a column could be turned into "clean" without being
+    examined (#2294), raising so the caller records an incomplete audit:
+
+    * ``errors="coerce"`` maps an unparseable value to ``NaT`` and ``NaT`` rows
+      drop out of every comparison, so a column whose values ALL fail to parse
+      compared nothing (codex r2). A column with no values at all has nothing
+      to leak and is left alone, as is a partly-parseable one.
+    * A bare number is ambiguous: pandas reads it as NANOseconds, so an
+      epoch-seconds 2025 date became 1970 and never looked "after split_date"
+      (codex r3), and no magnitude rule can recover the unit near 1970 (codex
+      r4). A numeric column is parsed ONLY with a unit declared in
+      ``scope_spec.epoch_units``; otherwise it is unverifiable.
+
+    Time zones: tz-aware values (including offset strings that span a DST
+    change and so parse to an object series) are converted to UTC and made
+    naive; naive values stay naive. ``_naive_utc`` applies the same rule to the
+    reference date, so both sides of every comparison are normalised alike.
     """
     values = df[col]
     n_values = int(values.notna().sum())
     if pd.api.types.is_numeric_dtype(values) and not pd.api.types.is_bool_dtype(values):
-        # A bare number is read as NANOseconds, so an epoch-seconds 2025 date
-        # became 1970-01-01 and never looked "after split_date" (codex r3).
-        dates = pd.to_datetime(values, unit=_epoch_unit(values, col), errors="coerce")
+        unit = (epoch_units or {}).get(col)
+        if unit is None:
+            if n_values == 0:
+                return pd.Series(pd.NaT, index=values.index, dtype="datetime64[ns]")
+            raise ValueError(
+                f"'{col}' is numeric with no declared epoch unit "
+                "(declare it in scope_spec.epoch_units)"
+            )
+        dates = pd.to_datetime(values, unit=unit, errors="coerce")
     else:
         dates = pd.to_datetime(values, errors="coerce")
         if dates.dtype == object:
-            # Offset-aware strings spanning a DST change carry mixed UTC
-            # offsets and parse to an OBJECT series with no ``.dt``; compare
-            # them in UTC (codex r3).
             dates = pd.to_datetime(values, errors="coerce", utc=True)
     if n_values and not dates.notna().any():
         raise ValueError(f"column '{col}' has {n_values} values and none parse as dates")
+    if dates.dt.tz is not None:
+        dates = dates.dt.tz_convert("UTC").dt.tz_localize(None)
     return dates
 
 
-def _epoch_unit(values: Any, col: str) -> str:
-    """The epoch unit a numeric date column is written in, from its magnitude.
-
-    Bands keep every unit to plausible calendar dates (seconds 1e9 ~ 2001).
-    A column that fits none — a year, days since some origin — cannot be
-    interpreted, and raises so the caller records an incomplete audit.
-    """
-    median = float(values.dropna().abs().median()) if values.notna().any() else 0.0
-    if median == 0.0 and not values.notna().any():
-        return "ns"  # all-null: nothing to interpret
-    for floor, unit in ((1e17, "ns"), (1e14, "us"), (1e11, "ms"), (1e8, "s")):
-        if median >= floor:
-            return unit
-    raise ValueError(f"numeric column '{col}' (median {median:g}) is not an epoch timestamp")
+def _naive_utc(moment: Any) -> Any:
+    """A reference timestamp normalised like ``_parse_configured_dates``."""
+    ts = pd.Timestamp(moment)
+    return ts.tz_convert("UTC").tz_localize(None) if ts.tzinfo is not None else ts
 
 
-def _check_date_ordering(df: Any, event_col: str, target_col: str) -> tuple:
+def _check_date_ordering(
+    df: Any, event_col: str, target_col: str, epoch_units: Optional[Dict[str, str]] = None
+) -> tuple:
     """Check if event dates occur after target dates.
 
     Raises rather than returning ``(0, 0.0)`` on failure: a zero count reads as
-    "no temporal leakage" (e.g. comparing a tz-aware column with a naive one
-    raised TypeError and was reported as clean, #2294). The caller's
-    ``except`` turns the failure into a "Temporal leakage check incomplete"
-    issue, which blocks.
+    "no temporal leakage" (#2294). The caller's ``except`` turns the failure
+    into a "Temporal leakage check incomplete" issue, which blocks.
     """
-    event_dates = _parse_configured_dates(df, event_col)
-    target_dates = _parse_configured_dates(df, target_col)
+    event_dates = _parse_configured_dates(df, event_col, epoch_units)
+    target_dates = _parse_configured_dates(df, target_col, epoch_units)
 
     valid_mask = event_dates.notna() & target_dates.notna()
     leakage_mask = valid_mask & (event_dates > target_dates)
@@ -1419,18 +1431,17 @@ def _check_date_ordering(df: Any, event_col: str, target_col: str) -> tuple:
     return leakage_count, leakage_pct
 
 
-def _check_future_dates(df: Any, col: str, reference_date: datetime) -> tuple:
+def _check_future_dates(
+    df: Any, col: str, reference_date: datetime, epoch_units: Optional[Dict[str, str]] = None
+) -> tuple:
     """Check for dates after a reference date.
 
     Raises on failure for the same reason as ``_check_date_ordering``.
     """
-    dates = _parse_configured_dates(df, col)
+    dates = _parse_configured_dates(df, col, epoch_units)
     valid_mask = dates.notna()
 
-    ref_date = pd.Timestamp(reference_date).tz_localize(None)
-    dates_naive = dates.dt.tz_localize(None) if dates.dt.tz is not None else dates
-
-    future_mask = valid_mask & (dates_naive > ref_date)
+    future_mask = valid_mask & (dates > _naive_utc(reference_date))
     future_count = future_mask.sum()
     future_pct = (future_count / len(df)) * 100 if len(df) > 0 else 0
 
@@ -1446,17 +1457,30 @@ def _parse_date(date_str: str) -> Optional[datetime]:
         return None
 
 
-def _detect_date_columns(df: Any, exclude: Optional[List[str]] = None) -> List[str]:
-    """Auto-detect date columns in DataFrame."""
+def _detect_date_columns(
+    df: Any,
+    exclude: Optional[List[str]] = None,
+    epoch_units: Optional[Dict[str, str]] = None,
+) -> List[str]:
+    """Auto-detect date columns in DataFrame.
+
+    A numeric column is a date only when its epoch unit is declared: by name
+    alone (``time_on_therapy`` matches ``time_``) it is far more likely a
+    duration, and ``pd.to_datetime`` "parses" any integer as nanoseconds, so
+    guessing would either hide it (1970) or block every such run (#2294).
+    """
     exclude = exclude or []
+    epoch_units = epoch_units or {}
     date_cols = []
 
     for col in df.columns:
         if col in exclude:
             continue
 
-        if pd.api.types.is_datetime64_any_dtype(df[col]):
+        if pd.api.types.is_datetime64_any_dtype(df[col]) or col in epoch_units:
             date_cols.append(col)
+            continue
+        if pd.api.types.is_numeric_dtype(df[col]) or pd.api.types.is_bool_dtype(df[col]):
             continue
 
         date_patterns = ["_date", "_time", "_at", "_timestamp", "date_", "time_"]
