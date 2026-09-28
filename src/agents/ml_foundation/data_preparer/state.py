@@ -6,7 +6,9 @@ in Shard A of the migration tracked at
 
 The state inherits from ``BaseAgentSchema`` which provides:
 
-- ``extra="allow"`` for forward-compat during the multi-shard rollout.
+- ``extra="ignore"`` (PR #67 tightened the transition-window ``allow``):
+  an UNDECLARED key is silently DROPPED at validation, so every key a
+  node RETURNS must be declared below or it never reaches the state.
 - TypedDict-compat dict-like accessors (``__getitem__``, ``get``, etc.)
   so the existing ``state["key"]`` / ``state.get("key", default)`` call
   sites in ``data_preparer/nodes/`` (33 + 232 = 265 total) continue

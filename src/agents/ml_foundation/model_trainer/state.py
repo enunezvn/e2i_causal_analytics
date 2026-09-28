@@ -4,7 +4,8 @@ Migrated from ``TypedDict(total=False)`` to pydantic v2 ``BaseModel``
 in Shard B of the migration tracked at
 ``.claude/plans/typeddict_to_pydantic_migration_plan_20260504.md``.
 
-Inherits from ``BaseAgentSchema`` (extra="allow",
+Inherits from ``BaseAgentSchema`` (extra="ignore" since PR #67 — an
+undeclared key a node returns is silently DROPPED, so declare every field,
 arbitrary_types_allowed=True, dict-like accessors) so the existing
 ``state["key"]`` / ``state.get("key", default)`` call sites in
 ``model_trainer/nodes/`` work unchanged. Per Decision 8a, every field
@@ -77,7 +78,8 @@ class ModelTrainerState(BaseAgentSchema):
     # fields + 2 caller-injected consumer keys (clinical_threshold_range,
     # dataset_disease). Underscore-prefixed audit keys (_adaptive_skipped,
     # _adaptive_p_t, _adaptive_inputs) flow through model_extra per pydantic
-    # v2 reserved-name rule (BaseAgentSchema's extra="allow" preserves them).
+    # v2 reserved-name rule (SuccessCriteriaSchema's OWN extra="allow"
+    # preserves them — BaseAgentSchema itself is extra="ignore").
     success_criteria: Optional[SuccessCriteriaSchema] = None  # Performance thresholds to meet
     problem_type: Optional[str] = None  # binary_classification, regression, etc.
     # Block 5: optional business cost matrix (tp/fp/fn/tn dollar values).
@@ -162,9 +164,10 @@ class ModelTrainerState(BaseAgentSchema):
     # key, ``AliasChoices`` resolves to the FIRST alias in the declaration
     # order below — i.e., the canonical name ALWAYS wins regardless of
     # the order in the input dict. The runner-up key lands in
-    # ``model_extra`` with its discarded value (because ``extra="allow"``
-    # is set on BaseAgentSchema). The declaration order below is therefore
-    # load-bearing for the precedence guarantee — keep canonical first.
+    # nowhere: BaseAgentSchema is ``extra="ignore"``, so the runner-up key is
+    # DROPPED and leaves no ``model_extra`` residue (measured, #2298). The
+    # declaration order below is still load-bearing for the precedence
+    # guarantee — keep canonical first.
     #
     # This scenario is extremely unlikely in practice (no real checkpoint
     # writer would emit both forms) but the residue in ``model_extra``

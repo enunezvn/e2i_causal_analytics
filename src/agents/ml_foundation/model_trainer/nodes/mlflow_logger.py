@@ -785,8 +785,10 @@ async def _persist_training_run(
         Database run ID if successful, None otherwise
     """
     repo = _get_training_run_repository()
-    if not repo:
-        logger.debug("Training run repository not available, skipping DB persistence")
+    if not repo or repo.client is None:
+        # #2296: this repository never had a client, so "persisted" was an in-memory
+        # uuid4 no table holds. The trainer agent persists (and finalises) the run.
+        logger.debug("No database client here; the trainer agent persists the training run")
         return None
 
     try:

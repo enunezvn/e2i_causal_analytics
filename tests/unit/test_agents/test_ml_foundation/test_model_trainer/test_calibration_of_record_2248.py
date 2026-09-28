@@ -94,7 +94,9 @@ def test_the_trainers_own_hyperparameters_are_not_mutated():
 @pytest.mark.asyncio
 async def test_the_persisted_training_run_carries_the_method():
     repo = MagicMock()
-    repo.create_run_with_hpo = AsyncMock(return_value=None)
+    repo.create_run_with_hpo = AsyncMock(return_value=SimpleNamespace(id="r1", run_name="t"))
+    repo.update_run_metrics = AsyncMock(return_value=True)  # #2296: the run is finalised
+    repo.complete_run = AsyncMock(return_value=True)
     exp_repo = MagicMock()
     exp_repo.get_by_mlflow_id = AsyncMock(
         return_value=SimpleNamespace(id="11111111-1111-1111-1111-111111111111")
