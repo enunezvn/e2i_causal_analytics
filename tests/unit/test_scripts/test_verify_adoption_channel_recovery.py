@@ -354,7 +354,7 @@ def test_the_calibration_constants_are_the_owner_decision():
     """The certifying thresholds and the replayable seed list are module constants."""
     assert MAX_NULL_FP_RATE == 0.10
     assert MIN_SE_RATIO == 0.9
-    assert len(NULL_CALIBRATION_SEEDS) == len(set(NULL_CALIBRATION_SEEDS)) >= 50
+    assert len(NULL_CALIBRATION_SEEDS) == len(set(NULL_CALIBRATION_SEEDS)) == 100
     assert 427 not in NULL_CALIBRATION_SEEDS  # the live draw is not part of its own null
 
 
@@ -489,3 +489,66 @@ def test_redraw_adopted_replaces_labels_only_on_the_frame_rows_that_had_one():
     assert out["adopted"].iloc[3] == 0.0
     assert out["rep_training_score"].tolist() == frame["rep_training_score"].tolist()
     assert frame["adopted"].tolist()[:2] == [1.0, 0.0]  # input untouched
+
+
+def test_every_realised_null_exclusion_is_printed_and_none_is_gated():
+    """codex r1 (MED): the removed ">= 2/3 cover 0" clause must stay removed -- with a passing
+    family calibration, three realised exclusions still pass, each on its own draw line."""
+    parts = [
+        _fits(
+            b,
+            overrides={
+                (_NULL_COL, "ate"): a,
+                (_NULL_COL, "ci_lower"): a - 0.03,
+                (_NULL_COL, "ci_upper"): a + 0.03,
+            },
+        )
+        for b, a in zip(BRANDS, (0.047, -0.04, 0.035), strict=True)
+    ]
+    gate = evaluate_recovery_gate(pd.concat(parts), null_calibration=_calibration_ok())
+    assert gate.passed
+    lines = [ln for ln in gate.verdict().splitlines() if "null CI excludes 0" in ln]
+    assert len(lines) == 3 and all("realised draw" in ln for ln in lines)
+
+
+def test_an_fp_rate_of_exactly_the_ceiling_passes_on_the_point_rate():
+    """The gate is on the point FP rate (<= 0.10), not on its Wilson upper bound: 30/300 passes
+    although the Wilson interval reaches past 0.10 (the bound is printed as K's precision)."""
+    k = len(NULL_CALIBRATION_SEEDS)
+    base = list(_null_fits()["ate"].iloc[:k])
+    # 10 of 100 per brand beyond +-1.96 SE (the calibrated quantiles put 4 there already).
+    ates = sorted(base, key=abs)[: k - 10] + [0.05] * 5 + [-0.05] * 5
+    cal = evaluate_null_calibration(_null_fits(dict.fromkeys(BRANDS, ates)), reproduction=1.0)
+    assert cal.n_fp == 30 and cal.fp_rate == pytest.approx(0.10)
+    assert cal.wilson_hi > MAX_NULL_FP_RATE
+    assert not any("false-positive" in f for f in cal.failures)
+
+
+def test_the_se_ratio_uses_the_within_brand_spread_not_the_spread_of_brand_means():
+    """Brands have their own designs, so their null means differ; the empirical SD is pooled
+    WITHIN brand. Shifting a brand's whole null distribution must not move the ratio."""
+    k = len(NULL_CALIBRATION_SEEDS)
+    base = list(_null_fits()["ate"].iloc[:k])
+    shifted = {
+        "Remibrutinib": [a + 0.03 for a in base],
+        "Fabhalta": base,
+        "Kisqali": [a - 0.03 for a in base],
+    }
+    ref = evaluate_null_calibration(_null_fits(), reproduction=1.0)
+    cal = evaluate_null_calibration(_null_fits(shifted), reproduction=1.0)
+    assert cal.se_ratio == pytest.approx(ref.se_ratio)
+
+
+def test_an_unevaluated_or_incomplete_calibration_never_passes():
+    """codex r1 (HIGH): a default-constructed calibration, non-finite cells, or an
+    unmeasurable reproduction must fail, not vanish."""
+    from scripts.verify_adoption_channel_recovery import NullCalibration
+
+    assert not NullCalibration().passed
+    fits = pd.concat([_fits(b) for b in BRANDS], ignore_index=True)
+    assert not evaluate_recovery_gate(fits, null_calibration=NullCalibration()).passed
+    nan_cells = _null_fits()
+    nan_cells.loc[nan_cells["brand"] == "Kisqali", "ate"] = float("nan")
+    cal = evaluate_null_calibration(nan_cells, reproduction=1.0)
+    assert not cal.passed and any("non-finite" in f for f in cal.failures)
+    assert not evaluate_null_calibration(_null_fits(), reproduction=float("nan")).passed
