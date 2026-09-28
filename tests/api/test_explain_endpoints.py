@@ -61,6 +61,9 @@ class _FakeQuery:
     def like(self, *a, **k):
         return self
 
+    def or_(self, *a, **k):  # the canonical-row predicate (#2310)
+        return self
+
     def order(self, *a, **k):
         return self
 
