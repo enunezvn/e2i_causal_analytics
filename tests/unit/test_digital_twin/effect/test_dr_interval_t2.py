@@ -249,3 +249,19 @@ def test_a_non_finite_dr_stderr_is_an_estimation_failure_not_an_interval(monkeyp
         estimate_cohort_effect(cohort, PLANTED)
     assert caught.value.cause is EffectCause.ESTIMATION_FAILED
     assert caught.value.details["is_target_inference"] is False
+
+
+def test_an_arm_too_thin_to_cross_fit_is_refused_as_no_contrast_not_a_fit_failure(cohort):
+    """codex r3: a split of 3,399 rows at-or-below the median and ONE above passes a "two
+    arms exist" check, then econml's two-fold cross-fit has a fold without the treated class.
+    Each arm needs MIN_ARM_ROWS (twice the forest's leaf) before a fit is attempted, and the
+    availability gate applies the same rule (test_cohort_loader)."""
+    thin = cohort.copy()
+    thin[PLANTED] = 0.0
+    thin.loc[0, PLANTED] = 1.0
+    with pytest.raises(EffectDataUnavailable) as caught:
+        estimate_cohort_effect(thin, PLANTED)
+    assert caught.value.cause is EffectCause.NO_TREATMENT_CONTRAST
+    assert caught.value.details["n_treated_rows"] == 1
+    assert caught.value.details["n_control_rows"] == N - 1
+    assert caught.value.details["n_min_arm_rows"] == cce.MIN_ARM_ROWS == 20

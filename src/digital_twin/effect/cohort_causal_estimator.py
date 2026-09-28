@@ -69,6 +69,10 @@ _MISSING_SPECIALTY = "__missing_specialty__"
 # rows remain in the pooled fit, while an under-supported label is omitted from the API.
 MIN_SPECIALTY_ROWS = 100
 MIN_SPECIALTY_ARM_ROWS = 20
+# Rows each arm of the cohort-wide median contrast needs before a fit is attempted: the same
+# twice-the-leaf floor. Below it econml's two-fold cross-fit can hold a fold with no treated
+# (or no control) row and the fit fails; above it the forest can place a leaf in each arm.
+MIN_ARM_ROWS = 2 * 10
 
 
 @dataclass
@@ -173,13 +177,32 @@ def _usable_rows(
 
 
 def median_contrast(t_raw: pd.Series) -> np.ndarray:
-    """The pre-registered contrast: 1 for rows above the median treatment intensity, else 0.
+    """The pre-registered contrast: 1 for rows above the median treatment intensity, else 0."""
+    return cast(np.ndarray, (t_raw > float(t_raw.median())).astype(int).to_numpy())
+
+
+def treatment_contrast_shortfall(t_raw: pd.Series) -> dict[str, int] | None:
+    """Why the median contrast of ``t_raw`` (the usable rows' treatment) cannot be estimated
+    on, as refusal details; ``None`` when it can.
 
     Shared with ``cohort_loader.assess_cohort_frame`` so the availability gate refuses exactly
-    the channels this estimator would (a constant channel, or one tied at its maximum, has no
-    row above its median).
+    the channels this estimator would (codex r2/r3): a channel with no row above its median
+    (constant, or tied at its maximum), or with an arm below ``MIN_ARM_ROWS``.
     """
-    return cast(np.ndarray, (t_raw > float(t_raw.median())).astype(int).to_numpy())
+    t = median_contrast(t_raw)
+    n_treated = int(t.sum())
+    n_control = int(len(t) - n_treated)
+    details = {"n_usable_rows": int(len(t)), "n_distinct_treatment_values": int(t_raw.nunique())}
+    if n_treated == 0 or n_control == 0:
+        return details
+    if min(n_treated, n_control) < MIN_ARM_ROWS:
+        return {
+            **details,
+            "n_treated_rows": n_treated,
+            "n_control_rows": n_control,
+            "n_min_arm_rows": MIN_ARM_ROWS,
+        }
+    return None
 
 
 def _effect_modifier_matrix(work: pd.DataFrame) -> np.ndarray:
@@ -314,16 +337,22 @@ def estimate_cohort_effect(
 
     # Pre-registered contrast: treated = above the cohort median intensity.
     t = median_contrast(work["t_raw"])
-    if len(np.unique(t)) < 2:
+    shortfall = treatment_contrast_shortfall(work["t_raw"])
+    if shortfall is not None and "n_treated_rows" not in shortfall:
         # One distinct value is a constant channel; more than one is a skew onto the median.
         raise EffectDataUnavailable(
             f"treatment '{treatment_col}' has no median contrast (all rows on one side); "
             "cannot identify an effect.",
             cause=EffectCause.NO_TREATMENT_CONTRAST,
-            details={
-                "n_usable_rows": n_usable,
-                "n_distinct_treatment_values": int(work["t_raw"].nunique()),
-            },
+            details=shortfall,
+        )
+    if shortfall is not None:
+        raise EffectDataUnavailable(
+            f"treatment '{treatment_col}' splits {shortfall['n_treated_rows']} rows above its "
+            f"median and {shortfall['n_control_rows']} at or below; each side needs at least "
+            f"{MIN_ARM_ROWS} to identify an effect.",
+            cause=EffectCause.NO_TREATMENT_CONTRAST,
+            details=shortfall,
         )
 
     y = work["y"].to_numpy(dtype=float)

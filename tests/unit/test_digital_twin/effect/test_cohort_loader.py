@@ -589,7 +589,11 @@ async def test_availability_advertises_exactly_what_simulate_accepts(n_adopted):
         assert availability[intervention] is (provider is not None), intervention
 
 
-@pytest.mark.parametrize("values", [[0.0], [0.0, 5.0, 5.0, 5.0]], ids=["constant", "tied-at-max"])
+@pytest.mark.parametrize(
+    "values",
+    [[0.0], [0.0, 5.0, 5.0, 5.0], [0.0] * 599 + [1.0]],
+    ids=["constant", "tied-at-max", "one-row-arm"],
+)
 async def test_a_channel_without_a_median_contrast_is_not_advertised(values):
     """codex r2: 600 usable rows of a channel that never splits at its median (constant, or so
     tied that every row sits at or below it) pass a non-null count, but the estimator refuses

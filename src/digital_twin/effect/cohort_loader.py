@@ -28,12 +28,11 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional, Union
 
-import numpy as np
 import pandas as pd
 
 from src.data.per_hcp_cohort_collapse import collapse_per_hcp_brand
 from src.data.per_hcp_cohort_columns import TWIN_OUTCOME_COLUMN, TWIN_OUTCOME_TABLE
-from src.digital_twin.effect.cohort_causal_estimator import median_contrast
+from src.digital_twin.effect.cohort_causal_estimator import treatment_contrast_shortfall
 from src.digital_twin.effect.errors import EffectCause
 from src.digital_twin.effect.provider import (
     COHORT_CONFOUNDERS,
@@ -333,18 +332,11 @@ def assess_cohort_frame(df: pd.DataFrame, intervention_type: str) -> CohortUsabi
                 ),
             },
         )
-    # The estimator's own median split, on the same rows: a channel with no row above its median
-    # is refused there (NO_TREATMENT_CONTRAST), so it is not usable here either (codex r2).
-    treatment = pd.to_numeric(usable[treatment_col], errors="coerce")
-    if len(np.unique(median_contrast(treatment))) < 2:
-        return CohortUsability(
-            None,
-            EffectCause.NO_TREATMENT_CONTRAST,
-            {
-                "n_usable_rows": int(len(usable)),
-                "n_distinct_treatment_values": int(treatment.nunique()),
-            },
-        )
+    # The estimator's own median-split rule, on the same rows: a channel it would refuse
+    # (NO_TREATMENT_CONTRAST) is not usable here either (codex r2/r3).
+    shortfall = treatment_contrast_shortfall(pd.to_numeric(usable[treatment_col], errors="coerce"))
+    if shortfall is not None:
+        return CohortUsability(None, EffectCause.NO_TREATMENT_CONTRAST, shortfall)
     return CohortUsability(CohortEffectDataProvider(usable))
 
 
