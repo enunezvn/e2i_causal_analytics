@@ -278,8 +278,7 @@ class SimulationResult(BaseModel):
     data_provenance: Optional[str] = None
     # The outcome column the ATE was estimated ON: the effect provider's frame outcome
     # (``adopted`` on the cohort path since lane T2). None for error/legacy results. A draft
-    # experiment made from this run measures the same column (twin_repository
-    # ``stored_outcome_column``).
+    # experiment made from this run measures the same column (``stored_outcome_column``).
     outcome_column: Optional[str] = None
 
     # Status
@@ -478,3 +477,25 @@ class SimulationRequest(BaseModel):
     def to_population_filter(self) -> PopulationFilter:
         """Convert to PopulationFilter model."""
         return PopulationFilter(**self.population_filters)
+
+
+#: Key inside a twin_simulations row's ``effect_heterogeneity`` JSON naming the outcome
+#: column its ATE was estimated ON (lane T2). The twin's outcome moved from
+#: ``cohort_conversion_outcome`` to ``adopted``; a draft experiment made from a stored run
+#: must measure what THAT run predicted. Kept in the JSON the row already carries rather
+#: than a new column, so recording it needs no migration.
+OUTCOME_COLUMN_KEY = "outcome_column"
+
+
+def stored_outcome_column(row: Dict[str, Any]) -> Optional[str]:
+    """The outcome column a stored twin_simulations row's effect was estimated on, or
+    ``None`` when the row does not say.
+
+    Rows saved before lane T2 recorded none, and it is not recoverable: runs before
+    migration 147 (2026-09-21) were estimated on ``conversion_rate``, later ones on
+    ``cohort_conversion_outcome``, and no stored field tells them apart (the proposals
+    surface labelled them all ``cohort_conversion_outcome`` before; codex r1 #2).
+    """
+    heterogeneity = row.get("effect_heterogeneity")
+    recorded = heterogeneity.get(OUTCOME_COLUMN_KEY) if isinstance(heterogeneity, dict) else None
+    return recorded if isinstance(recorded, str) and recorded else None

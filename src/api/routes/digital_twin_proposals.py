@@ -52,7 +52,7 @@ from src.api.schemas.digital_twin import (
 )
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.data.per_hcp_cohort_columns import TWIN_OUTCOME_COLUMN
-from src.digital_twin.twin_repository import stored_outcome_column
+from src.digital_twin.models.simulation_models import stored_outcome_column
 from src.repositories.experiment_outcome import UNIT_OUTCOMES_TABLE
 
 logger = logging.getLogger(__name__)

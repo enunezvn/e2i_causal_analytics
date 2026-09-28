@@ -23,6 +23,7 @@ from src.repositories.base import BaseRepository
 
 from .effect.estimate import PROVENANCE_COHORT, PROVENANCE_RWD, PROVENANCE_SYNTHETIC, SUBGROUP_AXES
 from .models.simulation_models import (
+    OUTCOME_COLUMN_KEY,
     EstimateScope,
     FidelityGrade,
     FidelityRecord,
@@ -411,28 +412,6 @@ def stored_filter_regions(row: Dict[str, Any]) -> List[str]:
     filters = row.get("population_filters")
     regions = filters.get("regions") if isinstance(filters, dict) else None
     return [r for r in regions if isinstance(r, str)] if isinstance(regions, list) else []
-
-
-#: Key inside a twin_simulations row's ``effect_heterogeneity`` JSON naming the outcome
-#: column its ATE was estimated ON (lane T2). The twin's outcome moved from
-#: ``cohort_conversion_outcome`` to ``adopted``; a draft experiment made from a stored run
-#: must measure what THAT run predicted. Kept in the JSON the row already carries rather
-#: than a new column, so recording it needs no migration.
-OUTCOME_COLUMN_KEY = "outcome_column"
-
-
-def stored_outcome_column(row: Dict[str, Any]) -> Optional[str]:
-    """The outcome column a stored twin_simulations row's effect was estimated on, or
-    ``None`` when the row does not say.
-
-    Rows saved before lane T2 recorded none, and it is not recoverable: runs before
-    migration 147 (2026-09-21) were estimated on ``conversion_rate``, later ones on
-    ``cohort_conversion_outcome``, and no stored field tells them apart (the proposals
-    surface labelled them all ``cohort_conversion_outcome`` before; codex r1 #2).
-    """
-    heterogeneity = row.get("effect_heterogeneity")
-    recorded = heterogeneity.get(OUTCOME_COLUMN_KEY) if isinstance(heterogeneity, dict) else None
-    return recorded if isinstance(recorded, str) and recorded else None
 
 
 # Subgroup axes a cohort-provenance row can only carry if it was stored before #2097, when

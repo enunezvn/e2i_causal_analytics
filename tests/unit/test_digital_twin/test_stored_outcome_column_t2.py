@@ -12,16 +12,14 @@ import asyncio
 from uuid import uuid4
 
 from src.digital_twin.models.simulation_models import (
+    OUTCOME_COLUMN_KEY,
     EffectHeterogeneity,
     InterventionConfig,
     SimulationRecommendation,
     SimulationResult,
-)
-from src.digital_twin.twin_repository import (
-    OUTCOME_COLUMN_KEY,
-    SimulationRepository,
     stored_outcome_column,
 )
+from src.digital_twin.twin_repository import SimulationRepository
 
 
 class _Insert:
