@@ -516,6 +516,124 @@ async def test_all_null_configured_date_column_is_not_an_incomplete_audit() -> N
 
 
 @pytest.mark.asyncio
+async def test_string_labelled_binary_target_is_audited_not_blocked() -> None:
+    """Codex r3: ``check_single_feature_auc`` cast the target with
+    ``astype(float)``, which raises on ``"yes"``/``"no"`` labels. On main that
+    was swallowed (the AUC audit silently did not run); recording it as an
+    incomplete audit blocked EVERY string-labelled run. The labels are a valid
+    binary target: the check must run, find nothing here, and not block."""
+    frame = _noise_frame()
+    frame["target"] = np.where(frame["target"] == 1, "yes", "no")
+
+    final_state = await _leakage_gate_graph().ainvoke(_leakage_state(frame))
+
+    assert final_state["blocking_issues"] == [], final_state["blocking_issues"]
+    assert final_state["gate_passed"] is True
+
+
+@pytest.mark.asyncio
+async def test_string_labelled_binary_target_leak_is_found() -> None:
+    """...and the same check now actually audits string labels: a feature that
+    separates ``"yes"`` from ``"no"`` is flagged instead of skipped."""
+    rng = np.random.default_rng(22947)
+    n = 200
+    labels = np.array(["no", "yes"] * (n // 2))
+    frame = pd.DataFrame(
+        {
+            "leaky": (labels == "yes") * 2.5 + rng.standard_normal(n),
+            "noise": rng.standard_normal(n),
+            "target": labels,
+        }
+    )
+
+    final_state = await _leakage_gate_graph().ainvoke(_leakage_state(frame))
+
+    blocking = final_state["blocking_issues"] or []
+    assert any("] single_feature_auc: Feature 'leaky'" in i for i in blocking), blocking
+    assert not any("incomplete" in i for i in blocking), blocking
+    assert final_state["gate_passed"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scale", [1, 1_000], ids=["epoch_seconds", "epoch_millis"])
+async def test_epoch_timestamp_feature_dates_are_audited(scale: int) -> None:
+    """Codex r3: ``pd.to_datetime`` reads a bare integer as NANOseconds, so an
+    epoch-seconds 2025 date became 1970-01-01 and never looked "after
+    split_date" — a real temporal leak read as clean."""
+    frame = _noise_frame()
+    feb_2025 = 1_738_368_000  # 2025-02-01T00:00:00Z in epoch seconds
+    frame["event_ts"] = [feb_2025 * scale] * len(frame)
+    state = _leakage_state(
+        frame,
+        scope_spec={
+            "required_features": ["noise_a"],
+            "split_date": "2025-01-01",
+            "feature_date_columns": ["event_ts"],
+        },
+    )
+
+    final_state = await _leakage_gate_graph().ainvoke(state)
+
+    blocking = final_state["blocking_issues"] or []
+    assert any(i.startswith("leakage: Temporal leakage:") and "event_ts" in i for i in blocking), (
+        blocking
+    )
+    assert final_state["gate_passed"] is False
+
+
+@pytest.mark.asyncio
+async def test_small_integer_date_column_is_an_incomplete_audit() -> None:
+    """An integer column too small to be any epoch unit (e.g. a year, or days
+    since some origin) cannot be interpreted; that is an incomplete audit, not
+    a clean one."""
+    frame = _noise_frame()
+    frame["event_ts"] = [2025] * len(frame)
+    state = _leakage_state(
+        frame,
+        scope_spec={
+            "required_features": ["noise_a"],
+            "split_date": "2025-01-01",
+            "feature_date_columns": ["event_ts"],
+        },
+    )
+
+    final_state = await _leakage_gate_graph().ainvoke(state)
+
+    blocking = final_state["blocking_issues"] or []
+    assert any(i.startswith("leakage: Temporal leakage check incomplete") for i in blocking), (
+        blocking
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("second", "leaks"),
+    [("2024-07-15T12:00:00-04:00", False), ("2025-07-15T12:00:00-04:00", True)],
+    ids=["before_split", "after_split"],
+)
+async def test_dst_spanning_offset_strings_are_audited(second: str, leaks: bool) -> None:
+    """Codex r3: offset-aware strings spanning a DST change parse to an OBJECT
+    series (mixed UTC offsets), and ``.dt.tz`` raised — a false "incomplete"
+    block on perfectly valid timestamps. They are compared in UTC now."""
+    frame = _noise_frame()
+    frame["event_ts"] = ["2024-01-15T12:00:00-05:00", second] * (len(frame) // 2)
+    state = _leakage_state(
+        frame,
+        scope_spec={
+            "required_features": ["noise_a"],
+            "split_date": "2025-01-01",
+            "feature_date_columns": ["event_ts"],
+        },
+    )
+
+    final_state = await _leakage_gate_graph().ainvoke(state)
+
+    blocking = final_state["blocking_issues"] or []
+    assert not any("incomplete" in i for i in blocking), blocking
+    assert any(i.startswith("leakage: Temporal leakage:") for i in blocking) is leaks, blocking
+
+
+@pytest.mark.asyncio
 async def test_incomplete_audit_entry_is_retracted_by_a_clean_rerun() -> None:
     """The incomplete-audit entry is a ``leakage:`` entry, so the next
     ``detect_leakage`` pass (the recheck, or a QC retry) replaces it: once the

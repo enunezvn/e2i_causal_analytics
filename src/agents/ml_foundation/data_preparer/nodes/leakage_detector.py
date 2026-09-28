@@ -1209,7 +1209,12 @@ def check_single_feature_auc(
             if mask.sum() < 30:
                 continue
 
-            y = df.loc[mask, target_variable].values.astype(float)
+            # Indicator of one of the two classes, not ``astype(float)``:
+            # string labels ("yes"/"no") are a valid binary target, and the
+            # cast raised on them — a skipped audit on main, a false
+            # incomplete-audit block once crashes are recorded (codex r3,
+            # #2294). AUC is symmetrised below, so which class is 1 is moot.
+            y = (df.loc[mask, target_variable].values == unique_classes[1]).astype(float)
             x = df.loc[mask, feature].values.astype(float)
 
             # AUC can be < 0.5 if relationship is inverted — check both directions
@@ -1359,11 +1364,38 @@ def _parse_configured_dates(df: Any, col: str) -> Any:
     column with no values at all is left alone — there is nothing to leak —
     and so is a partly-parseable one, whose parseable rows are still audited.
     """
-    dates = pd.to_datetime(df[col], errors="coerce")
-    n_values = int(df[col].notna().sum())
+    values = df[col]
+    n_values = int(values.notna().sum())
+    if pd.api.types.is_numeric_dtype(values) and not pd.api.types.is_bool_dtype(values):
+        # A bare number is read as NANOseconds, so an epoch-seconds 2025 date
+        # became 1970-01-01 and never looked "after split_date" (codex r3).
+        dates = pd.to_datetime(values, unit=_epoch_unit(values, col), errors="coerce")
+    else:
+        dates = pd.to_datetime(values, errors="coerce")
+        if dates.dtype == object:
+            # Offset-aware strings spanning a DST change carry mixed UTC
+            # offsets and parse to an OBJECT series with no ``.dt``; compare
+            # them in UTC (codex r3).
+            dates = pd.to_datetime(values, errors="coerce", utc=True)
     if n_values and not dates.notna().any():
         raise ValueError(f"column '{col}' has {n_values} values and none parse as dates")
     return dates
+
+
+def _epoch_unit(values: Any, col: str) -> str:
+    """The epoch unit a numeric date column is written in, from its magnitude.
+
+    Bands keep every unit to plausible calendar dates (seconds 1e9 ~ 2001).
+    A column that fits none — a year, days since some origin — cannot be
+    interpreted, and raises so the caller records an incomplete audit.
+    """
+    median = float(values.dropna().abs().median()) if values.notna().any() else 0.0
+    if median == 0.0 and not values.notna().any():
+        return "ns"  # all-null: nothing to interpret
+    for floor, unit in ((1e17, "ns"), (1e14, "us"), (1e11, "ms"), (1e8, "s")):
+        if median >= floor:
+            return unit
+    raise ValueError(f"numeric column '{col}' (median {median:g}) is not an epoch timestamp")
 
 
 def _check_date_ordering(df: Any, event_col: str, target_col: str) -> tuple:
