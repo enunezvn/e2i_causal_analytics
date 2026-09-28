@@ -71,7 +71,7 @@ takes precedence over Supabase (but not over file-based ingestion).
 | `uniqueness_score` | float | ✅ | quality_checker.py:54 | Dimension score |
 | `timeliness_score` | float | ✅ | quality_checker.py:55 | Dimension score |
 | `expectation_results` | List[Dict] | ✅ | quality_checker.py:67 | GE results |
-| `failed_expectations` | List[str] | ✅ | quality_checker.py:75 | Failed expectations list |
+| `failed_expectations` | List[Dict[str, Any]] | ✅ | quality_checker.py:96 | Blocking expectation results (#2292) |
 | `warnings` | List[str] | ✅ | quality_checker.py:76 | Warnings list |
 | `remediation_steps` | List[str] | ✅ | quality_checker.py:77 | Remediation steps |
 | `blocking_issues` | List[str] | ✅ | quality_checker.py:78 | Critical - blocks training |
