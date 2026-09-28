@@ -13,7 +13,11 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from scripts.verify_adoption_channel_recovery import evaluate_recovery_gate, planted_rd_by_column
+from scripts.verify_adoption_channel_recovery import (
+    BRANDS,
+    evaluate_recovery_gate,
+    planted_rd_by_column,
+)
 from src.data.per_hcp_cohort_columns import (
     ADOPTION_CHANNEL_PLANTED_RD,
     ADOPTION_NULL_CHANNEL,
@@ -89,7 +93,7 @@ def test_a_ci_missing_the_planted_rd_is_reported_not_gated():
         "Kisqali", overrides={("engagement_score", "ci_lower"): 0.15}
     )  # planted 0.138 < 0.15
     result = evaluate_recovery_gate(fits, required_brands=_ONE)
-    assert result.passed
+    assert result.per_brand["Kisqali"].passed
     assert result.per_brand["Kisqali"].covers == 7
     assert "covers 7/8" in result.verdict()
 
@@ -195,9 +199,8 @@ def test_gate_fails_loud_on_an_errored_or_missing_fit():
 
 
 def test_gate_verdict_text_starts_with_the_verdict_word():
-    assert (
-        evaluate_recovery_gate(_fits("Kisqali"), required_brands=_ONE).verdict().startswith("PASS")
-    )
+    all_three = pd.concat([_fits(b) for b in BRANDS], ignore_index=True)
+    assert evaluate_recovery_gate(all_three).verdict().startswith("PASS")
     assert (
         evaluate_recovery_gate(_fits("Kisqali", 0.2), required_brands=_ONE)
         .verdict()
@@ -308,3 +311,14 @@ def test_the_twin_loader_frame_is_what_simulate_estimates_on():
     assert frame["adopted"].notna().all()
     assert (frame["triggers_total_count"] == 10.0).all()
     assert {"hcp_id", "brand", "adopted", "region", *channels} <= set(frame.columns)
+
+
+def test_a_brand_subset_never_certifies():
+    """codex r6 (MED): the null clause is "covers 0 in >= 2 of the 3 brands". Evaluated on
+    fewer brands it must not shrink to "1 of 1": a subset is diagnostic, never a PASS."""
+    one = evaluate_recovery_gate(_fits("Kisqali"), required_brands=_ONE)
+    assert one.per_brand["Kisqali"].passed
+    assert not one.passed
+    assert one.verdict().startswith("FAIL")
+    two = pd.concat([_fits(b) for b in BRANDS[:2]], ignore_index=True)
+    assert not evaluate_recovery_gate(two, required_brands=BRANDS[:2]).passed

@@ -278,10 +278,12 @@ def evaluate_recovery_gate(
                 )
         per_brand[brand] = g
     null_covers = sum(g.null_covers_zero for g in per_brand.values())
+    # Certification is over the full brand set: a subset's per-brand verdicts are diagnostic,
+    # and the null's ">= 2 of 3" is never scaled down to the brands evaluated (codex r6).
     passed = (
-        bool(per_brand)
+        set(BRANDS) <= set(per_brand)
         and all(g.passed for g in per_brand.values())
-        and null_covers >= min(MIN_NULL_COVERING_BRANDS, len(per_brand))
+        and null_covers >= MIN_NULL_COVERING_BRANDS
     )
     return GateResult(
         passed=passed,
