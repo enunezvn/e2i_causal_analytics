@@ -526,22 +526,26 @@ _ANALYZE_LEAKAGE_LLM = (
 )
 
 
-def _remediation_loop_graph():
+def _remediation_loop_graph(adaptive_node: Any):
     """The REAL leakage loop from ``graph.py``, closed onto the gate.
 
-    ``detect_leakage --_route_after_leakage_detection--> leakage_remediation
-    --_route_after_leakage_remediation--> {detect_leakage | finalize_output}``,
-    using the production routing functions. ``adaptive_validity_check`` and the
-    transform..sufficiency chain are omitted: neither reads nor writes
-    ``leakage:`` entries, and several need external services.
+    ``detect_leakage -> adaptive_validity_check --_route_after_leakage_detection-->
+    leakage_remediation --_route_after_leakage_remediation--> {detect_leakage |
+    finalize_output}``, with the production routing functions and the real
+    adaptive node (only its Layer-4 LLM loader stubbed — see
+    ``_no_layer_4_llm``). The transform..sufficiency chain is omitted: none of
+    it reads or writes ``leakage:`` entries, and several nodes need external
+    services.
     """
     graph = StateGraph(DataPreparerState)
     graph.add_node("detect_leakage", detect_leakage)  # type: ignore[arg-type]
+    graph.add_node("adaptive_validity_check", adaptive_node)  # type: ignore[arg-type]
     graph.add_node("leakage_remediation", review_and_remediate_leakage)  # type: ignore[arg-type]
     graph.add_node("finalize_output", finalize_output)  # type: ignore[arg-type]
     graph.set_entry_point("detect_leakage")
+    graph.add_edge("detect_leakage", "adaptive_validity_check")
     graph.add_conditional_edges(
-        "detect_leakage",
+        "adaptive_validity_check",
         _route_after_leakage_detection,
         {"remediate": "leakage_remediation", "continue": "finalize_output"},
     )
@@ -572,6 +576,7 @@ def _kept_leak_frame(n: int = 240) -> pd.DataFrame:
 
 
 @pytest.mark.asyncio
+@pytest.mark.timeout(300)
 async def test_final_remediation_pass_is_rechecked_before_the_gate(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Any
 ) -> None:
@@ -608,7 +613,7 @@ async def test_final_remediation_pass_is_rechecked_before_the_gate(
     }
 
     with patch(_ANALYZE_LEAKAGE_LLM, new=AsyncMock(return_value=analysis)):
-        final_state = await _remediation_loop_graph().ainvoke(state)
+        final_state = await _remediation_loop_graph(_no_layer_4_llm(monkeypatch)).ainvoke(state)
 
     assert final_state["leakage_remediation_status"] == "applied"
     assert final_state["leakage_remediation_attempts"] == 5
@@ -784,3 +789,102 @@ async def test_resolved_feast_entry_is_retracted(monkeypatch: pytest.MonkeyPatch
 
     assert final_state["feast_blocked"] is False
     assert final_state["blocking_issues"] == ["sampling_frame_drift: an unrelated upstream blocker"]
+
+
+# =============================================================================
+# Codex r1 (HIGH) — declared-safe manifest immunity vs. the detector's blocker
+# =============================================================================
+
+_ADAPTIVE_MODULE = "src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check"
+
+
+def _no_layer_4_llm(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Return the REAL adaptive node with only its Layer-4 LLM loader stubbed.
+
+    The loader configures a paid LLM when an API key is in the environment;
+    ``None`` is its own documented "no LM configured" result, so Layer 3, the
+    manifest immunity and the severity merge all run for real.
+    """
+    import importlib
+
+    module = importlib.import_module(_ADAPTIVE_MODULE)
+    monkeypatch.setattr(module, "_try_load_layer_4_classifier", lambda: None)
+    return module.adaptive_validity_check
+
+
+def _detect_adaptive_gate_graph(adaptive_node: Any):
+    """``detect_leakage -> adaptive_validity_check -> finalize_output`` with the
+    production routing; the remediation branch ends the graph (not under test)."""
+    graph = StateGraph(DataPreparerState)
+    graph.add_node("detect_leakage", detect_leakage)  # type: ignore[arg-type]
+    graph.add_node("adaptive_validity_check", adaptive_node)  # type: ignore[arg-type]
+    graph.add_node("finalize_output", finalize_output)  # type: ignore[arg-type]
+    graph.set_entry_point("detect_leakage")
+    graph.add_edge("detect_leakage", "adaptive_validity_check")
+    graph.add_conditional_edges(
+        "adaptive_validity_check",
+        _route_after_leakage_detection,
+        {"remediate": END, "continue": "finalize_output"},
+    )
+    graph.add_edge("finalize_output", END)
+    return graph.compile()
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(300)
+async def test_declared_safe_feature_does_not_block_the_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``lab_claim_count`` is declared pre-index in the CSU manifest. Full
+    manifest immunity (owner decision 2026-06-03, ``8f0eb68be``) exempts it
+    from leakage: ``adaptive_validity_check`` strips its finding and downgrades
+    the severity. But ``detect_leakage`` had already written a ``leakage:``
+    blocker for the same finding, and nothing retracted it — so a
+    contract-certified feature failed the gate anyway. Pre-existing and
+    fail-CLOSED; found by codex r1 because the loop tests had omitted the
+    adaptive node. The detector owns its entries, so it applies the contract.
+    """
+    adaptive = _no_layer_4_llm(monkeypatch)
+    rng = np.random.default_rng(22946)
+    n = 400
+    target = np.array([0, 1] * (n // 2))
+    frame = pd.DataFrame(
+        {
+            # single-feature AUC ~0.86 -> a HIGH structured finding.
+            "lab_claim_count": target * 1.5 + rng.standard_normal(n),
+            "noise": rng.standard_normal(n),
+            "target": target,
+        }
+    )
+    state = _leakage_state(frame, scope_spec={"feature_manifest_source": "csu"})
+
+    final_state = await _detect_adaptive_gate_graph(adaptive).ainvoke(state)
+
+    # Precondition: the immunity really fired downstream.
+    assert final_state["leakage_severity"] not in ("critical", "high")
+    assert final_state["blocking_issues"] == [], final_state["blocking_issues"]
+    assert final_state["gate_passed"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(300)
+async def test_the_same_finding_still_blocks_without_a_manifest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Control: immunity is opt-in per cohort. Without a manifest the same
+    HIGH finding keeps blocking (and routes to remediation)."""
+    adaptive = _no_layer_4_llm(monkeypatch)
+    rng = np.random.default_rng(22946)
+    n = 400
+    target = np.array([0, 1] * (n // 2))
+    frame = pd.DataFrame(
+        {
+            "lab_claim_count": target * 1.5 + rng.standard_normal(n),
+            "noise": rng.standard_normal(n),
+            "target": target,
+        }
+    )
+
+    final_state = await _detect_adaptive_gate_graph(adaptive).ainvoke(_leakage_state(frame))
+
+    assert any("lab_claim_count" in i for i in final_state["blocking_issues"])

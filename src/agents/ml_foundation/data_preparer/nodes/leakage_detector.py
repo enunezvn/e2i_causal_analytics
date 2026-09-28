@@ -218,6 +218,33 @@ async def detect_leakage(state: DataPreparerState) -> Dict[str, Any]:
         blocking_findings = [
             f for f in findings if f.severity in (LeakageSeverity.CRITICAL, LeakageSeverity.HIGH)
         ]
+        # Full manifest immunity (owner decision 2026-06-03): a feature the
+        # cohort's FeatureContract declares pre-index is exempt from leakage.
+        # ``adaptive_validity_check`` strips its findings and downgrades the
+        # severity, but it does not own this node's entries, so the blocker
+        # written here survived and failed the gate on a contract-certified
+        # feature (codex r1 on #2294). This node applies the same contract to
+        # what it blocks on. The adaptive module is already loaded by graph.py.
+        manifest_source = scope_spec.get("feature_manifest_source")
+        if manifest_source and blocking_findings:
+            from .adaptive_validity_check import _declared_safe_immune_features
+
+            immune = _declared_safe_immune_features(
+                {f.feature for f in blocking_findings}, manifest_source
+            )
+            blocking_findings = [f for f in blocking_findings if f.feature not in immune]
+            # ``check_target_leakage`` also emits a legacy string per HIGH /
+            # CRITICAL correlation finding, in this exact generated form.
+            leakage_issues_for_blocking = [
+                i
+                for i in leakage_issues
+                if not any(
+                    i.startswith(f"Potential target leakage: feature '{feat}' has ")
+                    for feat in immune
+                )
+            ]
+        else:
+            leakage_issues_for_blocking = leakage_issues
         # Legacy leakage issues (temporal, contamination) ALWAYS block. They
         # carry no severity, and before f953304ea every leakage issue blocked;
         # that commit filtered STRUCTURED findings by severity and meant to
@@ -227,7 +254,7 @@ async def detect_leakage(state: DataPreparerState) -> Dict[str, Any]:
         # nothing (#2294). Only structured findings are severity-filtered.
         finding_strings = {f.to_issue_string() for f in findings}
         own_blocking: List[str] = [f.to_issue_string() for f in blocking_findings] + [
-            i for i in leakage_issues if i not in finding_strings
+            i for i in leakage_issues_for_blocking if i not in finding_strings
         ]
         # Write the channel on this path even with nothing of our own to add.
         # This node is RE-ENTRANT (graph.py routes leakage_remediation
