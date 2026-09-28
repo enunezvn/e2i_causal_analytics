@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 from src.agents.ml_foundation.model_deployer.nodes.mlflow_registration import (  # noqa: F401
     _get_mlflow_connector,
+    _model_versions_for_run,
     _register_model_mlflow,
     _tag_model_version_mlflow,
     _transition_stage_mlflow,
@@ -1076,19 +1077,13 @@ async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
         if retrain_error:
             return retrain_error
 
-        # Real MLflow registration (#2311: a retrain's retry reuses its recorded version).
-        (
-            registered_model_name,
-            model_version,
-            current_stage,
-            reuse_error,
-        ) = await register_or_reuse_version(
-            state,
-            retrain_of,
-            registry_name,
-            _register_model_mlflow,
-            _get_async_supabase_client_or_none,
-        )
+        # Real MLflow registration (#2311: a retrain never registers a second version).
+        registered_model_name, model_version, current_stage, reuse_error, created = (
+            await register_or_reuse_version(state, retrain_of, registry_name,
+                                            _register_model_mlflow,
+                                            _get_async_supabase_client_or_none,
+                                            _model_versions_for_run)
+        )  # fmt: skip
         if reuse_error:
             return reuse_error
 
@@ -1133,7 +1128,10 @@ async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
                 logger.error("ml_model_registry persistence raised (fail-closed): %s", e)
                 model_registry_id = None
             if retrain_of and model_registry_id is None:
-                return retrain_not_persisted_error(retrain_of, registered_model_name)
+                return await retrain_not_persisted_error(
+                    retrain_of, registered_model_name, model_version if created else None,
+                    _tag_model_version_mlflow,
+                )  # fmt: skip
 
         return {
             "registered_model_name": registered_model_name,

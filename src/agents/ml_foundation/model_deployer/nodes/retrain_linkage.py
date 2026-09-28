@@ -22,7 +22,7 @@ Split out of ``registry_manager`` (module-size ratchet).
 from __future__ import annotations
 
 import logging
-from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -119,21 +119,43 @@ def retrain_experiment_mismatch(
     return True
 
 
-def retrain_not_persisted_error(
-    retrain_of: Dict[str, Any], registered_model_name: Optional[str]
+async def retrain_not_persisted_error(
+    retrain_of: Dict[str, Any],
+    registered_model_name: Optional[str],
+    created_version: Optional[int],
+    tag: Callable[[str, int, Dict[str, str]], Awaitable[bool]],
 ) -> Dict[str, Any]:
     """codex r1: a retrain's deliverable IS the linked registry row; an MLflow version
-    without it must not be promoted as that model."""
+    without it must not be promoted as that model.
+
+    #2311: a version THIS delivery created but could not link (database failure, a
+    refused reuse, a lost unique race) is not left silently: it is tagged
+    ``e2i.role=unlinked`` and named in the error. A reused version is left as it is.
+    """
+    tagged = None
+    if created_version is not None and registered_model_name:
+        tagged = await tag(
+            registered_model_name,
+            int(created_version),
+            {"e2i.role": "unlinked", "e2i.retrain_of": str(retrain_of.get("model_id"))},
+        )
+    orphan = (
+        f"; MLflow version {created_version} was registered but is not linked "
+        f"(tagged e2i.role=unlinked: {tagged})"
+        if created_version is not None
+        else ""
+    )
     return {
         "error": (
             f"retrain candidate {registered_model_name} "
             f"v{retrain_of['new_model_version']} was not written to "
-            "ml_model_registry (see the fail-closed log above)"
+            f"ml_model_registry (see the fail-closed log above){orphan}"
         ),
         "error_type": "retrain_candidate_not_persisted",
         "registration_successful": False,
         "registered_model_name": registered_model_name,
         "model_registry_id": None,
+        "unlinked_mlflow_version": created_version,
     }
 
 
@@ -185,29 +207,52 @@ def reuse_refusal(
     return None
 
 
+RegisterFn = Callable[[str, str], Awaitable[Tuple[Optional[str], Optional[int], Optional[str]]]]
+FindFn = Callable[[str, str], Awaitable[Optional[List[int]]]]
+
+
+def _reuse_error(registry_name: str, retrain_of: Dict[str, Any], why: str) -> Dict[str, Any]:
+    logger.error("retrain candidate %s NOT registered: %s", registry_name, why)
+    return {
+        "error": f"retrain candidate {registry_name} v{retrain_of['new_model_version']} "
+        f"not registered: {why}",
+        "error_type": "retrain_candidate_reuse_refused",
+        "registration_successful": False,
+        "model_registry_id": None,
+    }
+
+
 async def register_or_reuse_version(
     state: Dict[str, Any],
     retrain_of: Optional[Dict[str, Any]],
     registry_name: str,
-    register: Callable[[str, str], Awaitable[Tuple[Optional[str], Optional[int], Optional[str]]]],
+    register: RegisterFn,
     get_client: Callable[[], Awaitable[Optional[Any]]],
-) -> Tuple[Optional[str], Optional[int], Optional[str], Optional[Dict[str, Any]]]:
-    """``(name, version, stage, error)``: register in MLflow, or reuse a retry's version.
+    find_run_versions: FindFn,
+) -> Tuple[Optional[str], Optional[int], Optional[str], Optional[Dict[str, Any]], bool]:
+    """``(name, version, stage, error, created)``: register in MLflow, or reuse (#2311).
 
-    Not a retrain: ``register`` as before. A retrain first reads its candidate row
-    (name, new_model_version): a row this registration may not reuse fails closed BEFORE
-    MLflow (no orphan version is created); a reusable row that records its MLflow version
-    reuses that version (#2311 -- a redelivered job used to register a second one).
+    Not a retrain: ``register`` as before (``created`` True when it returned a version).
+    A retrain never registers a second MLflow version for one candidate:
+      1. its candidate row (name, new_model_version) is read first: a row this registration
+         may not reuse fails closed BEFORE MLflow; a reusable row that records its MLflow
+         version reuses that version (a redelivered job used to register a second one);
+      2. otherwise MLflow is asked for the versions of that name already registered from
+         this run (an earlier delivery whose database write failed): exactly one is reused,
+         more than one is ambiguous and fails closed;
+      3. only then is a new version registered.
     """
     model_uri = state.get("model_uri") or ""
     if not retrain_of:
-        return (*(await register(model_uri, registry_name)), None)
+        name, version, stage = await register(model_uri, registry_name)
+        return name, version, stage, None, version is not None
     from src.agents.ml_foundation.model_deployer.nodes.training_provenance import (
         _parse_mlflow_run_id,
         pinned_training_run_id,
     )
     from src.repositories.ml_experiment import MLModelRegistryRepository
 
+    run_id = pinned_training_run_id(_parse_mlflow_run_id(model_uri), state.get("mlflow_run_id"))
     client = await get_client()
     existing = (
         await MLModelRegistryRepository(supabase_client=client).get_by_name_version(
@@ -217,7 +262,6 @@ async def register_or_reuse_version(
         else None
     )
     if existing is not None and existing.id:
-        run_id = pinned_training_run_id(_parse_mlflow_run_id(model_uri), state.get("mlflow_run_id"))
         refusal = reuse_refusal(
             existing,
             experiment_id=retrain_of["experiment_id"],
@@ -226,19 +270,7 @@ async def register_or_reuse_version(
             mlflow_version=None,
         )
         if refusal:
-            logger.error("retrain candidate %s NOT registered: %s", registry_name, refusal)
-            return (
-                None,
-                None,
-                None,
-                {
-                    "error": f"retrain candidate {registry_name} "
-                    f"v{retrain_of['new_model_version']} not registered: {refusal}",
-                    "error_type": "retrain_candidate_reuse_refused",
-                    "registration_successful": False,
-                    "model_registry_id": None,
-                },
-            )
+            return None, None, None, _reuse_error(registry_name, retrain_of, refusal), False
         if existing.mlflow_model_version:
             logger.warning(
                 "retrain candidate %s v%s: reusing MLflow version %s recorded on row %s "
@@ -248,8 +280,26 @@ async def register_or_reuse_version(
                 existing.mlflow_model_version,
                 existing.id,
             )
-            return registry_name, int(existing.mlflow_model_version), "None", None
-    return (*(await register(model_uri, registry_name)), None)
+            return registry_name, int(existing.mlflow_model_version), "None", None, False
+    earlier = await find_run_versions(registry_name, run_id) if run_id else None
+    if earlier and len(earlier) > 1:
+        why = (
+            f"MLflow already holds versions {earlier} of {registry_name} from run {run_id}; "
+            "which one is the candidate is not determinable"
+        )
+        return None, None, None, _reuse_error(registry_name, retrain_of, why), False
+    if earlier:
+        logger.warning(
+            "retrain candidate %s v%s: reusing MLflow version %s already registered from run "
+            "%s (an earlier delivery did not record it); no new MLflow version created",
+            registry_name,
+            retrain_of["new_model_version"],
+            earlier[0],
+            run_id,
+        )
+        return registry_name, earlier[0], "None", None, False
+    name, version, stage = await register(model_uri, registry_name)
+    return name, version, stage, None, version is not None
 
 
 async def promote_candidate(

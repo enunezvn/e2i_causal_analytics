@@ -20,7 +20,9 @@
 -- model_name. Three registry rows match: cff4f2b5 / faf4ed1d (completed jobs 836578bf /
 -- 36cd579b, stage staging) and c524db0f (FAILED job 073c38eb, stage development), all under
 -- parent 4ec55d13 (initiation_kisqali_goldstd_lr_v1 v1.0). Completed -> 'candidate', failed
--- -> 'archived'. Only rows at 'staging'/'development' and not champion move; any other row,
+-- -> 'archived'. The backfill is pinned to those three (row, job, parent) triples AND still
+-- requires the history join to hold for each. Only rows at 'staging'/'development' and
+-- not champion move; any other row,
 -- and any row an operator has already moved, is left alone. A candidate matched by more
 -- than one history row is skipped (not determinable). Their 'active' ml_deployments rows
 -- without an endpoint become 'registered' (#2308), and each completed job records its one
@@ -108,7 +110,20 @@ BEGIN
       JOIN ml_model_registry c
         ON c.model_name = p.model_name
        AND c.model_version = h.new_model_version
-       AND c.id <> p.id;
+       AND c.id <> p.id
+      -- Pinned to the three audited rows (codex r1): a retrain written between the audit
+      -- and this migration's apply is NOT restaged here (the new writer registers its own
+      -- candidates; an old-code row is left for review rather than guessed at).
+     WHERE (c.id, h.id, p.id) IN (
+            ('c524db0f-1df1-4f21-806f-3b857c5245b9'::uuid,
+             '073c38eb-586b-4f83-adb3-4a7ec0d1d20b'::uuid,
+             '4ec55d13-46c8-4df4-9ec8-7723fad67fb3'::uuid),
+            ('cff4f2b5-a87e-4947-aa2a-243a7fb0ee45'::uuid,
+             '836578bf-0456-433d-9593-dbd373581579'::uuid,
+             '4ec55d13-46c8-4df4-9ec8-7723fad67fb3'::uuid),
+            ('faf4ed1d-15cf-4ae2-88c7-e927e64ec53f'::uuid,
+             '36cd579b-102f-41ec-9003-9261d315f785'::uuid,
+             '4ec55d13-46c8-4df4-9ec8-7723fad67fb3'::uuid));
 
     -- A candidate matched by more than one history row is not determinable: skip it.
     DELETE FROM _m160_matched m

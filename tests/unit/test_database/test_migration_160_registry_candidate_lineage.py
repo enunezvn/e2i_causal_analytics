@@ -45,6 +45,9 @@ NAME = "initiation_kisqali_goldstd_lr_v1"
 SIBLING = "8d1244df-7c38-435e-820f-1f201e51af24"  # another goldstd v1.0 reference row
 DECOY = "11111111-2222-3333-4444-555555555555"  # same name, a version no history row names
 OTHER_DEP = "99999999-8888-7777-6666-555555555555"  # an 'active' no-endpoint deploy of SIBLING
+# codex r1: a retrain completed AFTER the audit -- the join matches it, the pin must not.
+LATE = "22222222-3333-4444-5555-666666666666"
+JOB_LATE = "33333333-4444-5555-6666-777777777777"
 
 
 def _code(path: Path) -> str:
@@ -128,7 +131,9 @@ INSERT INTO ml_model_registry (id, model_name, model_version, algorithm, stage, 
  ('{SIBLING}', 'hcp_adoption_kisqali_goldstd_lr_v1', '1.0', 'logistic_regression_calibrated',
   'staging', false, NULL, '2026-09-28 03:06:38+00'),
  ('{DECOY}', '{NAME}', '1.0_manual_copy', 'logistic_regression_calibrated',
-  'staging', false, 'deadbeef', '2026-09-28 21:00:00+00');
+  'staging', false, 'deadbeef', '2026-09-28 21:00:00+00'),
+ ('{LATE}', '{NAME}', '1.0_retrained_20260929_0101_aaaaaa', 'logistic_regression_calibrated',
+  'staging', false, 'late-run', '2026-09-29 01:03:00+00');
 INSERT INTO ml_deployments (id, model_registry_id, deployment_name, environment, status) VALUES
  ('{DEP_A}', '{CAND_A}', 'd_a', 'staging', 'active'),
  ('{DEP_B}', '{CAND_B}', 'd_b', 'staging', 'active'),
@@ -142,7 +147,9 @@ INSERT INTO ml_retraining_history (id, trigger_type, trigger_reason, model_id, o
  ('{JOB_A}', 'manual', 'r', '{PARENT}', '{PARENT}',
   '1.0_retrained_20260928_1934_725a94', 'completed', '2026-09-28 19:34:09+00'),
  ('{JOB_B}', 'manual', 'r', '{PARENT}', '{PARENT}',
-  '1.0_retrained_20260928_2036_6fbd91', 'completed', '2026-09-28 20:36:59+00');
+  '1.0_retrained_20260928_2036_6fbd91', 'completed', '2026-09-28 20:36:59+00'),
+ ('{JOB_LATE}', 'manual', 'r', '{PARENT}', '{PARENT}',
+  '1.0_retrained_20260929_0101_aaaaaa', 'completed', '2026-09-29 01:01:00+00');
 """
 
 
@@ -209,9 +216,11 @@ def test_backfill_links_retrains_and_moves_only_their_rows(conn):
     assert reg[PARENT] == ("staging", "-", "-")
     assert reg[SIBLING] == ("staging", "-", "-")
     assert reg[DECOY] == ("staging", "-", "-")
+    assert reg[LATE] == ("staging", "-", "-")  # matched by the join, outside the pin
     assert _status(conn) == {DEP_A: "registered", DEP_B: "registered", OTHER_DEP: "active"}
     hist = _history_dep(conn)
     assert hist[JOB_A] == DEP_A and hist[JOB_B] == DEP_B and hist[JOB_FAILED] == "-"
+    assert hist[JOB_LATE] == "-"
 
 
 def test_second_application_changes_nothing(conn):
@@ -259,12 +268,19 @@ def test_rollbacks_restore_the_pre_160_rows_and_160_reapplies(conn):
         )
 
     _apply_159_160(conn)
+    # codex r1: a post-160 candidate no retraining-history row links (a standalone deploy)
+    # must be restored too, not stranded at 'candidate' once the columns are dropped.
+    conn.execute(
+        f"UPDATE ml_model_registry SET retrain_of_id = '{PARENT}', stage = 'candidate' "
+        f"WHERE id = '{DECOY}'",
+        user="postgres",
+    )
     refused = rollback(R159)
     assert refused.returncode != 0 and b"rollback 159 refused" in refused.stderr
 
     assert rollback(R160).returncode == 0
     stages = dict(r.split("|") for r in conn.rows("select id, stage from ml_model_registry"))
-    assert stages[CAND_A] == stages[CAND_B] == "staging"
+    assert stages[CAND_A] == stages[CAND_B] == stages[DECOY] == "staging"
     assert stages[FAILED_ROW] == "development"
     assert _status(conn) == {DEP_A: "active", DEP_B: "active", OTHER_DEP: "active"}
     assert set(_history_dep(conn).values()) == {"-"}

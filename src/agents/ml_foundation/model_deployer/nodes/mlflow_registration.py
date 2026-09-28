@@ -7,7 +7,7 @@ Split out of ``registry_manager`` (module-size ratchet, #2242); behaviour unchan
 """
 
 import logging
-from typing import Any, Dict, Optional, Tuple, cast
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 logger = logging.getLogger(__name__)
 
@@ -80,11 +80,10 @@ async def _register_model_mlflow(
         )
 
         if model_version:
-            return (
-                model_version.name,
-                int(model_version.version),
-                model_version.stage.value if model_version.stage else "None",
-            )
+            # A newly registered MLflow version is at registry stage "None". The connector's
+            # ModelVersion carries ModelStage.DEVELOPMENT ("development"), which is not an
+            # MLflow stage and which validate_promotion's paths do not know (#2310 codex r1).
+            return model_version.name, int(model_version.version), "None"
         return None, None, None
 
     except Exception as e:
@@ -157,3 +156,21 @@ async def _tag_model_version_mlflow(model_name: str, version: int, tags: Dict[st
         logger.warning(f"MLflow tag of {model_name} v{version} failed: {e}")
         return False
     return True
+
+
+async def _model_versions_for_run(model_name: str, run_id: str) -> Optional[List[int]]:
+    """The MLflow versions of ``model_name`` registered from ``run_id`` (#2310 codex r1).
+
+    ``None`` when MLflow cannot be asked (disabled connector, search failure): the caller
+    then cannot prove there is no earlier version and registers as before.
+    """
+    connector = _get_mlflow_connector()
+    client = getattr(connector, "_client", None) if connector else None
+    if client is None:
+        return None
+    try:
+        found = client.search_model_versions(f"name = '{model_name}' and run_id = '{run_id}'")
+    except Exception as e:
+        logger.warning(f"MLflow version search for {model_name} run {run_id} failed: {e}")
+        return None
+    return sorted(int(v.version) for v in found)

@@ -1082,17 +1082,54 @@ async def _execute_real_retraining(
                 f"{parent or None!r}) — the candidate is not linked to the retrained model; "
                 "job marked failed"
             )
-        # #2311: the exact ml_deployments record this run wrote (the column existed, 017,
-        # and was never written).
+        # #2311: the exact MLflow version -- recorded on the row, equal to what the deployer
+        # reports -- and the exact ml_deployments record this run wrote: THIS candidate's,
+        # kept as 'registered' with no endpoint (#2308). The history row then records it
+        # (the column existed, 017, and was never written). Anything else fails closed.
+        reported_version = deployment.get("mlflow_model_version")
         record_id = deployment.get("deployment_record_id")
-        if record_id:
+        dep_rows: List[Dict[str, Any]] = []
+        if record_id and deployment.get("db_persisted") is True:
             try:
-                await repo.update(retraining_id, {"deployment_id": record_id})
-            except Exception as e:  # noqa: BLE001 — an unrecorded link is not a completion
-                return await _mark_failed(
-                    f"candidate {deployed_rid} registered but its ml_deployments record "
-                    f"{record_id} could not be linked to the job ({e}); job marked failed"
+                dep = await (
+                    repo.client.table("ml_deployments")
+                    .select("id, status, endpoint_url")
+                    .eq("id", record_id)
+                    .eq("model_registry_id", deployed_rid)
+                    .limit(1)
+                    .execute()
                 )
+                dep_rows = getattr(dep, "data", None) or []
+            except Exception as e:  # noqa: BLE001 — an unverifiable record is not a completion
+                logger.error(f"Retraining {retraining_id}: deployment lookup failed ({e})")
+        dep_row = dep_rows[0] if dep_rows else {}
+        problems = []
+        if reported_version is None or row.get("mlflow_model_version") is None:
+            problems.append("no MLflow version recorded")
+        elif int(row["mlflow_model_version"]) != int(reported_version):
+            problems.append(
+                f"row records MLflow v{row['mlflow_model_version']}, deployer v{reported_version}"
+            )
+        if not dep_row:
+            problems.append(f"no confirmed ml_deployments record ({record_id!r})")
+        elif dep_row.get("status") != "registered" or dep_row.get("endpoint_url"):
+            problems.append(
+                f"ml_deployments {record_id} is {dep_row.get('status')!r} "
+                f"(endpoint {dep_row.get('endpoint_url')!r}), not 'registered' without one"
+            )
+        if problems:
+            return await _mark_failed(
+                f"candidate {deployed_rid} registered but not completed: "
+                + "; ".join(problems)
+                + "; job marked failed"
+            )
+        try:
+            await repo.update(retraining_id, {"deployment_id": record_id})
+        except Exception as e:  # noqa: BLE001 — an unrecorded link is not a completion
+            return await _mark_failed(
+                f"candidate {deployed_rid} registered but its ml_deployments record "
+                f"{record_id} could not be linked to the job ({e}); job marked failed"
+            )
         notes = (
             f"candidate {retrain_of.get('model_name')!r} "
             f"v{retrain_of.get('new_model_version')!r} registered as candidate, not promoted, "
