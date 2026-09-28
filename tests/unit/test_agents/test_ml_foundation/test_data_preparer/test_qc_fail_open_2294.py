@@ -26,6 +26,7 @@ import pytest
 from langgraph.graph import END, StateGraph
 
 from src.agents.ml_foundation.data_preparer.graph import finalize_output
+from src.agents.ml_foundation.data_preparer.nodes import leakage_detector as ld
 from src.agents.ml_foundation.data_preparer.nodes.leakage_detector import detect_leakage
 from src.agents.ml_foundation.data_preparer.nodes.schema_validator import (
     run_schema_validation,
@@ -172,7 +173,7 @@ def _schema_state() -> Dict[str, Any]:
 
 
 def _raise_runtime(*_args: Any, **_kwargs: Any) -> Any:
-    raise RuntimeError("pandera exploded mid-validation")
+    raise RuntimeError("forced crash inside a dependency")
 
 
 @pytest.mark.asyncio
@@ -192,7 +193,7 @@ async def test_crashed_schema_validation_blocks_the_gate(
     blocking = final_state["blocking_issues"]
     schema_entries = [i for i in blocking if i.startswith("schema: validation error:")]
     assert len(schema_entries) == 1, f"crashed schema audit left no blocker: {blocking!r}"
-    assert "pandera exploded" in schema_entries[0]
+    assert "forced crash inside a dependency" in schema_entries[0]
     assert "sampling_frame_drift: an unrelated upstream blocker" in blocking
     assert final_state["gate_passed"] is False
 
@@ -256,3 +257,248 @@ async def test_schema_entry_is_replaced_not_duplicated_on_re_entry(
     blocking = final_state["blocking_issues"]
     assert sum(i.startswith("schema: ") for i in blocking) == 1, blocking
     assert blocking.count("sampling_frame_drift: an unrelated upstream blocker") == 1
+
+
+# =============================================================================
+# Item 3 — inner leakage checks that swallowed their own crash
+# =============================================================================
+
+
+def _leakage_state(train_df: pd.DataFrame, **extra: Any) -> Dict[str, Any]:
+    scope_spec = {"prediction_target": "target", **extra.pop("scope_spec", {})}
+    return {
+        "experiment_id": "exp-2294-leakage-inner",
+        "train_df": train_df,
+        "scope_spec": scope_spec,
+        **extra,
+        **_CLEAN_UPSTREAM_QC,
+    }
+
+
+def _noise_frame(n: int = 200) -> pd.DataFrame:
+    """No leakage anywhere: a clean run must pass, so a block means the crash."""
+    rng = np.random.default_rng(22940)
+    return pd.DataFrame(
+        {
+            "noise_a": rng.standard_normal(n),
+            "noise_b": rng.standard_normal(n),
+            "target": np.array([0, 1] * (n // 2)),
+        }
+    )
+
+
+def _incomplete_entries(final_state: Dict[str, Any], check: str) -> list:
+    prefix = f"leakage: Leakage audit incomplete: {check}"
+    return [i for i in (final_state["blocking_issues"] or []) if i.startswith(prefix)]
+
+
+@pytest.mark.asyncio
+async def test_clean_frame_passes_the_leakage_gate() -> None:
+    """Control for the tests below: the same frame with nothing crashing
+    passes the gate, so each block below is caused by the crash alone."""
+    state = _leakage_state(_noise_frame(), scope_spec={"required_features": ["noise_a"]})
+
+    final_state = await _leakage_gate_graph().ainvoke(state)
+
+    assert final_state["blocking_issues"] == [], final_state["blocking_issues"]
+    assert final_state["gate_passed"] is True
+
+
+@pytest.mark.asyncio
+async def test_crashed_target_leakage_check_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``check_target_leakage`` wraps its whole loop in one ``except`` that only
+    logged, so a crash mid-loop left every remaining feature unaudited and
+    reported nothing.
+
+    Data that crashes this check for real (e.g. a nullable ``Int64`` column,
+    which ``np.issubdtype`` rejects) also crashes ``_get_numeric_features`` a
+    few lines later, which the node's OUTER ``except`` already blocks on — so
+    it cannot isolate this path. The crash is forced instead inside the check's
+    own dependency: on a continuous target the check correlates with
+    ``Series.corr``, which no other leakage check calls.
+    """
+    frame = _noise_frame()
+    frame["target"] = frame["noise_b"] * 3.0 + 1.0  # continuous target
+    monkeypatch.setattr(pd.Series, "corr", _raise_runtime)
+
+    state = _leakage_state(frame, scope_spec={"required_features": ["noise_a"]})
+    final_state = await _leakage_gate_graph().ainvoke(state)
+
+    entries = _incomplete_entries(final_state, "target_correlation")
+    assert len(entries) == 1, final_state["blocking_issues"]
+    assert "RuntimeError" in entries[0]
+    assert final_state["gate_passed"] is False
+
+
+@pytest.mark.asyncio
+async def test_contamination_is_audited_despite_a_list_column() -> None:
+    """A list-valued column (a JSON array from the source) made the row-hash
+    fallback raise ``unhashable type: 'list'`` when there is no id column, and
+    the check swallowed it: a real 40-row train/validation overlap went
+    unreported and the gate passed. No monkeypatching — the data crashes it.
+
+    The fix does not merely record the crash: such a column never reaches a
+    model (``data_transformer`` drops it), so the rows are compared on the
+    remaining columns and the overlap is actually FOUND.
+    """
+    train = _noise_frame()
+    train["codes"] = [[i % 7] for i in range(len(train))]
+    validation = train.iloc[:40].copy()
+
+    state = _leakage_state(train, validation_df=validation)
+    final_state = await _leakage_gate_graph().ainvoke(state)
+
+    blocking = final_state["blocking_issues"] or []
+    assert any(
+        i.startswith("leakage: Train-validation contamination: 40 samples") for i in blocking
+    ), blocking
+    # ...and the list column is "not applicable" to the categorical check,
+    # not an incomplete audit.
+    assert not [i for i in blocking if "Leakage audit incomplete" in i], blocking
+    assert final_state["gate_passed"] is False
+
+
+@pytest.mark.asyncio
+async def test_crashed_contamination_check_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The contamination check's own ``except``: forced inside the row-hash
+    fallback (``DataFrame.apply`` — used by no other leakage check)."""
+    train = _noise_frame()
+    validation = train.iloc[:40].copy()
+    monkeypatch.setattr(pd.DataFrame, "apply", _raise_runtime)
+
+    final_state = await _leakage_gate_graph().ainvoke(
+        _leakage_state(train, validation_df=validation)
+    )
+
+    entries = _incomplete_entries(final_state, "train_test_contamination")
+    assert len(entries) == 1, final_state["blocking_issues"]
+    assert final_state["gate_passed"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("module_path", "attr", "check"),
+    [
+        ("sklearn.feature_selection", "mutual_info_classif", "mutual_information"),
+        ("sklearn.metrics", "roc_auc_score", "single_feature_auc"),
+    ],
+)
+async def test_crashed_structural_check_blocks(
+    monkeypatch: pytest.MonkeyPatch, module_path: str, attr: str, check: str
+) -> None:
+    """The structural checks catch per check (MI) or per feature (AUC and the
+    rest). The crash is forced inside the check's own sklearn dependency."""
+    import importlib
+
+    monkeypatch.setattr(importlib.import_module(module_path), attr, _raise_runtime)
+
+    final_state = await _leakage_gate_graph().ainvoke(_leakage_state(_noise_frame()))
+
+    assert _incomplete_entries(final_state, check), final_state["blocking_issues"]
+    assert final_state["gate_passed"] is False
+
+
+@pytest.mark.asyncio
+async def test_crashed_temporal_ordering_blocks() -> None:
+    """Comparing a tz-aware event date with a naive label date raises
+    ``TypeError``; ``_check_date_ordering`` returned ``(0, 0.0)`` — "no
+    temporal leakage" — for every row, including rows that do leak."""
+    frame = _noise_frame()
+    n = len(frame)
+    event = pd.date_range("2024-01-01", periods=n, freq="D", tz="UTC")
+    frame["event_date"] = event
+    # Every label date PRECEDES its event: a leak on every row.
+    frame["target_date"] = (event - pd.Timedelta(days=1)).tz_localize(None)
+
+    state = _leakage_state(
+        frame,
+        scope_spec={
+            "required_features": ["noise_a"],
+            "event_date_column": "event_date",
+            "target_date_column": "target_date",
+        },
+    )
+    final_state = await _leakage_gate_graph().ainvoke(state)
+
+    blocking = final_state["blocking_issues"] or []
+    assert any(i.startswith("leakage: Temporal leakage check incomplete") for i in blocking), (
+        blocking
+    )
+    assert final_state["gate_passed"] is False
+
+
+@pytest.mark.asyncio
+async def test_unparseable_split_date_is_an_incomplete_temporal_audit() -> None:
+    """Temporal strategies 2 and 3 both need ``split_date``; an unparseable one
+    skipped them without a word, which read as "no temporal leakage"."""
+    state = _leakage_state(
+        _noise_frame(),
+        scope_spec={
+            "required_features": ["noise_a"],
+            "split_date": "not-a-date",
+            "date_column": "event_date",
+        },
+    )
+
+    final_state = await _leakage_gate_graph().ainvoke(state)
+
+    blocking = final_state["blocking_issues"] or []
+    assert any(
+        i.startswith("leakage: Temporal leakage check incomplete: split_date 'not-a-date'")
+        for i in blocking
+    ), blocking
+    assert final_state["gate_passed"] is False
+
+
+@pytest.mark.asyncio
+async def test_incomplete_audit_entry_is_retracted_by_a_clean_rerun() -> None:
+    """The incomplete-audit entry is a ``leakage:`` entry, so the next
+    ``detect_leakage`` pass (the recheck, or a QC retry) replaces it: once the
+    check completes, the gate can pass again."""
+    state = _leakage_state(_noise_frame(), scope_spec={"required_features": ["noise_a"]})
+    state["blocking_issues"] = [
+        "leakage: Leakage audit incomplete: target_correlation: TypeError: earlier pass"
+    ]
+
+    final_state = await _leakage_gate_graph().ainvoke(state)
+
+    assert final_state["blocking_issues"] == []
+    assert final_state["gate_passed"] is True
+
+
+@pytest.mark.parametrize(
+    "check",
+    [
+        ld.check_perfect_class_separation,
+        ld.check_zero_variance_within_class,
+        ld.check_feature_target_logical_dependency,
+        ld.check_single_feature_auc,
+        ld.check_categorical_class_separation,
+    ],
+)
+def test_every_per_feature_check_records_its_crash(check: Any) -> None:
+    """Function-level sweep over the per-feature ``except`` branches: a feature
+    name that is not a column raises ``KeyError`` inside each check's loop.
+    Every one must report it through ``audit_errors``."""
+    frame = _noise_frame()
+    audit_errors: list = []
+
+    check(frame, "target", ["not_a_column"], audit_errors=audit_errors)
+
+    assert len(audit_errors) == 1, audit_errors
+    assert "'not_a_column'" in audit_errors[0] and "KeyError" in audit_errors[0]
+
+
+@pytest.mark.asyncio
+async def test_regression_target_is_not_an_incomplete_audit() -> None:
+    """Measured while fixing item 3: ``mutual_info_classif`` raised "Unknown
+    label type: continuous" on EVERY regression-target run. Recording every
+    swallowed crash would have blocked all of them. The MI check does not
+    APPLY to a continuous target; that is not an incomplete audit."""
+    frame = _noise_frame()
+    frame["target"] = frame["noise_b"] * 3.0 + 1.0
+
+    final_state = await _leakage_gate_graph().ainvoke(_leakage_state(frame))
+
+    assert final_state["blocking_issues"] == [], final_state["blocking_issues"]
+    assert final_state["gate_passed"] is True
