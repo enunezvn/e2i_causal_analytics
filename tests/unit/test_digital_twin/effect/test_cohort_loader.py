@@ -447,7 +447,7 @@ async def test_the_adoption_read_is_paged_past_the_server_row_cap_in_a_total_ord
     reads = client.reads("hcp_brand_adoption")
     assert [q.window for q in reads] == [(0, 999), (1000, 1999), (2000, 2999)]
     assert all(q.orders == ["hcp_id", "brand"] for q in reads)
-    assert all(q.filters == {"brand": BRAND} for q in reads)
+    assert all(q.filters == {"brand": BRAND, "is_synthetic": True} for q in reads)
 
 
 async def test_a_short_adoption_read_fails_loud_rather_than_joining_a_subset():
@@ -491,6 +491,55 @@ async def test_rollup_rows_that_carry_no_channel_are_not_collapsed_into_the_conf
     assert h0["n_metric_rows"] == 1
     assert str(h0["max_metric_date"])[:10] == "2026-06-01"
     assert "h9999" not in set(frame["hcp_id"])
+
+
+async def test_only_synthetic_gold_rows_are_read_on_both_tables():
+    """codex r1 #1: the estimate is labelled synthetic-gold (PROVENANCE_COHORT), so a REAL row
+    on either table must never be collapsed or joined into it (0 real rows live today)."""
+    rollups = [{**r, "is_synthetic": True} for r in _cohort_rows(600, with_all_channels=True)]
+    adoption = [{**a, "is_synthetic": True} for a in _adoption_rows(rollups)]
+    real_rollup = {**rollups[0], "is_synthetic": False, "triggers_total_count": 9999.0}
+    real_only = {**rollups[1], "hcp_id": "h8888", "is_synthetic": False}
+    real_adoption = {"hcp_id": "h8888", "brand": BRAND, "adopted": 1, "is_synthetic": False}
+    client = _FakeClient([*rollups, real_rollup, real_only], [*adoption, real_adoption])
+    frame = await cohort_loader.load_cohort_frame(client, BRAND)
+
+    assert "h8888" not in set(frame["hcp_id"])
+    h0 = frame.set_index("hcp_id").loc["h0000"]
+    assert h0["triggers_total_count"] == rollups[0]["triggers_total_count"]
+    assert all(q.filters.get("is_synthetic") is True for q in client.calls)
+
+
+@pytest.mark.parametrize("table", ["business_metrics", "hcp_brand_adoption"])
+async def test_a_read_without_an_exact_count_fails_loud(table):
+    """codex r1 #3: completeness is checked against the server's count; no count, no check,
+    so the read refuses rather than trusting it."""
+
+    class _NoCount(_FakeClient):
+        def table(self, name):
+            query = super().table(name)
+            if name != table:
+                return query
+            real = query.execute
+
+            async def execute():
+                result = await real()
+                result.count = None
+                return result
+
+            query.execute = execute
+            return query
+
+    with pytest.raises(RuntimeError, match=table):
+        await cohort_loader.load_cohort_frame(_NoCount(_cohort_rows(600)), BRAND)
+
+
+async def test_a_cohort_larger_than_the_rollup_read_fails_loud(monkeypatch):
+    """codex r1 #3: at more rows than ``_FETCH_LIMIT`` the one read returns exactly the limit,
+    which the old check accepted; an arbitrary subset would then be collapsed."""
+    monkeypatch.setattr(cohort_loader, "_FETCH_LIMIT", 500)
+    with pytest.raises(RuntimeError, match="business_metrics"):
+        await cohort_loader.load_cohort_frame(_FakeClient(_cohort_rows(600)), BRAND)
 
 
 async def test_a_truncated_rollup_read_fails_loud_rather_than_collapsing_a_subset():

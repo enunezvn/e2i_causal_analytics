@@ -2,20 +2,23 @@
 
 Phase 2: reads a brand's ``per_hcp_rollup`` rows (``business_metrics``) so
 :class:`CohortEffectDataProvider` can estimate a region-standardized treatment
-effect for the cohort-estimable interventions.
+effect for the cohort-estimable interventions. This is **synthetic-gold** data
+(``is_synthetic=true``) — the intended showcase substrate before real-world data
+is connected. Async DB access lives here (called from the async API route)
+because the effect provider / simulation engine run synchronously off the event
+loop; the cohort is pre-loaded and handed to the provider as a DataFrame.
 
 Lane T2 (2026-09-28): the estimand is ``hcp_brand_adoption.adopted``, which lives on a
 different table at a different grain. The frame is therefore TWO reads: the rollups
 (treatment channels, confounders, labels), collapsed to one row per (hcp_id, brand) with
 ``src.data.per_hcp_cohort_collapse`` — the rules the adoption re-plant built its channel
 term from, so the estimator's median contrast is the planted contrast — and the brand's
-``adopted`` labels, paged. They are left-joined on (hcp_id, brand): a pair without an
-adoption row carries a NULL outcome, which the usable-row rule drops, so estimation sees
-exactly the inner join while the refusal can still say the OUTCOME is what is missing. This is **synthetic-gold** data
-(``is_synthetic=true``) — the intended showcase substrate before real-world data
-is connected. Async DB access lives here (called from the async API route)
-because the effect provider / simulation engine run synchronously off the event
-loop; the cohort is pre-loaded and handed to the provider as a DataFrame.
+``adopted`` labels, paged. Both reads take ``is_synthetic = true`` rows only: the estimate
+is labelled synthetic-gold (``PROVENANCE_COHORT``), and a real row must not be mixed into it
+(a real-world cohort needs its own path and provenance). Both are checked against the
+server's exact count. They are left-joined on (hcp_id, brand): a pair without an adoption
+row carries a NULL outcome, which the usable-row rule drops, so estimation sees exactly the
+inner join while the refusal can still say the OUTCOME is what is missing.
 """
 
 from __future__ import annotations
@@ -109,6 +112,7 @@ async def _load_adoption(client: Any, brand: str) -> pd.DataFrame:
             client.table(TWIN_OUTCOME_TABLE)
             .select(f"hcp_id,brand,{TWIN_OUTCOME_COLUMN}", count="exact")
             .eq("brand", brand)
+            .eq("is_synthetic", True)
             .order("hcp_id")
             .order("brand")
             .range(len(rows), len(rows) + _ADOPTION_PAGE_SIZE - 1)
@@ -116,16 +120,21 @@ async def _load_adoption(client: Any, brand: str) -> pd.DataFrame:
         )
         if expected is None:
             expected = getattr(result, "count", None)
+            if expected is None:
+                raise RuntimeError(
+                    f"{TWIN_OUTCOME_TABLE}[{brand}]: the server returned no exact count, so "
+                    "the paged read cannot be checked for completeness"
+                )
         page = getattr(result, "data", None) or []
         rows.extend(page)
-        if not page or (expected is not None and len(rows) >= expected):
+        if not page or len(rows) >= expected:
             break
     else:
         raise RuntimeError(
             f"{TWIN_OUTCOME_TABLE}[{brand}]: paged read hit {_ADOPTION_MAX_PAGES} pages "
             "before exhausting the rows"
         )
-    if expected is not None and len(rows) != expected:
+    if len(rows) != expected:
         raise RuntimeError(
             f"{TWIN_OUTCOME_TABLE}[{brand}]: paged read returned {len(rows)} rows but the "
             f"server reports {expected}; refusing to estimate on a partial outcome read"
@@ -154,16 +163,19 @@ async def load_cohort_frame(client: Any, brand: str) -> pd.DataFrame:
         .select(_COHORT_COLUMNS, count="exact")
         .eq("metric_type", COHORT_METRIC_TYPE)
         .eq("brand", brand)
+        .eq("is_synthetic", True)
         .limit(_FETCH_LIMIT)
         .execute()
     )
     rows = getattr(result, "data", None) or []
     expected = getattr(result, "count", None)
-    if expected is not None and len(rows) < min(expected, _FETCH_LIMIT):
-        # A server max-rows cap below the limit would drop HCPs from the collapse silently.
+    if expected is None or len(rows) != expected:
+        # A server max-rows cap, or a cohort past _FETCH_LIMIT, would drop HCPs from the
+        # collapse silently; so would trusting a read the server did not count.
         raise RuntimeError(
-            f"{COHORT_TABLE}[{brand}]: the rollup read returned {len(rows)} of {expected} rows; "
-            "refusing to estimate on a truncated cohort"
+            f"{COHORT_TABLE}[{brand}]: the rollup read returned {len(rows)} rows against a "
+            f"server count of {expected} (limit {_FETCH_LIMIT}); refusing to estimate on a "
+            "cohort that may be truncated"
         )
     df = flatten_specialty_relation(pd.DataFrame(rows))
     if df.empty:
