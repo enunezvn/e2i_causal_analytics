@@ -409,7 +409,7 @@ def test_feature_drift_sql_success_does_not_consult_mlflow():
     client.rpc.return_value.execute.return_value = MagicMock(data=[{"avg_psi": 0.13}])
     # Poison MLflow (via the constructor param) so consulting it would surface — it must not be.
     poisoned = MagicMock()
-    poisoned.get_latest_versions.side_effect = AssertionError("MLflow consulted on SQL success")
+    poisoned.search_model_versions.side_effect = AssertionError("MLflow consulted on SQL success")
     calc = ModelPerformanceCalculator(db_client=client, mlflow_client=poisoned)
     value, error = calc._calc_feature_drift({"model_name": "m"})
     assert (value, error) == (0.13, None)
@@ -427,7 +427,7 @@ def test_feature_drift_null_avg_psi_falls_through_to_fail_loud():
     client = MagicMock()
     client.rpc.return_value.execute.return_value = MagicMock(data=[{"avg_psi": None}])
     mlflow_client = MagicMock()
-    mlflow_client.get_latest_versions.return_value = []  # no versions -> model_not_found, NO network
+    mlflow_client.search_model_versions.return_value = []  # no versions -> model_not_found, NO network
     calc = ModelPerformanceCalculator(db_client=client, mlflow_client=mlflow_client)
     value, error = calc._calc_feature_drift({"model_name": "m"})
     assert value is None

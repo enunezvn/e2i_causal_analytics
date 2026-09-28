@@ -3,7 +3,8 @@
 Drives the real repository facades (BaseRepository / MLExperimentRepository /
 MLModelRegistryRepository / RetrainingHistoryRepository) so a test asserts on the rows
 that LANDED, not on mock call shapes. Supports the builder chain those repositories use:
-select / eq / neq / in_ / is_ / not_ / like / order / limit / range / insert / update /
+select / eq / neq / in_ / is_ / not_ / or_ (``col.[not.]op.value`` terms for eq / neq / is /
+in) / like / order / limit / range / insert / update /
 upsert / delete. Unknown columns in an ``eq`` filter do not match (like PostgREST);
 ``order`` sorts like Postgres (chained keys, NULLS LAST ascending / FIRST descending).
 """
@@ -76,6 +77,30 @@ class _AsyncQuery:
     def like(self, col, pattern):
         return self._add("like", col, pattern)
 
+    def or_(self, filters: str, *_a, **_k):
+        """PostgREST ``or=(...)``: any term matches. Terms are ``col.[not.]op.value``."""
+        terms, depth, cur = [], 0, ""
+        for ch in filters:
+            if ch == "," and depth == 0:
+                terms.append(cur)
+                cur = ""
+                continue
+            depth += ch == "("
+            depth -= ch == ")"
+            cur += ch
+        terms.append(cur)
+        parsed = []
+        for term in terms:
+            col, rest = term.split(".", 1)
+            negate = rest.startswith("not.")
+            if negate:
+                rest = rest[4:]
+            op, value = rest.split(".", 1)
+            if op == "in":
+                value = [v.strip() for v in value.strip("()").split(",")]
+            parsed.append(({"in": "in"}.get(op, op), col, value, negate))
+        return self._add("or", None, parsed)
+
     def order(self, column, *, desc=False, **_k):
         # PostgREST semantics: chained calls append sort keys; ASC puts NULLs last,
         # DESC puts them first (Postgres defaults).
@@ -96,27 +121,27 @@ class _AsyncQuery:
 
     # execution ------------------------------------------------------------
     def _match(self, row: Dict[str, Any]) -> bool:
-        for kind, col, val, negate in self._filters:
-            present = col in row
-            if kind == "eq":
-                ok = present and str(row.get(col)).lower() == str(val).lower()
-            elif kind == "neq":
-                ok = present and str(row.get(col)).lower() != str(val).lower()
-            elif kind == "in":
-                ok = present and str(row.get(col)) in {str(v) for v in val}
-            elif kind == "is":
-                ok = (row.get(col) is None) if val in ("null", None) else (row.get(col) == val)
-            elif kind == "like":
-                import fnmatch
+        return all(self._one(row, *f) for f in self._filters)
 
-                ok = present and fnmatch.fnmatch(str(row.get(col)), str(val).replace("%", "*"))
-            else:
-                ok = True
-            if negate:
-                ok = not ok
-            if not ok:
-                return False
-        return True
+    def _one(self, row: Dict[str, Any], kind, col, val, negate) -> bool:
+        if kind == "or":
+            return any(self._one(row, *term) for term in val) != negate
+        present = col in row
+        if kind == "eq":
+            ok = present and str(row.get(col)).lower() == str(val).lower()
+        elif kind == "neq":
+            ok = present and str(row.get(col)).lower() != str(val).lower()
+        elif kind == "in":
+            ok = present and str(row.get(col)) in {str(v) for v in val}
+        elif kind == "is":
+            ok = (row.get(col) is None) if val in ("null", None) else (row.get(col) == val)
+        elif kind == "like":
+            import fnmatch
+
+            ok = present and fnmatch.fnmatch(str(row.get(col)), str(val).replace("%", "*"))
+        else:
+            ok = True
+        return (not ok) if negate else ok
 
     async def execute(self):
         rows = self._store.setdefault(self._table, [])

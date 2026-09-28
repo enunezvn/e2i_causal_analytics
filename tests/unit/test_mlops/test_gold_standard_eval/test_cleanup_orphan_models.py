@@ -149,6 +149,16 @@ class _TableProxy:
         self._pending.append(("limit", n))
         return self
 
+    # the canonical-row predicate + deterministic order of the name resolver (#2310); the
+    # canned registry lookup below answers per handle, so they only need to chain.
+    def or_(self, filters: str) -> "_TableProxy":
+        self._pending.append(("or", filters))
+        return self
+
+    def order(self, col: str, desc: bool = False) -> "_TableProxy":
+        self._pending.append(("order", col, desc))
+        return self
+
     async def execute(self) -> MagicMock:
         self._pending.append(("execute",))
 

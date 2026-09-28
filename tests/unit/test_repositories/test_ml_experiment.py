@@ -31,7 +31,7 @@ def _install_select_chain(mock_client, mock_execute):
     chain depth (the #893 ``test_causal_path.py`` idiom).
     """
     query = MagicMock()
-    for m in ("eq", "limit", "offset", "order", "gte", "lte", "in_", "is_"):
+    for m in ("eq", "limit", "offset", "order", "gte", "lte", "in_", "is_", "or_"):
         getattr(query, m).return_value = query
     query.execute = mock_execute
     mock_client.table.return_value.select.return_value = query

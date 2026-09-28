@@ -243,20 +243,24 @@ async def _apply_update(client: Any, row_id: str, update: dict) -> None:
 
 
 async def _fetch_registry_row(client: Any, model_name: str) -> dict | None:
-    res = await (
+    from src.repositories.model_registry_roles import canonical_rows
+
+    # #2310: canonical rows only. A retrain of this model registers a 'candidate' row under
+    # the same name (and a failed one is 'archived'); neither is the row the owner ruled on,
+    # and counting them would make every retrain block this promotion as "ambiguous".
+    res = await canonical_rows(
         client.table("ml_model_registry")
         .select(
             "id,model_name,auc,stage,is_champion,artifact_path,experiment_id,promoted_at,"
             "training_provenance"
         )
         .eq("model_name", model_name)
-        .execute()
-    )
+    ).execute()
     rows = res.data or []
     if len(rows) > 1:
         # (model_name, model_version) is unique but model_name alone is not —
-        # a hypothetical v2.0 would make "the row to promote" ambiguous. Refuse
-        # loudly rather than promote an arbitrary one.
+        # a hypothetical canonical v2.0 would make "the row to promote" ambiguous.
+        # Refuse loudly rather than promote an arbitrary one.
         raise RuntimeError(
             f"{len(rows)} registry rows for {model_name!r}; refusing ambiguous promotion"
         )

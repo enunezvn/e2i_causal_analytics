@@ -70,6 +70,9 @@ class _ChainableQuery:
     def neq(self, *a: Any) -> "_ChainableQuery":
         return self._record("neq", *a)
 
+    def or_(self, *a: Any) -> "_ChainableQuery":
+        return self._record("or_", *a)
+
     def gt(self, *a: Any) -> "_ChainableQuery":
         return self._record("gt", *a)
 

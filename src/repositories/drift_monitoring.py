@@ -42,6 +42,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from pydantic import BaseModel, Field
 
 from src.repositories.base import BaseRepository
+from src.repositories.model_registry_roles import resolve_canonical_model_id
 from src.repositories.query_utils import match_nullable_column
 
 logger = logging.getLogger(__name__)
@@ -219,11 +220,19 @@ def _is_open_month_backtest_row(row: Dict[str, Any], month_start: datetime) -> b
 async def _resolve_model_id(client: Any, model_version: Optional[str]) -> Optional[str]:
     """Resolve an app-level model handle to a ``model_id`` uuid.
 
-    - If the handle already *is* a uuid, use it directly.
-    - Else look it up in ``ml_model_registry`` (by ``model_version`` then
-      ``model_name``).
+    - If the handle already *is* a uuid, use it directly (the EXACT-id path:
+      provenance, retrain completion and lineage pass the row they mean, and a
+      retrain candidate's uuid resolves to that candidate).
+    - Else it is a NAME-style handle (``model_version`` label, then
+      ``model_name``): resolve it to the CANONICAL row for the name (#2310) —
+      never a ``candidate`` / ``archived`` / ``deprecated`` row, newest first,
+      deterministic (``resolve_canonical_model_id``). Before #2310 this was an
+      unordered ``.limit(1)``, so a name could resolve to a retrain candidate
+      and ``MetricRecorder`` would delete and re-record metrics under it.
     - Else return ``None`` (unregistered model -> NULL FK; the handle is
-      preserved in the row's jsonb so it is never lost). Never fabricated.
+      preserved in the row's jsonb so it is never lost). Never fabricated. A
+      registry lookup failure also returns ``None`` so recording drift is never
+      blocked by it.
     """
     if not model_version:
         return None
@@ -231,22 +240,7 @@ async def _resolve_model_id(client: Any, model_version: Optional[str]) -> Option
         return model_version
     if not client:
         return None
-    try:
-        for col in ("model_version", "model_name"):
-            res = await (
-                client.table("ml_model_registry")
-                .select("id")
-                .eq(col, model_version)
-                .limit(1)
-                .execute()
-            )
-            if res.data:
-                return str(res.data[0]["id"])
-    except Exception:
-        # A registry lookup failure must not block recording drift — fall back
-        # to the preserved-handle path rather than raising.
-        return None
-    return None
+    return await resolve_canonical_model_id(client, model_version)
 
 
 def _apply_model_filter(query: Any, model_id: Optional[str], model_version: str, jsonb_col: str):

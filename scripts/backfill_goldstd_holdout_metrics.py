@@ -4,9 +4,12 @@ window (``test`` + ``holdout``) WITHOUT a full eval re-run.
 A full re-run retrains AND re-registers each model, which trips the
 ``ml_drift_history`` RESTRICT FK (23503). This script avoids that: it re-scores
 each model's OOS-union window and records the metrics against the EXISTING
-model_id (resolved by name) via ``MetricRecorder.record_run`` — no
-``register_cohort_model`` call, so no FK trip. The registry row's ``auc``
-column is refreshed with a plain UPDATE (no delete/insert, so no FK exposure).
+model_id via ``MetricRecorder.record_run`` — no ``register_cohort_model`` call,
+so no FK trip. The name is resolved ONCE to its canonical registry row (#2310:
+never a retrain ``candidate`` / archived row) and every read and write below uses
+that id. The registry row's ``auc`` column is refreshed with a plain UPDATE by id
+(no delete/insert, so no FK exposure; by name it would also rewrite the name's
+retrain candidates).
 
 OOS-UNION POLICY (2026-07-23): the headline scores every row the champion never
 saw — ``data_split IN ('test','holdout')`` — matching ``_OOS_EVAL_SPLITS`` in
@@ -141,12 +144,14 @@ async def _rescore_one(client, spec):
     )
 
 
-async def _stored_holdout(client, model_name):
-    from src.repositories.drift_monitoring import _resolve_model_id
+async def _registry_target(client, model_name: str) -> str | None:
+    """The canonical registry row for ``model_name`` (#2310), resolved once per model."""
+    from src.repositories.model_registry_roles import resolve_canonical_model_id
 
-    mid = await _resolve_model_id(client, model_name)
-    if mid is None:
-        return None
+    return await resolve_canonical_model_id(client, model_name)
+
+
+async def _stored_holdout(client, mid: str):
     res = await (
         client.table("ml_performance_metrics")
         .select("metric_name,metric_value")
@@ -166,12 +171,12 @@ def _faithful(recomputed: dict | None, stored: dict) -> tuple[bool, float, float
     return (d_auc <= TOL and d_acc <= TOL), d_auc, d_acc
 
 
-async def _update_registry_auc(client, model_name: str, auc: float) -> None:
-    """Plain UPDATE of the registry row's auc (keeps id — no FK exposure)."""
+async def _update_registry_auc(client, model_id: str, auc: float) -> None:
+    """Plain UPDATE of ONE registry row's auc, by id (keeps id — no FK exposure)."""
     await (
         client.table("ml_model_registry")
         .update({"auc": round(float(auc), 4)})
-        .eq("model_name", model_name)
+        .eq("id", model_id)
         .execute()
     )
 
@@ -195,7 +200,8 @@ async def main(dry_run: bool, only: str | None) -> int:
                 print(f"  SKIP {model_name}: {err}")
                 skipped += 1
                 continue
-            stored = await _stored_holdout(client, model_name)
+            mid = await _registry_target(client, model_name)
+            stored = await _stored_holdout(client, mid) if mid else None
             if not stored:
                 print(f"  SKIP {model_name}: not registered / no stored holdout")
                 skipped += 1
@@ -227,7 +233,7 @@ async def main(dry_run: bool, only: str | None) -> int:
                 ok += 1
                 continue
             await recorder.record_run(
-                model_name,
+                mid,
                 [(res["ts"], m, res["n"])],
                 source="holdout",
                 split_version=None,
@@ -243,12 +249,12 @@ async def main(dry_run: bool, only: str | None) -> int:
                 ),
             )
             await recorder.record_curves(
-                model_name,
+                mid,
                 res["curves"],
                 measured_at=res["ts"],
                 sample_size=res["n"],
             )
-            await _update_registry_auc(client, model_name, m["auc_roc"])
+            await _update_registry_auc(client, mid, m["auc_roc"])
             print(f"  DONE {model_name}: recorded faithful({window}) {summary}")
             ok += 1
         except Exception as e:  # noqa: BLE001 — one model's failure must not abort the rest

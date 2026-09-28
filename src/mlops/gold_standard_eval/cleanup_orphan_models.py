@@ -4,7 +4,8 @@ Three pooled/single-brand models were superseded by the per-brand gold-standard 
 introduced in P3 (gold_standard_model_eval_20260614).  This script retires EXACTLY those
 three handles — and ONLY those three — by:
 
-1. Resolving each handle to a registry UUID via ``_resolve_model_id``.
+1. Resolving each handle to a registry UUID via ``_resolve_model_id`` (the canonical row for
+   the name, #2310: an already-archived row reads as absent, so a re-run is a no-op).
 2. Counting (and optionally deleting) their ``ml_performance_metrics`` rows.
 3. Setting ``ml_model_registry.stage = 'archived'`` on the registry row (reversible;
    does NOT hard-DELETE the registry row, preserving audit history and FK integrity).
@@ -127,7 +128,7 @@ async def decommission(db: Any = None, *, execute: bool = False) -> dict[str, An
         model_id = await _resolve_model_id(client, handle)
 
         if model_id is None:
-            logger.info("[%s] absent — not found in ml_model_registry; skipping.", handle)
+            logger.info("[%s] absent — no canonical ml_model_registry row; skipping.", handle)
             results.append(
                 {
                     "handle": handle,

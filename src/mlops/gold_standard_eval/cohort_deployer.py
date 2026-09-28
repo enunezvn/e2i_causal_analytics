@@ -28,7 +28,8 @@ How it DIFFERS from ``src/mlops/prediction_synthesizer_deploy.py``
    ``model_stage_enum`` value (``database/ml/mlops_tables.sql``) — which:
      * is EXCLUDED by ``get_models_for_target`` (serving is unaffected), and
      * is STILL resolvable by ``_resolve_model_id`` (matches by model_name then
-       model_version, regardless of stage) so the trend read-path finds it.
+       model_version, among canonical stages — staging is one, a retrain candidate is not,
+       #2310) so the trend read-path finds it.
 
    A distinct experiment (``initiation_goldstd_eval_v1``) and distinct
    model_name (``csu_initiation_goldstd_lr_v1``) keep it cleanly separated from
