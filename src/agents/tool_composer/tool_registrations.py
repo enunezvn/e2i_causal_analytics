@@ -3893,8 +3893,8 @@ def _targeted_effect(frame: Any, regions: List[str]) -> _TargetedEffect:
 
     A second fit of ``estimate_cohort_effect`` on the same frame with the engine's seed and
     alpha (``CohortCausalEstimator`` defaults), so its point estimate for a region is the
-    engine's region effect; ``ate_interval`` over the targeted cohort rows gives the
-    interval. The engine's DEPLOY / REFINE / SKIP policy (same minimum effect, power and
+    engine's region effect; the forest's doubly-robust mean and standard error over the
+    targeted cohort rows give the interval. The engine's DEPLOY / REFINE / SKIP policy (same minimum effect, power and
     alpha) is then applied to it; the experiment is sized separately by the shared
     ``experiment_size``. A region without a treated-vs-control contrast in the cohort is
     refused.

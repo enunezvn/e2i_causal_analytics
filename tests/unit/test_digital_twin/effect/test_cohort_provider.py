@@ -41,12 +41,16 @@ def _make_cohort(n: int = 3000, seed: int = 0) -> pd.DataFrame:
     # Pre-treatment confounder columns the direct estimator adjusts for (present subset).
     market_share = np.clip(base * 0.5 + rng.uniform(0, 0.5, size=n), 0, 1)
     triggers_total_count = rng.poisson(lam=np.clip(50 + 80 * base, 1, None)).astype(float)
+    # The twin's outcome (lane T2): a 0/1 label drawn from the same engagement-driven
+    # probability. The continuous column stays for the retained region-only baseline.
+    adopted = (rng.random(n) < np.clip(conversion - 0.3, 0.02, 0.98)).astype(int)
     return pd.DataFrame(
         {
             "region": regions,
             "engagement_score": engagement,
             "call_frequency": call_frequency,
             "cohort_conversion_outcome": conversion,
+            "adopted": adopted,
             "market_share": market_share,
             "triggers_total_count": triggers_total_count,
         }
@@ -83,14 +87,14 @@ def test_region_standardized_ate_removes_region_confounding():
 
 def test_cohort_provider_returns_raw_cohort_frame():
     """The provider returns the RAW cohort (no synthetic injected-effect handoff):
-    treatment=engagement_score, outcome=cohort_conversion_outcome, region as effect modifier,
+    treatment=engagement_score, outcome=adopted (hcp_brand_adoption, lane T2), region as effect modifier,
     the present pre-treatment confounders, and ground_truth_ate=None (estimated, not
     injected)."""
     cohort = _make_cohort()
     provider = CohortEffectDataProvider(cohort, seed=42)
     frame = provider.get_training_frame("digital_engagement", brand="Remibrutinib", twin_type="hcp")
     assert frame.treatment_var == "engagement_score"
-    assert frame.outcome_var == "cohort_conversion_outcome"
+    assert frame.outcome_var == "adopted"
     assert frame.ground_truth_ate is None  # estimated from data, NOT injected
     assert frame.confounders == ["market_share", "triggers_total_count"]
     assert frame.effect_modifiers == ["region"]
@@ -140,7 +144,7 @@ def test_cohort_provider_call_frequency_estimable_from_its_own_channel():
     provider = CohortEffectDataProvider(_make_cohort())
     frame = provider.get_training_frame("call_frequency_increase", brand="Kisqali", twin_type="hcp")
     assert frame.treatment_var == "call_frequency"
-    assert frame.outcome_var == "cohort_conversion_outcome"
+    assert frame.outcome_var == "adopted"
     assert frame.ground_truth_ate is None
 
 
