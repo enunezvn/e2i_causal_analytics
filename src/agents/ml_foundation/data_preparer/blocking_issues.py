@@ -67,7 +67,6 @@ __all__ = [
     "KIND_SEPARATOR",
     "merge_blocking_issues",
     "tag_blocking_issue",
-    "untag_blocking_issue",
 ]
 
 #: Separator between an entry's kind and its message. Matches the shape
@@ -85,19 +84,6 @@ KIND_SCHEMA_VALIDATION = "schema"
 def tag_blocking_issue(kind: str, message: str) -> str:
     """Prefix ``message`` with its producing node's ``kind``."""
     return f"{kind}{KIND_SEPARATOR}{message}"
-
-
-def untag_blocking_issue(kind: str, issue: str) -> Optional[str]:
-    """The message inside ``issue`` if it carries ``kind``, else ``None``.
-
-    Callers that match on an entry's CONTENT must use this rather than
-    searching the whole tagged string: the kind prefix is part of that string
-    and can produce false hits. ``leakage: `` contains ``age``, so a leaked
-    feature named ``age`` matched every leakage entry — including unrelated
-    ones — when the prune searched the tagged form (codex r2 HIGH on #2283).
-    """
-    prefix = f"{kind}{KIND_SEPARATOR}"
-    return issue[len(prefix) :] if issue.startswith(prefix) else None
 
 
 def merge_blocking_issues(

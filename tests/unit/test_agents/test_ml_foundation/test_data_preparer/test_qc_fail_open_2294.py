@@ -25,9 +25,16 @@ import pandas as pd
 import pytest
 from langgraph.graph import END, StateGraph
 
-from src.agents.ml_foundation.data_preparer.graph import finalize_output
+from src.agents.ml_foundation.data_preparer.graph import (
+    _route_after_leakage_detection,
+    _route_after_leakage_remediation,
+    finalize_output,
+)
 from src.agents.ml_foundation.data_preparer.nodes import leakage_detector as ld
 from src.agents.ml_foundation.data_preparer.nodes.leakage_detector import detect_leakage
+from src.agents.ml_foundation.data_preparer.nodes.leakage_remediation import (
+    review_and_remediate_leakage,
+)
 from src.agents.ml_foundation.data_preparer.nodes.schema_validator import (
     run_schema_validation,
 )
@@ -144,7 +151,7 @@ def _schema_gate_graph(*, passes: int = 1):
         graph.add_node(name, run_schema_validation)  # type: ignore[arg-type]
     graph.add_node("finalize_output", finalize_output)  # type: ignore[arg-type]
     graph.set_entry_point(names[0])
-    for a, b in zip(names, names[1:]):
+    for a, b in zip(names, names[1:], strict=False):
         graph.add_edge(a, b)
     graph.add_edge(names[-1], "finalize_output")
     graph.add_edge("finalize_output", END)
@@ -502,3 +509,110 @@ async def test_regression_target_is_not_an_incomplete_audit() -> None:
 
     assert final_state["blocking_issues"] == [], final_state["blocking_issues"]
     assert final_state["gate_passed"] is True
+
+
+# =============================================================================
+# Item 4 — leakage remediation's free-text retraction + the unrechecked 5th pass
+# =============================================================================
+
+_ANALYZE_LEAKAGE_LLM = (
+    "src.agents.ml_foundation.data_preparer.nodes.leakage_remediation._analyze_leakage_with_llm"
+)
+
+
+def _remediation_loop_graph():
+    """The REAL leakage loop from ``graph.py``, closed onto the gate.
+
+    ``detect_leakage --_route_after_leakage_detection--> leakage_remediation
+    --_route_after_leakage_remediation--> {detect_leakage | finalize_output}``,
+    using the production routing functions. ``adaptive_validity_check`` and the
+    transform..sufficiency chain are omitted: neither reads nor writes
+    ``leakage:`` entries, and several need external services.
+    """
+    graph = StateGraph(DataPreparerState)
+    graph.add_node("detect_leakage", detect_leakage)  # type: ignore[arg-type]
+    graph.add_node("leakage_remediation", review_and_remediate_leakage)  # type: ignore[arg-type]
+    graph.add_node("finalize_output", finalize_output)  # type: ignore[arg-type]
+    graph.set_entry_point("detect_leakage")
+    graph.add_conditional_edges(
+        "detect_leakage",
+        _route_after_leakage_detection,
+        {"remediate": "leakage_remediation", "continue": "finalize_output"},
+    )
+    graph.add_conditional_edges(
+        "leakage_remediation",
+        _route_after_leakage_remediation,
+        {"recheck": "detect_leakage", "continue": "finalize_output", "end": END},
+    )
+    graph.add_edge("finalize_output", END)
+    return graph.compile()
+
+
+def _kept_leak_frame(n: int = 240) -> pd.DataFrame:
+    """``age`` leaks at HIGH (single-feature AUC ~0.85, not auto-droppable);
+    ``leak_b`` is a near copy of the target; three clean noise features."""
+    rng = np.random.default_rng(22944)
+    target = np.array([0, 1] * (n // 2))
+    return pd.DataFrame(
+        {
+            "age": target * 1.5 + rng.standard_normal(n),
+            "leak_b": target * 3.0 + rng.normal(0.0, 0.05, n),
+            "clean_a": rng.standard_normal(n),
+            "clean_b": rng.standard_normal(n),
+            "clean_c": rng.standard_normal(n),
+            "target": target,
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_final_remediation_pass_is_rechecked_before_the_gate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """The remediation node retracted the ``leakage:`` entry of EVERY leaked
+    feature — including one it did not drop — and relied on the recheck to
+    rebuild what was still true. ``_route_after_leakage_remediation`` skipped
+    that recheck once ``attempts`` reached the max, and the node sets
+    ``attempts`` to 5 before routing, so the 5th successful pass went straight
+    on with the over-retracted channel: a still-present HIGH leak passed.
+
+    The LLM (an external service) is the only thing patched: its analysis
+    drops ``leak_b`` and keeps ``age`` as a "legitimate predictor".
+    """
+    from unittest.mock import AsyncMock, patch
+
+    # Isolate the on-disk analysis cache so a cached analysis cannot stand in
+    # for the patched one.
+    monkeypatch.setenv("E2I_CACHE_DIR", str(tmp_path))
+    analysis = {
+        "leakage_classifications": {"leak_b": "tautological", "age": "legitimate"},
+        "features_to_drop": ["leak_b"],
+        "replacement_candidates": [],
+        "recommended_feature_set": ["clean_a", "clean_b", "clean_c"],
+        "viable": True,
+        "reasoning": "leak_b encodes the label; age is a legitimate predictor",
+    }
+    state = {
+        "experiment_id": "exp-2294-final-pass",
+        "train_df": _kept_leak_frame(),
+        "scope_spec": {"prediction_target": "target"},
+        # Four passes already spent: the next successful one is the last.
+        "leakage_remediation_attempts": 4,
+        **_CLEAN_UPSTREAM_QC,
+    }
+
+    with patch(_ANALYZE_LEAKAGE_LLM, new=AsyncMock(return_value=analysis)):
+        final_state = await _remediation_loop_graph().ainvoke(state)
+
+    assert final_state["leakage_remediation_status"] == "applied"
+    assert final_state["leakage_remediation_attempts"] == 5
+    assert "leak_b" not in final_state["train_df"].columns
+    assert "age" in final_state["train_df"].columns  # kept: still leaking
+
+    blocking = final_state["blocking_issues"] or []
+    assert any(i.startswith("leakage: ") and "'age'" in i for i in blocking), (
+        f"the kept HIGH leak on 'age' was retracted and never rebuilt: {blocking!r}"
+    )
+    # What remediation genuinely fixed is gone — rebuilt from the recheck.
+    assert not any("leak_b" in i for i in blocking), blocking
+    assert final_state["gate_passed"] is False
