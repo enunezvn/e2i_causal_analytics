@@ -155,7 +155,7 @@ class _TableProxy:
         self._pending.append(("or", filters))
         return self
 
-    def order(self, col: str, desc: bool = False) -> "_TableProxy":
+    def order(self, col: str, desc: bool = False, **_k: object) -> "_TableProxy":
         self._pending.append(("order", col, desc))
         return self
 

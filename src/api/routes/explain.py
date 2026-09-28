@@ -546,17 +546,16 @@ async def _get_latest_versions_by_model_type() -> Dict[str, Optional[str]]:
         if client is None:
             return versions
 
-        # One SELECT for all model types (``registered_at``: there is no ``created_at``,
-        # database/ml/mlops_tables.sql:166). Without the is_synthetic predicate (#894) a
-        # synthetic row, and without the canonical predicate (#2310) an unreviewed retrain
-        # candidate, would win the latest-version race on this user route.
+        # One SELECT for all types (``registered_at``, mlops_tables.sql:166). Without is_synthetic
+        # (#894) a synthetic row, without the canonical predicate (#2310) a retrain candidate,
+        # would win the latest-version race here; NULLS LAST so an undated row never wins.
         result = await (
             client.table("ml_model_registry")
             .select("model_name,model_version,registered_at")
             .in_("model_name", list(versions.keys()))
             .eq("is_synthetic", False)
             .or_(CANONICAL_STAGE_FILTER)
-            .order("registered_at", desc=True)
+            .order("registered_at", desc=True, nullsfirst=False)
             .execute()
         )
 
@@ -580,7 +579,7 @@ async def _get_latest_versions_by_model_type() -> Dict[str, Optional[str]]:
             .like("model_name", "%_goldstd_lr_v1")
             .eq("is_synthetic", False)
             .or_(CANONICAL_STAGE_FILTER)
-            .order("registered_at", desc=True)
+            .order("registered_at", desc=True, nullsfirst=False)
             .execute()
         )
         for r in goldstd.data or []:
@@ -2251,7 +2250,8 @@ async def _resolve_model_registry_id(model_name: str) -> Optional[str]:
             .eq("model_name", model_name)
             .eq("is_synthetic", False)
             .or_(CANONICAL_STAGE_FILTER)  # #2310: SHAP rows go under the model the name serves
-            .order("registered_at", desc=True)
+            .order("registered_at", desc=True, nullsfirst=False)
+            .order("id", desc=True)
             .limit(1)
             .execute()
         )

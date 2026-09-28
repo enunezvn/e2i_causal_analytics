@@ -101,10 +101,10 @@ class _AsyncQuery:
             parsed.append(({"in": "in"}.get(op, op), col, value, negate))
         return self._add("or", None, parsed)
 
-    def order(self, column, *, desc=False, **_k):
+    def order(self, column, *, desc=False, nullsfirst=None, **_k):
         # PostgREST semantics: chained calls append sort keys; ASC puts NULLs last,
-        # DESC puts them first (Postgres defaults).
-        self._order.append((column, desc))
+        # DESC puts them first (Postgres defaults) unless ``nullsfirst`` says otherwise.
+        self._order.append((column, desc, desc if nullsfirst is None else bool(nullsfirst)))
         return self
 
     def limit(self, n, *_a, **_k):
@@ -121,12 +121,24 @@ class _AsyncQuery:
 
     # execution ------------------------------------------------------------
     def _match(self, row: Dict[str, Any]) -> bool:
-        return all(self._one(row, *f) for f in self._filters)
+        return all(self._one(row, *f) is True for f in self._filters)
 
-    def _one(self, row: Dict[str, Any], kind, col, val, negate) -> bool:
+    def _one(self, row: Dict[str, Any], kind, col, val, negate) -> Optional[bool]:
+        """SQL three-valued logic: ``None`` is UNKNOWN (a NULL compared with ``eq`` / ``neq`` /
+        ``in`` / ``like``), stays UNKNOWN under ``not``, and a filter keeps only TRUE rows."""
         if kind == "or":
-            return any(self._one(row, *term) for term in val) != negate
+            results = [self._one(row, *term) for term in val]
+            ok_or: Optional[bool] = (
+                True
+                if any(r is True for r in results)
+                else (None if any(r is None for r in results) else False)
+            )
+            return ok_or if ok_or is None or not negate else not ok_or
+        if kind not in ("eq", "neq", "in", "is", "like"):
+            raise NotImplementedError(f"fake supabase: unsupported filter {kind!r}")
         present = col in row
+        if kind != "is" and present and row.get(col) is None:
+            return None
         if kind == "eq":
             ok = present and str(row.get(col)).lower() == str(val).lower()
         elif kind == "neq":
@@ -135,12 +147,10 @@ class _AsyncQuery:
             ok = present and str(row.get(col)) in {str(v) for v in val}
         elif kind == "is":
             ok = (row.get(col) is None) if val in ("null", None) else (row.get(col) == val)
-        elif kind == "like":
+        else:  # like
             import fnmatch
 
             ok = present and fnmatch.fnmatch(str(row.get(col)), str(val).replace("%", "*"))
-        else:
-            ok = True
         return (not ok) if negate else ok
 
     async def execute(self):
@@ -168,14 +178,14 @@ class _AsyncQuery:
                 rows.remove(r)
             return SimpleNamespace(data=[dict(r) for r in hit], count=len(hit))
         out = [dict(r) for r in rows if self._match(r)]
-        for column, desc in reversed(self._order):  # stable sort, last key first
+        for column, desc, nulls_first in reversed(self._order):  # stable sort, last key first
             present = [r for r in out if r.get(column) is not None]
             nulls = [r for r in out if r.get(column) is None]
             present.sort(
                 key=lambda r: r[column] if isinstance(r[column], (int, float)) else str(r[column]),
                 reverse=desc,
             )
-            out = nulls + present if desc else present + nulls
+            out = nulls + present if nulls_first else present + nulls
         out = out[self._offset :]
         if self._limit is not None:
             out = out[: self._limit]

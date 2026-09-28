@@ -48,15 +48,17 @@ MLFLOW_CANDIDATE_ROLE = "candidate"
 CANONICAL_STAGE_FILTER = f"stage.is.null,stage.not.in.({','.join(NON_CANONICAL_STAGES)})"
 
 
-def canonical_rows(query: Any) -> Any:
-    """Restrict a PostgREST ``ml_model_registry`` query to canonical rows."""
-    return query.or_(CANONICAL_STAGE_FILTER)
+#: Canonical rows plus retrain candidates: for a caller that opts in to candidates. Archived /
+#: deprecated rows stay out either way.
+CANONICAL_OR_CANDIDATE_FILTER = "stage.is.null,stage.not.in.(archived,deprecated)"
 
 
-def non_candidate_rows(query: Any) -> Any:
-    """Restrict a PostgREST ``ml_model_registry`` query to rows that are not retrain candidates
-    (NULL stage kept). For readers already scoped by another role predicate (e.g. champion)."""
-    return query.or_(f"stage.is.null,stage.neq.{CANDIDATE_STAGE}")
+def canonical_rows(query: Any, *, include_candidates: bool = False) -> Any:
+    """Restrict a PostgREST ``ml_model_registry`` query to canonical rows (plus candidates when
+    the caller explicitly opts in)."""
+    return query.or_(
+        CANONICAL_OR_CANDIDATE_FILTER if include_candidates else CANONICAL_STAGE_FILTER
+    )
 
 
 def is_canonical_stage(stage: Optional[str]) -> bool:
@@ -75,7 +77,8 @@ async def resolve_canonical_model_id(client: Any, handle: Optional[str]) -> Opti
 
     Looks the handle up as a ``model_version`` label, then as a ``model_name`` (the order the
     monitoring handles have always used), among canonical rows only, newest ``registered_at``
-    first with ``id`` as the tie-break, so the answer never depends on physical row order.
+    first (NULLS LAST: a row with no timestamp never beats a dated one) with ``id`` as the
+    tie-break, so the answer never depends on physical row order.
     More than one canonical match is logged: it is legitimate (e.g. a development and a staging
     version of one name) but the caller gets the newest, and an operator should know.
     A lookup failure returns ``None`` (callers fall back to their preserved-handle path).
@@ -86,7 +89,7 @@ async def resolve_canonical_model_id(client: Any, handle: Optional[str]) -> Opti
         for col in ("model_version", "model_name"):
             res = await (
                 canonical_rows(client.table(TABLE).select("id,stage,registered_at").eq(col, handle))
-                .order("registered_at", desc=True)
+                .order("registered_at", desc=True, nullsfirst=False)
                 .order("id", desc=True)
                 .limit(2)
                 .execute()

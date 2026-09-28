@@ -8,16 +8,17 @@ stage change alone.
 
 Real Postgres + real PostgREST, opt-in (``E2I_DB_INTEGRATION=1`` + docker): a throwaway
 Postgres container of prod's own image, the tables built from the repo's VERBATIM DDL
-(``database/ml/mlops_tables.sql`` + ``017_model_monitoring_tables.sql``) plus migrations 159 and
-160 as the runner applies them, and a throwaway PostgREST of prod's own image in front of it.
+(``database/ml/mlops_tables.sql`` + ``017_model_monitoring_tables.sql``) plus migrations 159,
+160 and 161 as the runner applies them, and a throwaway PostgREST of prod's own image in front of it.
 The readers run unmodified through real ``postgrest`` clients. Nothing here reads or writes
 ``supabase-db`` / ``supabase-rest`` beyond ``docker inspect`` for the image tags.
 
 The seed mirrors the live rows migration 160 was written for (ids, names, versions, stages as
-Lane A measured them 2026-09-28). The parent row is UPDATEd after its candidates are written
-(the backfill script's ``auc`` refresh does exactly that), so in physical order it sits AFTER
-its candidates: an unordered ``.eq(name).limit(1)`` returns a candidate, which
-``test_the_fixture_reproduces_the_unordered_hazard`` asserts, so a green here is the fix at
+Lane A measured them 2026-09-28). The parent row is UPDATEd after its retrain rows are written
+(the backfill script's ``auc`` refresh does exactly that), so its live tuple sits after them.
+``test_the_fixture_reproduces_the_unordered_hazard`` sends the pre-#2310 query shape (an
+unordered ``.eq(model_name).limit(1)``) through the same PostgREST and asserts it answers with a
+NON-canonical row (the archived failed retrain or a candidate), so a green here is the fix at
 work and not a lucky heap order.
 """
 
@@ -41,6 +42,8 @@ REPO = Path(__file__).resolve().parents[3]
 MIGRATIONS = REPO / "database" / "migrations"
 M159 = MIGRATIONS / "159_registry_candidate_stage_and_lineage_enums.sql"
 M160 = MIGRATIONS / "160_registry_candidate_stage_and_lineage.sql"
+M161 = MIGRATIONS / "161_get_latest_model_canonical.sql"
+R161 = MIGRATIONS / "rollback_161_get_latest_model_canonical.sql"
 
 EXP_INIT = "0e0e0e0e-0000-4000-8000-000000000001"
 EXP_HCP = "0e0e0e0e-0000-4000-8000-000000000002"
@@ -67,6 +70,12 @@ NULL_NAME = "lane2310_null_stage"
 NULL_STAGE = "e0e0e0e0-0000-4000-8000-000000000001"
 NULL_CAND = "e0e0e0e0-0000-4000-8000-000000000002"
 DEPRECATED = "e0e0e0e0-0000-4000-8000-000000000003"
+
+EXP_EDGE = "0e0e0e0e-0000-4000-8000-000000000005"
+UNDATED_NAME = "lane2310_undated"
+UNDATED = "f0f0f0f0-0000-4000-8000-000000000001"  # canonical, registered_at NULL
+DATED = "f0f0f0f0-0000-4000-8000-000000000002"  # canonical, dated
+ARCHIVED_CHAMP = "f0f0f0f0-0000-4000-8000-000000000003"  # archived but still is_champion
 
 _OPT_IN = "E2I_DB_INTEGRATION"
 
@@ -109,7 +118,8 @@ INSERT INTO ml_experiments (id, experiment_name, prediction_target) VALUES
  ('{EXP_INIT}', 'initiation_kisqali_goldstd_eval_v1', 'initiation_kisqali'),
  ('{EXP_HCP}', 'hcp_adoption_kisqali_goldstd_eval_v1', 'hcp_adoption_kisqali'),
  ('{EXP_CHAMP}', 'lane2310_champion_exp', 'lane2310_target'),
- ('{EXP_DUAL}', 'lane2310_dual_exp', 'lane2310_dual_target');
+ ('{EXP_DUAL}', 'lane2310_dual_exp', 'lane2310_dual_target'),
+ ('{EXP_EDGE}', 'lane2310_edge_exp', 'lane2310_edge_target');
 INSERT INTO ml_model_registry (id, experiment_id, model_name, model_version, algorithm, stage,
                                is_champion, mlflow_run_id, registered_at) VALUES
  ('{PARENT}', '{EXP_INIT}', '{NAME}', '1.0', 'logistic_regression_calibrated', 'staging', false,
@@ -153,6 +163,17 @@ INSERT INTO ml_model_registry (id, experiment_id, model_name, model_version, alg
  ('{DEPRECATED}', '{EXP_DUAL}', '{NULL_NAME}', '0.9', 'logistic_regression', 'deprecated', false,
   '2026-09-04 00:00:00+00');
 
+-- registered_at is nullable: an undated canonical row must not beat a dated one. And an
+-- archived row that kept is_champion (transition_stage does not clear it on a direct archive).
+INSERT INTO ml_model_registry (id, experiment_id, model_name, model_version, algorithm, stage,
+                               is_champion, is_synthetic, registered_at) VALUES
+ ('{UNDATED}', '{EXP_EDGE}', '{UNDATED_NAME}', '0.1', 'logistic_regression', 'staging', false,
+  false, NULL),
+ ('{DATED}', '{EXP_EDGE}', '{UNDATED_NAME}', '0.2', 'logistic_regression', 'staging', false,
+  false, '2026-09-05 00:00:00+00'),
+ ('{ARCHIVED_CHAMP}', '{EXP_EDGE}', 'lane2310_archived_champion', '1.0', 'logistic_regression',
+  'archived', true, false, '2026-09-06 00:00:00+00');
+
 -- A holdout metric the candidate already carries: a name-handle re-record must not delete it.
 INSERT INTO ml_performance_metrics (model_id, metric_name, metric_value, source, measured_at)
 VALUES ('{CAND_A}', 'auc_roc', 0.6100, 'holdout', '2026-09-28 19:40:00+00');
@@ -188,6 +209,7 @@ def conn(throwaway_pg):
     )
     assert apply_migration(c, M159, record=M159.name) == "unwrapped"
     assert apply_migration(c, M160, record=M160.name) == "wrapped"
+    assert apply_migration(c, M161, record=M161.name) == "wrapped"
     c.execute(_SEED, user="postgres")
     # Statistics as autovacuum keeps them on a live table: the planner then reads this small
     # table in physical order, where the updated parent sits after its candidates.
@@ -230,9 +252,15 @@ def _one(conn, sql: str) -> str:
 # --------------------------------------------------------------------------------------------
 
 
-def test_the_fixture_reproduces_the_unordered_hazard(conn):
-    first = _one(conn, f"select id from ml_model_registry where model_name = '{NAME}' limit 1")
-    assert first != PARENT, "the unordered name lookup must reach a non-canonical row first"
+async def test_the_fixture_reproduces_the_unordered_hazard(conn, aclient):
+    """The pre-#2310 query shape, through the same PostgREST and planner the readers use."""
+    res = await (
+        aclient.table("ml_model_registry").select("id").eq("model_name", NAME).limit(1).execute()
+    )
+    first = res.data[0]["id"]
+    assert first in {FAILED_ROW, CAND_A, CAND_B}, (
+        "the unordered name lookup must answer with a non-canonical row"
+    )
     newest = _one(
         conn,
         f"select id from ml_model_registry where model_name = '{NAME}' "
@@ -281,6 +309,15 @@ async def test_a_null_stage_row_is_canonical_and_deprecated_is_not(aclient):
     from src.repositories.drift_monitoring import _resolve_model_id
 
     assert await _resolve_model_id(aclient, NULL_NAME) == NULL_STAGE
+
+
+async def test_an_undated_canonical_row_never_beats_a_dated_one(aclient, patched_async_factory):
+    """registered_at is nullable and DESC puts NULL first in Postgres: NULLS LAST is required."""
+    from src.api.routes import explain
+    from src.repositories.drift_monitoring import _resolve_model_id
+
+    assert await _resolve_model_id(aclient, UNDATED_NAME) == DATED
+    assert await explain._resolve_model_registry_id(UNDATED_NAME) == DATED
 
 
 async def test_exact_name_version_resolver(aclient):
@@ -417,6 +454,17 @@ async def test_champion_lookup_skips_a_candidate_unless_asked(aclient):
     assert asked is not None and str(asked.id) == CHAMP_CAND
 
 
+async def test_an_archived_champion_is_never_the_champion(aclient):
+    from src.repositories.ml_experiment import MLModelRegistryRepository
+
+    repo = MLModelRegistryRepository(supabase_client=aclient)
+    for include in (False, True):
+        got = await repo.get_champion_model(
+            experiment_id=uuid.UUID(EXP_EDGE), include_candidates=include
+        )
+        assert got is None, (include, got)
+
+
 async def test_models_by_stage_returns_candidates_only_for_the_candidate_stage(aclient):
     from src.repositories.ml_experiment import MLModelRegistryRepository
 
@@ -480,6 +528,36 @@ async def _with_async_factory(monkeypatch, rest, fn):
     monkeypatch.setattr(factories, "get_async_supabase_client", _async_client)
     monkeypatch.setattr(repositories, "get_supabase_client", rest.sync_service_role_client)
     return await fn()
+
+
+# --------------------------------------------------------------------------------------------
+# SQL: get_latest_model (migration 161)
+# --------------------------------------------------------------------------------------------
+
+
+async def test_get_latest_model_rpc_returns_the_canonical_row(aclient):
+    res = await aclient.rpc(
+        "get_latest_model", {"p_experiment_name": "initiation_kisqali_goldstd_eval_v1"}
+    ).execute()
+    assert [r["model_id"] for r in res.data] == [PARENT]
+    edge = await aclient.rpc(
+        "get_latest_model", {"p_experiment_name": "lane2310_edge_exp"}
+    ).execute()
+    assert [r["model_id"] for r in edge.data] == [DATED]
+
+
+def test_161_rollback_restores_the_old_body_and_reapplies(conn):
+    from tests.unit.test_database.learning_loop._pg import apply_migration
+
+    q = "select model_id from get_latest_model('initiation_kisqali_goldstd_eval_v1')"
+    proc = conn.pg.run_script(conn.db, R161.read_bytes(), single_transaction=True, user="postgres")
+    assert proc.returncode == 0, proc.stderr
+    assert conn.rows(q) == [CAND_B], "the pre-161 body answers with the newest candidate"
+    assert conn.rows(f"select count(*) from schema_migrations where filename = '{M161.name}'") == [
+        "0"
+    ]
+    assert apply_migration(conn, M161, record=M161.name) == "wrapped"
+    assert conn.rows(q) == [PARENT]
 
 
 def test_seed_names_are_unique_per_version(conn):

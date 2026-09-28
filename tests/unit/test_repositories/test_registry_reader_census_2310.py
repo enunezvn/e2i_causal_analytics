@@ -11,8 +11,7 @@ checked against the code, so a NEW accessor fails here until someone has decided
 Categories:
 
 * ``CANONICAL`` — a name-style lookup restricted to canonical rows
-  (``canonical_rows`` / ``.or_(CANONICAL_STAGE_FILTER)`` / ``non_candidate_rows`` /
-  ``resolve_canonical_model_id``).
+  (``canonical_rows`` / ``.or_(CANONICAL_STAGE_FILTER)`` / ``resolve_canonical_model_id``).
 * ``STAGE`` — scoped to ``production`` / ``staging`` (or ``shadow``); ``candidate`` is outside.
 * ``EXACT`` — one row it already identifies: by ``id`` (incl. ``get_by_id``) or by the unique
   ``(model_name, model_version)``; a candidate is returned only when it is the row asked for.
@@ -58,7 +57,8 @@ ACCESSORS: Dict[str, Tuple[str, str]] = {
     ),
     "src/repositories/ml_experiment.py::get_champion_model": (
         CANONICAL,
-        "champion flag + non-candidate unless include_candidates=True",
+        "champion flag + canonical rows (candidates only with include_candidates=True; "
+        "archived/deprecated never)",
     ),
     # --- stage-scoped (production / staging) -------------------------------------------------
     "src/agents/drift_monitor/connectors/supabase_connector.py::get_available_models": (
@@ -152,7 +152,7 @@ RESOLVER_CALLERS: Dict[str, Set[str]] = {
 }
 _RESOLVERS = ("_resolve_model_id", "resolve_canonical_model_id", "resolve_model_id_by_name_version")
 
-_CANONICAL_CALLS = {"canonical_rows", "non_candidate_rows", "resolve_canonical_model_id"}
+_CANONICAL_CALLS = {"canonical_rows", "resolve_canonical_model_id"}
 _SERVED_STAGES = {"production", "staging", "shadow"}
 
 
@@ -391,9 +391,10 @@ SQL_OBJECTS: Dict[str, Tuple[str, str]] = {
     "ml_model_health_dashboard": (STAGE, "production/staging (every definition, 017..103)"),
     "v_champion_models": (STAGE, "champion + production/staging"),
     "get_latest_model": (
-        OPT_IN,
-        "stage-agnostic newest-by-experiment; ZERO callers in src/, scripts/, frontend "
-        "(checked 2026-09-28) — must gain a canonical predicate before anything calls it",
+        CANONICAL,
+        "newest canonical row of an experiment (migration 161; the base body in "
+        "mlops_tables.sql was stage-agnostic). No caller in src/, scripts/, frontend "
+        "(2026-09-28), but PostgREST exposes it as an RPC",
     ),
     "ensure_single_champion": (
         OPT_IN,
@@ -406,6 +407,9 @@ SQL_OBJECTS: Dict[str, Tuple[str, str]] = {
 _SQL_DEF = re.compile(
     r"CREATE\s+(?:OR\s+REPLACE\s+)?(?:MATERIALIZED\s+)?(VIEW|FUNCTION)\s+(?:public\.)?(\w+)",
     re.I,
+)
+_SQL_CANONICAL = re.compile(
+    r"stage\s+NOT\s+IN\s*\(\s*'candidate'\s*,\s*'archived'\s*,\s*'deprecated'\s*\)", re.I
 )
 _SQL_STAGE = re.compile(
     r"stage\s+IN\s*\(\s*'production'\s*,\s*'staging'\s*\)"
@@ -420,9 +424,16 @@ def _strip_sql_comments(text: str) -> str:
 
 
 def _sql_definitions() -> Dict[str, List[Tuple[str, str]]]:
-    """name -> [(file, body)] for every view/function definition that reads the registry."""
+    """name -> [(file, body)] for every view/function definition that reads the registry, in
+    apply order: database/ml/ base files first, then numbered migrations ascending."""
     out: Dict[str, List[Tuple[str, str]]] = {}
-    for path in sorted((REPO_ROOT / "database").rglob("*.sql")):
+
+    def _apply_order(path: Path) -> Tuple[int, int, str]:
+        m = re.match(r"(\d+)_", path.name)
+        in_migrations = path.parent.name == "migrations"
+        return (1 if in_migrations else 0, int(m.group(1)) if m else 0, path.as_posix())
+
+    for path in sorted((REPO_ROOT / "database").rglob("*.sql"), key=_apply_order):
         rel = path.relative_to(REPO_ROOT).as_posix()
         if "/rollback_" in rel or path.name.startswith("rollback_"):
             continue
@@ -460,4 +471,64 @@ def test_stage_scoped_sql_readers_are_scoped_in_every_definition():
     ]
     assert not unscoped, (
         f"stage-scoped SQL readers without the production/staging scope: {unscoped}"
+    )
+
+
+def test_canonical_sql_readers_are_canonical_in_their_latest_definition():
+    defs = _sql_definitions()
+    stale = [
+        f"{name} ({defs[name][-1][0]})"
+        for name, (category, _r) in SQL_OBJECTS.items()
+        if category == CANONICAL and not _SQL_CANONICAL.search(defs[name][-1][1])
+    ]
+    assert not stale, f"canonical SQL readers whose latest definition lacks the predicate: {stale}"
+
+
+# ---------------------------------------------------------------------------------------------
+# Inherited BaseRepository methods called on an MLModelRegistryRepository instance
+# ---------------------------------------------------------------------------------------------
+
+_INHERITED = {"get_many", "get_by_id", "update", "delete", "create"}
+
+#: (file, inherited method) pairs called on a registry repository from outside the class.
+INHERITED_CALLS: Dict[Tuple[str, str], str] = {
+    ("src/agents/ml_foundation/model_deployer/nodes/registry_manager.py", "get_by_id"): (
+        "exact: read-back of the row it just wrote"
+    ),
+    ("src/agents/ml_foundation/model_deployer/nodes/training_provenance.py", "get_by_id"): (
+        "exact: the row being promoted"
+    ),
+}
+
+
+def _registry_instance_calls() -> Set[Tuple[str, str]]:
+    found: Set[Tuple[str, str]] = set()
+    for path in _python_files():
+        text = path.read_text()
+        if f"{REPO_CLASS}(" not in text:
+            continue
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        tree = ast.parse(text)
+        names: Set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and _call_name(node.value) == REPO_CLASS:
+                for t in node.targets:
+                    names.add(ast.unparse(t))
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                continue
+            if node.func.attr not in _INHERITED:
+                continue
+            owner = node.func.value
+            if _call_name(owner) == REPO_CLASS or ast.unparse(owner) in names:
+                found.add((rel, node.func.attr))
+    return found
+
+
+def test_inherited_repository_calls_on_the_registry_are_pinned():
+    found = _registry_instance_calls()
+    assert found == set(INHERITED_CALLS), (
+        "BaseRepository methods called on an MLModelRegistryRepository changed: new "
+        f"{sorted(found - set(INHERITED_CALLS))}, gone {sorted(set(INHERITED_CALLS) - found)}. "
+        "get_many/get_by_id carry no stage predicate: say which rows the call means."
     )

@@ -1379,7 +1379,7 @@ class TestListExplainableModelsEndpoint:
             captured["select"] = cols
             return chain
 
-        def order_capture(col, desc=False):
+        def order_capture(col, desc=False, **_kw):
             captured["order"] = (col, desc)
             return chain
 
