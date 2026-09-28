@@ -991,10 +991,11 @@ export interface ProposedExperimentItem {
   /** What proposed this: a completed digital-twin simulation (the only source today). */
   proposal_basis: 'twin_simulation';
   /**
-   * The per-HCP business_metrics column the twin predicted an effect ON. simulated_ate
-   * and its interval are an ABSOLUTE difference in this column's units, never a % lift.
+   * The per-HCP outcome column THIS run predicted an effect ON ('adopted' since lane T2).
+   * simulated_ate and its interval are an ABSOLUTE difference in this column's units, never
+   * a % lift. null for a run saved before the outcome was recorded: it cannot be drafted.
    */
-  outcome_column: string;
+  outcome_column: string | null;
   /** simulated_ate is an absolute outcome-unit difference (never relative lift). */
   effect_scale: 'absolute';
 }
@@ -1002,7 +1003,7 @@ export interface ProposedExperimentItem {
 /** Proposals plus the honest counts around them. */
 export interface ProposedExperimentsResponse {
   proposals: ProposedExperimentItem[];
-  /** The outcome column every proposal's effect is stated on. */
+  /** The outcome column the twin estimates on today; each item names its own run's. */
   outcome_column: string;
   /**
    * Whether any REAL per-HCP row records the outcome column. False today (measured):

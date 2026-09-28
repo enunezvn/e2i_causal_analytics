@@ -23,6 +23,7 @@ from src.repositories.base import BaseRepository
 
 from .effect.estimate import PROVENANCE_COHORT, PROVENANCE_RWD, PROVENANCE_SYNTHETIC, SUBGROUP_AXES
 from .models.simulation_models import (
+    OUTCOME_COLUMN_KEY,
     EstimateScope,
     FidelityGrade,
     FidelityRecord,
@@ -514,7 +515,10 @@ class SimulationRepository(BaseRepository):
             "simulated_ci_lower": result.simulated_ci_lower,
             "simulated_ci_upper": result.simulated_ci_upper,
             "simulated_std_error": result.simulated_std_error,
-            "effect_heterogeneity": result.effect_heterogeneity.model_dump(),
+            "effect_heterogeneity": {
+                **result.effect_heterogeneity.model_dump(),
+                **({OUTCOME_COLUMN_KEY: result.outcome_column} if result.outcome_column else {}),
+            },
             "simulation_status": result.status.value,
             "recommendation": result.recommendation.value,
             "recommendation_rationale": result.recommendation_rationale,

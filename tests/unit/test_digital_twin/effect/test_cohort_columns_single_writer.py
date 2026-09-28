@@ -53,9 +53,15 @@ def test_no_planted_treatment_channel_is_a_column_the_etl_recomputes():
 
 
 def test_the_outcome_has_one_name_across_loader_estimator_and_provider():
-    assert cohort_causal_estimator._OUTCOME_COL == provider.COHORT_OUTCOME_COLUMN
-    assert provider.COHORT_OUTCOME_COLUMN in cohort_loader._COHORT_COLUMNS.split(",")
-    assert provider.COHORT_OUTCOME_COLUMN in cohort_loader._NUMERIC_COLUMNS
+    """Lane T2: the twin estimates on ``hcp_brand_adoption.adopted``. The loader reads it from
+    its own table (not the rollup select) and every twin reader names it the same way; the
+    plant column is no longer read by the twin at all."""
+    from src.data.per_hcp_cohort_columns import TWIN_OUTCOME_COLUMN
+
+    assert cohort_causal_estimator._OUTCOME_COL == TWIN_OUTCOME_COLUMN
+    assert provider._COHORT_OUTCOME == TWIN_OUTCOME_COLUMN
+    assert TWIN_OUTCOME_COLUMN not in cohort_loader._COHORT_COLUMNS.split(",")
+    assert provider.COHORT_OUTCOME_COLUMN not in cohort_loader._COHORT_COLUMNS.split(",")
 
 
 def test_the_plant_writes_the_cohort_outcome_and_leaves_the_etl_columns_alone():

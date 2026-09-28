@@ -338,6 +338,7 @@ class SimulationEngine:
             model_fidelity_score=self.model_fidelity_score,
             fidelity_status=fidelity_status,
             data_provenance=estimate.data_provenance,
+            outcome_column=frame.outcome_var,
             status=SimulationStatus.COMPLETED,
             execution_time_ms=execution_time_ms,
             completed_at=datetime.now(timezone.utc),

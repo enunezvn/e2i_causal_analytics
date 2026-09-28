@@ -278,13 +278,22 @@ class ModelDeployerMemoryHooks:
                 "bento_tag": result.get("final_bento_tag"),
                 "health_check_passed": result.get("health_check_passed"),
                 "deployment_duration_seconds": result.get("deployment_duration_seconds"),
+                # #2157: a register/promote-only run deployed no endpoint; say why.
+                "deployment_action": state.get("deployment_action"),
+                "deployment_skipped_reason": result.get("deployment_skipped_reason"),
             }
 
+            skipped = result.get("deployment_skipped_reason")
             summary = (
                 f"Deployment: {result.get('deployment_id', 'unknown')} "
                 f"to {state.get('target_environment', 'unknown')}. "
                 f"Status: {result.get('deployment_status', 'unknown')}. "
-                f"Health: {'PASSED' if result.get('health_check_passed') else 'FAILED'}."
+                # No endpoint, so no health check ran: neither PASSED nor FAILED.
+                + (
+                    f"{skipped}."
+                    if skipped
+                    else f"Health: {'PASSED' if result.get('health_check_passed') else 'FAILED'}."
+                )
             )
 
             memory_id = await insert_episodic_memory(  # type: ignore[call-arg]

@@ -1,0 +1,49 @@
+
+===== PART A — schema facts (review findings 1 and 2) =====
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/supabase/_sync/client.py:309: DeprecationWarning: The 'timeout' parameter is deprecated. Please configure it in the http client instead.
+  return SyncPostgrestClient(
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/supabase/_sync/client.py:309: DeprecationWarning: The 'verify' parameter is deprecated. Please configure it in the http client instead.
+  return SyncPostgrestClient(
+A1  business_metrics.adopted        : REFUSED -> {'message': 'column business_metrics.adopted does not exist', 'code': '42703', 'hint': None, 'details': None}
+A2  flipped availability gate query : REFUSED -> {'message': 'column business_metrics.adopted does not exist', 'code': '42703', 'hint': None, 'details': None}
+A3  hcp_brand_adoption rows=15000 adopted IS NULL=0  -> gate VACUOUS
+A3b per_hcp_rollup rows=13797 cohort_conversion_outcome IS NULL=0  (what the gate excludes today)
+
+===== PART B — twin loader path -> collapse -> join adopted =====
+B0  hcp_brand_adoption read 15000 rows, duplicate (hcp,brand) pairs=0
+B1  Remibrutinib   load_cohort_frame -> 4607 rows (exact=4607, _FETCH_LIMIT=20000)
+B2  Remibrutinib   collapsed pairs=3354 -> joined to adopted=3354 (lost 0)
+B3  Remibrutinib   usable rows on `adopted` min=3354 (COHORT_MIN_ROWS=500) -> PASS
+B1  Fabhalta       load_cohort_frame -> 4628 rows (exact=4628, _FETCH_LIMIT=20000)
+B2  Fabhalta       collapsed pairs=3404 -> joined to adopted=3404 (lost 0)
+B3  Fabhalta       usable rows on `adopted` min=3404 (COHORT_MIN_ROWS=500) -> PASS
+B1  Kisqali        load_cohort_frame -> 4562 rows (exact=4562, _FETCH_LIMIT=20000)
+B2  Kisqali        collapsed pairs=3378 -> joined to adopted=3378 (lost 0)
+B3  Kisqali        usable rows on `adopted` min=3378 (COHORT_MIN_ROWS=500) -> PASS
+
+===== PART C — DR interval vs shipped, + _oob_preds pin (finding 3) =====
+C   Remibrutinib   engagement_score           n=3354  ate=+0.1643 shipped=(-0.0015,+0.2987) sig=False | DR=(+0.1213,+0.2072) sig=True  ratio=3.50 oob==ate_:True 2.9s rss=0.62G
+C   Remibrutinib   speaker_program_count      n=3354  ate=+0.0984 shipped=(-0.0716,+0.2764) sig=False | DR=(+0.0410,+0.1559) sig=True  ratio=3.03 oob==ate_:True 2.4s rss=0.63G
+C   Remibrutinib   peer_influence_score       n=3354  ate=+0.0935 shipped=(-0.0615,+0.2616) sig=False | DR=(+0.0451,+0.1419) sig=True  ratio=3.34 oob==ate_:True 2.3s rss=0.63G
+C   Remibrutinib   patient_support_enrollment n=3354  ate=+0.0896 shipped=(-0.0800,+0.2456) sig=False | DR=(+0.0482,+0.1311) sig=True  ratio=3.92 oob==ate_:True 2.0s rss=0.64G
+C   Remibrutinib   rep_training_score         n=3354  ate=+0.0472 shipped=(-0.0918,+0.1996) sig=False | DR=(+0.0083,+0.0861) sig=True  ratio=3.75 oob==ate_:True 2.0s rss=0.64G
+C   Fabhalta       engagement_score           n=3404  ate=+0.1560 shipped=(+0.0089,+0.3129) sig=True  | DR=(+0.1154,+0.1967) sig=True  ratio=3.74 oob==ate_:True 2.2s rss=0.64G
+C   Fabhalta       speaker_program_count      n=3404  ate=+0.0896 shipped=(-0.0885,+0.2677) sig=False | DR=(+0.0352,+0.1439) sig=True  ratio=3.28 oob==ate_:True 2.1s rss=0.65G
+C   Fabhalta       peer_influence_score       n=3404  ate=+0.0726 shipped=(-0.0748,+0.2559) sig=False | DR=(+0.0283,+0.1170) sig=True  ratio=3.73 oob==ate_:True 2.2s rss=0.65G
+C   Fabhalta       patient_support_enrollment n=3404  ate=+0.0614 shipped=(-0.0977,+0.2171) sig=False | DR=(+0.0204,+0.1023) sig=True  ratio=3.85 oob==ate_:True 2.3s rss=0.65G
+C   Fabhalta       rep_training_score         n=3404  ate=+0.0058 shipped=(-0.1558,+0.1644) sig=False | DR=(-0.0348,+0.0465) sig=False ratio=3.94 oob==ate_:True 2.4s rss=0.66G
+C   Kisqali        engagement_score           n=3378  ate=+0.1069 shipped=(-0.0510,+0.2785) sig=False | DR=(+0.0607,+0.1531) sig=True  ratio=3.57 oob==ate_:True 2.3s rss=0.66G
+C   Kisqali        speaker_program_count      n=3378  ate=+0.1373 shipped=(-0.0950,+0.2762) sig=False | DR=(+0.0188,+0.2557) sig=True  ratio=1.57 oob==ate_:True 2.9s rss=0.66G
+C   Kisqali        peer_influence_score       n=3378  ate=+0.1107 shipped=(-0.0263,+0.2664) sig=False | DR=(+0.0619,+0.1595) sig=True  ratio=3.00 oob==ate_:True 2.4s rss=0.67G
+C   Kisqali        patient_support_enrollment n=3378  ate=+0.0626 shipped=(-0.0844,+0.2038) sig=False | DR=(+0.0211,+0.1041) sig=True  ratio=3.47 oob==ate_:True 2.2s rss=0.67G
+C   Kisqali        rep_training_score         n=3378  ate=-0.0109 shipped=(-0.1621,+0.1410) sig=False | DR=(-0.0500,+0.0282) sig=False ratio=3.88 oob==ate_:True 2.2s rss=0.67G
+
+===== VERDICT =====
+  DR significance on planted channels : 12/12 -> PASS
+  shipped-interval significance       : 1/12
+  null covers 0 in >= 2/3 brands      : PASS
+  finding 3 nanmean(_oob_preds)==ate_ : 15/15 fits
+  rows >= COHORT_MIN_ROWS in 3/3 brands: PASS
+  PREMISE HOLDS: True
+
+wrote /home/enunez/Projects/e2i_causal_analytics/.worktrees/twin-adopted-repoint/docs/demos/results/2026-09-23_t2_premise_probe/probe.json

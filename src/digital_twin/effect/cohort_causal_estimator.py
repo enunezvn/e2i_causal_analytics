@@ -8,6 +8,11 @@ adjustment set. This is the Direction-2 estimator (design doc 2026-06-19):
 - magnitude, uncertainty, per-region and supported per-specialty heterogeneity all come
   from the cohort data;
 - nothing is laundered through a synthetic frame, so the CI reflects REAL sampling noise;
+- the interval is the forest's DOUBLY-ROBUST one (lane T2): ``cf.ate_ +- z * cf.ate_stderr_``,
+  the mean and standard error of econml's DR pseudo-outcomes, not ``ate_interval`` (which
+  averages per-row CATE intervals, an upper bound 1.57-3.94x wider on the live cohort — see
+  ``docs/demos/results/2026-09-23_t2_premise_probe/`` and ``.../2026-09-23_ab_reload_interval/
+  cert.md`` section 3, where the DR SE calibrated at 1.06-1.52x the seed Monte-Carlo SD);
 - it is substrate-agnostic: identical code recovers the planted ``TRUE_CATE_BY_REGION`` on
   synthetic-gold today and runs unchanged on RWD tomorrow (the adjustment set is the
   present subset of the configured pre-treatment confounders, never hardcoded magnitudes).
@@ -25,19 +30,21 @@ fabricated ATE.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
-from typing import Sequence, cast
+from statistics import NormalDist
+from typing import Any, Sequence, cast
 
 import numpy as np
 import pandas as pd
 
+from src.data.per_hcp_cohort_columns import TWIN_OUTCOME_COLUMN
 from src.digital_twin.effect.errors import EffectCause, EffectDataUnavailable
 from src.digital_twin.effect.estimate import (
     PROVENANCE_COHORT,
     AxisProvenance,
     EffectEstimate,
 )
-from src.digital_twin.effect.provider import COHORT_OUTCOME_COLUMN
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +58,7 @@ DEFAULT_CONFOUNDERS: tuple[str, ...] = ("market_share", "triggers_total_count")
 _LOG_CONFOUNDERS = frozenset({"triggers_total_count"})
 
 _MIN_ROWS = 200  # DML needs a stable nuisance fit; the loader gates cohorts at >= 500.
-_OUTCOME_COL = COHORT_OUTCOME_COLUMN
+_OUTCOME_COL = TWIN_OUTCOME_COLUMN
 _REGION_COL = "region"
 _SPECIALTY_COL = "specialty"
 _MISSING_SPECIALTY = "__missing_specialty__"
@@ -62,6 +69,10 @@ _MISSING_SPECIALTY = "__missing_specialty__"
 # rows remain in the pooled fit, while an under-supported label is omitted from the API.
 MIN_SPECIALTY_ROWS = 100
 MIN_SPECIALTY_ARM_ROWS = 20
+# Rows each arm of the cohort-wide median contrast needs before a fit is attempted: the same
+# twice-the-leaf floor. Below it econml's two-fold cross-fit can hold a fold with no treated
+# (or no control) row and the fit fails; above it the forest can place a leaf in each arm.
+MIN_ARM_ROWS = 2 * 10
 
 
 @dataclass
@@ -90,6 +101,10 @@ class CohortCausalEffect:
     target_ci_lower: float | None = None
     target_ci_upper: float | None = None
     target_n: int = 0
+    # The DR standard errors behind the intervals above (CI = point +- z * stderr).
+    ate_stderr: float | None = None
+    target_stderr: float | None = None
+    interval_method: str = "dr_ate_stderr"
 
     def ci_width(self) -> float:
         return float(self.ate_ci_upper - self.ate_ci_lower)
@@ -159,6 +174,41 @@ def _usable_rows(
     work = work.dropna().reset_index(drop=True)
 
     return work
+
+
+def median_contrast(t_raw: pd.Series) -> np.ndarray:
+    """The pre-registered contrast: 1 for rows above the median treatment intensity, else 0."""
+    return cast(np.ndarray, (t_raw > float(t_raw.median())).astype(int).to_numpy())
+
+
+def treatment_contrast_shortfall(t_raw: pd.Series) -> dict[str, int] | None:
+    """Why the median contrast of ``t_raw`` (the usable rows' treatment) cannot be estimated
+    on, as refusal details; ``None`` when it can.
+
+    Shared with ``cohort_loader.assess_cohort_frame`` so the availability gate refuses exactly
+    the channels this estimator would (codex r2/r3): a channel with no row above its median
+    (constant, or tied at its maximum), or with an arm below ``MIN_ARM_ROWS``.
+    """
+    t = median_contrast(t_raw)
+    n_treated = int(t.sum())
+    n_control = int(len(t) - n_treated)
+    details = {"n_usable_rows": int(len(t)), "n_distinct_treatment_values": int(t_raw.nunique())}
+    if n_treated == 0 or n_control == 0:
+        return details
+    if min(n_treated, n_control) < MIN_ARM_ROWS:
+        return {
+            **details,
+            "n_treated_rows": n_treated,
+            "n_control_rows": n_control,
+            "n_min_arm_rows": MIN_ARM_ROWS,
+        }
+    return None
+
+
+def _arms_supported(t: np.ndarray) -> bool:
+    """Both arms of a 0/1 contrast hold at least ``MIN_ARM_ROWS`` rows."""
+    n_treated = int(t.sum())
+    return min(n_treated, int(len(t)) - n_treated) >= MIN_ARM_ROWS
 
 
 def _effect_modifier_matrix(work: pd.DataFrame) -> np.ndarray:
@@ -260,9 +310,16 @@ def estimate_cohort_effect(
     heterogeneity axes X; ``confounders`` is the control set W. Returns honest DML
     inference intervals.
 
-    ``target_regions`` (#2015) adds the same forest's average effect over the cohort rows
-    in those regions, with ``ate_interval`` over those rows — the interval the cohort-wide
-    ATE gets, on the subset. Each target region must be in the cohort with both treated and
+    The ATE and its interval are the forest's doubly-robust ones: ``ate = cf.ate_`` and
+    ``ate +- z * cf.ate_stderr_`` with ``z`` the two-sided normal quantile for ``alpha``.
+    ``cate_by_region`` is the DR mean over each region's rows (the same estimator, so the
+    cohort ATE is their row-weighted mean); ``cate_by_specialty`` stays the forest's CATE
+    mean (``cf.effect``) under its own published estimand.
+
+    ``target_regions`` (#2015) adds the same forest's DR mean and standard error over the
+    cohort rows in those regions (econml's own ``_ate_and_stderr`` on the DR pseudo-outcomes,
+    masked) — the interval the cohort-wide ATE gets, on the subset. Each target region must
+    be in the cohort with both treated and
     control rows; otherwise ``EffectDataUnavailable`` (a region the cohort does not cover
     would only get an extrapolated or fallback effect).
     """
@@ -285,18 +342,23 @@ def estimate_cohort_effect(
         )
 
     # Pre-registered contrast: treated = above the cohort median intensity.
-    t_thr = float(work["t_raw"].median())
-    t = (work["t_raw"] > t_thr).astype(int).to_numpy()
-    if len(np.unique(t)) < 2:
+    t = median_contrast(work["t_raw"])
+    shortfall = treatment_contrast_shortfall(work["t_raw"])
+    if shortfall is not None and "n_treated_rows" not in shortfall:
         # One distinct value is a constant channel; more than one is a skew onto the median.
         raise EffectDataUnavailable(
             f"treatment '{treatment_col}' has no median contrast (all rows on one side); "
             "cannot identify an effect.",
             cause=EffectCause.NO_TREATMENT_CONTRAST,
-            details={
-                "n_usable_rows": n_usable,
-                "n_distinct_treatment_values": int(work["t_raw"].nunique()),
-            },
+            details=shortfall,
+        )
+    if shortfall is not None:
+        raise EffectDataUnavailable(
+            f"treatment '{treatment_col}' splits {shortfall['n_treated_rows']} rows above its "
+            f"median and {shortfall['n_control_rows']} at or below; each side needs at least "
+            f"{MIN_ARM_ROWS} to identify an effect.",
+            cause=EffectCause.NO_TREATMENT_CONTRAST,
+            details=shortfall,
         )
 
     y = work["y"].to_numpy(dtype=float)
@@ -338,7 +400,27 @@ def estimate_cohort_effect(
         )
         cf.fit(y, t, X=x, W=w)
         eff = np.asarray(cf.effect(x), dtype=float).ravel()
-        lo, hi = cf.ate_interval(x, alpha=alpha)
+        ate = float(np.ravel(cf.ate_)[0])
+        ate_se = float(np.ravel(cf.ate_stderr_)[0])
+        if not (math.isfinite(ate) and math.isfinite(ate_se) and ate_se >= 0.0):
+            raise ValueError(f"non-finite doubly-robust ATE/stderr ({ate!r}, {ate_se!r})")
+        dr = _dr_pseudo_outcomes(cf, n_usable, ate)
+        region_arr = work["region"].to_numpy(dtype=str)
+        # Region effects are the DR mean over each region's rows — the estimator the headline
+        # ATE and a targeted estimate use — so a single targeted region's declared effect IS
+        # its headline (#2023) and the cohort ATE is the row-weighted mean of the region
+        # effects. ``nanmean`` is econml's own point formula in ``_ate_and_stderr``.
+        # A region is published only with MIN_ARM_ROWS on each side of the cohort median within
+        # it (codex r4): without a within-region contrast its DR mean is an extrapolation, and
+        # the same region is refused when targeted. Twins in an unpublished region score at the
+        # headline ATE (the estimator seam's fallback).
+        cate_by_region = {
+            c: float(np.nanmean(dr[region_arr == c]))
+            for c in cats
+            if _arms_supported(t[region_arr == c])
+        }
+        if not all(math.isfinite(v) for v in cate_by_region.values()):
+            raise ValueError("a region has no finite doubly-robust pseudo-outcome")
     except EffectDataUnavailable:
         raise
     except Exception as e:  # econml/sklearn failure -> honest no-data, never a fake ATE
@@ -351,12 +433,14 @@ def estimate_cohort_effect(
             details={"n_usable_rows": n_usable, "is_target_inference": False},
         ) from e
 
-    region_arr = work["region"].to_numpy(dtype=str)
-    cate_by_region = {
-        c: float(np.mean(eff[region_arr == c])) for c in cats if (region_arr == c).any()
-    }
-    # Evidence base per region: the usable cohort rows the CATE above averages over.
-    n_by_region = {c: int((region_arr == c).sum()) for c in cate_by_region}
+    z = NormalDist().inv_cdf(1.0 - alpha / 2.0)
+    # Evidence base per region: the rows its DR mean averages over, i.e. those with a finite
+    # pseudo-outcome (econml leaves a row no subforest held out as NaN and ``nanmean`` skips
+    # it), so the headline stays the count-weighted mean of the region effects.
+    # ``_oob_preds`` is (n, 1) for our single binary treatment: a row counts when every
+    # entry on it is finite.
+    has_dr = np.isfinite(dr).reshape(len(dr), -1).all(axis=1)
+    n_by_region = {c: int(((region_arr == c) & has_dr).sum()) for c in cate_by_region}
 
     specialty_arr = work["specialty"].to_numpy(dtype=str)
     report_mask: np.ndarray = np.ones(len(work), dtype=bool)
@@ -368,12 +452,16 @@ def estimate_cohort_effect(
     )
 
     targets = list(dict.fromkeys(str(r) for r in target_regions))
-    target_ate = target_lo = target_hi = None
+    target_ate = target_lo = target_hi = target_se = None
     target_n = 0
     if targets:
         # Counted over every target before refusing; the message names the first that fails.
         absent = [r for r in targets if not (region_arr == r).any()]
-        one_arm = [r for r in targets if r not in absent and len(np.unique(t[region_arr == r])) < 2]
+        # "one arm" covers an arm below MIN_ARM_ROWS too: a handful of treated rows is not a
+        # contrast to publish an interval on (codex r4).
+        one_arm = [
+            r for r in targets if r not in absent and not _arms_supported(t[region_arr == r])
+        ]
         for region in targets:
             if region in absent or region in one_arm:
                 raise EffectDataUnavailable(
@@ -390,7 +478,7 @@ def estimate_cohort_effect(
                 )
         mask = np.isin(region_arr, targets)
         try:
-            t_lo, t_hi = cf.ate_interval(x[mask], alpha=alpha)
+            target_ate, target_se = _dr_subset_ate(cf, dr, mask)
         except Exception as e:  # econml failure -> honest no-data, never a fake interval
             logger.warning(
                 "target-region inference failed for '%s' on %s", treatment_col, targets, exc_info=e
@@ -405,7 +493,12 @@ def estimate_cohort_effect(
                     "n_target_rows": int(mask.sum()),
                 },
             ) from e
-        target_ate, target_lo, target_hi = float(np.mean(eff[mask])), float(t_lo), float(t_hi)
+        # The targeted point is the DR mean over the targeted rows, NOT the CATE mean
+        # ``mean(eff[mask])`` it used to be: the interval is built around the DR mean, and a
+        # point that is not the centre of its own interval can sit outside it. It is the same
+        # estimator as the cohort-wide ``ate`` and ``cate_by_region``, so a single targeted
+        # region's point equals its declared region effect exactly (#2023).
+        target_lo, target_hi = target_ate - z * target_se, target_ate + z * target_se
         target_n = int(mask.sum())
 
     adjustment_set = [region_col]
@@ -413,9 +506,9 @@ def estimate_cohort_effect(
         adjustment_set.append(specialty_col)
     adjustment_set.extend(present_confounders)
     return CohortCausalEffect(
-        ate=float(np.mean(eff)),
-        ate_ci_lower=float(lo),
-        ate_ci_upper=float(hi),
+        ate=ate,
+        ate_ci_lower=ate - z * ate_se,
+        ate_ci_upper=ate + z * ate_se,
         cate_by_region=cate_by_region,
         n_by_region=n_by_region,
         cate_by_specialty=cate_by_specialty,
@@ -431,7 +524,46 @@ def estimate_cohort_effect(
         target_ci_lower=target_lo,
         target_ci_upper=target_hi,
         target_n=target_n,
+        ate_stderr=ate_se,
+        target_stderr=target_se,
     )
+
+
+def _dr_pseudo_outcomes(cf: Any, n_rows: int, ate: float) -> np.ndarray:
+    """The forest's doubly-robust pseudo-outcomes, one per usable row, once they are
+    shown to be the array ``cf.ate_`` was computed from.
+
+    ``rlearner_model_final_._oob_preds`` is private and held by ``econml==0.16.0``
+    (requirements.txt). It is the DR pseudo-outcome array only because econml corrects the
+    OOB predictions IN PLACE (``drpreds = oob_preds; drpreds += ...``); an upstream copy
+    would leave the raw OOB CATE predictions there, and a mean over them would be plausible
+    and wrong. So the array must reproduce the public ``cf.ate_`` over every row before any
+    subset of it is published. Raises ``ValueError`` when absent, misshapen or not
+    reproducing ``ate_``.
+    """
+    final = getattr(cf, "rlearner_model_final_", None)
+    oob = getattr(final, "_oob_preds", None)
+    if oob is None:
+        raise ValueError("the fitted forest carries no doubly-robust pseudo-outcomes")
+    dr = np.asarray(oob, dtype=float)
+    if dr.shape[0] != n_rows:
+        raise ValueError(f"{dr.shape[0]} DR pseudo-outcomes for {n_rows} usable rows")
+    if not np.isfinite(dr).any() or not math.isclose(
+        float(np.nanmean(dr)), ate, rel_tol=1e-9, abs_tol=1e-12
+    ):
+        raise ValueError("the DR pseudo-outcomes do not reproduce the forest's ate_")
+    return dr
+
+
+def _dr_subset_ate(cf: Any, dr: np.ndarray, mask: np.ndarray) -> tuple[float, float]:
+    """The forest's DR mean and standard error over the ``mask`` rows, from econml's own
+    ``_ate_and_stderr`` (the function ``cf.ate_`` / ``cf.ate_stderr_`` come from) rather than
+    a reimplementation of its ``nanstd / sqrt(non-NaN n)``."""
+    point, stderr = cf.rlearner_model_final_._ate_and_stderr(dr, mask)
+    t_ate, t_se = float(np.ravel(point)[0]), float(np.ravel(stderr)[0])
+    if not (math.isfinite(t_ate) and math.isfinite(t_se)):
+        raise ValueError("no finite DR pseudo-outcome on the targeted rows")
+    return t_ate, t_se
 
 
 class CohortCausalEstimator:

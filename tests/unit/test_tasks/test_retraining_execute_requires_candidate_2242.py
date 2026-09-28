@@ -35,7 +35,12 @@ def _result(model_registry_id: Any) -> SimpleNamespace:
     return SimpleNamespace(
         status="completed",
         training_result={"validation_metrics": {"roc_auc": 0.71}, "success_criteria_met": True},
-        deployment_result={"model_version": "1", "model_registry_id": model_registry_id},
+        deployment_result={
+            "model_version": "1",
+            "model_registry_id": model_registry_id,
+            # the agent always reports it; #2157 codex r1 requires it for completion
+            "deployment_successful": True,
+        },
     )
 
 

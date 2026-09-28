@@ -46,6 +46,8 @@ from uuid import UUID
 
 import numpy as np
 
+from src.data.per_hcp_cohort_columns import TWIN_OUTCOME_COLUMN
+
 logger = logging.getLogger(__name__)
 
 # primary_metric (normalized) -> (business_metrics column, reducer).
@@ -55,12 +57,22 @@ logger = logging.getLogger(__name__)
 # (see resolve_column) — no per-HCP prescription column exists.
 _COUNT_COLUMNS = {"triggers_delivered_count", "triggers_accepted_count", "triggers_total_count"}
 _RATE_COLUMNS = {"market_share", "conversion_rate", "engagement_score", "call_frequency"}
-# The Digital Twin cohort OUTCOME (migration 147; src.data.per_hcp_cohort_columns
-# .COHORT_OUTCOME_COLUMN). A draft experiment created from a twin proposal
-# (#2206 item C) carries it as prediction_target so the final results measure the
-# SAME quantity the twin predicted an effect on. Per-HCP numeric, not a count:
-# the window collapses by MEAN.
-_TWIN_OUTCOME_COLUMN = "cohort_conversion_outcome"
+# The Digital Twin cohort OUTCOME before lane T2 (migration 147;
+# src.data.per_hcp_cohort_columns.COHORT_OUTCOME_COLUMN). A draft experiment created
+# from a twin proposal (#2206 item C) carries the twin's outcome as prediction_target so
+# the final results measure the SAME quantity the twin predicted an effect on; drafts made
+# from the simulations estimated on this column keep resolving here. Per-HCP numeric, not
+# a count: the window collapses by MEAN.
+_LEGACY_TWIN_OUTCOME_COLUMN = "cohort_conversion_outcome"
+# The twin's outcome since lane T2 (src.data.per_hcp_cohort_columns.TWIN_OUTCOME_COLUMN):
+# hcp_brand_adoption.adopted. It is measurable ONLY through the per-experiment unit-outcome
+# feed. business_metrics has no such column (mapping it here would be a PostgREST 42703),
+# and hcp_brand_adoption cannot stand in: it holds ONE static label per (hcp, brand) with
+# no post-assignment time index (consideration_date is when the HCP first considered the
+# brand, migration 076), while each HCP sits in ~12 experiments per brand — the same
+# structural reason the generator writes the feed (measured 2026-09-23: a per-HCP join
+# yielded adopted -0.032 against the stored +0.097). Refused by name in resolve_column.
+_FEED_ONLY_METRICS = frozenset({TWIN_OUTCOME_COLUMN})
 _PRESCRIPTION_SHORTHANDS = frozenset(
     {"trx", "nrx", "rx", "total_rx", "trx_count", "nrx_count", "total_rx_count"}
 )
@@ -78,7 +90,7 @@ METRIC_COLUMN_MAP: Dict[str, str] = {
     "engagement_score": "engagement_score",
     "engagement": "engagement_score",
     "call_frequency": "call_frequency",
-    _TWIN_OUTCOME_COLUMN: _TWIN_OUTCOME_COLUMN,
+    _LEGACY_TWIN_OUTCOME_COLUMN: _LEGACY_TWIN_OUTCOME_COLUMN,
 }
 
 
@@ -136,6 +148,14 @@ class ExperimentOutcomeRepository:
                 "carry TRIGGER funnel counts (triggers_delivered_count / triggers_accepted_count / "
                 "triggers_total_count, migration 144), not prescriptions. Name the trigger count "
                 "you mean; prescription outcomes are not recorded per HCP."
+            )
+        if key in _FEED_ONLY_METRICS:
+            raise ValueError(
+                f"primary_metric {primary_metric!r} (hcp_brand_adoption.adopted, the Digital "
+                f"Twin's outcome) is measured only by the per-experiment unit-outcome feed "
+                f"({UNIT_OUTCOMES_TABLE}), and this experiment has no rows there. It has no "
+                "business_metrics column, and hcp_brand_adoption holds one static label per "
+                "(HCP, brand), not an outcome observed after this experiment's assignment."
             )
         column = METRIC_COLUMN_MAP.get(key)
         if column is None:

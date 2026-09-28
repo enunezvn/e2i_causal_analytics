@@ -1,0 +1,33 @@
+started 2026-09-28T15:05:35Z  src=/home/enunez/Projects/e2i_causal_analytics/.worktrees/twin-adopted-repoint/src/__init__.py
+LOAD  Remibrutinib   1.44s pairs=3354 joined=3354 unjoined=0
+AVAIL Remibrutinib   1.24s errors=0 available=8/8
+LOAD  Fabhalta       1.35s pairs=3404 joined=3404 unjoined=0
+AVAIL Fabhalta       1.36s errors=0 available=8/8
+LOAD  Kisqali        1.22s pairs=3378 joined=3378 unjoined=0
+AVAIL Kisqali        1.57s errors=0 available=8/8
+FIT   Remibrutinib  digital_engagement          n=3354  ate=+0.1643 se=0.0219 CI=(+0.1213,+0.2072) excl0=True  4.72s rss=0.61G
+FIT   Remibrutinib  speaker_program_invitation  n=3354  ate=+0.0984 se=0.0293 CI=(+0.0410,+0.1559) excl0=True  4.05s rss=0.62G
+FIT   Remibrutinib  peer_influence_activation   n=3354  ate=+0.0935 se=0.0247 CI=(+0.0451,+0.1419) excl0=True  4.46s rss=0.62G
+FIT   Remibrutinib  patient_support_program     n=3354  ate=+0.0896 se=0.0212 CI=(+0.0482,+0.1311) excl0=True  5.42s rss=0.63G
+FIT   Remibrutinib  rep_training_quality        n=3354  ate=+0.0472 se=0.0198 CI=(+0.0083,+0.0861) excl0=True  4.93s rss=0.63G
+TGT   Remibrutinib  digital_engagement@northeast n=715 ate=+0.2157 CI=(+0.0966,+0.3347) region_cate=+0.2157
+FIT   Fabhalta      digital_engagement          n=3404  ate=+0.1560 se=0.0207 CI=(+0.1154,+0.1967) excl0=True  2.77s rss=0.64G
+FIT   Fabhalta      speaker_program_invitation  n=3404  ate=+0.0896 se=0.0277 CI=(+0.0352,+0.1439) excl0=True  3.58s rss=0.64G
+FIT   Fabhalta      peer_influence_activation   n=3404  ate=+0.0726 se=0.0226 CI=(+0.0283,+0.1170) excl0=True  3.22s rss=0.65G
+FIT   Fabhalta      patient_support_program     n=3404  ate=+0.0614 se=0.0209 CI=(+0.0204,+0.1023) excl0=True  2.97s rss=0.65G
+FIT   Fabhalta      rep_training_quality        n=3404  ate=+0.0058 se=0.0208 CI=(-0.0348,+0.0465) excl0=False 2.85s rss=0.65G
+TGT   Fabhalta      digital_engagement@northeast n=736 ate=+0.1768 CI=(+0.0903,+0.2632) region_cate=+0.1768
+FIT   Kisqali       digital_engagement          n=3378  ate=+0.1069 se=0.0236 CI=(+0.0607,+0.1531) excl0=True  2.87s rss=0.66G
+FIT   Kisqali       speaker_program_invitation  n=3378  ate=+0.1373 se=0.0604 CI=(+0.0188,+0.2557) excl0=True  2.73s rss=0.66G
+FIT   Kisqali       peer_influence_activation   n=3378  ate=+0.1107 se=0.0249 CI=(+0.0619,+0.1595) excl0=True  2.87s rss=0.66G
+FIT   Kisqali       patient_support_program     n=3378  ate=+0.0626 se=0.0212 CI=(+0.0211,+0.1041) excl0=True  3.42s rss=0.67G
+FIT   Kisqali       rep_training_quality        n=3378  ate=-0.0109 se=0.0199 CI=(-0.0500,+0.0282) excl0=False 2.83s rss=0.67G
+TGT   Kisqali       digital_engagement@northeast n=750 ate=+0.1300 CI=(+0.0021,+0.2580) region_cate=+0.1300
+
+===== VERDICT =====
+  planted_exclude_0: 12/12
+  null_covers_0: 2/3
+  null_max_abs_ate: 0.047196311837152324
+  rows_meet_min: True
+  refusals: []
+wrote /home/enunez/Projects/e2i_causal_analytics/.worktrees/twin-adopted-repoint/docs/demos/results/2026-09-28_t2_twin_adopted_repoint/live_probe.json

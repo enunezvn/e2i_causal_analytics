@@ -1017,6 +1017,31 @@ async def _execute_real_retraining(
     # version and the retrained model's experiment. A same-named row from an earlier
     # delivery of this job does not count. Otherwise the job is NOT completed.
     retrain_of = pipeline_input.get("retrain_of")
+    # #2157: a deployer that RAISED leaves deployment_result None and its error in
+    # result.errors. It may have written the candidate row before failing, so the reason
+    # is the deployer's own error, never "no row written".
+    deployer_errors = [
+        e.get("error")
+        for e in (getattr(result, "errors", None) or [])
+        if isinstance(e, dict) and e.get("stage") == "model_deployment"
+    ]
+    if retrain_of and deployer_errors:
+        return await _mark_failed(
+            f"validation_auc={performance_after!r} but model_deployer failed: "
+            f"{deployer_errors[-1]} — the candidate {retrain_of.get('model_name')!r} "
+            f"v{retrain_of.get('new_model_version')!r} is not completed; job marked failed"
+        )
+    # codex r1 (#2157): a deployer can also RETURN a failure (MLflow stage transition
+    # failed, or the #2259 registry gate refused the promotion) while still reporting the
+    # row it wrote. A linked row alone is not a completed retrain.
+    reported = getattr(result, "deployment_result", None) or {}
+    if retrain_of and reported.get("deployment_successful") is not True:
+        return await _mark_failed(
+            f"validation_auc={performance_after!r} but model_deployer did not promote the "
+            f"candidate (status={reported.get('status')!r}, ml_model_registry row "
+            f"{reported.get('model_registry_id')}, promotion_refused_reason="
+            f"{reported.get('promotion_refused_reason')!r}); job marked failed"
+        )
     if retrain_of:
         deployed_rid = (getattr(result, "deployment_result", None) or {}).get("model_registry_id")
         linked_rows: List[Dict[str, Any]] = []
@@ -1045,10 +1070,20 @@ async def _execute_real_retraining(
 
     # Real metric + success criteria met — record completion. The pipeline also
     # gated deployment on the regulatory AUC/leakage gate.
+    deployment = getattr(result, "deployment_result", None) or {}
+    skipped = deployment.get("deployment_skipped_reason")
     await service.complete_retraining(
         job_id=retraining_id,
         performance_after=performance_after,
         success=True,
+        # #2157: say plainly what was delivered: the registry row, not an endpoint.
+        notes=(
+            f"candidate {(retrain_of or {}).get('model_name')!r} "
+            f"v{(retrain_of or {}).get('new_model_version')!r} registered as ml_model_registry "
+            f"row {deployment.get('model_registry_id')}; {skipped}"
+            if skipped
+            else None
+        ),
     )
     # #2207: THIS contract just produced a promotable model — heal the retrained
     # model's registry row (NULL columns only, as a consistent unit; never at
@@ -1075,7 +1110,6 @@ async def _execute_real_retraining(
             )
     except Exception as e:  # noqa: BLE001 — the retrain succeeded; healing is a side channel
         logger.warning(f"Retraining {retraining_id}: cohort contract not healed ({e})")
-    deployment = getattr(result, "deployment_result", None) or {}
     return {
         "status": "completed",
         "retraining_id": retraining_id,
@@ -1084,8 +1118,12 @@ async def _execute_real_retraining(
         "performance_after": performance_after,
         "calibration_method": calibration,
         "mlflow_model_version": deployment.get("model_version"),
-        "deployed": bool(deployment.get("deployment_successful", deployment.get("model_version"))),
-        "message": f"Model {new_version} retrained; validation AUC={performance_after:.4f}",
+        # A register/promote-only retrain (#2157) is promoted, not deployed to an endpoint.
+        "deployed": not skipped
+        and bool(deployment.get("deployment_successful", deployment.get("model_version"))),
+        "deployment_skipped_reason": skipped,
+        "message": f"Model {new_version} retrained; validation AUC={performance_after:.4f}"
+        + (f"; {skipped}" if skipped else ""),
     }
 
 

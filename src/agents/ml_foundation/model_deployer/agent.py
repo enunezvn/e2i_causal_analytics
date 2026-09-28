@@ -229,7 +229,11 @@ class ModelDeployerAgent:
         if final_state.get("error"):
             error_msg = final_state["error"]
             error_type = final_state.get("error_type", "unknown")
-            raise RuntimeError(f"{error_type}: {error_msg}")
+            # #2157: a failure after register_model leaves its ml_model_registry row
+            # behind; name it so the caller does not report "no row written".
+            rid = final_state.get("model_registry_id")
+            left = f" (ml_model_registry row {rid} was written before this failure)" if rid else ""
+            raise RuntimeError(f"{error_type}: {error_msg}{left}")
 
         # Build outputs
         deployment_manifest = self._build_deployment_manifest(final_state)
@@ -274,6 +278,14 @@ class ModelDeployerAgent:
             # #2242: the ml_model_registry row THIS run wrote (None when not persisted) —
             # what a retrain's completion must point at.
             "model_registry_id": final_state.get("model_registry_id"),
+            # #2157: a register/promote-only action ends after promote_stage, so
+            # deployment_successful means "promoted", not "serving". Say so explicitly.
+            "deployment_skipped_reason": (
+                f"deployment_action={deployment_action!r}: register/promote only — "
+                "no Bento packaged, no endpoint deployed"
+                if deployment_action in ("promote", "register")
+                else None
+            ),
         }
 
         # Store to database (ml_deployments and ml_model_registry)

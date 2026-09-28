@@ -1360,6 +1360,7 @@ class RetrainingHistoryRepository(BaseRepository[RetrainingHistoryRecord]):
         success: bool = True,
         *,
         mlflow_run_id: Optional[str] = None,
+        notes: Optional[str] = None,
     ) -> Optional[RetrainingHistoryRecord]:
         """Complete a retraining run.
 
@@ -1371,6 +1372,8 @@ class RetrainingHistoryRepository(BaseRepository[RetrainingHistoryRecord]):
                 ``performance_after`` (#546). When supplied it is merged into the
                 record's ``config`` (under ``mlflow_run_id``) so a completed
                 metric remains auditable back to its run.
+            notes: Written to ``notes`` when given (#2157: what the completion
+                delivered, e.g. a registered candidate with no endpoint).
 
         Returns:
             Updated record
@@ -1382,6 +1385,8 @@ class RetrainingHistoryRepository(BaseRepository[RetrainingHistoryRecord]):
             "new_metric_value": performance_after,
             "completed_at": datetime.now(timezone.utc).isoformat(),
         }
+        if notes:
+            updates["notes"] = notes
 
         if mlflow_run_id:
             existing = await self.get_by_id(record_id)
