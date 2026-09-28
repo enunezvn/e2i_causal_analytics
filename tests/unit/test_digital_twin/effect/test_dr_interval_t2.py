@@ -265,3 +265,29 @@ def test_an_arm_too_thin_to_cross_fit_is_refused_as_no_contrast_not_a_fit_failur
     assert caught.value.details["n_treated_rows"] == 1
     assert caught.value.details["n_control_rows"] == N - 1
     assert caught.value.details["n_min_arm_rows"] == cce.MIN_ARM_ROWS == 20
+
+
+def test_a_region_without_arm_support_publishes_no_effect(cohort):
+    """codex r4: a region whose rows sit (almost) all on one side of the cohort median has no
+    within-region contrast; its DR mean would be an extrapolation. It is left out of
+    ``cate_by_region`` (twins there fall back to the headline), as it is refused when targeted."""
+    skewed = cohort.copy()
+    west = skewed["region"] == "west"
+    skewed.loc[west, PLANTED] = 10.0  # every west row above the cohort median
+    skewed.loc[skewed.index[west][:3], PLANTED] = -10.0  # ... but three
+    eff = estimate_cohort_effect(skewed, PLANTED)
+    assert "west" not in eff.cate_by_region and "west" not in eff.n_by_region
+    assert set(eff.cate_by_region) == {"northeast", "south", "midwest"}
+
+
+def test_a_target_region_with_too_few_rows_in_an_arm_is_not_covered(cohort):
+    """codex r4: one or two treated rows in a targeted region passed the two-arms check and got
+    a DR interval on them. The targeted region needs MIN_ARM_ROWS in each arm."""
+    skewed = cohort.copy()
+    west = skewed["region"] == "west"
+    skewed.loc[west, PLANTED] = 10.0
+    skewed.loc[skewed.index[west][:3], PLANTED] = -10.0
+    with pytest.raises(EffectDataUnavailable) as caught:
+        estimate_cohort_effect(skewed, PLANTED, target_regions=["west"])
+    assert caught.value.cause is EffectCause.TARGET_REGION_NOT_COVERED
+    assert caught.value.details["n_target_regions_one_arm"] == 1

@@ -205,6 +205,12 @@ def treatment_contrast_shortfall(t_raw: pd.Series) -> dict[str, int] | None:
     return None
 
 
+def _arms_supported(t: np.ndarray) -> bool:
+    """Both arms of a 0/1 contrast hold at least ``MIN_ARM_ROWS`` rows."""
+    n_treated = int(t.sum())
+    return min(n_treated, int(len(t)) - n_treated) >= MIN_ARM_ROWS
+
+
 def _effect_modifier_matrix(work: pd.DataFrame) -> np.ndarray:
     """One-hot both nominal axes, preserving the legacy region-only matrix when needed."""
     if "specialty" not in work or not work["specialty"].ne(_MISSING_SPECIALTY).any():
@@ -404,8 +410,14 @@ def estimate_cohort_effect(
         # ATE and a targeted estimate use — so a single targeted region's declared effect IS
         # its headline (#2023) and the cohort ATE is the row-weighted mean of the region
         # effects. ``nanmean`` is econml's own point formula in ``_ate_and_stderr``.
+        # A region is published only with MIN_ARM_ROWS on each side of the cohort median within
+        # it (codex r4): without a within-region contrast its DR mean is an extrapolation, and
+        # the same region is refused when targeted. Twins in an unpublished region score at the
+        # headline ATE (the estimator seam's fallback).
         cate_by_region = {
-            c: float(np.nanmean(dr[region_arr == c])) for c in cats if (region_arr == c).any()
+            c: float(np.nanmean(dr[region_arr == c]))
+            for c in cats
+            if _arms_supported(t[region_arr == c])
         }
         if not all(math.isfinite(v) for v in cate_by_region.values()):
             raise ValueError("a region has no finite doubly-robust pseudo-outcome")
@@ -440,7 +452,11 @@ def estimate_cohort_effect(
     if targets:
         # Counted over every target before refusing; the message names the first that fails.
         absent = [r for r in targets if not (region_arr == r).any()]
-        one_arm = [r for r in targets if r not in absent and len(np.unique(t[region_arr == r])) < 2]
+        # "one arm" covers an arm below MIN_ARM_ROWS too: a handful of treated rows is not a
+        # contrast to publish an interval on (codex r4).
+        one_arm = [
+            r for r in targets if r not in absent and not _arms_supported(t[region_arr == r])
+        ]
         for region in targets:
             if region in absent or region in one_arm:
                 raise EffectDataUnavailable(
