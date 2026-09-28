@@ -1349,6 +1349,23 @@ def check_categorical_class_separation(
 # =============================================================================
 
 
+def _parse_configured_dates(df: Any, col: str) -> Any:
+    """``pd.to_datetime(errors="coerce")`` that refuses to turn data into "clean".
+
+    Coercion maps an unparseable value to ``NaT``, and ``NaT`` rows are
+    excluded from every temporal comparison. A column whose values ALL fail to
+    parse therefore compared nothing and reported zero leakage (codex r2 on
+    #2294). That raises instead, so the caller records an incomplete audit. A
+    column with no values at all is left alone — there is nothing to leak —
+    and so is a partly-parseable one, whose parseable rows are still audited.
+    """
+    dates = pd.to_datetime(df[col], errors="coerce")
+    n_values = int(df[col].notna().sum())
+    if n_values and not dates.notna().any():
+        raise ValueError(f"column '{col}' has {n_values} values and none parse as dates")
+    return dates
+
+
 def _check_date_ordering(df: Any, event_col: str, target_col: str) -> tuple:
     """Check if event dates occur after target dates.
 
@@ -1358,8 +1375,8 @@ def _check_date_ordering(df: Any, event_col: str, target_col: str) -> tuple:
     ``except`` turns the failure into a "Temporal leakage check incomplete"
     issue, which blocks.
     """
-    event_dates = pd.to_datetime(df[event_col], errors="coerce")
-    target_dates = pd.to_datetime(df[target_col], errors="coerce")
+    event_dates = _parse_configured_dates(df, event_col)
+    target_dates = _parse_configured_dates(df, target_col)
 
     valid_mask = event_dates.notna() & target_dates.notna()
     leakage_mask = valid_mask & (event_dates > target_dates)
@@ -1375,7 +1392,7 @@ def _check_future_dates(df: Any, col: str, reference_date: datetime) -> tuple:
 
     Raises on failure for the same reason as ``_check_date_ordering``.
     """
-    dates = pd.to_datetime(df[col], errors="coerce")
+    dates = _parse_configured_dates(df, col)
     valid_mask = dates.notna()
 
     ref_date = pd.Timestamp(reference_date).tz_localize(None)

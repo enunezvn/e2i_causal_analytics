@@ -464,6 +464,58 @@ async def test_unparseable_split_date_is_an_incomplete_temporal_audit() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "extra_scope",
+    [
+        {"split_date": "2024-06-01", "feature_date_columns": ["event_ts"]},
+        {"event_date_column": "event_ts", "target_date_column": "label_ts"},
+    ],
+)
+async def test_configured_date_column_that_never_parses_is_an_incomplete_audit(
+    extra_scope: Dict[str, Any],
+) -> None:
+    """Codex r2: ``pd.to_datetime(errors="coerce")`` turns a configured date
+    column whose values are ALL unparseable into all-``NaT``, so the check
+    counted zero future rows / zero bad pairs and read as "no temporal
+    leakage" without examining a single date."""
+    frame = _noise_frame()
+    frame["event_ts"] = ["not a date"] * len(frame)
+    frame["label_ts"] = pd.date_range("2024-01-01", periods=len(frame), freq="D").strftime(
+        "%Y-%m-%d"
+    )
+    state = _leakage_state(frame, scope_spec={"required_features": ["noise_a"], **extra_scope})
+
+    final_state = await _leakage_gate_graph().ainvoke(state)
+
+    blocking = final_state["blocking_issues"] or []
+    assert any(
+        i.startswith("leakage: Temporal leakage check incomplete") and "event_ts" in i
+        for i in blocking
+    ), blocking
+    assert final_state["gate_passed"] is False
+
+
+@pytest.mark.asyncio
+async def test_all_null_configured_date_column_is_not_an_incomplete_audit() -> None:
+    """Control: a configured date column with no values has nothing that could
+    leak; only values that exist and fail to parse make the audit incomplete."""
+    frame = _noise_frame()
+    frame["event_ts"] = [None] * len(frame)
+    state = _leakage_state(
+        frame,
+        scope_spec={
+            "required_features": ["noise_a"],
+            "split_date": "2024-06-01",
+            "feature_date_columns": ["event_ts"],
+        },
+    )
+
+    final_state = await _leakage_gate_graph().ainvoke(state)
+
+    assert final_state["blocking_issues"] == [], final_state["blocking_issues"]
+
+
+@pytest.mark.asyncio
 async def test_incomplete_audit_entry_is_retracted_by_a_clean_rerun() -> None:
     """The incomplete-audit entry is a ``leakage:`` entry, so the next
     ``detect_leakage`` pass (the recheck, or a QC retry) replaces it: once the
