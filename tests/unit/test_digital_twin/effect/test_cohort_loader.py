@@ -470,6 +470,29 @@ async def test_a_short_adoption_read_fails_loud_rather_than_joining_a_subset():
         await cohort_loader.load_cohort_frame(_ShortCount(_cohort_rows(600)), BRAND)
 
 
+async def test_rollup_rows_that_carry_no_channel_are_not_collapsed_into_the_confounders():
+    """Measured live 2026-09-28: 219 per_hcp_rollup rows dated after the plant (the daily ETL)
+    carry NO channel; 168 of their pairs also have planted rows. Summing their trigger counts
+    and averaging their market share into the pair would give the estimator confounders the
+    DGP never saw. Only rows carrying at least one channel are collapsed."""
+    rollups = _cohort_rows(600, with_all_channels=True)
+    planted_h0 = dict(rollups[0])
+    etl_row = {
+        k: v for k, v in planted_h0.items() if k not in set(INTERVENTION_TREATMENT_MAP.values())
+    }
+    etl_row.update({"metric_date": "2026-09-28", "triggers_total_count": 5000.0})
+    only_etl = {**etl_row, "hcp_id": "h9999"}
+    frame = await cohort_loader.load_cohort_frame(
+        _FakeClient([*rollups, etl_row, only_etl], _adoption_rows([*rollups, only_etl])),
+        BRAND,
+    )
+    h0 = frame.set_index("hcp_id").loc["h0000"]
+    assert h0["triggers_total_count"] == planted_h0["triggers_total_count"]
+    assert h0["n_metric_rows"] == 1
+    assert str(h0["max_metric_date"])[:10] == "2026-06-01"
+    assert "h9999" not in set(frame["hcp_id"])
+
+
 async def test_a_truncated_rollup_read_fails_loud_rather_than_collapsing_a_subset():
     """The rollup read relies on the server honouring ``limit(_FETCH_LIMIT)``; measured live it
     does (4.6k rows per brand, 2026-09-23). If a server cap ever cut it short, the collapse

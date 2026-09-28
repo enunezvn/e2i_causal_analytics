@@ -172,6 +172,15 @@ async def load_cohort_frame(client: Any, brand: str) -> pd.DataFrame:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
     df["brand"] = brand  # the read is .eq-filtered on it; the collapse keys on it
+    # Collapse only rows that carry at least one treatment channel. The daily per-HCP ETL keeps
+    # adding rollup rows after the plant with every channel NULL (219 live on 2026-09-28, dated
+    # after the planted window; 168 of their pairs also have planted rows): summed into a pair,
+    # their trigger counts and market share would hand the estimator confounders the DGP never
+    # collapsed. A row with some channels (a partial substrate) is kept.
+    present = [c for c in _TREATMENT_COLUMNS if c in df.columns]
+    df = df[df[present].notna().any(axis=1)] if present else df.iloc[0:0]
+    if df.empty:
+        return df.reset_index(drop=True)
     collapsed = collapse_per_hcp_brand(df)
     adoption = await _load_adoption(client, brand)
     return collapsed.merge(adoption, on=_KEY, how="left", validate="one_to_one")
