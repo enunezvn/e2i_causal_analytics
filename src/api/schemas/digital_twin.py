@@ -519,11 +519,16 @@ class ProposedExperimentItem(BaseModel):
         default="twin_simulation",
         description="What proposed this: a completed digital-twin simulation (the only source today).",
     )
-    outcome_column: str = Field(
+    outcome_column: Optional[str] = Field(
         description=(
-            "The per-HCP business_metrics column the twin predicted an effect ON "
-            "(cohort_conversion_outcome today). simulated_ate and its interval are an "
-            "ABSOLUTE difference in this column's units, not a percentage lift."
+            "The per-HCP outcome column THIS simulation predicted an effect ON: 'adopted' "
+            "(hcp_brand_adoption, 0/1) for runs since lane T2, so simulated_ate is a "
+            "difference in adoption rate. null for a run saved earlier, which recorded no "
+            "column (cohort_conversion_outcome, or conversion_rate before migration 147); "
+            "such a run cannot be drafted into an experiment. simulated_ate and its interval are an ABSOLUTE "
+            "difference in this column's units, not a percentage lift. Since lane T2 the "
+            "interval is the causal forest's doubly-robust one (ATE +- z * its DR standard "
+            "error), not the wider averaged per-HCP CATE interval earlier runs report."
         ),
     )
     effect_scale: Literal["absolute"] = Field(
@@ -537,14 +542,18 @@ class ProposedExperimentsResponse(BaseModel):
 
     proposals: List[ProposedExperimentItem]
     outcome_column: str = Field(
-        description="The outcome column every proposal's effect is stated on (see items)."
+        description=(
+            "The outcome column the twin estimates on today ('adopted', "
+            "hcp_brand_adoption). Each item names the column its own run was estimated on."
+        )
     )
     outcome_measurable_in_real_mode: bool = Field(
         description=(
-            "Whether any REAL (is_synthetic=false) per-HCP business_metrics row records "
-            "the outcome column. False today (measured): the column is populated only on "
-            "the synthetic-gold cohort rows, and the real-mode final-results feed excludes "
-            "them, so a real experiment drafted from a proposal cannot yet be compared "
+            "Whether any REAL (is_synthetic=false) row records outcome_column where the "
+            "real-mode final-results feed reads it: for 'adopted', the per-experiment "
+            "unit-outcome feed (ab_experiment_unit_outcomes; the business_metrics join "
+            "cannot measure it). False today (measured): no real writer of that feed "
+            "exists, so a real experiment drafted from a proposal cannot yet be compared "
             "against the twin — an owner decision on the real endpoint is needed."
         ),
     )
@@ -590,9 +599,10 @@ class DraftExperimentResponse(BaseModel):
     outcome_column: str = Field(description="prediction_target: the outcome the twin predicted on.")
     outcome_measurable_in_real_mode: bool = Field(
         description=(
-            "Whether real per-HCP rows record the outcome column today (see the list "
-            "envelope). False means the final analysis of this draft will report "
-            "insufficient_data until a real endpoint is recorded."
+            "Whether real rows record this draft's outcome column where its final analysis "
+            "reads it (see the list envelope). False means that analysis cannot measure the "
+            "outcome until a real endpoint is recorded: 'adopted' is skipped with the reason, "
+            "a legacy column reports insufficient_data."
         ),
     )
     linked: bool = Field(

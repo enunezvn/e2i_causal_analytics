@@ -51,7 +51,9 @@ from src.api.schemas.digital_twin import (
     ProposedExperimentsResponse,
 )
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
-from src.data.per_hcp_cohort_columns import COHORT_OUTCOME_COLUMN
+from src.data.per_hcp_cohort_columns import TWIN_OUTCOME_COLUMN
+from src.digital_twin.models.simulation_models import stored_outcome_column
+from src.repositories.experiment_outcome import UNIT_OUTCOMES_TABLE
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +82,22 @@ OUTCOME_NOT_MEASURABLE = (
     "real-mode final analysis of this draft will report insufficient_data until a real "
     "per-HCP endpoint is recorded (owner decision)."
 )
+#: The same note for the twin's outcome since lane T2, which only the per-experiment
+#: unit-outcome feed can measure (see ``ExperimentOutcomeRepository.resolve_column``).
+FEED_OUTCOME_NOT_MEASURABLE = (
+    " Note: {column} is measured only by the per-experiment unit-outcome feed ("
+    + UNIT_OUTCOMES_TABLE
+    + "), which has no real (is_synthetic=false) rows today, so the real-mode final "
+    "analysis of this draft will be skipped with that reason until a real writer records "
+    "its units' outcomes (owner decision)."
+)
+
+
+def _not_measurable_note(column: str) -> str:
+    template = (
+        FEED_OUTCOME_NOT_MEASURABLE if column == TWIN_OUTCOME_COLUMN else OUTCOME_NOT_MEASURABLE
+    )
+    return template.format(column=column)
 
 
 def _proposal_sort_key(row: Dict[str, Any]) -> tuple:
@@ -117,24 +135,37 @@ async def _count_real_running_experiments(client: Any, brand: Optional[str]) -> 
     return int(result.count or 0)
 
 
-async def _outcome_measurable_in_real_mode(client: Any) -> bool:
-    """Whether any REAL per-HCP row records the twin's outcome column (codex r1 #1).
+async def _outcome_measurable_in_real_mode(client: Any, column: str = TWIN_OUTCOME_COLUMN) -> bool:
+    """Whether any REAL row records ``column`` where the real-mode final-results feed
+    (``ExperimentOutcomeRepository.load_arrays``) would read it (codex r1 #1). Counted,
+    never assumed.
 
-    Measured live 2026-09-22: every per_hcp_rollup row carrying
-    cohort_conversion_outcome is is_synthetic=true (13,797 rows), and the real-mode
-    outcome feed (ExperimentOutcomeRepository.load_arrays) excludes synthetic rows —
-    so a real draft's final analysis cannot measure it today. Counted, never assumed.
+    ``adopted`` (the twin's outcome since lane T2) is measurable ONLY through the
+    per-experiment unit-outcome feed — ``resolve_column`` refuses it on the business_metrics
+    join — so that is the table counted. A legacy draft's ``cohort_conversion_outcome`` is
+    read off business_metrics per_hcp_rollup rows. Measured live 2026-09-22: every rollup
+    row carrying it is is_synthetic=true (13,797 rows), and the real-mode feed excludes
+    synthetic rows.
     """
     # is_synthetic=false stated directly, not via apply_provenance_filter, which
     # skips the predicate on a showcase deployment (codex r2 #1).
-    query = (
-        client.table("business_metrics")
-        .select("hcp_id", count="exact")
-        .eq("metric_type", "per_hcp_rollup")
-        .not_.is_(COHORT_OUTCOME_COLUMN, "null")
-        .eq("is_synthetic", False)
-        .limit(1)
-    )
+    if column == TWIN_OUTCOME_COLUMN:
+        query = (
+            client.table(UNIT_OUTCOMES_TABLE)
+            .select("unit_id", count="exact")
+            .eq("metric_name", column)
+            .eq("is_synthetic", False)
+            .limit(1)
+        )
+    else:
+        query = (
+            client.table("business_metrics")
+            .select("hcp_id", count="exact")
+            .eq("metric_type", "per_hcp_rollup")
+            .not_.is_(column, "null")
+            .eq("is_synthetic", False)
+            .limit(1)
+        )
     result = await query.execute()
     return int(result.count or 0) > 0
 
@@ -199,13 +230,15 @@ async def list_proposed_experiments(
                     data_provenance=row.get("data_provenance"),
                     fidelity_status=FidelityStatusEnum(fidelity["fidelity_status"].value),
                     created_at=row.get("created_at"),
-                    outcome_column=COHORT_OUTCOME_COLUMN,
+                    # What THIS simulation was estimated on: the twin's outcome moved to
+                    # `adopted` in lane T2, and the earlier runs stay on their own column.
+                    outcome_column=stored_outcome_column(row),
                 )
             )
 
         return ProposedExperimentsResponse(
             proposals=items,
-            outcome_column=COHORT_OUTCOME_COLUMN,
+            outcome_column=TWIN_OUTCOME_COLUMN,
             outcome_measurable_in_real_mode=measurable,
             # The exact population, never len(window) (codex r4): the store returns
             # the top of the population in presentation order and says how big it is.
@@ -283,13 +316,28 @@ async def create_draft_experiment(
 
     intervention_type = str(sim.get("intervention_type") or "unknown")
     weeks = sim.get("recommended_duration_weeks")
+    # The draft measures what the simulation predicted an effect ON, so the fidelity loop
+    # compares like with like — never the twin's CURRENT outcome for an earlier run, and
+    # never a guess for a run that did not record one (codex r1 #2).
+    outcome_column = stored_outcome_column(sim)
+    if outcome_column is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Simulation {simulation_id} does not say which outcome its effect was "
+                "estimated on, and it cannot be resolved (a synthetic-uplift run, whose outcome "
+                "is no measurable column, or a cohort run saved while migration 147 was "
+                "deploying). A draft names that outcome as its endpoint, so none is created: "
+                "re-run the simulation and draft the experiment from the new run."
+            ),
+        )
     # Every diagnostic read happens BEFORE the mutation (codex r2 #5): a read that
     # fails after the committed draft would turn a success into a 500.
     try:
         model_row = (
             await repo.require_model(UUID(str(sim["model_id"]))) if sim.get("model_id") else None
         )
-        measurable = await _outcome_measurable_in_real_mode(repo.client)
+        measurable = await _outcome_measurable_in_real_mode(repo.client, outcome_column)
     except Exception as e:
         logger.error(f"Pre-draft reads failed for simulation {simulation_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to read the model / outcome state")
@@ -306,7 +354,7 @@ async def create_draft_experiment(
             if ci_lo is not None and ci_hi is not None
             else ""
         )
-        + f" on {COHORT_OUTCOME_COLUMN}; model fidelity {fidelity['fidelity_status'].value}."
+        + f" on {outcome_column}; model fidelity {fidelity['fidelity_status'].value}."
     )
     # Written directly (the ``prediction_synthesizer_deploy`` precedent):
     # ``MLExperimentRepository.create_experiment`` cannot carry the channel /
@@ -316,7 +364,7 @@ async def create_draft_experiment(
     data: Dict[str, Any] = {
         "experiment_name": experiment_name,
         "description": description,
-        "prediction_target": COHORT_OUTCOME_COLUMN,
+        "prediction_target": outcome_column,
         "brand": sim_brand,
         "created_by": _caller_identity(user),
         "status": DRAFT_STATUS,
@@ -402,15 +450,14 @@ async def create_draft_experiment(
         experiment_name=experiment_name,
         brand=str(sim_brand),
         intervention_channel=intervention_type,
-        prediction_target=COHORT_OUTCOME_COLUMN,
+        prediction_target=outcome_column,
         target_enrollment=data["target_enrollment"],
         planned_duration_days=data["planned_duration_days"],
         created_by=data["created_by"],
-        outcome_column=COHORT_OUTCOME_COLUMN,
+        outcome_column=outcome_column,
         outcome_measurable_in_real_mode=measurable,
         linked=True,
-        next_step=NEXT_STEP
-        + ("" if measurable else OUTCOME_NOT_MEASURABLE.format(column=COHORT_OUTCOME_COLUMN)),
+        next_step=NEXT_STEP + ("" if measurable else _not_measurable_note(outcome_column)),
     )
 
 

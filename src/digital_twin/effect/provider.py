@@ -17,6 +17,7 @@ import pandas as pd
 from src.data.per_hcp_cohort_columns import (  # one list, shared with the ETL preview
     COHORT_OUTCOME_COLUMN,
     INTERVENTION_TREATMENT_MAP,
+    TWIN_OUTCOME_COLUMN,
 )
 from src.digital_twin.effect.errors import EffectCause, EffectDataUnavailable
 
@@ -76,7 +77,12 @@ COHORT_CONFOUNDERS: tuple[str, ...] = ("market_share", "triggers_total_count")
 # 2026-09-19 a full-window backfill replaced the rows wholesale and the twin went dark for every
 # brand. ``tests/unit/test_digital_twin/effect/test_cohort_columns_single_writer.py`` pins the
 # separation: no column the plant writes may appear in the ETL's upsert SET arm.
-_COHORT_OUTCOME = COHORT_OUTCOME_COLUMN
+#
+# Lane T2 (2026-09-28): the twin now estimates on ``hcp_brand_adoption.adopted`` (0/1), joined
+# per (hcp_id, brand) by the loader. ``cohort_conversion_outcome`` carried a structural null for
+# every channel (0/48 significant fits, 2026-09-23); ``adopted`` carries the T1 re-plant's channel
+# effects. COHORT_OUTCOME_COLUMN stays the plant's column, re-exported for the ETL-side readers.
+_COHORT_OUTCOME = TWIN_OUTCOME_COLUMN
 _COHORT_REGION = "region"
 # Minimum usable cohort rows for a stable region-standardized estimate.
 COHORT_MIN_ROWS = 500
@@ -207,7 +213,11 @@ def region_standardized_ate(
     cohort: pd.DataFrame,
     treatment_col: str,
     *,
-    outcome_col: str = _COHORT_OUTCOME,
+    # Deliberately still the continuous plant column, not the twin's 0/1 outcome: this retained
+    # baseline median-binarizes the OUTCOME, which is degenerate on a 0/1 label (y > median is
+    # y itself or all-zero). It has no production caller (only its own unit tests); the twin's
+    # estimate is CohortCausalEstimator's.
+    outcome_col: str = COHORT_OUTCOME_COLUMN,
     region_col: str = _COHORT_REGION,
 ) -> float:
     """Region-standardized binary treatment effect from a labeled cohort.

@@ -48,6 +48,8 @@ def _sim(brand="Kisqali", recommendation="deploy", ate=0.1, linked=None, **overr
         "simulation_confidence": 0.71,
         "simulation_status": "completed",
         "data_provenance": "cohort_estimated_synthetic_gold_v1",
+        # Lane T2: a run saved since then records the outcome it was estimated on.
+        "effect_heterogeneity": {"by_region": {}, "outcome_column": "adopted"},
         "created_at": datetime.now(timezone.utc),
     }
     row.update(overrides)
@@ -73,11 +75,13 @@ def _client(
         getattr(chain, name).return_value = chain
     chain.not_.is_.return_value = chain
 
-    # Count results by TABLE, not by call order: the route reads business_metrics
-    # (measurability) and ml_experiments (running count) in whatever order.
+    # Count results by TABLE, not by call order: the route reads the outcome's real-mode
+    # feed (measurability: ab_experiment_unit_outcomes for `adopted`, business_metrics for a
+    # legacy draft's column) and ml_experiments (running count) in whatever order.
     def _execute():
         table = client.table.call_args.args[0] if client.table.call_args else ""
-        count = measurable_count if table == "business_metrics" else running_count
+        measured = ("business_metrics", "ab_experiment_unit_outcomes")
+        count = measurable_count if table in measured else running_count
         return MagicMock(data=[], count=count)
 
     chain.execute = AsyncMock(side_effect=_execute)
@@ -156,7 +160,7 @@ class TestListProposedExperiments:
     def test_items_carry_the_twin_parameters_and_the_models_fidelity_state(self):
         from src.api.routes.digital_twin_proposals import list_proposed_experiments
 
-        sim = _sim()
+        sim = _sim(effect_heterogeneity={"by_region": {}})  # saved before lane T2
         repo = _repo([sim], models={sim["model_id"]: _model_row(sim["model_id"])})
         with _patched(repo):
             resp = asyncio.run(list_proposed_experiments(brand=None, user=ADMIN))
@@ -179,10 +183,30 @@ class TestListProposedExperiments:
         assert item.fidelity_status.value == "unvalidated"
         assert item.proposal_basis == "twin_simulation"
         # codex r1 #5: the ATE is an ABSOLUTE difference on the twin's outcome column,
-        # never a percentage lift; the item names both.
+        # never a percentage lift. This cohort row recorded no outcome and was saved after
+        # migration 147 went live, so it ran on cohort_conversion_outcome; the envelope
+        # names the twin's outcome today.
         assert item.outcome_column == "cohort_conversion_outcome"
         assert item.effect_scale == "absolute"
-        assert resp.outcome_column == "cohort_conversion_outcome"
+        assert resp.outcome_column == "adopted"
+
+    def test_each_item_names_the_outcome_its_own_run_was_estimated_on(self):
+        """Lane T2 moved the twin's outcome to `adopted`. A run saved after that records it;
+        an earlier run must not be relabelled as a prediction about adoption."""
+        from src.api.routes.digital_twin_proposals import list_proposed_experiments
+
+        new = _sim(effect_heterogeneity={"by_region": {}, "outcome_column": "adopted"})
+        old = _sim(effect_heterogeneity={"by_region": {}}, created_at="2026-09-10T00:00:00Z")
+        uplift = _sim(effect_heterogeneity={}, data_provenance="synthetic_uplift_v1")
+        repo = _repo([new, old, uplift])
+        with _patched(repo):
+            resp = asyncio.run(list_proposed_experiments(brand=None, user=ADMIN))
+        by_id = {p.simulation_id: p.outcome_column for p in resp.proposals}
+        assert by_id == {
+            new["simulation_id"]: "adopted",
+            old["simulation_id"]: "conversion_rate",  # before migration 147
+            uplift["simulation_id"]: None,
+        }
 
     def test_a_measured_model_reads_validated(self):
         from src.api.routes.digital_twin_proposals import list_proposed_experiments
@@ -242,10 +266,10 @@ class TestListProposedExperiments:
         chain.eq.assert_any_call("is_synthetic", False)
 
     def test_envelope_says_whether_the_twin_outcome_is_measurable_in_real_mode(self):
-        """codex r1 #1 (measured live): cohort_conversion_outcome is recorded ONLY on the
-        synthetic-gold per-HCP rows (13,797 rows, all is_synthetic=true); the real-mode
-        outcome feed excludes them. A real draft's final analysis therefore cannot
-        measure it today. The envelope states that from a real count, never assumes."""
+        """codex r1 #1, lane T2: the twin's outcome `adopted` is measurable only by the
+        per-experiment unit-outcome feed (the business_metrics join refuses it), and no real
+        row exists there today. The envelope states that from a real count of THAT feed —
+        never from business_metrics, which has no such column."""
         from src.api.routes.digital_twin_proposals import list_proposed_experiments
 
         client, chain = _client(running_count=0, measurable_count=0)
@@ -253,9 +277,10 @@ class TestListProposedExperiments:
         with _patched(repo):
             resp = asyncio.run(list_proposed_experiments(brand=None, user=ADMIN))
         assert resp.outcome_measurable_in_real_mode is False
-        client.table.assert_any_call("business_metrics")
-        chain.eq.assert_any_call("metric_type", "per_hcp_rollup")
-        chain.not_.is_.assert_any_call("cohort_conversion_outcome", "null")
+        client.table.assert_any_call("ab_experiment_unit_outcomes")
+        chain.eq.assert_any_call("metric_name", "adopted")
+        chain.eq.assert_any_call("is_synthetic", False)
+        assert ("business_metrics",) not in [c.args for c in client.table.call_args_list]
 
         client2, _ = _client(running_count=0, measurable_count=42)
         repo2 = _repo([_sim()], client=client2)
@@ -378,8 +403,9 @@ class TestCreateDraftExperiment:
         with _patched(repo):
             asyncio.run(create_draft_experiment(sim["simulation_id"], user=ADMIN))
         tables = [c.args[0] for c in client.table.call_args_list]
-        assert tables.index("business_metrics") < tables.index("ml_experiments")
-        assert tables.count("business_metrics") == 1
+        # `adopted` (lane T2) is measured on the unit-outcome feed; that read comes first.
+        assert tables.index("ab_experiment_unit_outcomes") < tables.index("ml_experiments")
+        assert tables.count("ab_experiment_unit_outcomes") == 1
 
     def test_a_failing_measurability_read_is_a_500_before_any_mutation(self):
         from src.api.routes.digital_twin_proposals import create_draft_experiment
@@ -438,7 +464,8 @@ class TestCreateDraftExperiment:
         from src.api.routes.digital_twin_proposals import create_draft_experiment
         from src.data.per_hcp_cohort_columns import COHORT_OUTCOME_COLUMN
 
-        sim = _sim()
+        # A run that recorded the plant column (the legacy business_metrics measurement arm).
+        sim = _sim(effect_heterogeneity={"outcome_column": COHORT_OUTCOME_COLUMN})
         exp_id = str(uuid4())
         client, chain = _client(insert_rows=[{"id": exp_id}])
         repo = _repo([], sim=sim, client=client)
@@ -479,6 +506,81 @@ class TestCreateDraftExperiment:
         assert resp.outcome_measurable_in_real_mode is False
         assert "promot" in resp.next_step.lower()
         assert "synthetic-gold" in resp.next_step
+        # A legacy run's column is checked where the final analysis would read it.
+        client.table.assert_any_call("business_metrics")
+        chain.not_.is_.assert_any_call(COHORT_OUTCOME_COLUMN, "null")
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"data_provenance": "synthetic_uplift_v1", "effect_heterogeneity": None},
+            # between migration 147's apply and its deploy finishing: the image is unknown
+            {"effect_heterogeneity": {}, "created_at": "2026-09-22T01:08:00Z"},
+        ],
+    )
+    def test_a_run_whose_outcome_is_unknown_cannot_become_a_draft(self, overrides):
+        """codex r1 #2: a draft names its endpoint in prediction_target. A run whose outcome
+        cannot be resolved (a synthetic-uplift run's synthetic outcome, or a cohort run
+        inside the 147 deploy window) is refused before anything is written."""
+        from src.api.routes.digital_twin_proposals import create_draft_experiment
+
+        sim = _sim(**overrides)
+        client, chain = _client(insert_rows=[{"id": str(uuid4())}])
+        repo = _repo([], sim=sim, client=client)
+        with _patched(repo), pytest.raises(HTTPException) as ei:
+            asyncio.run(create_draft_experiment(sim["simulation_id"], user=OPERATOR_KISQALI))
+        assert ei.value.status_code == 422
+        assert "re-run" in ei.value.detail.lower()
+        chain.insert.assert_not_called()
+        repo.claim_experiment_link.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        ("created_at", "column"),
+        [
+            ("2026-09-10T00:00:00Z", "conversion_rate"),
+            ("2026-09-22T07:00:12Z", "cohort_conversion_outcome"),
+        ],
+    )
+    def test_a_draft_from_a_legacy_run_keeps_that_runs_column(self, created_at, column):
+        """Team-lead condition (2): a pre-T2 cohort run keeps its own outcome as the draft's
+        prediction_target, measured through business_metrics as before (both columns resolve
+        in ExperimentOutcomeRepository.resolve_column)."""
+        from src.api.routes.digital_twin_proposals import create_draft_experiment
+        from src.repositories.experiment_outcome import ExperimentOutcomeRepository
+
+        sim = _sim(effect_heterogeneity={"by_region": {}}, created_at=created_at)
+        client, chain = _client(insert_rows=[{"id": str(uuid4())}])
+        repo = _repo([], sim=sim, client=client)
+        with _patched(repo):
+            resp = asyncio.run(create_draft_experiment(sim["simulation_id"], user=OPERATOR_KISQALI))
+        assert chain.insert.call_args.args[0]["prediction_target"] == column
+        assert resp.prediction_target == resp.outcome_column == column
+        client.table.assert_any_call("business_metrics")
+        chain.not_.is_.assert_any_call(column, "null")
+        assert ExperimentOutcomeRepository.resolve_column(column) == (column, "mean")
+
+    def test_a_draft_from_an_adopted_run_measures_adopted_on_the_unit_outcome_feed(self):
+        """Lane T2: the draft's prediction_target is what the run predicted ON, and its
+        measurability is read from the feed the final analysis would use for it."""
+        from src.api.routes.digital_twin_proposals import create_draft_experiment
+
+        sim = _sim(effect_heterogeneity={"outcome_column": "adopted"})
+        exp_id = str(uuid4())
+        client, chain = _client(insert_rows=[{"id": exp_id}])
+        repo = _repo([], sim=sim, client=client)
+        with _patched(repo):
+            resp = asyncio.run(create_draft_experiment(sim["simulation_id"], user=OPERATOR_KISQALI))
+
+        data = chain.insert.call_args.args[0]
+        assert data["prediction_target"] == "adopted"
+        assert " on adopted;" in data["description"]
+        assert resp.prediction_target == resp.outcome_column == "adopted"
+        assert resp.outcome_measurable_in_real_mode is False
+        client.table.assert_any_call("ab_experiment_unit_outcomes")
+        chain.eq.assert_any_call("metric_name", "adopted")
+        assert ("business_metrics",) not in [c.args for c in client.table.call_args_list]
+        assert "ab_experiment_unit_outcomes" in resp.next_step
+        assert "skipped" in resp.next_step
 
     def test_a_lost_claim_deletes_the_orphan_draft_and_is_a_409(self):
         """codex r1 #2: two concurrent POSTs both pass the pre-check and both insert a

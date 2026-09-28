@@ -300,24 +300,33 @@ class _FitRaises:
         raise RuntimeError(SENTINEL)
 
 
+class _SubsetInferenceRaises:
+    """The DR final stage: its pseudo-outcomes reproduce ``ate_`` (0.2), and the masked
+    ``_ate_and_stderr`` call for the target rows raises."""
+
+    def __init__(self, n):
+        self._oob_preds = np.full((n, 1, 1), 0.2)
+
+    def _ate_and_stderr(self, _drpreds, mask=None):
+        raise RuntimeError(SENTINEL)
+
+
 class _TargetIntervalRaises:
-    """A forest whose cohort-wide fit succeeds and whose second, target-region
-    ``ate_interval`` call raises."""
+    """A forest whose cohort-wide fit and DR ATE succeed and whose target-region inference
+    (the DR mean and stderr over the targeted rows) raises."""
+
+    ate_ = np.array([0.2])
+    ate_stderr_ = np.array([0.05])
 
     def __init__(self, **_kwargs):
-        self.intervals = 0
+        pass
 
-    def fit(self, *_args, **_kwargs):
+    def fit(self, y, *_args, **_kwargs):
+        self.rlearner_model_final_ = _SubsetInferenceRaises(len(y))
         return self
 
     def effect(self, x):
         return np.full(len(x), 0.2)
-
-    def ate_interval(self, _x, alpha=0.05):
-        self.intervals += 1
-        if self.intervals == 2:
-            raise RuntimeError(SENTINEL)
-        return (0.1, 0.3)
 
 
 def test_cohort_fit_failure_text_is_logged_not_raised(monkeypatch, caplog):

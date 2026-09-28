@@ -38,6 +38,16 @@ INTERVENTION_TREATMENT_MAP: Final[dict[str, str]] = {
 #: recompute and the plant stop sharing one.
 COHORT_OUTCOME_COLUMN: Final = "cohort_conversion_outcome"
 
+#: The Digital Twin's estimand (lane T2, 2026-09-28): ``hcp_brand_adoption.adopted`` (0/1, one
+#: row per (hcp_id, brand), migration 076). It lives on a DIFFERENT TABLE from the plant column
+#: above, which is why it is a second constant and not a rename: ``business_metrics`` has no
+#: ``adopted`` column, so querying it there is a PostgREST 42703 (measured live 2026-09-23). The
+#: twin loader reads it with a second, paged read and joins it to the collapsed per-(hcp, brand)
+#: rollup (``src/digital_twin/effect/cohort_loader.py``). ``adopted`` is written by
+#: ``scripts/backfill_hcp_treatment_arm.py``, never by the plant, so it is not in PLANTED_COLUMNS.
+TWIN_OUTCOME_COLUMN: Final = "adopted"
+TWIN_OUTCOME_TABLE: Final = "hcp_brand_adoption"
+
 #: Every column the plant writes, in a fixed order: the eight channels sorted, then the outcome.
 PLANTED_COLUMNS: Final[tuple[str, ...]] = (
     *sorted(set(INTERVENTION_TREATMENT_MAP.values())),

@@ -293,7 +293,8 @@ function ProposalRow({
                 proposal.simulated_ci_upper
               )}
             </span>{' '}
-            on {proposal.outcome_column} (absolute, outcome units)
+            on {proposal.outcome_column ?? 'an outcome this run did not record'} (absolute,
+            outcome units)
             {' · '}
             {proposal.recommended_sample_size != null
               ? `n=${proposal.recommended_sample_size.toLocaleString()}`
@@ -311,7 +312,12 @@ function ProposalRow({
             </p>
           )}
         </div>
-        {canDraft && !draftedExperimentId && (
+        {canDraft && !draftedExperimentId && proposal.outcome_column == null && (
+          <p className="text-xs text-[var(--color-muted-foreground)] max-w-[12rem]">
+            Re-run this simulation to draft an experiment: it predates outcome recording.
+          </p>
+        )}
+        {canDraft && !draftedExperimentId && proposal.outcome_column != null && (
           <Button
             size="sm"
             variant="outline"
@@ -570,10 +576,9 @@ export function ExperimentRecommendations({ className }: ExperimentRecommendatio
                 >
                   <AlertCircle className="h-3.5 w-3.5 mt-0.5 text-amber-600" />
                   <span>
-                    The outcome these effects are stated on ({outcomeColumn ?? 'the twin outcome'}) is
-                    recorded only on the synthetic-gold cohort rows today, so a real experiment drafted
-                    from a proposal cannot yet be measured against the twin — the real endpoint is an
-                    owner decision.
+                    The twin&apos;s outcome ({outcomeColumn ?? 'the twin outcome'}) has no real
+                    experiment outcomes recorded yet, so a real experiment drafted from a proposal
+                    cannot yet be measured against the twin — the real endpoint is an owner decision.
                   </span>
                 </div>
               )}

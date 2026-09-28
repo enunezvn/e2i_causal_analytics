@@ -98,17 +98,17 @@ function proposal(overrides: Record<string, unknown> = {}) {
     fidelity_status: 'unvalidated',
     created_at: '2026-09-22T10:00:00Z',
     proposal_basis: 'twin_simulation',
-    outcome_column: 'cohort_conversion_outcome',
+    outcome_column: 'adopted',
     effect_scale: 'absolute',
     ...overrides,
   };
 }
 
-/** The list envelope as the backend states it today: outcome recorded only on synthetic-gold rows. */
+/** The list envelope as the backend states it today: no real experiment outcomes for `adopted` yet. */
 function proposalsResponse(proposals: unknown[], overrides: Record<string, unknown> = {}) {
   return {
     proposals,
-    outcome_column: 'cohort_conversion_outcome',
+    outcome_column: 'adopted',
     outcome_measurable_in_real_mode: false,
     total_proposed: proposals.length,
     truncated: false,
@@ -307,7 +307,7 @@ describe('ExperimentRecommendations (Proposed experiments, #2206)', () => {
     // No percentage form of the effect anywhere (the rationale's own "95% CI" is the twin's text).
     expect(screen.queryByText(/[+-]\d+\.\d%/)).not.toBeInTheDocument();
     expect(
-      screen.getAllByText(/on cohort_conversion_outcome \(absolute, outcome units\)/)
+      screen.getAllByText(/on adopted \(absolute, outcome units\)/)
     ).toHaveLength(2);
     expect(
       screen.getByText(
@@ -333,7 +333,7 @@ describe('ExperimentRecommendations (Proposed experiments, #2206)', () => {
     mockProposals(proposalsResponse([proposal()], { outcome_measurable_in_real_mode: false }));
     const { unmount } = render(<ExperimentRecommendations />, { wrapper: createWrapper() });
     expect(screen.getByTestId('proposals-outcome-note')).toHaveTextContent(
-      /cohort_conversion_outcome.*recorded only on the synthetic-gold cohort rows today/
+      /adopted.*no real\s+experiment outcomes recorded yet/
     );
     expect(screen.getByTestId('proposals-outcome-note')).toHaveTextContent(/owner decision/);
     unmount();
@@ -397,6 +397,15 @@ describe('ExperimentRecommendations (Proposed experiments, #2206)', () => {
     mockUseAuth.mockReturnValue({ isAdmin: true });
     render(<ExperimentRecommendations />, { wrapper: createWrapper() });
     expect(screen.getByRole('button', { name: /create draft experiment/i })).toBeInTheDocument();
+  });
+
+  it('offers no draft for a run that recorded no outcome, and says why (lane T2)', () => {
+    mockUseAuth.mockReturnValue({ isAdmin: true });
+    mockProposals(proposalsResponse([proposal({ outcome_column: null })]));
+    render(<ExperimentRecommendations />, { wrapper: createWrapper() });
+    expect(screen.queryByRole('button', { name: /create draft experiment/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/re-run this simulation to draft an experiment/i)).toBeInTheDocument();
+    expect(screen.getByText(/an outcome this run did not record/i)).toBeInTheDocument();
   });
 
   it('confirms, creates the draft for that simulation, and shows the experiment id as a draft', () => {
