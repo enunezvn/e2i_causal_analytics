@@ -1,0 +1,14 @@
+[ok ] operator login — 200
+[ok ] health: healthy, brands_simulable 3 — 200 healthy/3
+[ok ] Kisqali: 8/8 available_for_effect, cohort_causal basis — 8/8 ['cohort_causal']
+[ok ] Fabhalta: 8/8 available_for_effect, cohort_causal basis — 8/8 ['cohort_causal']
+[ok ] Remibrutinib: 8/8 available_for_effect, cohort_causal basis — 8/8 ['cohort_causal']
+[ok ] Kisqali: digital_engagement completes on the cohort, is_significant, CI excludes 0 — 200 ate=0.1069 ci=(0.0607, 0.1531) half-width=0.0462 sig=True rec=deploy
+[ok ] Fabhalta: digital_engagement completes on the cohort, is_significant, CI excludes 0 — 200 ate=0.156 ci=(0.1154, 0.1967) half-width=0.0407 sig=True rec=deploy
+[ok ] Remibrutinib: digital_engagement completes on the cohort, is_significant, CI excludes 0 — 200 ate=0.1643 ci=(0.1213, 0.2072) half-width=0.0429 sig=True rec=deploy
+[info] Kisqali: rep_training_quality (planted null) ate=-0.0109 ci=(-0.05, 0.0282) sig=False status=completed http=200
+[info] Fabhalta: rep_training_quality (planted null) ate=0.0058 ci=(-0.0348, 0.0465) sig=False status=completed http=200
+[info] Remibrutinib: rep_training_quality (planted null) ate=0.0472 ci=(0.0083, 0.0861) sig=True status=completed http=200
+[ok ] proposed-experiments: envelope outcome_column is adopted; rows resolve per the date rule — 200 envelope=adopted rows_by_outcome={'conversion_rate': 24, 'adopted': 4, 'None': 3, 'cohort_conversion_outcome': 3} n=34
+
+# ok=9 bad=0

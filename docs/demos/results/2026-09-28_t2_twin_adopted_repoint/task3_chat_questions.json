@@ -1,0 +1,16 @@
+{
+ "source": "lane T2 Task 3 live acceptance 2026-09-28",
+ "notes": "one ask that must route to digital_twin_simulate_tool and report the DR interval on adopted",
+ "questions": [
+  {
+   "question_id": "T2.1",
+   "session": "t2a",
+   "text": "Use the digital twin to simulate a digital engagement intervention for Fabhalta HCPs. What effect on adoption does it predict, with its confidence interval, and is it significant?",
+   "tier": "T3",
+   "follow_up": false,
+   "gold_pattern": "SINGLE_AGENT",
+   "gold_agents": ["digital_twin"],
+   "gold_source": "plan"
+  }
+ ]
+}
