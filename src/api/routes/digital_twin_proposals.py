@@ -317,8 +317,20 @@ async def create_draft_experiment(
     intervention_type = str(sim.get("intervention_type") or "unknown")
     weeks = sim.get("recommended_duration_weeks")
     # The draft measures what the simulation predicted an effect ON, so the fidelity loop
-    # compares like with like — never the twin's CURRENT outcome for an earlier run.
+    # compares like with like — never the twin's CURRENT outcome for an earlier run, and
+    # never a guess for a run that did not record one (codex r1 #2).
     outcome_column = stored_outcome_column(sim)
+    if outcome_column is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Simulation {simulation_id} was saved before the twin recorded the outcome its "
+                "effect was estimated on (earlier runs used cohort_conversion_outcome, or "
+                "conversion_rate before migration 147, and the row does not say which). A "
+                "draft names that outcome as its endpoint, so none is created: re-run the "
+                "simulation and draft the experiment from the new run."
+            ),
+        )
     # Every diagnostic read happens BEFORE the mutation (codex r2 #5): a read that
     # fails after the committed draft would turn a success into a 500.
     try:

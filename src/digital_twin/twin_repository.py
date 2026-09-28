@@ -19,7 +19,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from src.data.per_hcp_cohort_columns import COHORT_OUTCOME_COLUMN
 from src.repositories.base import BaseRepository
 
 from .effect.estimate import PROVENANCE_COHORT, PROVENANCE_RWD, PROVENANCE_SYNTHETIC, SUBGROUP_AXES
@@ -422,19 +421,18 @@ def stored_filter_regions(row: Dict[str, Any]) -> List[str]:
 OUTCOME_COLUMN_KEY = "outcome_column"
 
 
-def stored_outcome_column(row: Dict[str, Any]) -> str:
-    """The outcome column a stored twin_simulations row's effect was estimated on.
+def stored_outcome_column(row: Dict[str, Any]) -> Optional[str]:
+    """The outcome column a stored twin_simulations row's effect was estimated on, or
+    ``None`` when the row does not say.
 
-    Rows saved before lane T2 recorded none. They read as ``cohort_conversion_outcome``, the
-    label the proposals surface has always given them — which is exact for runs after
-    migration 147 (2026-09-21) and NOT for earlier ones, estimated on ``conversion_rate``
-    before the outcome had its own column; no stored field tells the two apart.
+    Rows saved before lane T2 recorded none, and it is not recoverable: runs before
+    migration 147 (2026-09-21) were estimated on ``conversion_rate``, later ones on
+    ``cohort_conversion_outcome``, and no stored field tells them apart (the proposals
+    surface labelled them all ``cohort_conversion_outcome`` before; codex r1 #2).
     """
     heterogeneity = row.get("effect_heterogeneity")
     recorded = heterogeneity.get(OUTCOME_COLUMN_KEY) if isinstance(heterogeneity, dict) else None
-    if isinstance(recorded, str) and recorded:
-        return recorded
-    return COHORT_OUTCOME_COLUMN
+    return recorded if isinstance(recorded, str) and recorded else None
 
 
 # Subgroup axes a cohort-provenance row can only carry if it was stored before #2097, when

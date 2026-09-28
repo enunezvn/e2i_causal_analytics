@@ -519,12 +519,13 @@ class ProposedExperimentItem(BaseModel):
         default="twin_simulation",
         description="What proposed this: a completed digital-twin simulation (the only source today).",
     )
-    outcome_column: str = Field(
+    outcome_column: Optional[str] = Field(
         description=(
             "The per-HCP outcome column THIS simulation predicted an effect ON: 'adopted' "
             "(hcp_brand_adoption, 0/1) for runs since lane T2, so simulated_ate is a "
-            "difference in adoption rate; runs saved earlier recorded no column and read "
-            "as 'cohort_conversion_outcome'. simulated_ate and its interval are an ABSOLUTE "
+            "difference in adoption rate. null for a run saved earlier, which recorded no "
+            "column (cohort_conversion_outcome, or conversion_rate before migration 147); "
+            "such a run cannot be drafted into an experiment. simulated_ate and its interval are an ABSOLUTE "
             "difference in this column's units, not a percentage lift. Since lane T2 the "
             "interval is the causal forest's doubly-robust one (ATE +- z * its DR standard "
             "error), not the wider averaged per-HCP CATE interval earlier runs report."

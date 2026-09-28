@@ -3,7 +3,7 @@
 The twin's outcome moved from ``cohort_conversion_outcome`` to ``adopted``. A draft experiment
 made from a stored run must measure what THAT run predicted, so ``save_simulation`` writes the
 run's outcome into the row's ``effect_heterogeneity`` JSON and ``stored_outcome_column`` reads it
-back; rows saved earlier read as the column they have always been labelled with.
+back; a row saved earlier has no known outcome.
 """
 
 from __future__ import annotations
@@ -81,6 +81,8 @@ def test_a_run_without_an_outcome_records_none():
     assert OUTCOME_COLUMN_KEY not in client.captured["row"]["effect_heterogeneity"]
 
 
-def test_a_row_saved_before_lane_t2_reads_as_its_historical_label():
+def test_a_row_saved_before_lane_t2_has_no_known_outcome():
+    """Not recoverable: conversion_rate before migration 147, cohort_conversion_outcome after,
+    and nothing stored says which (codex r1 #2). Unknown, never a guessed label."""
     for row in ({}, {"effect_heterogeneity": None}, {"effect_heterogeneity": {"by_region": {}}}):
-        assert stored_outcome_column(row) == "cohort_conversion_outcome"
+        assert stored_outcome_column(row) is None
