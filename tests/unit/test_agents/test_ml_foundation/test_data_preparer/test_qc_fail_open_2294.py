@@ -27,6 +27,9 @@ from langgraph.graph import END, StateGraph
 
 from src.agents.ml_foundation.data_preparer.graph import finalize_output
 from src.agents.ml_foundation.data_preparer.nodes.leakage_detector import detect_leakage
+from src.agents.ml_foundation.data_preparer.nodes.schema_validator import (
+    run_schema_validation,
+)
 from src.agents.ml_foundation.data_preparer.state import DataPreparerState
 
 # Upstream QC verdict every graph below starts from: a clean pass, so a
@@ -121,3 +124,135 @@ async def test_legacy_temporal_leak_blocks_alongside_a_moderate_finding() -> Non
     # The MODERATE finding itself is review-only and must NOT block.
     assert not any("target_correlation" in i for i in blocking), blocking
     assert final_state["gate_passed"] is False
+
+
+# =============================================================================
+# Item 2 — schema_validator: crashed audits and non-passed-without-errors
+# =============================================================================
+
+
+def _schema_gate_graph(*, passes: int = 1):
+    """``run_schema_validation`` (``passes`` times) ``-> finalize_output``.
+
+    ``passes=2`` wires the same node twice to prove its entry is replaced, not
+    duplicated, if the node ever runs again on a populated channel.
+    """
+    graph = StateGraph(DataPreparerState)
+    names = [f"run_schema_validation_{i}" for i in range(passes)]
+    for name in names:
+        graph.add_node(name, run_schema_validation)  # type: ignore[arg-type]
+    graph.add_node("finalize_output", finalize_output)  # type: ignore[arg-type]
+    graph.set_entry_point(names[0])
+    for a, b in zip(names, names[1:]):
+        graph.add_edge(a, b)
+    graph.add_edge(names[-1], "finalize_output")
+    graph.add_edge("finalize_output", END)
+    return graph.compile()
+
+
+def _schema_state() -> Dict[str, Any]:
+    """A frame the REAL ``patient_journeys`` Pandera schema is resolved for."""
+    n = 40
+    frame = pd.DataFrame(
+        {
+            "patient_journey_id": [f"pj-{i:04d}" for i in range(n)],
+            "patient_id": [f"pat-{i:04d}" for i in range(n)],
+        }
+    )
+    return {
+        "experiment_id": "exp-2294-schema",
+        "train_df": frame,
+        # A string ``data_source`` keys the Pandera registry directly.
+        "data_source": "patient_journeys",
+        "scope_spec": {"data_source": "patient_journeys"},
+        # A foreign entry that every schema path must carry through untouched.
+        "blocking_issues": ["sampling_frame_drift: an unrelated upstream blocker"],
+        **_CLEAN_UPSTREAM_QC,
+    }
+
+
+def _raise_runtime(*_args: Any, **_kwargs: Any) -> Any:
+    raise RuntimeError("pandera exploded mid-validation")
+
+
+@pytest.mark.asyncio
+async def test_crashed_schema_validation_blocks_the_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Item 2, generic ``except``: the node recorded status ``error`` and an
+    ``error`` key but no blocker, and ``finalize_output`` reads neither.
+    The crash is forced inside the validator's own dependency."""
+    import src.mlops.pandera_schemas as pandera_schemas
+
+    monkeypatch.setattr(pandera_schemas, "validate_dataframe", _raise_runtime)
+
+    final_state = await _schema_gate_graph().ainvoke(_schema_state())
+
+    assert final_state["schema_validation_status"] == "error"
+    blocking = final_state["blocking_issues"]
+    schema_entries = [i for i in blocking if i.startswith("schema: validation error:")]
+    assert len(schema_entries) == 1, f"crashed schema audit left no blocker: {blocking!r}"
+    assert "pandera exploded" in schema_entries[0]
+    assert "sampling_frame_drift: an unrelated upstream blocker" in blocking
+    assert final_state["gate_passed"] is False
+
+
+@pytest.mark.asyncio
+async def test_schema_import_failure_blocks_the_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Item 2, ``ImportError`` branch: a validator that could not even load
+    audited nothing, and must not read as a pass."""
+    import sys
+
+    # ``None`` in ``sys.modules`` makes ``from src.mlops.pandera_schemas
+    # import ...`` raise ImportError inside the node's own try.
+    monkeypatch.setitem(sys.modules, "src.mlops.pandera_schemas", None)
+
+    final_state = await _schema_gate_graph().ainvoke(_schema_state())
+
+    assert final_state["schema_validation_status"] == "error"
+    blocking = final_state["blocking_issues"]
+    assert any(i.startswith("schema: validation error:") for i in blocking), blocking
+    assert final_state["gate_passed"] is False
+
+
+@pytest.mark.asyncio
+async def test_non_passed_split_without_error_detail_still_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Item 2, the status branch: the overall verdict keyed on ``all_errors``,
+    so a split whose status was NOT ``passed`` but which carried an empty
+    ``errors`` list counted as passing. No real Pandera path produces that
+    shape today (``validate_dataframe``'s ``error`` branch always attaches one
+    error), so the empty-errors result is injected at the dependency; the
+    point is that the node's verdict must key on the split's STATUS."""
+    import src.mlops.pandera_schemas as pandera_schemas
+
+    monkeypatch.setattr(
+        pandera_schemas,
+        "validate_dataframe",
+        lambda *_a, **_k: {"status": "error", "errors": []},
+    )
+
+    final_state = await _schema_gate_graph().ainvoke(_schema_state())
+
+    assert final_state["schema_validation_status"] == "failed"
+    blocking = final_state["blocking_issues"]
+    assert any(i.startswith("schema: Schema validation failed:") for i in blocking), blocking
+    assert final_state["gate_passed"] is False
+
+
+@pytest.mark.asyncio
+async def test_schema_entry_is_replaced_not_duplicated_on_re_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Item 2, idempotence: the schema entry goes through
+    ``merge_blocking_issues`` under its own kind, so a second pass replaces it."""
+    import src.mlops.pandera_schemas as pandera_schemas
+
+    monkeypatch.setattr(pandera_schemas, "validate_dataframe", _raise_runtime)
+
+    final_state = await _schema_gate_graph(passes=2).ainvoke(_schema_state())
+
+    blocking = final_state["blocking_issues"]
+    assert sum(i.startswith("schema: ") for i in blocking) == 1, blocking
+    assert blocking.count("sampling_frame_drift: an unrelated upstream blocker") == 1

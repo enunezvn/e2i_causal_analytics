@@ -63,6 +63,7 @@ __all__ = [
     "KIND_GE_VALIDATION",
     "KIND_LEAKAGE",
     "KIND_QUALITY_CHECK",
+    "KIND_SCHEMA_VALIDATION",
     "KIND_SEPARATOR",
     "merge_blocking_issues",
     "tag_blocking_issue",
@@ -78,6 +79,7 @@ KIND_GE_VALIDATION = "ge_validation"
 KIND_DATA_LOADING = "data_loading"
 KIND_DATA_TRANSFORM = "data_transform"
 KIND_LEAKAGE = "leakage"
+KIND_SCHEMA_VALIDATION = "schema"
 
 
 def tag_blocking_issue(kind: str, message: str) -> str:

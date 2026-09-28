@@ -15,6 +15,7 @@ import logging
 import time
 from typing import Any, Dict, List
 
+from ..blocking_issues import KIND_SCHEMA_VALIDATION, merge_blocking_issues
 from ..state import DataPreparerState
 
 logger = logging.getLogger(__name__)
@@ -45,7 +46,10 @@ async def run_schema_validation(state: DataPreparerState) -> Dict[str, Any]:
         - schema_validation_errors: List of error dicts
         - schema_splits_validated: Number of splits validated
         - schema_validation_time_ms: Execution time in milliseconds
-        - blocking_issues: Extended with schema errors if failed
+        - blocking_issues: this node's ``schema:`` entry replaced (see
+          ``blocking_issues.merge_blocking_issues``) — present when validation
+          failed OR crashed, retracted when it passed; ``skipped`` paths leave
+          the channel untouched
     """
     start_time = time.perf_counter()
     experiment_id = state.get("experiment_id", "unknown")
@@ -119,6 +123,7 @@ async def run_schema_validation(state: DataPreparerState) -> Dict[str, Any]:
 
         # Validate each split
         all_errors: List[Dict[str, Any]] = []
+        failed_splits: List[str] = []
         splits_validated = 0
         splits_passed = 0
 
@@ -133,40 +138,42 @@ async def run_schema_validation(state: DataPreparerState) -> Dict[str, Any]:
             if result["status"] == "passed":
                 splits_passed += 1
                 logger.debug(f"{split_name} split passed schema validation")
-            elif result["status"] == "failed":
-                # Add split context to errors
-                for error in result.get("errors", []):
-                    error_with_context = {
-                        "split": split_name,
-                        "data_source": data_source,
-                        **error,
-                    }
-                    all_errors.append(error_with_context)
-                logger.warning(
-                    f"{split_name} split failed schema validation: "
-                    f"{len(result.get('errors', []))} errors"
-                )
-            else:
-                # Error or other status
-                for error in result.get("errors", []):
-                    error_with_context = {
-                        "split": split_name,
-                        "data_source": data_source,
-                        **error,
-                    }
-                    all_errors.append(error_with_context)
+                continue
+
+            # "failed", "error" or any other status: this split did NOT pass,
+            # whether or not the result carried error detail. The verdict
+            # below keys on the split STATUS, not on ``all_errors`` being
+            # non-empty — a non-passed split with an empty ``errors`` list
+            # used to count as passing (#2294).
+            failed_splits.append(split_name)
+            split_errors = result.get("errors") or [
+                {"message": f"status={result['status']!r} with no error detail"}
+            ]
+            for error in split_errors:
+                error_with_context = {
+                    "split": split_name,
+                    "data_source": data_source,
+                    **error,
+                }
+                all_errors.append(error_with_context)
+            logger.warning(
+                f"{split_name} split did not pass schema validation "
+                f"(status={result['status']!r}): {len(split_errors)} errors"
+            )
 
         # Determine overall status
         elapsed_ms = int((time.perf_counter() - start_time) * 1000)
 
-        if all_errors:
+        if failed_splits:
             # Schema validation failed
             status = "failed"
 
-            # Build blocking issues
-            blocking_issues = state.get("blocking_issues", []).copy()
             error_summary = _summarize_schema_errors(all_errors)
-            blocking_issues.append(f"Schema validation failed: {error_summary}")
+            blocking_issues = merge_blocking_issues(
+                state.get("blocking_issues"),
+                [f"Schema validation failed: {error_summary}"],
+                kind=KIND_SCHEMA_VALIDATION,
+            )
 
             logger.warning(
                 f"Schema validation FAILED for {data_source}: "
@@ -193,6 +200,10 @@ async def run_schema_validation(state: DataPreparerState) -> Dict[str, Any]:
                 "schema_validation_errors": [],
                 "schema_splits_validated": splits_validated,
                 "schema_validation_time_ms": elapsed_ms,
+                # Retract this node's own earlier entry if it ever re-runs.
+                "blocking_issues": merge_blocking_issues(
+                    state.get("blocking_issues"), [], kind=KIND_SCHEMA_VALIDATION
+                ),
             }
 
     except ImportError as e:
@@ -207,6 +218,15 @@ async def run_schema_validation(state: DataPreparerState) -> Dict[str, Any]:
             "schema_validation_time_ms": elapsed_ms,
             "error": str(e),
             "error_type": "schema_import_error",
+            # A validator that could not load audited nothing. ``finalize_output``
+            # reads neither the status nor ``error``, so without an entry here the
+            # gate passed a run whose schema audit never ran (#2294) — the same
+            # shape PR #2285 fixed in ``detect_leakage``'s outer ``except``.
+            "blocking_issues": merge_blocking_issues(
+                state.get("blocking_issues"),
+                [f"validation error: {type(e).__name__}: {e}"],
+                kind=KIND_SCHEMA_VALIDATION,
+            ),
         }
 
     except Exception as e:
@@ -219,6 +239,12 @@ async def run_schema_validation(state: DataPreparerState) -> Dict[str, Any]:
             "schema_validation_time_ms": elapsed_ms,
             "error": str(e),
             "error_type": "schema_validation_error",
+            # See the ImportError branch: a crashed audit must fail the gate.
+            "blocking_issues": merge_blocking_issues(
+                state.get("blocking_issues"),
+                [f"validation error: {type(e).__name__}: {e}"],
+                kind=KIND_SCHEMA_VALIDATION,
+            ),
         }
 
 
