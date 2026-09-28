@@ -1,8 +1,8 @@
 {
-  "started_at": "2026-09-28T13:42:39Z",
+  "started_at": "2026-09-28T13:59:19Z",
   "load": {
     "Remibrutinib": {
-      "seconds": 1.23,
+      "seconds": 1.25,
       "pairs": 3354,
       "joined_to_adopted": 3354,
       "unjoined_pairs": 0,
@@ -29,7 +29,7 @@
       ]
     },
     "Fabhalta": {
-      "seconds": 1.06,
+      "seconds": 0.97,
       "pairs": 3404,
       "joined_to_adopted": 3404,
       "unjoined_pairs": 0,
@@ -56,7 +56,7 @@
       ]
     },
     "Kisqali": {
-      "seconds": 1.0,
+      "seconds": 0.97,
       "pairs": 3378,
       "joined_to_adopted": 3378,
       "unjoined_pairs": 0,
@@ -85,7 +85,7 @@
   },
   "availability": {
     "Remibrutinib": {
-      "seconds": 1.09,
+      "seconds": 1.12,
       "n_probe_errors": 0,
       "available": {
         "email_campaign": true,
@@ -99,7 +99,7 @@
       }
     },
     "Fabhalta": {
-      "seconds": 1.03,
+      "seconds": 1.1,
       "n_probe_errors": 0,
       "available": {
         "email_campaign": true,
@@ -113,7 +113,7 @@
       }
     },
     "Kisqali": {
-      "seconds": 1.54,
+      "seconds": 1.5,
       "n_probe_errors": 0,
       "available": {
         "email_campaign": true,
@@ -143,12 +143,12 @@
       "interval_method": "dr_ate_stderr",
       "cate_by_region": {
         "midwest": 0.1587163326027555,
-        "northeast": 0.21568563469675875,
+        "northeast": 0.2156856346967587,
         "south": 0.1241498205192273,
         "west": 0.1895908059125401
       },
-      "seconds": 2.54,
-      "peak_rss_gib": 0.614
+      "seconds": 2.3,
+      "peak_rss_gib": 0.615
     },
     {
       "brand": "Remibrutinib",
@@ -156,20 +156,20 @@
       "treatment": "speaker_program_count",
       "outcome": "adopted",
       "n": 3354,
-      "ate": 0.09841530477377979,
+      "ate": 0.09841530477377977,
       "ate_stderr": 0.029306105435877618,
-      "ci_lower": 0.04097639359232617,
-      "ci_upper": 0.1558542159552334,
-      "ci_width": 0.11487782236290725,
+      "ci_lower": 0.04097639359232615,
+      "ci_upper": 0.15585421595523338,
+      "ci_width": 0.11487782236290722,
       "excludes_0": true,
       "interval_method": "dr_ate_stderr",
       "cate_by_region": {
         "midwest": 0.0951044606231125,
         "northeast": 0.19341590609770667,
-        "south": 0.08724680272936233,
-        "west": 0.020194724820101408
+        "south": 0.08724680272936235,
+        "west": 0.020194724820101394
       },
-      "seconds": 2.63,
+      "seconds": 2.71,
       "peak_rss_gib": 0.62
     },
     {
@@ -189,9 +189,9 @@
         "midwest": 0.07674655949357878,
         "northeast": 0.041402905595946796,
         "south": 0.11496996655526581,
-        "west": 0.12867873684213507
+        "west": 0.12867873684213504
       },
-      "seconds": 2.44,
+      "seconds": 2.39,
       "peak_rss_gib": 0.623
     },
     {
@@ -200,20 +200,20 @@
       "treatment": "patient_support_enrollment",
       "outcome": "adopted",
       "n": 3354,
-      "ate": 0.08964857286216348,
+      "ate": 0.08964857286216346,
       "ate_stderr": 0.02116534708100808,
-      "ci_lower": 0.04816525486309769,
+      "ci_lower": 0.048165254863097674,
       "ci_upper": 0.13113189086122926,
-      "ci_width": 0.08296663599813156,
+      "ci_width": 0.08296663599813159,
       "excludes_0": true,
       "interval_method": "dr_ate_stderr",
       "cate_by_region": {
         "midwest": 0.09836607403806216,
-        "northeast": 0.036003571938680215,
-        "south": 0.08683706761428314,
-        "west": 0.14306032058082443
+        "northeast": 0.036003571938680194,
+        "south": 0.08683706761428313,
+        "west": 0.1430603205808244
       },
-      "seconds": 2.7,
+      "seconds": 2.44,
       "peak_rss_gib": 0.624
     },
     {
@@ -222,21 +222,21 @@
       "treatment": "rep_training_score",
       "outcome": "adopted",
       "n": 3354,
-      "ate": 0.04719631183715232,
+      "ate": 0.047196311837152304,
       "ate_stderr": 0.01984303020619,
-      "ci_lower": 0.008304687288879523,
-      "ci_upper": 0.08608793638542511,
+      "ci_lower": 0.008304687288879509,
+      "ci_upper": 0.0860879363854251,
       "ci_width": 0.07778324909654559,
       "excludes_0": true,
       "interval_method": "dr_ate_stderr",
       "cate_by_region": {
-        "midwest": 0.05007822493135209,
+        "midwest": 0.05007822493135208,
         "northeast": 0.02913272649174002,
         "south": 0.025311463053064778,
         "west": 0.10423553013339185
       },
-      "seconds": 2.27,
-      "peak_rss_gib": 0.628
+      "seconds": 2.25,
+      "peak_rss_gib": 0.626
     },
     {
       "brand": "Remibrutinib",
@@ -267,11 +267,11 @@
       "cate_by_region": {
         "midwest": 0.17532963565850734,
         "northeast": 0.1767636460407046,
-        "south": 0.1210943971290986,
-        "west": 0.17662364659738308
+        "south": 0.12109439712909857,
+        "west": 0.17662364659738305
       },
-      "seconds": 2.52,
-      "peak_rss_gib": 0.633
+      "seconds": 2.15,
+      "peak_rss_gib": 0.634
     },
     {
       "brand": "Fabhalta",
@@ -287,13 +287,13 @@
       "excludes_0": true,
       "interval_method": "dr_ate_stderr",
       "cate_by_region": {
-        "midwest": 0.016835111507787864,
-        "northeast": 0.07993920549024525,
+        "midwest": 0.016835111507787857,
+        "northeast": 0.07993920549024523,
         "south": 0.12983059070508082,
-        "west": 0.10563893259855517
+        "west": 0.10563893259855518
       },
-      "seconds": 2.72,
-      "peak_rss_gib": 0.636
+      "seconds": 2.6,
+      "peak_rss_gib": 0.635
     },
     {
       "brand": "Fabhalta",
@@ -314,8 +314,8 @@
         "south": 0.06016903092969669,
         "west": 0.0698413151992599
       },
-      "seconds": 2.64,
-      "peak_rss_gib": 0.638
+      "seconds": 2.39,
+      "peak_rss_gib": 0.636
     },
     {
       "brand": "Fabhalta",
@@ -324,8 +324,8 @@
       "outcome": "adopted",
       "n": 3404,
       "ate": 0.06137721965368871,
-      "ate_stderr": 0.02088626483596286,
-      "ci_lower": 0.02044089280363614,
+      "ate_stderr": 0.020886264835962856,
+      "ci_lower": 0.020440892803636146,
       "ci_upper": 0.10231354650374128,
       "ci_width": 0.08187265370010513,
       "excludes_0": true,
@@ -333,11 +333,11 @@
       "cate_by_region": {
         "midwest": 0.026314807299196278,
         "northeast": 0.11849248269643246,
-        "south": 0.027577266300190275,
+        "south": 0.02757726630019029,
         "west": 0.09996583412528315
       },
-      "seconds": 2.59,
-      "peak_rss_gib": 0.639
+      "seconds": 2.61,
+      "peak_rss_gib": 0.637
     },
     {
       "brand": "Fabhalta",
@@ -354,12 +354,12 @@
       "interval_method": "dr_ate_stderr",
       "cate_by_region": {
         "midwest": 0.058667330327548825,
-        "northeast": 0.03701076409558228,
-        "south": 0.006215060025425937,
+        "northeast": 0.03701076409558227,
+        "south": 0.006215060025425934,
         "west": -0.08659930714439568
       },
-      "seconds": 2.51,
-      "peak_rss_gib": 0.642
+      "seconds": 2.69,
+      "peak_rss_gib": 0.643
     },
     {
       "brand": "Fabhalta",
@@ -369,8 +369,8 @@
       ],
       "target_n": 736,
       "target_ate": 0.17676364604070463,
-      "target_stderr": 0.04410724827631823,
-      "target_ci_lower": 0.09031502796195455,
+      "target_stderr": 0.04410724827631822,
+      "target_ci_lower": 0.09031502796195456,
       "target_ci_upper": 0.2632122641194547,
       "declared_region_cate": 0.17676364604070463
     },
@@ -393,8 +393,8 @@
         "south": 0.10311953617229136,
         "west": 0.07303026600661083
       },
-      "seconds": 2.25,
-      "peak_rss_gib": 0.653
+      "seconds": 2.23,
+      "peak_rss_gib": 0.649
     },
     {
       "brand": "Kisqali",
@@ -415,8 +415,8 @@
         "south": 0.07675763921190698,
         "west": 0.09998902032472409
       },
-      "seconds": 2.58,
-      "peak_rss_gib": 0.654
+      "seconds": 2.34,
+      "peak_rss_gib": 0.65
     },
     {
       "brand": "Kisqali",
@@ -434,10 +434,10 @@
       "cate_by_region": {
         "midwest": 0.08319506164550777,
         "northeast": 0.06763603554527838,
-        "south": 0.10134034831139262,
+        "south": 0.1013403483113926,
         "west": 0.20429853202048165
       },
-      "seconds": 2.78,
+      "seconds": 4.74,
       "peak_rss_gib": 0.656
     },
     {
@@ -454,13 +454,13 @@
       "excludes_0": true,
       "interval_method": "dr_ate_stderr",
       "cate_by_region": {
-        "midwest": 0.08804351878939794,
-        "northeast": 0.006943849133597998,
-        "south": 0.058299956793237726,
+        "midwest": 0.08804351878939796,
+        "northeast": 0.006943849133597993,
+        "south": 0.05829995679323774,
         "west": 0.10409330877969002
       },
-      "seconds": 2.69,
-      "peak_rss_gib": 0.66
+      "seconds": 3.8,
+      "peak_rss_gib": 0.661
     },
     {
       "brand": "Kisqali",
@@ -468,21 +468,21 @@
       "treatment": "rep_training_score",
       "outcome": "adopted",
       "n": 3378,
-      "ate": -0.01092733882881094,
+      "ate": -0.010927338828810945,
       "ate_stderr": 0.019947933757121263,
-      "ci_lower": -0.05002457055875937,
-      "ci_upper": 0.028169892901137493,
+      "ci_lower": -0.050024570558759376,
+      "ci_upper": 0.028169892901137486,
       "ci_width": 0.07819446345989686,
       "excludes_0": false,
       "interval_method": "dr_ate_stderr",
       "cate_by_region": {
-        "midwest": 0.03375526314868827,
+        "midwest": 0.03375526314868825,
         "northeast": -0.04953689810143307,
-        "south": -0.01923680427228674,
+        "south": -0.019236804272286735,
         "west": -0.0019713825767034335
       },
-      "seconds": 2.98,
-      "peak_rss_gib": 0.662
+      "seconds": 3.59,
+      "peak_rss_gib": 0.667
     },
     {
       "brand": "Kisqali",
@@ -501,7 +501,7 @@
   "verdict": {
     "planted_exclude_0": "12/12",
     "null_covers_0": "2/3",
-    "null_max_abs_ate": 0.04719631183715232,
+    "null_max_abs_ate": 0.047196311837152304,
     "rows_meet_min": true,
     "refusals": []
   }
