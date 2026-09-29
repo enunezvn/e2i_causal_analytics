@@ -1,0 +1,102 @@
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/supabase/_sync/client.py:309: DeprecationWarning: The 'timeout' parameter is deprecated. Please configure it in the http client instead.
+  return SyncPostgrestClient(
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/supabase/_sync/client.py:309: DeprecationWarning: The 'verify' parameter is deprecated. Please configure it in the http client instead.
+  return SyncPostgrestClient(
+INFO src.mlops.pandera_schemas: Pandera schema 'patient_journeys': skipping ['patient_journey_id', 'patient_id', 'journey_start_date', 'journey_end_date', 'current_stage', 'journey_status', 'brand', 'age_group', 'gender', 'source_match_confidence'] — not in contract projection
+INFO src.mlops.pandera_schemas: Schema validation passed for patient_journeys (5330 rows)
+INFO src.mlops.pandera_schemas: Pandera schema 'patient_journeys': skipping ['patient_journey_id', 'patient_id', 'journey_start_date', 'journey_end_date', 'current_stage', 'journey_status', 'brand', 'age_group', 'gender', 'source_match_confidence'] — not in contract projection
+INFO src.mlops.pandera_schemas: Schema validation passed for patient_journeys (1800 rows)
+INFO src.mlops.pandera_schemas: Pandera schema 'patient_journeys': skipping ['patient_journey_id', 'patient_id', 'journey_start_date', 'journey_end_date', 'current_stage', 'journey_status', 'brand', 'age_group', 'gender', 'source_match_confidence'] — not in contract projection
+INFO src.mlops.pandera_schemas: Schema validation passed for patient_journeys (876 rows)
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmpslhmdhd2' for ephemeral docs site
+code under test: /home/enunez/Projects/e2i_causal_analytics/.worktrees/issue-2320/src
+
+=== initiation / Kisqali === columns=['disease_severity', 'academic_hcp', 'geographic_region', 'insurance_type', 'age_at_diagnosis', 'comorbidity_burden', 'prior_therapy_lines', 'rep_detailing_high', 'sample_dropped', 'trigger_accepted', 'treatment_initiated']
+[load_data 1.0s] {} blocking=[]
+  rows train/val/test = 5330/1800/876; frame columns = ['disease_severity', 'academic_hcp', 'geographic_region', 'insurance_type', 'age_at_diagnosis', 'comorbidity_burden', 'prior_therapy_lines', 'rep_detailing_high', 'sample_dropped', 'trigger_accepted', 'treatment_initiated', 'data_split']
+[audit_sampling_frame 0.0s] {} blocking=[]
+[run_schema_validation 1.5s] {"schema_validation_status": "passed", "schema_splits_validated": 3} blocking=[]
+[run_quality_checks 0.0s] {"qc_status": "passed", "overall_score": 1.0} blocking=[]
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 2448.04it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 1996.65it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 2411.56it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 2263.83it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2122.19it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 1951.38it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2136.92it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2033.88it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1972.86it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1916.57it/s]
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmpjc1kfvzn' for ephemeral docs site
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3474.98it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 2677.22it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3071.06it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 2674.51it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2331.72it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2143.23it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1995.91it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1895.87it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1853.88it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1800.04it/s]
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmpmsb16nk8' for ephemeral docs site
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3411.85it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 2649.59it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 2982.62it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 2691.68it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2353.44it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2122.84it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2145.30it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2040.80it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1994.65it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1929.89it/s]
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/opik/error_tracking/shutdown_hooks.py:12: SentryHubDeprecationWarning: `sentry_sdk.Hub` is deprecated and will be removed in a future major release. Please consult our 1.x to 2.x migration guide for details on how to migrate `Hub` usage to the new API: https://docs.sentry.io/platforms/python/migration/1.x-to-2.x
+  client = sentry_sdk.Hub.current.client
+WARNING src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check: Declared-safe immunity: exempted 5 manifest pre-index feature(s) from leakage (contract is authoritative); severity none -> info. Features: ['academic_hcp', 'age_at_diagnosis', 'comorbidity_burden', 'disease_severity', 'prior_therapy_lines']
+WARNING src.agents.ml_foundation.data_preparer.nodes.sufficiency_check: target_mde not specified in scope_spec.sufficiency; using computed_from_data default 0.0698311444652908. Override via scope_spec.sufficiency.target_mde.
+INFO src.mlops.pandera_schemas: Pandera schema 'patient_journeys': skipping ['patient_journey_id', 'patient_id', 'journey_start_date', 'journey_end_date', 'current_stage', 'journey_status', 'brand', 'age_group', 'gender', 'source_match_confidence'] — not in contract projection
+INFO src.mlops.pandera_schemas: Schema validation passed for patient_journeys (5330 rows)
+INFO src.mlops.pandera_schemas: Pandera schema 'patient_journeys': skipping ['patient_journey_id', 'patient_id', 'journey_start_date', 'journey_end_date', 'current_stage', 'journey_status', 'brand', 'age_group', 'gender', 'source_match_confidence'] — not in contract projection
+INFO src.mlops.pandera_schemas: Schema validation passed for patient_journeys (1800 rows)
+INFO src.mlops.pandera_schemas: Pandera schema 'patient_journeys': skipping ['patient_journey_id', 'patient_id', 'journey_start_date', 'journey_end_date', 'current_stage', 'journey_status', 'brand', 'age_group', 'gender', 'source_match_confidence'] — not in contract projection
+INFO src.mlops.pandera_schemas: Schema validation passed for patient_journeys (876 rows)
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmpb2yh2ff7' for ephemeral docs site
+[run_ge_validation 0.6s] {"ge_validation_status": "passed", "ge_expectations_passed": 39, "ge_expectations_evaluated": 39} blocking=[]
+[engineer_features 0.0s] {} blocking=[]
+[detect_leakage 1.0s] {"leakage_severity": "none", "leaked_features": []} blocking=[]
+[adaptive_validity_check 14.4s] {"leakage_severity": "info", "leaked_features": []} blocking=[]
+[route_after_leakage_detection] -> continue
+[transform_data 0.1s] {} blocking=[]
+[compute_baseline_metrics 0.0s] {} blocking=[]
+[sufficiency_check 0.0s] {} blocking=[]
+[finalize_output 0.0s] {"gate_passed": true, "qc_passed": true, "is_ready": true} blocking=[]
+RESULT initiation/Kisqali: schema_validation_status=passed splits=3 schema_blockers=[] route=continue gate_passed=True blocking_issues=[]
+
+=== persistence / Kisqali === columns=['disease_severity', 'academic_hcp', 'geographic_region', 'insurance_type', 'age_at_diagnosis', 'comorbidity_burden', 'prior_therapy_lines', 'copay_support', 'psp_enrolled', 'persistent_180d']
+[load_data 0.7s] {} blocking=[]
+  rows train/val/test = 5330/1800/876; frame columns = ['disease_severity', 'academic_hcp', 'geographic_region', 'insurance_type', 'age_at_diagnosis', 'comorbidity_burden', 'prior_therapy_lines', 'copay_support', 'psp_enrolled', 'persistent_180d', 'data_split']
+[audit_sampling_frame 0.0s] {} blocking=[]
+[run_schema_validation 0.1s] {"schema_validation_status": "passed", "schema_splits_validated": 3} blocking=[]
+[run_quality_checks 0.0s] {"qc_status": "passed", "overall_score": 1.0} blocking=[]
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3456.84it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 2548.70it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 2880.70it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 2420.26it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2170.07it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 1899.25it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1983.54it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1870.05it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1827.23it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1781.10it/s]
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmpiqyf4qm8' for ephemeral docs site
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3771.86it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 2781.98it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3218.34it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 2898.62it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2450.23it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2226.04it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2239.22it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2116.55it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2065.37it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2005.67it/s]
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmply42v4xu' for ephemeral docs site
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 4059.00it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 2946.82it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3472.11it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3126.00it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2654.29it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2396.75it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2262.30it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2133.90it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2068.20it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2011.66it/s]
+WARNING src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check: Declared-safe immunity: exempted 5 manifest pre-index feature(s) from leakage (contract is authoritative); severity none -> info. Features: ['academic_hcp', 'age_at_diagnosis', 'comorbidity_burden', 'disease_severity', 'prior_therapy_lines']
+WARNING src.agents.ml_foundation.data_preparer.nodes.sufficiency_check: target_mde not specified in scope_spec.sufficiency; using computed_from_data default 0.11557223264540338. Override via scope_spec.sufficiency.target_mde.
+INFO src.mlops.pandera_schemas: Pandera schema 'patient_journeys': skipping ['patient_journey_id', 'patient_id', 'journey_start_date', 'journey_end_date', 'current_stage', 'journey_status', 'brand', 'age_group', 'gender', 'source_match_confidence'] — not in contract projection
+INFO src.mlops.pandera_schemas: Schema validation passed for patient_journeys (5330 rows)
+INFO src.mlops.pandera_schemas: Pandera schema 'patient_journeys': skipping ['patient_journey_id', 'patient_id', 'journey_start_date', 'journey_end_date', 'current_stage', 'journey_status', 'brand', 'age_group', 'gender', 'source_match_confidence'] — not in contract projection
+INFO src.mlops.pandera_schemas: Schema validation passed for patient_journeys (1800 rows)
+INFO src.mlops.pandera_schemas: Pandera schema 'patient_journeys': skipping ['patient_journey_id', 'patient_id', 'journey_start_date', 'journey_end_date', 'current_stage', 'journey_status', 'brand', 'age_group', 'gender', 'source_match_confidence'] — not in contract projection
+INFO src.mlops.pandera_schemas: Schema validation passed for patient_journeys (876 rows)
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmpc5it6444' for ephemeral docs site
+[run_ge_validation 0.6s] {"ge_validation_status": "passed", "ge_expectations_passed": 36, "ge_expectations_evaluated": 36} blocking=[]
+[engineer_features 0.0s] {} blocking=[]
+[detect_leakage 0.9s] {"leakage_severity": "none", "leaked_features": []} blocking=[]
+[adaptive_validity_check 5.6s] {"leakage_severity": "info", "leaked_features": []} blocking=[]
+[route_after_leakage_detection] -> continue
+[transform_data 0.1s] {} blocking=[]
+[compute_baseline_metrics 0.0s] {} blocking=[]
+[sufficiency_check 0.0s] {} blocking=[]
+[finalize_output 0.0s] {"gate_passed": true, "qc_passed": true, "is_ready": true} blocking=[]
+RESULT persistence/Kisqali: schema_validation_status=passed splits=3 schema_blockers=[] route=continue gate_passed=True blocking_issues=[]
+
+=== discontinuation / Kisqali === columns=['disease_severity', 'academic_hcp', 'geographic_region', 'insurance_type', 'age_at_diagnosis', 'comorbidity_burden', 'prior_therapy_lines', 'copay_support', 'psp_enrolled', 'discontinued_180d']
+[load_data 0.6s] {} blocking=[]
+  rows train/val/test = 5330/1800/876; frame columns = ['disease_severity', 'academic_hcp', 'geographic_region', 'insurance_type', 'age_at_diagnosis', 'comorbidity_burden', 'prior_therapy_lines', 'copay_support', 'psp_enrolled', 'discontinued_180d', 'data_split']
+[audit_sampling_frame 0.0s] {} blocking=[]
+[run_schema_validation 0.0s] {"schema_validation_status": "passed", "schema_splits_validated": 3} blocking=[]
+[run_quality_checks 0.0s] {"qc_status": "passed", "overall_score": 1.0} blocking=[]
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 4875.21it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3567.60it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3910.77it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3470.67it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2857.93it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2504.66it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2374.43it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2225.88it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2167.85it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2109.34it/s]
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmpbzspql2b' for ephemeral docs site
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 4672.45it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3382.50it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3873.75it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3442.89it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2849.39it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2517.89it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2562.02it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2439.18it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2384.63it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2304.84it/s]
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmp045u4al_' for ephemeral docs site
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3168.70it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 2457.60it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 2854.72it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 2513.82it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2255.49it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2074.95it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2163.62it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2057.49it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2012.19it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1951.24it/s]
+WARNING src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check: Declared-safe immunity: exempted 5 manifest pre-index feature(s) from leakage (contract is authoritative); severity none -> info. Features: ['academic_hcp', 'age_at_diagnosis', 'comorbidity_burden', 'disease_severity', 'prior_therapy_lines']
+WARNING src.agents.ml_foundation.data_preparer.nodes.sufficiency_check: target_mde not specified in scope_spec.sufficiency; using computed_from_data default 0.08442776735459663. Override via scope_spec.sufficiency.target_mde.
+[run_ge_validation 0.6s] {"ge_validation_status": "passed", "ge_expectations_passed": 36, "ge_expectations_evaluated": 36} blocking=[]
+[engineer_features 0.0s] {} blocking=[]
+[detect_leakage 0.9s] {"leakage_severity": "none", "leaked_features": []} blocking=[]
+[adaptive_validity_check 5.3s] {"leakage_severity": "info", "leaked_features": []} blocking=[]
+[route_after_leakage_detection] -> continue
+[transform_data 0.1s] {} blocking=[]
+[compute_baseline_metrics 0.0s] {} blocking=[]
+[sufficiency_check 0.0s] {} blocking=[]
+[finalize_output 0.0s] {"gate_passed": true, "qc_passed": true, "is_ready": true} blocking=[]
+RESULT discontinuation/Kisqali: schema_validation_status=passed splits=3 schema_blockers=[] route=continue gate_passed=True blocking_issues=[]
+
+SUMMARY schema_validation_status: {'initiation': 'passed', 'persistence': 'passed', 'discontinuation': 'passed'}
