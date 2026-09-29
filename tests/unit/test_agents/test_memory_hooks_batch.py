@@ -2481,10 +2481,14 @@ class TestContributeToMemory:
                 hooks, "store_algorithm_pattern", new_callable=AsyncMock, return_value=True
             ):
                 counts = await ms_hooks.contribute_to_memory(
+                    # The agent output nests the selection under model_candidate
+                    # (#2325); a top-level shape never occurs.
                     result={
-                        "algorithm_name": "xgboost",
-                        "algorithm_family": "gradient_boosting",
-                        "selection_score": 0.92,
+                        "model_candidate": {
+                            "algorithm_name": "xgboost",
+                            "algorithm_family": "gradient_boosting",
+                            "selection_score": 0.92,
+                        },
                     },
                     state={
                         "experiment_id": "exp1",

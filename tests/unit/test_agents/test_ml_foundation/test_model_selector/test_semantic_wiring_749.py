@@ -18,9 +18,13 @@ _OUTPUT = {
         "algorithm_family": "linear",
         "selection_score": 0.82,
     },
-    "selection_summary": {"problem_type": "binary_classification"},
+    # The real selection_summary has no problem_type (create_selection_summary); an
+    # earlier version of this fixture invented one, which hid the dropped SUITED_FOR
+    # edge (#2325). problem_type comes from the graph's final state.
+    "selection_summary": {"algorithm_name": "logistic_regression"},
     "benchmark_results": {"lr": 0.82},
 }
+_FINAL_STATE = {"problem_type": "binary_classification"}
 
 
 @pytest.mark.unit
@@ -29,7 +33,7 @@ def test_update_semantic_memory_invokes_algorithm_pattern_writer():
     with patch("src.agents.ml_foundation.model_selector.agent.ModelSelectorMemoryHooks") as HookCls:
         hook = HookCls.return_value
         hook.store_algorithm_pattern = AsyncMock(return_value=True)
-        asyncio.run(agent._update_semantic_memory(_OUTPUT))
+        asyncio.run(agent._update_semantic_memory(_OUTPUT, _FINAL_STATE))
 
     hook.store_algorithm_pattern.assert_awaited_once()
     kwargs = hook.store_algorithm_pattern.await_args.kwargs

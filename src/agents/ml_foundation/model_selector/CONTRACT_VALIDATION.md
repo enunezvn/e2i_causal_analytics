@@ -267,10 +267,13 @@ write (added in c4675f935) never landed a row: it sent columns the live table do
 held 0 `candidate-%` rows. Since #2310 `stage='candidate'` means "retrain awaiting review", so
 the call and the method were removed. The structured selection (algorithm name / family /
 framework / default hyperparameters) is persisted by the MLflow `model_selection_<algorithm>`
-run (`nodes/mlflow_registrar.py`). The episodic `model_selection_completed` row carries the
-selection rationale text and the alternatives only: its `algorithm_name` / `selection_score`
-fields are NULL on every prod row (0/188, 2026-09-29) because `store_model_selection` reads
-top-level keys that live under `model_candidate` (pre-existing defect, reported on #2319).
+run (`nodes/mlflow_registrar.py`). The episodic `model_selection_completed` row records the
+algorithm name / family / class, selection score, primary reason, rationale, alternatives and
+the MLflow run id. Until #2325 its `algorithm_name` / `selection_score` fields were NULL on every
+prod row (0/188, 2026-09-29) and the description read `Score: 0.00`, because
+`store_model_selection` read top-level keys that live under `model_candidate` /
+`selection_rationale`; a missing value now reads "not recorded". The historic rows are
+repaired by the migration in the #2325 PR (owner-applied), from each row's own rationale text.
 
 ---
 

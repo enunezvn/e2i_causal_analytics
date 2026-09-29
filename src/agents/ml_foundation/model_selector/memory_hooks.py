@@ -16,6 +16,7 @@ Version: 1.0.0
 
 import json
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, cast
@@ -51,6 +52,63 @@ class ModelSelectionRecord:
     selection_rationale: str
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+# =============================================================================
+# READING THE AGENT OUTPUT (#2325)
+# =============================================================================
+
+#: What a missing value reads as in the row description. A score that was not
+#: recorded must never render as ``0.00``, nor a missing algorithm as ``unknown``.
+NOT_RECORDED = "not recorded"
+
+
+def _text(value: Any) -> Optional[str]:
+    """A non-empty string, else None (``_build_output`` defaults absent names to "")."""
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _number(value: Any) -> Optional[float]:
+    """A finite number, else None."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(value) else None
+
+
+def selection_fields(result: Dict[str, Any]) -> Dict[str, Any]:
+    """The selection as ``ModelSelectorAgent.run()`` returns it.
+
+    ``run()`` (``agent._build_output``) nests the chosen algorithm under
+    ``model_candidate`` and the reasons under ``selection_rationale``; nothing
+    about the selection is at the top level. Reading the top level recorded NULL
+    on every prod row (#2325). A value the output does not carry stays None.
+    """
+    candidate = result.get("model_candidate")
+    candidate = candidate if isinstance(candidate, dict) else {}
+    rationale = result.get("selection_rationale")
+    rationale = rationale if isinstance(rationale, dict) else {}
+    expected = candidate.get("expected_performance")
+    return {
+        "algorithm_name": _text(candidate.get("algorithm_name")),
+        "algorithm_family": _text(candidate.get("algorithm_family")),
+        "algorithm_class": _text(candidate.get("algorithm_class")),
+        "selection_score": _number(candidate.get("selection_score")),
+        "interpretability_score": _number(candidate.get("interpretability_score")),
+        "scalability_score": _number(candidate.get("scalability_score")),
+        "expected_performance": expected if isinstance(expected, dict) else {},
+        "primary_reason": _text(rationale.get("primary_reason")),
+    }
+
+
+def selection_summary_text(fields: Dict[str, Any]) -> str:
+    """The episodic description; an absent value reads as absent."""
+    score = fields.get("selection_score")
+    return (
+        f"Model Selection: {fields.get('algorithm_name') or 'algorithm ' + NOT_RECORDED} "
+        f"({fields.get('algorithm_family') or 'family ' + NOT_RECORDED}). "
+        f"Score: {f'{score:.3f}' if score is not None else NOT_RECORDED}. "
+        f"Reason: {fields.get('primary_reason') or NOT_RECORDED}"
+    )
 
 
 # =============================================================================
@@ -262,6 +320,7 @@ class ModelSelectorMemoryHooks:
         try:
             from src.memory.episodic_memory import insert_episodic_memory
 
+            fields = selection_fields(result)
             content = {
                 "experiment_id": state.get("experiment_id"),
                 # The audit chain's workflow id used to be persisted AS the session
@@ -272,24 +331,18 @@ class ModelSelectorMemoryHooks:
                     if state.get("audit_workflow_id")
                     else {}
                 ),
-                "algorithm_name": result.get("algorithm_name"),
-                "algorithm_family": result.get("algorithm_family"),
-                "algorithm_class": result.get("algorithm_class"),
-                "selection_score": result.get("selection_score"),
+                **fields,
+                # The whole rationale block (text, factors, alternatives considered,
+                # constraint compliance), the shape every prod row already stores.
                 "selection_rationale": result.get("selection_rationale"),
-                "interpretability_score": result.get("interpretability_score"),
-                "scalability_score": result.get("scalability_score"),
-                "expected_performance": result.get("expected_performance", {}),
+                # The MLflow ``model_selection_<algorithm>`` run that holds the
+                # structured selection, when this run registered one.
+                "mlflow_run_id": result.get("mlflow_run_id"),
                 "alternative_candidates": result.get("alternative_candidates", []),
                 "benchmark_results": state.get("benchmark_results", {}),
             }
 
-            summary = (
-                f"Model Selection: {result.get('algorithm_name', 'unknown')} "
-                f"({result.get('algorithm_family', 'unknown')}). "
-                f"Score: {result.get('selection_score', 0):.2f}. "
-                f"Reason: {result.get('primary_reason', 'N/A')}"
-            )
+            summary = selection_summary_text(fields)
 
             memory_id = await insert_episodic_memory(  # type: ignore[call-arg]
                 session_id=session_id,
@@ -315,51 +368,67 @@ class ModelSelectorMemoryHooks:
         self,
         experiment_id: str,
         algorithm_name: str,
-        algorithm_family: str,
-        problem_type: str,
-        selection_score: float,
+        algorithm_family: Optional[str],
+        problem_type: Optional[str],
+        selection_score: Optional[float],
         benchmark_results: Dict[str, Any],
     ) -> bool:
-        """Store algorithm selection pattern in semantic memory."""
+        """Store algorithm selection pattern in semantic memory.
+
+        A value that is not known is left off the node or edge rather than written
+        as a stand-in (#2325): ``family='unknown'`` would overwrite a real family on
+        the MERGEd Algorithm node, a ``0.0`` score reads as a measurement, and a
+        ``ptype:unknown`` endpoint does not exist, so that edge was silently dropped.
+        """
         if not self.semantic_memory:
             logger.warning("Semantic memory not available")
             return False
+
+        def _known(props: Dict[str, Any]) -> Dict[str, Any]:
+            return {k: v for k, v in props.items() if v is not None}
 
         try:
             # Create algorithm node
             self.semantic_memory.add_e2i_entity(
                 entity_type="Algorithm",
                 entity_id=f"algo:{algorithm_name}",
-                properties={
-                    "name": algorithm_name,
-                    "family": algorithm_family,
-                    "agent": "model_selector",
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                },
+                properties=_known(
+                    {
+                        "name": algorithm_name,
+                        "family": algorithm_family,
+                        "agent": "model_selector",
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                ),
             )
 
-            # Create problem type relationship
-            self.semantic_memory.add_relationship(
-                from_entity_id=f"algo:{algorithm_name}",
-                to_entity_id=f"ptype:{problem_type}",
-                relationship_type="SUITED_FOR",
-                properties={
-                    "selection_score": selection_score,
-                    "agent": "model_selector",
-                },
-            )
+            # Create problem type relationship (only to a problem type we know)
+            if problem_type:
+                self.semantic_memory.add_relationship(
+                    from_entity_id=f"algo:{algorithm_name}",
+                    to_entity_id=f"ptype:{problem_type}",
+                    relationship_type="SUITED_FOR",
+                    properties=_known(
+                        {
+                            "selection_score": selection_score,
+                            "agent": "model_selector",
+                        }
+                    ),
+                )
 
             # Create usage relationship to experiment
             self.semantic_memory.add_relationship(
                 from_entity_id=f"algo:{algorithm_name}",
                 to_entity_id=f"exp:{experiment_id}",
                 relationship_type="USED_IN",
-                properties={
-                    "selection_score": selection_score,
-                    "benchmark_score": benchmark_results.get("score"),
-                    "agent": "model_selector",
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                },
+                properties=_known(
+                    {
+                        "selection_score": selection_score,
+                        "benchmark_score": benchmark_results.get("score"),
+                        "agent": "model_selector",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
+                ),
             )
 
             logger.info(f"Stored algorithm pattern: {algorithm_name}")
@@ -405,11 +474,14 @@ async def contribute_to_memory(
         logger.info("Skipping memory storage due to error")
         return counts
 
+    # The selection lives under model_candidate / selection_rationale (#2325).
+    fields = selection_fields(result)
+
     # 1. Cache in working memory
     selection = {
-        "algorithm_name": result.get("algorithm_name"),
-        "algorithm_family": result.get("algorithm_family"),
-        "selection_score": result.get("selection_score"),
+        "algorithm_name": fields["algorithm_name"],
+        "algorithm_family": fields["algorithm_family"],
+        "selection_score": fields["selection_score"],
     }
     # Skipped without a session (#2076): the cache key embeds the session id, so a
     # session-less write would land under a key no reader can ever ask for.
@@ -431,14 +503,14 @@ async def contribute_to_memory(
 
     # 3. Store pattern in semantic memory
     experiment_id = state.get("experiment_id")
-    algorithm_name = result.get("algorithm_name")
+    algorithm_name = fields["algorithm_name"]
     if experiment_id and algorithm_name:
         stored = await memory_hooks.store_algorithm_pattern(
             experiment_id=experiment_id,
             algorithm_name=algorithm_name,
-            algorithm_family=result.get("algorithm_family", "unknown"),
-            problem_type=state.get("problem_type", "unknown"),
-            selection_score=result.get("selection_score", 0),
+            algorithm_family=fields["algorithm_family"],
+            problem_type=state.get("problem_type"),
+            selection_score=fields["selection_score"],
             benchmark_results=state.get("benchmark_results", {}),
         )
         if stored:
