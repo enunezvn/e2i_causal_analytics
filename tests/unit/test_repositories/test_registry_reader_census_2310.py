@@ -129,7 +129,6 @@ ACCESSORS: Dict[str, Tuple[str, str]] = {
     "scripts/promote_hcp_adoption_champions.py::_verify_written": (EXACT, "by id"),
     # --- documented opt-in -------------------------------------------------------------------
     "src/repositories/ml_experiment.py::register_model": (OPT_IN, "insert only"),
-    "src/repositories/ml_experiment.py::register_model_candidate": (OPT_IN, "insert only"),
     "src/agents/drift_monitor/connectors/supabase_connector.py::health_check": (
         OPT_IN,
         "schema probe: select id limit 1, the row is never used",

@@ -72,7 +72,6 @@ _TARGETS = [
             "graph_attr": "_graph",  # ``graph`` is a lazy property over ``_graph``
             "attrs": {"mode": "simple"},
             "patched": {
-                "_persist_model_candidate": None,
                 "_update_procedural_memory": None,
                 "_update_semantic_memory": None,
             },

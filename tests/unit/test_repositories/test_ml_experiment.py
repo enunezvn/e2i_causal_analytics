@@ -789,57 +789,6 @@ class TestMLModelRegistryRepository:
 
         assert len(result) == 2
 
-    @pytest.mark.asyncio
-    async def test_register_model_candidate_creates_candidate(self, repo, mock_client):
-        """Test that register_model_candidate creates a candidate model."""
-        mock_data = {
-            "id": str(uuid4()),
-            "experiment_id": str(uuid4()),
-            "model_name": "RandomForestClassifier",
-            "model_version": "candidate-20250130120000",
-            "algorithm": "RandomForestClassifier",
-            "stage": "candidate",
-        }
-        mock_result = MagicMock()
-        mock_result.data = [mock_data]
-        mock_execute = AsyncMock(return_value=mock_result)
-        mock_client.table.return_value.insert.return_value.execute = mock_execute
-
-        result = await repo.register_model_candidate(
-            experiment_id=mock_data["experiment_id"],
-            model_name="RandomForestClassifier",
-            model_type="ensemble",
-            model_class="sklearn.ensemble.RandomForestClassifier",
-            hyperparameters={"n_estimators": 100},
-            hyperparameter_search_space={"n_estimators": [50, 100, 200]},
-            selection_score=0.95,
-            selection_rationale="Best cross-validation score",
-        )
-
-        assert result is not None
-        assert result.model_name == "RandomForestClassifier"
-        assert result.stage == "candidate"
-
-    @pytest.mark.asyncio
-    async def test_register_model_candidate_returns_none_on_error(self, repo, mock_client):
-        """Test that register_model_candidate returns None on error."""
-        mock_client.table.return_value.insert.return_value.execute = AsyncMock(
-            side_effect=Exception("Database error")
-        )
-
-        result = await repo.register_model_candidate(
-            experiment_id=str(uuid4()),
-            model_name="RandomForestClassifier",
-            model_type="ensemble",
-            model_class="sklearn.ensemble.RandomForestClassifier",
-            hyperparameters={},
-            hyperparameter_search_space={},
-            selection_score=0.95,
-            selection_rationale="Test",
-        )
-
-        assert result is None
-
 
 @pytest.mark.unit
 class TestEnums:
