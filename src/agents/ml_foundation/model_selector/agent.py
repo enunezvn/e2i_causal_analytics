@@ -10,9 +10,9 @@ Integration:
 - Upstream: data_preparer (requires QC gate passed)
 - Downstream: model_trainer (consumes ModelCandidate)
 - Persistence: the MLflow ``model_selection_<algorithm>`` run (mlflow_registrar) holds the
-  structured selection; the episodic ``model_selection_completed`` row holds the rationale
-  text (its structured algorithm fields are NULL, see CONTRACT_VALIDATION.md). Nothing is
-  written to ml_model_registry
+  structured selection; the episodic ``model_selection_completed`` row records the chosen
+  algorithm, its score and the rationale (read from ``model_candidate`` /
+  ``selection_rationale`` since #2325). Nothing is written to ml_model_registry
   (#2319: the former ``stage='candidate'`` write never landed a row; ``candidate`` means
   "retrain awaiting review" since #2310).
 - Memory: Procedural memory (successful selection patterns)
@@ -21,7 +21,7 @@ Integration:
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, Literal
+from typing import Any, Dict, Literal, Optional
 from uuid import uuid4
 
 from .graph import (
@@ -29,7 +29,7 @@ from .graph import (
     create_model_selector_graph,
     create_simple_selector_graph,
 )
-from .memory_hooks import ModelSelectorMemoryHooks
+from .memory_hooks import ModelSelectorMemoryHooks, selection_fields
 from .state import ModelSelectorState
 
 logger = logging.getLogger(__name__)
@@ -260,12 +260,12 @@ class ModelSelectorAgent:
             output = self._build_output(final_state, experiment_id)
 
             # Update procedural memory with successful selection pattern
-            await self._update_procedural_memory(output)
+            await self._update_procedural_memory(output, final_state)
 
             # Populate the semantic knowledge graph (e2i_causal) with the selected
             # algorithm so Tier 0 runs grow it and read-hooks return real context
             # (#749 — store_algorithm_pattern was defined but never called).
-            await self._update_semantic_memory(output)
+            await self._update_semantic_memory(output, final_state)
 
             # Record the model selection to episodic memory (#749 — store_model_selection
             # was defined but never called from run() and used a non-existent insert API).
@@ -387,7 +387,9 @@ class ModelSelectorAgent:
             "status": "completed",
         }
 
-    async def _update_procedural_memory(self, output: Dict[str, Any]) -> None:
+    async def _update_procedural_memory(
+        self, output: Dict[str, Any], final_state: Optional[Dict[str, Any]] = None
+    ) -> None:
         """Update procedural memory with successful selection pattern.
 
         Graceful degradation: If memory is unavailable,
@@ -412,7 +414,8 @@ class ModelSelectorAgent:
                 pattern_data={
                     "algorithm_name": model_candidate.get("algorithm_name"),
                     "algorithm_family": model_candidate.get("algorithm_family"),
-                    "problem_type": output.get("selection_summary", {}).get("problem_type"),
+                    # selection_summary has no problem_type; the final state does (#2325).
+                    "problem_type": (final_state or {}).get("problem_type"),
                     "selection_score": model_candidate.get("selection_score"),
                     "primary_reason": selection_rationale.get("primary_reason"),
                     "supporting_factors": selection_rationale.get("supporting_factors", []),
@@ -426,7 +429,9 @@ class ModelSelectorAgent:
         except Exception as e:
             logger.debug(f"Failed to update procedural memory: {e}")
 
-    async def _update_semantic_memory(self, output: Dict[str, Any]) -> None:
+    async def _update_semantic_memory(
+        self, output: Dict[str, Any], final_state: Optional[Dict[str, Any]] = None
+    ) -> None:
         """Populate the semantic knowledge graph (FalkorDB ``e2i_causal``) with the
         selected algorithm (#749).
 
@@ -436,13 +441,17 @@ class ModelSelectorAgent:
 
         Args:
             output: Agent output carrying experiment_id, model_candidate
-                (algorithm_name / algorithm_family / selection_score),
-                selection_summary.problem_type, benchmark_results.
+                (algorithm_name / algorithm_family / selection_score), benchmark_results.
+            final_state: The graph's final state, which carries ``problem_type``.
+                ``selection_summary`` has no ``problem_type`` key (see
+                ``create_selection_summary``), so reading it there aimed every
+                SUITED_FOR edge at a ``ptype:unknown`` node that does not exist and
+                the edge was dropped (#2325: 0 SUITED_FOR edges in prod).
         """
         try:
             experiment_id = output.get("experiment_id")
-            model_candidate = output.get("model_candidate", {}) or {}
-            algorithm_name = model_candidate.get("algorithm_name")
+            fields = selection_fields(output)
+            algorithm_name = fields["algorithm_name"]
             if not experiment_id or not algorithm_name:
                 logger.debug("Missing experiment_id/algorithm_name; skipping semantic-graph update")
                 return
@@ -450,11 +459,10 @@ class ModelSelectorAgent:
             hooks = ModelSelectorMemoryHooks()
             await hooks.store_algorithm_pattern(
                 experiment_id=str(experiment_id),
-                algorithm_name=str(algorithm_name),
-                algorithm_family=model_candidate.get("algorithm_family") or "unknown",
-                problem_type=(output.get("selection_summary", {}) or {}).get("problem_type")
-                or "unknown",
-                selection_score=float(model_candidate.get("selection_score") or 0.0),
+                algorithm_name=algorithm_name,
+                algorithm_family=fields["algorithm_family"],
+                problem_type=(final_state or {}).get("problem_type"),
+                selection_score=fields["selection_score"],
                 benchmark_results=output.get("benchmark_results", {}) or {},
             )
             logger.info(f"Updated semantic graph (e2i_causal) for algorithm: {algorithm_name}")
