@@ -39,6 +39,25 @@ class TriggerReason(str, Enum):
     DATA_VOLUME = "data_volume"
 
 
+class RetrainRefusedError(RuntimeError):
+    """A retrain refused at trigger time, before anything is recorded or enqueued.
+
+    ``reason`` is machine-readable:
+
+    - ``no_registry_identity``: the handle resolves to no ``ml_model_registry`` row
+      (#2319 item 2). Such a retrain has no cohort contract of record and no
+      ``retrain_of``, so it either fails closed at execution or, with a hand-passed
+      contract, runs the whole pipeline and fails at ``containerize``.
+    - ``unreadable_registry_identity``: the row resolves but its model name / version /
+      experiment cannot be read (#2242 codex r1), so its candidate could not be attached.
+    """
+
+    def __init__(self, handle: str, reason: str, message: str):
+        super().__init__(message)
+        self.handle = handle
+        self.reason = reason
+
+
 class RetrainingStatus(str, Enum):
     """Status of retraining job."""
 
@@ -308,6 +327,11 @@ class RetrainingTriggerService:
 
         Returns:
             Created retraining job
+
+        Raises:
+            RetrainRefusedError: the handle resolves to no ``ml_model_registry`` row, or
+                the row's identity cannot be read (#2319 item 2). Nothing is recorded
+                and nothing is enqueued.
         """
 
         from src.memory.services.factories import ServiceConnectionError
@@ -321,6 +345,51 @@ class RetrainingTriggerService:
         # Get current metrics. Fail-closed (#845): resolve the client once and
         # wire it into the repositories (unconfigured Supabase raises here).
         client = await get_drift_monitoring_client()
+
+        # #2207 (owner decision 2026-09-22): the registry row is the cohort contract of
+        # record (migration 150). A request that omits data_source / target_outcome falls
+        # back to the row's contract; explicit request values win. The row is NOT healed
+        # here — only a contract that has just produced a promotable model heals it
+        # (execute_model_retraining on completion; codex r1 HIGH-2: healing at trigger
+        # time could persist a wrong contract and the sweep would then enqueue failing
+        # jobs). A registered request with no contract anywhere still fails closed at
+        # execution. The row id becomes ml_retraining_history.model_id.
+        from src.services.cohort_contract import (
+            load_registry_cohort_contract,
+            load_registry_model_identity,
+            merge_contracts,
+        )
+
+        registry_model_id, registry_contract = await load_registry_cohort_contract(
+            client, model_version
+        )
+        # #2319 item 2 (owner decision 2026-09-29): refuse a handle with no registry row
+        # before any read, write or enqueue. #2242 had kept a legacy
+        # "<base>_retrained_<ts>" path for it; that retrain has no cohort contract of
+        # record and no retrain_of, so it fails closed at execution or, with a
+        # hand-passed contract, runs the pipeline and fails at containerize.
+        if not registry_model_id:
+            raise RetrainRefusedError(
+                model_version,
+                "no_registry_identity",
+                f"no registry identity: model handle {model_version!r} does not resolve to "
+                "an ml_model_registry row (unregistered, or the registry lookup failed) — "
+                "refusing a retrain whose candidate could not be attached to a registered "
+                "model; trigger by the registry row id or its model_name",
+            )
+        # #2242: the candidate is a new VERSION of the registered model being retrained.
+        # A registered row whose identity cannot be read is refused rather than retrained
+        # as an unattached orphan (codex r1).
+        identity = await load_registry_model_identity(client, registry_model_id)
+        if not identity:
+            raise RetrainRefusedError(
+                model_version,
+                "unreadable_registry_identity",
+                f"registered model {registry_model_id} (handle {model_version!r}) has no "
+                "readable identity (model name / version / experiment) — refusing a "
+                "retrain its candidate could not be attached to",
+            )
+
         drift_repo = DriftHistoryRepository(client)
         drift_records = await drift_repo.get_latest_drift_status(model_version, limit=20)
         drift_score = max((self._severity_to_score(r.severity) for r in drift_records), default=0.0)
@@ -340,54 +409,20 @@ class RetrainingTriggerService:
         # Build training config
         training_config = self._build_training_config(reason, drift_score, performance_before)
 
-        # #2207 (owner decision 2026-09-22): the registry row is the cohort contract of
-        # record (migration 150). A request that omits data_source / target_outcome falls
-        # back to the row's contract; explicit request values win. The row is NOT healed
-        # here — only a contract that has just produced a promotable model heals it
-        # (execute_model_retraining on completion; codex r1 HIGH-2: healing at trigger
-        # time could persist a wrong contract and the sweep would then enqueue failing
-        # jobs). A request with no contract anywhere behaves exactly as before (the job
-        # fails closed at execution). The row id becomes ml_retraining_history.model_id.
-        from src.services.cohort_contract import (
-            load_registry_cohort_contract,
-            load_registry_model_identity,
-            merge_contracts,
-        )
-
-        registry_model_id, registry_contract = await load_registry_cohort_contract(
-            client, model_version
-        )
         effective_cohort = merge_contracts(cohort, registry_contract)
         # Cohort identity → reaches execute_model_retraining → MLFoundationPipeline.
         if effective_cohort:
             training_config.update(effective_cohort)
 
-        # #2242: the candidate is a new VERSION of the registered model being retrained.
-        # The logical identity travels as training_config["retrain_of"]: the pipeline
-        # attaches the scope to the model's experiment and registers the candidate as
-        # (model_name, new_version) — the pair this history row records. A registered
-        # row whose identity cannot be read is refused rather than retrained as an
-        # unattached orphan (codex r1).
-        identity = await load_registry_model_identity(client, registry_model_id)
-        if registry_model_id and not identity:
-            raise RuntimeError(
-                f"registered model {registry_model_id} has no readable identity (model "
-                "name / version / experiment) — refusing a retrain its candidate could "
-                "not be attached to"
-            )
+        # #2242: the logical identity travels as training_config["retrain_of"]: the
+        # pipeline attaches the scope to the model's experiment and registers the
+        # candidate as (model_name, new_version) — the pair this history row records.
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
-        if identity:
-            new_version = _candidate_version(identity["model_version"], timestamp)
-        else:
-            base_version = (
-                model_version.rsplit("_", 1)[0] if "_" in model_version else model_version
-            )
-            new_version = f"{base_version}_retrained_{timestamp}"
+        new_version = _candidate_version(identity["model_version"], timestamp)
         if config_overrides:
             training_config.update(config_overrides)
-        if identity:
-            # After the overrides: the retrained identity is authoritative, never a knob.
-            training_config["retrain_of"] = {**identity, "new_model_version": new_version}
+        # After the overrides: the retrained identity is authoritative, never a knob.
+        training_config["retrain_of"] = {**identity, "new_model_version": new_version}
         training_config["approved_by"] = approved_by
 
         # Record retraining trigger
@@ -789,12 +824,20 @@ async def evaluate_and_trigger_retraining(
         result["retraining_triggered"] = False
         result["retraining_blocked_reason"] = "no_cohort_contract"
     elif wants_trigger and decision.reason:
-        job = await service.trigger_retraining(
-            model_version=model_version,
-            reason=decision.reason,
-            approved_by="auto" if auto_approve else None,
-            cohort=cohort,
-        )
+        try:
+            job = await service.trigger_retraining(
+                model_version=model_version,
+                reason=decision.reason,
+                approved_by="auto" if auto_approve else None,
+                cohort=cohort,
+            )
+        except RetrainRefusedError as refused:
+            # #2319 item 2: the sweep passes registry ids, so this is reached only by an
+            # evaluation of a handle with no (readable) registry identity.
+            logger.warning("Retraining for %s refused: %s", model_version, refused)
+            result["retraining_triggered"] = False
+            result["retraining_blocked_reason"] = refused.reason
+            return result
         result["retraining_triggered"] = True
         result["job_id"] = job.job_id
         result["new_model_version"] = job.new_model_version

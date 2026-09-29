@@ -193,11 +193,51 @@ async def test_retraining_a_retrained_candidate_keeps_the_version_bounded():
 
 
 @pytest.mark.asyncio
-async def test_unregistered_handle_keeps_the_legacy_version_and_no_identity():
+async def test_unregistered_handle_is_refused_before_anything_is_recorded():
+    """#2319 item 2 (owner decision 2026-09-29), replacing
+    ``test_unregistered_handle_keeps_the_legacy_version_and_no_identity``.
+
+    #2242 kept the legacy ``<base>_retrained_<ts>`` path for a handle with no registry
+    row only to leave non-registry callers unchanged. Such a retrain has no
+    ``retrain_of`` (its candidate cannot attach to a registered model) and no registry
+    cohort contract: it either fails closed for lack of a contract or, with a hand-passed
+    contract, runs to ``containerize`` and fails there. The trigger now refuses it with
+    an explicit reason: no ``ml_retraining_history`` row, no task.
+    """
+    from src.services.retraining_trigger import RetrainRefusedError
+
     db, _ = _goldstd_db()
-    out = await _trigger(db, "propensity_v2.1.0")
-    assert out["new_version"].startswith("propensity_retrained_")
-    assert "retrain_of" not in out["training_config"]
+    with pytest.raises(RetrainRefusedError) as exc:
+        await _trigger(db, "propensity_v2.1.0")
+    assert exc.value.reason == "no_registry_identity"
+    assert exc.value.handle == "propensity_v2.1.0"
+    assert "propensity_v2.1.0" in str(exc.value)
+    assert db.rows("ml_retraining_history") == []
+
+
+@pytest.mark.asyncio
+async def test_unregistered_handle_is_refused_even_with_a_hand_passed_contract():
+    """The wasted-run case: a contract passed by hand used to carry the job through the
+    whole pipeline to a failure at ``containerize``."""
+    from src.services.retraining_trigger import RetrainRefusedError
+
+    db, _ = _goldstd_db()
+    service = RetrainingTriggerService()
+    with (
+        patch(
+            "src.repositories.drift_monitoring.get_drift_monitoring_client",
+            AsyncMock(return_value=db),
+        ),
+        patch("src.tasks.drift_monitoring_tasks.execute_model_retraining") as mock_task,
+    ):
+        with pytest.raises(RetrainRefusedError, match="no registry identity"):
+            await service.trigger_retraining(
+                model_version="propensity_v2.1.0",
+                reason=TriggerReason.MANUAL,
+                cohort={"data_source": "patient_journeys", "target_outcome": "y"},
+            )
+        mock_task.delay.assert_not_called()
+    assert db.rows("ml_retraining_history") == []
 
 
 def test_cohort_input_keeps_the_physical_label_and_carries_the_logical_identity():

@@ -15,6 +15,32 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.services.retraining_trigger import RetrainingTriggerService, TriggerReason
+from tests.unit._fakes.async_supabase import FakeAsyncSupabase
+
+
+def _registry_with(model_name: str) -> FakeAsyncSupabase:
+    """A registry row for ``model_name`` (no cohort contract of its own): since #2319 the
+    trigger refuses a handle with no registry identity, so the cohort under test must be
+    threaded for a registered model."""
+    return FakeAsyncSupabase(
+        {
+            "ml_model_registry": [
+                {
+                    "id": "00000000-0000-4000-8000-000000000001",
+                    "experiment_id": "00000000-0000-4000-8000-000000000002",
+                    "model_name": model_name,
+                    "model_version": "1.0",
+                }
+            ],
+            "ml_experiments": [
+                {
+                    "id": "00000000-0000-4000-8000-000000000002",
+                    "experiment_name": f"{model_name}_exp",
+                    "prediction_target": "initiation",
+                }
+            ],
+        }
+    )
 
 
 @pytest.mark.asyncio
@@ -45,6 +71,10 @@ async def test_trigger_retraining_threads_cohort_into_training_config() -> None:
     }
 
     with (
+        patch(
+            "src.repositories.drift_monitoring.get_drift_monitoring_client",
+            AsyncMock(return_value=_registry_with("optum_v1")),
+        ),
         patch("src.repositories.drift_monitoring.DriftHistoryRepository", return_value=drift_repo),
         patch(
             "src.repositories.drift_monitoring.RetrainingHistoryRepository",

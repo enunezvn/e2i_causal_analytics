@@ -1841,8 +1841,12 @@ async def trigger_retraining(
 
     Creates a retraining job and optionally auto-approves it.
 
+    A handle that resolves to no ml_model_registry row is refused with 404, and a
+    registered row whose identity cannot be read with 409; neither records nor
+    enqueues anything (#2319).
+
     Args:
-        model_id: Model version/ID
+        model_id: ml_model_registry row id, or a registered model_name / model_version
         request: Retraining parameters
         triggered_by: User or system triggering retraining
 
@@ -1850,6 +1854,7 @@ async def trigger_retraining(
         Created retraining job
     """
     from src.services.retraining_trigger import (
+        RetrainRefusedError,
         TriggerReason,
         get_retraining_trigger_service,
     )
@@ -1877,6 +1882,12 @@ async def trigger_retraining(
 
         return _retraining_job_to_response(job, triggered_by=triggered_by, notes=request.notes)
 
+    except RetrainRefusedError as refused:
+        # #2319 item 2: refused before anything was recorded or enqueued. A handle with
+        # no registry row is a 404 (the path names no registered model); a registered row
+        # whose identity cannot be read is a 409 (its state blocks the retrain).
+        status = 404 if refused.reason == "no_registry_identity" else 409
+        raise HTTPException(status_code=status, detail=str(refused)) from refused
     except Exception as e:
         raise _log_and_500("Failed to trigger retraining", e)
 

@@ -150,3 +150,28 @@ async def test_a_registry_contract_with_a_file_source_dict_is_triggered_with_it(
 def test_has_cohort_contract_accepts_a_dict_data_source():
     assert has_cohort_contract({"data_source": {"type": "files"}, "target_outcome": "y"}) is True
     assert has_cohort_contract({"data_source": {}, "target_outcome": "y"}) is False
+
+
+@pytest.mark.asyncio
+async def test_a_trigger_refusal_is_reported_as_a_block_not_an_error():
+    """#2319 item 2: the sweep only evaluates registry rows, but the helper also serves
+    ``evaluate_retraining_need`` for any handle. A trigger refused for lack of a registry
+    identity is reported with its reason, like the missing-contract block."""
+    from src.services.retraining_trigger import RetrainRefusedError
+
+    service = MagicMock()
+    service.evaluate_retraining_need = AsyncMock(return_value=_auto_approvable_decision())
+    service.trigger_retraining = AsyncMock(
+        side_effect=RetrainRefusedError("ghost_v9", "no_registry_identity", "no registry identity")
+    )
+    with patch(
+        "src.services.retraining_trigger.get_retraining_trigger_service", return_value=service
+    ):
+        result = await evaluate_and_trigger_retraining(
+            "ghost_v9",
+            auto_approve=True,
+            cohort={"data_source": "cohort_x", "target_outcome": "y"},
+        )
+    assert result["retraining_triggered"] is False
+    assert result["retraining_blocked_reason"] == "no_registry_identity"
+    assert "job_id" not in result
