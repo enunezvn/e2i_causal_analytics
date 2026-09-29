@@ -694,6 +694,64 @@ async def test_dst_spanning_offset_strings_are_audited(second: str, leaks: bool)
     assert any(i.startswith("leakage: Temporal leakage:") for i in blocking) is leaks, blocking
 
 
+def _string_dates_state(values: list, **scope: Any) -> Dict[str, Any]:
+    frame = _noise_frame()
+    frame["event_ts"] = (values * len(frame))[: len(frame)]
+    return _leakage_state(
+        frame,
+        scope_spec={
+            "required_features": ["noise_a"],
+            "split_date": "2025-01-01",
+            "feature_date_columns": ["event_ts"],
+            **scope,
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_mixed_format_iso_dates_are_all_parsed() -> None:
+    """Codex r5: pandas inferred ONE format from the first value
+    (``2024-12-31``) and coerced ``2025-02-01T00:00:00`` — the leaking row —
+    to ``NaT``, which dropped out of the comparison. Every ISO 8601 shape is
+    parsed now, so the future row is found."""
+    final_state = await _leakage_gate_graph().ainvoke(
+        _string_dates_state(["2024-12-31", "2025-02-01T00:00:00"])
+    )
+
+    blocking = final_state["blocking_issues"] or []
+    assert any(i.startswith("leakage: Temporal leakage:") and "event_ts" in i for i in blocking), (
+        blocking
+    )
+    assert not any("unverifiable" in i for i in blocking), blocking
+    assert final_state["gate_passed"] is False
+
+
+@pytest.mark.asyncio
+async def test_partly_unparseable_date_column_is_unverifiable() -> None:
+    """A value that does not parse could be the leaking row; a partly
+    unparseable column can no longer read clean."""
+    final_state = await _leakage_gate_graph().ainvoke(
+        _string_dates_state(["2024-06-01", "not a date"])
+    )
+
+    blocking = final_state["blocking_issues"] or []
+    assert any(
+        "temporal check unverifiable: 'event_ts' has 100 unparseable values" in i for i in blocking
+    ), blocking
+    assert final_state["gate_passed"] is False
+
+
+@pytest.mark.asyncio
+async def test_clean_iso_dates_before_the_split_pass() -> None:
+    """Control: valid ISO dates (with nulls) that are all before the split do
+    not block."""
+    final_state = await _leakage_gate_graph().ainvoke(
+        _string_dates_state(["2024-06-01", None, "2024-11-30T08:15:00"])
+    )
+
+    assert final_state["blocking_issues"] == [], final_state["blocking_issues"]
+
+
 @pytest.mark.asyncio
 async def test_incomplete_audit_entry_is_retracted_by_a_clean_rerun() -> None:
     """The incomplete-audit entry is a ``leakage:`` entry, so the next
