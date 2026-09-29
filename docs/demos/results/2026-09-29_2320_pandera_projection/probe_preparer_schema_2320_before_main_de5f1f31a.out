@@ -1,0 +1,87 @@
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/supabase/_sync/client.py:309: DeprecationWarning: The 'timeout' parameter is deprecated. Please configure it in the http client instead.
+  return SyncPostgrestClient(
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/supabase/_sync/client.py:309: DeprecationWarning: The 'verify' parameter is deprecated. Please configure it in the http client instead.
+  return SyncPostgrestClient(
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmp545jq18a' for ephemeral docs site
+code under test: /tmp/claude-1000/-home-enunez-Projects-e2i-causal-analytics/b1d41f57-1169-44e4-af12-96c28babe7a7/scratchpad/l2320_main_de5f1f31a/src
+
+=== initiation / Kisqali === columns=['disease_severity', 'academic_hcp', 'geographic_region', 'insurance_type', 'age_at_diagnosis', 'comorbidity_burden', 'prior_therapy_lines', 'rep_detailing_high', 'sample_dropped', 'trigger_accepted', 'treatment_initiated']
+[load_data 1.0s] {} blocking=[]
+  rows train/val/test = 5330/1800/876; frame columns = ['disease_severity', 'academic_hcp', 'geographic_region', 'insurance_type', 'age_at_diagnosis', 'comorbidity_burden', 'prior_therapy_lines', 'rep_detailing_high', 'sample_dropped', 'trigger_accepted', 'treatment_initiated', 'data_split']
+[audit_sampling_frame 0.0s] {} blocking=[]
+[run_schema_validation 0.0s] {"schema_validation_status": "skipped", "schema_splits_validated": 0} blocking=[]
+[run_quality_checks 0.0s] {"qc_status": "passed", "overall_score": 1.0} blocking=[]
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3094.67it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 2388.56it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 2668.13it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 2380.42it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 1977.70it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 1825.99it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2015.42it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1933.75it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1894.45it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1830.33it/s]
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmpe4l67si1' for ephemeral docs site
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 2885.99it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 2252.58it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 2670.26it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 2420.61it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 1786.63it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 1622.55it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2021.57it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1945.91it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1916.37it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1866.07it/s]
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmpgu4mv1hd' for ephemeral docs site
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3989.51it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 2807.43it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3253.92it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 2863.01it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2253.31it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2017.85it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1990.44it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1867.09it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1815.63it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1768.17it/s]
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/opik/error_tracking/shutdown_hooks.py:12: SentryHubDeprecationWarning: `sentry_sdk.Hub` is deprecated and will be removed in a future major release. Please consult our 1.x to 2.x migration guide for details on how to migrate `Hub` usage to the new API: https://docs.sentry.io/platforms/python/migration/1.x-to-2.x
+  client = sentry_sdk.Hub.current.client
+WARNING src.data.causal_role_classifier_loader: Compiled classifier artifact not found at /tmp/claude-1000/-home-enunez-Projects-e2i-causal-analytics/b1d41f57-1169-44e4-af12-96c28babe7a7/scratchpad/l2320_main_de5f1f31a/artifacts/dspy/causal_role_classifier.json — Layer 4 will be skipped for this run. Generate via `python scripts/compile_causal_role_classifier.py`.
+WARNING src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check: Declared-safe immunity: exempted 5 manifest pre-index feature(s) from leakage (contract is authoritative); severity none -> info. Features: ['academic_hcp', 'age_at_diagnosis', 'comorbidity_burden', 'disease_severity', 'prior_therapy_lines']
+WARNING src.agents.ml_foundation.data_preparer.nodes.sufficiency_check: target_mde not specified in scope_spec.sufficiency; using computed_from_data default 0.0698311444652908. Override via scope_spec.sufficiency.target_mde.
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmpmcontl98' for ephemeral docs site
+[run_ge_validation 0.7s] {"ge_validation_status": "passed", "ge_expectations_passed": 39, "ge_expectations_evaluated": 39} blocking=[]
+[engineer_features 0.0s] {} blocking=[]
+[detect_leakage 0.9s] {"leakage_severity": "none", "leaked_features": []} blocking=[]
+[adaptive_validity_check 13.2s] {"leakage_severity": "info", "leaked_features": []} blocking=[]
+[route_after_leakage_detection] -> continue
+[transform_data 0.1s] {} blocking=[]
+[compute_baseline_metrics 0.0s] {} blocking=[]
+[sufficiency_check 0.0s] {} blocking=[]
+[finalize_output 0.0s] {"gate_passed": true, "qc_passed": true, "is_ready": true} blocking=[]
+RESULT initiation/Kisqali: schema_validation_status=skipped splits=0 schema_blockers=[] route=continue gate_passed=True blocking_issues=[]
+
+=== persistence / Kisqali === columns=['disease_severity', 'academic_hcp', 'geographic_region', 'insurance_type', 'age_at_diagnosis', 'comorbidity_burden', 'prior_therapy_lines', 'copay_support', 'psp_enrolled', 'persistent_180d']
+[load_data 0.6s] {} blocking=[]
+  rows train/val/test = 5330/1800/876; frame columns = ['disease_severity', 'academic_hcp', 'geographic_region', 'insurance_type', 'age_at_diagnosis', 'comorbidity_burden', 'prior_therapy_lines', 'copay_support', 'psp_enrolled', 'persistent_180d', 'data_split']
+[audit_sampling_frame 0.0s] {} blocking=[]
+[run_schema_validation 0.0s] {"schema_validation_status": "skipped", "schema_splits_validated": 0} blocking=[]
+[run_quality_checks 0.0s] {"qc_status": "passed", "overall_score": 1.0} blocking=[]
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 4396.55it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3140.23it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3557.51it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3151.24it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2591.96it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2348.70it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2495.45it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2376.08it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2318.43it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2250.57it/s]
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmpaa6tazv0' for ephemeral docs site
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 4648.29it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3271.69it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3778.65it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3379.78it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2946.68it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2603.86it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2576.71it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2445.02it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2370.56it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2283.79it/s]
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmpfgeylbna' for ephemeral docs site
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 4524.60it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3427.65it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3918.99it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3454.23it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2921.23it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2649.26it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2498.76it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2365.21it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2308.93it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2229.69it/s]
+WARNING src.data.causal_role_classifier_loader: Compiled classifier artifact not found at /tmp/claude-1000/-home-enunez-Projects-e2i-causal-analytics/b1d41f57-1169-44e4-af12-96c28babe7a7/scratchpad/l2320_main_de5f1f31a/artifacts/dspy/causal_role_classifier.json — Layer 4 will be skipped for this run. Generate via `python scripts/compile_causal_role_classifier.py`.
+WARNING src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check: Declared-safe immunity: exempted 5 manifest pre-index feature(s) from leakage (contract is authoritative); severity none -> info. Features: ['academic_hcp', 'age_at_diagnosis', 'comorbidity_burden', 'disease_severity', 'prior_therapy_lines']
+WARNING src.agents.ml_foundation.data_preparer.nodes.sufficiency_check: target_mde not specified in scope_spec.sufficiency; using computed_from_data default 0.11557223264540338. Override via scope_spec.sufficiency.target_mde.
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmppiq0_v5h' for ephemeral docs site
+[run_ge_validation 0.6s] {"ge_validation_status": "passed", "ge_expectations_passed": 36, "ge_expectations_evaluated": 36} blocking=[]
+[engineer_features 0.0s] {} blocking=[]
+[detect_leakage 0.8s] {"leakage_severity": "none", "leaked_features": []} blocking=[]
+[adaptive_validity_check 5.3s] {"leakage_severity": "info", "leaked_features": []} blocking=[]
+[route_after_leakage_detection] -> continue
+[transform_data 0.1s] {} blocking=[]
+[compute_baseline_metrics 0.0s] {} blocking=[]
+[sufficiency_check 0.0s] {} blocking=[]
+[finalize_output 0.0s] {"gate_passed": true, "qc_passed": true, "is_ready": true} blocking=[]
+RESULT persistence/Kisqali: schema_validation_status=skipped splits=0 schema_blockers=[] route=continue gate_passed=True blocking_issues=[]
+
+=== discontinuation / Kisqali === columns=['disease_severity', 'academic_hcp', 'geographic_region', 'insurance_type', 'age_at_diagnosis', 'comorbidity_burden', 'prior_therapy_lines', 'copay_support', 'psp_enrolled', 'discontinued_180d']
+[load_data 0.6s] {} blocking=[]
+  rows train/val/test = 5330/1800/876; frame columns = ['disease_severity', 'academic_hcp', 'geographic_region', 'insurance_type', 'age_at_diagnosis', 'comorbidity_burden', 'prior_therapy_lines', 'copay_support', 'psp_enrolled', 'discontinued_180d', 'data_split']
+[audit_sampling_frame 0.0s] {} blocking=[]
+[run_schema_validation 0.0s] {"schema_validation_status": "skipped", "schema_splits_validated": 0} blocking=[]
+[run_quality_checks 0.0s] {"qc_status": "passed", "overall_score": 1.0} blocking=[]
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3930.93it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 2761.83it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3139.45it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 2733.34it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2168.27it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 1968.97it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1918.32it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1780.68it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1733.58it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1678.24it/s]
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmpsacvdw9a' for ephemeral docs site
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 4466.78it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3262.36it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3800.05it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3298.06it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2725.34it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2462.60it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2452.17it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2322.86it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2257.97it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2189.22it/s]
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmp1jlez5sg' for ephemeral docs site
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3527.59it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 2669.26it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3045.42it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 2728.00it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2438.83it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2211.25it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2198.78it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2032.89it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1971.63it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1909.78it/s]
+WARNING src.data.causal_role_classifier_loader: Compiled classifier artifact not found at /tmp/claude-1000/-home-enunez-Projects-e2i-causal-analytics/b1d41f57-1169-44e4-af12-96c28babe7a7/scratchpad/l2320_main_de5f1f31a/artifacts/dspy/causal_role_classifier.json — Layer 4 will be skipped for this run. Generate via `python scripts/compile_causal_role_classifier.py`.
+WARNING src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check: Declared-safe immunity: exempted 5 manifest pre-index feature(s) from leakage (contract is authoritative); severity none -> info. Features: ['academic_hcp', 'age_at_diagnosis', 'comorbidity_burden', 'disease_severity', 'prior_therapy_lines']
+WARNING src.agents.ml_foundation.data_preparer.nodes.sufficiency_check: target_mde not specified in scope_spec.sufficiency; using computed_from_data default 0.08442776735459663. Override via scope_spec.sufficiency.target_mde.
+[run_ge_validation 0.6s] {"ge_validation_status": "passed", "ge_expectations_passed": 36, "ge_expectations_evaluated": 36} blocking=[]
+[engineer_features 0.0s] {} blocking=[]
+[detect_leakage 0.9s] {"leakage_severity": "none", "leaked_features": []} blocking=[]
+[adaptive_validity_check 5.7s] {"leakage_severity": "info", "leaked_features": []} blocking=[]
+[route_after_leakage_detection] -> continue
+[transform_data 0.1s] {} blocking=[]
+[compute_baseline_metrics 0.0s] {} blocking=[]
+[sufficiency_check 0.0s] {} blocking=[]
+[finalize_output 0.0s] {"gate_passed": true, "qc_passed": true, "is_ready": true} blocking=[]
+RESULT discontinuation/Kisqali: schema_validation_status=skipped splits=0 schema_blockers=[] route=continue gate_passed=True blocking_issues=[]
+
+SUMMARY schema_validation_status: {'initiation': 'skipped', 'persistence': 'skipped', 'discontinuation': 'skipped'}

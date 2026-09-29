@@ -22,7 +22,7 @@ Version: 1.0.0
 """
 
 import logging
-from typing import Any, Dict, Optional, Type
+from typing import Any, Dict, List, Optional, Sequence, Type
 
 import pandas as pd
 import pandera.pandas as pa
@@ -305,13 +305,58 @@ def get_schema(data_source: str) -> Optional[Type[DataFrameModel]]:
     return PANDERA_SCHEMA_REGISTRY.get(data_source)
 
 
-def validate_dataframe(df: pd.DataFrame, data_source: str, lazy: bool = True) -> Dict[str, Any]:
+def project_schema(model: Type[DataFrameModel], columns: Sequence[str]) -> pa.DataFrameSchema:
+    """The schema a COLUMN-SCOPED load of ``model``'s table is held to (#2320).
+
+    A table cohort contract's ``columns`` is a deliberate PROJECTION: the loader SELECTs
+    only those columns, so a schema column outside it is NOT APPLICABLE — dropped here
+    and logged at INFO, never failed. This mirrors the GE contract suite
+    (``data_preparer.nodes.ge_validator._register_contract_suite``, owner decision
+    2026-09-23). The projection narrows the schema; it does not weaken it:
+
+    - a schema column inside the projection keeps every check it declares (dtype,
+      nullability, uniqueness, ``isin`` / range) and becomes REQUIRED, even when the
+      model marks it ``Optional``;
+    - every projected column the model does not declare is added as a REQUIRED column
+      with no other check, so a projected column missing from the frame still fails
+      ``column_in_dataframe``.
+    """
+    projection: List[str] = list(dict.fromkeys(str(c) for c in columns))
+    schema = model.to_schema()
+    not_applicable = [c for c in schema.columns if c not in projection]
+    if not_applicable:
+        logger.info(
+            "Pandera schema %r: skipping %s — not in contract projection",
+            model.Config.name,
+            not_applicable,
+        )
+        schema = schema.remove_columns(not_applicable)
+    declared = [c for c in projection if c in schema.columns]
+    if declared:
+        schema = schema.update_columns({c: {"required": True} for c in declared})
+    undeclared = {
+        c: pa.Column(required=True, nullable=True) for c in projection if c not in schema.columns
+    }
+    if undeclared:
+        schema = schema.add_columns(undeclared)
+    return schema
+
+
+def validate_dataframe(
+    df: pd.DataFrame,
+    data_source: str,
+    lazy: bool = True,
+    columns: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
     """Validate a DataFrame against its Pandera schema.
 
     Args:
         df: DataFrame to validate
         data_source: Name of the data source
         lazy: If True, collect all errors; if False, fail on first error
+        columns: A table cohort contract's column projection. When non-empty the
+            frame is held to ``project_schema(schema, columns)``; ``None`` or empty
+            (the loader SELECTs every column for both) validates the whole schema.
 
     Returns:
         Dict with validation results:
@@ -339,7 +384,10 @@ def validate_dataframe(df: pd.DataFrame, data_source: str, lazy: bool = True) ->
 
     try:
         # Validate with lazy=True to collect all errors
-        schema.validate(df, lazy=lazy)
+        if columns:
+            project_schema(schema, columns).validate(df, lazy=lazy)
+        else:
+            schema.validate(df, lazy=lazy)
 
         logger.info(f"Schema validation passed for {data_source} ({len(df)} rows)")
         return {

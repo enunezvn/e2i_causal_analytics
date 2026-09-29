@@ -1,0 +1,14 @@
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/supabase/_sync/client.py:309: DeprecationWarning: The 'timeout' parameter is deprecated. Please configure it in the http client instead.
+  return SyncPostgrestClient(
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/supabase/_sync/client.py:309: DeprecationWarning: The 'verify' parameter is deprecated. Please configure it in the http client instead.
+  return SyncPostgrestClient(
+code under test: /home/enunez/Projects/e2i_causal_analytics/.worktrees/issue-2320/src
+initiation      Kisqali        rows=[5330, 1800, 876] schema=passed splits=3 errors=0 blocking=[]
+initiation      Fabhalta       rows=[5395, 1842, 909] schema=passed splits=3 errors=0 blocking=[]
+initiation      Remibrutinib   rows=[5448, 1742, 907] schema=passed splits=3 errors=0 blocking=[]
+persistence     Kisqali        rows=[5330, 1800, 876] schema=passed splits=3 errors=0 blocking=[]
+persistence     Fabhalta       rows=[5395, 1842, 909] schema=passed splits=3 errors=0 blocking=[]
+persistence     Remibrutinib   rows=[5448, 1742, 907] schema=passed splits=3 errors=0 blocking=[]
+discontinuation Kisqali        rows=[5330, 1800, 876] schema=passed splits=3 errors=0 blocking=[]
+discontinuation Fabhalta       rows=[5395, 1842, 909] schema=passed splits=3 errors=0 blocking=[]
+discontinuation Remibrutinib   rows=[5448, 1742, 907] schema=passed splits=3 errors=0 blocking=[]
