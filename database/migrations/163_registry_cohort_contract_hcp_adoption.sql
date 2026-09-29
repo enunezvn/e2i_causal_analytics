@@ -43,12 +43,19 @@
 -- row whose cohort_data_source AND cohort_feature_manifest_source are still NULL AND
 -- whose cohort_target_outcome is exactly 'adopted' (151's value) is written, so a
 -- healed or hand-edited contract is never overwritten and a mixed contract is never
--- composed; scoped to is_synthetic = false. The JSON literals are encode_data_source()
+-- composed; scoped to the production rows (stage = 'production', is_synthetic = false)
+-- -- ml_model_registry is unique on (model_name, model_version), so an archived version,
+-- a staged one or a retrain candidate can share the name and must not be touched. The JSON literals are encode_data_source()
 -- output (json.dumps(sort_keys=True)), so the sweep's decode/encode round trip is the
 -- identity. Idempotent: a second application matches zero rows.
 --
 -- ORDER: needs 162 (the view) applied and the #2286 allowlist deployed before the sweep
--- reads a row; the runner applies 162 then 163, and the code ships in the same deploy.
+-- reads a row. The deploy applies migrations BEFORE it recreates the app containers,
+-- and a failed recreate rolls the containers back but not the migrations. In either
+-- state an OLD worker sees this contract without the view in ML_TABLES, and a retrain
+-- the daily sweep (01:45, auto_approve=False) enqueues then fails LOUD in the loader
+-- ("not supported") -- never wrong values. Deploy outside 01:45; if the deploy rolls
+-- back, apply rollback_163 until the code is live.
 --
 -- NOTE: no BEGIN/COMMIT here -- the migration runner wraps each file.
 
@@ -56,6 +63,7 @@ UPDATE ml_model_registry
    SET cohort_data_source = '{"columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region", "adopted"], "filters": {"brand": "Remibrutinib", "is_synthetic": true}, "table": "hcp_adoption_goldstd_v", "type": "table"}',
        cohort_feature_manifest_source = 'synthetic_csu'
  WHERE model_name = 'hcp_adoption_remibrutinib_goldstd_lr_v1'
+   AND stage = 'production'
    AND is_synthetic = false
    AND cohort_data_source IS NULL
    AND cohort_feature_manifest_source IS NULL
@@ -65,6 +73,7 @@ UPDATE ml_model_registry
    SET cohort_data_source = '{"columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region", "adopted"], "filters": {"brand": "Fabhalta", "is_synthetic": true}, "table": "hcp_adoption_goldstd_v", "type": "table"}',
        cohort_feature_manifest_source = 'synthetic_csu'
  WHERE model_name = 'hcp_adoption_fabhalta_goldstd_lr_v1'
+   AND stage = 'production'
    AND is_synthetic = false
    AND cohort_data_source IS NULL
    AND cohort_feature_manifest_source IS NULL
@@ -74,6 +83,7 @@ UPDATE ml_model_registry
    SET cohort_data_source = '{"columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region", "adopted"], "filters": {"brand": "Kisqali", "is_synthetic": true}, "table": "hcp_adoption_goldstd_v", "type": "table"}',
        cohort_feature_manifest_source = 'synthetic_csu'
  WHERE model_name = 'hcp_adoption_kisqali_goldstd_lr_v1'
+   AND stage = 'production'
    AND is_synthetic = false
    AND cohort_data_source IS NULL
    AND cohort_feature_manifest_source IS NULL

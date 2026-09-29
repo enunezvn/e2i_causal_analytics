@@ -14,6 +14,7 @@ UPDATE ml_model_registry
    SET cohort_data_source = NULL,
        cohort_feature_manifest_source = NULL
  WHERE model_name = 'hcp_adoption_remibrutinib_goldstd_lr_v1'
+   AND stage = 'production'
    AND is_synthetic = false
    AND cohort_data_source = '{"columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region", "adopted"], "filters": {"brand": "Remibrutinib", "is_synthetic": true}, "table": "hcp_adoption_goldstd_v", "type": "table"}'
    AND cohort_feature_manifest_source = 'synthetic_csu';
@@ -22,6 +23,7 @@ UPDATE ml_model_registry
    SET cohort_data_source = NULL,
        cohort_feature_manifest_source = NULL
  WHERE model_name = 'hcp_adoption_fabhalta_goldstd_lr_v1'
+   AND stage = 'production'
    AND is_synthetic = false
    AND cohort_data_source = '{"columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region", "adopted"], "filters": {"brand": "Fabhalta", "is_synthetic": true}, "table": "hcp_adoption_goldstd_v", "type": "table"}'
    AND cohort_feature_manifest_source = 'synthetic_csu';
@@ -30,6 +32,7 @@ UPDATE ml_model_registry
    SET cohort_data_source = NULL,
        cohort_feature_manifest_source = NULL
  WHERE model_name = 'hcp_adoption_kisqali_goldstd_lr_v1'
+   AND stage = 'production'
    AND is_synthetic = false
    AND cohort_data_source = '{"columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region", "adopted"], "filters": {"brand": "Kisqali", "is_synthetic": true}, "table": "hcp_adoption_goldstd_v", "type": "table"}'
    AND cohort_feature_manifest_source = 'synthetic_csu';

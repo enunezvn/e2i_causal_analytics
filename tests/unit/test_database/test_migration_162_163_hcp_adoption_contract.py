@@ -112,6 +112,8 @@ def test_162_view_selects_the_goldstd_frame_and_nothing_wider() -> None:
     cols = [c.strip().split(".")[-1] for c in body[len("SELECT") :].split(",")]
     spec = make_hcp_spec("Kisqali")
     assert set(cols) == {
+        "id",
+        "created_at",
         "hcp_id",
         "brand",
         "consideration_date",
@@ -120,7 +122,7 @@ def test_162_view_selects_the_goldstd_frame_and_nothing_wider() -> None:
         "is_synthetic",
     } | set(spec.base_covariates)
     # provenance, split and label are the ADOPTION row's, covariates the profile's.
-    for col in ("adopted", "data_split", "is_synthetic", "brand"):
+    for col in ("id", "created_at", "adopted", "data_split", "is_synthetic", "brand"):
         assert f"a.{col}" in body
     for col in spec.base_covariates:
         assert f"p.{col}" in body
@@ -143,6 +145,9 @@ def test_162_view_is_security_invoker_and_service_role_only() -> None:
 
 def test_rollback_162_refuses_while_a_contract_names_the_view() -> None:
     s = _sql(R162)
+    # both contract encodings: a bare table name and a table-cohort dict's JSON
+    assert "cohort_data_source = 'hcp_adoption_goldstd_v'" in s
+    assert "cohort_data_source LIKE '%\"hcp_adoption_goldstd_v\"%'" in s
     assert s.index("RAISE EXCEPTION") < s.index("DROP VIEW IF EXISTS public.hcp_adoption_goldstd_v")
     assert f"DELETE FROM public.schema_migrations WHERE filename = '{M162.name}'" in s
 
@@ -159,6 +164,7 @@ def test_163_sets_the_pair_on_exactly_the_three_hcp_rows_compare_and_set() -> No
         # data_source + manifest as ONE unit; the label is 151's and never rewritten.
         assert set(up["set"]) == {"cohort_data_source", "cohort_feature_manifest_source"}
         where = up["where"]
+        assert "stage = 'production'" in where
         assert "is_synthetic = false" in where
         assert "cohort_data_source IS NULL" in where
         assert "cohort_feature_manifest_source IS NULL" in where
@@ -254,6 +260,7 @@ def test_rollback_163_restores_null_only_on_163s_own_pair() -> None:
         written = ups[model]["set"]
         assert f"cohort_data_source = '{written['cohort_data_source']}'" in roll["where"]
         assert f"cohort_feature_manifest_source = '{MANIFEST}'" in roll["where"]
+        assert "stage = 'production'" in roll["where"]
     assert f"DELETE FROM public.schema_migrations WHERE filename = '{M163.name}'" in _sql(R163)
     assert "cohort_target_outcome" not in _sql(R163)
 
@@ -298,10 +305,13 @@ def _fresh(pg, name: str):
 
 
 def _registry_rows(conn) -> dict:
-    """{model_name: (source, target, manifest)}; synthetic rows keyed ``<name>#synthetic``."""
+    """{model_name: (source, target, manifest)} for real production rows; any other row
+    is keyed ``<name>#<stage>`` (+ ``#synthetic``)."""
     out = {}
     for line in conn.rows(
-        "select model_name || case when is_synthetic then '#synthetic' else '' end || '|' || "
+        "select model_name || case when coalesce(stage, '') <> 'production' "
+        "then '#' || coalesce(stage, '') else '' end || "
+        "case when is_synthetic then '#synthetic' else '' end || '|' || "
         "coalesce(cohort_data_source, '<NULL>') || '|' || "
         "coalesce(cohort_target_outcome, '<NULL>') || '|' || "
         "coalesce(cohort_feature_manifest_source, '<NULL>') from ml_model_registry order by 1"
@@ -317,8 +327,12 @@ def _seed_registry(conn) -> None:
     conn.execute(
         "INSERT INTO ml_model_registry (model_name, stage, is_synthetic, cohort_target_outcome) "
         f"VALUES {values}, "
-        # controls: a synthetic twin of a goldstd row, and an unrelated model
+        # controls: a synthetic twin of a goldstd row, same-name real rows in other
+        # stages (an old version, a staged one, a retrain candidate), an unrelated model
         "('hcp_adoption_kisqali_goldstd_lr_v1', 'archived', true, 'adopted'), "
+        "('hcp_adoption_kisqali_goldstd_lr_v1', 'archived', false, 'adopted'), "
+        "('hcp_adoption_fabhalta_goldstd_lr_v1', 'staging', false, 'adopted'), "
+        "('hcp_adoption_remibrutinib_goldstd_lr_v1', 'candidate', false, 'adopted'), "
         "('other_model', 'production', false, 'adopted')",
         user="postgres",
     )
@@ -347,8 +361,13 @@ def test_real_db_162_then_163_apply_twice_and_both_roll_back(throwaway_pg) -> No
             MANIFEST,
         )
     assert after["other_model"] == before["other_model"]
-    synth = "hcp_adoption_kisqali_goldstd_lr_v1#synthetic"
-    assert after[synth] == before[synth] == ("<NULL>", "adopted", "<NULL>")
+    for control in (
+        "hcp_adoption_kisqali_goldstd_lr_v1#archived#synthetic",
+        "hcp_adoption_kisqali_goldstd_lr_v1#archived",
+        "hcp_adoption_fabhalta_goldstd_lr_v1#staging",
+        "hcp_adoption_remibrutinib_goldstd_lr_v1#candidate",
+    ):
+        assert after[control] == before[control] == ("<NULL>", "adopted", "<NULL>"), control
     assert conn.rows(
         "select reloptions::text from pg_class where relname = 'hcp_adoption_goldstd_v'"
     ) == ["{security_invoker=true}"]
@@ -386,14 +405,16 @@ def test_real_db_163_never_overwrites_a_healed_contract_or_composes_a_mixed_pair
     conn = _fresh(throwaway_pg, "t163_cas")
     healed = json.dumps({"type": "table", "table": "somewhere"}, sort_keys=True)
     conn.execute(
-        "INSERT INTO ml_model_registry (model_name, is_synthetic, cohort_data_source, "
+        "INSERT INTO ml_model_registry (model_name, stage, is_synthetic, cohort_data_source, "
         "cohort_target_outcome, cohort_feature_manifest_source) VALUES "
         # a contract healed by a completed retrain
-        f"('hcp_adoption_kisqali_goldstd_lr_v1', false, '{healed}', 'adopted', NULL), "
+        f"('hcp_adoption_kisqali_goldstd_lr_v1', 'production', false, '{healed}', 'adopted', "
+        "NULL), "
         # a label that no longer says 'adopted'
-        "('hcp_adoption_fabhalta_goldstd_lr_v1', false, NULL, 'will_adopt', NULL), "
+        "('hcp_adoption_fabhalta_goldstd_lr_v1', 'production', false, NULL, 'will_adopt', NULL), "
         # a manifest set by hand: writing only data_source would compose a mixed pair
-        "('hcp_adoption_remibrutinib_goldstd_lr_v1', false, NULL, 'adopted', 'optum_hcp')",
+        "('hcp_adoption_remibrutinib_goldstd_lr_v1', 'production', false, NULL, 'adopted', "
+        "'optum_hcp')",
         user="postgres",
     )
     before = _registry_rows(conn)
@@ -403,6 +424,25 @@ def test_real_db_163_never_overwrites_a_healed_contract_or_composes_a_mixed_pair
     # and rollback_163 leaves all of them alone
     assert _run(throwaway_pg, conn, R163).returncode == 0
     assert _registry_rows(conn) == before
+
+
+@pg_only
+def test_real_db_rollback_162_refuses_on_a_bare_string_contract(throwaway_pg) -> None:
+    from tests.unit.test_database._hcp_adoption_pg import apply_file
+
+    conn = _fresh(throwaway_pg, "t162_bare")
+    apply_file(conn, M162)
+    conn.execute(
+        "INSERT INTO ml_model_registry (model_name, stage, is_synthetic, cohort_data_source, "
+        "cohort_target_outcome) VALUES ('m', 'production', false, 'hcp_adoption_goldstd_v', "
+        "'adopted')",
+        user="postgres",
+    )
+    proc = _run(throwaway_pg, conn, R162)
+    assert proc.returncode != 0 and b"apply rollback_163 first" in proc.stderr
+    assert conn.rows("select count(*) from pg_views where viewname = 'hcp_adoption_goldstd_v'") == [
+        "1"
+    ]
 
 
 @pytest.fixture(scope="module")
@@ -449,6 +489,24 @@ def test_real_postgrest_serves_the_view_to_service_role_only(served_cohort) -> N
         with pytest.raises(APIError) as err:
             server.client(role).from_(VIEW).select("adopted").limit(1).execute()
         assert err.value.code == "42501"
+
+
+@pg_only
+@pytest.mark.asyncio
+async def test_real_generic_loader_api_works_on_the_view(served_cohort) -> None:
+    """count_records selects ``id`` and the date helpers default to ``created_at``: the
+    allowlisted view must answer them, not 42703 into a silent 0 / (None, None)."""
+    from src.repositories.ml_data_loader import MLDataLoader
+    from tests.unit.test_database._hcp_adoption_pg import SupabaseShim
+
+    server, _, _ = served_cohort
+    loader = MLDataLoader(supabase_client=SupabaseShim(server.client("service_role")))
+    pinned = {"brand": "Kisqali", "is_synthetic": True}
+    assert await loader.count_records(VIEW, filters=pinned, include_synthetic=True) == 5000
+    # unpinned: the provenance default-exclude drops every (synthetic) row
+    assert await loader.count_records(VIEW, filters={"brand": "Kisqali"}) == 0
+    lo, hi = await loader.get_date_range(VIEW, filters=pinned, include_synthetic=True)
+    assert lo is not None and hi is not None and lo <= hi
 
 
 @pg_only

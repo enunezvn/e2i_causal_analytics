@@ -22,6 +22,9 @@
 --   * covariates are exactly cohort_spec._HCP_COVARIATES. treatment_arm is NOT
 --     exposed: it is not a goldstd feature and a column-scoped contract never selects
 --     it; a wider view would only widen what an unscoped load could read.
+--   * id and created_at (the adoption row's) are row metadata, never contract columns:
+--     MLDataLoader.count_records selects "id" and its date helpers default to
+--     "created_at", so an allowlisted relation must answer both (codex r1 on PR #2326).
 --
 -- SECURITY: security_invoker = true, so a caller reads through its OWN grants on the
 -- base tables (both are service_role-only since 058, RLS off); a view without it
@@ -37,12 +40,14 @@
 CREATE OR REPLACE VIEW public.hcp_adoption_goldstd_v
 WITH (security_invoker = true) AS
 SELECT
+    a.id,
     a.hcp_id,
     a.brand,
     a.consideration_date,
     a.adopted,
     a.data_split,
     a.is_synthetic,
+    a.created_at,
     p.peer_influence_score,
     p.influence_network_size,
     p.years_experience,

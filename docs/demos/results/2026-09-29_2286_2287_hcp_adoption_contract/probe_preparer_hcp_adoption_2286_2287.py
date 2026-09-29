@@ -69,7 +69,9 @@ def row_163(brand: str) -> dict:
     text = open(MIGRATION_163).read()
     model = f"hcp_adoption_{brand.lower()}_goldstd_lr_v1"
     m = re.search(
-        r"UPDATE ml_model_registry\s+SET (?P<set>.*?)\s+WHERE model_name = '" + re.escape(model) + "'",
+        r"UPDATE ml_model_registry\s+SET (?P<set>.*?)\s+WHERE model_name = '"
+        + re.escape(model)
+        + "'",
         text,
         re.S,
     )
@@ -200,7 +202,9 @@ async def run_brand(brand: str, make_loader, async_db) -> dict:
         upd = await node(state)
         fold(state, upd)
         keys = {k: upd.get(k) for k in keys_of_interest if k in (upd or {})}
-        print(f"[{name} {time.time() - t0:.1f}s] {json.dumps(keys, default=str)} blocking={state.get('blocking_issues')}")
+        print(
+            f"[{name} {time.time() - t0:.1f}s] {json.dumps(keys, default=str)} blocking={state.get('blocking_issues')}"
+        )
         if name == "load_data" and state.get("train_df") is not None:
             frames = {
                 "train": state["train_df"],
@@ -220,7 +224,9 @@ async def run_brand(brand: str, make_loader, async_db) -> dict:
         print(f"  adaptive verdict severities: {dict(sev)}")
         for v in state["adaptive_verdicts"]:
             if v.get("severity") in ("high", "critical"):
-                print(f"    {v.get('severity')}: {v.get('feature')} layer={v.get('layer')} {v.get('reason', '')[:160]}")
+                print(
+                    f"    {v.get('severity')}: {v.get('feature')} layer={v.get('layer')} {v.get('reason', '')[:160]}"
+                )
     route = G._route_after_leakage_detection(state)
     print(f"[route_after_leakage_detection] -> {route}")
     if route == "remediate":
@@ -237,10 +243,52 @@ async def run_brand(brand: str, make_loader, async_db) -> dict:
             fold(state, upd)
             keys = {
                 k: upd.get(k)
-                for k in ("error", "gate_passed", "qc_passed", "is_ready", "missing_required_features")
+                for k in (
+                    "error",
+                    "gate_passed",
+                    "qc_passed",
+                    "is_ready",
+                    "missing_required_features",
+                )
                 if k in (upd or {})
             }
-            print(f"[{name} {time.time() - t0:.1f}s] {json.dumps(keys, default=str)} blocking={state.get('blocking_issues')}")
+            print(
+                f"[{name} {time.time() - t0:.1f}s] {json.dumps(keys, default=str)} blocking={state.get('blocking_issues')}"
+            )
+
+    # Trainer handoff: the pipeline builds model_trainer's {X, y} splits from the frames
+    # data_preparer returns, exactly like this (tier_0/pipeline.py frames_to_trainer_splits).
+    handoff = None
+    if state.get("gate_passed"):
+        from src.agents.tier_0.split_handoff import (
+            feature_columns_to_drop,
+            frames_to_trainer_splits,
+        )
+
+        frames = {
+            "train": state.get("train_df"),
+            "validation": state.get("validation_df"),
+            "test": state.get("test_df"),
+            "holdout": state.get("holdout_df"),
+        }
+        drop_columns = (
+            scope_spec.get("entity_column"),
+            scope_spec.get("date_column"),
+            *(scope_spec.get("excluded_features") or []),
+        )
+        plan = feature_columns_to_drop(
+            frames["train"], scope_spec["prediction_target"], drop_columns
+        )
+        splits = frames_to_trainer_splits(
+            frames, target_column=scope_spec.get("prediction_target"), drop_columns=drop_columns
+        )
+        handoff = {
+            "X_columns": list(splits["train_data"]["X"].columns),
+            "X_dtypes": {c: str(t) for c, t in splits["train_data"]["X"].dtypes.items()},
+            "rows": {k: v["row_count"] for k, v in splits.items()},
+            "dropped": {k: v for k, v in plan.items() if v and k != "target"},
+        }
+    print(f"TRAINER_HANDOFF {brand}: {json.dumps(handoff, default=str)}")
 
     # Frame fidelity: the contract load vs the goldstd builder's frame.
     spec = make_hcp_spec(brand)
@@ -250,14 +298,18 @@ async def run_brand(brand: str, make_loader, async_db) -> dict:
 
     def multiset(df: pd.DataFrame) -> Counter:
         return Counter(
-            tuple(None if pd.isna(v) else v for v in r) for r in df[cols].itertuples(index=False, name=None)
+            tuple(None if pd.isna(v) else v for v in r)
+            for r in df[cols].itertuples(index=False, name=None)
         )
 
     fidelity = None
     if loaded is not None and len(gold):
         fidelity = {
             "rows": (len(loaded), len(gold)),
-            "label_rate": (round(float(loaded["adopted"].mean()), 4), round(float(gold["adopted"].mean()), 4)),
+            "label_rate": (
+                round(float(loaded["adopted"].mean()), 4),
+                round(float(gold["adopted"].mean()), 4),
+            ),
             "splits": (dict(Counter(loaded["data_split"])), dict(Counter(gold["data_split"]))),
             "row_multiset_equal": multiset(loaded) == multiset(gold),
         }
@@ -273,6 +325,7 @@ async def run_brand(brand: str, make_loader, async_db) -> dict:
         "ge_validation_status": state.get("ge_validation_status"),
         "leakage_severity": state.get("leakage_severity"),
         "fidelity_row_multiset_equal": (fidelity or {}).get("row_multiset_equal"),
+        "trainer_X_columns": (handoff or {}).get("X_columns"),
     }
     print(f"RESULT {json.dumps(result, default=str)}")
     return result
@@ -290,7 +343,9 @@ async def main() -> None:
     args = ap.parse_args()
     global MANIFEST_OVERRIDE
     MANIFEST_OVERRIDE = args.manifest
-    print(f"code under test: {os.path.dirname(src.__file__)}  source={args.source} manifest_override={args.manifest}")
+    print(
+        f"code under test: {os.path.dirname(src.__file__)}  source={args.source} manifest_override={args.manifest}"
+    )
 
     from src.repositories.ml_data_loader import MLDataLoader
 
