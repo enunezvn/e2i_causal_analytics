@@ -15,16 +15,27 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 from src.agents.ml_foundation.model_deployer.nodes.mlflow_registration import (  # noqa: F401
     _get_mlflow_connector,
+    _model_version_stage,
+    _model_versions_for_run,
     _register_model_mlflow,
+    _tag_model_version_mlflow,
     _transition_stage_mlflow,
 )
 from src.agents.ml_foundation.model_deployer.nodes.retrain_linkage import (
+    CANDIDATE_DB_STAGE,
+    CANDIDATE_ENVIRONMENT,
+    CANDIDATE_STAGE,
+    promote_candidate,
+    register_or_reuse_version,
     resolve_retrain_registration,
     retrain_experiment_mismatch,
     retrain_not_persisted_error,
     retrain_persist_kwargs,
+    reuse_refusal,
 )
 from src.agents.ml_foundation.model_deployer.nodes.training_provenance import (
+    _metrics_to_registry_dict,
+    _parse_mlflow_run_id,
     candidate_training_provenance,
     cohort_contract_from_state,
     heal_reused_row,
@@ -790,50 +801,6 @@ def _evaluate_regulatory_eligibility(
     return result
 
 
-def _parse_mlflow_run_id(model_uri: Optional[str]) -> Optional[str]:
-    """Extract the MLflow run id from a ``runs:/<run_id>/<path>`` URI.
-
-    ``None`` for ``models:/`` (MLflow 3.x), empty or malformed URIs (#2296: the caller
-    then pins the trainer's own run, else falls back to the experiment's best run)."""
-    if not model_uri or not model_uri.startswith("runs:/"):
-        return None
-    run_id = model_uri[len("runs:/") :].split("/", 1)[0].strip()
-    return run_id or None
-
-
-def _metrics_to_registry_dict(validation_metrics: Any) -> Dict[str, Optional[float]]:
-    """Map deployer ``validation_metrics`` onto the registry's metric keys.
-
-    ``MLModelRegistryRepository.register_model`` reads ``auc`` / ``pr_auc`` /
-    ``brier_score`` / ``calibration_slope``. The ``MetricsSchema`` python field
-    is ``auc_roc`` (aliased from the modern producer key ``roc_auc``); accept
-    all spellings. ``None`` => all-``None`` (these registry columns are
-    nullable) — an honest absence, NOT a fabricated value.
-    """
-    if validation_metrics is None:
-        data: Dict[str, Any] = {}
-    elif hasattr(validation_metrics, "model_dump"):
-        data = validation_metrics.model_dump()
-    elif isinstance(validation_metrics, dict):
-        data = validation_metrics
-    else:
-        data = {}
-
-    def _first(*keys: str) -> Optional[float]:
-        for k in keys:
-            v = data.get(k)
-            if v is not None:
-                return float(v)
-        return None
-
-    return {
-        "auc": _first("auc", "auc_roc", "roc_auc"),
-        "pr_auc": _first("pr_auc"),
-        "brier_score": _first("brier_score"),
-        "calibration_slope": _first("calibration_slope"),
-    }
-
-
 async def _get_async_supabase_client_or_none() -> Optional[Any]:
     """Best-effort async Supabase client; ``None`` when unconfigured/unavailable.
 
@@ -863,6 +830,7 @@ async def _persist_model_registry_row(
     expected_experiment_id: Optional[str] = None,
     training_provenance: Optional[str] = None,
     pinned_mlflow_run_id: Optional[str] = None,
+    retrain_of_id: Optional[str] = None,
 ) -> Optional[str]:
     """Write (idempotently) a REAL ``ml_model_registry`` row; return its id (str).
 
@@ -876,7 +844,9 @@ async def _persist_model_registry_row(
     ``cohort`` (#2207, migration 150): data_source / target_outcome /
     feature_manifest_source — written on the new row, healed onto a reused row's
     NULL columns (never overwritten). #2242 retrain: ``version_label`` / ``expected_
-    experiment_id`` — see ``retrain_linkage`` (mismatch => FAIL CLOSED).
+    experiment_id`` — see ``retrain_linkage`` (mismatch => FAIL CLOSED). #2310/#2311: a
+    retrain's row is inserted at stage 'candidate' with ``retrain_of_id``; every row records
+    ``model_version`` as its exact MLflow version; reuse obeys ``reuse_refusal``.
     """
     row_version = version_label or str(model_version)
     if client is None:
@@ -944,43 +914,38 @@ async def _persist_model_registry_row(
         pinned_run = candidate
 
     # 3. Idempotency: ml_model_registry has UNIQUE(model_name, model_version); a
-    #    re-deploy of the SAME model reuses the row. Provenance guards: a same
-    #    name+version row from a DIFFERENT experiment is a collision => fail closed;
-    #    a row in THIS experiment from a DIFFERENT run than the one pinned here
-    #    (both run ids known, unequal) is a different artifact => fail closed. A
-    #    missing run id on either side is NOT a conflict (legitimate ``models:/``
-    #    re-deploys) — name+version+experiment suffice; step 2 proved the pinned run.
+    #    re-deploy of the SAME model reuses the row, subject to ``reuse_refusal``
+    #    (experiment, source run -- a missing run id on either side is NOT a conflict,
+    #    step 2 proved the pinned run -- lineage #2310, and a retrain's MLflow version #2311).
     registry_repo = MLModelRegistryRepository(supabase_client=client)
+
+    def _refusal(row: Any) -> Optional[str]:
+        if not (row and row.id):
+            return "no readable row"
+        return reuse_refusal(
+            row,
+            experiment_id=experiment.id,
+            run_id=run_id,
+            retrain_of_id=retrain_of_id,
+            mlflow_version=model_version,
+        )
+
     existing = await registry_repo.get_by_name_version(registered_model_name, row_version)
     if existing and existing.id:
-        if str(existing.experiment_id) != str(experiment.id):
+        if refusal := _refusal(existing):
             logger.error(
-                "ml_model_registry NOT written for '%s' v%s: an existing row belongs to "
-                "experiment %s, not the resolved experiment %s — name+version collision "
-                "(db_persisted=False)",
+                "ml_model_registry NOT reused for '%s' v%s: %s (db_persisted=False)",
                 registered_model_name,
                 row_version,
-                existing.experiment_id,
-                experiment.id,
-            )
-            return None
-        existing_run_id = (existing.mlflow_run_id or "").strip() or None
-        if run_id and existing_run_id and existing_run_id != run_id:
-            logger.error(
-                "ml_model_registry NOT reused for '%s' v%s: existing row was registered "
-                "from run %s but this deployment references run %s — same name+version+"
-                "experiment, different source run (provenance collision, db_persisted=False)",
-                registered_model_name,
-                row_version,
-                existing_run_id,
-                run_id,
+                refusal,
             )
             return None
         logger.info(
-            "ml_model_registry row already present for %s v%s (experiment %s) — reusing %s",
+            "ml_model_registry row for %s v%s (experiment %s, MLflow v%s) — reusing %s",
             registered_model_name,
             row_version,
             experiment.id,
+            existing.mlflow_model_version,
             existing.id,
         )
         await heal_reused_row(client, str(existing.id), cohort, training_provenance)
@@ -1018,6 +983,9 @@ async def _persist_model_registry_row(
             cohort_target_outcome=(cohort or {}).get("target_outcome"),
             cohort_feature_manifest_source=(cohort or {}).get("feature_manifest_source"),
             training_provenance=training_provenance,
+            stage=CANDIDATE_DB_STAGE if retrain_of_id else "development",
+            retrain_of_id=retrain_of_id,
+            mlflow_model_version=model_version,
         )
     except Exception as e:
         # Only a genuine UNIQUE(model_name, model_version) violation is a benign
@@ -1027,30 +995,22 @@ async def _persist_model_registry_row(
         is_unique = "23505" in err or "unique" in err or "duplicate key" in err
         if is_unique:
             raced = await registry_repo.get_by_name_version(registered_model_name, row_version)
-            raced_run_id = (
-                ((raced.mlflow_run_id or "").strip() or None) if (raced and raced.id) else None
-            )
-            same_experiment = bool(
-                raced and raced.id and str(raced.experiment_id) == str(experiment.id)
-            )
-            # Same run-id provenance guard as the pre-check: a definite run-id
-            # conflict means the raced row is a different source run, not our row.
-            run_conflict = bool(run_id and raced_run_id and raced_run_id != run_id)
-            if raced is not None and same_experiment and not run_conflict:
+            refusal = _refusal(raced)
+            if raced is not None and refusal is None:
                 logger.info(
-                    "ml_model_registry insert raced for %s v%s — reusing "
-                    "concurrently written row %s",
+                    "ml_model_registry insert raced for %s v%s — reusing concurrently "
+                    "written row %s",
                     registered_model_name,
                     row_version,
                     raced.id,
                 )
                 return str(raced.id)
             logger.error(
-                "ml_model_registry NOT written for '%s' v%s: unique violation but the "
-                "existing row is missing, foreign-experiment, or a different source run "
-                "(db_persisted=False)",
+                "ml_model_registry NOT written for '%s' v%s: unique violation and the "
+                "existing row may not be reused: %s (db_persisted=False)",
                 registered_model_name,
                 row_version,
+                refusal,
             )
             return None
         logger.error(
@@ -1118,10 +1078,15 @@ async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
         if retrain_error:
             return retrain_error
 
-        # Try real MLflow registration first
-        registered_model_name, model_version, current_stage = await _register_model_mlflow(
-            model_uri, registry_name
-        )
+        # Real MLflow registration (#2311: a retrain never registers a second version).
+        registered_model_name, model_version, current_stage, reuse_error, created = (
+            await register_or_reuse_version(state, retrain_of, registry_name,
+                                            _register_model_mlflow,
+                                            _get_async_supabase_client_or_none,
+                                            _model_versions_for_run)
+        )  # fmt: skip
+        if reuse_error:
+            return reuse_error
 
         # F4 (audit): capture whether the REAL MLflow registration succeeded BEFORE
         # the simulation fallback (an intentional dev pattern, commit 214890aa)
@@ -1164,7 +1129,10 @@ async def register_model(state: Dict[str, Any]) -> Dict[str, Any]:
                 logger.error("ml_model_registry persistence raised (fail-closed): %s", e)
                 model_registry_id = None
             if retrain_of and model_registry_id is None:
-                return retrain_not_persisted_error(retrain_of, registered_model_name)
+                return await retrain_not_persisted_error(
+                    retrain_of, registered_model_name, model_version if created else None,
+                    _tag_model_version_mlflow,
+                )  # fmt: skip
 
         return {
             "registered_model_name": registered_model_name,
@@ -1216,6 +1184,7 @@ async def validate_promotion(state: Dict[str, Any]) -> Dict[str, Any]:
             "shadow": "Shadow",
             "production": "Production",
             "archived": "Archived",
+            CANDIDATE_ENVIRONMENT: CANDIDATE_STAGE,  # #2310: never sent to MLflow
         }
 
         if not target_stage:
@@ -1225,7 +1194,7 @@ async def validate_promotion(state: Dict[str, Any]) -> Dict[str, Any]:
         # For initial deployments (None stage), allow any target environment
         # Production requires shadow mode validation (checked below)
         ALLOWED_PROMOTIONS = {
-            "None": ["Staging", "Shadow", "Production"],  # Initial deployments
+            "None": ["Staging", "Shadow", "Production", CANDIDATE_STAGE],  # Initial deploys
             "Staging": ["Shadow", "Archived"],
             "Shadow": ["Production", "Archived"],
             "Production": ["Archived"],
@@ -1434,6 +1403,8 @@ async def promote_stage(state: Dict[str, Any]) -> Dict[str, Any]:
                 "promotion_successful": False,
             }
 
+        if promotion_target_stage == CANDIDATE_STAGE:  # #2310: tag, never transition
+            return await promote_candidate(state, _tag_model_version_mlflow, _model_version_stage)
         # #2259: the provenance gate runs BEFORE MLflow moves, not only at the DB write.
         if refused := await production_gate(state, promotion_target_stage):
             return refused

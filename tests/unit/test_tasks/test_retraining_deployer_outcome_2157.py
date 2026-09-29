@@ -22,6 +22,7 @@ import pytest
 
 from tests.unit.test_tasks.test_retraining_execute_requires_candidate_2242 import (
     CANDIDATE_ID,
+    DEPLOY_RECORD_ID,
     NEW_VERSION,
     _db,
     _run,
@@ -70,6 +71,9 @@ def _promote_only_result(reason: Any) -> SimpleNamespace:
             "model_registry_id": CANDIDATE_ID,
             "deployment_successful": True,
             "deployment_skipped_reason": reason,
+            "mlflow_model_version": 4,
+            "deployment_record_id": DEPLOY_RECORD_ID,
+            "db_persisted": True,
         },
         errors=[],
     )

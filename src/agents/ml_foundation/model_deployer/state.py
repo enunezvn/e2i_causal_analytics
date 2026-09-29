@@ -56,7 +56,9 @@ class ModelDeployerState(BaseAgentSchema):
 
     # === DEPLOYMENT CONFIG ===
 
-    target_environment: Optional[Literal["staging", "shadow", "production"]] = None
+    # #2310: "candidate" = a retrain's register-only registration (no endpoint; the
+    # registry row is inserted at stage 'candidate', the MLflow version keeps stage None).
+    target_environment: Optional[Literal["staging", "shadow", "production", "candidate"]] = None
     deployment_name: Optional[str] = None
 
     # Serving configuration.

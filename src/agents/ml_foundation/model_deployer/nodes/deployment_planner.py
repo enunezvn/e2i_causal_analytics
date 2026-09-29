@@ -399,9 +399,24 @@ async def plan_deployment(state: Dict[str, Any]) -> Dict[str, Any]:
         deployment_name = state.get("deployment_name", "e2i-model")
 
         # Validate target environment
-        if target_environment not in ["staging", "shadow", "production"]:
+        if target_environment not in ["staging", "shadow", "production", "candidate"]:
             return {
                 "error": f"Invalid target environment: {target_environment}",
+                "error_type": "invalid_environment",
+                "deployment_plan_created": False,
+            }
+        # #2310: "candidate" is a retrain's register-only registration. It plans nothing to
+        # serve, so it is refused for a non-retrain or for an action that deploys an endpoint.
+        action = state.get("deployment_action", "deploy")
+        if target_environment == "candidate" and not (
+            state.get("retrain_of") and action in ("promote", "register")
+        ):
+            return {
+                "error": (
+                    "target environment 'candidate' is for a retrain's register-only "
+                    f"registration (retrain_of={bool(state.get('retrain_of'))}, "
+                    f"deployment_action={action!r})"
+                ),
                 "error_type": "invalid_environment",
                 "deployment_plan_created": False,
             }

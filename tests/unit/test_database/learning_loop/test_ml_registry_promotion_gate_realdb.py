@@ -376,9 +376,17 @@ async def test_deploy_agent_promotion_reaches_the_registry(
     assert "promotion_refused_reason" not in output
     assert output["deployment_successful"] is True
     assert _row(registry_db, model_id)["stage"] == "production"
+    # #2308: the deploy record is kept, but a promote-only action deploys no endpoint, so it
+    # is 'registered' (the real enum value, migration 159), never 'active'.
     assert registry_db.rows(
         f"select status from ml_deployments where model_registry_id = '{model_id}'"
-    ) == ["active"]
+    ) == ["registered"]
+    assert (
+        output["deployment_record_id"]
+        == registry_db.rows(
+            f"select id from ml_deployments where model_registry_id = '{model_id}'"
+        )[0]
+    )
 
 
 async def test_deploy_agent_surfaces_a_refused_promotion(

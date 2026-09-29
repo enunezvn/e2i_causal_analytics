@@ -32,7 +32,15 @@ class TestDeploymentStatus:
 
     def test_all_statuses_defined(self):
         """Test all expected statuses are defined."""
-        expected_statuses = {"pending", "deploying", "active", "draining", "rolled_back"}
+        # "registered": #2308 / migration 159 (a register-only deploy record, never active).
+        expected_statuses = {
+            "pending",
+            "deploying",
+            "active",
+            "draining",
+            "rolled_back",
+            "registered",
+        }
         actual_statuses = {s.value for s in DeploymentStatus}
         assert actual_statuses == expected_statuses
 
@@ -49,7 +57,8 @@ class TestDeploymentEnvironment:
 
     def test_all_environments_defined(self):
         """Test all expected environments are defined."""
-        expected_environments = {"development", "staging", "shadow", "production"}
+        # "candidate": #2310 (a retrain's register-only record).
+        expected_environments = {"development", "staging", "shadow", "production", "candidate"}
         actual_environments = {e.value for e in DeploymentEnvironment}
         assert actual_environments == expected_environments
 
