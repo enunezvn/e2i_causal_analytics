@@ -1403,6 +1403,40 @@ class TestTriggerRetraining:
         assert "no registry identity" in detail
         assert db.rows("ml_retraining_history") == []
 
+    def test_a_uuid_naming_no_row_is_404_and_a_registry_outage_is_500(self, client):
+        """codex r1 (#2319): a uuid naming no registry row is 'no registry identity' (404),
+        and a registry that cannot be read is a server error (500), never a 4xx refusal."""
+        from uuid import uuid4
+
+        from tests.unit._fakes.async_supabase import FakeAsyncSupabase
+
+        class _Down(FakeAsyncSupabase):
+            def table(self, name):
+                if name == "ml_model_registry":
+                    raise ConnectionError("registry: connection refused")
+                return super().table(name)
+
+        ghost = str(uuid4())
+        for db, expected in (
+            (FakeAsyncSupabase({"ml_model_registry": [], "ml_retraining_history": []}), 404),
+            (_Down({"ml_retraining_history": []}), 500),
+        ):
+            with (
+                patch(
+                    "src.repositories.drift_monitoring.get_drift_monitoring_client",
+                    AsyncMock(return_value=db),
+                ),
+                patch("src.tasks.drift_monitoring_tasks.execute_model_retraining") as mock_task,
+            ):
+                response = client.post(
+                    f"/monitoring/retraining/trigger/{ghost}", json={"reason": "manual"}
+                )
+                mock_task.delay.assert_not_called()
+            assert response.status_code == expected, response.text
+            if expected == 404:
+                assert ghost in response.json()["detail"]
+            assert db.rows("ml_retraining_history") == []
+
     def test_registered_row_without_identity_is_refused_with_409(self, client):
         """A registry row whose identity (name / version / experiment) cannot be read was
         already refused (#2242 codex r1) but surfaced as a 500; it is a 409 now."""

@@ -105,6 +105,11 @@ ACCESSORS: Dict[str, Tuple[str, str]] = {
         "reads by the id _resolve_model_id returned (canonical for a name, exact for a uuid)",
     ),
     "src/services/cohort_contract.py::load_registry_model_identity": (EXACT, "by id"),
+    "src/services/cohort_contract.py::resolve_registry_model_id_strict": (
+        EXACT,
+        "retrain trigger (#2319): a uuid must name an existing row (by id); a name goes to "
+        "resolve_canonical_model_id(strict=True)",
+    ),
     "src/services/cohort_contract.py::heal_registry_cohort_contract": (EXACT, "by id"),
     "src/agents/ml_foundation/model_deployer/nodes/training_provenance.py::"
     "heal_training_provenance": (EXACT, "by id"),
@@ -141,7 +146,9 @@ RESOLVER_CALLERS: Dict[str, Set[str]] = {
     # the repositories themselves; _resolve_model_id delegates names to the canonical resolver
     "src/repositories/drift_monitoring.py": {"_resolve_model_id", "resolve_canonical_model_id"},
     "src/mlops/gold_standard_eval/recorder.py": {"_resolve_model_id"},  # name -> canonical
-    "src/services/cohort_contract.py": {"_resolve_model_id"},  # manual retrain by name/uuid
+    # manual retrain by name/uuid: the contract loader (_resolve_model_id) and the trigger's
+    # strict resolver (#2319: canonical by name, lookup failures raise)
+    "src/services/cohort_contract.py": {"_resolve_model_id", "resolve_canonical_model_id"},
     "src/mlops/gold_standard_eval/cleanup_orphan_models.py": {"_resolve_model_id"},
     # the row register_model_row is about to replace: exact (name, version)
     "src/mlops/gold_standard_eval/run_initiation_eval.py": {"resolve_model_id_by_name_version"},

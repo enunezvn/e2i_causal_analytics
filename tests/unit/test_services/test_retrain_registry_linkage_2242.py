@@ -240,6 +240,51 @@ async def test_unregistered_handle_is_refused_even_with_a_hand_passed_contract()
     assert db.rows("ml_retraining_history") == []
 
 
+@pytest.mark.asyncio
+async def test_a_uuid_naming_no_registry_row_is_refused_as_unregistered():
+    """codex r1 (#2319) MED: a uuid handle used to be taken verbatim as the row id, so a
+    uuid naming no row surfaced as an 'unreadable identity' (409) instead of 'no registry
+    identity' (404)."""
+    from src.services.retraining_trigger import RetrainRefusedError
+
+    db, _ = _goldstd_db()
+    ghost = str(uuid4())
+    with pytest.raises(RetrainRefusedError) as exc:
+        await _trigger(db, ghost)
+    assert exc.value.reason == "no_registry_identity"
+    assert db.rows("ml_retraining_history") == []
+
+
+class _UnreachableRegistry(FakeAsyncSupabase):
+    """The registry (or its experiment) cannot be read: a transport / auth / schema error."""
+
+    def __init__(self, store, failing: str):
+        super().__init__(store)
+        self._failing = failing
+
+    def table(self, name: str):
+        if name == self._failing:
+            raise ConnectionError(f"{name}: connection refused")
+        return super().table(name)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failing", ["ml_model_registry", "ml_experiments"])
+@pytest.mark.parametrize("by_name", [False, True])
+async def test_a_registry_read_failure_is_an_error_not_a_refusal(failing, by_name):
+    """codex r1 (#2319) HIGH: the lenient resolvers turned a lookup failure into 'not
+    found', so an outage read as a client error (404/409) and the sweep as a blocked retrain.
+    The trigger's lookup is strict: the failure propagates, nothing is recorded."""
+    from src.services.retraining_trigger import RetrainRefusedError
+
+    base, ids = _goldstd_db()
+    db = _UnreachableRegistry(base.store, failing)
+    with pytest.raises(ConnectionError) as exc:
+        await _trigger(db, ids["Kisqali"]["name"] if by_name else ids["Kisqali"]["model"])
+    assert not isinstance(exc.value, RetrainRefusedError)
+    assert db.rows("ml_retraining_history") == []
+
+
 def test_cohort_input_keeps_the_physical_label_and_carries_the_logical_identity():
     retrain_of = {
         "model_id": "m",

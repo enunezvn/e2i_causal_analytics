@@ -8,9 +8,12 @@ named ``candidate-<ts>``. The insert sent columns the live table does not have
 2026-09-29). Since #2310 ``stage='candidate'`` means "retrain awaiting review", so a future
 schema change must not let this writer start producing rows with a different meaning.
 
-The selection itself is persisted by the MLflow ``model_selection_<algorithm>`` run
+The structured selection is persisted by the MLflow ``model_selection_<algorithm>`` run
 (``mlflow_registrar``: params ``algorithm_name`` / ``algorithm_family`` / defaults, tags
-``agent=model_selector``) and the episodic ``model_selection_completed`` row.
+``agent=model_selector``; 812 runs in prod). The episodic ``model_selection_completed`` row
+carries the rationale text only (its structured algorithm fields are NULL, a pre-existing
+hook defect reported on #2319). This test does not cover either; it pins the absence of the
+registry write.
 
 Drives the real ``run()`` with a stub graph over the in-memory async supabase fake, which
 accepts any column: the old writer inserts a row here, so this test is red on it.

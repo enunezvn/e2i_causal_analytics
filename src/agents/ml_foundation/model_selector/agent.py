@@ -9,8 +9,10 @@ Outputs:
 Integration:
 - Upstream: data_preparer (requires QC gate passed)
 - Downstream: model_trainer (consumes ModelCandidate)
-- Persistence: the MLflow ``model_selection_<algorithm>`` run (mlflow_registrar) and the
-  episodic ``model_selection_completed`` row. Nothing is written to ml_model_registry
+- Persistence: the MLflow ``model_selection_<algorithm>`` run (mlflow_registrar) holds the
+  structured selection; the episodic ``model_selection_completed`` row holds the rationale
+  text (its structured algorithm fields are NULL, see CONTRACT_VALIDATION.md). Nothing is
+  written to ml_model_registry
   (#2319: the former ``stage='candidate'`` write never landed a row; ``candidate`` means
   "retrain awaiting review" since #2310).
 - Memory: Procedural memory (successful selection patterns)

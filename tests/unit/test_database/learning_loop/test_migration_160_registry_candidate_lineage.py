@@ -306,6 +306,7 @@ def test_rollbacks_restore_the_pre_160_rows_and_160_reapplies(conn):
 # those, 'active' is the plausible-wrong status #2308 removed. Only the two deployments 160
 # itself moved (DEP_A / DEP_B, the pinned audited rows) go back.
 LATE_DEP = "44444444-5555-6666-7777-888888888888"  # a post-160 retrain's register-only record
+REDEPLOY = "55555555-6666-7777-8888-999999999999"  # a later record of a row 160 pinned
 
 
 @pytest.mark.unit
@@ -315,7 +316,8 @@ def test_rollback_160_deployment_revert_names_the_pinned_rows():
     code = _code(R160)
     update = re.search(r"UPDATE ml_deployments d\s+SET status = 'active'(.*?);", code, re.S)
     assert update is not None
-    for pinned in (CAND_A, CAND_B, FAILED_ROW):
+    # pinned by DEPLOYMENT id (codex r1): a later redeploy of a pinned row is a new row
+    for pinned in (DEP_A, CAND_A, DEP_B, CAND_B):
         assert pinned in update.group(1)
     assert "endpoint_url IS NULL" in update.group(1)
 
@@ -339,7 +341,10 @@ def test_rollback_160_leaves_register_only_deployments_it_did_not_create(conn):
         f"UPDATE ml_model_registry SET retrain_of_id = '{PARENT}', stage = 'candidate' "
         f"WHERE id = '{DECOY}';"
         f"INSERT INTO ml_deployments (id, model_registry_id, deployment_name, environment, "
-        f"status) VALUES ('{LATE_DEP}', '{DECOY}', 'd_late', 'staging', 'registered')",
+        f"status) VALUES ('{LATE_DEP}', '{DECOY}', 'd_late', 'staging', 'registered');"
+        # codex r1: a later register-only REDEPLOY of a row 160 pinned inserts a new record.
+        f"INSERT INTO ml_deployments (id, model_registry_id, deployment_name, environment, "
+        f"status) VALUES ('{REDEPLOY}', '{CAND_A}', 'd_a2', 'staging', 'registered')",
         user="postgres",
     )
 
@@ -349,6 +354,7 @@ def test_rollback_160_leaves_register_only_deployments_it_did_not_create(conn):
         DEP_B: "active",
         OTHER_DEP: "registered",  # not 160's: untouched (nothing serves it)
         LATE_DEP: "registered",  # not 160's: untouched
+        REDEPLOY: "registered",  # a pinned row's later record, not 160's: untouched
     }
     stages = dict(r.split("|") for r in conn.rows("select id, stage from ml_model_registry"))
     assert stages[DECOY] == "staging"  # the lineage-row restore is unchanged

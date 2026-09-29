@@ -192,7 +192,33 @@ async def load_registry_cohort_contract(
     return model_id, contract_from_registry_row(rows[0] if rows else None)
 
 
-async def load_registry_model_identity(client: Any, model_id: Optional[str]) -> Dict[str, Any]:
+async def resolve_registry_model_id_strict(
+    client: Any, model_handle: Optional[str]
+) -> Optional[str]:
+    """The registry row id a retrain handle names, or ``None`` when it names no row (#2319).
+
+    Unlike ``_resolve_model_id`` (which takes any uuid verbatim and turns a lookup failure into
+    ``None`` so a recording is never blocked), this is for a caller that REFUSES on "not found":
+    a uuid must name an existing row (exact, any stage), a name resolves to the canonical row,
+    and a lookup failure raises instead of reading as "not registered".
+    """
+    if client is None or not model_handle:
+        return None
+    from src.repositories.drift_monitoring import _is_uuid
+    from src.repositories.model_registry_roles import resolve_canonical_model_id
+
+    if _is_uuid(model_handle):
+        res = await (
+            client.table("ml_model_registry").select("id").eq("id", model_handle).limit(1).execute()
+        )
+        rows = getattr(res, "data", None) or []
+        return str(rows[0]["id"]) if rows else None
+    return await resolve_canonical_model_id(client, model_handle, strict=True)
+
+
+async def load_registry_model_identity(
+    client: Any, model_id: Optional[str], *, strict: bool = False
+) -> Dict[str, Any]:
     """The LOGICAL identity of the registry row a retrain refreshes (#2242), or ``{}``.
 
     ``{model_id, model_name, model_version, experiment_id, experiment_name,
@@ -229,6 +255,10 @@ async def load_registry_model_identity(client: Any, model_id: Optional[str]) -> 
         )
         exp_rows = getattr(exp, "data", None) or []
     except Exception as e:  # noqa: BLE001 — identity unknown; the retrain keeps today's shape
+        if strict:
+            # #2319 codex r1: a trigger that refuses on a missing identity must not read an
+            # unreachable registry as one.
+            raise
         logger.warning("Registry identity for %s could not be read (%s)", model_id, e)
         return {}
     if not exp_rows or not exp_rows[0].get("experiment_name"):

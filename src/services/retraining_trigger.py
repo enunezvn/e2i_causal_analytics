@@ -358,11 +358,12 @@ class RetrainingTriggerService:
             load_registry_cohort_contract,
             load_registry_model_identity,
             merge_contracts,
+            resolve_registry_model_id_strict,
         )
 
-        registry_model_id, registry_contract = await load_registry_cohort_contract(
-            client, model_version
-        )
+        # Strict (#2319 codex r1): a uuid must name an existing row, and a registry that
+        # cannot be read raises (a server error), never reads as "not registered".
+        registry_model_id = await resolve_registry_model_id_strict(client, model_version)
         # #2319 item 2 (owner decision 2026-09-29): refuse a handle with no registry row
         # before any read, write or enqueue. #2242 had kept a legacy
         # "<base>_retrained_<ts>" path for it; that retrain has no cohort contract of
@@ -373,14 +374,16 @@ class RetrainingTriggerService:
                 model_version,
                 "no_registry_identity",
                 f"no registry identity: model handle {model_version!r} does not resolve to "
-                "an ml_model_registry row (unregistered, or the registry lookup failed) — "
-                "refusing a retrain whose candidate could not be attached to a registered "
-                "model; trigger by the registry row id or its model_name",
+                "an ml_model_registry row — refusing a retrain whose candidate could not be "
+                "attached to a registered model; trigger by the registry row id or its "
+                "model_name",
             )
+        # The row's persisted cohort contract, read by its exact id.
+        _, registry_contract = await load_registry_cohort_contract(client, registry_model_id)
         # #2242: the candidate is a new VERSION of the registered model being retrained.
         # A registered row whose identity cannot be read is refused rather than retrained
-        # as an unattached orphan (codex r1).
-        identity = await load_registry_model_identity(client, registry_model_id)
+        # as an unattached orphan (codex r1); a read FAILURE raises (strict).
+        identity = await load_registry_model_identity(client, registry_model_id, strict=True)
         if not identity:
             raise RetrainRefusedError(
                 model_version,

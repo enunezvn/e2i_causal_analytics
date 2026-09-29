@@ -9,8 +9,9 @@
 --     (a failed / unfinished job: the old writer never promoted it);
 --   * a lineage row at 'archived' whose linked job FAILED -> 'development' (160 archived it);
 --     any other archived row is an operator's decision and is left alone;
---   * the 'registered' deployments of the three rows 160 pinned (c524db0f / cff4f2b5 /
---     faf4ed1d, no endpoint) -> 'active', i.e. exactly what 160 moved, in reverse (#2319);
+--   * the two deployments 160 moved (53d7e7d7 of cff4f2b5, b3ffe870 of faf4ed1d; pinned by
+--     deployment id, 'registered', no endpoint) -> 'active', i.e. exactly what 160 changed,
+--     in reverse (#2319);
 --   * ml_retraining_history.deployment_id pointing at a lineage row's deployment -> NULL
 --     (never written before 160).
 -- Any OTHER 'registered' deployment is LEFT as it is (#2319 item 5, decided 2026-09-29).
@@ -65,14 +66,19 @@ BEGIN
     GET DIAGNOSTICS v_n = ROW_COUNT;
     RAISE NOTICE 'rollback 160: history.deployment_id cleared on % rows', v_n;
 
-    -- #2319 item 5: only the deployments 160 itself moved (its pinned audited rows, the
-    -- same predicate in reverse). A 'registered' record written by the new code after
-    -- deploy (a promote/register-only deploy of any model, or a later retrain) is left.
+    -- #2319 item 5: only the deployments 160 itself moved: the two (deployment, registry
+    -- row) pairs measured read-only on prod 2026-09-29 (53d7e7d7 -> cff4f2b5, b3ffe870 ->
+    -- faf4ed1d; c524db0f has none), plus 160's own predicate in reverse. Pinned by
+    -- DEPLOYMENT id (codex r1): a later register-only redeploy of a pinned row inserts a new
+    -- deployment row, which is not 160's. A 'registered' record written by the new code
+    -- after deploy (any model's register/promote-only deploy, or a later retrain) is left.
     UPDATE ml_deployments d
        SET status = 'active'
-     WHERE d.model_registry_id IN ('c524db0f-1df1-4f21-806f-3b857c5245b9'::uuid,
-                                   'cff4f2b5-a87e-4947-aa2a-243a7fb0ee45'::uuid,
-                                   'faf4ed1d-15cf-4ae2-88c7-e927e64ec53f'::uuid)
+     WHERE (d.id, d.model_registry_id) IN (
+            ('53d7e7d7-19af-44b5-9f1c-2d149142448a'::uuid,
+             'cff4f2b5-a87e-4947-aa2a-243a7fb0ee45'::uuid),
+            ('b3ffe870-c58d-4dc9-8f02-f8eb11d92760'::uuid,
+             'faf4ed1d-15cf-4ae2-88c7-e927e64ec53f'::uuid))
        AND d.status::text = 'registered'
        AND d.endpoint_url IS NULL
        AND d.endpoint_name IS NULL;
@@ -101,9 +107,8 @@ BEGIN
     IF EXISTS (SELECT 1 FROM ml_model_registry WHERE stage::text = 'candidate')
        OR EXISTS (SELECT 1 FROM ml_deployments
                    WHERE status::text = 'registered'
-                     AND model_registry_id IN ('c524db0f-1df1-4f21-806f-3b857c5245b9'::uuid,
-                                               'cff4f2b5-a87e-4947-aa2a-243a7fb0ee45'::uuid,
-                                               'faf4ed1d-15cf-4ae2-88c7-e927e64ec53f'::uuid))
+                     AND id IN ('53d7e7d7-19af-44b5-9f1c-2d149142448a'::uuid,
+                                'b3ffe870-c58d-4dc9-8f02-f8eb11d92760'::uuid))
     THEN
         RAISE EXCEPTION 'rollback 160 refused: rows remain at candidate, or a deployment 160 moved is still registered';
     END IF;

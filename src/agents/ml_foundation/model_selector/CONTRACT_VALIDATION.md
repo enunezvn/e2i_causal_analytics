@@ -265,9 +265,12 @@ The former `_persist_model_candidate()` -> `MLModelRegistryRepository.register_m
 write (added in c4675f935) never landed a row: it sent columns the live table does not have
 (`metrics`, `description`, `created_at`, `created_by`, `tags`) and swallowed the error; prod
 held 0 `candidate-%` rows. Since #2310 `stage='candidate'` means "retrain awaiting review", so
-the call and the method were removed. The selection is persisted by the MLflow
-`model_selection_<algorithm>` run (`nodes/mlflow_registrar.py`) and the episodic
-`model_selection_completed` row.
+the call and the method were removed. The structured selection (algorithm name / family /
+framework / default hyperparameters) is persisted by the MLflow `model_selection_<algorithm>`
+run (`nodes/mlflow_registrar.py`). The episodic `model_selection_completed` row carries the
+selection rationale text and the alternatives only: its `algorithm_name` / `selection_score`
+fields are NULL on every prod row (0/188, 2026-09-29) because `store_model_selection` reads
+top-level keys that live under `model_candidate` (pre-existing defect, reported on #2319).
 
 ---
 
