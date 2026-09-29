@@ -299,3 +299,61 @@ def test_rollbacks_restore_the_pre_160_rows_and_160_reapplies(conn):
 
     apply_migration(conn, M160, record=M160.name)
     assert _registry(conn)[CAND_A] == ("candidate", PARENT, "4")
+
+
+# #2319 item 5: rollback_160 reverted EVERY 'registered' deployment to 'active', including
+# register-only records the new writer (model_deployer, #2308) produces after deploy. For
+# those, 'active' is the plausible-wrong status #2308 removed. Only the two deployments 160
+# itself moved (DEP_A / DEP_B, the pinned audited rows) go back.
+LATE_DEP = "44444444-5555-6666-7777-888888888888"  # a post-160 retrain's register-only record
+
+
+@pytest.mark.unit
+def test_rollback_160_deployment_revert_names_the_pinned_rows():
+    """CI ratchet for the opt-in rehearsal below: the deployment revert is scoped to the rows
+    160 changed, never an unscoped ``status = 'registered'`` sweep."""
+    code = _code(R160)
+    update = re.search(r"UPDATE ml_deployments d\s+SET status = 'active'(.*?);", code, re.S)
+    assert update is not None
+    for pinned in (CAND_A, CAND_B, FAILED_ROW):
+        assert pinned in update.group(1)
+    assert "endpoint_url IS NULL" in update.group(1)
+
+
+def test_rollback_160_leaves_register_only_deployments_it_did_not_create(conn):
+    def rollback(path: Path):
+        return conn.pg.run_script(
+            conn.db, path.read_bytes(), single_transaction=True, user="postgres"
+        )
+
+    _apply_159_160(conn)
+    # After deploy, the new writer records a promote-only (no endpoint) deploy of a
+    # non-retrain model as 'registered' ...
+    conn.execute(
+        f"UPDATE ml_deployments SET status = 'registered' WHERE id = '{OTHER_DEP}'",
+        user="postgres",
+    )
+    # ... and a post-160 retrain registers a linked candidate with a 'registered' record
+    # (prod: 9376e88d / 3e14671d, 2026-09-29).
+    conn.execute(
+        f"UPDATE ml_model_registry SET retrain_of_id = '{PARENT}', stage = 'candidate' "
+        f"WHERE id = '{DECOY}';"
+        f"INSERT INTO ml_deployments (id, model_registry_id, deployment_name, environment, "
+        f"status) VALUES ('{LATE_DEP}', '{DECOY}', 'd_late', 'staging', 'registered')",
+        user="postgres",
+    )
+
+    assert rollback(R160).returncode == 0
+    assert _status(conn) == {
+        DEP_A: "active",  # 160 moved these two: restored
+        DEP_B: "active",
+        OTHER_DEP: "registered",  # not 160's: untouched (nothing serves it)
+        LATE_DEP: "registered",  # not 160's: untouched
+    }
+    stages = dict(r.split("|") for r in conn.rows("select id, stage from ml_model_registry"))
+    assert stages[DECOY] == "staging"  # the lineage-row restore is unchanged
+    assert rollback(R160).returncode == 0  # a second run changes nothing
+    assert _status(conn)[OTHER_DEP] == "registered"
+    # rollback 159 still refuses while any row uses a 159 value (its documented contract).
+    refused = rollback(R159)
+    assert refused.returncode != 0 and b"rollback 159 refused" in refused.stderr
