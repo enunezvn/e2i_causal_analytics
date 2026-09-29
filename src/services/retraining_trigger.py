@@ -57,6 +57,12 @@ class RetrainRefusedError(RuntimeError):
         self.handle = handle
         self.reason = reason
 
+    @property
+    def http_status(self) -> int:
+        """404 when the handle names no registered model; 409 when the row's state (an
+        unreadable identity) blocks the retrain."""
+        return 404 if self.reason == "no_registry_identity" else 409
+
 
 class RetrainingStatus(str, Enum):
     """Status of retraining job."""
