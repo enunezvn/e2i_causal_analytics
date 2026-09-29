@@ -75,14 +75,18 @@ async def run_schema_validation(state: DataPreparerState) -> Dict[str, Any]:
         # it. Without this branch the dict fell through to ``scope_spec.data_source``,
         # which is never set in production, and every contract run was "skipped".
         contract_columns: Optional[List[str]] = None
-        loaded_source = data_source or scope_spec.get("data_source")
+        # The exact expression ``load_data`` routes on, default included: a frame
+        # loaded from the ``business_metrics`` default is held to that schema.
+        loaded_source = data_source or scope_spec.get("data_source", "business_metrics")
 
         if isinstance(loaded_source, dict) and loaded_source.get("type") == "table":
             data_source = str(loaded_source.get("table") or "")
             raw_columns = loaded_source.get("columns")
             if raw_columns:
                 contract_columns = [str(c) for c in raw_columns]
-        elif isinstance(data_source, dict) or not data_source:
+        elif isinstance(loaded_source, str) and loaded_source:
+            data_source = loaded_source
+        else:
             data_source = scope_spec.get("data_source") or scope_spec.get("table_name") or ""
             if isinstance(data_source, dict):
                 # Final fallback: file ingestion produces patient_journeys

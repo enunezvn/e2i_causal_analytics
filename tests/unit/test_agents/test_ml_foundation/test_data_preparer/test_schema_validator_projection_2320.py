@@ -369,3 +369,40 @@ def test_every_registered_schema_honours_a_projection(table: str, id_columns: Li
     assert [(e["check"], e["failure_case"]) for e in missing["errors"]] == [
         ("column_in_dataframe", "feature_b")
     ]
+
+
+# =============================================================================
+# Codex r1 MED: the node resolves the source exactly as ``load_data`` does
+# =============================================================================
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("frame", "expected"),
+    [
+        (pd.DataFrame({"value": [1.0, 2.0]}), "failed"),
+        (
+            pd.DataFrame({"metric_id": ["m1", "m2"], "metric_date": ["2026-01-01", "2026-01-02"]}),
+            "passed",
+        ),
+    ],
+    ids=["missing-ids", "valid"],
+)
+async def test_no_source_anywhere_validates_the_business_metrics_default(
+    frame: pd.DataFrame, expected: str
+) -> None:
+    """``load_data`` loads ``business_metrics`` when neither ``state.data_source`` nor
+    ``scope_spec.data_source`` is given; the frame it loaded is held to that schema."""
+    state = {
+        "experiment_id": "exp-2320-default",
+        "scope_spec": {"experiment_id": "exp-2320-default"},
+        "train_df": frame,
+        "blocking_issues": [],
+        **_CLEAN_UPSTREAM_QC,
+    }
+    final_state = await _schema_gate_graph().ainvoke(state)
+
+    assert final_state["schema_validation_status"] == expected, final_state.get(
+        "schema_validation_errors"
+    )
+    assert final_state["gate_passed"] is (expected == "passed")
