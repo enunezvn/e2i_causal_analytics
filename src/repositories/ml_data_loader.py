@@ -36,6 +36,12 @@ ML_TABLES = [
     "causal_paths",
     "patient_journeys",
     "agent_activities",
+    # #2286/#2287: the HCP-adoption goldstd frame (hcp_brand_adoption LEFT JOIN
+    # hcp_profiles), one VIEW so a single-relation cohort contract can name it
+    # (migration 162). The raw tables stay out: hcp_brand_adoption alone has no
+    # covariates and hcp_profiles has no label. Provenance-tagged (the view exposes the
+    # adoption row's is_synthetic) and carries data_split, so the split contract holds.
+    "hcp_adoption_goldstd_v",
 ]
 
 # Tables that carry the is_synthetic provenance column, re-derived from

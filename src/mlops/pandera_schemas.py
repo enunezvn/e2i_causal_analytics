@@ -243,6 +243,43 @@ class CausalPathsSchema(DataFrameModel):
 
 
 # =============================================================================
+# Schema 5b: HCP-adoption goldstd view (#2287, migration 162)
+# =============================================================================
+
+
+class HcpAdoptionGoldstdSchema(DataFrameModel):
+    """Schema for hcp_adoption_goldstd_v (hcp_brand_adoption LEFT JOIN hcp_profiles).
+
+    The retrain cohort of the hcp_adoption_<brand>_goldstd_lr_v1 champions (migration
+    163 contract). Registered so a contract load is checked, not "skipped" (the fail-open
+    shape #2320 closed). Checks are the database's own guarantees — the ``adopted`` CHECK
+    constraint and the brand / region / split enums, numeric(3,2) for the score — plus
+    non-negative counts. Covariates are nullable: the embed is a LEFT join and the
+    hcp_profiles columns are nullable.
+    """
+
+    hcp_id: Optional[Series[str]] = Field(nullable=False)
+    brand: Optional[Series[str]] = Field(
+        nullable=False, isin=["Remibrutinib", "Fabhalta", "Kisqali", "competitor", "other"]
+    )
+    adopted: Series[int] = Field(nullable=False, isin=[0, 1])
+    data_split: Optional[Series[str]] = Field(
+        nullable=False, isin=["train", "validation", "test", "holdout", "unassigned"]
+    )
+    is_synthetic: Optional[Series[bool]] = Field(nullable=False)
+    peer_influence_score: Optional[Series[float]] = Field(nullable=True, ge=0.0, le=9.99)
+    influence_network_size: Optional[Series[float]] = Field(nullable=True, ge=0)
+    years_experience: Optional[Series[float]] = Field(nullable=True, ge=0)
+    specialty: Optional[Series[str]] = Field(nullable=True)
+    geographic_region: Optional[Series[str]] = Field(nullable=True, isin=E2I_REGIONS + [None])
+
+    class Config:
+        name = "hcp_adoption_goldstd_v"
+        strict = False
+        coerce = True
+
+
+# =============================================================================
 # Schema 6: Agent Activities
 # =============================================================================
 
@@ -285,6 +322,7 @@ PANDERA_SCHEMA_REGISTRY: Dict[str, Type[DataFrameModel]] = {
     "patient_journeys": PatientJourneysSchema,
     "causal_paths": CausalPathsSchema,
     "agent_activities": AgentActivitiesSchema,
+    "hcp_adoption_goldstd_v": HcpAdoptionGoldstdSchema,  # #2287, migration 162 view
 }
 
 

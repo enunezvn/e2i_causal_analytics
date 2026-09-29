@@ -27,6 +27,7 @@ PROVENANCE_DROP_COLS: tuple[str, ...] = (PROVENANCE_COLUMN,)
 #   database/migrations/069_synthetic_provenance_shard09_tables.sql (Shard 09, 11)
 #   database/ml/036_move_discovery_tables_to_public.sql         (#1974, 1)
 #   database/migrations/148 / 149 / 156                          (2026-09-22/23, 1 each)
+#   database/migrations/162 (#2287)            (1 VIEW exposing the adoption row's tag)
 PROVENANCE_TAGGED_TABLES: frozenset[str] = frozenset(
     {
         # 063
@@ -66,6 +67,8 @@ PROVENANCE_TAGGED_TABLES: frozenset[str] = frozenset(
         "csu_escalation_causal",
         # migrations/156 (option d1, 2026-09-23, Part of #2207)
         "ab_experiment_unit_outcomes",
+        # migrations/162 (#2287): a VIEW, exposing hcp_brand_adoption.is_synthetic
+        "hcp_adoption_goldstd_v",
     }
 )
 
