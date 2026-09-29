@@ -520,6 +520,35 @@ class TestModelSelectorAgentOutputFormats:
         assert "Supporting Factors:" in rationale_text
 
 
+@pytest.mark.asyncio
+async def test_run_writes_land_on_the_recorded_boundaries(
+    valid_scope_spec, valid_qc_report, store_boundaries
+):
+    """#2331: run() writes the semantic graph and an MLflow run -- on the droplet
+    these tests used to land both in PROD. They now land on the directory's recorders
+    (conftest.py); this pins what run() writes there."""
+    result = await ModelSelectorAgent().run(
+        {"scope_spec": valid_scope_spec, "qc_report": valid_qc_report}
+    )
+    candidate = result["model_candidate"]
+    name = candidate["algorithm_name"]
+
+    graph = store_boundaries.graph
+    assert [e["entity_id"] for e in graph.entities] == [f"algo:{name}"]
+    edges = {(e["relationship_type"], e["to_entity_id"]) for e in graph.edges}
+    assert edges == {
+        ("SUITED_FOR", "ptype:binary_classification"),
+        ("USED_IN", f"exp:{valid_scope_spec['experiment_id']}"),
+    }
+
+    mlflow = store_boundaries.mlflow
+    assert list(mlflow.experiments) == [f"e2i_model_selection_{valid_scope_spec['experiment_id']}"]
+    assert [r.run_name for r in mlflow.runs] == [f"model_selection_{name}"]
+    assert mlflow.runs[0].params["algorithm_name"] == name
+    assert result["registered_in_mlflow"] is True
+    assert result["mlflow_run_id"] == mlflow.runs[0].run_id
+
+
 class TestBuildOutputCalibrationFlags:
     """Phase 1 W2 day-2: model_candidate dict propagates the new
     calibration-native flags from the registry entry stored in
