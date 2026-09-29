@@ -406,3 +406,44 @@ async def test_no_source_anywhere_validates_the_business_metrics_default(
         "schema_validation_errors"
     )
     assert final_state["gate_passed"] is (expected == "passed")
+
+
+# =============================================================================
+# File ingestion: deliberately UNCHANGED by #2320 (pinned, not fixed)
+# =============================================================================
+
+_FILES_SOURCE = {"type": "files", "paths": {"patient_journeys": "/tmp/pj.json"}}
+
+
+@pytest.mark.asyncio
+async def test_files_source_without_table_name_is_still_skipped() -> None:
+    """Pinned pre-existing behaviour, NOT an endorsement. In the production state shape
+    (no ``scope_spec.data_source`` / ``table_name``) a file-ingestion dict resolves to
+    ``""`` and Pandera is skipped. The node's "final fallback: patient_journeys" branch
+    fires only when ``scope_spec.data_source`` is itself a dict, which the typed state
+    rejects. Turning Pandera on for file runs is a separate owner decision (it can
+    newly block CSU file runs); this test makes that change deliberate, not accidental."""
+    columns = ["disease_severity", "geographic_region"]
+    final_state = await _schema_gate_graph().ainvoke(_state(_FILES_SOURCE, columns))
+
+    assert final_state["schema_validation_status"] == "skipped"
+    assert final_state["gate_passed"] is True
+
+
+@pytest.mark.asyncio
+async def test_files_source_with_table_name_keeps_full_schema() -> None:
+    """With ``scope_spec.table_name`` the file frame is held to the FULL schema: file
+    loads are not projections, so the id columns are still required."""
+    columns = ["disease_severity", "geographic_region"]
+    state = _state(_FILES_SOURCE, columns)
+    state["scope_spec"]["table_name"] = "patient_journeys"
+    final_state = await _schema_gate_graph().ainvoke(state)
+
+    assert final_state["schema_validation_status"] == "failed"
+    missing = {
+        str(e.get("failure_case"))
+        for e in final_state["schema_validation_errors"]
+        if e.get("check") == "column_in_dataframe"
+    }
+    assert missing == {"patient_journey_id", "patient_id"}
+    assert final_state["gate_passed"] is False
