@@ -58,7 +58,10 @@ from src.services.cohort_contract import contract_from_registry_row  # noqa: E40
 from src.services.retraining_trigger import has_cohort_contract  # noqa: E402
 from src.tasks.drift_monitoring_tasks import _cohort_input_from_training_config  # noqa: E402
 
-MIGRATION_163 = "database/migrations/163_registry_cohort_contract_hcp_adoption.sql"
+MIGRATION_163 = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "../../../../database/migrations/163_registry_cohort_contract_hcp_adoption.sql",
+)
 
 
 def row_163(brand: str) -> dict:
@@ -396,4 +399,5 @@ async def main() -> None:
         print(json.dumps(r, default=str))
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
