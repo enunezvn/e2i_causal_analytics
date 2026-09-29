@@ -119,6 +119,8 @@ async def _register(
             "_register_model_mlflow",
             AsyncMock(side_effect=lambda uri, name: (name, 1, "None")),
         ),
+        # #2311: MLflow is replaced here; it answers "no earlier version from this run".
+        patch.object(registry_manager, "_model_versions_for_run", AsyncMock(return_value=[])),
         patch.object(
             registry_manager, "_get_async_supabase_client_or_none", AsyncMock(return_value=db)
         ),

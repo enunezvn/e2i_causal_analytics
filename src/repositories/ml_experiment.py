@@ -307,6 +307,12 @@ class MLModelRegistry:
     cohort_target_outcome: Optional[str] = None
     cohort_feature_manifest_source: Optional[str] = None
 
+    # #2310 (migration 160): the registry row this row was retrained from. Lineage only:
+    # immutable once set (DB trigger), never used to exclude a row.
+    retrain_of_id: Optional[UUID] = None
+    # #2311 (migration 160): the exact MLflow model-registry version the deployer registered.
+    mlflow_model_version: Optional[int] = None
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for database storage.
 
@@ -323,6 +329,11 @@ class MLModelRegistry:
             value = getattr(self, col)
             if value is not None:
                 data[col] = value
+        # Same rule for the migration-160 columns (#2310 / #2311).
+        if self.retrain_of_id is not None:
+            data["retrain_of_id"] = str(self.retrain_of_id)
+        if self.mlflow_model_version is not None:
+            data["mlflow_model_version"] = int(self.mlflow_model_version)
         return data
 
     def _to_dict_base(self) -> Dict[str, Any]:
@@ -381,6 +392,12 @@ class MLModelRegistry:
             promoted_at=data.get("promoted_at"),
             data_split=data.get("data_split", "train"),
             training_provenance=data.get("training_provenance"),
+            retrain_of_id=UUID(str(data["retrain_of_id"])) if data.get("retrain_of_id") else None,
+            mlflow_model_version=(
+                int(data["mlflow_model_version"])
+                if data.get("mlflow_model_version") is not None
+                else None
+            ),
         )
 
 
@@ -1109,6 +1126,9 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
         cohort_target_outcome: Optional[str] = None,
         cohort_feature_manifest_source: Optional[str] = None,
         training_provenance: Optional[str] = None,
+        stage: str = "development",
+        retrain_of_id: Optional[Any] = None,
+        mlflow_model_version: Optional[int] = None,
     ) -> MLModelRegistry:
         """Register a new model version.
 
@@ -1128,6 +1148,11 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
             training_provenance: #968/#2255 — what the model was trained on
                 (``synthetic_gold`` | ``real`` | ``mixed``; None = unknown). Keys the
                 ``transition_stage`` production gate.
+            stage: #2310 — the stage the row is inserted at: ``'development'`` (the
+                deploy then transitions it), or ``'candidate'`` for a retrain (it stays
+                there until an owner-approved activation).
+            retrain_of_id: #2310 — the parent row a retrain was trained from.
+            mlflow_model_version: #2311 — the exact MLflow version registered for the row.
 
         Returns:
             Created MLModelRegistry
@@ -1147,12 +1172,14 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
             pr_auc=metrics.get("pr_auc"),
             brier_score=metrics.get("brier_score"),
             calibration_slope=metrics.get("calibration_slope"),
-            stage="development",
+            stage=stage,
             registered_at=datetime.now(timezone.utc),
             cohort_data_source=encode_data_source(cohort_data_source),
             cohort_target_outcome=cohort_target_outcome or None,
             cohort_feature_manifest_source=cohort_feature_manifest_source or None,
             training_provenance=training_provenance or None,
+            retrain_of_id=UUID(str(retrain_of_id)) if retrain_of_id else None,
+            mlflow_model_version=mlflow_model_version,
         )
 
         if self.client:

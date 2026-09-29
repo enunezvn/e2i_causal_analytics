@@ -28,6 +28,8 @@ pytestmark = pytest.mark.unit
 MODEL = "initiation_kisqali_goldstd_lr_v1"
 NEW_VERSION = "1.0_retrained_20260923_0632_ab12cd"
 CANDIDATE_ID = str(uuid4())
+# #2310/#2311: the ml_deployments record the deployer confirmed for the candidate.
+DEPLOY_RECORD_ID = str(uuid4())
 
 
 def _result(model_registry_id: Any) -> SimpleNamespace:
@@ -40,6 +42,10 @@ def _result(model_registry_id: Any) -> SimpleNamespace:
             "model_registry_id": model_registry_id,
             # the agent always reports it; #2157 codex r1 requires it for completion
             "deployment_successful": True,
+            # #2311: what the agent reports for the version and the deploy record.
+            "mlflow_model_version": 4,
+            "deployment_record_id": DEPLOY_RECORD_ID,
+            "db_persisted": True,
         },
     )
 
@@ -57,6 +63,10 @@ def _db(with_candidate: bool) -> tuple[FakeAsyncSupabase, Dict[str, Any]]:
                 "model_name": MODEL,
                 "model_version": NEW_VERSION,
                 "experiment_id": exp_id,
+                # #2310: what the deployer now writes for a retrain.
+                "stage": "candidate",
+                "retrain_of_id": parent_id,
+                "mlflow_model_version": 4,
             }
         )
     history = {"id": "rt-1", "status": "pending", "model_id": parent_id}
@@ -68,7 +78,25 @@ def _db(with_candidate: bool) -> tuple[FakeAsyncSupabase, Dict[str, Any]]:
         "experiment_name": "initiation_kisqali_goldstd_eval_v1",
         "new_model_version": NEW_VERSION,
     }
-    db = FakeAsyncSupabase({"ml_model_registry": rows, "ml_retraining_history": [history]})
+    deployments = (
+        [
+            {
+                "id": DEPLOY_RECORD_ID,
+                "model_registry_id": CANDIDATE_ID,
+                "status": "registered",
+                "endpoint_url": None,
+            }
+        ]
+        if with_candidate
+        else []
+    )
+    db = FakeAsyncSupabase(
+        {
+            "ml_model_registry": rows,
+            "ml_retraining_history": [history],
+            "ml_deployments": deployments,
+        }
+    )
     return db, {
         "data_source": "patient_journeys",
         "target_outcome": "treatment_initiated",
@@ -80,7 +108,8 @@ async def _run(db: FakeAsyncSupabase, training_config: Dict[str, Any], result: A
     pipeline = MagicMock()
     pipeline.run = AsyncMock(return_value=result)
     service = MagicMock()
-    service.complete_retraining = AsyncMock(return_value=None)
+    # #2310 codex r2: a real completion returns the recorded job (None = nothing written).
+    service.complete_retraining = AsyncMock(return_value=MagicMock(name="recorded_job"))
     with (
         patch("src.agents.tier_0.pipeline.MLFoundationPipeline", MagicMock(return_value=pipeline)),
         patch(
