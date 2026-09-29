@@ -84,7 +84,7 @@ def run(sync_client: Any) -> str:
         before = dict(row)
         if applied:
             print("  163 is ALREADY applied to this row (its pair is present)")
-            before = {**row, **{col: None for col in written}}
+            before = {**row, **dict.fromkeys(written)}
         elif not _would_match(row):
             failures.append(f"{name}: 163's WHERE does not match the production row")
             print("  163 would NOT match this row -> it keeps no_cohort_contract")
