@@ -77,6 +77,17 @@ def _recency(value):
     return _q
 
 
+def _feast_blockers(result):
+    """This node's own ``feast_freshness:`` entries in its channel write.
+
+    Since #2294 the node writes ``blocking_issues`` on every pass that computes
+    a freshness verdict (merging under its own kind, so a QC retry replaces or
+    retracts its entry). "Not blocked" therefore means no entry of its kind,
+    not an absent key.
+    """
+    return [b for b in (result.get("blocking_issues") or []) if b.startswith("feast_freshness: ")]
+
+
 @pytest.fixture(autouse=True)
 def _no_escape_hatch(monkeypatch):
     monkeypatch.delenv("ALLOW_STALE_FEAST", raising=False)
@@ -112,7 +123,7 @@ def test_table_source_with_fresh_mapped_views_registers_and_reports_fresh():
         "market_dynamics_features",
     }
     assert not any(w.startswith("Freshness") for w in result["feast_warnings"])
-    assert "blocking_issues" not in result
+    assert not _feast_blockers(result)
 
 
 @pytest.mark.unit
@@ -122,7 +133,7 @@ def test_table_source_with_stale_views_is_advisory_not_blocked():
     assert result["feast_registration_status"] == "advisory_stale_features"
     assert result["feast_freshness_check"]["fresh"] is False
     assert any(w.startswith("Freshness") for w in result["feast_warnings"])
-    assert "blocking_issues" not in result
+    assert not _feast_blockers(result)
 
 
 @pytest.mark.unit
@@ -158,7 +169,7 @@ def test_file_sources_are_advisory(data_source):
     assert result["feast_freshness_check"]["feast_backed"] is False
     assert result["feast_freshness_check"]["source_kind"] == data_source["type"]
     assert any("not Feast-backed" in w for w in result["feast_warnings"])
-    assert "blocking_issues" not in result
+    assert not _feast_blockers(result)
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +203,7 @@ def test_feast_served_run_allow_stale_escape_hatch(monkeypatch):
     )
     assert result["feast_blocked"] is False
     assert result["feast_registration_status"] != "blocked_stale_features"
-    assert "blocking_issues" not in result
+    assert not _feast_blockers(result)
 
 
 @pytest.mark.unit

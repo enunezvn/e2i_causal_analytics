@@ -14,7 +14,6 @@ This node detects multiple types of data leakage:
 
 import logging
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -23,6 +22,13 @@ import pandas as pd
 
 from ..blocking_issues import KIND_LEAKAGE, merge_blocking_issues
 from ..state import DataPreparerState
+from .data_transformer import _column_has_unhashable_cells
+from .temporal_dates import (
+    _check_date_ordering,
+    _check_future_dates,
+    _detect_date_columns,
+    _parse_date,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +104,8 @@ async def detect_leakage(state: DataPreparerState) -> Dict[str, Any]:
 
     leakage_issues: List[str] = []
     findings: List[LeakageFinding] = []
+    # Checks that crashed part-way (see ``_record_audit_error``).
+    audit_errors: List[str] = []
 
     try:
         train_df = state.get("train_df")
@@ -119,14 +127,14 @@ async def detect_leakage(state: DataPreparerState) -> Dict[str, Any]:
         # === 2. TARGET LEAKAGE (enhanced with pointbiserialr) ===
         if target_variable and target_variable in train_df.columns:
             target_leakage_issues, target_findings = check_target_leakage(
-                train_df, target_variable, required_features
+                train_df, target_variable, required_features, audit_errors=audit_errors
             )
             leakage_issues.extend(target_leakage_issues)
             findings.extend(target_findings)
 
         # === 3. TRAIN-TEST CONTAMINATION ===
         contamination_issues = check_train_test_contamination(
-            train_df, validation_df, test_df, holdout_df
+            train_df, validation_df, test_df, holdout_df, audit_errors=audit_errors
         )
         leakage_issues.extend(contamination_issues)
 
@@ -154,31 +162,31 @@ async def detect_leakage(state: DataPreparerState) -> Dict[str, Any]:
             if len(numeric_features) > 0 and len(combined_df) >= 30:
                 # 4. Perfect class separation
                 separation_findings = check_perfect_class_separation(
-                    combined_df, target_variable, numeric_features
+                    combined_df, target_variable, numeric_features, audit_errors=audit_errors
                 )
                 findings.extend(separation_findings)
 
                 # 5. Zero variance within class
                 variance_findings = check_zero_variance_within_class(
-                    combined_df, target_variable, numeric_features
+                    combined_df, target_variable, numeric_features, audit_errors=audit_errors
                 )
                 findings.extend(variance_findings)
 
                 # 6. Mutual information
                 mi_findings = check_mutual_information(
-                    combined_df, target_variable, numeric_features
+                    combined_df, target_variable, numeric_features, audit_errors=audit_errors
                 )
                 findings.extend(mi_findings)
 
                 # 7. Logical dependency
                 dependency_findings = check_feature_target_logical_dependency(
-                    combined_df, target_variable, numeric_features
+                    combined_df, target_variable, numeric_features, audit_errors=audit_errors
                 )
                 findings.extend(dependency_findings)
 
                 # 8. Single-feature AUC
                 auc_findings = check_single_feature_auc(
-                    combined_df, target_variable, numeric_features
+                    combined_df, target_variable, numeric_features, audit_errors=audit_errors
                 )
                 findings.extend(auc_findings)
 
@@ -188,9 +196,16 @@ async def detect_leakage(state: DataPreparerState) -> Dict[str, Any]:
             )
             if len(categorical_features) > 0 and len(combined_df) >= 30:
                 cat_findings = check_categorical_class_separation(
-                    combined_df, target_variable, categorical_features
+                    combined_df, target_variable, categorical_features, audit_errors=audit_errors
                 )
                 findings.extend(cat_findings)
+
+        # A check that crashed audited nothing for what it skipped, so the
+        # audit is incomplete and must not read as clean. These are legacy
+        # (severity-less) issues, so they block like every legacy issue, and
+        # being ``leakage:``-kind entries they are replaced on the next pass.
+        for error in audit_errors:
+            leakage_issues.append(f"Leakage audit incomplete: {error}")
 
         # Convert findings to issue strings
         for f in findings:
@@ -208,12 +223,44 @@ async def detect_leakage(state: DataPreparerState) -> Dict[str, Any]:
         blocking_findings = [
             f for f in findings if f.severity in (LeakageSeverity.CRITICAL, LeakageSeverity.HIGH)
         ]
-        # Legacy leakage issues (temporal, contamination) also block.
-        own_blocking: List[str] = []
-        if blocking_findings or (leakage_detected and not findings):
-            own_blocking = [f.to_issue_string() for f in blocking_findings] + [
-                i for i in leakage_issues if not any(i == f.to_issue_string() for f in findings)
+        # Full manifest immunity (owner decision 2026-06-03): a feature the
+        # cohort's FeatureContract declares pre-index is exempt from leakage.
+        # ``adaptive_validity_check`` strips its findings and downgrades the
+        # severity, but it does not own this node's entries, so the blocker
+        # written here survived and failed the gate on a contract-certified
+        # feature (codex r1 on #2294). This node applies the same contract to
+        # what it blocks on. The adaptive module is already loaded by graph.py.
+        manifest_source = scope_spec.get("feature_manifest_source")
+        if manifest_source and blocking_findings:
+            from .adaptive_validity_check import _declared_safe_immune_features
+
+            immune = _declared_safe_immune_features(
+                {f.feature for f in blocking_findings}, manifest_source
+            )
+            blocking_findings = [f for f in blocking_findings if f.feature not in immune]
+            # ``check_target_leakage`` also emits a legacy string per HIGH /
+            # CRITICAL correlation finding, in this exact generated form.
+            leakage_issues_for_blocking = [
+                i
+                for i in leakage_issues
+                if not any(
+                    i.startswith(f"Potential target leakage: feature '{feat}' has ")
+                    for feat in immune
+                )
             ]
+        else:
+            leakage_issues_for_blocking = leakage_issues
+        # Legacy leakage issues (temporal, contamination) ALWAYS block. They
+        # carry no severity, and before f953304ea every leakage issue blocked;
+        # that commit filtered STRUCTURED findings by severity and meant to
+        # keep the legacy ones blocking, but approximated "this came from a
+        # legacy check" with ``leakage_detected and not findings``. A single
+        # MODERATE finding broke the approximation and a temporal leak blocked
+        # nothing (#2294). Only structured findings are severity-filtered.
+        finding_strings = {f.to_issue_string() for f in findings}
+        own_blocking: List[str] = [f.to_issue_string() for f in blocking_findings] + [
+            i for i in leakage_issues_for_blocking if i not in finding_strings
+        ]
         # Write the channel on this path even with nothing of our own to add.
         # This node is RE-ENTRANT (graph.py routes leakage_remediation
         # --recheck--> detect_leakage), and the channel has no reducer, so
@@ -317,6 +364,27 @@ def _aggregate_severity(findings: List[LeakageFinding]) -> str:
     return "none"
 
 
+def _record_audit_error(
+    audit_errors: Optional[List[str]],
+    check_name: str,
+    exc: BaseException,
+    feature: Optional[str] = None,
+) -> None:
+    """Record a check that crashed instead of completing.
+
+    Every check below catches its own exceptions so one bad column cannot
+    abort the whole audit. Before #2294 they only logged, so a PARTIALLY
+    crashed audit returned no finding for what it never examined and looked
+    clean to the gate. ``detect_leakage`` passes a list and turns each entry
+    into a blocking "Leakage audit incomplete" issue; direct callers that pass
+    nothing keep the old best-effort behaviour.
+    """
+    if audit_errors is None:
+        return
+    where = f" on '{feature}'" if feature else ""
+    audit_errors.append(f"{check_name}{where}: {type(exc).__name__}: {exc}")
+
+
 def _get_leaked_features(findings: List[LeakageFinding]) -> List[str]:
     """Get feature names flagged at CRITICAL or HIGH severity."""
     leaked = set()
@@ -355,6 +423,10 @@ def check_temporal_leakage(df: Any, scope_spec: Dict[str, Any]) -> List[str]:
         return issues
 
     try:
+        # Declared units for numeric (epoch) date columns; see
+        # ``_parse_configured_dates``.
+        epoch_units = scope_spec.get("epoch_units") or {}
+
         # Strategy 1: Explicit event_date vs target_date comparison
         event_date_col = scope_spec.get("event_date_column")
         target_date_col = scope_spec.get("target_date_column")
@@ -362,7 +434,7 @@ def check_temporal_leakage(df: Any, scope_spec: Dict[str, Any]) -> List[str]:
         if event_date_col and target_date_col:
             if event_date_col in df.columns and target_date_col in df.columns:
                 leakage_count, leakage_pct = _check_date_ordering(
-                    df, event_date_col, target_date_col
+                    df, event_date_col, target_date_col, epoch_units
                 )
                 if leakage_count > 0:
                     issues.append(
@@ -374,12 +446,26 @@ def check_temporal_leakage(df: Any, scope_spec: Dict[str, Any]) -> List[str]:
         split_date_str = scope_spec.get("split_date")
         feature_date_columns = scope_spec.get("feature_date_columns", [])
 
+        # Strategies 2 and 3 both need split_date. An unparseable one used to
+        # skip them silently, which read as "no temporal leakage" (#2294).
+        if (
+            split_date_str
+            and (feature_date_columns or scope_spec.get("date_column"))
+            and _parse_date(split_date_str) is None
+        ):
+            issues.append(
+                f"Temporal leakage check incomplete: split_date {split_date_str!r} "
+                "is not a parseable date"
+            )
+
         if split_date_str and feature_date_columns:
             split_date = _parse_date(split_date_str)
             if split_date:
                 for col in feature_date_columns:
                     if col in df.columns:
-                        future_count, future_pct = _check_future_dates(df, col, split_date)
+                        future_count, future_pct = _check_future_dates(
+                            df, col, split_date, epoch_units
+                        )
                         if future_count > 0:
                             issues.append(
                                 f"Temporal leakage: {future_count} rows ({future_pct:.2f}%) "
@@ -392,9 +478,9 @@ def check_temporal_leakage(df: Any, scope_spec: Dict[str, Any]) -> List[str]:
             split_date = _parse_date(split_date_str)
             if split_date:
                 # Find all date-like columns (excluding the main date column)
-                date_cols = _detect_date_columns(df, exclude=[date_column])
+                date_cols = _detect_date_columns(df, exclude=[date_column], epoch_units=epoch_units)
                 for col in date_cols:
-                    future_count, future_pct = _check_future_dates(df, col, split_date)
+                    future_count, future_pct = _check_future_dates(df, col, split_date, epoch_units)
                     if future_count > 0:
                         issues.append(
                             f"Potential temporal leakage: {future_count} rows ({future_pct:.2f}%) "
@@ -414,7 +500,11 @@ def check_temporal_leakage(df: Any, scope_spec: Dict[str, Any]) -> List[str]:
 
 
 def check_target_leakage(
-    df: Any, target_variable: str, features: List[str]
+    df: Any,
+    target_variable: str,
+    features: List[str],
+    *,
+    audit_errors: Optional[List[str]] = None,
 ) -> tuple[List[str], List[LeakageFinding]]:
     """Check for target leakage using point-biserial correlation.
 
@@ -512,6 +602,7 @@ def check_target_leakage(
 
     except Exception as e:
         logger.warning(f"Target leakage check failed: {e}")
+        _record_audit_error(audit_errors, "target_correlation", e)
 
     return issues, findings
 
@@ -526,6 +617,8 @@ def check_train_test_contamination(
     validation_df: Any = None,
     test_df: Any = None,
     holdout_df: Any = None,
+    *,
+    audit_errors: Optional[List[str]] = None,
 ) -> List[str]:
     """Check for train-test contamination.
 
@@ -570,10 +663,28 @@ def check_train_test_contamination(
                 split_ids = set(split_df[id_column].astype(str))
                 overlap = train_ids.intersection(split_ids)
             else:
-                # Fallback to row hash comparison (more reliable than index)
-                # Create hash from all columns to identify unique rows
-                train_hashes = set(train_df.apply(lambda row: hash(tuple(row)), axis=1))
-                split_hashes = set(split_df.apply(lambda row: hash(tuple(row)), axis=1))
+                # Fallback to row hash comparison (more reliable than index).
+                # A column holding list/dict cells (JSON-decoded sources) made
+                # ``hash(tuple(row))`` raise and the whole check was swallowed,
+                # so a real overlap went unreported (#2294). Such columns never
+                # reach a model (``data_transformer`` drops them), so rows are
+                # compared on the remaining columns.
+                unhashable = {
+                    c
+                    for frame in (train_df, split_df)
+                    for c in frame.columns
+                    if _column_has_unhashable_cells(frame[c])
+                }
+                train_hashes = set(
+                    train_df.drop(columns=[c for c in train_df.columns if c in unhashable]).apply(
+                        lambda row: hash(tuple(row)), axis=1
+                    )
+                )
+                split_hashes = set(
+                    split_df.drop(columns=[c for c in split_df.columns if c in unhashable]).apply(
+                        lambda row: hash(tuple(row)), axis=1
+                    )
+                )
                 overlap = train_hashes.intersection(split_hashes)
 
             if len(overlap) > 0:
@@ -585,6 +696,7 @@ def check_train_test_contamination(
 
     except Exception as e:
         logger.warning(f"Train-test contamination check failed: {e}")
+        _record_audit_error(audit_errors, "train_test_contamination", e)
 
     return issues
 
@@ -595,7 +707,11 @@ def check_train_test_contamination(
 
 
 def check_perfect_class_separation(
-    df: Any, target_variable: str, numeric_features: List[str]
+    df: Any,
+    target_variable: str,
+    numeric_features: List[str],
+    *,
+    audit_errors: Optional[List[str]] = None,
 ) -> List[LeakageFinding]:
     """Check if any feature perfectly separates target classes.
 
@@ -738,6 +854,7 @@ def check_perfect_class_separation(
 
         except Exception as e:
             logger.warning(f"Perfect class separation check failed for '{feature}': {e}")
+            _record_audit_error(audit_errors, "perfect_class_separation", e, feature)
 
     return findings
 
@@ -748,7 +865,11 @@ def check_perfect_class_separation(
 
 
 def check_zero_variance_within_class(
-    df: Any, target_variable: str, numeric_features: List[str]
+    df: Any,
+    target_variable: str,
+    numeric_features: List[str],
+    *,
+    audit_errors: Optional[List[str]] = None,
 ) -> List[LeakageFinding]:
     """Check for zero variance within target classes.
 
@@ -862,6 +983,7 @@ def check_zero_variance_within_class(
 
         except Exception as e:
             logger.warning(f"Zero variance check failed for '{feature}': {e}")
+            _record_audit_error(audit_errors, "zero_variance_within_class", e, feature)
 
     return findings
 
@@ -872,7 +994,11 @@ def check_zero_variance_within_class(
 
 
 def check_mutual_information(
-    df: Any, target_variable: str, numeric_features: List[str]
+    df: Any,
+    target_variable: str,
+    numeric_features: List[str],
+    *,
+    audit_errors: Optional[List[str]] = None,
 ) -> List[LeakageFinding]:
     """Check for implausibly high mutual information between features and target.
 
@@ -894,6 +1020,7 @@ def check_mutual_information(
 
     try:
         from sklearn.feature_selection import mutual_info_classif
+        from sklearn.utils.multiclass import type_of_target
 
         target = df[target_variable]
         valid_mask = target.notna()
@@ -908,6 +1035,14 @@ def check_mutual_information(
 
         n_classes = len(np.unique(y))
         if n_classes < 2:
+            return findings
+
+        # ``mutual_info_classif`` is defined for class labels only. On a
+        # regression target it raised "Unknown label type: continuous" on EVERY
+        # run; that was harmless while the except only logged, but it is not an
+        # incomplete audit — the check does not apply — so it must not be
+        # recorded as one (#2294, measured on a continuous target).
+        if type_of_target(y) not in ("binary", "multiclass"):
             return findings
 
         mi_scores = mutual_info_classif(X, y, random_state=42, n_neighbors=5)
@@ -946,10 +1081,12 @@ def check_mutual_information(
                     )
                 )
 
-    except ImportError:
+    except ImportError as e:
         logger.warning("sklearn not available for mutual information check")
+        _record_audit_error(audit_errors, "mutual_information", e)
     except Exception as e:
         logger.warning(f"Mutual information check failed: {e}")
+        _record_audit_error(audit_errors, "mutual_information", e)
 
     return findings
 
@@ -960,7 +1097,11 @@ def check_mutual_information(
 
 
 def check_feature_target_logical_dependency(
-    df: Any, target_variable: str, numeric_features: List[str]
+    df: Any,
+    target_variable: str,
+    numeric_features: List[str],
+    *,
+    audit_errors: Optional[List[str]] = None,
 ) -> List[LeakageFinding]:
     """Detect tautological 'if and only if' relationships.
 
@@ -1032,6 +1173,7 @@ def check_feature_target_logical_dependency(
 
         except Exception as e:
             logger.warning(f"Logical dependency check failed for '{feature}': {e}")
+            _record_audit_error(audit_errors, "logical_dependency", e, feature)
 
     return findings
 
@@ -1042,7 +1184,11 @@ def check_feature_target_logical_dependency(
 
 
 def check_single_feature_auc(
-    df: Any, target_variable: str, numeric_features: List[str]
+    df: Any,
+    target_variable: str,
+    numeric_features: List[str],
+    *,
+    audit_errors: Optional[List[str]] = None,
 ) -> List[LeakageFinding]:
     """Flag features where a single column yields high AUC against the target.
 
@@ -1074,7 +1220,12 @@ def check_single_feature_auc(
             if mask.sum() < 30:
                 continue
 
-            y = df.loc[mask, target_variable].values.astype(float)
+            # Indicator of one of the two classes, not ``astype(float)``:
+            # string labels ("yes"/"no") are a valid binary target, and the
+            # cast raised on them — a skipped audit on main, a false
+            # incomplete-audit block once crashes are recorded (codex r3,
+            # #2294). AUC is symmetrised below, so which class is 1 is moot.
+            y = (df.loc[mask, target_variable].values == unique_classes[1]).astype(float)
             x = df.loc[mask, feature].values.astype(float)
 
             # AUC can be < 0.5 if relationship is inverted — check both directions
@@ -1112,6 +1263,7 @@ def check_single_feature_auc(
 
         except Exception as e:
             logger.warning(f"Single-feature AUC check failed for '{feature}': {e}")
+            _record_audit_error(audit_errors, "single_feature_auc", e, feature)
 
     return findings
 
@@ -1122,7 +1274,11 @@ def check_single_feature_auc(
 
 
 def check_categorical_class_separation(
-    df: Any, target_variable: str, categorical_features: List[str]
+    df: Any,
+    target_variable: str,
+    categorical_features: List[str],
+    *,
+    audit_errors: Optional[List[str]] = None,
 ) -> List[LeakageFinding]:
     """Flag categorical features with high association to the target (Cramér's V).
 
@@ -1140,6 +1296,14 @@ def check_categorical_class_separation(
 
     for feature in categorical_features:
         try:
+            # A list/dict-valued column is not a categorical and cannot be one:
+            # ``data_transformer`` drops it before training, so no model ever
+            # sees it. Skipping it is "does not apply", not an incomplete audit
+            # — recording it as one would block every run carrying a JSON
+            # column (#2294).
+            if _column_has_unhashable_cells(df[feature]):
+                logger.info(f"Skipping categorical check for '{feature}': unhashable cells")
+                continue
             subset = df[[feature, target_variable]].dropna()
             if len(subset) < 30:
                 continue
@@ -1191,81 +1355,6 @@ def check_categorical_class_separation(
 
         except Exception as e:
             logger.warning(f"Categorical class separation check failed for '{feature}': {e}")
+            _record_audit_error(audit_errors, "categorical_class_separation", e, feature)
 
     return findings
-
-
-# =============================================================================
-# TEMPORAL LEAKAGE HELPERS (unchanged)
-# =============================================================================
-
-
-def _check_date_ordering(df: Any, event_col: str, target_col: str) -> tuple:
-    """Check if event dates occur after target dates."""
-    try:
-        event_dates = pd.to_datetime(df[event_col], errors="coerce")
-        target_dates = pd.to_datetime(df[target_col], errors="coerce")
-
-        valid_mask = event_dates.notna() & target_dates.notna()
-        leakage_mask = valid_mask & (event_dates > target_dates)
-
-        leakage_count = leakage_mask.sum()
-        leakage_pct = (leakage_count / len(df)) * 100 if len(df) > 0 else 0
-
-        return leakage_count, leakage_pct
-    except Exception:
-        return 0, 0.0
-
-
-def _check_future_dates(df: Any, col: str, reference_date: datetime) -> tuple:
-    """Check for dates after a reference date."""
-    try:
-        dates = pd.to_datetime(df[col], errors="coerce")
-        valid_mask = dates.notna()
-
-        ref_date = pd.Timestamp(reference_date).tz_localize(None)
-        dates_naive = dates.dt.tz_localize(None) if dates.dt.tz is not None else dates
-
-        future_mask = valid_mask & (dates_naive > ref_date)
-        future_count = future_mask.sum()
-        future_pct = (future_count / len(df)) * 100 if len(df) > 0 else 0
-
-        return future_count, future_pct
-    except Exception:
-        return 0, 0.0
-
-
-def _parse_date(date_str: str) -> Optional[datetime]:
-    """Parse date string to datetime."""
-    try:
-        result = pd.to_datetime(date_str).to_pydatetime()
-        return result if isinstance(result, datetime) else None
-    except Exception:
-        return None
-
-
-def _detect_date_columns(df: Any, exclude: Optional[List[str]] = None) -> List[str]:
-    """Auto-detect date columns in DataFrame."""
-    exclude = exclude or []
-    date_cols = []
-
-    for col in df.columns:
-        if col in exclude:
-            continue
-
-        if pd.api.types.is_datetime64_any_dtype(df[col]):
-            date_cols.append(col)
-            continue
-
-        date_patterns = ["_date", "_time", "_at", "_timestamp", "date_", "time_"]
-        if any(pattern in col.lower() for pattern in date_patterns):
-            try:
-                sample = df[col].dropna().head(100)
-                if len(sample) > 0:
-                    parsed = pd.to_datetime(sample, errors="coerce")
-                    if parsed.notna().sum() > len(sample) * 0.5:
-                        date_cols.append(col)
-            except Exception:
-                pass
-
-    return date_cols

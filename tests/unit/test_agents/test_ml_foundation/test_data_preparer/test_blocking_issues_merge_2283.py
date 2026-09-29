@@ -92,7 +92,7 @@ def test_one_kind_does_not_evict_another() -> None:
 async def test_leakage_remediation_cannot_evict_a_foreign_entry() -> None:
     """Drives the REAL ``review_and_remediate_leakage`` node.
 
-    Its prune used to drop ANY entry containing a leaked feature's name. A
+    History: its prune used to drop ANY entry containing a leaked feature's name. A
     ``sampling_frame_drift:`` entry names its drifting columns, and a column can
     be both drifting and leaked — so remediating leakage silently retracted an
     unrelated, still-unresolved gate reason. That was the last surviving
@@ -164,15 +164,16 @@ async def test_leakage_remediation_cannot_evict_a_foreign_entry() -> None:
         result = await review_and_remediate_leakage(state)  # type: ignore[arg-type]
 
     assert result["leakage_remediation_status"] == "applied", (
-        f"fixture did not reach the prune branch: {result!r}"
+        f"fixture did not reach the applied branch: {result!r}"
     )
-    assert result["blocking_issues"] == [
-        unrelated_leakage_entry,
-        sampling_entry,
-        schema_entry,
-    ], (
-        "the prune must retract only its OWN-kind entries that name a remediated "
-        "feature: it either evicted a foreign entry or over-matched on the kind prefix"
+    # #2294 removed the free-text prune altogether: the node no longer writes
+    # the channel, so it can evict nothing — foreign or its own kind. The
+    # ``leakage:`` entries are rebuilt by ``detect_leakage`` on the recheck
+    # that now ALWAYS follows an applied pass; that end-to-end property is
+    # pinned by ``test_qc_fail_open_2294.py::
+    # test_final_remediation_pass_is_rechecked_before_the_gate``.
+    assert "blocking_issues" not in result, (
+        f"leakage_remediation wrote the channel again: {result['blocking_issues']!r}"
     )
 
 

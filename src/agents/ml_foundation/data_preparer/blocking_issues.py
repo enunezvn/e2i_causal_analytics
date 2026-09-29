@@ -32,14 +32,41 @@ would stay blocked and the remediation loop would be pointless.
 
 Adoption status (be precise about this)
 ---------------------------------------
-``quality_checker``, ``ge_validator``, ``data_loader``, ``data_transformer``
-and ``leakage_detector`` route through this helper, and
-``leakage_remediation`` prunes by kind. ``feast_registrar`` and
-``sufficiency_check`` still concatenate naively; on a QC retry they can
-duplicate and fail to retract their own entries. That is a *fail-closed*
-defect (a stale blocker keeps the gate shut) of a different class from the
-fail-open bug #2283 fixed, and it is tracked separately rather than folded in
-here. This module does NOT yet describe every writer.
+Writers of the channel, and how (re-verified by grep for #2294):
+
+* Merge through this helper under their own kind: ``data_loader``
+  (``data_loading``), ``run_schema_validation`` (``schema``),
+  ``run_quality_checks`` (``quality_check``), ``run_ge_validation``
+  (``ge_validation``), ``detect_leakage`` (``leakage``), ``transform_data``
+  (``data_transform``), ``register_features_in_feast`` (``feast_freshness``)
+  and ``run_sufficiency_check`` (``data_sufficiency``). Each writes the
+  channel on every pass that computes its verdict, so a re-run replaces its
+  entry and a resolved condition is retracted; paths that compute NO verdict
+  omit the key and leave an earlier pass's entry in place (sufficiency
+  ``SKIPPED``; Feast's early returns and ``except`` on a run that does not
+  train on Feast-served features — on one that does, they block as
+  "unverifiable").
+* ``audit_sampling_frame`` copies the incoming list and appends its
+  ``sampling_frame_drift:`` entry. It runs once (upstream of the QC retry
+  edge), so it cannot duplicate or go stale.
+* ``leakage_remediation`` does NOT write the channel (#2294). Its
+  ``leakage:`` entries are rebuilt by the ``detect_leakage`` recheck that
+  ``graph._route_after_leakage_remediation`` now takes after EVERY applied
+  pass; it used to retract entries by matching feature names in free text.
+* ``finalize_output`` echoes the channel it gated on.
+
+NOT fixed here, and why: ``adaptive_validity_check`` writes no entry. It
+escalates ``leakage_severity`` (routing to remediation) and ``finalize_output``
+reads no severity, so a feature it still flags after the final recheck, or one
+whose Layer-3 scoring raised, does not block the gate. Layer 3 flags on
+SIGNIFICANCE (z > 5 sigma over a permutation null), which a legitimately
+predictive feature clears at production n — the reason the FDR and delta-AUC
+effect floor exist — and its documented role is to route features to
+remediation review, not to gate. Making it gate would change what a Layer-3
+flag means, at a false-block rate that cannot be measured without the real
+cohorts; that is an owner decision, raised in the #2294 PR (a Layer-1 manifest
+violation, which is definitional rather than statistical, is the strongest
+candidate to block).
 
 The contract implemented here
 -----------------------------
@@ -59,14 +86,16 @@ from typing import Iterable, List, Optional
 
 __all__ = [
     "KIND_DATA_LOADING",
+    "KIND_DATA_SUFFICIENCY",
     "KIND_DATA_TRANSFORM",
+    "KIND_FEAST_FRESHNESS",
     "KIND_GE_VALIDATION",
     "KIND_LEAKAGE",
     "KIND_QUALITY_CHECK",
+    "KIND_SCHEMA_VALIDATION",
     "KIND_SEPARATOR",
     "merge_blocking_issues",
     "tag_blocking_issue",
-    "untag_blocking_issue",
 ]
 
 #: Separator between an entry's kind and its message. Matches the shape
@@ -78,24 +107,16 @@ KIND_GE_VALIDATION = "ge_validation"
 KIND_DATA_LOADING = "data_loading"
 KIND_DATA_TRANSFORM = "data_transform"
 KIND_LEAKAGE = "leakage"
+KIND_SCHEMA_VALIDATION = "schema"
+#: ``sufficiency_check`` has emitted ``"data_sufficiency: ..."`` since PR #462;
+#: the kind reuses that prefix so its entries are unchanged on the wire.
+KIND_DATA_SUFFICIENCY = "data_sufficiency"
+KIND_FEAST_FRESHNESS = "feast_freshness"
 
 
 def tag_blocking_issue(kind: str, message: str) -> str:
     """Prefix ``message`` with its producing node's ``kind``."""
     return f"{kind}{KIND_SEPARATOR}{message}"
-
-
-def untag_blocking_issue(kind: str, issue: str) -> Optional[str]:
-    """The message inside ``issue`` if it carries ``kind``, else ``None``.
-
-    Callers that match on an entry's CONTENT must use this rather than
-    searching the whole tagged string: the kind prefix is part of that string
-    and can produce false hits. ``leakage: `` contains ``age``, so a leaked
-    feature named ``age`` matched every leakage entry — including unrelated
-    ones — when the prune searched the tagged form (codex r2 HIGH on #2283).
-    """
-    prefix = f"{kind}{KIND_SEPARATOR}"
-    return issue[len(prefix) :] if issue.startswith(prefix) else None
 
 
 def merge_blocking_issues(

@@ -32,12 +32,14 @@ Reads:
       baseline_computer; this node MUST run after it)
     - ``state.scope_spec``: problem_type, prediction_target,
       sufficiency overrides (``scope_spec.sufficiency.*``)
-    - ``state.blocking_issues``: prior blocking issues (preserved & extended)
+    - ``state.blocking_issues``: other nodes' entries are preserved
 
 Writes:
     - ``state.sufficiency_report``: DataSufficiencyReport.model_dump()
-    - ``state.blocking_issues``: extended on HARD_FAIL / blocking SOFT_FAIL /
-      INCONCLUSIVE
+    - ``state.blocking_issues``: this node's ``data_sufficiency:`` entry is
+      replaced on every computed verdict (present on HARD_FAIL / blocking
+      SOFT_FAIL / INCONCLUSIVE, retracted otherwise) via
+      ``blocking_issues.merge_blocking_issues``; SKIPPED leaves it untouched
     - ``state.power_warnings``: SOFT_FAIL warnings for predictive paths
     - ``state.qc_status``: set to "failed" when this node adds blocking issues
 """
@@ -74,6 +76,7 @@ from src.utils.sufficiency_schemas import (
     ThresholdResolution,
 )
 
+from ..blocking_issues import KIND_DATA_SUFFICIENCY, merge_blocking_issues
 from ..state import DataPreparerState
 
 logger = logging.getLogger(__name__)
@@ -817,7 +820,7 @@ def _apply_verdict_to_state(
     """
     force_low_power = bool((user_config or {}).get("force_low_power_run", False))
 
-    blocking_issues: List[str] = list(state.get("blocking_issues") or [])
+    own_blocking: List[str] = []
     power_warnings: List[str] = list(state.get("power_warnings") or [])
 
     is_causal = problem_type == "causal_inference"
@@ -858,20 +861,19 @@ def _apply_verdict_to_state(
         # the pipeline will keep failing.
         if report.verdict == "HARD_FAIL":
             msg = (
-                f"data_sufficiency: HARD_FAIL ({report.verdict_rationale}). "
+                f"HARD_FAIL ({report.verdict_rationale}). "
                 f"HARD_FAIL is non-overridable; review and fix the underlying "
                 f"data issue (insufficient sample size / EPV / variance)."
             )
         else:
             # Blocking causal SOFT_FAIL (force_low_power_run not set).
             msg = (
-                f"data_sufficiency: {report.verdict} ({report.verdict_rationale}). "
+                f"{report.verdict} ({report.verdict_rationale}). "
                 f"Override via scope_spec.sufficiency.force_low_power_run=True "
                 f"if intentional (causal SOFT_FAIL only — HARD_FAIL is "
                 f"non-overridable)."
             )
-        blocking_issues.append(msg)
-        updates["blocking_issues"] = blocking_issues
+        own_blocking.append(msg)
         updates["qc_status"] = "failed"
         logger.warning(f"Sufficiency check BLOCKING: {report.verdict_rationale}")
     elif report.verdict == "SOFT_FAIL":
@@ -882,6 +884,15 @@ def _apply_verdict_to_state(
     else:
         logger.info(f"Sufficiency check PASS: {report.verdict_rationale}")
 
+    # Written on every COMPUTED verdict, blocking or not (#2294): the node is
+    # re-entrant (a QC retry re-runs it), and merging under its own kind is
+    # what replaces its previous entry instead of duplicating it, and retracts
+    # it once the verdict clears. SKIPPED verdicts omit the key and so leave
+    # the channel as it was: a pass that did not assess sufficiency must not
+    # retract an earlier pass's blocker.
+    updates["blocking_issues"] = merge_blocking_issues(
+        state.get("blocking_issues"), own_blocking, kind=KIND_DATA_SUFFICIENCY
+    )
     return updates
 
 
@@ -984,11 +995,13 @@ def _emit_inconclusive_report(
         problem_type=safe_problem_type,  # type: ignore[arg-type]
         human_readable_summary=f"Verdict: INCONCLUSIVE; {rationale}",
     )
-    blocking_issues: List[str] = list(state.get("blocking_issues") or [])
-    blocking_issues.append("data_sufficiency: INCONCLUSIVE (diagnostic failed — see logs)")
     return {
         "sufficiency_report": report.model_dump(),
-        "blocking_issues": blocking_issues,
+        "blocking_issues": merge_blocking_issues(
+            state.get("blocking_issues"),
+            ["INCONCLUSIVE (diagnostic failed — see logs)"],
+            kind=KIND_DATA_SUFFICIENCY,
+        ),
         "qc_status": "failed",
     }
 
@@ -1023,15 +1036,17 @@ def _emit_zero_event_hard_fail(
         baseline_rate=0.0,
         human_readable_summary=f"Verdict: HARD_FAIL; {rationale}",
     )
-    blocking_issues: List[str] = list(state.get("blocking_issues") or [])
-    blocking_issues.append(
-        f"data_sufficiency: HARD_FAIL ({rationale}). HARD_FAIL is "
-        f"non-overridable; review and fix the underlying data issue "
-        f"(insufficient sample size / EPV / variance)."
-    )
     return {
         "sufficiency_report": report.model_dump(),
-        "blocking_issues": blocking_issues,
+        "blocking_issues": merge_blocking_issues(
+            state.get("blocking_issues"),
+            [
+                f"HARD_FAIL ({rationale}). HARD_FAIL is "
+                f"non-overridable; review and fix the underlying data issue "
+                f"(insufficient sample size / EPV / variance)."
+            ],
+            kind=KIND_DATA_SUFFICIENCY,
+        ),
         "qc_status": "failed",
     }
 

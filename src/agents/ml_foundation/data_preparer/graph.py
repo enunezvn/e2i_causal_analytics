@@ -477,9 +477,20 @@ def _route_after_leakage_remediation(
 ) -> Literal["recheck", "continue", "end"]:
     """Route after leakage remediation.
 
-    - If remediation was applied and viable, re-check via detect_leakage
+    - If remediation was applied and viable, re-check via detect_leakage —
+      ALWAYS, including after the last permitted attempt
     - If remediation found no viable features, halt the pipeline
     - Otherwise continue to transform_data
+
+    Why the recheck is unconditional (#2294): ``leakage_remediation`` does not
+    touch ``blocking_issues``; ``detect_leakage`` rebuilds its ``leakage:``
+    entries from the findings on the remediated frames. This route used to
+    skip the recheck once ``attempts`` reached the max — and the node sets
+    ``attempts`` BEFORE routing, so the 5th successful pass was never
+    rechecked and went on with whatever the channel held. The loop is still
+    bounded: ``_route_after_leakage_detection`` stops routing to remediation
+    at the max, so that final recheck continues to ``transform_data`` with
+    entries that reflect the data actually being passed on.
 
     Args:
         state: Current agent state
@@ -495,11 +506,7 @@ def _route_after_leakage_remediation(
         logger.warning("Leakage remediation found no viable features — halting pipeline")
         return "end"
 
-    if (
-        status == "applied"
-        and state.get("requires_leakage_revalidation")
-        and attempts < MAX_LEAKAGE_REMEDIATION_ATTEMPTS
-    ):
+    if status == "applied" and state.get("requires_leakage_revalidation"):
         logger.info(
             f"Leakage remediation applied, re-checking "
             f"(attempt {attempts}/{MAX_LEAKAGE_REMEDIATION_ATTEMPTS})"
@@ -550,13 +557,13 @@ async def finalize_output(state: DataPreparerState) -> Dict[str, Any]:
         # appending. Pinned by ``test_blocking_issues_channel_2283.py::
         # test_sampling_frame_entry_reaches_the_gate_without_re_promotion``.
         #
-        # What is NOT claimed: that every condition which SHOULD block reaches
-        # this channel in the first place. Several producer-side paths still
-        # fail open (schema-validator exception returns, swallowed inner
-        # leakage checks, and the promotion condition at
-        # ``leakage_detector`` when a legacy issue coexists with a MODERATE
-        # finding). Those are pre-existing and tracked separately; restoring
-        # the re-promotion would not address any of them.
+        # The producer-side gaps #2294 found — schema-validator exception
+        # returns, swallowed inner leakage checks, the legacy-leakage
+        # promotion condition, the unrechecked final leakage remediation —
+        # are fixed at their producers and pinned by
+        # ``test_qc_fail_open_2294.py``. That is a list of known paths, not a
+        # proof that every condition which should block reaches this channel;
+        # see ``blocking_issues.py`` for the writers and what they cover.
         blocking_issues = list(state.get("blocking_issues", []) or [])
 
         # Apply gate logic (from tier0-contracts.md)
