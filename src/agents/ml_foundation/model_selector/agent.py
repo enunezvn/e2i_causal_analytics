@@ -260,7 +260,7 @@ class ModelSelectorAgent:
             output = self._build_output(final_state, experiment_id)
 
             # Update procedural memory with successful selection pattern
-            await self._update_procedural_memory(output)
+            await self._update_procedural_memory(output, final_state)
 
             # Populate the semantic knowledge graph (e2i_causal) with the selected
             # algorithm so Tier 0 runs grow it and read-hooks return real context
@@ -387,7 +387,9 @@ class ModelSelectorAgent:
             "status": "completed",
         }
 
-    async def _update_procedural_memory(self, output: Dict[str, Any]) -> None:
+    async def _update_procedural_memory(
+        self, output: Dict[str, Any], final_state: Optional[Dict[str, Any]] = None
+    ) -> None:
         """Update procedural memory with successful selection pattern.
 
         Graceful degradation: If memory is unavailable,
@@ -412,7 +414,8 @@ class ModelSelectorAgent:
                 pattern_data={
                     "algorithm_name": model_candidate.get("algorithm_name"),
                     "algorithm_family": model_candidate.get("algorithm_family"),
-                    "problem_type": output.get("selection_summary", {}).get("problem_type"),
+                    # selection_summary has no problem_type; the final state does (#2325).
+                    "problem_type": (final_state or {}).get("problem_type"),
                     "selection_score": model_candidate.get("selection_score"),
                     "primary_reason": selection_rationale.get("primary_reason"),
                     "supporting_factors": selection_rationale.get("supporting_factors", []),

@@ -137,6 +137,28 @@ async def test_run_links_the_algorithm_to_the_real_problem_type(boundaries):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_run_hands_the_procedural_pattern_the_real_problem_type(boundaries, monkeypatch):
+    """The procedural client does not exist today (the write is a no-op); when it does, the
+    pattern must carry the run's problem type, not selection_summary's absent one."""
+    import src.agents.ml_foundation.model_selector.agent as agent_module
+
+    patterns: List[Dict[str, Any]] = []
+
+    class _Procedural:
+        async def store_pattern(self, **kwargs: Any) -> None:
+            patterns.append(kwargs)
+
+    monkeypatch.setattr(agent_module, "_get_procedural_memory", lambda: _Procedural())
+    output = await _run_real_agent()
+
+    assert len(patterns) == 1
+    data = patterns[0]["pattern_data"]
+    assert data["problem_type"] == "binary_classification"
+    assert data["algorithm_name"] == output["model_candidate"]["algorithm_name"]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_a_missing_value_reads_as_absent_never_as_a_measurement(boundaries):
     """The real output with the selection fields gone: the row must not invent them."""
     from src.agents.ml_foundation.model_selector.memory_hooks import ModelSelectorMemoryHooks

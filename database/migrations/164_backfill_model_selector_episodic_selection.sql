@@ -27,6 +27,13 @@
 -- description is still exactly the broken text, whose structured fields are still null, and
 -- whose rationale text matches the pattern. A second application matches zero rows.
 --
+-- APPLIED BY: the first deploy after merge (deploy.yml runs scripts/run_migrations.sh BEFORE
+-- the services flip). A model_selector run landing between the migration and the flip is
+-- written by the OLD hook and stays broken; check after the deploy with
+--   select count(*) from episodic_memories where agent_name = 'model_selector'
+--      and description = 'Model Selection: unknown (unknown). Score: 0.00. Reason: N/A';
+-- and, if non-zero, re-run this file's statement by hand (it is idempotent).
+--
 -- NOTE: no BEGIN/COMMIT here -- the migration runner wraps each file.
 
 WITH parsed AS (
@@ -63,4 +70,11 @@ UPDATE episodic_memories em
        )
   FROM parsed p
  WHERE em.memory_id = p.memory_id
-   AND p.m IS NOT NULL;
+   AND p.m IS NOT NULL
+   -- The old-state predicates again on the row being updated, so a row changed after the
+   -- CTE's snapshot is left alone.
+   AND em.agent_name = 'model_selector'
+   AND em.event_type = 'model_selection_completed'
+   AND em.description = 'Model Selection: unknown (unknown). Score: 0.00. Reason: N/A'
+   AND em.raw_content ->> 'algorithm_name' IS NULL
+   AND em.raw_content ->> 'selection_score' IS NULL;

@@ -273,7 +273,8 @@ the MLflow run id. Until #2325 its `algorithm_name` / `selection_score` fields w
 prod row (0/188, 2026-09-29) and the description read `Score: 0.00`, because
 `store_model_selection` read top-level keys that live under `model_candidate` /
 `selection_rationale`; a missing value now reads "not recorded". The historic rows are
-repaired by the migration in the #2325 PR (owner-applied), from each row's own rationale text.
+repaired by `database/migrations/164_backfill_model_selector_episodic_selection.sql`, which the
+first deploy after merge applies automatically, from each row's own rationale text.
 
 ---
 
