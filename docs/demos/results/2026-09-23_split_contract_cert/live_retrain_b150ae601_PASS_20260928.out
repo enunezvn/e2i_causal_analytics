@@ -1,0 +1,42 @@
+== preflight: deployed image must contain 6720959b8
+image b150ae6013387d7f6198b89060d011742d452c50 contains #2264
+== parent row (must show calibration_method=sigmoid, provenance synthetic_gold)
+initiation_kisqali_goldstd_lr_v1 | 1.0 | sigmoid | synthetic_gold | 35a2cd41-4d85-4034-b1a0-1c2a61e3766e
+T0=2026-09-28T20:36:58Z
+{
+    "job_id": "36cd579b-102f-41ec-9003-9261d315f785",
+    "model_version": "4ec55d13-46c8-4df4-9ec8-7723fad67fb3",
+    "status": "pending",
+    "trigger_reason": "manual",
+    "triggered_at": "2026-09-28T20:36:59.967891Z",
+    "triggered_by": "owner_post2264_proof",
+    "approved_at": null,
+    "started_at": null,
+    "completed_at": null,
+    "performance_before": 0.735294,
+    "performance_after": null,
+    "notes": "post-#2264 live proof (#2242/#2255/#2257/#2248)"
+}
+== waiting for the job to finish (a run takes ~2 min)
+== 1) history row (PASS: completed, new_metric_value ~0.83 vs goldstd 0.8505, new_model_version = <1.0>_retrained_<ts>_<hex>)
+36cd579b-102f-41ec-9003-9261d315f785 | completed | 4ec55d13-46c8-4df4-9ec8-7723fad67fb3 | 1.0_retrained_20260928_2036_6fbd91 | 0.735294 | 0.835903 | candidate 'initiation_kisqali_goldstd_lr_v1' v'1.0_retrained_20260928_2036_6fbd91' registered as ml_model_registry row faf4ed1d-15cf-4ae2-88c7-e927e64ec53f; deployment_action='promote': register/promote only — no Bento packaged, no endpoint deployed
+== 2) candidate registry row (PASS: same model_name, new version, SAME experiment_id as parent, provenance synthetic_gold, calibration sigmoid)
+initiation_kisqali_goldstd_lr_v1 | 1.0 | 35a2cd41-4d85-4034-b1a0-1c2a61e3766e | synthetic_gold | sigmoid | staging
+initiation_kisqali_goldstd_lr_v1 | 1.0_retrained_20260928_1617_d18ac8 | 35a2cd41-4d85-4034-b1a0-1c2a61e3766e | synthetic_gold | sigmoid | development
+initiation_kisqali_goldstd_lr_v1 | 1.0_retrained_20260928_1934_725a94 | 35a2cd41-4d85-4034-b1a0-1c2a61e3766e | synthetic_gold | sigmoid | staging
+initiation_kisqali_goldstd_lr_v1 | 1.0_retrained_20260928_2036_6fbd91 | 35a2cd41-4d85-4034-b1a0-1c2a61e3766e | synthetic_gold | sigmoid | staging
+== 3) episodic rows since T0 (PASS for #2157/#2120: all SIX agents incl. model_deployer, ONE shared audit_workflow_id, session NULL)
+scope_definer | NULL | ace2f802-1b38-487b-bd9d-27ee26b59206
+data_preparer | NULL | ace2f802-1b38-487b-bd9d-27ee26b59206
+model_selector | NULL | ace2f802-1b38-487b-bd9d-27ee26b59206
+model_trainer | NULL | ace2f802-1b38-487b-bd9d-27ee26b59206
+feature_analyzer | NULL | ace2f802-1b38-487b-bd9d-27ee26b59206
+model_deployer | NULL | ace2f802-1b38-487b-bd9d-27ee26b59206
+== 4) no new experiment rows named after the physical label (PASS: 0 — #2257)
+0
+== 5) worker log: calibration + criteria
+[2026-09-28 20:37:49,123: INFO/ForkPoolWorker-2] Calibration: ECE 0.1068 → 0.0295 (sigmoid)
+[2026-09-28 20:37:49,172: INFO/ForkPoolWorker-2] Evaluation complete: success_criteria_met=True
+[2026-09-28 20:38:39,403: INFO/ForkPoolWorker-2] Model training complete: LogisticRegression (success_criteria_met: True) in 81.40s
+[2026-09-28 20:38:39,404: INFO/ForkPoolWorker-2] Stage 4 complete: training_run_id=train_cdfe3be40c66, success_criteria_met=True, primary_metric=0.8363, hpo_trials=50, duration=81.74s
+[2026-09-28 20:38:45,206: INFO/ForkPoolWorker-2] Task src.tasks.execute_model_retraining[2bbb3015-44e6-433e-bccb-1089b4c87f46] succeeded in 104.57105769496411s: {'status': 'completed', 'retraining_id': '36cd579b-102f-41ec-9003-9261d315f785', 'old_version': '4ec55d13-46c8-4df4-9ec8-7723fad67fb3', 'new_version': '1.0_retrained_20260928_2036_6fbd91', 'performance_after': 0.8359030654056568, 'calibration_method': 'sigmoid', 'mlflow_model_version': None, 'deployed': False, 'deployment_skipped_reason': 'deployment_action=\'promote\': register/promote only — no Bento packaged, no endpoint deployed', 'message': 'Model 1.0_retrained_20260928_2036_6fbd91 retrained; validation AUC=0.8359; deployment_action=\'promote\': register/promote only — no Bento packaged, no endpoint deployed'}
