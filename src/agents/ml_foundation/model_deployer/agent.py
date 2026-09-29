@@ -569,20 +569,24 @@ class ModelDeployerAgent:
                     status = "active"
                 else:
                     status = "registered"
-                await deployment_repo.update_status(
-                    deployment_id=deployment.id,
-                    new_status=status,
-                )
-                # codex r3 (#2310): the record is what the DB now says, not what was sent. A
-                # status write that did not land (zero rows, RLS) is not a persisted record,
-                # and a success whose record did not reach its status is not a success.
-                recorded = await deployment_repo.get_by_id(str(deployment.id))
+                # codex r3/r4 (#2310): the record is what the DB now says, not what was sent.
+                # A status write that did not land (zero rows, RLS) or raised is not a
+                # persisted record, and a success whose record did not reach its status is
+                # not a success.
+                try:
+                    await deployment_repo.update_status(
+                        deployment_id=deployment.id,
+                        new_status=status,
+                    )
+                    recorded = await deployment_repo.get_by_id(str(deployment.id))
+                    seen = repr(getattr(recorded, "status", None))
+                except Exception as status_err:  # noqa: BLE001 — judged below, not swallowed
+                    recorded, seen = None, f"unconfirmed ({status_err})"
                 if recorded is None or str(recorded.status) != status:
                     output["db_persisted"] = False
                     output["deployment_record_id"] = None
                     output["db_persist_skipped_reason"] = (
-                        f"ml_deployments {deployment.id} status is "
-                        f"{getattr(recorded, 'status', None)!r}, not {status!r}"
+                        f"ml_deployments {deployment.id} status is {seen}, not {status!r}"
                     )
                     if output.get("deployment_successful"):
                         output["deployment_successful"] = False

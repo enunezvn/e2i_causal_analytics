@@ -273,11 +273,10 @@ async def test_the_candidate_environment_validates_to_the_candidate_target():
 @pytest.fixture
 def local_mlflow(tmp_path, monkeypatch):
     """A real MLflow registry on a sqlite store under tmp_path (never the tracking server)."""
+    import mlflow
     from mlflow.tracking import MlflowClient
 
     from src.mlops.mlflow_connector import MLflowConnector
-
-    import mlflow
 
     uri = f"sqlite:///{tmp_path}/mlflow.db"
     monkeypatch.setenv("MLFLOW_TRACKING_URI", uri)

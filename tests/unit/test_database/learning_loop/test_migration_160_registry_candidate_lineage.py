@@ -1,9 +1,11 @@
 """Migrations 159 + 160 (#2310, #2311, #2308): retrain candidates get their own stage, a
 lineage link to the row they retrain, the exact MLflow version, and register-only deploys a
-non-active status. The backfill moves only the rows a retraining-history row links.
+non-active status. The backfill moves only the three audited rows a retraining-history row
+links.
 
-Real Postgres, opt-in (``E2I_DB_INTEGRATION=1`` + docker, like
-``tests/unit/test_database/learning_loop/``): a throwaway container of prod's own image,
+Real Postgres, opt-in (``E2I_DB_INTEGRATION=1`` + docker). It lives in the learning_loop
+suite so the deploy's real-DB gate (``scripts/deploy/realdb_suite_gate.sh``), which runs
+that directory, runs it too (codex r4). A throwaway container of prod's own image,
 the tables built by the repo's VERBATIM DDL (``database/ml/mlops_tables.sql`` +
 ``017_model_monitoring_tables.sql``), a copy of the live rows the backfill is written for
 (ids, names, versions, stages, run ids and statuses as measured read-only on 2026-09-28),
@@ -24,7 +26,7 @@ import pytest
 
 pytestmark = pytest.mark.timeout(300)
 
-REPO = Path(__file__).resolve().parents[3]
+REPO = Path(__file__).resolve().parents[4]
 MIGRATIONS = REPO / "database" / "migrations"
 M159 = MIGRATIONS / "159_registry_candidate_stage_and_lineage_enums.sql"
 M160 = MIGRATIONS / "160_registry_candidate_stage_and_lineage.sql"

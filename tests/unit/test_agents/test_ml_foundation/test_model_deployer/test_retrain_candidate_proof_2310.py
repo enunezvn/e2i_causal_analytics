@@ -50,8 +50,9 @@ async def _register(db, retrain_of, model_uri: str, find):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["no_row", "raises"])
 @pytest.mark.parametrize("action", ["promote", "deploy"])
-async def test_a_deploy_record_whose_status_write_did_not_land_is_not_a_success(action):
+async def test_a_deploy_record_whose_status_write_did_not_land_is_not_a_success(action, failure):
     """codex r3: a zero-row status update (RLS, a concurrent delete) must not leave a
     'registered' success reported over a record that still reads 'pending'."""
     from src.agents.ml_foundation.model_deployer.agent import ModelDeployerAgent
@@ -62,6 +63,8 @@ async def test_a_deploy_record_whose_status_write_did_not_land_is_not_a_success(
     output = {"deployment_successful": True, "status": "completed"}
 
     async def _no_row(self, **_kw):
+        if failure == "raises":  # codex r4: an exception is not a confirmation either
+            raise RuntimeError("status write failed")
         return True  # the repository reports True whatever the update matched
 
     with (
@@ -87,7 +90,9 @@ async def test_a_deploy_record_whose_status_write_did_not_land_is_not_a_success(
     assert output["deployment_record_id"] is None
     assert output["deployment_successful"] is False
     assert output["status"] == ("failed" if action == "promote" else "partial")
-    assert "pending" in output["db_persist_skipped_reason"]
+    assert ("pending" if failure == "no_row" else "status write failed") in output[
+        "db_persist_skipped_reason"
+    ]
 
 
 @pytest.mark.asyncio
