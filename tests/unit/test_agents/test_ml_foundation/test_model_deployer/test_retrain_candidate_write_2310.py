@@ -277,15 +277,26 @@ def local_mlflow(tmp_path, monkeypatch):
 
     from src.mlops.mlflow_connector import MLflowConnector
 
+    import mlflow
+
     uri = f"sqlite:///{tmp_path}/mlflow.db"
     monkeypatch.setenv("MLFLOW_TRACKING_URI", uri)
     monkeypatch.setenv("MLFLOW_REGISTRY_URI", uri)
     monkeypatch.setattr(MLflowConnector, "_instance", None)
+    # mlflow's module-level URIs win over the environment once any earlier test in the
+    # process set them (CI xdist worker: "Run ... not found" on another store). Pin both.
+    saved = (mlflow.get_tracking_uri(), mlflow.get_registry_uri())
+    mlflow.set_tracking_uri(uri)
+    mlflow.set_registry_uri(uri)
     client = MlflowClient(tracking_uri=uri, registry_uri=uri)
     client.create_registered_model(MODEL)
     version = client.create_model_version(MODEL, source=str(tmp_path / "artifact")).version
-    yield client, int(version)
-    monkeypatch.setattr(MLflowConnector, "_instance", None)
+    try:
+        yield client, int(version)
+    finally:
+        mlflow.set_tracking_uri(saved[0])
+        mlflow.set_registry_uri(saved[1])
+        monkeypatch.setattr(MLflowConnector, "_instance", None)
 
 
 @pytest.mark.asyncio
@@ -310,7 +321,7 @@ async def test_promoting_a_candidate_tags_the_version_and_never_moves_its_mlflow
     assert mv.current_stage == "None"
     assert mv.tags == {"e2i.role": "candidate", "e2i.retrain_of": parent}
     assert out["promotion_successful"] is True
-    assert out["current_stage"] == "Candidate"
+    assert out["current_stage"] == "None"  # the MLflow stage; the role is the tag
     assert out["mlflow_transition_success"] is False
     assert "not promoted" in out["promotion_reason"]
 
@@ -443,7 +454,8 @@ async def test_a_candidate_keeps_its_stage_and_its_deploy_record_is_registered_n
             "deployment_name": "d",
             "target_environment": "candidate",
             "promotion_successful": True,
-            "current_stage": "Candidate",
+            "current_stage": "None",
+            "promotion_target_stage": "Candidate",
             "deployment_action": "promote",
         },
     )

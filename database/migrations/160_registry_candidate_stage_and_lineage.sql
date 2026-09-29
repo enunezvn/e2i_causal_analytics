@@ -52,13 +52,15 @@ CREATE INDEX IF NOT EXISTS idx_ml_model_registry_retrain_of
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                    WHERE conname = 'ml_model_registry_retrain_of_not_self') THEN
+                    WHERE conname = 'ml_model_registry_retrain_of_not_self'
+                      AND conrelid = 'public.ml_model_registry'::regclass) THEN
         ALTER TABLE ml_model_registry
             ADD CONSTRAINT ml_model_registry_retrain_of_not_self
             CHECK (retrain_of_id IS NULL OR retrain_of_id <> id);
     END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                    WHERE conname = 'ml_model_registry_mlflow_model_version_positive') THEN
+                    WHERE conname = 'ml_model_registry_mlflow_model_version_positive'
+                      AND conrelid = 'public.ml_model_registry'::regclass) THEN
         ALTER TABLE ml_model_registry
             ADD CONSTRAINT ml_model_registry_mlflow_model_version_positive
             CHECK (mlflow_model_version IS NULL OR mlflow_model_version > 0);

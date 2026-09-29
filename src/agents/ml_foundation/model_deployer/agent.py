@@ -516,16 +516,16 @@ class ModelDeployerAgent:
 
             # Row CONFIRMED present in the DB -> honest to mark persisted.
             output["db_persisted"] = True
-            output["deployment_record_id"] = str(persisted_row.id)
 
             # 2. Update ml_model_registry if promotion occurred. BEFORE the deployment
             # status: a promotion the registry refuses means the deployment is not active.
             # #2310: a candidate was INSERTED at stage 'candidate' by register_model; its
-            # "promotion" is the MLflow role tag, so there is no stage to transition.
+            # "promotion" is the MLflow role tag (the MLflow stage stays "None"), so there is
+            # no stage to transition.
             if (
                 model_registry_id
                 and state.get("promotion_successful")
-                and state.get("current_stage") != CANDIDATE_STAGE
+                and state.get("promotion_target_stage") != CANDIDATE_STAGE
             ):
                 # current_stage carries the MLflow casing ("Production");
                 # transition_stage normalises it and archives only on production.
@@ -573,6 +573,28 @@ class ModelDeployerAgent:
                     deployment_id=deployment.id,
                     new_status=status,
                 )
+                # codex r3 (#2310): the record is what the DB now says, not what was sent. A
+                # status write that did not land (zero rows, RLS) is not a persisted record,
+                # and a success whose record did not reach its status is not a success.
+                recorded = await deployment_repo.get_by_id(str(deployment.id))
+                if recorded is None or str(recorded.status) != status:
+                    output["db_persisted"] = False
+                    output["deployment_record_id"] = None
+                    output["db_persist_skipped_reason"] = (
+                        f"ml_deployments {deployment.id} status is "
+                        f"{getattr(recorded, 'status', None)!r}, not {status!r}"
+                    )
+                    if output.get("deployment_successful"):
+                        output["deployment_successful"] = False
+                        output["status"] = (
+                            "failed"
+                            if state.get("deployment_action", "deploy") in ("promote", "register")
+                            else "partial"
+                        )
+                    logger.error("Deployment record not confirmed: %s", output[
+                        "db_persist_skipped_reason"])  # fmt: skip
+                    return
+                output["deployment_record_id"] = str(deployment.id)
 
                 # Update metrics if available
                 shadow_metrics = state.get("shadow_mode_metrics", {})

@@ -342,7 +342,9 @@ async def promote_candidate(
         logger.error("Candidate registration incomplete: %s", reason)
     return {
         "previous_stage": current,
-        "current_stage": CANDIDATE_STAGE if tagged else current,
+        # codex r3: current_stage is the MLflow stage, which a candidate never changes
+        # ("None"); the role lives in promotion_target_stage and the MLflow tags.
+        "current_stage": current,
         "promotion_successful": tagged,
         "promotion_simulated": False,
         "promotion_reason": reason,

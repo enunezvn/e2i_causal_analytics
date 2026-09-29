@@ -50,6 +50,47 @@ async def _register(db, retrain_of, model_uri: str, find):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["promote", "deploy"])
+async def test_a_deploy_record_whose_status_write_did_not_land_is_not_a_success(action):
+    """codex r3: a zero-row status update (RLS, a concurrent delete) must not leave a
+    'registered' success reported over a record that still reads 'pending'."""
+    from src.agents.ml_foundation.model_deployer.agent import ModelDeployerAgent
+    from src.repositories.deployment import MLDeploymentRepository
+
+    db, retrain_of = _db()
+    first, _ = await _register(db, retrain_of, "runs:/run-a/model", AsyncMock(return_value=[]))
+    output = {"deployment_successful": True, "status": "completed"}
+
+    async def _no_row(self, **_kw):
+        return True  # the repository reports True whatever the update matched
+
+    with (
+        patch(
+            "src.memory.services.factories.get_async_supabase_client", AsyncMock(return_value=db)
+        ),
+        patch.object(MLDeploymentRepository, "update_status", _no_row),
+    ):
+        await ModelDeployerAgent()._store_to_database(
+            output,
+            {
+                "model_registry_id": first["model_registry_id"],
+                "deployment_name": "d",
+                "target_environment": "candidate" if action == "promote" else "staging",
+                "promotion_successful": action == "promote",
+                "current_stage": "None",
+                "promotion_target_stage": "Candidate" if action == "promote" else None,
+                "deployment_action": action,
+                "endpoint_url": None if action == "promote" else "http://svc:3000/predict",
+            },
+        )
+    assert output["db_persisted"] is False
+    assert output["deployment_record_id"] is None
+    assert output["deployment_successful"] is False
+    assert output["status"] == ("failed" if action == "promote" else "partial")
+    assert "pending" in output["db_persist_skipped_reason"]
+
+
+@pytest.mark.asyncio
 async def test_an_answered_empty_search_is_the_only_licence_to_register():
     db, retrain_of = _db()
     out, register = await _register(db, retrain_of, "runs:/run-a/model", AsyncMock(return_value=[]))

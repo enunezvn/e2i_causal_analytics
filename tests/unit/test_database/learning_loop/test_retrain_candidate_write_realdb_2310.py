@@ -241,7 +241,8 @@ async def test_the_candidate_deploy_record_is_registered_and_the_row_stays_a_can
             "deployment_name": f"{MLFLOW_EXP}_deployment",
             "target_environment": "candidate",
             "promotion_successful": True,
-            "current_stage": "Candidate",
+            "current_stage": "None",
+            "promotion_target_stage": "Candidate",
             "deployment_action": "promote",
         },
     )
