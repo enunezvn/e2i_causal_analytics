@@ -1592,8 +1592,12 @@ export interface paths {
          *
          *     Creates a retraining job and optionally auto-approves it.
          *
+         *     A handle that resolves to no ml_model_registry row is refused with 404, and a
+         *     registered row whose identity cannot be read with 409; neither records nor
+         *     enqueues anything (#2319).
+         *
          *     Args:
-         *         model_id: Model version/ID
+         *         model_id: ml_model_registry row id, or a registered model_name / model_version
          *         request: Retraining parameters
          *         triggered_by: User or system triggering retraining
          *
