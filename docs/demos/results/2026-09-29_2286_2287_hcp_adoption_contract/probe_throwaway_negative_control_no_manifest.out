@@ -1,0 +1,106 @@
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/opik/error_tracking/shutdown_hooks.py:12: SentryHubDeprecationWarning: `sentry_sdk.Hub` is deprecated and will be removed in a future major release. Please consult our 1.x to 2.x migration guide for details on how to migrate `Hub` usage to the new API: https://docs.sentry.io/platforms/python/migration/1.x-to-2.x
+  client = sentry_sdk.Hub.current.client
+WARNING src.tasks.drift_monitoring_tasks: Retrain of 'adopted': the parent's calibration method is not recorded; the evaluator's auto policy picks it
+WARNING src.agents.ml_foundation.scope_definer.nodes.scope_builder: scope_spec.sufficiency.target_mde not specified and no scope-time data signal (baseline_rate / sigma_outcome) available; falling back to literature default 0.050 for problem_type=binary_classification. Set scope_spec.sufficiency.target_mde or pre-compute baseline_rate / sigma_outcome to silence this warning.
+WARNING src.agents.ml_foundation.scope_definer.nodes.criteria_validator: ADAPTIVE_CRITERIA on but state missing pre-eval inputs (n_samples=None, prevalence=None, feature_count=None); falling back to fixed thresholds. Caller (e.g., scripts/run_tier0_test.py) must inject these.
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmpv8s07nha' for ephemeral docs site
+code under test: /home/enunez/Projects/e2i_causal_analytics/.worktrees/issue-2286-2287/src  source=throwaway manifest_override=none
+seeded (generators, prod-free): {'hcp_profiles': 5000, 'hcp_brand_adoption': 15000}; images db=supabase/postgres:15.8.1.085
+postgrest image=postgrest/postgrest:v14.1
+registry row after 163 (simulated, not written): {'cohort_target_outcome': 'adopted', 'cohort_data_source': '{"columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region", "adopted"], "filters": {"brand": "Remibrutinib", "is_synthetic": true}, "table": "hcp_adoption_goldstd_v", "type": "table"}'}
+
+=== hcp_adoption / Remibrutinib ===
+has_cohort_contract: today(151 label only)=False after163=True
+sweep branch: today -> 'blocked: no_cohort_contract'; after163 -> 'enqueue: trigger_retraining(cohort=...)'
+scope_spec: prediction_target='adopted' problem_type='binary_classification' feature_manifest_source=None data_source-in-scope_spec=False
+[load_data 0.3s] {} blocking=[]
+  rows {'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500} total=5000 label_rate=0.3938
+  frame columns = ['peer_influence_score', 'influence_network_size', 'years_experience', 'specialty', 'geographic_region', 'adopted', 'data_split']
+[audit_sampling_frame 0.0s] {} blocking=[]
+[run_schema_validation 1.0s] {"schema_validation_status": "passed", "schema_splits_validated": 3} blocking=[]
+[run_quality_checks 0.0s] {"qc_status": "passed", "overall_score": 1.0} blocking=[]
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3865.72it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 2895.29it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3323.54it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 2895.62it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2441.67it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2212.42it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2212.83it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2105.10it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2043.45it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1972.86it/s]
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmpha01rzi4' for ephemeral docs site
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3843.28it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 2824.45it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3322.22it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 2907.16it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2470.14it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2272.10it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2198.91it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2087.76it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2027.54it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1966.49it/s]
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmpahl9xpiw' for ephemeral docs site
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 4503.55it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3434.20it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3930.01it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3499.63it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 3021.83it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2758.68it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2733.24it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2599.06it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2534.32it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2454.24it/s]
+WARNING src.tasks.drift_monitoring_tasks: Retrain of 'adopted': the parent's calibration method is not recorded; the evaluator's auto policy picks it
+WARNING src.agents.ml_foundation.scope_definer.nodes.scope_builder: scope_spec.sufficiency.target_mde not specified and no scope-time data signal (baseline_rate / sigma_outcome) available; falling back to literature default 0.050 for problem_type=binary_classification. Set scope_spec.sufficiency.target_mde or pre-compute baseline_rate / sigma_outcome to silence this warning.
+WARNING src.agents.ml_foundation.scope_definer.nodes.criteria_validator: ADAPTIVE_CRITERIA on but state missing pre-eval inputs (n_samples=None, prevalence=None, feature_count=None); falling back to fixed thresholds. Caller (e.g., scripts/run_tier0_test.py) must inject these.
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmprr04scup' for ephemeral docs site
+[run_ge_validation 0.5s] {"ge_validation_status": "passed", "ge_expectations_passed": 24, "ge_expectations_evaluated": 24} blocking=[]
+[engineer_features 0.0s] {} blocking=[]
+[detect_leakage 0.2s] {"leakage_severity": "none", "leaked_features": []} blocking=[]
+[adaptive_validity_check 2.2s] {"leakage_severity": "high", "leaked_features": ["influence_network_size", "peer_influence_score"]} blocking=[]
+  adaptive verdict severities: {'high': 2, 'info': 1}
+    high: peer_influence_score layer=3
+    high: influence_network_size layer=3
+[route_after_leakage_detection] -> remediate
+leakage_remediation (LLM) would run -- NOT executed by this probe
+FIDELITY Remibrutinib (contract load, goldstd builder): {'rows': (5000, 5000), 'label_rate': (0.3938, 0.3938), 'splits': ({'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500}, {'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500}), 'row_multiset_equal': True}
+RESULT {"brand": "Remibrutinib", "has_cohort_contract_after163": true, "prediction_target": "adopted", "route": "remediate", "gate_passed": null, "blocking_issues": [], "schema_validation_status": "passed", "ge_validation_status": "passed", "leakage_severity": "high", "fidelity_row_multiset_equal": true}
+registry row after 163 (simulated, not written): {'cohort_target_outcome': 'adopted', 'cohort_data_source': '{"columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region", "adopted"], "filters": {"brand": "Fabhalta", "is_synthetic": true}, "table": "hcp_adoption_goldstd_v", "type": "table"}'}
+
+=== hcp_adoption / Fabhalta ===
+has_cohort_contract: today(151 label only)=False after163=True
+sweep branch: today -> 'blocked: no_cohort_contract'; after163 -> 'enqueue: trigger_retraining(cohort=...)'
+scope_spec: prediction_target='adopted' problem_type='binary_classification' feature_manifest_source=None data_source-in-scope_spec=False
+[load_data 0.3s] {} blocking=[]
+  rows {'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500} total=5000 label_rate=0.4176
+  frame columns = ['peer_influence_score', 'influence_network_size', 'years_experience', 'specialty', 'geographic_region', 'adopted', 'data_split']
+[audit_sampling_frame 0.0s] {} blocking=[]
+[run_schema_validation 0.1s] {"schema_validation_status": "passed", "schema_splits_validated": 3} blocking=[]
+[run_quality_checks 0.0s] {"qc_status": "passed", "overall_score": 1.0} blocking=[]
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3697.59it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 2835.91it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3311.73it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 2958.94it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2514.57it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2296.24it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2287.25it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2162.51it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2084.30it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2026.02it/s]
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmp1g_rr9p7' for ephemeral docs site
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 4682.89it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3452.10it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3973.76it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3571.14it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2975.53it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2703.56it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2520.62it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2393.25it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2330.03it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2276.63it/s]
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmpp68l74k5' for ephemeral docs site
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 4563.99it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3335.87it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3817.34it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3454.23it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2902.63it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2622.42it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2421.96it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2289.47it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2235.64it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2162.14it/s]
+WARNING src.tasks.drift_monitoring_tasks: Retrain of 'adopted': the parent's calibration method is not recorded; the evaluator's auto policy picks it
+WARNING src.agents.ml_foundation.scope_definer.nodes.scope_builder: scope_spec.sufficiency.target_mde not specified and no scope-time data signal (baseline_rate / sigma_outcome) available; falling back to literature default 0.050 for problem_type=binary_classification. Set scope_spec.sufficiency.target_mde or pre-compute baseline_rate / sigma_outcome to silence this warning.
+WARNING src.agents.ml_foundation.scope_definer.nodes.criteria_validator: ADAPTIVE_CRITERIA on but state missing pre-eval inputs (n_samples=None, prevalence=None, feature_count=None); falling back to fixed thresholds. Caller (e.g., scripts/run_tier0_test.py) must inject these.
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmpba8gzobf' for ephemeral docs site
+[run_ge_validation 0.4s] {"ge_validation_status": "passed", "ge_expectations_passed": 24, "ge_expectations_evaluated": 24} blocking=[]
+[engineer_features 0.0s] {} blocking=[]
+[detect_leakage 0.2s] {"leakage_severity": "none", "leaked_features": []} blocking=[]
+[adaptive_validity_check 2.1s] {"leakage_severity": "high", "leaked_features": ["influence_network_size", "peer_influence_score"]} blocking=[]
+  adaptive verdict severities: {'high': 2, 'info': 1}
+    high: peer_influence_score layer=3
+    high: influence_network_size layer=3
+[route_after_leakage_detection] -> remediate
+leakage_remediation (LLM) would run -- NOT executed by this probe
+FIDELITY Fabhalta (contract load, goldstd builder): {'rows': (5000, 5000), 'label_rate': (0.4176, 0.4176), 'splits': ({'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500}, {'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500}), 'row_multiset_equal': True}
+RESULT {"brand": "Fabhalta", "has_cohort_contract_after163": true, "prediction_target": "adopted", "route": "remediate", "gate_passed": null, "blocking_issues": [], "schema_validation_status": "passed", "ge_validation_status": "passed", "leakage_severity": "high", "fidelity_row_multiset_equal": true}
+registry row after 163 (simulated, not written): {'cohort_target_outcome': 'adopted', 'cohort_data_source': '{"columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region", "adopted"], "filters": {"brand": "Kisqali", "is_synthetic": true}, "table": "hcp_adoption_goldstd_v", "type": "table"}'}
+
+=== hcp_adoption / Kisqali ===
+has_cohort_contract: today(151 label only)=False after163=True
+sweep branch: today -> 'blocked: no_cohort_contract'; after163 -> 'enqueue: trigger_retraining(cohort=...)'
+scope_spec: prediction_target='adopted' problem_type='binary_classification' feature_manifest_source=None data_source-in-scope_spec=False
+[load_data 0.3s] {} blocking=[]
+  rows {'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500} total=5000 label_rate=0.4046
+  frame columns = ['peer_influence_score', 'influence_network_size', 'years_experience', 'specialty', 'geographic_region', 'adopted', 'data_split']
+[audit_sampling_frame 0.0s] {} blocking=[]
+[run_schema_validation 0.1s] {"schema_validation_status": "passed", "schema_splits_validated": 3} blocking=[]
+[run_quality_checks 0.0s] {"qc_status": "passed", "overall_score": 1.0} blocking=[]
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3658.89it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 2751.57it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3209.11it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 2857.64it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2452.52it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2223.92it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2347.70it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2212.06it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2157.32it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2088.91it/s]
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmps3zgmxr4' for ephemeral docs site
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 4199.90it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3183.94it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3620.46it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3218.34it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2738.51it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2504.36it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2451.06it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2319.57it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2259.86it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2183.02it/s]
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmpi6d6wghi' for ephemeral docs site
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 4597.34it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3414.63it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3963.43it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3568.10it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2932.26it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2642.91it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2614.90it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2477.60it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2419.79it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2332.76it/s]
+[run_ge_validation 0.4s] {"ge_validation_status": "passed", "ge_expectations_passed": 24, "ge_expectations_evaluated": 24} blocking=[]
+[engineer_features 0.0s] {} blocking=[]
+[detect_leakage 0.2s] {"leakage_severity": "none", "leaked_features": []} blocking=[]
+[adaptive_validity_check 2.1s] {"leakage_severity": "high", "leaked_features": ["influence_network_size", "peer_influence_score"]} blocking=[]
+  adaptive verdict severities: {'high': 2, 'info': 1}
+    high: peer_influence_score layer=3
+    high: influence_network_size layer=3
+[route_after_leakage_detection] -> remediate
+leakage_remediation (LLM) would run -- NOT executed by this probe
+FIDELITY Kisqali (contract load, goldstd builder): {'rows': (5000, 5000), 'label_rate': (0.4046, 0.4046), 'splits': ({'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500}, {'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500}), 'row_multiset_equal': True}
+RESULT {"brand": "Kisqali", "has_cohort_contract_after163": true, "prediction_target": "adopted", "route": "remediate", "gate_passed": null, "blocking_issues": [], "schema_validation_status": "passed", "ge_validation_status": "passed", "leakage_severity": "high", "fidelity_row_multiset_equal": true}
+
+SUMMARY
+{"brand": "Remibrutinib", "has_cohort_contract_after163": true, "prediction_target": "adopted", "route": "remediate", "gate_passed": null, "blocking_issues": [], "schema_validation_status": "passed", "ge_validation_status": "passed", "leakage_severity": "high", "fidelity_row_multiset_equal": true}
+{"brand": "Fabhalta", "has_cohort_contract_after163": true, "prediction_target": "adopted", "route": "remediate", "gate_passed": null, "blocking_issues": [], "schema_validation_status": "passed", "ge_validation_status": "passed", "leakage_severity": "high", "fidelity_row_multiset_equal": true}
+{"brand": "Kisqali", "has_cohort_contract_after163": true, "prediction_target": "adopted", "route": "remediate", "gate_passed": null, "blocking_issues": [], "schema_validation_status": "passed", "ge_validation_status": "passed", "leakage_severity": "high", "fidelity_row_multiset_equal": true}

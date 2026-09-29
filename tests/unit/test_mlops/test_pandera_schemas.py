@@ -59,6 +59,7 @@ class TestSchemaRegistry:
             "patient_journeys",
             "causal_paths",
             "agent_activities",
+            "hcp_adoption_goldstd_v",  # #2287, migration 162's view
         }
         assert expected_sources == set(PANDERA_SCHEMA_REGISTRY.keys())
 
@@ -83,7 +84,7 @@ class TestSchemaRegistry:
     def test_list_registered_schemas_returns_all_sources(self):
         """Test list_registered_schemas returns all source names."""
         sources = list_registered_schemas()
-        assert len(sources) == 7  # Including ml_predictions alias
+        assert len(sources) == 8  # Including ml_predictions alias (+ #2287 view)
         assert "business_metrics" in sources
         assert "ml_predictions" in sources
         # Returns Dict[str, str] mapping name to class name

@@ -668,6 +668,9 @@ def test_provenance_tagged_tables_match_migrations() -> None:
         "csu_escalation_causal",
         # 156_ab_experiment_unit_outcomes.sql (option d1, 2026-09-23, Part of #2207)
         "ab_experiment_unit_outcomes",
+        # 162_hcp_adoption_goldstd_view.sql (#2287: a VIEW exposing the adoption row's
+        # is_synthetic, allowlisted in ML_TABLES by #2286)
+        "hcp_adoption_goldstd_v",
     }
     assert set(PROVENANCE_TAGGED_TABLES) == expected
 

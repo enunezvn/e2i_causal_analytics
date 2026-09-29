@@ -1,0 +1,142 @@
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/opik/error_tracking/shutdown_hooks.py:12: SentryHubDeprecationWarning: `sentry_sdk.Hub` is deprecated and will be removed in a future major release. Please consult our 1.x to 2.x migration guide for details on how to migrate `Hub` usage to the new API: https://docs.sentry.io/platforms/python/migration/1.x-to-2.x
+  client = sentry_sdk.Hub.current.client
+WARNING src.tasks.drift_monitoring_tasks: Retrain of 'adopted': the parent's calibration method is not recorded; the evaluator's auto policy picks it
+WARNING src.agents.ml_foundation.scope_definer.nodes.scope_builder: scope_spec.sufficiency.target_mde not specified and no scope-time data signal (baseline_rate / sigma_outcome) available; falling back to literature default 0.050 for problem_type=binary_classification. Set scope_spec.sufficiency.target_mde or pre-compute baseline_rate / sigma_outcome to silence this warning.
+WARNING src.agents.ml_foundation.scope_definer.nodes.criteria_validator: ADAPTIVE_CRITERIA on but state missing pre-eval inputs (n_samples=None, prevalence=None, feature_count=None); falling back to fixed thresholds. Caller (e.g., scripts/run_tier0_test.py) must inject these.
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmpn0nvjkjw' for ephemeral docs site
+code under test: /home/enunez/Projects/e2i_causal_analytics/.worktrees/issue-2286-2287/src  source=throwaway manifest_override=None
+seeded (generators, prod-free): {'hcp_profiles': 5000, 'hcp_brand_adoption': 15000}; images db=supabase/postgres:15.8.1.085
+postgrest image=postgrest/postgrest:v14.1
+registry row after 163 (simulated, not written): {'cohort_target_outcome': 'adopted', 'cohort_data_source': '{"columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region", "adopted"], "filters": {"brand": "Remibrutinib", "is_synthetic": true}, "table": "hcp_adoption_goldstd_v", "type": "table"}', 'cohort_feature_manifest_source': 'synthetic_csu'}
+
+=== hcp_adoption / Remibrutinib ===
+has_cohort_contract: today(151 label only)=False after163=True
+sweep branch: today -> 'blocked: no_cohort_contract'; after163 -> 'enqueue: trigger_retraining(cohort=...)'
+scope_spec: prediction_target='adopted' problem_type='binary_classification' feature_manifest_source='synthetic_csu' data_source-in-scope_spec=False
+[load_data 0.3s] {} blocking=[]
+  rows {'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500} total=5000 label_rate=0.3938
+  frame columns = ['peer_influence_score', 'influence_network_size', 'years_experience', 'specialty', 'geographic_region', 'adopted', 'data_split']
+[audit_sampling_frame 0.0s] {} blocking=[]
+[run_schema_validation 1.2s] {"schema_validation_status": "passed", "schema_splits_validated": 3} blocking=[]
+[run_quality_checks 0.0s] {"qc_status": "passed", "overall_score": 1.0} blocking=[]
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3323.54it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 2592.81it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3024.01it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 2725.34it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2364.32it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2187.50it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2106.40it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2002.27it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1953.46it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1874.50it/s]
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmppsyklk1k' for ephemeral docs site
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 4212.56it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3140.23it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3658.35it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3211.57it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2685.21it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2435.15it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2405.91it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2274.71it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2217.38it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2135.96it/s]
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmpyr6bzr58' for ephemeral docs site
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 4650.00it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3306.07it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3758.34it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3270.41it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2696.26it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2457.70it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2475.49it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2355.47it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2299.37it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2230.88it/s]
+WARNING src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check: Declared-safe immunity: exempted 3 manifest pre-index feature(s) from leakage (contract is authoritative); severity none -> none. Features: ['influence_network_size', 'peer_influence_score', 'years_experience']
+WARNING src.agents.ml_foundation.data_preparer.nodes.baseline_computer: Feature hcp_specialty not found in train data
+WARNING src.agents.ml_foundation.data_preparer.nodes.baseline_computer: Feature patient_count not found in train data
+WARNING src.agents.ml_foundation.data_preparer.nodes.baseline_computer: Feature prescription_history not found in train data
+WARNING src.agents.ml_foundation.data_preparer.nodes.baseline_computer: Feature brand_affinity_score not found in train data
+WARNING src.agents.ml_foundation.data_preparer.nodes.baseline_computer: Feature engagement_score not found in train data
+WARNING src.agents.ml_foundation.data_preparer.nodes.baseline_computer: Feature channel_response_rate not found in train data
+WARNING src.agents.ml_foundation.data_preparer.nodes.sufficiency_check: target_mde not specified in scope_spec.sufficiency; using literature_default default 0.05. Override via scope_spec.sufficiency.target_mde.
+WARNING src.tasks.drift_monitoring_tasks: Retrain of 'adopted': the parent's calibration method is not recorded; the evaluator's auto policy picks it
+WARNING src.agents.ml_foundation.scope_definer.nodes.scope_builder: scope_spec.sufficiency.target_mde not specified and no scope-time data signal (baseline_rate / sigma_outcome) available; falling back to literature default 0.050 for problem_type=binary_classification. Set scope_spec.sufficiency.target_mde or pre-compute baseline_rate / sigma_outcome to silence this warning.
+WARNING src.agents.ml_foundation.scope_definer.nodes.criteria_validator: ADAPTIVE_CRITERIA on but state missing pre-eval inputs (n_samples=None, prevalence=None, feature_count=None); falling back to fixed thresholds. Caller (e.g., scripts/run_tier0_test.py) must inject these.
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmp68fthhs4' for ephemeral docs site
+[run_ge_validation 0.4s] {"ge_validation_status": "passed", "ge_expectations_passed": 24, "ge_expectations_evaluated": 24} blocking=[]
+[engineer_features 0.0s] {} blocking=[]
+[detect_leakage 0.2s] {"leakage_severity": "none", "leaked_features": []} blocking=[]
+[adaptive_validity_check 2.2s] {"leaked_features": []} blocking=[]
+  adaptive verdict severities: {'high': 2, 'info': 1}
+    high: peer_influence_score layer=3
+    high: influence_network_size layer=3
+[route_after_leakage_detection] -> continue
+[transform_data 0.1s] {} blocking=[]
+[compute_baseline_metrics 0.0s] {} blocking=[]
+[sufficiency_check 0.0s] {} blocking=[]
+[finalize_output 0.0s] {"gate_passed": true, "qc_passed": true, "is_ready": false, "missing_required_features": ["hcp_specialty", "patient_count", "prescription_history", "brand_affinity_score", "engagement_score", "channel_response_rate"]} blocking=[]
+TRAINER_HANDOFF Remibrutinib: {"X_columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region"], "X_dtypes": {"peer_influence_score": "float64", "influence_network_size": "int64", "years_experience": "int64", "specialty": "object", "geographic_region": "object"}, "rows": {"train_data": 3000, "validation_data": 1000, "test_data": 500, "holdout_data": 500}, "dropped": {"identifier_named": ["data_split"]}}
+FIDELITY Remibrutinib (contract load, goldstd builder): {'rows': (5000, 5000), 'label_rate': (0.3938, 0.3938), 'splits': ({'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500}, {'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500}), 'row_multiset_equal': True}
+RESULT {"brand": "Remibrutinib", "has_cohort_contract_after163": true, "prediction_target": "adopted", "route": "continue", "gate_passed": true, "blocking_issues": [], "schema_validation_status": "passed", "ge_validation_status": "passed", "leakage_severity": "none", "fidelity_row_multiset_equal": true, "trainer_X_columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region"]}
+registry row after 163 (simulated, not written): {'cohort_target_outcome': 'adopted', 'cohort_data_source': '{"columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region", "adopted"], "filters": {"brand": "Fabhalta", "is_synthetic": true}, "table": "hcp_adoption_goldstd_v", "type": "table"}', 'cohort_feature_manifest_source': 'synthetic_csu'}
+
+=== hcp_adoption / Fabhalta ===
+has_cohort_contract: today(151 label only)=False after163=True
+sweep branch: today -> 'blocked: no_cohort_contract'; after163 -> 'enqueue: trigger_retraining(cohort=...)'
+scope_spec: prediction_target='adopted' problem_type='binary_classification' feature_manifest_source='synthetic_csu' data_source-in-scope_spec=False
+[load_data 0.3s] {} blocking=[]
+  rows {'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500} total=5000 label_rate=0.4176
+  frame columns = ['peer_influence_score', 'influence_network_size', 'years_experience', 'specialty', 'geographic_region', 'adopted', 'data_split']
+[audit_sampling_frame 0.0s] {} blocking=[]
+[run_schema_validation 0.1s] {"schema_validation_status": "passed", "schema_splits_validated": 3} blocking=[]
+[run_quality_checks 0.0s] {"qc_status": "passed", "overall_score": 1.0} blocking=[]
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3921.13it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 2826.99it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3190.80it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 2798.53it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2279.76it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2045.40it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2113.95it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2013.91it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1972.04it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1907.47it/s]
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmpr5sf61fn' for ephemeral docs site
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 4027.82it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 2990.95it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3508.41it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3206.65it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2330.43it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2100.30it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2111.94it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2003.54it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1938.91it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1884.42it/s]
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmpb18wxr4l' for ephemeral docs site
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3611.63it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 2759.41it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3260.24it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 2980.50it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2545.40it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2314.23it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2336.95it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2219.60it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2167.35it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2105.34it/s]
+WARNING src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check: Declared-safe immunity: exempted 3 manifest pre-index feature(s) from leakage (contract is authoritative); severity none -> none. Features: ['influence_network_size', 'peer_influence_score', 'years_experience']
+WARNING src.agents.ml_foundation.data_preparer.nodes.baseline_computer: Feature hcp_specialty not found in train data
+WARNING src.agents.ml_foundation.data_preparer.nodes.baseline_computer: Feature patient_count not found in train data
+WARNING src.agents.ml_foundation.data_preparer.nodes.baseline_computer: Feature prescription_history not found in train data
+WARNING src.agents.ml_foundation.data_preparer.nodes.baseline_computer: Feature brand_affinity_score not found in train data
+WARNING src.agents.ml_foundation.data_preparer.nodes.baseline_computer: Feature engagement_score not found in train data
+WARNING src.agents.ml_foundation.data_preparer.nodes.baseline_computer: Feature channel_response_rate not found in train data
+WARNING src.agents.ml_foundation.data_preparer.nodes.sufficiency_check: target_mde not specified in scope_spec.sufficiency; using literature_default default 0.05. Override via scope_spec.sufficiency.target_mde.
+WARNING src.tasks.drift_monitoring_tasks: Retrain of 'adopted': the parent's calibration method is not recorded; the evaluator's auto policy picks it
+WARNING src.agents.ml_foundation.scope_definer.nodes.scope_builder: scope_spec.sufficiency.target_mde not specified and no scope-time data signal (baseline_rate / sigma_outcome) available; falling back to literature default 0.050 for problem_type=binary_classification. Set scope_spec.sufficiency.target_mde or pre-compute baseline_rate / sigma_outcome to silence this warning.
+WARNING src.agents.ml_foundation.scope_definer.nodes.criteria_validator: ADAPTIVE_CRITERIA on but state missing pre-eval inputs (n_samples=None, prevalence=None, feature_count=None); falling back to fixed thresholds. Caller (e.g., scripts/run_tier0_test.py) must inject these.
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmpt6n9w0x3' for ephemeral docs site
+[run_ge_validation 0.4s] {"ge_validation_status": "passed", "ge_expectations_passed": 24, "ge_expectations_evaluated": 24} blocking=[]
+[engineer_features 0.0s] {} blocking=[]
+[detect_leakage 0.2s] {"leakage_severity": "none", "leaked_features": []} blocking=[]
+[adaptive_validity_check 2.4s] {"leaked_features": []} blocking=[]
+  adaptive verdict severities: {'high': 2, 'info': 1}
+    high: peer_influence_score layer=3
+    high: influence_network_size layer=3
+[route_after_leakage_detection] -> continue
+[transform_data 0.1s] {} blocking=[]
+[compute_baseline_metrics 0.0s] {} blocking=[]
+[sufficiency_check 0.0s] {} blocking=[]
+[finalize_output 0.0s] {"gate_passed": true, "qc_passed": true, "is_ready": false, "missing_required_features": ["hcp_specialty", "patient_count", "prescription_history", "brand_affinity_score", "engagement_score", "channel_response_rate"]} blocking=[]
+TRAINER_HANDOFF Fabhalta: {"X_columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region"], "X_dtypes": {"peer_influence_score": "float64", "influence_network_size": "int64", "years_experience": "int64", "specialty": "object", "geographic_region": "object"}, "rows": {"train_data": 3000, "validation_data": 1000, "test_data": 500, "holdout_data": 500}, "dropped": {"identifier_named": ["data_split"]}}
+FIDELITY Fabhalta (contract load, goldstd builder): {'rows': (5000, 5000), 'label_rate': (0.4176, 0.4176), 'splits': ({'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500}, {'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500}), 'row_multiset_equal': True}
+RESULT {"brand": "Fabhalta", "has_cohort_contract_after163": true, "prediction_target": "adopted", "route": "continue", "gate_passed": true, "blocking_issues": [], "schema_validation_status": "passed", "ge_validation_status": "passed", "leakage_severity": "none", "fidelity_row_multiset_equal": true, "trainer_X_columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region"]}
+registry row after 163 (simulated, not written): {'cohort_target_outcome': 'adopted', 'cohort_data_source': '{"columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region", "adopted"], "filters": {"brand": "Kisqali", "is_synthetic": true}, "table": "hcp_adoption_goldstd_v", "type": "table"}', 'cohort_feature_manifest_source': 'synthetic_csu'}
+
+=== hcp_adoption / Kisqali ===
+has_cohort_contract: today(151 label only)=False after163=True
+sweep branch: today -> 'blocked: no_cohort_contract'; after163 -> 'enqueue: trigger_retraining(cohort=...)'
+scope_spec: prediction_target='adopted' problem_type='binary_classification' feature_manifest_source='synthetic_csu' data_source-in-scope_spec=False
+[load_data 0.3s] {} blocking=[]
+  rows {'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500} total=5000 label_rate=0.4046
+  frame columns = ['peer_influence_score', 'influence_network_size', 'years_experience', 'specialty', 'geographic_region', 'adopted', 'data_split']
+[audit_sampling_frame 0.0s] {} blocking=[]
+[run_schema_validation 0.1s] {"schema_validation_status": "passed", "schema_splits_validated": 3} blocking=[]
+[run_quality_checks 0.0s] {"qc_status": "passed", "overall_score": 1.0} blocking=[]
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 4148.67it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 2977.50it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3383.87it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3045.42it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2549.73it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2277.04it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2233.12it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2113.24it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2061.76it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2001.63it/s]
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmp_trbgks1' for ephemeral docs site
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 4066.88it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3047.45it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3434.44it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3015.86it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2538.62it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2330.17it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2299.65it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2188.59it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2134.87it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2058.27it/s]
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmp8tw4l265' for ephemeral docs site
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3934.62it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 2876.09it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3353.43it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3030.57it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2554.08it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2332.24it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1906.98it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1806.76it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1767.43it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1726.45it/s]
+WARNING src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check: Declared-safe immunity: exempted 3 manifest pre-index feature(s) from leakage (contract is authoritative); severity none -> none. Features: ['influence_network_size', 'peer_influence_score', 'years_experience']
+WARNING src.agents.ml_foundation.data_preparer.nodes.baseline_computer: Feature hcp_specialty not found in train data
+WARNING src.agents.ml_foundation.data_preparer.nodes.baseline_computer: Feature patient_count not found in train data
+WARNING src.agents.ml_foundation.data_preparer.nodes.baseline_computer: Feature prescription_history not found in train data
+WARNING src.agents.ml_foundation.data_preparer.nodes.baseline_computer: Feature brand_affinity_score not found in train data
+WARNING src.agents.ml_foundation.data_preparer.nodes.baseline_computer: Feature engagement_score not found in train data
+WARNING src.agents.ml_foundation.data_preparer.nodes.baseline_computer: Feature channel_response_rate not found in train data
+WARNING src.agents.ml_foundation.data_preparer.nodes.sufficiency_check: target_mde not specified in scope_spec.sufficiency; using literature_default default 0.05. Override via scope_spec.sufficiency.target_mde.
+[run_ge_validation 0.4s] {"ge_validation_status": "passed", "ge_expectations_passed": 24, "ge_expectations_evaluated": 24} blocking=[]
+[engineer_features 0.0s] {} blocking=[]
+[detect_leakage 0.2s] {"leakage_severity": "none", "leaked_features": []} blocking=[]
+[adaptive_validity_check 2.2s] {"leaked_features": []} blocking=[]
+  adaptive verdict severities: {'high': 2, 'info': 1}
+    high: peer_influence_score layer=3
+    high: influence_network_size layer=3
+[route_after_leakage_detection] -> continue
+[transform_data 0.1s] {} blocking=[]
+[compute_baseline_metrics 0.0s] {} blocking=[]
+[sufficiency_check 0.0s] {} blocking=[]
+[finalize_output 0.0s] {"gate_passed": true, "qc_passed": true, "is_ready": false, "missing_required_features": ["hcp_specialty", "patient_count", "prescription_history", "brand_affinity_score", "engagement_score", "channel_response_rate"]} blocking=[]
+TRAINER_HANDOFF Kisqali: {"X_columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region"], "X_dtypes": {"peer_influence_score": "float64", "influence_network_size": "int64", "years_experience": "int64", "specialty": "object", "geographic_region": "object"}, "rows": {"train_data": 3000, "validation_data": 1000, "test_data": 500, "holdout_data": 500}, "dropped": {"identifier_named": ["data_split"]}}
+FIDELITY Kisqali (contract load, goldstd builder): {'rows': (5000, 5000), 'label_rate': (0.4046, 0.4046), 'splits': ({'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500}, {'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500}), 'row_multiset_equal': True}
+RESULT {"brand": "Kisqali", "has_cohort_contract_after163": true, "prediction_target": "adopted", "route": "continue", "gate_passed": true, "blocking_issues": [], "schema_validation_status": "passed", "ge_validation_status": "passed", "leakage_severity": "none", "fidelity_row_multiset_equal": true, "trainer_X_columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region"]}
+
+SUMMARY
+{"brand": "Remibrutinib", "has_cohort_contract_after163": true, "prediction_target": "adopted", "route": "continue", "gate_passed": true, "blocking_issues": [], "schema_validation_status": "passed", "ge_validation_status": "passed", "leakage_severity": "none", "fidelity_row_multiset_equal": true, "trainer_X_columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region"]}
+{"brand": "Fabhalta", "has_cohort_contract_after163": true, "prediction_target": "adopted", "route": "continue", "gate_passed": true, "blocking_issues": [], "schema_validation_status": "passed", "ge_validation_status": "passed", "leakage_severity": "none", "fidelity_row_multiset_equal": true, "trainer_X_columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region"]}
+{"brand": "Kisqali", "has_cohort_contract_after163": true, "prediction_target": "adopted", "route": "continue", "gate_passed": true, "blocking_issues": [], "schema_validation_status": "passed", "ge_validation_status": "passed", "leakage_severity": "none", "fidelity_row_multiset_equal": true, "trainer_X_columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region"]}
