@@ -26,3 +26,14 @@ Job `836578bf-0456-433d-9593-dbd373581579`, T0 19:34Z. File: `live_retrain_c16bd
 ## Follow-ups filed
 #2308 (register-only `ml_deployments` row marked `active` with no endpoint), #2310 (staging candidates picked up
 by explain / KPI n_models / drift sweeps), #2311 (task result `mlflow_model_version=None`), #2304 (flaky timing test).
+
+## Run 3: prod b150ae601 (after peer #2309, data_preparer change): PASS
+Job `36cd579b-102f-41ec-9003-9261d315f785`, T0 20:36:58Z. Same 5 checks as run 2; candidate `faf4ed1d` (then `staging`),
+AUC 0.835903 (identical to run 2), all six agents on audit id `ace2f802…`. File: `live_retrain_b150ae601_PASS_20260928.out`.
+
+## Run 4: prod de5f1f31a (after #2310: PRs #2315/#2316, migrations 159-161): PASS on the candidate contract
+Job `543b8acd-0086-4145-b56b-c845f4e0c6ae`, T0 2026-09-29 02:25:28Z. History `completed` ("registered as candidate, not
+promoted, no endpoint"). Row `9376e88d` at stage **`candidate`**, `retrain_of_id` = parent `4ec55d13`, `mlflow_model_version`=6.
+MLflow v6 at stage None, tagged `e2i.role=candidate` / `e2i.retrain_of`. `ml_deployments` row `registered`, no endpoint (#2308);
+the task returned `mlflow_model_version: 6` (#2311). All six agents on audit id `56939f44…`. Readers: Kisqali staging goldstd set = 3,
+sweep selection = 12, `get_latest_model` → parent v1.0. File: `live_retrain_de5f1f31a_candidate_PASS_20260929.out`.
