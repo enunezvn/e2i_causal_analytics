@@ -30,6 +30,79 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from tests import prod_store_guard as _psg
+
+# PROD-STORE GUARD (#2331, incident 2026-09-29). The env pins below close the
+# prod leak one variable at a time; the model_selector suite still wrote prod
+# FalkorDB twice in one day through clients no pin covered. The guard refuses
+# the CONNECTION itself -- to any droplet prod port on a local address -- for
+# the whole protocol of every unit item (setup of every fixture scope, call,
+# teardown). It lives here rather than in tests/conftest.py for the same
+# reason as the pins: the integration trees reach real services on purpose.
+# Refusal == CI's ECONNREFUSED, so outcomes match CI; every attempt is
+# reported in the terminal summary, and E2I_PROD_STORE_GUARD_STRICT=1 fails
+# the offending test. Off in GitHub Actions (see ``guard_enabled``). Locked by
+# tests/unit/test_tests_meta/test_prod_store_guard_2331.py.
+_PROD_STORE_GUARD = _psg.ProdStoreGuard() if _psg.guard_enabled() else None
+_PROD_STORE_USER_PROPERTY = "prod_store_guard"
+_prod_store_report: list[tuple[str, str, str]] = []
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None):  # type: ignore[no-untyped-def]
+    if _PROD_STORE_GUARD is None:
+        yield
+        return
+    _PROD_STORE_GUARD.current_test = item.nodeid
+    _PROD_STORE_GUARD.exempt_ports = (
+        _psg.SUPABASE_REST_PORTS if item.get_closest_marker("real_supabase") else frozenset()
+    )
+    with _PROD_STORE_GUARD.active():
+        yield
+    _PROD_STORE_GUARD.current_test = None
+    _PROD_STORE_GUARD.exempt_ports = frozenset()
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):  # type: ignore[no-untyped-def]
+    outcome = yield
+    if _PROD_STORE_GUARD is None:
+        return
+    attempts = _PROD_STORE_GUARD.take_new_attempts()
+    if not attempts:
+        return
+    report = outcome.get_result()
+    described = [a.describe() for a in attempts]
+    # user_properties survive xdist serialisation, so the controller's summary
+    # sees worker-side attempts.
+    report.user_properties.append((_PROD_STORE_USER_PROPERTY, described))
+    if _psg.strict_mode() and report.outcome != "failed":
+        report.outcome = "failed"
+        report.longrepr = (
+            f"{_psg.GUARD_TAG} {_psg.STRICT_ENV_VAR}=1 and this test tried to reach "
+            "a production store:\n  " + "\n  ".join(described)
+        )
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    for name, value in report.user_properties:
+        if name == _PROD_STORE_USER_PROPERTY:
+            _prod_store_report.extend((report.nodeid, report.when, v) for v in value)
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):  # type: ignore[no-untyped-def]
+    if not _prod_store_report:
+        return
+    tests = {nodeid for nodeid, _, _ in _prod_store_report}
+    terminalreporter.section(f"prod-store guard {_psg.GUARD_TAG}", sep="=", yellow=True)
+    terminalreporter.line(
+        f"{len(_prod_store_report)} refused connection attempt(s) to PRODUCTION stores "
+        f"from {len(tests)} test(s):"
+    )
+    for nodeid, when, target in _prod_store_report:
+        terminalreporter.line(f"  {nodeid} [{when}] -> {target}")
+
+
 # DEAD-SUPABASE PIN (#1420, incident 2026-07-31). The root conftest's
 # load_dotenv(override=True) walks up from nested worktrees into the
 # repo-root .env; on the droplet (PROD == DEV) that hands every unit test
