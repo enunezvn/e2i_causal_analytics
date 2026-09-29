@@ -1379,7 +1379,7 @@ class TestListExplainableModelsEndpoint:
             captured["select"] = cols
             return chain
 
-        def order_capture(col, desc=False):
+        def order_capture(col, desc=False, **_kw):
             captured["order"] = (col, desc)
             return chain
 
@@ -1396,6 +1396,7 @@ class TestListExplainableModelsEndpoint:
         # falls into its best-effort except branch.
         chain.eq.side_effect = eq_capture
         chain.like.return_value = chain
+        chain.or_.side_effect = lambda f: captured.setdefault("or", []).append(f) or chain
         chain.select.side_effect = select_capture
         chain.order.side_effect = order_capture
         chain.execute.side_effect = lambda: async_execute()
@@ -1425,6 +1426,11 @@ class TestListExplainableModelsEndpoint:
             # #894: ml_model_registry is is_synthetic-tagged, so a synthetic row
             # would otherwise win the latest-version race on this user route.
             assert ("is_synthetic", False) in captured.get("eq", []), captured
+            # #2310: canonical rows only (a newer retrain candidate is not the version).
+            assert (
+                captured.get("or")
+                == ["stage.is.null,stage.not.in.(candidate,archived,deprecated)"] * 2
+            ), captured
 
             by_type = {m["model_type"]: m["latest_version"] for m in response["supported_models"]}
             assert by_type["propensity"] == "v3.0"  # newest, not v2.3.1

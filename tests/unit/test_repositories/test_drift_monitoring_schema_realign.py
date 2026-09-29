@@ -604,6 +604,13 @@ class _FakeRegistry:
     def limit(self, *_a, **_k) -> "_FakeRegistry":
         return self
 
+    # the name resolver's canonical-row predicate + order (#2310): chain only
+    def or_(self, *_a, **_k) -> "_FakeRegistry":
+        return self
+
+    def order(self, *_a, **_k) -> "_FakeRegistry":
+        return self
+
     async def execute(self) -> Any:
         data: List[Dict[str, Any]] = []
         if self._pending is not None:

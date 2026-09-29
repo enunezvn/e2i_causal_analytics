@@ -183,7 +183,8 @@ def _stub_mlflow_returns_metric(
     """Configure the mock MLflow client to return a real metric value."""
     mock_version = Mock()
     mock_version.run_id = "test-run-id"
-    calculator._mlflow_client.get_latest_versions.return_value = [mock_version]
+    mock_version.current_stage = "Production"
+    calculator._mlflow_client.search_model_versions.return_value = [mock_version]
     mock_run = Mock()
     mock_run.data.metrics = {metric_name: value}
     calculator._mlflow_client.get_run.return_value = mock_run
@@ -191,7 +192,7 @@ def _stub_mlflow_returns_metric(
 
 def _stub_mlflow_no_versions(calculator: ModelPerformanceCalculator) -> None:
     """Configure the mock MLflow client to return an empty version list."""
-    calculator._mlflow_client.get_latest_versions.return_value = []
+    calculator._mlflow_client.search_model_versions.return_value = []
 
 
 def _stub_mlflow_run_missing_metric(calculator: ModelPerformanceCalculator) -> None:
@@ -199,15 +200,16 @@ def _stub_mlflow_run_missing_metric(calculator: ModelPerformanceCalculator) -> N
     is empty (metric_name not present)."""
     mock_version = Mock()
     mock_version.run_id = "test-run-id"
-    calculator._mlflow_client.get_latest_versions.return_value = [mock_version]
+    mock_version.current_stage = "Production"
+    calculator._mlflow_client.search_model_versions.return_value = [mock_version]
     mock_run = Mock()
     mock_run.data.metrics = {}  # the requested metric is not present
     calculator._mlflow_client.get_run.return_value = mock_run
 
 
 def _stub_mlflow_raises(calculator: ModelPerformanceCalculator, exc: Exception) -> None:
-    """Configure the mock MLflow client to raise on `get_latest_versions`."""
-    calculator._mlflow_client.get_latest_versions.side_effect = exc
+    """Configure the mock MLflow client to raise on `search_model_versions`."""
+    calculator._mlflow_client.search_model_versions.side_effect = exc
 
 
 def _stub_db_query_empty(calculator: ModelPerformanceCalculator) -> None:
@@ -569,7 +571,7 @@ class TestFeatureDriftUnavailability:
         calculator_with_mlflow._execute_query = Mock(return_value=([{"avg_psi": 0.05}], None))
         # MLflow should not be consulted; if it were, this would mistakenly succeed
         # with the wrong value.
-        calculator_with_mlflow._mlflow_client.get_latest_versions.side_effect = AssertionError(
+        calculator_with_mlflow._mlflow_client.search_model_versions.side_effect = AssertionError(
             "mlflow consulted despite SQL success"
         )
         result = calculator_with_mlflow.calculate(feature_drift_kpi, {"model_name": "test"})
@@ -804,7 +806,7 @@ class TestMlflowLegIsTimeBounded:
             return []
 
         calc = ModelPerformanceCalculator(db_client=Mock(), mlflow_client=Mock())
-        calc._mlflow_client.get_latest_versions.side_effect = _observe
+        calc._mlflow_client.search_model_versions.side_effect = _observe
 
         value, error = calc._get_metric_from_mlflow("default_model", "roc_auc")
 
@@ -826,9 +828,9 @@ class TestMlflowLegIsTimeBounded:
 
         calc = ModelPerformanceCalculator(db_client=Mock(), mlflow_client=Mock())
         if raises:
-            calc._mlflow_client.get_latest_versions.side_effect = RuntimeError("boom")
+            calc._mlflow_client.search_model_versions.side_effect = RuntimeError("boom")
         else:
-            calc._mlflow_client.get_latest_versions.return_value = []
+            calc._mlflow_client.search_model_versions.return_value = []
 
         calc._get_metric_from_mlflow("default_model", "roc_auc")
 

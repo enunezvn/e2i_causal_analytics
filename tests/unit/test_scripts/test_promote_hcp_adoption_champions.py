@@ -311,6 +311,12 @@ class _RegistryQuery:
         self._filters.append((col, val))
         return self
 
+    def or_(self, filters):
+        # #2310 canonical-row predicate on the read; the real-PostgREST behaviour is pinned in
+        # tests/unit/test_database/test_registry_candidate_readers_realdb_2310.py
+        assert filters == "stage.is.null,stage.not.in.(candidate,archived,deprecated)"
+        return self
+
     async def execute(self):
         assert self._table == "ml_model_registry", f"unexpected table {self._table}"
         if self._update is not None:
@@ -433,6 +439,10 @@ class _CannedQuery:
         self.calls.append(("order", col, desc))
         return self
 
+    def or_(self, filters):
+        self.calls.append(("or", filters))
+        return self
+
     async def execute(self):
         return type("R", (), {"data": self._rows})()
 
@@ -459,6 +469,9 @@ def test_fetch_registry_row_refuses_ambiguous_duplicates():
     client = _CannedClient([{"id": "a"}, {"id": "b"}])
     with pytest.raises(RuntimeError, match="2 registry rows"):
         asyncio.run(promo._fetch_registry_row(client, "hcp_adoption_fabhalta_goldstd_lr_v1"))
+    # #2310: the count is over canonical rows (the real-PostgREST behaviour is pinned in
+    # tests/unit/test_database/test_registry_candidate_readers_realdb_2310.py).
+    assert ("or", "stage.is.null,stage.not.in.(candidate,archived,deprecated)") in client.calls
 
 
 def test_stored_holdout_scopes_by_model_id_and_folds_newest_per_metric():

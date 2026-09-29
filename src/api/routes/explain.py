@@ -36,6 +36,7 @@ from src.api.utils.data_masking import mask_identifier
 from src.feature_store.feast_client import FeastClient, get_feast_client
 from src.feature_store.online_feature_presence import missing_or_null_feature_fields
 from src.mlops.shap_explainer_realtime import RealTimeSHAPExplainer, SHAPResult
+from src.repositories.model_registry_roles import CANONICAL_STAGE_FILTER
 from src.repositories.shap_analysis import ShapAnalysisRepository, get_shap_analysis_repository
 
 logger = logging.getLogger(__name__)
@@ -545,20 +546,16 @@ async def _get_latest_versions_by_model_type() -> Dict[str, Optional[str]]:
         if client is None:
             return versions
 
-        # Fetch (model_name, model_version) for any of our model types. The
-        # set is small (4); a single SELECT with ``in_`` is cheaper than 4
-        # per-type round-trips. ``ml_model_registry.registered_at`` is the
-        # canonical timestamp column (see database/ml/mlops_tables.sql:166);
-        # there is no ``created_at`` column on this table.
-        # Provenance (#894): ml_model_registry is is_synthetic-tagged
-        # (migration 069; 720/722 live rows synthetic) — without the predicate
-        # a synthetic row wins the latest-version race on this user route.
+        # One SELECT for all types (``registered_at``, mlops_tables.sql:166). Without is_synthetic
+        # (#894) a synthetic row, without the canonical predicate (#2310) a retrain candidate,
+        # would win the latest-version race here; NULLS LAST so an undated row never wins.
         result = await (
             client.table("ml_model_registry")
             .select("model_name,model_version,registered_at")
             .in_("model_name", list(versions.keys()))
             .eq("is_synthetic", False)
-            .order("registered_at", desc=True)
+            .or_(CANONICAL_STAGE_FILTER)
+            .order("registered_at", desc=True, nullsfirst=False)
             .execute()
         )
 
@@ -581,7 +578,8 @@ async def _get_latest_versions_by_model_type() -> Dict[str, Optional[str]]:
             .select("model_name,model_version,registered_at")
             .like("model_name", "%_goldstd_lr_v1")
             .eq("is_synthetic", False)
-            .order("registered_at", desc=True)
+            .or_(CANONICAL_STAGE_FILTER)
+            .order("registered_at", desc=True, nullsfirst=False)
             .execute()
         )
         for r in goldstd.data or []:
@@ -2239,7 +2237,7 @@ def _ranking_stable(
 
 
 async def _resolve_model_registry_id(model_name: str) -> Optional[str]:
-    """Resolve a serving ``model_name`` to its latest ``ml_model_registry.id``."""
+    """``model_name`` -> its newest CANONICAL ``ml_model_registry.id`` (never a candidate)."""
     from src.memory.services.factories import get_async_supabase_client
 
     client = await get_async_supabase_client()
@@ -2251,7 +2249,9 @@ async def _resolve_model_registry_id(model_name: str) -> Optional[str]:
             .select("id,registered_at")
             .eq("model_name", model_name)
             .eq("is_synthetic", False)
-            .order("registered_at", desc=True)
+            .or_(CANONICAL_STAGE_FILTER)  # #2310: SHAP rows go under the model the name serves
+            .order("registered_at", desc=True, nullsfirst=False)
+            .order("id", desc=True)
             .limit(1)
             .execute()
         )

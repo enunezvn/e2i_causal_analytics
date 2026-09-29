@@ -193,7 +193,8 @@ class TestModelPerformanceCalculator:
         # Mock MLflow response
         mock_version = Mock()
         mock_version.run_id = "test-run-123"
-        calculator._mlflow_client.get_latest_versions.return_value = [mock_version]
+        mock_version.current_stage = "Production"
+        calculator._mlflow_client.search_model_versions.return_value = [mock_version]
 
         mock_run = Mock()
         mock_run.data.metrics = {"roc_auc": 0.85}
@@ -210,7 +211,8 @@ class TestModelPerformanceCalculator:
         # Mock MLflow response
         mock_version = Mock()
         mock_version.run_id = "test-run-123"
-        calculator._mlflow_client.get_latest_versions.return_value = [mock_version]
+        mock_version.current_stage = "Production"
+        calculator._mlflow_client.search_model_versions.return_value = [mock_version]
 
         mock_run = Mock()
         mock_run.data.metrics = {"brier_score": 0.08}
@@ -226,7 +228,8 @@ class TestModelPerformanceCalculator:
         """Test Brier Score in critical zone (too high)."""
         mock_version = Mock()
         mock_version.run_id = "test-run-123"
-        calculator._mlflow_client.get_latest_versions.return_value = [mock_version]
+        mock_version.current_stage = "Production"
+        calculator._mlflow_client.search_model_versions.return_value = [mock_version]
 
         mock_run = Mock()
         mock_run.data.metrics = {"brier_score": 0.35}
@@ -253,7 +256,7 @@ class TestModelPerformanceCalculator:
         """
         # SQL leg unavailable (no rows) -> control reaches the MLflow leg, which errors.
         calculator._execute_query = Mock(return_value=([], None))
-        calculator._mlflow_client.get_latest_versions.side_effect = Exception("MLflow error")
+        calculator._mlflow_client.search_model_versions.side_effect = Exception("MLflow error")
 
         result = calculator.calculate(roc_auc_kpi)
 

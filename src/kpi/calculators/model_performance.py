@@ -529,7 +529,8 @@ class ModelPerformanceCalculator(KPICalculatorBase):
     def _get_metric_from_mlflow(
         self, model_name: str, metric_name: str
     ) -> tuple[float | None, str | None]:
-        """Get a metric value from MLflow for the latest model version.
+        """Get a metric value from MLflow for the canonical model version (#2310:
+        never a retrain candidate; see ``_canonical_mlflow_version``).
 
         Returns:
             A `(value, error)` tuple. Exactly one of the two is non-None:
@@ -576,13 +577,11 @@ class ModelPerformanceCalculator(KPICalculatorBase):
                 return None, self._mlflow_client_error or "mlflow_client_unavailable"
 
             try:
-                versions = self.mlflow_client.get_latest_versions(
-                    model_name, stages=["Production", "Staging", "None"]
-                )
-                if not versions:
+                version = _canonical_mlflow_version(self.mlflow_client, model_name)
+                if version is None:
                     return None, f"model_not_found:{model_name}"
 
-                run_id = versions[0].run_id
+                run_id = version.run_id
                 run = self.mlflow_client.get_run(run_id)
                 metrics = run.data.metrics
                 if metric_name not in metrics:
@@ -613,6 +612,41 @@ class ModelPerformanceCalculator(KPICalculatorBase):
         except Exception as e:
             msg = str(e)[:200]
             return None, f"{type(e).__name__}:{msg}"
+
+
+#: MLflow stage precedence for the fallback leg: a served version before a staged one before an
+#: unstaged one. Archived versions are never read.
+_MLFLOW_STAGE_RANK = {"production": 0, "staging": 1, "none": 2}
+
+
+def _canonical_mlflow_version(mlflow_client: Any, model_name: str) -> Any:
+    """The MLflow model version whose run the fallback reads, or ``None`` (#2310).
+
+    Searches ALL versions of ``model_name`` and picks deterministically: highest stage in
+    :data:`_MLFLOW_STAGE_RANK`, then the highest version number. A version tagged
+    ``e2i.role=candidate`` (an unreviewed retrain; its MLflow stage stays ``None``) is never
+    read, whatever its stage. ``get_latest_versions`` could not do this: it returns ONE latest
+    version per stage, so a newer candidate hides an older canonical version at the same stage,
+    and the old ``versions[0]`` read depended on the order MLflow listed the stages.
+    """
+    from src.repositories.model_registry_roles import is_mlflow_candidate
+
+    if "'" in model_name:  # the filter string is single-quoted; no such name is registered
+        return None
+    best: Any = None
+    best_key: tuple[int, int] | None = None
+    for v in mlflow_client.search_model_versions(f"name='{model_name}'"):
+        rank = _MLFLOW_STAGE_RANK.get(str(getattr(v, "current_stage", "None") or "None").lower())
+        if rank is None or is_mlflow_candidate(getattr(v, "tags", None)):
+            continue
+        try:
+            number = int(getattr(v, "version", 0))
+        except (TypeError, ValueError):
+            number = 0
+        key = (-rank, number)
+        if best_key is None or key > best_key:
+            best, best_key = v, key
+    return best
 
 
 def calculate_psi(expected: np.ndarray, actual: np.ndarray, bins: int = 10) -> float:

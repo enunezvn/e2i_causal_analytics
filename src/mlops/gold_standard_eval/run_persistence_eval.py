@@ -166,14 +166,15 @@ async def _run_one_cohort(
         ``n_train`` (int), ``n_holdout`` (int).
     """
     from src.mlops.gold_standard_eval.cohort_deployer import (
+        GOLDSTD_MODEL_VERSION as REGISTERED_VERSION,
+    )
+    from src.mlops.gold_standard_eval.cohort_deployer import (
         register_cohort_model,
         serialize_model,
         train_cohort_model,
     )
-    from src.repositories.drift_monitoring import (
-        PerformanceMetricRepository,
-        _resolve_model_id,
-    )
+    from src.repositories.drift_monitoring import PerformanceMetricRepository
+    from src.repositories.model_registry_roles import resolve_model_id_by_name_version
 
     # --- 1. Load the full cohort frame once (all splits, all months). -------- #
     fb_full = FeatureBuilder(spec)
@@ -253,7 +254,10 @@ async def _run_one_cohort(
     # the recorder uses for idempotency: model_id + source), which unblocks the
     # registry replace AND keeps the whole pipeline re-run safe. On the very
     # first run this resolves to no prior id and is a harmless no-op.
-    prior_model_id = await _resolve_model_id(client, model_name)
+    # #2310: resolve the EXACT (model_name, model_version) row the replace targets (the
+    # version register_cohort_model registers by default) — a name alone can match a retrain
+    # candidate of this model, whose metrics are not ours to clear.
+    prior_model_id = await resolve_model_id_by_name_version(client, model_name, REGISTERED_VERSION)
     if prior_model_id is not None:
         cleared = 0
         for src in (_BACKTEST_SOURCE, _HOLDOUT_SOURCE, HOLDOUT_CURVE_SOURCE):

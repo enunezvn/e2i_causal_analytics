@@ -20,6 +20,7 @@ from uuid import UUID, uuid4
 from src.memory.jsonb_sanitize import sanitize_jsonb_payload
 
 from .base import BaseRepository
+from .model_registry_roles import canonical_rows
 
 logger = logging.getLogger(__name__)
 
@@ -931,13 +932,19 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
         return self._to_model(result.data[0]) if result.data else None
 
     async def get_champion_model(
-        self, experiment_id: Optional[UUID] = None, include_synthetic: bool = False
+        self,
+        experiment_id: Optional[UUID] = None,
+        include_synthetic: bool = False,
+        include_candidates: bool = False,
     ) -> Optional[MLModelRegistry]:
         """Get the current champion model.
 
         Args:
             experiment_id: Optional experiment filter
             include_synthetic: When True, do not exclude synthetic rows (opt-in).
+            include_candidates: When True, a retrain ``candidate`` row may answer (opt-in,
+                #2310). By default an unreviewed retrain is never "the champion", even if a
+                writer flagged it ``is_champion``. Archived / deprecated rows never answer.
 
         Returns:
             Champion MLModelRegistry or None
@@ -946,6 +953,9 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
             return None
 
         query = self.client.table(self.table_name).select("*").eq("is_champion", True)
+        # #2310: canonical rows only (an archived/deprecated row is not "the" champion either,
+        # and transition_stage does not clear is_champion on a direct archive).
+        query = canonical_rows(query, include_candidates=include_candidates)
 
         if experiment_id:
             query = query.eq("experiment_id", str(experiment_id))
