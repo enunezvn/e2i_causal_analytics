@@ -1,0 +1,44 @@
+== preflight: deployed image must contain 6720959b8
+image 2a999a2d2b40cf0b2ff01a93f63d8f578bb9279c contains #2264
+== parent row (must show calibration_method=sigmoid, provenance synthetic_gold)
+initiation_kisqali_goldstd_lr_v1 | 1.0 | sigmoid | synthetic_gold | 35a2cd41-4d85-4034-b1a0-1c2a61e3766e
+T0=2026-09-29T18:23:34Z
+{
+    "job_id": "61e923bd-08ec-4acd-9aba-e012c126b097",
+    "model_version": "4ec55d13-46c8-4df4-9ec8-7723fad67fb3",
+    "status": "pending",
+    "trigger_reason": "manual",
+    "triggered_at": "2026-09-29T18:23:35.879147Z",
+    "triggered_by": "owner_post2264_proof",
+    "approved_at": null,
+    "started_at": null,
+    "completed_at": null,
+    "performance_before": 0.735294,
+    "performance_after": null,
+    "notes": "post-#2264 live proof (#2242/#2255/#2257/#2248)"
+}
+== waiting for the job to finish (a run takes ~2 min)
+== 1) history row (PASS: completed, new_metric_value ~0.83 vs goldstd 0.8505, new_model_version = <1.0>_retrained_<ts>_<hex>)
+61e923bd-08ec-4acd-9aba-e012c126b097 | completed | 4ec55d13-46c8-4df4-9ec8-7723fad67fb3 | 1.0_retrained_20260929_1823_7b1ab4 | 0.735294 | 0.835903 | candidate 'initiation_kisqali_goldstd_lr_v1' v'1.0_retrained_20260929_1823_7b1ab4' registered as candidate, not promoted, no endpoint: ml_model_registry row a4d6f219-d454-449d-a5a8-0d1d9d4a2da2 (retrain of 4ec55d13-46c8-4df4-9ec8-7723fad67fb3), MLflow version 7, ml_deployments record f3e0b26d-d7f5-4
+== 2) candidate registry row (PASS: same model_name, new version, SAME experiment_id as parent, provenance synthetic_gold, calibration sigmoid)
+initiation_kisqali_goldstd_lr_v1 | 1.0 | 35a2cd41-4d85-4034-b1a0-1c2a61e3766e | synthetic_gold | sigmoid | staging
+initiation_kisqali_goldstd_lr_v1 | 1.0_retrained_20260928_1617_d18ac8 | 35a2cd41-4d85-4034-b1a0-1c2a61e3766e | synthetic_gold | sigmoid | archived
+initiation_kisqali_goldstd_lr_v1 | 1.0_retrained_20260928_1934_725a94 | 35a2cd41-4d85-4034-b1a0-1c2a61e3766e | synthetic_gold | sigmoid | candidate
+initiation_kisqali_goldstd_lr_v1 | 1.0_retrained_20260928_2036_6fbd91 | 35a2cd41-4d85-4034-b1a0-1c2a61e3766e | synthetic_gold | sigmoid | candidate
+initiation_kisqali_goldstd_lr_v1 | 1.0_retrained_20260929_0225_6ea06c | 35a2cd41-4d85-4034-b1a0-1c2a61e3766e | synthetic_gold | sigmoid | candidate
+initiation_kisqali_goldstd_lr_v1 | 1.0_retrained_20260929_1823_7b1ab4 | 35a2cd41-4d85-4034-b1a0-1c2a61e3766e | synthetic_gold | sigmoid | candidate
+== 3) episodic rows since T0 (PASS for #2157/#2120: all SIX agents incl. model_deployer, ONE shared audit_workflow_id, session NULL)
+scope_definer | NULL | 40dd44fd-4cfc-4976-a36c-19c188b9adb8
+data_preparer | NULL | 40dd44fd-4cfc-4976-a36c-19c188b9adb8
+model_selector | NULL | 40dd44fd-4cfc-4976-a36c-19c188b9adb8
+model_trainer | NULL | 40dd44fd-4cfc-4976-a36c-19c188b9adb8
+feature_analyzer | NULL | 40dd44fd-4cfc-4976-a36c-19c188b9adb8
+model_deployer | NULL | 40dd44fd-4cfc-4976-a36c-19c188b9adb8
+== 4) no new experiment rows named after the physical label (PASS: 0 — #2257)
+0
+== 5) worker log: calibration + criteria
+[2026-09-29 18:24:26,349: INFO/ForkPoolWorker-2] Calibration: ECE 0.1068 → 0.0295 (sigmoid)
+[2026-09-29 18:24:26,405: INFO/ForkPoolWorker-2] Evaluation complete: success_criteria_met=True
+[2026-09-29 18:25:12,807: INFO/ForkPoolWorker-2] Model training complete: LogisticRegression (success_criteria_met: True) in 78.12s
+[2026-09-29 18:25:12,808: INFO/ForkPoolWorker-2] Stage 4 complete: training_run_id=train_7a15fa5b5c3e, success_criteria_met=True, primary_metric=0.8363, hpo_trials=50, duration=78.45s
+[2026-09-29 18:25:19,301: INFO/ForkPoolWorker-2] Task src.tasks.execute_model_retraining[d639eb51-f251-424d-b3a5-25f5c9644d17] succeeded in 103.10858461726457s: {'status': 'completed', 'retraining_id': '61e923bd-08ec-4acd-9aba-e012c126b097', 'old_version': '4ec55d13-46c8-4df4-9ec8-7723fad67fb3', 'new_version': '1.0_retrained_20260929_1823_7b1ab4', 'performance_after': 0.8359030654056568, 'calibration_method': 'sigmoid', 'mlflow_model_version': 7, 'deployment_record_id': 'f3e0b26d-d7f5-45fd-b05f-3fd958b77843', 'deployed': False, 'deployment_skipped_reason': 'deployment_action=\'promote\': register/promote only — no Bento packaged, no endpoint deployed', 'message': 'Model 1.0_retrained_20260929_1823_7b1ab4 retrained; validation AUC=0.8359; deployment_action=\'promote\': register/promote only — no Bento packaged, no endpoint deployed'}
