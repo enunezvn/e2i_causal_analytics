@@ -753,6 +753,33 @@ async def test_clean_iso_dates_before_the_split_pass() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "values",
+    [
+        # ISO 8601 decimal-COMMA fraction: pandas' format="ISO8601" rejects it.
+        ["2024-01-02T03:04:05,123456Z"],
+        # Timestamp OBJECTS with different offsets: the first parse fixes one
+        # offset dtype and coerces the other to NaT.
+        [pd.Timestamp("2024-01-02T00:00:00+05:00"), pd.Timestamp("2024-01-03T00:00:00-05:00")],
+    ],
+    ids=["iso_decimal_comma", "mixed_offset_timestamp_objects"],
+)
+async def test_known_fail_closed_limitation_blocks_as_unverifiable(values: list) -> None:
+    """PINNED KNOWN LIMITATION (codex r6 on #2294, not fixed by decision).
+
+    These are VALID timestamps that the audit cannot parse, so they block as
+    "temporal check unverifiable" — a false block with a loud reason, never a
+    false pass. No in-repo producer configures temporal columns at all (see the
+    PR's census). This test pins the current behaviour so that supporting
+    either form is a deliberate change, not an accident."""
+    final_state = await _leakage_gate_graph().ainvoke(_string_dates_state(values))
+
+    blocking = final_state["blocking_issues"] or []
+    assert any("temporal check unverifiable: 'event_ts'" in i for i in blocking), blocking
+    assert final_state["gate_passed"] is False
+
+
+@pytest.mark.asyncio
 async def test_incomplete_audit_entry_is_retracted_by_a_clean_rerun() -> None:
     """The incomplete-audit entry is a ``leakage:`` entry, so the next
     ``detect_leakage`` pass (the recheck, or a QC retry) replaces it: once the
