@@ -31,9 +31,9 @@ ALLOWLIST: dict[str, int] = {
     "src/agents/causal_impact/nodes/refutation.py": 2519,
     "src/agents/feedback_learner/dspy_integration.py": 1836,
     "src/agents/ml_foundation/data_preparer/nodes/adaptive_validity_check.py": 4224,
-    # 1563 -> 1533: #2310 moved the run-id / metrics mapping helpers to training_provenance
+    # 1563 -> 1534: #2310 moved the run-id / metrics mapping helpers to training_provenance
     # and the candidate write / reuse rules to retrain_linkage.
-    "src/agents/ml_foundation/model_deployer/nodes/registry_manager.py": 1533,
+    "src/agents/ml_foundation/model_deployer/nodes/registry_manager.py": 1534,
     "src/agents/ml_foundation/model_trainer/nodes/evaluator.py": 4026,
     # 3710: MEASURED from the merged tree, not either side's pin. The lane's
     # value-lookup mask (#2114) and main's #2139 structural guard both run here,

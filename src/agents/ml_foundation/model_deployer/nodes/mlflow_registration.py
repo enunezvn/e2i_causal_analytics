@@ -174,3 +174,17 @@ async def _model_versions_for_run(model_name: str, run_id: str) -> Optional[List
         logger.warning(f"MLflow version search for {model_name} run {run_id} failed: {e}")
         return None
     return sorted(int(v.version) for v in found)
+
+
+async def _model_version_stage(model_name: str, version: int) -> Optional[str]:
+    """The MLflow registry stage of one version ("None", "Staging", ...), or None when
+    MLflow cannot be asked or the version does not exist (#2310 codex r5)."""
+    connector = _get_mlflow_connector()
+    client = getattr(connector, "_client", None) if connector else None
+    if client is None:
+        return None
+    try:
+        return str(client.get_model_version(model_name, str(version)).current_stage)
+    except Exception as e:
+        logger.warning(f"MLflow stage read of {model_name} v{version} failed: {e}")
+        return None

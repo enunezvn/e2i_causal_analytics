@@ -315,28 +315,39 @@ async def register_or_reuse_version(
 
 
 async def promote_candidate(
-    state: Dict[str, Any], tag: Callable[[str, int, Dict[str, str]], Awaitable[bool]]
+    state: Dict[str, Any],
+    tag: Callable[[str, int, Dict[str, str]], Awaitable[bool]],
+    stage_of: Callable[[str, int], Awaitable[Optional[str]]],
 ) -> Dict[str, Any]:
     """``promote_stage`` for the candidate target (#2310): tag, never transition.
 
-    The MLflow version keeps stage None; it is tagged with its role and parent. Success is
-    the tag landing -- a retrain whose MLflow version is not marked as a candidate has not
-    delivered one. The target requires a retrain (a parent to point at).
+    The MLflow version must BE at stage None -- read from MLflow, not assumed (codex r5: a
+    reused version could already sit at Staging, like the live v3/v4/v5). Any other stage,
+    or a stage MLflow cannot report, fails closed: this node never moves a version. Then it
+    is tagged with its role and parent. Success is the tag landing -- a retrain whose MLflow
+    version is not marked as a candidate has not delivered one. The target requires a
+    retrain (a parent to point at). ``current_stage`` reports the stage MLflow holds.
     """
     from datetime import datetime
 
     name, version = state.get("registered_model_name"), state.get("model_version")
     parent = (state.get("retrain_of") or {}).get("model_id")
     current = state.get("current_stage", "None")
-    tagged = False
+    tagged, why = False, f"parent={parent!r}"
     if parent and name and version:
-        tagged = await tag(
-            name, int(version), {"e2i.role": CANDIDATE_DB_STAGE, "e2i.retrain_of": str(parent)}
-        )
+        actual = await stage_of(name, int(version))
+        if actual is not None:
+            current = actual
+        if actual != "None":
+            why = f"its MLflow stage is {actual!r}, not 'None' (a candidate is never staged)"
+        else:
+            tagged = await tag(
+                name, int(version), {"e2i.role": CANDIDATE_DB_STAGE, "e2i.retrain_of": str(parent)}
+            )
     reason = (
         f"{name} v{version} {CANDIDATE_NOTE}"
         if tagged
-        else f"candidate {name} v{version} not tagged in MLflow (parent={parent!r})"
+        else f"candidate {name} v{version} not registered as a candidate: {why}"
     )
     if not tagged:
         logger.error("Candidate registration incomplete: %s", reason)

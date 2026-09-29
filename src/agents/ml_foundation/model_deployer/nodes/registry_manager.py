@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple, cast
 
 from src.agents.ml_foundation.model_deployer.nodes.mlflow_registration import (  # noqa: F401
     _get_mlflow_connector,
+    _model_version_stage,
     _model_versions_for_run,
     _register_model_mlflow,
     _tag_model_version_mlflow,
@@ -1403,7 +1404,7 @@ async def promote_stage(state: Dict[str, Any]) -> Dict[str, Any]:
             }
 
         if promotion_target_stage == CANDIDATE_STAGE:  # #2310: tag, never transition
-            return await promote_candidate(state, _tag_model_version_mlflow)
+            return await promote_candidate(state, _tag_model_version_mlflow, _model_version_stage)
         # #2259: the provenance gate runs BEFORE MLflow moves, not only at the DB write.
         if refused := await production_gate(state, promotion_target_stage):
             return refused

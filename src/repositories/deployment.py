@@ -47,6 +47,8 @@ class DeploymentEnvironment(str, Enum):
     STAGING = "staging"
     SHADOW = "shadow"
     PRODUCTION = "production"
+    # #2310: a retrain's register-only candidate record (no endpoint; status 'registered').
+    CANDIDATE = "candidate"
 
 
 # ============================================================================
