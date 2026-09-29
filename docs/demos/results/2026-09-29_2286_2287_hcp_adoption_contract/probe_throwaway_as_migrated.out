@@ -41,8 +41,8 @@ INFO great_expectations.data_context.types.base: Created temporary directory '/t
 [detect_leakage 0.2s] {"leakage_severity": "none", "leaked_features": []} blocking=[]
 [adaptive_validity_check 2.2s] {"leaked_features": []} blocking=[]
   adaptive verdict severities: {'high': 2, 'info': 1}
-    high: peer_influence_score layer=3 
-    high: influence_network_size layer=3 
+    high: peer_influence_score layer=3
+    high: influence_network_size layer=3
 [route_after_leakage_detection] -> continue
 [transform_data 0.1s] {} blocking=[]
 [compute_baseline_metrics 0.0s] {} blocking=[]
@@ -85,8 +85,8 @@ INFO great_expectations.data_context.types.base: Created temporary directory '/t
 [detect_leakage 0.2s] {"leakage_severity": "none", "leaked_features": []} blocking=[]
 [adaptive_validity_check 2.4s] {"leaked_features": []} blocking=[]
   adaptive verdict severities: {'high': 2, 'info': 1}
-    high: peer_influence_score layer=3 
-    high: influence_network_size layer=3 
+    high: peer_influence_score layer=3
+    high: influence_network_size layer=3
 [route_after_leakage_detection] -> continue
 [transform_data 0.1s] {} blocking=[]
 [compute_baseline_metrics 0.0s] {} blocking=[]
@@ -125,8 +125,8 @@ WARNING src.agents.ml_foundation.data_preparer.nodes.sufficiency_check: target_m
 [detect_leakage 0.2s] {"leakage_severity": "none", "leaked_features": []} blocking=[]
 [adaptive_validity_check 2.2s] {"leaked_features": []} blocking=[]
   adaptive verdict severities: {'high': 2, 'info': 1}
-    high: peer_influence_score layer=3 
-    high: influence_network_size layer=3 
+    high: peer_influence_score layer=3
+    high: influence_network_size layer=3
 [route_after_leakage_detection] -> continue
 [transform_data 0.1s] {} blocking=[]
 [compute_baseline_metrics 0.0s] {} blocking=[]

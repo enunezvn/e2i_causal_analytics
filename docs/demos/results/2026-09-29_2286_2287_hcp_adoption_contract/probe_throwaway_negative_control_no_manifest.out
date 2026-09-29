@@ -33,8 +33,8 @@ INFO great_expectations.data_context.types.base: Created temporary directory '/t
 [detect_leakage 0.2s] {"leakage_severity": "none", "leaked_features": []} blocking=[]
 [adaptive_validity_check 2.2s] {"leakage_severity": "high", "leaked_features": ["influence_network_size", "peer_influence_score"]} blocking=[]
   adaptive verdict severities: {'high': 2, 'info': 1}
-    high: peer_influence_score layer=3 
-    high: influence_network_size layer=3 
+    high: peer_influence_score layer=3
+    high: influence_network_size layer=3
 [route_after_leakage_detection] -> remediate
 leakage_remediation (LLM) would run -- NOT executed by this probe
 FIDELITY Remibrutinib (contract load, goldstd builder): {'rows': (5000, 5000), 'label_rate': (0.3938, 0.3938), 'splits': ({'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500}, {'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500}), 'row_multiset_equal': True}
@@ -65,8 +65,8 @@ INFO great_expectations.data_context.types.base: Created temporary directory '/t
 [detect_leakage 0.2s] {"leakage_severity": "none", "leaked_features": []} blocking=[]
 [adaptive_validity_check 2.1s] {"leakage_severity": "high", "leaked_features": ["influence_network_size", "peer_influence_score"]} blocking=[]
   adaptive verdict severities: {'high': 2, 'info': 1}
-    high: peer_influence_score layer=3 
-    high: influence_network_size layer=3 
+    high: peer_influence_score layer=3
+    high: influence_network_size layer=3
 [route_after_leakage_detection] -> remediate
 leakage_remediation (LLM) would run -- NOT executed by this probe
 FIDELITY Fabhalta (contract load, goldstd builder): {'rows': (5000, 5000), 'label_rate': (0.4176, 0.4176), 'splits': ({'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500}, {'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500}), 'row_multiset_equal': True}
@@ -93,8 +93,8 @@ INFO great_expectations.data_context.types.base: Created temporary directory '/t
 [detect_leakage 0.2s] {"leakage_severity": "none", "leaked_features": []} blocking=[]
 [adaptive_validity_check 2.1s] {"leakage_severity": "high", "leaked_features": ["influence_network_size", "peer_influence_score"]} blocking=[]
   adaptive verdict severities: {'high': 2, 'info': 1}
-    high: peer_influence_score layer=3 
-    high: influence_network_size layer=3 
+    high: peer_influence_score layer=3
+    high: influence_network_size layer=3
 [route_after_leakage_detection] -> remediate
 leakage_remediation (LLM) would run -- NOT executed by this probe
 FIDELITY Kisqali (contract load, goldstd builder): {'rows': (5000, 5000), 'label_rate': (0.4046, 0.4046), 'splits': ({'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500}, {'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500}), 'row_multiset_equal': True}

@@ -225,7 +225,7 @@ async def run_brand(brand: str, make_loader, async_db) -> dict:
         for v in state["adaptive_verdicts"]:
             if v.get("severity") in ("high", "critical"):
                 print(
-                    f"    {v.get('severity')}: {v.get('feature')} layer={v.get('layer')} {v.get('reason', '')[:160]}"
+                    f"    {v.get('severity')}: {v.get('feature')} layer={v.get('layer')} {v.get('reason', '')[:160]}".rstrip()
                 )
     route = G._route_after_leakage_detection(state)
     print(f"[route_after_leakage_detection] -> {route}")
