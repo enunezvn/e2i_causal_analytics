@@ -154,13 +154,13 @@ async def test_a_row_with_other_lineage_is_refused_and_never_healed(
 
 @pytest.mark.parametrize(
     "raced_parent, raced_version, reused",
-    [("parent", 4, True), ("parent", 3, False), (None, 4, False)],
+    [("parent", 4, True), ("parent", 3, False), ("parent", None, False), (None, 4, False)],
 )
 async def test_the_unique_race_reuse_applies_the_same_rules(
     registry_db: _pg.PgConn,
     rest: ThrowawayRest,
     raced_parent: Optional[str],
-    raced_version: int,
+    raced_version: Optional[int],
     reused: bool,
 ) -> None:
     """A concurrent delivery writes the row between the pre-check and the insert: the real
@@ -177,7 +177,7 @@ async def test_the_unique_race_reuse_applies_the_same_rules(
         "insert into ml_model_registry (id, experiment_id, model_name, model_version, algorithm, "
         f"stage, mlflow_run_id, retrain_of_id, mlflow_model_version) values ('{raced}', "
         f"'{ids['exp']}', '{NAME}', '{VERSION}', 'lr', 'candidate', 'run-2310', {_q(parent)}, "
-        f"{raced_version})",
+        f"{_q(None) if raced_version is None else raced_version})",
         user="postgres",
     )
     real_lookup = MLModelRegistryRepository.get_by_name_version

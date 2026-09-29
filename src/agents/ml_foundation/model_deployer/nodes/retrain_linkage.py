@@ -197,7 +197,12 @@ def reuse_refusal(
             f"the existing row's lineage is retrain_of_id={have}, this registration's is "
             f"{want} -- lineage mismatch (fails closed, never healed)"
         )
-    if want and existing.mlflow_model_version and mlflow_version is not None:
+    if want and mlflow_version is not None:
+        if not existing.mlflow_model_version:  # codex r6: NULL is not a match
+            return (
+                "the existing row records no MLflow version, this delivery registered "
+                f"version {mlflow_version} -- which one is the candidate is not provable"
+            )
         if int(existing.mlflow_model_version) != int(mlflow_version):
             return (
                 f"the existing row records MLflow version {existing.mlflow_model_version}, "

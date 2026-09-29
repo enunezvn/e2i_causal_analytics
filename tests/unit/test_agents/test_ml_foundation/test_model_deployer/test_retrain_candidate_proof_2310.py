@@ -145,3 +145,39 @@ async def test_a_linked_row_without_an_mlflow_version_is_not_healed_by_guessing(
     assert out["registration_successful"] is False
     assert "records no MLflow version" in out["error"]
     assert row["mlflow_model_version"] is None
+
+
+@pytest.mark.asyncio
+async def test_the_writer_never_links_a_new_version_to_a_row_without_one():
+    """codex r6: the writer's reuse (pre-check and unique race) must treat a linked row's
+    NULL MLflow version as a mismatch, not as a match for the version just registered."""
+    from src.agents.ml_foundation.model_deployer.nodes.registry_manager import (
+        _persist_model_registry_row,
+    )
+
+    db, retrain_of = _db()
+    db.rows("ml_model_registry").append(
+        {
+            "id": str(uuid4()),
+            "experiment_id": retrain_of["experiment_id"],
+            "model_name": MODEL,
+            "model_version": retrain_of["new_model_version"],
+            "mlflow_run_id": "run-a",
+            "stage": "candidate",
+            "retrain_of_id": retrain_of["model_id"],
+            "mlflow_model_version": None,
+            "is_synthetic": False,
+        }
+    )
+    rid = await _persist_model_registry_row(
+        db,
+        experiment_id_str=MLFLOW_EXP,
+        model_uri="runs:/run-a/model",
+        registered_model_name=MODEL,
+        model_version=5,
+        validation_metrics=None,
+        version_label=retrain_of["new_model_version"],
+        expected_experiment_id=retrain_of["experiment_id"],
+        retrain_of_id=retrain_of["model_id"],
+    )
+    assert rid is None
