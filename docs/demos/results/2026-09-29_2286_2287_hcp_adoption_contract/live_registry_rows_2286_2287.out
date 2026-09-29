@@ -1,0 +1,26 @@
+live proof 1/3: registry rows + has_cohort_contract simulation (read-only)
+code under test: /home/enunez/Projects/e2i_causal_analytics/src
+git HEAD: 0684f8230e7066834718e0a170b0a576e7d0f9be
+.env loaded from: /home/enunez/Projects/e2i_causal_analytics/.env
+rows read: 3 (all stages, synthetic included)
+
+=== hcp_adoption_remibrutinib_goldstd_lr_v1 === rows=1 production+real=1
+  {"id": "8b7a1e4e-be3c-469f-822b-46d9ab3dad81", "model_version": "1.0", "stage": "production", "is_champion": true, "is_synthetic": false, "cohort_data_source": "{\"columns\": [\"peer_influence_score\", \"influence_network_size", "cohort_target_outcome": "adopted", "cohort_feature_manifest_source": "synthetic_csu", "163_would_update": false}
+  163 is ALREADY applied to this row (its pair is present)
+  has_cohort_contract: before=False after=True; sweep branch before=blocked: no_cohort_contract after=enqueue
+  after-163 contract: data_source.table=hcp_adoption_goldstd_v target=adopted manifest=synthetic_csu calibration_method=sigmoid
+
+=== hcp_adoption_fabhalta_goldstd_lr_v1 === rows=1 production+real=1
+  {"id": "dab9a91b-708d-4b0a-a332-803cef3d3245", "model_version": "1.0", "stage": "production", "is_champion": true, "is_synthetic": false, "cohort_data_source": "{\"columns\": [\"peer_influence_score\", \"influence_network_size", "cohort_target_outcome": "adopted", "cohort_feature_manifest_source": "synthetic_csu", "163_would_update": false}
+  163 is ALREADY applied to this row (its pair is present)
+  has_cohort_contract: before=False after=True; sweep branch before=blocked: no_cohort_contract after=enqueue
+  after-163 contract: data_source.table=hcp_adoption_goldstd_v target=adopted manifest=synthetic_csu calibration_method=sigmoid
+
+=== hcp_adoption_kisqali_goldstd_lr_v1 === rows=1 production+real=1
+  {"id": "8d1244df-7c38-435e-820f-1f201e51af24", "model_version": "1.0", "stage": "production", "is_champion": true, "is_synthetic": false, "cohort_data_source": "{\"columns\": [\"peer_influence_score\", \"influence_network_size", "cohort_target_outcome": "adopted", "cohort_feature_manifest_source": "synthetic_csu", "163_would_update": false}
+  163 is ALREADY applied to this row (its pair is present)
+  has_cohort_contract: before=False after=True; sweep branch before=blocked: no_cohort_contract after=enqueue
+  after-163 contract: data_source.table=hcp_adoption_goldstd_v target=adopted manifest=synthetic_csu calibration_method=sigmoid
+
+(output also written to /home/enunez/Projects/e2i_causal_analytics/docs/demos/results/2026-09-29_2286_2287_hcp_adoption_contract/live_registry_rows_2286_2287.out)
+VERDICT: PASS

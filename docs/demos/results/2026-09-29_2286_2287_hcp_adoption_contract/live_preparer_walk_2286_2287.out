@@ -1,0 +1,93 @@
+live proof 3/3: data_preparer walk, all 3 brands (read-only)
+code under test: /home/enunez/Projects/e2i_causal_analytics/src
+git HEAD: 0684f8230e7066834718e0a170b0a576e7d0f9be
+.env loaded from: /home/enunez/Projects/e2i_causal_analytics/.env
+registry row after 163 (simulated, not written): {'cohort_target_outcome': 'adopted', 'cohort_data_source': '{"columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region", "adopted"], "filters": {"brand": "Remibrutinib", "is_synthetic": true}, "table": "hcp_adoption_goldstd_v", "type": "table"}', 'cohort_feature_manifest_source': 'synthetic_csu'}
+
+=== hcp_adoption / Remibrutinib ===
+has_cohort_contract: today(151 label only)=False after163=True
+sweep branch: today -> 'blocked: no_cohort_contract'; after163 -> 'enqueue: trigger_retraining(cohort=...)'
+scope_spec: prediction_target='adopted' problem_type='binary_classification' feature_manifest_source='synthetic_csu' data_source-in-scope_spec=False
+[load_data 0.4s] {} blocking=[]
+  rows {'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500} total=5000 label_rate=0.3886
+  frame columns = ['peer_influence_score', 'influence_network_size', 'years_experience', 'specialty', 'geographic_region', 'adopted', 'data_split']
+[audit_sampling_frame 0.0s] {} blocking=[]
+[run_schema_validation 1.2s] {"schema_validation_status": "passed", "schema_splits_validated": 3} blocking=[]
+[run_quality_checks 0.0s] {"qc_status": "passed", "overall_score": 1.0} blocking=[]
+[run_ge_validation 0.4s] {"ge_validation_status": "passed", "ge_expectations_passed": 24, "ge_expectations_evaluated": 24} blocking=[]
+[engineer_features 0.0s] {} blocking=[]
+[detect_leakage 0.2s] {"leakage_severity": "none", "leaked_features": []} blocking=[]
+[adaptive_validity_check 2.2s] {"leaked_features": []} blocking=[]
+  adaptive verdict severities: {'high': 2, 'info': 1}
+    high: peer_influence_score layer=3
+    high: influence_network_size layer=3
+[route_after_leakage_detection] -> continue
+[transform_data 0.1s] {} blocking=[]
+[compute_baseline_metrics 0.0s] {} blocking=[]
+[sufficiency_check 0.0s] {} blocking=[]
+[finalize_output 0.0s] {"gate_passed": true, "qc_passed": true, "is_ready": false, "missing_required_features": ["hcp_specialty", "patient_count", "prescription_history", "brand_affinity_score", "engagement_score", "channel_response_rate"]} blocking=[]
+TRAINER_HANDOFF Remibrutinib: {"X_columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region"], "X_dtypes": {"peer_influence_score": "float64", "influence_network_size": "int64", "years_experience": "int64", "specialty": "object", "geographic_region": "object"}, "rows": {"train_data": 3000, "validation_data": 1000, "test_data": 500, "holdout_data": 500}, "dropped": {"identifier_named": ["data_split"]}}
+FIDELITY Remibrutinib (contract load, goldstd builder): {'rows': (5000, 5000), 'label_rate': (0.3886, 0.3886), 'splits': ({'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500}, {'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500}), 'row_multiset_equal': True}
+RESULT {"brand": "Remibrutinib", "has_cohort_contract_after163": true, "prediction_target": "adopted", "route": "continue", "gate_passed": true, "blocking_issues": [], "schema_validation_status": "passed", "ge_validation_status": "passed", "leakage_severity": "none", "fidelity_row_multiset_equal": true, "trainer_X_columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region"]}
+registry row after 163 (simulated, not written): {'cohort_target_outcome': 'adopted', 'cohort_data_source': '{"columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region", "adopted"], "filters": {"brand": "Fabhalta", "is_synthetic": true}, "table": "hcp_adoption_goldstd_v", "type": "table"}', 'cohort_feature_manifest_source': 'synthetic_csu'}
+
+=== hcp_adoption / Fabhalta ===
+has_cohort_contract: today(151 label only)=False after163=True
+sweep branch: today -> 'blocked: no_cohort_contract'; after163 -> 'enqueue: trigger_retraining(cohort=...)'
+scope_spec: prediction_target='adopted' problem_type='binary_classification' feature_manifest_source='synthetic_csu' data_source-in-scope_spec=False
+[load_data 0.3s] {} blocking=[]
+  rows {'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500} total=5000 label_rate=0.4074
+  frame columns = ['peer_influence_score', 'influence_network_size', 'years_experience', 'specialty', 'geographic_region', 'adopted', 'data_split']
+[audit_sampling_frame 0.0s] {} blocking=[]
+[run_schema_validation 0.1s] {"schema_validation_status": "passed", "schema_splits_validated": 3} blocking=[]
+[run_quality_checks 0.0s] {"qc_status": "passed", "overall_score": 1.0} blocking=[]
+[run_ge_validation 0.4s] {"ge_validation_status": "passed", "ge_expectations_passed": 24, "ge_expectations_evaluated": 24} blocking=[]
+[engineer_features 0.0s] {} blocking=[]
+[detect_leakage 0.2s] {"leakage_severity": "none", "leaked_features": []} blocking=[]
+[adaptive_validity_check 2.4s] {"leaked_features": []} blocking=[]
+  adaptive verdict severities: {'high': 2, 'info': 1}
+    high: peer_influence_score layer=3
+    high: influence_network_size layer=3
+[route_after_leakage_detection] -> continue
+[transform_data 0.1s] {} blocking=[]
+[compute_baseline_metrics 0.0s] {} blocking=[]
+[sufficiency_check 0.0s] {} blocking=[]
+[finalize_output 0.0s] {"gate_passed": true, "qc_passed": true, "is_ready": false, "missing_required_features": ["hcp_specialty", "patient_count", "prescription_history", "brand_affinity_score", "engagement_score", "channel_response_rate"]} blocking=[]
+TRAINER_HANDOFF Fabhalta: {"X_columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region"], "X_dtypes": {"peer_influence_score": "float64", "influence_network_size": "int64", "years_experience": "int64", "specialty": "object", "geographic_region": "object"}, "rows": {"train_data": 3000, "validation_data": 1000, "test_data": 500, "holdout_data": 500}, "dropped": {"identifier_named": ["data_split"]}}
+FIDELITY Fabhalta (contract load, goldstd builder): {'rows': (5000, 5000), 'label_rate': (0.4074, 0.4074), 'splits': ({'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500}, {'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500}), 'row_multiset_equal': True}
+RESULT {"brand": "Fabhalta", "has_cohort_contract_after163": true, "prediction_target": "adopted", "route": "continue", "gate_passed": true, "blocking_issues": [], "schema_validation_status": "passed", "ge_validation_status": "passed", "leakage_severity": "none", "fidelity_row_multiset_equal": true, "trainer_X_columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region"]}
+registry row after 163 (simulated, not written): {'cohort_target_outcome': 'adopted', 'cohort_data_source': '{"columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region", "adopted"], "filters": {"brand": "Kisqali", "is_synthetic": true}, "table": "hcp_adoption_goldstd_v", "type": "table"}', 'cohort_feature_manifest_source': 'synthetic_csu'}
+
+=== hcp_adoption / Kisqali ===
+has_cohort_contract: today(151 label only)=False after163=True
+sweep branch: today -> 'blocked: no_cohort_contract'; after163 -> 'enqueue: trigger_retraining(cohort=...)'
+scope_spec: prediction_target='adopted' problem_type='binary_classification' feature_manifest_source='synthetic_csu' data_source-in-scope_spec=False
+[load_data 0.3s] {} blocking=[]
+  rows {'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500} total=5000 label_rate=0.3944
+  frame columns = ['peer_influence_score', 'influence_network_size', 'years_experience', 'specialty', 'geographic_region', 'adopted', 'data_split']
+[audit_sampling_frame 0.0s] {} blocking=[]
+[run_schema_validation 0.1s] {"schema_validation_status": "passed", "schema_splits_validated": 3} blocking=[]
+[run_quality_checks 0.0s] {"qc_status": "passed", "overall_score": 1.0} blocking=[]
+[run_ge_validation 0.4s] {"ge_validation_status": "passed", "ge_expectations_passed": 24, "ge_expectations_evaluated": 24} blocking=[]
+[engineer_features 0.0s] {} blocking=[]
+[detect_leakage 0.2s] {"leakage_severity": "none", "leaked_features": []} blocking=[]
+[adaptive_validity_check 2.4s] {"leaked_features": []} blocking=[]
+  adaptive verdict severities: {'high': 2, 'info': 1}
+    high: peer_influence_score layer=3
+    high: influence_network_size layer=3
+[route_after_leakage_detection] -> continue
+[transform_data 0.1s] {} blocking=[]
+[compute_baseline_metrics 0.0s] {} blocking=[]
+[sufficiency_check 0.0s] {} blocking=[]
+[finalize_output 0.0s] {"gate_passed": true, "qc_passed": true, "is_ready": false, "missing_required_features": ["hcp_specialty", "patient_count", "prescription_history", "brand_affinity_score", "engagement_score", "channel_response_rate"]} blocking=[]
+TRAINER_HANDOFF Kisqali: {"X_columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region"], "X_dtypes": {"peer_influence_score": "float64", "influence_network_size": "int64", "years_experience": "int64", "specialty": "object", "geographic_region": "object"}, "rows": {"train_data": 3000, "validation_data": 1000, "test_data": 500, "holdout_data": 500}, "dropped": {"identifier_named": ["data_split"]}}
+FIDELITY Kisqali (contract load, goldstd builder): {'rows': (5000, 5000), 'label_rate': (0.3944, 0.3944), 'splits': ({'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500}, {'train': 3000, 'validation': 1000, 'test': 500, 'holdout': 500}), 'row_multiset_equal': True}
+RESULT {"brand": "Kisqali", "has_cohort_contract_after163": true, "prediction_target": "adopted", "route": "continue", "gate_passed": true, "blocking_issues": [], "schema_validation_status": "passed", "ge_validation_status": "passed", "leakage_severity": "none", "fidelity_row_multiset_equal": true, "trainer_X_columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region"]}
+
+SUMMARY
+{"brand": "Remibrutinib", "has_cohort_contract_after163": true, "prediction_target": "adopted", "route": "continue", "gate_passed": true, "blocking_issues": [], "schema_validation_status": "passed", "ge_validation_status": "passed", "leakage_severity": "none", "fidelity_row_multiset_equal": true, "trainer_X_columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region"]}
+{"brand": "Fabhalta", "has_cohort_contract_after163": true, "prediction_target": "adopted", "route": "continue", "gate_passed": true, "blocking_issues": [], "schema_validation_status": "passed", "ge_validation_status": "passed", "leakage_severity": "none", "fidelity_row_multiset_equal": true, "trainer_X_columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region"]}
+{"brand": "Kisqali", "has_cohort_contract_after163": true, "prediction_target": "adopted", "route": "continue", "gate_passed": true, "blocking_issues": [], "schema_validation_status": "passed", "ge_validation_status": "passed", "leakage_severity": "none", "fidelity_row_multiset_equal": true, "trainer_X_columns": ["peer_influence_score", "influence_network_size", "years_experience", "specialty", "geographic_region"]}
+
+(output also written to /home/enunez/Projects/e2i_causal_analytics/docs/demos/results/2026-09-29_2286_2287_hcp_adoption_contract/live_preparer_walk_2286_2287.out)
+VERDICT: PASS

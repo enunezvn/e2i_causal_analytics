@@ -1,0 +1,10 @@
+live proof 2/3: frame equivalence, retrain contract vs goldstd builder (read-only)
+code under test: /home/enunez/Projects/e2i_causal_analytics/src
+git HEAD: 0684f8230e7066834718e0a170b0a576e7d0f9be
+.env loaded from: /home/enunez/Projects/e2i_causal_analytics/.env
+Remibrutinib (retrain load, goldstd builder): {"rows": [5000, 5000], "label_rate": [0.3886, 0.3886], "splits": [{"train": 3000, "validation": 1000, "test": 500, "holdout": 500}, {"train": 3000, "validation": 1000, "test": 500, "holdout": 500}], "holdout_rows": 500, "row_multiset_equal": true}
+Fabhalta (retrain load, goldstd builder): {"rows": [5000, 5000], "label_rate": [0.4074, 0.4074], "splits": [{"train": 3000, "validation": 1000, "test": 500, "holdout": 500}, {"train": 3000, "validation": 1000, "test": 500, "holdout": 500}], "holdout_rows": 500, "row_multiset_equal": true}
+Kisqali (retrain load, goldstd builder): {"rows": [5000, 5000], "label_rate": [0.3944, 0.3944], "splits": [{"train": 3000, "validation": 1000, "test": 500, "holdout": 500}, {"train": 3000, "validation": 1000, "test": 500, "holdout": 500}], "holdout_rows": 500, "row_multiset_equal": true}
+
+(output also written to /home/enunez/Projects/e2i_causal_analytics/docs/demos/results/2026-09-29_2286_2287_hcp_adoption_contract/live_frame_equivalence_2287.out)
+VERDICT: PASS
