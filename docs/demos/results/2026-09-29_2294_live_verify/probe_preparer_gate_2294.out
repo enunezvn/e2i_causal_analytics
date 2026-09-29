@@ -1,0 +1,108 @@
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/supabase/_sync/client.py:309: DeprecationWarning: The 'timeout' parameter is deprecated. Please configure it in the http client instead.
+  return SyncPostgrestClient(
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/supabase/_sync/client.py:309: DeprecationWarning: The 'verify' parameter is deprecated. Please configure it in the http client instead.
+  return SyncPostgrestClient(
+WARNING src.mlops.pandera_schemas: Schema validation failed for patient_journeys: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: train split did not pass schema validation (status='failed'): 2 errors
+WARNING src.mlops.pandera_schemas: Schema validation failed for patient_journeys: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: validation split did not pass schema validation (status='failed'): 2 errors
+WARNING src.mlops.pandera_schemas: Schema validation failed for patient_journeys: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: test split did not pass schema validation (status='failed'): 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: Schema validation FAILED for patient_journeys: 6 errors across 3 splits (1367ms)
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmppuwjut6c' for ephemeral docs site
+
+=== initiation / Kisqali ===
+[load_data 0.9s] {} blocking=[]
+[audit_sampling_frame 0.0s] {} blocking=[]
+[run_schema_validation 1.4s] {"schema_validation_status": "failed"} blocking=['schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+[run_quality_checks 0.0s] {"qc_status": "passed"} blocking=['schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 4043.35it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 2048.67it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 2408.10it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 2265.66it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2175.02it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2051.61it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2398.88it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2315.87it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2262.84it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2210.76it/s]
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmp26dqr5kf' for ephemeral docs site
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 4382.76it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3211.57it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3740.74it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3335.43it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2829.02it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2534.63it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2462.25it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2348.00it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2285.31it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2207.92it/s]
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmpvj5pqmyk' for ephemeral docs site
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 6612.15it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 4946.11it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 5829.47it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 5304.21it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 4191.79it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 3837.42it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 3811.46it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 3623.41it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 3514.13it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 3410.62it/s]
+/home/enunez/Projects/e2i_causal_analytics/.venv/lib/python3.12/site-packages/opik/error_tracking/shutdown_hooks.py:12: SentryHubDeprecationWarning: `sentry_sdk.Hub` is deprecated and will be removed in a future major release. Please consult our 1.x to 2.x migration guide for details on how to migrate `Hub` usage to the new API: https://docs.sentry.io/platforms/python/migration/1.x-to-2.x
+  client = sentry_sdk.Hub.current.client
+WARNING src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check: Declared-safe immunity: exempted 5 manifest pre-index feature(s) from leakage (contract is authoritative); severity none -> info. Features: ['academic_hcp', 'age_at_diagnosis', 'comorbidity_burden', 'disease_severity', 'prior_therapy_lines']
+INFO src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check: adaptive_validity_check: scored=8 flagged=2 (high) prior_severity=none new_severity=info
+WARNING src.agents.ml_foundation.data_preparer.nodes.sufficiency_check: target_mde not specified in scope_spec.sufficiency; using computed_from_data default 0.0698311444652908. Override via scope_spec.sufficiency.target_mde.
+WARNING src.agents.ml_foundation.data_preparer.graph: QC gate BLOCKED: 1 blocking issues
+WARNING src.mlops.pandera_schemas: Schema validation failed for patient_journeys: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: train split did not pass schema validation (status='failed'): 2 errors
+WARNING src.mlops.pandera_schemas: Schema validation failed for patient_journeys: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: validation split did not pass schema validation (status='failed'): 2 errors
+WARNING src.mlops.pandera_schemas: Schema validation failed for patient_journeys: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: test split did not pass schema validation (status='failed'): 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: Schema validation FAILED for patient_journeys: 6 errors across 3 splits (26ms)
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmpcq6bx2vo' for ephemeral docs site
+[run_ge_validation 0.5s] {"ge_validation_status": "passed"} blocking=['schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+[engineer_features 0.0s] {} blocking=['schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+[detect_leakage 0.8s] {"leakage_severity": "none", "leaked_features": []} blocking=['schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+[adaptive_validity_check 13.9s] {"leakage_severity": "info", "leaked_features": []} blocking=['schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+[route_after_leakage_detection] -> continue
+[transform_data 0.1s] {} blocking=['schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+[compute_baseline_metrics 0.0s] {} blocking=['schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+[sufficiency_check 0.0s] {} blocking=['schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+[finalize_output 0.0s] {"gate_passed": false, "qc_passed": false, "is_ready": false} blocking=['schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+GATE initiation/Kisqali: gate_passed=False n_blocking=1 duplicates=False
+
+=== persistence / Kisqali ===
+[load_data 0.8s] {} blocking=[]
+[audit_sampling_frame 0.0s] {} blocking=[]
+[run_schema_validation 0.0s] {"schema_validation_status": "failed"} blocking=['schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+[run_quality_checks 0.0s] {"qc_status": "passed"} blocking=['schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3490.41it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 2667.00it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3055.40it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 2766.24it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2466.37it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2230.30it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2300.49it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2186.18it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2110.40it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2049.67it/s]
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmpqiumfnq1' for ephemeral docs site
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 4187.33it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3107.66it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3630.65it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3224.53it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2654.29it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2416.91it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2404.38it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2271.83it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2212.83it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2147.74it/s]
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmphne132ov' for ephemeral docs site
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 4297.44it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3276.80it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3648.81it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3216.49it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2727.12it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2458.85it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2504.73it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2381.32it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2325.00it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2243.61it/s]
+WARNING src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check: Declared-safe immunity: exempted 5 manifest pre-index feature(s) from leakage (contract is authoritative); severity none -> info. Features: ['academic_hcp', 'age_at_diagnosis', 'comorbidity_burden', 'disease_severity', 'prior_therapy_lines']
+INFO src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check: adaptive_validity_check: scored=7 flagged=1 (high) prior_severity=none new_severity=info
+WARNING src.agents.ml_foundation.data_preparer.nodes.sufficiency_check: target_mde not specified in scope_spec.sufficiency; using computed_from_data default 0.11557223264540338. Override via scope_spec.sufficiency.target_mde.
+WARNING src.agents.ml_foundation.data_preparer.graph: QC gate BLOCKED: 1 blocking issues
+WARNING src.mlops.pandera_schemas: Schema validation failed for patient_journeys: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: train split did not pass schema validation (status='failed'): 2 errors
+WARNING src.mlops.pandera_schemas: Schema validation failed for patient_journeys: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: validation split did not pass schema validation (status='failed'): 2 errors
+WARNING src.mlops.pandera_schemas: Schema validation failed for patient_journeys: 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: test split did not pass schema validation (status='failed'): 2 errors
+WARNING src.agents.ml_foundation.data_preparer.nodes.schema_validator: Schema validation FAILED for patient_journeys: 6 errors across 3 splits (37ms)
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmp68fv2zo3' for ephemeral docs site
+[run_ge_validation 0.6s] {"ge_validation_status": "passed"} blocking=['schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+[engineer_features 0.0s] {} blocking=['schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+[detect_leakage 0.9s] {"leakage_severity": "none", "leaked_features": []} blocking=['schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+[adaptive_validity_check 5.9s] {"leakage_severity": "info", "leaked_features": []} blocking=['schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+[route_after_leakage_detection] -> continue
+[transform_data 0.1s] {} blocking=['schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+[compute_baseline_metrics 0.0s] {} blocking=['schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+[sufficiency_check 0.0s] {} blocking=['schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+[finalize_output 0.0s] {"gate_passed": false, "qc_passed": false, "is_ready": false} blocking=['schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+GATE persistence/Kisqali: gate_passed=False n_blocking=1 duplicates=False
+
+=== discontinuation / Kisqali ===
+[load_data 0.6s] {} blocking=[]
+[audit_sampling_frame 0.0s] {} blocking=[]
+[run_schema_validation 0.0s] {"schema_validation_status": "failed"} blocking=['schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+[run_quality_checks 0.0s] {"qc_status": "passed"} blocking=['schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3969.37it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3004.52it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3547.73it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3122.50it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2640.58it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2389.92it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2218.43it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2082.80it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2037.28it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 1984.06it/s]
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmppa5ud3np' for ephemeral docs site
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 4294.51it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3212.38it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3765.93it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3381.14it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2838.98it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2587.48it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2540.80it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2417.62it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2357.82it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2272.92it/s]
+INFO great_expectations.data_context.types.base: Created temporary directory '/tmp/tmprwx476in' for ephemeral docs site
+Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:   0%|          | 0/9 [00:00<?, ?it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 3100.00it/s]Calculating Metrics:  33%|███▎      | 3/9 [00:00<00:00, 2506.56it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 3020.20it/s]Calculating Metrics:  44%|████▍     | 4/9 [00:00<00:00, 2771.26it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2475.39it/s]Calculating Metrics:  56%|█████▌    | 5/9 [00:00<00:00, 2262.30it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2340.28it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2235.37it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2188.71it/s]Calculating Metrics: 100%|██████████| 9/9 [00:00<00:00, 2127.17it/s]
+WARNING src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check: Declared-safe immunity: exempted 5 manifest pre-index feature(s) from leakage (contract is authoritative); severity none -> info. Features: ['academic_hcp', 'age_at_diagnosis', 'comorbidity_burden', 'disease_severity', 'prior_therapy_lines']
+INFO src.agents.ml_foundation.data_preparer.nodes.adaptive_validity_check: adaptive_validity_check: scored=7 flagged=1 (high) prior_severity=none new_severity=info
+WARNING src.agents.ml_foundation.data_preparer.nodes.sufficiency_check: target_mde not specified in scope_spec.sufficiency; using computed_from_data default 0.08442776735459663. Override via scope_spec.sufficiency.target_mde.
+WARNING src.agents.ml_foundation.data_preparer.graph: QC gate BLOCKED: 1 blocking issues
+[run_ge_validation 0.6s] {"ge_validation_status": "passed"} blocking=['schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+[engineer_features 0.0s] {} blocking=['schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+[detect_leakage 0.9s] {"leakage_severity": "none", "leaked_features": []} blocking=['schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+[adaptive_validity_check 5.1s] {"leakage_severity": "info", "leaked_features": []} blocking=['schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+[route_after_leakage_detection] -> continue
+[transform_data 0.1s] {} blocking=['schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+[compute_baseline_metrics 0.0s] {} blocking=['schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+[sufficiency_check 0.0s] {} blocking=['schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+[finalize_output 0.0s] {"gate_passed": false, "qc_passed": false, "is_ready": false} blocking=['schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]']
+GATE discontinuation/Kisqali: gate_passed=False n_blocking=1 duplicates=False
+
+SUMMARY: {"initiation": {"gate_passed": false, "blocking": ["schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]"], "duplicates": false, "route": "continue"}, "persistence": {"gate_passed": false, "blocking": ["schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]"], "duplicates": false, "route": "continue"}, "discontinuation": {"gate_passed": false, "blocking": ["schema: Schema validation failed: 6 error(s) in columns [patient_journeys] checks [column_in_dataframe]"], "duplicates": false, "route": "continue"}}
+VERDICT: PASS (every cohort with a blocking condition reaches finalize with a non-empty, duplicate-free blocking_issues and gate_passed False)
