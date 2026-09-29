@@ -165,6 +165,21 @@ takes precedence over Supabase (but not over file-based ingestion).
 
 **Status**: ✅ **COMPLIANT** - All 6 E2I data sources have Pandera schemas
 
+### Table Cohort Contracts (#2320)
+
+A table cohort contract `{"type": "table", "table": ..., "columns": [...]}` is validated
+against **its table's** schema, restricted to the contract's column projection
+(`pandera_schemas.project_schema`, the same rule as the GE contract suite):
+
+| Column | Rule |
+|--------|------|
+| Schema column outside the projection | Not applicable: skipped and logged at INFO |
+| Schema column inside the projection | Every declared check kept (dtype, nullability, uniqueness, `isin`/range), and it becomes required |
+| Projected column the schema does not declare | Required (a missing one fails `column_in_dataframe`) |
+
+A table dict with no `columns` (or an empty list) and a string `data_source` keep
+full-schema validation. A table with no registered schema is `skipped`, as its string is.
+
 ### E2I Business Constraints
 
 | Constraint | Type | Implementation |
