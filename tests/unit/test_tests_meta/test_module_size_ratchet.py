@@ -59,7 +59,7 @@ ALLOWLIST: dict[str, int] = {
     "src/api/routes/explain.py": 2822,
     "src/api/routes/feedback.py": 2041,
     "src/api/routes/health_score.py": 2379,
-    "src/api/routes/monitoring.py": 2153,
+    "src/api/routes/monitoring.py": 2152,
     "src/api/routes/predictions.py": 1519,
     "src/api/routes/resource_optimizer.py": 1549,
     "src/api/routes/segments.py": 2934,

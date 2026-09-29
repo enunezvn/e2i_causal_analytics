@@ -259,26 +259,18 @@ END
 ## Database Compliance
 
 ### ml_model_registry Table
-**Repository**: `src/repositories/ml_experiment.py`
-**Status**: ✅ COMPLETE
+**Status (2026-09-29, #2319)**: the agent writes nothing to `ml_model_registry`.
 
-| Column | Type | Status | Implementation |
-|--------|------|--------|----------------|
-| experiment_id | TEXT | ✅ COMPLETE | _persist_model_candidate:385 |
-| model_name | TEXT | ✅ COMPLETE | _persist_model_candidate:386 |
-| model_type | TEXT | ✅ COMPLETE | _persist_model_candidate:387 |
-| model_class | TEXT | ✅ COMPLETE | _persist_model_candidate:388 |
-| hyperparameters | JSONB | ✅ COMPLETE | _persist_model_candidate:389 |
-| hyperparameter_search_space | JSONB | ✅ COMPLETE | _persist_model_candidate:390 |
-| selection_score | FLOAT | ✅ COMPLETE | _persist_model_candidate:391 |
-| selection_rationale | TEXT | ✅ COMPLETE | _persist_model_candidate:392 |
-| stage | TEXT | ✅ COMPLETE | _persist_model_candidate:393 |
-| created_by | TEXT | ✅ COMPLETE | _persist_model_candidate:394 |
-
-**Database Integration**: ✅ 100% Complete
-- Method: `_persist_model_candidate()` (agent.py:365-403)
-- Repository: `MLModelRegistryRepository` via lazy import
-- Graceful degradation: Continues if DB unavailable (agent.py:376-378)
+The former `_persist_model_candidate()` -> `MLModelRegistryRepository.register_model_candidate()`
+write (added in c4675f935) never landed a row: it sent columns the live table does not have
+(`metrics`, `description`, `created_at`, `created_by`, `tags`) and swallowed the error; prod
+held 0 `candidate-%` rows. Since #2310 `stage='candidate'` means "retrain awaiting review", so
+the call and the method were removed. The structured selection (algorithm name / family /
+framework / default hyperparameters) is persisted by the MLflow `model_selection_<algorithm>`
+run (`nodes/mlflow_registrar.py`). The episodic `model_selection_completed` row carries the
+selection rationale text and the alternatives only: its `algorithm_name` / `selection_score`
+fields are NULL on every prod row (0/188, 2026-09-29) because `store_model_selection` reads
+top-level keys that live under `model_candidate` (pre-existing defect, reported on #2319).
 
 ---
 
@@ -410,7 +402,7 @@ END
 | Pipeline Structure | 100% | ✅ COMPLETE |
 | Upstream Integration | 100% | ✅ COMPLETE |
 | Downstream Integration | 100% | ✅ COMPLETE |
-| Database Integration | 100% | ✅ COMPLETE |
+| Database Integration | n/a | no registry write (#2319); MLflow + episodic memory |
 | Memory Integration | 100% | ✅ COMPLETE |
 | Observability (Opik) | 100% | ✅ COMPLETE |
 | Test Coverage | 100% | ✅ COMPLETE |
@@ -436,7 +428,7 @@ The model_selector agent implementation is **100% complete** with all functional
 - MLflow integration (experiment tracking, artifact logging)
 - Input/output contract compliance
 - Comprehensive test coverage (193 tests)
-- Database persistence via MLModelRegistryRepository
+- Selection persisted via the MLflow run and episodic memory (no registry write, #2319)
 - Procedural memory integration with graceful degradation
 - Opik observability tracing
 - Factory registration (enabled: True)

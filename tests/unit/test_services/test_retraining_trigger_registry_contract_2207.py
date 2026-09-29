@@ -151,12 +151,13 @@ async def test_no_contract_anywhere_behaves_as_today():
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_unregistered_model_handle_leaves_model_id_null():
+async def test_unregistered_model_handle_is_refused_without_a_history_row():
+    """#2319 item 2: before, an unregistered handle wrote a history row with a NULL
+    ``model_id`` and enqueued a job that could not attach its candidate to any registered
+    model. The trigger now refuses it (no row, no task)."""
+    from src.services.retraining_trigger import RetrainRefusedError
+
     db, _ = _db()
-    job, queued = await _trigger(
-        db, cohort={"data_source": "t", "target_outcome": "y"}, handle="ghost_v9"
-    )
-    (history,) = db.rows("ml_retraining_history")
-    assert history["model_id"] is None
-    assert history["old_model_version"] == "ghost_v9"
-    assert queued["training_config"]["data_source"] == "t"
+    with pytest.raises(RetrainRefusedError, match="ghost_v9"):
+        await _trigger(db, cohort={"data_source": "t", "target_outcome": "y"}, handle="ghost_v9")
+    assert db.rows("ml_retraining_history") == []

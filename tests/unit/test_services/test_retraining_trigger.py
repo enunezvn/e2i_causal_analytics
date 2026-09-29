@@ -601,9 +601,36 @@ class TestRetrainingTriggerService:
             trend="degrading",
         )
 
-        with patch(
-            "src.repositories.drift_monitoring.DriftHistoryRepository"
-        ) as mock_drift_repo_cls:
+        # #2319: the trigger refuses a handle with no registry identity, so the handle
+        # names a registered model (in-memory async supabase fake).
+        from tests.unit._fakes.async_supabase import FakeAsyncSupabase
+
+        exp_id = str(uuid4())
+        registry = FakeAsyncSupabase(
+            {
+                "ml_model_registry": [
+                    {
+                        "id": str(uuid4()),
+                        "experiment_id": exp_id,
+                        "model_name": "propensity",
+                        "model_version": "propensity_v2.1.0",
+                    }
+                ],
+                "ml_experiments": [
+                    {"id": exp_id, "experiment_name": "propensity_exp", "prediction_target": "p"}
+                ],
+            }
+        )
+
+        with (
+            patch(
+                "src.repositories.drift_monitoring.get_drift_monitoring_client",
+                AsyncMock(return_value=registry),
+            ),
+            patch(
+                "src.repositories.drift_monitoring.DriftHistoryRepository"
+            ) as mock_drift_repo_cls,
+        ):
             mock_drift_repo = MagicMock()
             mock_drift_repo.get_latest_drift_status = AsyncMock(return_value=mock_drift_records)
             mock_drift_repo_cls.return_value = mock_drift_repo

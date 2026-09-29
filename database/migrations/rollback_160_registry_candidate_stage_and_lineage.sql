@@ -9,11 +9,23 @@
 --     (a failed / unfinished job: the old writer never promoted it);
 --   * a lineage row at 'archived' whose linked job FAILED -> 'development' (160 archived it);
 --     any other archived row is an operator's decision and is left alone;
---   * every 'registered' deployment -> 'active' (the pre-#2308 status the old code wrote);
+--   * the two deployments 160 moved (53d7e7d7 of cff4f2b5, b3ffe870 of faf4ed1d; pinned by
+--     deployment id, 'registered', no endpoint) -> 'active', i.e. exactly what 160 changed,
+--     in reverse (#2319);
 --   * ml_retraining_history.deployment_id pointing at a lineage row's deployment -> NULL
 --     (never written before 160).
--- It then REFUSES (raises, nothing committed) if any row is still at 'candidate' or any
--- deployment still 'registered', so no row is left in a state the pre-160 code cannot read.
+-- Any OTHER 'registered' deployment is LEFT as it is (#2319 item 5, decided 2026-09-29).
+-- Since deploy the new model_deployer records every register/promote-only deploy (no
+-- endpoint) as 'registered' (#2308), retrain or not. Reverting those to 'active' would
+-- reintroduce the plausible-wrong status #2308 removed (the table would claim a live
+-- deployment nothing serves). Leaving them is safe for the pre-160 code: it reads
+-- ml_deployments.status as a plain string and only ever compares it to 'active' (checked
+-- on 62ca793c0^: DeploymentRecord.from_dict keeps the string, no DeploymentStatus(...)
+-- coercion of a read value), and 159's enum value stays (rollback 159 cannot drop it).
+-- Such rows are reported by a NOTICE; rollback 159 still refuses while they exist.
+-- It then REFUSES (raises, nothing committed) if any row is still at 'candidate' or a
+-- deployment 160 moved is still 'registered', so no registry row is left at a stage the
+-- pre-160 code cannot place.
 -- Then the trigger, constraints, index and columns are dropped (the lineage and the exact
 -- MLflow versions are lost; re-applying 160 re-derives the three backfilled rows, not later
 -- retrains), and 160's ledger row is removed so a later deploy re-applies it. A second run
@@ -54,11 +66,26 @@ BEGIN
     GET DIAGNOSTICS v_n = ROW_COUNT;
     RAISE NOTICE 'rollback 160: history.deployment_id cleared on % rows', v_n;
 
+    -- #2319 item 5: only the deployments 160 itself moved: the two (deployment, registry
+    -- row) pairs measured read-only on prod 2026-09-29 (53d7e7d7 -> cff4f2b5, b3ffe870 ->
+    -- faf4ed1d; c524db0f has none), plus 160's own predicate in reverse. Pinned by
+    -- DEPLOYMENT id (codex r1): a later register-only redeploy of a pinned row inserts a new
+    -- deployment row, which is not 160's. A 'registered' record written by the new code
+    -- after deploy (any model's register/promote-only deploy, or a later retrain) is left.
     UPDATE ml_deployments d
        SET status = 'active'
-     WHERE d.status::text = 'registered';
+     WHERE (d.id, d.model_registry_id) IN (
+            ('53d7e7d7-19af-44b5-9f1c-2d149142448a'::uuid,
+             'cff4f2b5-a87e-4947-aa2a-243a7fb0ee45'::uuid),
+            ('b3ffe870-c58d-4dc9-8f02-f8eb11d92760'::uuid,
+             'faf4ed1d-15cf-4ae2-88c7-e927e64ec53f'::uuid))
+       AND d.status::text = 'registered'
+       AND d.endpoint_url IS NULL
+       AND d.endpoint_name IS NULL;
     GET DIAGNOSTICS v_n = ROW_COUNT;
-    RAISE NOTICE 'rollback 160: deployments registered -> active on % rows', v_n;
+    RAISE NOTICE 'rollback 160: deployments 160 moved, registered -> active on % rows', v_n;
+    SELECT count(*) INTO v_n FROM ml_deployments WHERE status::text = 'registered';
+    RAISE NOTICE 'rollback 160: % other registered deployment(s) left as they are', v_n;
 
     UPDATE ml_model_registry r
        SET stage = 'staging'
@@ -78,8 +105,12 @@ BEGIN
     RAISE NOTICE 'rollback 160: failed/unfinished-job rows -> development on % rows', v_n;
 
     IF EXISTS (SELECT 1 FROM ml_model_registry WHERE stage::text = 'candidate')
-       OR EXISTS (SELECT 1 FROM ml_deployments WHERE status::text = 'registered') THEN
-        RAISE EXCEPTION 'rollback 160 refused: rows remain at candidate/registered';
+       OR EXISTS (SELECT 1 FROM ml_deployments
+                   WHERE status::text = 'registered'
+                     AND id IN ('53d7e7d7-19af-44b5-9f1c-2d149142448a'::uuid,
+                                'b3ffe870-c58d-4dc9-8f02-f8eb11d92760'::uuid))
+    THEN
+        RAISE EXCEPTION 'rollback 160 refused: rows remain at candidate, or a deployment 160 moved is still registered';
     END IF;
 END
 $$;

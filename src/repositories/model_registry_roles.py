@@ -72,7 +72,9 @@ def is_mlflow_candidate(tags: Any) -> bool:
     return tags.get(MLFLOW_ROLE_TAG) == MLFLOW_CANDIDATE_ROLE
 
 
-async def resolve_canonical_model_id(client: Any, handle: Optional[str]) -> Optional[str]:
+async def resolve_canonical_model_id(
+    client: Any, handle: Optional[str], *, strict: bool = False
+) -> Optional[str]:
     """The canonical registry id for a name-style handle, or ``None``.
 
     Looks the handle up as a ``model_version`` label, then as a ``model_name`` (the order the
@@ -81,7 +83,9 @@ async def resolve_canonical_model_id(client: Any, handle: Optional[str]) -> Opti
     tie-break, so the answer never depends on physical row order.
     More than one canonical match is logged: it is legitimate (e.g. a development and a staging
     version of one name) but the caller gets the newest, and an operator should know.
-    A lookup failure returns ``None`` (callers fall back to their preserved-handle path).
+    A lookup failure returns ``None`` (callers fall back to their preserved-handle path), unless
+    ``strict``: then it raises, so a caller that refuses on "not found" never mistakes an
+    unreachable registry for an absent row (the retrain trigger, #2319 codex r1).
     """
     if not handle or client is None:
         return None
@@ -108,6 +112,8 @@ async def resolve_canonical_model_id(client: Any, handle: Optional[str]) -> Opti
                     )
                 return str(rows[0]["id"])
     except Exception as e:  # noqa: BLE001 — never block a recording on a lookup failure
+        if strict:
+            raise
         logger.warning("ml_model_registry canonical lookup failed for %r: %s", handle, e)
         return None
     return None

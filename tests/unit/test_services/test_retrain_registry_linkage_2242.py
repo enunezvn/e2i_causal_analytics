@@ -193,11 +193,96 @@ async def test_retraining_a_retrained_candidate_keeps_the_version_bounded():
 
 
 @pytest.mark.asyncio
-async def test_unregistered_handle_keeps_the_legacy_version_and_no_identity():
+async def test_unregistered_handle_is_refused_before_anything_is_recorded():
+    """#2319 item 2 (owner decision 2026-09-29), replacing
+    ``test_unregistered_handle_keeps_the_legacy_version_and_no_identity``.
+
+    #2242 kept the legacy ``<base>_retrained_<ts>`` path for a handle with no registry
+    row only to leave non-registry callers unchanged. Such a retrain has no
+    ``retrain_of`` (its candidate cannot attach to a registered model) and no registry
+    cohort contract: it either fails closed for lack of a contract or, with a hand-passed
+    contract, runs to ``containerize`` and fails there. The trigger now refuses it with
+    an explicit reason: no ``ml_retraining_history`` row, no task.
+    """
+    from src.services.retraining_trigger import RetrainRefusedError
+
     db, _ = _goldstd_db()
-    out = await _trigger(db, "propensity_v2.1.0")
-    assert out["new_version"].startswith("propensity_retrained_")
-    assert "retrain_of" not in out["training_config"]
+    with pytest.raises(RetrainRefusedError) as exc:
+        await _trigger(db, "propensity_v2.1.0")
+    assert exc.value.reason == "no_registry_identity"
+    assert exc.value.handle == "propensity_v2.1.0"
+    assert "propensity_v2.1.0" in str(exc.value)
+    assert db.rows("ml_retraining_history") == []
+
+
+@pytest.mark.asyncio
+async def test_unregistered_handle_is_refused_even_with_a_hand_passed_contract():
+    """The wasted-run case: a contract passed by hand used to carry the job through the
+    whole pipeline to a failure at ``containerize``."""
+    from src.services.retraining_trigger import RetrainRefusedError
+
+    db, _ = _goldstd_db()
+    service = RetrainingTriggerService()
+    with (
+        patch(
+            "src.repositories.drift_monitoring.get_drift_monitoring_client",
+            AsyncMock(return_value=db),
+        ),
+        patch("src.tasks.drift_monitoring_tasks.execute_model_retraining") as mock_task,
+    ):
+        with pytest.raises(RetrainRefusedError, match="no registry identity"):
+            await service.trigger_retraining(
+                model_version="propensity_v2.1.0",
+                reason=TriggerReason.MANUAL,
+                cohort={"data_source": "patient_journeys", "target_outcome": "y"},
+            )
+        mock_task.delay.assert_not_called()
+    assert db.rows("ml_retraining_history") == []
+
+
+@pytest.mark.asyncio
+async def test_a_uuid_naming_no_registry_row_is_refused_as_unregistered():
+    """codex r1 (#2319) MED: a uuid handle used to be taken verbatim as the row id, so a
+    uuid naming no row surfaced as an 'unreadable identity' (409) instead of 'no registry
+    identity' (404)."""
+    from src.services.retraining_trigger import RetrainRefusedError
+
+    db, _ = _goldstd_db()
+    ghost = str(uuid4())
+    with pytest.raises(RetrainRefusedError) as exc:
+        await _trigger(db, ghost)
+    assert exc.value.reason == "no_registry_identity"
+    assert db.rows("ml_retraining_history") == []
+
+
+class _UnreachableRegistry(FakeAsyncSupabase):
+    """The registry (or its experiment) cannot be read: a transport / auth / schema error."""
+
+    def __init__(self, store, failing: str):
+        super().__init__(store)
+        self._failing = failing
+
+    def table(self, name: str):
+        if name == self._failing:
+            raise ConnectionError(f"{name}: connection refused")
+        return super().table(name)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failing", ["ml_model_registry", "ml_experiments"])
+@pytest.mark.parametrize("by_name", [False, True])
+async def test_a_registry_read_failure_is_an_error_not_a_refusal(failing, by_name):
+    """codex r1 (#2319) HIGH: the lenient resolvers turned a lookup failure into 'not
+    found', so an outage read as a client error (404/409) and the sweep as a blocked retrain.
+    The trigger's lookup is strict: the failure propagates, nothing is recorded."""
+    from src.services.retraining_trigger import RetrainRefusedError
+
+    base, ids = _goldstd_db()
+    db = _UnreachableRegistry(base.store, failing)
+    with pytest.raises(ConnectionError) as exc:
+        await _trigger(db, ids["Kisqali"]["name"] if by_name else ids["Kisqali"]["model"])
+    assert not isinstance(exc.value, RetrainRefusedError)
+    assert db.rows("ml_retraining_history") == []
 
 
 def test_cohort_input_keeps_the_physical_label_and_carries_the_logical_identity():

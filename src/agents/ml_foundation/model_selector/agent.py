@@ -9,7 +9,12 @@ Outputs:
 Integration:
 - Upstream: data_preparer (requires QC gate passed)
 - Downstream: model_trainer (consumes ModelCandidate)
-- Database: ml_model_registry table
+- Persistence: the MLflow ``model_selection_<algorithm>`` run (mlflow_registrar) holds the
+  structured selection; the episodic ``model_selection_completed`` row holds the rationale
+  text (its structured algorithm fields are NULL, see CONTRACT_VALIDATION.md). Nothing is
+  written to ml_model_registry
+  (#2319: the former ``stage='candidate'`` write never landed a row; ``candidate`` means
+  "retrain awaiting review" since #2310).
 - Memory: Procedural memory (successful selection patterns)
 - Observability: Opik tracing
 """
@@ -28,19 +33,6 @@ from .memory_hooks import ModelSelectorMemoryHooks
 from .state import ModelSelectorState
 
 logger = logging.getLogger(__name__)
-
-
-def _get_model_registry_repository():
-    """Get MLModelRegistryRepository (lazy import to avoid circular deps)."""
-    try:
-        from src.memory.services.factories import get_supabase_client
-        from src.repositories.ml_experiment import MLModelRegistryRepository
-
-        client = get_supabase_client()
-        return MLModelRegistryRepository(supabase_client=client)
-    except Exception as e:
-        logger.warning(f"Could not get model registry repository: {e}")
-        return None
 
 
 def _get_opik_connector():
@@ -267,9 +259,6 @@ class ModelSelectorAgent:
             # Build output
             output = self._build_output(final_state, experiment_id)
 
-            # Persist model candidate to database
-            await self._persist_model_candidate(output)
-
             # Update procedural memory with successful selection pattern
             await self._update_procedural_memory(output)
 
@@ -397,53 +386,6 @@ class ModelSelectorAgent:
             "experiment_id": experiment_id,
             "status": "completed",
         }
-
-    async def _persist_model_candidate(self, output: Dict[str, Any]) -> None:
-        """Persist ModelCandidate to ml_model_registry table.
-
-        Graceful degradation: If repository is unavailable,
-        logs a debug message and continues without error.
-
-        Args:
-            output: Agent output containing model_candidate and metadata
-        """
-        try:
-            repo = _get_model_registry_repository()
-            if repo is None:
-                logger.debug("Skipping model persistence (no repository)")
-                return
-
-            model_candidate = output.get("model_candidate", {})
-            experiment_id = output.get("experiment_id", "")
-            mlflow_info = output.get("mlflow_info", {})
-
-            # Register model candidate in ml_model_registry table with MLflow audit trail
-            result = await repo.register_model_candidate(
-                experiment_id=experiment_id,
-                model_name=model_candidate.get("algorithm_name", "unknown"),
-                model_type=model_candidate.get("algorithm_family", "unknown"),
-                model_class=model_candidate.get("algorithm_class", ""),
-                hyperparameters=model_candidate.get("default_hyperparameters", {}),
-                hyperparameter_search_space=model_candidate.get("hyperparameter_search_space", {}),
-                selection_score=model_candidate.get("selection_score", 0.0),
-                selection_rationale=output.get("selection_rationale", {}).get(
-                    "selection_rationale", ""
-                ),
-                stage="candidate",
-                created_by="model_selector",
-                mlflow_run_id=mlflow_info.get("mlflow_run_id"),
-                mlflow_experiment_id=mlflow_info.get("mlflow_experiment_id"),
-            )
-
-            if result:
-                logger.info(
-                    f"Persisted model candidate: {model_candidate.get('algorithm_name')} for {experiment_id}"
-                )
-            else:
-                logger.debug("Model candidate not persisted (no result returned)")
-
-        except Exception as e:
-            logger.warning(f"Failed to persist model candidate: {e}")
 
     async def _update_procedural_memory(self, output: Dict[str, Any]) -> None:
         """Update procedural memory with successful selection pattern.

@@ -1850,6 +1850,7 @@ async def trigger_retraining(
         Created retraining job
     """
     from src.services.retraining_trigger import (
+        RetrainRefusedError,
         TriggerReason,
         get_retraining_trigger_service,
     )
@@ -1857,14 +1858,10 @@ async def trigger_retraining(
     try:
         service = get_retraining_trigger_service()
 
-        # Map enum
         reason = TriggerReason(request.reason.value)
-
-        # Map the request onto the service's actual signature: cohort identity
-        # for a real retrain, notes via config_overrides, and approved_by when
-        # the caller asked to auto-approve. (The prior call passed triggered_by/
-        # notes/auto_approve as kwargs the service never accepted — they only
-        # survived under type: ignore and would TypeError at runtime.)
+        # Map the request onto the service's actual signature: cohort identity for a real
+        # retrain, notes via config_overrides, approved_by when the caller auto-approves
+        # (triggered_by / notes / auto_approve are not service kwargs).
         cohort = request.cohort_contract()
         config_overrides = {"notes": request.notes} if request.notes else None
         job = await service.trigger_retraining(
@@ -1877,6 +1874,8 @@ async def trigger_retraining(
 
         return _retraining_job_to_response(job, triggered_by=triggered_by, notes=request.notes)
 
+    except RetrainRefusedError as refused:  # #2319: nothing recorded or enqueued
+        raise HTTPException(refused.http_status, detail=str(refused)) from refused
     except Exception as e:
         raise _log_and_500("Failed to trigger retraining", e)
 
