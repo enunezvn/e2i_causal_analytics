@@ -199,17 +199,17 @@ async def run(db: Any = None) -> dict[str, Any]:
     repo = PerformanceMetricRepository(client)
     recorder = MetricRecorder(repo)
 
-    # --- Re-run safety: clear dependent metric rows BEFORE replacing the
-    #     registry row. ----------------------------------------------------- #
-    # register_cohort_model -> register_model_row DELETEs the existing
-    # (model_name, model_version) registry row and re-INSERTs it with a NEW
-    # gen_random_uuid() id. ml_performance_metrics.model_id REFERENCES
-    # ml_model_registry(id) with NO ON DELETE CASCADE (RESTRICT), so on a re-run
-    # the prior run's metric rows still point at the OLD registry id and the
-    # registry DELETE 23503's. We clear those dependent rows first (same scope
-    # the recorder uses for idempotency: model_id + source), which unblocks the
-    # registry replace AND keeps the whole pipeline re-run safe. On the very
-    # first run this resolves to no prior id and is a harmless no-op.
+    # --- Re-run safety: clear the prior run's metric rows BEFORE re-registering.
+    # register_cohort_model -> register_model_row UPSERTs the (model_name,
+    # model_version) registry row in place (on_conflict=model_name,model_version,
+    # prediction_synthesizer_deploy.py; since 8fb39dc8a): the row keeps its id, so
+    # the RESTRICT FK from ml_performance_metrics.model_id never blocks it. (Before
+    # 8fb39dc8a it was a DELETE + re-INSERT with a new id, which 23503'd on a
+    # re-run; comments claiming a DELETE are stale, #2319.) This clear is re-run
+    # idempotency: it drops the prior run's backtest / holdout / curve rows under
+    # that same id (same scope the recorder uses: model_id + source) so a re-run
+    # does not leave them next to the new ones. On the very first run this
+    # resolves to no prior id and is a harmless no-op.
     # #2310: resolve the EXACT (model_name, model_version) row the replace targets — a name
     # alone can match a retrain candidate of this model, whose metrics are not ours to clear.
     prior_model_id = await resolve_model_id_by_name_version(
