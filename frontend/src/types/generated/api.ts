@@ -1588,17 +1588,10 @@ export interface paths {
         put?: never;
         /**
          * Trigger model retraining
-         * @description Trigger model retraining.
+         * @description Create a retraining job for ``model_id`` and optionally auto-approve it.
          *
-         *     Creates a retraining job and optionally auto-approves it.
-         *
-         *     Args:
-         *         model_id: Model version/ID
-         *         request: Retraining parameters
-         *         triggered_by: User or system triggering retraining
-         *
-         *     Returns:
-         *         Created retraining job
+         *     Refused before anything is recorded: 404 no registry row, 409 unreadable identity,
+         *     422 no declared required features (#2335).
          */
         post: operations["trigger_model_retraining"];
         delete?: never;
@@ -20112,6 +20105,10 @@ export interface components {
          * @description Request to trigger model retraining.
          * @example {
          *       "auto_approve": false,
+         *       "candidate_features": [
+         *         "age_at_index",
+         *         "atopy_score"
+         *       ],
          *       "data_source": {
          *         "path": "data/rwd/optum/initiation",
          *         "type": "file_dir"
@@ -20158,6 +20155,11 @@ export interface components {
              * @description Layer-5 manifest source (csu/optum/synthetic)
              */
             feature_manifest_source?: string | null;
+            /**
+             * Candidate Features
+             * @description Required features (else the table contract's columns)
+             */
+            candidate_features?: string[] | null;
         };
         /**
          * TwinModelDetailResponse
