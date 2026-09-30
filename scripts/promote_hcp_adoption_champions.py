@@ -85,12 +85,21 @@ from typing import Any
 
 import numpy as np
 
+from src.mlops.activation.holdout_gate import (  # noqa: F401 — re-exported helpers
+    HCP_PATHOLOGY_SLOPE_RANGE,
+    calibration_intercept,
+    pathology_gate,
+    positive_class_scores,
+)
+
 # Recomputed auc/accuracy must reproduce the stored holdout row within this
 # (mirrors scripts/backfill_goldstd_holdout_metrics.py).
 TOL = 1e-3
 
-# Calibration-slope acceptance band — see module docstring for the rationale.
-SLOPE_RANGE = (0.5, 2.0)
+# Calibration-slope acceptance band — see module docstring for the rationale. The
+# band and the pure scoring/gate helpers moved to src/mlops/activation/holdout_gate.py
+# (#2318) so candidate activation applies the SAME #1354 gate; re-exported here.
+SLOPE_RANGE = HCP_PATHOLOGY_SLOPE_RANGE
 
 # Lockstep with run_persistence_eval._OOS_EVAL_SPLITS / the backfill script:
 # the held-out window is everything the model never trained on.
@@ -105,84 +114,6 @@ MODEL_ALLOWLIST = tuple(f"hcp_adoption_{b}_goldstd_lr_v1" for b in BRANDS)
 # ---------------------------------------------------------------------------
 # Pure helpers (unit-tested in tests/unit/test_scripts/, no I/O)
 # ---------------------------------------------------------------------------
-
-
-def positive_class_scores(model: Any, x: Any) -> "np.ndarray":
-    """Positive-class probabilities from ``predict_proba``, honoring ``classes_``."""
-    proba = np.asarray(model.predict_proba(x), dtype=float)
-    if proba.ndim != 2 or proba.shape[1] == 1:
-        # Degenerate single-class model: the constant class value is the score
-        # (mirrors backfill_goldstd_holdout_metrics._window_scores).
-        classes = getattr(model, "classes_", [0])
-        return np.full(proba.shape[0], float(classes[0]))
-    classes = list(model.classes_)
-    pos = classes.index(1) if 1 in classes else 0
-    return proba[:, pos]
-
-
-def calibration_intercept(
-    y_true: "np.ndarray",
-    y_score: "np.ndarray",
-    *,
-    max_iter: int = 100,
-    tol: float = 1e-12,
-) -> float | None:
-    """Calibration-in-the-large: intercept-only logistic MLE with offset logit(p).
-
-    The standard companion to the Cox calibration slope (Van Calster framework):
-    fit ``logit(P(y=1)) = a + logit(y_score)`` with the slope FIXED at 1; ``a``
-    near 0 means the score level matches the outcome rate, ``a > 0`` means the
-    model under-predicts. Solved by Newton iteration on the 1-D score equation
-    (deterministic; no solver dependency). Returns ``None`` for single-class
-    labels or any numerical failure — never a fabricated value.
-    """
-    y = np.asarray(y_true, dtype=float)
-    if np.unique(y).size < 2:
-        return None
-    eps = 1e-6
-    p = np.clip(np.asarray(y_score, dtype=float), eps, 1.0 - eps)
-    offset = np.log(p / (1.0 - p))
-    a = 0.0
-    converged = False
-    try:
-        for _ in range(max_iter):
-            mu = 1.0 / (1.0 + np.exp(-(a + offset)))
-            hess = float(np.sum(mu * (1.0 - mu)))
-            if not np.isfinite(hess) or hess <= 0.0:
-                return None
-            step = float(np.sum(y - mu)) / hess
-            a += step
-            if abs(step) < tol:
-                converged = True
-                break
-        # A non-converged final iterate is NOT reported: better to omit the
-        # intercept than to print a number the solver did not actually reach.
-        return float(a) if (converged and np.isfinite(a)) else None
-    except (FloatingPointError, OverflowError, ValueError):
-        return None
-
-
-def pathology_gate(metrics: dict, prevalence: float) -> tuple[bool, list[str]]:
-    """Apply the #1354 calibration pathology gate; returns (ok, hold_reasons)."""
-    reasons: list[str] = []
-    slope = metrics.get("calibration_slope")
-    if slope is None:
-        reasons.append("calibration_slope unfittable on the held-out window")
-    elif not (SLOPE_RANGE[0] <= float(slope) <= SLOPE_RANGE[1]):
-        reasons.append(
-            f"calibration_slope {float(slope):.4f} outside "
-            f"[{SLOPE_RANGE[0]}, {SLOPE_RANGE[1]}] (logits mis-scaled >2x)"
-        )
-    brier = metrics.get("brier_score")
-    baseline = float(prevalence) * (1.0 - float(prevalence))
-    if brier is None:
-        reasons.append("brier_score missing")
-    elif float(brier) >= baseline:
-        reasons.append(
-            f"brier_score {float(brier):.4f} >= prevalence baseline {baseline:.4f} "
-            "(no skill over a constant base-rate forecast)"
-        )
-    return (not reasons), reasons
 
 
 def faithfulness_check(

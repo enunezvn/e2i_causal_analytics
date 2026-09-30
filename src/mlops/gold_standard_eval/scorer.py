@@ -27,7 +27,7 @@ from sklearn.metrics import (
 METRIC_NAMES = ("accuracy", "precision", "recall", "f1", "auc_roc")
 
 
-def _calibration_slope(y_true: "np.ndarray", y_score: "np.ndarray") -> "float | None":
+def calibration_slope(y_true: "np.ndarray", y_score: "np.ndarray") -> "float | None":
     """Cox calibration slope — the coefficient of a logistic regression of the
     labels on ``logit(y_score)``. ~1.0 == well-calibrated; <1 over-confident,
     >1 under-confident. Returns ``None`` when it cannot be fit (single-class
@@ -46,6 +46,11 @@ def _calibration_slope(y_true: "np.ndarray", y_score: "np.ndarray") -> "float | 
         return float(lr.coef_[0][0])
     except Exception:
         return None
+
+
+# Kept for the existing in-module callers; #2318 made the slope fit public so the
+# activation gate (src/mlops/activation/holdout_gate.py) reuses it rather than copying it.
+_calibration_slope = calibration_slope
 
 
 def calibration_slope_ci(
