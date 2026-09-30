@@ -66,7 +66,7 @@ Each item: my recommendation, why, and the single fact that would reverse it. La
 **OD-6 — hcp_adoption serves at `production`; the #968 gate refuses `synthetic_gold` → production (Lane 4, Lane 6)**
 - #968's intent: synthetic-trained models were cataloged as if real, so a real-mode consumer could not tell them apart. The #2259 gate therefore refuses `synthetic_gold` → production. The hcp_adoption champions are production only by an explicit owner ruling (`scripts/promote_hcp_adoption_champions.py:38-62`, #1354/#1384).
 - **Default in this plan: hcp_adoption activation FAILS CLOSED.** `promote-candidate` refuses the three `hcp_adoption_*` names until the owner rules. All other goldstd slots activate to `staging` (their served stage today, F12). There is no self-authorising CLI flag.
-- **Recommendation to the owner:** extend the existing hcp_adoption ruling to activated candidates, with the same calibration pathology gate. To grant it, merge a PR that adds the three names to a frozen `HCP_PRODUCTION_ACTIVATION_ALLOWLIST` in `src/mlops/activation/policy.py`, citing the owner's decision. Until then that constant is empty.
+- **Recommendation to the owner:** extend the existing hcp_adoption ruling to activated candidates, with the same calibration pathology gate. To grant it, merge a migration that inserts the three names into `ml_activation_production_allowlist` with the ruling text. That table is created empty by migration 165; service_role can only read it, and the SQL gate predicate enforces it together with the pathology predicate. The CLI mirrors the check early (`policy.py` reads the table) for a clear message.
 - If granted, note that chat propensity requires `artifact_path` on the champion (`src/services/hcp_segment_likelihood.py:219-236`). The RPC sets it to the versioned bundle path.
 - **Reverses it:** the owner does not want a retrained synthetic_gold model at production. Then the allowlist stays empty.
 
@@ -807,11 +807,24 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_ml_model_activations_one_live
     ON public.ml_model_activations (model_name)
     WHERE phase IN ('prepared', 'serving_switched', 'active', 'aborting', 'rolling_back');
 
+-- OD-6: names allowed to activate at 'production' (synthetic_gold exemption). EMPTY by
+-- default; rows are added only by an owner-approved migration citing the ruling.
+CREATE TABLE IF NOT EXISTS public.ml_activation_production_allowlist (
+    model_name varchar(255) PRIMARY KEY,
+    ruling     text NOT NULL CHECK (length(btrim(ruling)) > 0),
+    added_at   timestamptz NOT NULL DEFAULT now()
+);
+REVOKE ALL ON TABLE public.ml_activation_production_allowlist FROM PUBLIC, anon, authenticated;
+GRANT SELECT ON TABLE public.ml_activation_production_allowlist TO service_role;
+
 -- Frozen acceptance-rule constants; MUST equal src/mlops/activation/holdout_gate.GateConfig
 -- (a unit test parses this file and compares). Changing them is a reviewed migration.
-CREATE OR REPLACE FUNCTION public.activation_gate_passes(r jsonb, cand_sha text, served_sha text)
-RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
-    SELECT (r->>'kind') = 'deterministic_acceptance_rule'
+-- NULL-safe: every field is required (coalesce(..., false)); callers use IS TRUE.
+CREATE OR REPLACE FUNCTION public.activation_gate_passes(
+    r jsonb, cand_sha text, served_sha text, p_name text, p_stage text)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+    SELECT coalesce((
+       (r->>'kind') = 'deterministic_acceptance_rule'
        AND (r->'config'->>'auc_margin')::numeric = 0.010
        AND (r->'config'->>'alpha')::numeric = 0.05
        AND (r->'config'->>'brier_margin')::numeric = 0.005
@@ -822,12 +835,16 @@ RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
        AND (r->>'calibration_slope')::numeric BETWEEN 0.8 AND 1.25
        AND (r->>'candidate_bundle_sha256') = cand_sha
        AND (r->>'served_bundle_sha256') = served_sha
-       AND coalesce((r->>'hcp_pathology_passed')::boolean, true)
        AND (r->>'passed')::boolean
+       AND (p_stage <> 'production' OR (
+             (r->>'hcp_pathology_passed')::boolean
+             AND (r->>'brier_candidate')::numeric < (r->>'prevalence')::numeric * (1 - (r->>'prevalence')::numeric)
+             AND (r->>'calibration_slope')::numeric BETWEEN 0.5 AND 2.0
+             AND EXISTS (SELECT 1 FROM public.ml_activation_production_allowlist l WHERE l.model_name = p_name)))
+    ), false)
 $$;
-
-ALTER TABLE public.ml_model_activations ADD CONSTRAINT ml_model_activations_gate_passed
-    CHECK (public.activation_gate_passes(gate_report, candidate_bundle_sha256, predecessor_bundle_sha256));
+-- (STABLE, not IMMUTABLE: it reads the allowlist. So it is NOT used in a CHECK constraint —
+-- a CHECK must be immutable. It is enforced by the insert trigger and again in the RPC.)
 
 -- Identity, prior state, evidence and approval never change after insert; phase moves only
 -- along the state machine; a timestamp marker, once set, is never cleared or rewritten.
@@ -875,13 +892,40 @@ BEGIN
             OR NEW.rolled_back_at IS NULL) THEN
         RAISE EXCEPTION 'ml_model_activations %: phase % requires its progress markers', OLD.id, NEW.phase;
     END IF;
+    -- A marker may only be FIRST set in the phase it belongs to (no pre-set rollback markers).
+    IF (OLD.serving_switched_at IS NULL AND NEW.serving_switched_at IS NOT NULL AND NEW.phase <> 'serving_switched')
+       OR (OLD.mlflow_synced_at IS NULL AND NEW.mlflow_synced_at IS NOT NULL AND NEW.phase <> 'active')
+       OR (OLD.shap_refreshed_at IS NULL AND NEW.shap_refreshed_at IS NOT NULL AND NEW.phase <> 'active')
+       OR (OLD.rollback_serving_at IS NULL AND NEW.rollback_serving_at IS NOT NULL AND NEW.phase <> 'rolling_back')
+       OR (OLD.rollback_mlflow_synced_at IS NULL AND NEW.rollback_mlflow_synced_at IS NOT NULL
+           AND (NEW.phase <> 'rolling_back' OR NEW.rollback_db_at IS NULL))
+       OR (OLD.rollback_shap_refreshed_at IS NULL AND NEW.rollback_shap_refreshed_at IS NOT NULL
+           AND (NEW.phase <> 'rolling_back' OR NEW.rollback_db_at IS NULL)) THEN
+        RAISE EXCEPTION 'ml_model_activations %: marker set outside its phase', OLD.id;
+    END IF;
     RETURN NEW;
 END $$;
 CREATE TRIGGER tr_ml_model_activations_guard BEFORE UPDATE ON public.ml_model_activations
     FOR EACH ROW EXECUTE FUNCTION public.ml_model_activations_guard();
 
--- The single-served-row invariant, under a per-name advisory lock (no concurrent role writer
--- can interleave): exactly one canonical-served row (staging/production) exists for the name.
+CREATE OR REPLACE FUNCTION public.ml_model_activations_insert_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.phase <> 'prepared' OR NEW.serving_switched_at IS NOT NULL OR NEW.activated_at IS NOT NULL
+       OR NEW.rollback_serving_at IS NOT NULL OR NEW.rollback_db_at IS NOT NULL THEN
+        RAISE EXCEPTION 'ml_model_activations: a new row starts in phase prepared with no markers';
+    END IF;
+    IF public.activation_gate_passes(NEW.gate_report, NEW.candidate_bundle_sha256,
+            NEW.predecessor_bundle_sha256, NEW.model_name, NEW.served_stage::text) IS NOT TRUE THEN
+        RAISE EXCEPTION 'ml_model_activations: gate report does not satisfy the acceptance rule';
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER tr_ml_model_activations_insert_guard BEFORE INSERT ON public.ml_model_activations
+    FOR EACH ROW EXECUTE FUNCTION public.ml_model_activations_insert_guard();
+
+-- The single-canonical-row invariant, under a per-name advisory lock: exactly one CANONICAL
+-- row for the name, using the same predicate as model_registry_roles.CANONICAL_STAGE_FILTER
+-- (stage NULL or not in candidate/archived/deprecated; model_registry_roles.py:36-48).
 CREATE OR REPLACE FUNCTION public._activation_lock_and_count_served(p_name text, p_expect uuid)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE k int; only_id uuid;
@@ -889,9 +933,10 @@ BEGIN
     PERFORM pg_advisory_xact_lock(hashtextextended('ml_model_activation:' || p_name, 0));
     PERFORM 1 FROM public.ml_model_registry WHERE model_name = p_name FOR UPDATE;
     SELECT count(*), min(id::text)::uuid INTO k, only_id FROM public.ml_model_registry
-     WHERE model_name = p_name AND stage IN ('staging', 'production') AND NOT is_synthetic;
+     WHERE model_name = p_name AND NOT is_synthetic
+       AND (stage IS NULL OR stage NOT IN ('candidate', 'archived', 'deprecated'));
     IF k <> 1 OR only_id <> p_expect THEN
-        RAISE EXCEPTION 'model % must have exactly one served row (%), found % (%)', p_name, p_expect, k, only_id;
+        RAISE EXCEPTION 'model % must have exactly one canonical row (%), found % (%)', p_name, p_expect, k, only_id;
     END IF;
 END $$;
 
@@ -912,6 +957,11 @@ BEGIN
     IF a.phase <> 'serving_switched' THEN
         RAISE EXCEPTION 'activation % is in phase %, expected serving_switched', a.id, a.phase;
     END IF;
+    IF public.activation_gate_passes(a.gate_report, a.candidate_bundle_sha256, a.predecessor_bundle_sha256,
+                                     a.model_name, a.served_stage::text) IS NOT TRUE THEN
+        RAISE EXCEPTION 'activation %: gate report does not satisfy the acceptance rule now', a.id;
+    END IF;
+    PERFORM set_config('e2i.activation_rpc', 'on', true);   -- lets the role guard below through
     PERFORM public._activation_lock_and_count_served(a.model_name, a.predecessor_registry_id);
     PERFORM 1 FROM public.ml_model_registry
      WHERE id = a.candidate_registry_id AND stage = 'candidate' AND model_name = a.model_name
@@ -968,6 +1018,7 @@ BEGIN
     IF a.rollback_serving_at IS NULL THEN
         RAISE EXCEPTION 'activation %: restore and verify the predecessor bundle before the DB rollback', a.id;
     END IF;
+    PERFORM set_config('e2i.activation_rpc', 'on', true);
     PERFORM public._activation_lock_and_count_served(a.model_name, a.candidate_registry_id);
 
     UPDATE public.ml_model_registry SET stage = 'archived', is_champion = false
@@ -986,6 +1037,31 @@ BEGIN
     PERFORM public._activation_lock_and_count_served(a.model_name, a.predecessor_registry_id);  -- postcondition
     UPDATE public.ml_model_activations SET rollback_db_at = now() WHERE id = a.id;
 END $$;
+
+-- OD-5 / codex r3: the weekly re-registration must never change the ROLE of an activation's
+-- predecessor or candidate. Enforced in the writer's own transaction (race-free: a concurrent
+-- upsert blocked behind the RPC's row lock re-evaluates this trigger on the new row version).
+-- Only the two RPCs (flag set above, transaction-local) may change those rows' roles.
+CREATE OR REPLACE FUNCTION public.ml_model_registry_activation_role_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF current_setting('e2i.activation_rpc', true) IS DISTINCT FROM 'on'
+       AND EXISTS (SELECT 1 FROM public.ml_model_activations a
+                    WHERE a.phase IN ('prepared', 'serving_switched', 'active', 'aborting', 'rolling_back')
+                      AND OLD.id IN (a.predecessor_registry_id, a.candidate_registry_id)) THEN
+        IF NEW.stage IS DISTINCT FROM OLD.stage OR NEW.is_champion IS DISTINCT FROM OLD.is_champion THEN
+            RAISE NOTICE 'role of % preserved: it belongs to a live activation (#2318)', OLD.id;
+        END IF;
+        NEW.stage := OLD.stage;
+        NEW.is_champion := OLD.is_champion;
+        NEW.registered_at := OLD.registered_at;
+        NEW.artifact_path := CASE WHEN OLD.id IN (SELECT candidate_registry_id FROM public.ml_model_activations
+                                  WHERE phase IN ('prepared','serving_switched','active','aborting','rolling_back'))
+                                  THEN OLD.artifact_path ELSE NEW.artifact_path END;
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER tr_ml_model_registry_activation_role_guard BEFORE UPDATE ON public.ml_model_registry
+    FOR EACH ROW EXECUTE FUNCTION public.ml_model_registry_activation_role_guard();
 
 -- Grants: service_role only (the CLI runs with the service key). Follow the idiom of
 -- 162_hcp_adoption_goldstd_view.sql:35-60 (REVOKE from PUBLIC/anon/authenticated, GRANT to
@@ -1013,7 +1089,7 @@ COMMIT;
   - `prepared → serving_switched`, `prepared|serving_switched → aborting`, `aborting → aborted`;
   - `active → rolling_back`, `rolling_back → rolled_back` (the last only once all four `rollback_*` markers are set).
 - The trigger enforces the transitions and write-once markers even against a buggy caller.
-- The rollback file refuses to run while any live row exists (`DO $$ BEGIN IF EXISTS (SELECT 1 FROM public.ml_model_activations WHERE phase IN ('prepared','serving_switched','active','aborting','rolling_back')) THEN RAISE EXCEPTION 'live activation(s): roll back first'; END IF; END $$;`). It then **renames** the table to `ml_model_activations_retired_165` (audit history kept), and drops the trigger, the functions and the CHECK function.
+- The rollback file refuses to run while any live row exists (`DO $$ BEGIN IF EXISTS (SELECT 1 FROM public.ml_model_activations WHERE phase IN ('prepared','serving_switched','active','aborting','rolling_back')) THEN RAISE EXCEPTION 'live activation(s): roll back first'; END IF; END $$;`). It then **renames** the table to `ml_model_activations_retired_165` (audit history kept), drops `tr_ml_model_registry_activation_role_guard` on `ml_model_registry` and the two ledger triggers, drops all functions, and renames the allowlist to `ml_activation_production_allowlist_retired_165`.
 
 ### Task 4.2: Real-Postgres tests (prod-free)
 
@@ -1023,12 +1099,15 @@ COMMIT;
   - `test_activate_switches_roles_in_one_transaction` — P `archived`; C `staging` with `artifact_path = candidate_bundle_path`; D `active`/`staging`; A `active`.
   - `test_activate_rerun_verifies_postcondition` — a second call is a no-op. Then flip C back to `candidate` by hand; a third call raises "drifted".
   - `test_activate_refuses_wrong_phase` — A at `prepared` → exception, nothing changed.
-  - `test_ledger_rejects_a_failed_gate` — insert with `gate_report='{"passed": false}'` → check violation. Also reject: a non-hex sha; a report with `passed:true` but `auc_lower_bound=-0.02` (a **forged pass** must not pass the SQL predicate); a report whose `config.auc_margin` is 0.05; a report whose `candidate_bundle_sha256` differs from the column.
+  - `test_ledger_rejects_a_failed_gate` — insert with `gate_report='{"passed": false}'` → raised by the insert trigger. Also reject a report with a required field **omitted** (for example no `brier_delta_upper`: the predicate must be false, not NULL) and a new row inserted directly at `phase='active'`. Also reject: a non-hex sha; a report with `passed:true` but `auc_lower_bound=-0.02` (a **forged pass** must not pass the SQL predicate); a report whose `config.auc_margin` is 0.05; a report whose `candidate_bundle_sha256` differs from the column.
   - `test_gate_constants_match_python` — parse `activation_gate_passes` from the migration file and assert its constants equal `GateConfig()` (Lane 5). This runs without a DB.
   - `test_immutable_columns` — as service_role, UPDATE of `gate_report`, `candidate_bundle_sha256`, `approved_by` or `predecessor_prior_stage` → denied (column grant) or raised (trigger). Test both paths by also trying as the table owner.
   - `test_markers_write_once_and_phase_machine` — clearing `serving_switched_at` raises; `prepared → active` raises; `rolling_back → rolled_back` without all four rollback markers raises.
   - `test_activate_refuses_a_second_served_row` — seed an extra `staging` row for the name → exception and nothing changed. Repeat with an extra `production` row. With an unrelated champion in the same `experiment_id`, activation succeeds and leaves exactly one champion for the name.
-  - `test_rollback_db_requires_serving_restored` — `rollback_model_activation` with `rollback_serving_at` NULL → exception.
+  - `test_rollback_db_requires_serving_restored` — `rollback_model_activation` with `rollback_serving_at` NULL → exception. Setting `rollback_serving_at` while the phase is still `active` → raised ("marker set outside its phase").
+  - `test_production_needs_allowlist_and_pathology` — `served_stage='production'` with an empty `ml_activation_production_allowlist` → insert refused. With the name allowlisted but `brier_candidate ≥ prevalence·(1−prevalence)` → refused. With both satisfied → accepted.
+  - `test_weekly_upsert_cannot_change_roles` — with a live activation, an `INSERT … ON CONFLICT (model_name, model_version) DO UPDATE SET stage='staging', is_champion=true, registered_at=now(), auc=0.9` on the predecessor leaves stage/champion/registered_at unchanged and **updates auc**. Run it concurrently with `activate_model_candidate` from a second connection, the upsert blocking on the row lock: after both commit there is exactly one canonical row.
+  - `test_extra_canonical_row_of_any_stage_blocks` — an extra `development` or `shadow` or NULL-stage non-synthetic row for the name → activation refused.
   - `test_activate_refuses_when_predecessor_moved` — set P to `production` after creating A → exception, **nothing changed**.
   - `test_activate_refuses_foreign_deployment` — D belongs to another row → exception.
   - `test_activate_refuses_candidate_of_another_parent_or_name`, `test_activate_refuses_mlflow_version_mismatch`.
@@ -1142,7 +1221,7 @@ def test_report_is_json_and_deterministic():
     - `n`, `n_pos`, `auc_served`, `auc_candidate`, `auc_delta`, `se_delta`, `auc_lower_bound`;
     - `brier_served`, `brier_candidate`, `brier_delta_upper` (paired bootstrap, fixed seed);
     - `pr_auc_served`, `pr_auc_candidate`, `calibration_slope`, `calibration_intercept`;
-    - `candidate_bundle_sha256`, `served_bundle_sha256`, `snapshot` (Task 5.2) — the RPC's SQL predicate checks the two hashes against the ledger columns;
+    - `candidate_bundle_sha256`, `served_bundle_sha256`, `snapshot` (Task 5.2), `prevalence`, `brier_candidate` — the SQL predicate (`activation_gate_passes`) reads these fields and treats any missing one as a failure;
     - for hcp_adoption names only, `hcp_pathology_passed` plus the individual predicates. Run the **existing** `pathology_gate(metrics, prevalence)` from `scripts/promote_hcp_adoption_champions.py:165-187` (slope outside [0.5, 2.0]; Brier ≥ prevalence·(1−prevalence)), moved into this module and shared. Test a case where the generic rule passes but each pathology predicate fails;
     - `bootstrap_auc_delta_p05` (cross-check, reported only);
     - `failed_checks: list[str]`, `passed: bool`, `config: asdict(cfg)`, `kind: "deterministic_acceptance_rule"`.
@@ -1192,7 +1271,7 @@ def test_report_is_json_and_deterministic():
 
 | # | Step | Phase after | On failure |
 |---|---|---|---|
-| 1 | Resolve the candidate by id. It must be `stage='candidate'` with `retrain_of_id` = the current canonical row of the name. Refuse on a live ledger row for the name. Refuse names not in `HCP_PRODUCTION_ACTIVATION_ALLOWLIST` when the canonical row is `production` (OD-6). | — | exit 2, nothing written |
+| 1 | Resolve the candidate by id. It must be `stage='candidate'` with `retrain_of_id` = the current canonical row of the name. Refuse on a live ledger row for the name. Refuse names not in `ml_activation_production_allowlist` when the canonical row is `production` (OD-6). | — | exit 2, nothing written |
 | 2 | Fetch the exact artifact: run `mlflow_run_id` → tag `e2i.serving_bundle_sha256`; GET `…/mlflow-artifacts/artifacts/<run>/artifacts/serving_bundle/bundle.pkl`. **Verify the sha256 before unpickling.** | — | exit 2; no tag → "not servable as-trained; retrain after #2318 Lane 2" |
 | 3 | Read the served file `shap_serving/<cohort>/<name>.bundle.pkl` and hash it. It must equal the sidecar's `/model_info` `bundle_sha256` (Lane 3). Read the MLflow alias `served` (its version or none). | — | exit 2 on disagreement |
 | 4 | Gate on one snapshot (Lane 5); comparator = served bundle. Print the report. **Dry-run ends here** and prints the planned writes. | — | exit 1 on a failed gate, nothing written |
@@ -1213,7 +1292,7 @@ The registry is untouched on this path: the RPC either never ran or rolled back 
 
 **Rollback sequence** (`rollback-activation <ledger id> --reason TEXT --approved-by NAME [--execute]`). The phase stays `rolling_back` until **every** surface is done; each step sets a write-once marker:
 1. Guarded-UPDATE `active → rolling_back`, with `rolled_back_by` and `rollback_reason`.
-2. Swap the **predecessor stash** back (copy, never move; verify its sha against the ledger). Restart and verify the sidecar sha == `predecessor_bundle_sha256`. Set `rollback_serving_at`.
+2. Swap the **predecessor stash** back (copy, never move; verify its sha against the ledger). Restart and verify the sidecar sha == `predecessor_bundle_sha256`. Set `rollback_serving_at`. On resume, `reconcile` **re-verifies the live file sha and the sidecar sha** before step 3, even when the marker is set; the marker records history, the observation decides.
 3. RPC `rollback_model_activation` (it refuses unless `rollback_serving_at` is set). It sets `rollback_db_at`. On an exception, re-read `rollback_db_at` before retrying.
 4. MLflow: restore alias `served` to `prior_mlflow_served_version`, or delete it when that is NULL; set tag `e2i.role=rolled_back`. Set `rollback_mlflow_synced_at`.
 5. SHAP refresh for the slot. Set `rollback_shap_refreshed_at`.
@@ -1226,7 +1305,7 @@ The candidate's holdout metrics stay as history; the predecessor's are untouched
 - `serving_switched` → step 8;
 - `active` with NULL `mlflow_synced_at`/`shap_refreshed_at` → steps 9/10;
 - `aborting` → abort 2–4;
-- `rolling_back` → the first rollback step whose marker is NULL;
+- `rolling_back` → the first rollback step whose marker is NULL, after re-observing the file and sidecar hashes (a mismatch re-runs step 2);
 - `aborted`/`rolled_back` → verify only (file sha, sidecar sha, registry, alias) and report drift.
 
 `--abort` is accepted only in `prepared`/`serving_switched`. `status [<name>]` prints the ledger plus each surface's observed state (file sha, sidecar sha, registry stages, deployment, alias, cache row id) and flags drift.
@@ -1245,7 +1324,7 @@ The candidate's holdout metrics stay as history; the predecessor's are untouched
 
 ### Task 6.2: Reconciler with injectable surfaces
 
-**Files:** `src/mlops/activation/reconcile.py`, `src/mlops/activation/policy.py` (`HCP_PRODUCTION_ACTIVATION_ALLOWLIST: frozenset[str] = frozenset()`); test `tests/unit/test_mlops/test_activation_reconcile_2318.py`.
+**Files:** `src/mlops/activation/reconcile.py`, `src/mlops/activation/policy.py` (reads `ml_activation_production_allowlist`; early refusal only, the SQL predicate is authoritative); test `tests/unit/test_mlops/test_activation_reconcile_2318.py`.
 
 `Surfaces` is a `typing.Protocol`. Every operation from the sequence tables has a method, and each method raises on failure (nothing returns a silent `False`):
 
@@ -1336,16 +1415,15 @@ Production `Surfaces` lives in `src/mlops/activation/surfaces_live.py`. Its side
   - A lookup error **raises**: the callers are writers and must not proceed blind. This is the opposite of the reader fail-open in `model_registry_roles.py:114-118`, and the docstring says why.
 - [ ] **Step 2–4: implement → PASS.**
 
-### Task 7.2: Role-preserving upsert for an activation's predecessor (the weekly refit continues)
+### Task 7.2: The weekly refit continues; roles are preserved by the DB (Lane 4 trigger)
 
-**Files:** `src/mlops/prediction_synthesizer_deploy.py::register_model_row` (`:280-410`: build the payload, then upsert at `:380-387`, then read back at `:391-405`). Test in the guards test file with a fake client.
+**Why the DB and not Python** (codex r3): a Python check followed by a separate PostgREST upsert races the activation RPC. `tr_ml_model_registry_activation_role_guard` (migration 165) preserves `stage`/`is_champion`/`registered_at` inside the writer's own transaction, so there is no race. Python only has to stop treating that as a failure.
 
-- [ ] **Step 1: Failing tests.**
-  - When the `(model_name, model_version)` row being upserted is the `predecessor_registry_id` of a live activation, the upsert payload **omits** `stage`, `is_champion` and `registered_at`. The row stays `archived`, is not re-dated, and so is never canonical again (F15). The read-back verification (`:391-405`) checks that the stage is **unchanged** instead of `== stage`.
-  - Every other field (artifact_path, auc, feature_count, training_samples, hyperparameters) is refreshed as today, so the weekly refit's metrics and trend keep updating under that id (the `717dd7158` intent).
-  - With no live activation, behaviour is byte-identical to today: the payload equals the pre-change payload.
-- [ ] **Step 2: Run** → FAIL. **Step 3: Implement:** look up `live_activation_for(model_name)`; if its `predecessor_registry_id` equals the existing row's id, drop those three keys and log `INFO role preserved for <name> v<version>: predecessor of activation <id>`. **Step 4:** PASS.
-- [ ] **Step 5:** run the existing register/eval suites: `pytest -n 0 tests -k "register_model_row or cohort_deployer or run_persistence_eval or run_initiation_eval" -q` → PASS.
+**Files:** `src/mlops/prediction_synthesizer_deploy.py::register_model_row` read-back (`:391-405`). Test in the guards test file with a fake client, plus Lane 4's real-DB `test_weekly_upsert_cannot_change_roles`.
+
+- [ ] **Step 1: Failing test.** When the row being registered belongs to a live activation (`live_activation_for(model_name)` names its id), the read-back accepts the **preserved** stage and logs `INFO role preserved for <name> v<version>: predecessor of activation <id>` instead of raising "did not land at stage=staging". With no live activation, the read-back is byte-identical to today (still requires `stage == requested`).
+- [ ] **Step 2: Run** → FAIL. **Step 3: Implement.** **Step 4:** PASS.
+- [ ] **Step 5:** run the existing register/eval suites: `pytest -n 0 tests -k "register_model_row or cohort_deployer or run_persistence_eval or run_initiation_eval" -q` → PASS. The weekly refit's metrics and walk-forward trend keep updating under the archived predecessor's id (the `717dd7158` intent).
 
 ### Task 7.3: Writers that change *serving* or *role* refuse an activated slot
 
