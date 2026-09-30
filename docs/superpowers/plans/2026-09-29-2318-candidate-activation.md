@@ -738,9 +738,9 @@ class _ColumnTransformerRawEncoder:
 **Phases.** `ml_model_activations.phase` is the durable state machine the reconciler drives (Lane 6):
 
 ```
-prepared → serving_switched → active                    (activation)
-        ↘ aborted                                         (compensated before the DB switch)
-active → rolling_back → rolled_back                      (rollback)
+prepared → serving_switched → active                    (activation; active = DB switched, then MLflow/SHAP markers)
+prepared | serving_switched → aborting → aborted        (compensation before the DB switch)
+active → rolling_back → rolled_back                      (rollback; rolled_back only once all 4 rollback markers are set)
 ```
 
 - `prepared`: gate passed; both bundles stashed; nothing served has changed.
