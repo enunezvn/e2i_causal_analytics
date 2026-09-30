@@ -39,6 +39,21 @@ class ModelStage(str, Enum):
     PRODUCTION = "production"
     ARCHIVED = "archived"
     DEPRECATED = "deprecated"
+    CANDIDATE = "candidate"  # #2310 retrain awaiting review; promoted only by activation (#2318)
+
+
+class StageTransitionRefused(ValueError):
+    """A registry stage change the generic path must not make (#2318)."""
+
+
+#: Stage changes ``transition_stage`` may make, by current stage. Only the rows that need a
+#: rule are listed; any stage not listed keeps today's behaviour. A ``candidate`` enters service
+#: only through ``activate_model_candidate`` (migration 165, scripts/model_activation.py), which
+#: gates it on the holdout and records how to undo it; the generic path may only retire it.
+#: Nothing enters ``candidate`` generically: the retrain deployer inserts it (#2310).
+STAGE_TRANSITIONS: dict[str, frozenset[str]] = {
+    ModelStage.CANDIDATE.value: frozenset({ModelStage.ARCHIVED.value}),
+}
 
 
 class TrainingStatus(str, Enum):
@@ -1272,6 +1287,8 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
 
         Raises:
             ValueError: unknown stage, or production refused by the provenance gate
+            StageTransitionRefused: a move ``STAGE_TRANSITIONS`` forbids (a candidate
+                promoted outside activation), or any move into ``candidate`` (#2318)
         """
         if not self.client:
             return False
@@ -1284,6 +1301,21 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
         current = await self.get_by_id(str(model_id))
         if not current:
             return False
+
+        # #2318: refused before any write. A candidate is promoted only by activation.
+        from_stage = (
+            current.stage.value if hasattr(current.stage, "value") else current.stage
+        ) or ""
+        allowed = STAGE_TRANSITIONS.get(from_stage)
+        if allowed is not None and new_stage not in allowed:
+            raise StageTransitionRefused(
+                f"model {model_id} is a '{from_stage}'; the generic path may only move it to "
+                f"{sorted(allowed)}. Use scripts/model_activation.py promote-candidate (#2318)."
+            )
+        if new_stage == ModelStage.CANDIDATE.value:
+            raise StageTransitionRefused(
+                "no generic transition into 'candidate'; the retrain deployer registers it (#2310)"
+            )
 
         if new_stage == "production":
             refusal = self.production_refusal(model_id, current.training_provenance)

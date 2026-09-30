@@ -150,18 +150,25 @@ async def _goldstd_retrain(cohort_override: Optional[Dict[str, Any]] = None):
 
 @pytest.mark.asyncio
 async def test_a_retrain_on_the_synthetic_gold_contract_is_labelled_and_refused_production():
-    from src.repositories.ml_experiment import MLModelRegistryRepository
+    from src.repositories.ml_experiment import MLModelRegistryRepository, StageTransitionRefused
 
     db, _, pipeline_input, out = await _goldstd_retrain()
     assert pipeline_input["data_source"]["filters"]["is_synthetic"] is True  # mig-151 shape
     candidate = _row(db, out["model_registry_id"])
     assert candidate["training_provenance"] == "synthetic_gold"
 
+    # The #968 gate reads the label. transition_stage no longer reaches it for a candidate:
+    # since #2318 a candidate enters service only through activation, whose RPC re-applies
+    # this gate, so the generic path refuses every promotion before any write.
+    refusal = MLModelRegistryRepository.production_refusal(
+        candidate["id"], candidate["training_provenance"]
+    )
+    assert refusal and "synthetic_gold" in refusal
     repo = MLModelRegistryRepository(supabase_client=db)
-    with pytest.raises(ValueError, match="synthetic_gold"):  # the #968 gate
-        await repo.transition_stage(candidate["id"], "production")
-    assert candidate.get("stage") != "production"
-    assert await repo.transition_stage(candidate["id"], "staging") is True  # control
+    for target in ("production", "staging"):
+        with pytest.raises(StageTransitionRefused, match="promote-candidate"):
+            await repo.transition_stage(candidate["id"], target)
+    assert _row(db, candidate["id"])["stage"] == "candidate"
 
 
 @pytest.mark.asyncio
@@ -175,14 +182,22 @@ async def test_a_retrain_whose_load_is_not_pinned_does_not_inherit_the_parents_l
 @pytest.mark.asyncio
 async def test_a_real_data_retrain_of_a_synthetic_gold_parent_is_real_and_promotable():
     """#968's prescribed remedy: the gate must not follow the parent onto real data."""
-    from src.repositories.ml_experiment import MLModelRegistryRepository
+    from src.repositories.ml_experiment import MLModelRegistryRepository, StageTransitionRefused
 
     real = _table(brand="Kisqali", is_synthetic=False)
     db, _, _, out = await _goldstd_retrain({"data_source": real})
     candidate = _row(db, out["model_registry_id"])
     assert candidate["training_provenance"] == "real"
+    # Promotable by the #968 gate; the promotion itself is activation's (#2318).
+    assert (
+        MLModelRegistryRepository.production_refusal(
+            candidate["id"], candidate["training_provenance"]
+        )
+        is None
+    )
     repo = MLModelRegistryRepository(supabase_client=db)
-    assert await repo.transition_stage(candidate["id"], "production") is True
+    with pytest.raises(StageTransitionRefused, match="promote-candidate"):
+        await repo.transition_stage(candidate["id"], "production")
 
 
 def _plain_db() -> FakeAsyncSupabase:

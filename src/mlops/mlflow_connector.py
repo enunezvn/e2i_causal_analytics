@@ -81,6 +81,7 @@ class ModelStage(str, Enum):
     PRODUCTION = "production"
     ARCHIVED = "archived"
     DEPRECATED = "deprecated"
+    CANDIDATE = "candidate"  # #2310 retrain awaiting review; promoted only by activation (#2318)
 
 
 class RunStatus(str, Enum):
