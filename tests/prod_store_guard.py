@@ -59,6 +59,7 @@ import ipaddress
 import os
 import socket
 import threading
+import traceback
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -132,9 +133,23 @@ class Attempt:
     port: int | None
     store: str
     via: str
+    origin: str = ""
 
     def describe(self) -> str:
-        return f"{self.target} {self.store} via {self.via}"
+        origin = f" from {self.origin}" if self.origin else ""
+        return f"{self.target} {self.store} via {self.via}{origin}"
+
+
+_SRC_MARKER = f"{os.sep}src{os.sep}"
+
+
+def _src_origin() -> str:
+    """The innermost ``src/`` frame on the stack: which production code reached out."""
+    for frame in reversed(traceback.extract_stack()):
+        if _SRC_MARKER in frame.filename and "site-packages" not in frame.filename:
+            rel = frame.filename[frame.filename.rindex(_SRC_MARKER) + 1 :]
+            return f"{rel}:{frame.lineno} {frame.name}"
+    return ""
 
 
 @functools.lru_cache(maxsize=1)
@@ -205,7 +220,7 @@ class ProdStoreGuard:
     def refuse(self, target: str, port: int | None, store: str, via: str) -> str:
         test = self.current_test or "<outside a unit test>"
         with self._lock:
-            self.attempts.append(Attempt(test, target, port, store, via))
+            self.attempts.append(Attempt(test, target, port, store, via, _src_origin()))
         return (
             f"{GUARD_TAG} refused {via} connect to {target} -- {store}. On the droplet "
             f"this is PRODUCTION (test: {test}). Patch the store client at the test "

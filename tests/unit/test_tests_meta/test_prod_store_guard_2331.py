@@ -468,6 +468,25 @@ def test_linux_abstract_unix_socket_passes_through() -> None:
         srv.close()
 
 
+def test_attempt_names_the_src_frame_that_made_it(listener: socket.socket) -> None:
+    """The census needs to know WHICH production code reached out, not just the test."""
+    host, port = listener.getsockname()
+    fake_src = os.path.join(os.sep, "repo", "src", "memory", "fake_client.py")
+    code = compile(
+        "import socket\ndef open_store(addr):\n    socket.create_connection(addr, timeout=2)\n",
+        fake_src,
+        "exec",
+    )
+    namespace: dict = {}
+    exec(code, namespace)
+    guard = _guard_for(port)
+    with guard.active(), pytest.raises(ConnectionRefusedError):
+        namespace["open_store"]((host, port))
+    (attempt,) = guard.attempts
+    assert attempt.origin == os.path.join("src", "memory", "fake_client.py") + ":3 open_store"
+    assert attempt.describe().endswith("from " + attempt.origin)
+
+
 def test_innermost_active_guard_owns_the_attempt(listener: socket.socket) -> None:
     """The conftest's per-item guard sits inside any outer guard; its report must
     not lose the item's attempts to the outer one."""
