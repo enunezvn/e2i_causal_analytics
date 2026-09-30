@@ -63,6 +63,7 @@ async def test_scope_definition_autoresolves_manifest_from_data_source() -> None
         "business_objective": "b",
         "target_outcome": "t",
         "data_source": "data/rwd/optum/initiation",
+        "candidate_features": ["age_at_index"],  # #2335: declared requirement
     }
     try:
         await pipeline._run_scope_definition(input_data, _result(), {})
@@ -93,6 +94,7 @@ async def test_scope_definition_honors_explicit_manifest_override() -> None:
         "target_outcome": "t",
         "data_source": "ml_patient_journeys",
         "feature_manifest_source": "optum",
+        "candidate_features": ["age_at_index"],  # #2335: declared requirement
     }
     try:
         await pipeline._run_scope_definition(input_data, _result(), {})
@@ -120,6 +122,7 @@ async def test_scope_definition_unknown_source_stays_unset() -> None:
         "business_objective": "b",
         "target_outcome": "t",
         "data_source": "some_unregistered_table",
+        "candidate_features": ["age_at_index"],  # #2335: declared requirement
     }
     try:
         await pipeline._run_scope_definition(input_data, _result(), {})

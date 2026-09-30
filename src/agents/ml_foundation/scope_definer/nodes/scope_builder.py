@@ -6,8 +6,14 @@ This module builds the complete ScopeSpec from business requirements.
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional, Tuple, cast
 
+from src.services.cohort_contract import (
+    REQUIRED_FEATURES_SOURCES,
+    UNDECLARED_REQUIRED_FEATURES,
+    UndeclaredRequiredFeaturesError,
+    declared_required_features,
+)
 from src.utils.sufficiency_defaults import (
     DEFAULT_MDE_BINARY_ABSOLUTE_FLOOR,
     DEFAULT_MDE_BINARY_RELATIVE,
@@ -274,7 +280,7 @@ async def build_scope_spec(state: Dict[str, Any]) -> Dict[str, Any]:
     exclusion_criteria = _define_exclusion_criteria(state)
 
     # Define feature requirements
-    required_features = _define_required_features(state)
+    required_features, required_features_source = _define_required_features(state)
     excluded_features = _define_excluded_features(state)
     feature_categories = _define_feature_categories(state)
 
@@ -322,6 +328,7 @@ async def build_scope_spec(state: Dict[str, Any]) -> Dict[str, Any]:
         "inclusion_criteria": inclusion_criteria,
         "exclusion_criteria": exclusion_criteria,
         "required_features": required_features,
+        "required_features_source": required_features_source,
         "excluded_features": excluded_features,
         "feature_categories": feature_categories,
         "regulatory_constraints": regulatory_constraints,
@@ -398,28 +405,27 @@ def _define_exclusion_criteria(state: Dict[str, Any]) -> List[str]:
     return ["test_accounts", "invalid_data", "duplicate_records", "missing_required_fields"]
 
 
-def _define_required_features(state: Dict[str, Any]) -> List[str]:
-    """Define required features based on problem type."""
-    problem_type = state.get("inferred_problem_type", "")
-    candidate_features = state.get("candidate_features", [])
+def _define_required_features(state: Dict[str, Any]) -> Tuple[List[str], str]:
+    """``(required_features, provenance)`` — always DECLARED, never invented (#2335).
 
-    if candidate_features:
-        return cast(List[str], candidate_features)
-
-    # Default feature sets by problem type
-    base_features = [
-        "hcp_specialty",
-        "patient_count",
-        "prescription_history",
-        "brand_affinity_score",
-    ]
-
-    if problem_type == "regression":
-        base_features.extend(["historical_prescription_volume", "market_share"])
-    elif problem_type == "binary_classification":
-        base_features.extend(["engagement_score", "channel_response_rate"])
-
-    return base_features
+    The caller declares the requirement as ``candidate_features``. The pipeline's scope
+    stage resolves it from the declared sources (explicit candidates, else a table
+    cohort contract's columns — ``cohort_contract.resolve_required_features``) and names
+    the source in ``required_features_source``; a direct caller's candidates are
+    ``"explicit"``. No candidates fails closed: the scaffold default this replaced
+    (hcp_specialty, patient_count, ...) named columns no table has, and an empty list
+    would silently widen ``detect_leakage`` to every column.
+    """
+    declared = declared_required_features(state.get("candidate_features"), None, targets=())
+    if declared is None:
+        raise UndeclaredRequiredFeaturesError(
+            f"scope_definer has no declared required features: {UNDECLARED_REQUIRED_FEATURES}"
+        )
+    features, source = declared
+    stated = state.get("required_features_source")
+    if stated in REQUIRED_FEATURES_SOURCES:
+        source = stated
+    return features, source
 
 
 def _define_excluded_features(state: Dict[str, Any]) -> List[str]:

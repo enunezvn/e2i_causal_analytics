@@ -2290,6 +2290,7 @@ async def stop_bentoml_service(pid: int) -> dict:
 async def step_1_scope_definer(
     experiment_id: str,
     adaptive_inputs: Optional[Dict[str, Any]] = None,
+    candidate_features: Optional[List[str]] = None,
 ) -> dict[str, Any]:
     """Step 1: Define ML problem scope.
 
@@ -2302,6 +2303,9 @@ async def step_1_scope_definer(
             them on ``success_criteria['_adaptive_inputs']`` for the
             evaluator overlay. Pass ``None`` (the default) when adaptive
             criteria are not desired.
+        candidate_features: The frame's real feature columns (#2335). The
+            scope's requirement is declared, never invented: without them
+            scope_definer fails closed.
     """
     import time as time_mod
 
@@ -2328,6 +2332,8 @@ async def step_1_scope_definer(
         "problem_type_hint": CONFIG.problem_type,
         "brand": CONFIG.brand,
     }
+    if candidate_features:
+        input_data["candidate_features"] = list(candidate_features)
     # Merge adaptive pre-eval inputs when provided (task 05). The agent
     # forwards these into the state under the same field names; the
     # validator consumes them when ADAPTIVE_CRITERIA is on.
@@ -2518,6 +2524,7 @@ async def step_2_data_preparer(
             "prediction_target": CONFIG.target_outcome,
             "problem_type": CONFIG.problem_type,
             "required_features": available_features,
+            "required_features_source": "explicit",  # #2335: the frame's own columns
             "excluded_features": excluded_features,
             "max_staleness_days": 90,
             "sampling_frame_max_drift": CONFIG.sampling_frame_max_drift,
@@ -5533,7 +5540,14 @@ async def run_pipeline(
                 regime=regime,
                 deployment_intent=deployment_intent,
             )
-            result = await step_1_scope_definer(experiment_id, adaptive_inputs=adaptive_inputs)
+            # #2335: declare the frame's real columns up front (step 2 overrides
+            # required_features with the same list) — scope_definer no longer
+            # invents a requirement and fails closed without one.
+            result = await step_1_scope_definer(
+                experiment_id,
+                adaptive_inputs=adaptive_inputs,
+                candidate_features=_adaptive_feature_columns,
+            )
             state["scope_spec"] = result.get("scope_spec", {"problem_type": CONFIG.problem_type})
             state["scope_spec"]["experiment_id"] = experiment_id
             # Layer 5 manifest opt-in: thread the resolved cohort manifest

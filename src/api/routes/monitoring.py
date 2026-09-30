@@ -1577,6 +1577,11 @@ class TriggerRetrainingRequest(BaseModel):
     feature_manifest_source: Optional[str] = Field(
         None, description="Layer-5 manifest source (csu/optum/synthetic)"
     )
+    # #2335: the retrain's required features. Absent, a table cohort data_source must
+    # declare ``columns`` beyond the target, else the trigger refuses with 422.
+    candidate_features: Optional[List[str]] = Field(
+        None, description="Required features (else the table contract's columns)"
+    )
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -1587,6 +1592,7 @@ class TriggerRetrainingRequest(BaseModel):
                 "data_source": {"type": "file_dir", "path": "data/rwd/optum/initiation"},
                 "target_outcome": "initiated_biologic_180d",
                 "feature_manifest_source": "optum",
+                "candidate_features": ["age_at_index", "atopy_score"],
             }
         }
     )
@@ -1598,6 +1604,7 @@ class TriggerRetrainingRequest(BaseModel):
             "target_outcome": self.target_outcome,
             "brand": self.brand,
             "feature_manifest_source": self.feature_manifest_source,
+            "candidate_features": self.candidate_features,
         }
         return {k: v for k, v in fields.items() if v is not None}
 
@@ -1836,18 +1843,10 @@ async def trigger_retraining(
     triggered_by: str = Query(default="api_user", description="User triggering retraining"),
     _admin: dict = Depends(require_admin),
 ) -> RetrainingJobResponse:
-    """
-    Trigger model retraining.
+    """Create a retraining job for ``model_id`` and optionally auto-approve it.
 
-    Creates a retraining job and optionally auto-approves it.
-
-    Args:
-        model_id: Model version/ID
-        request: Retraining parameters
-        triggered_by: User or system triggering retraining
-
-    Returns:
-        Created retraining job
+    Refused before anything is recorded: 404 no registry row, 409 unreadable identity,
+    422 no declared required features (#2335).
     """
     from src.services.retraining_trigger import (
         RetrainRefusedError,

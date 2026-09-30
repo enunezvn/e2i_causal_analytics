@@ -32,6 +32,7 @@ from src.agents.tier_0.split_handoff import (
     with_adaptive_inputs_from_splits,
 )
 from src.data.manifests.resolution import resolve_manifest_source
+from src.services.cohort_contract import resolve_required_features
 from src.utils.audit_chain import AgentTier, AuditChainService
 
 logger = logging.getLogger(__name__)
@@ -283,7 +284,9 @@ class MLFoundationPipeline:
                 - problem_type_hint (str): Hint for problem type
                 - target_variable_hint (str): physical target column; pins
                   scope_spec.prediction_target verbatim. Alias: target_variable (#2284)
-                - candidate_features (List[str]): Candidate features
+                - candidate_features (List[str]): the required features; without them a
+                  table cohort ``data_source`` must declare ``columns``, else the scope
+                  stage fails closed (#2335)
                 - algorithm_preferences (List[str]): Preferred algorithms
                 - target_environment (str): Deployment environment
                 - feature_refs (List[str]): Feast feature references for training
@@ -459,6 +462,20 @@ class MLFoundationPipeline:
             input_data.get("feature_manifest_source"),
         )
 
+        # #2335: the requirement is DECLARED, never invented — explicit candidate_features,
+        # else a table cohort contract's columns minus the target. No declared source fails
+        # closed here, before scope_definer persists anything (the trigger API refuses the
+        # same contract with a 422 so such a job is never enqueued).
+        required_features, required_features_source = resolve_required_features(
+            input_data.get("candidate_features"),
+            input_data.get("data_source"),
+            targets=(
+                input_data.get("target_variable_hint"),
+                input_data.get("target_variable"),
+                input_data.get("target_outcome"),
+            ),
+        )
+
         # Prepare scope_definer input
         scope_input = {
             "problem_description": input_data["problem_description"],
@@ -471,7 +488,8 @@ class MLFoundationPipeline:
             # #2284: caller's physical target column; unset, `adopted` -> `will_adopt`.
             "target_variable_hint": input_data.get("target_variable_hint"),
             "target_variable": input_data.get("target_variable"),
-            "candidate_features": input_data.get("candidate_features"),
+            "candidate_features": required_features,
+            "required_features_source": required_features_source,
             "feature_manifest_source": feature_manifest_source,
             # #2248 (codex r1): an explicit clinical|commercial intent selects the
             # success-criteria bar; absent, scope_definer keeps its clinical default.

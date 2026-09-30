@@ -658,6 +658,9 @@ class TestRetrainingTriggerService:
                             model_version="propensity_v2.1.0",
                             reason=TriggerReason.DATA_DRIFT,
                             approved_by="user_123",
+                            # #2335: the row carries no contract, so the request
+                            # declares the requirement (else refused with 422).
+                            cohort={"candidate_features": ["engagement_score"]},
                         )
 
                         assert job.model_version == "propensity_v2.1.0"

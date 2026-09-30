@@ -122,6 +122,7 @@ async def test_orchestrator_threads_audit_workflow_id_to_scope_definer() -> None
                     "business_objective": "test",
                     "target_outcome": "test",
                     "data_source": "test",
+                    "candidate_features": ["f1"],  # #2335: declared requirement
                 }
             )
         except RuntimeError:
@@ -182,6 +183,7 @@ async def test_orchestrator_does_not_crash_when_audit_service_none() -> None:
                     "business_objective": "test",
                     "target_outcome": "test",
                     "data_source": "test",
+                    "candidate_features": ["f1"],  # #2335: declared requirement
                 }
             )
         except RuntimeError:

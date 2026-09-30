@@ -19,6 +19,8 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+from src.services.cohort_contract import UndeclaredRequiredFeaturesError
+
 from .graph import create_scope_definer_graph
 from .memory_hooks import ScopeDefinerMemoryHooks
 from .state import ScopeDefinerState
@@ -253,6 +255,8 @@ class ScopeDefinerAgent:
             "target_variable_hint": input_data.get("target_variable_hint"),
             "target_variable": input_data.get("target_variable"),
             "candidate_features": input_data.get("candidate_features"),
+            # #2335: where the pipeline resolved the requirement from (explicit|contract).
+            "required_features_source": input_data.get("required_features_source"),
             "time_budget_hours": input_data.get("time_budget_hours"),
             "performance_requirements": input_data.get("performance_requirements", {}),
             "brand": input_data.get("brand", "unknown"),
@@ -392,6 +396,10 @@ class ScopeDefinerAgent:
 
             return output
 
+        except UndeclaredRequiredFeaturesError as e:
+            # #2335: fail closed with the actionable message, nothing persisted.
+            logger.error(f"Scope definition refused: {e}")
+            return {"error": str(e), "error_type": "undeclared_required_features"}
         except Exception as e:
             logger.error(f"Scope definition failed: {e}", exc_info=True)
             return {

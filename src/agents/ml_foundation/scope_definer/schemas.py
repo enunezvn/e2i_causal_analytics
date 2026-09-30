@@ -73,6 +73,7 @@ class ScopeSpecSchema(BaseAgentSchema):
 
     # Features
     required_features: Optional[List[str]] = None
+    required_features_source: Optional[str] = None  # explicit | contract (#2335)
     excluded_features: Optional[List[str]] = None
     feature_categories: Optional[List[str]] = None
 

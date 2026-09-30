@@ -367,7 +367,12 @@ async def _scope_input(input_data: Dict[str, Any]) -> Dict[str, Any]:
 
     fake_scope = MagicMock()
     fake_scope.run = _capture
-    base = {"problem_description": "p", "business_objective": "b", "target_outcome": TARGET}
+    base = {
+        "problem_description": "p",
+        "business_objective": "b",
+        "target_outcome": TARGET,
+        "candidate_features": ["disease_severity"],  # #2335: declared requirement
+    }
     with patch.object(pipeline, "_get_agent", return_value=fake_scope):
         with pytest.raises(_StopAfterScopeInput):
             await pipeline._run_scope_definition({**base, **input_data}, _result({}), None)

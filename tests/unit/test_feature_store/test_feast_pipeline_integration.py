@@ -269,6 +269,8 @@ class TestPipelineRunWithFeast:
             "target_outcome": "conversion",
             "data_source": "business_metrics",
             "feature_refs": ["hcp_conversion_features:engagement_score"],
+            # #2335: a bare table name declares no columns, so the caller declares them.
+            "candidate_features": ["engagement_score"],
         }
 
     @pytest.fixture

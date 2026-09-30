@@ -910,20 +910,12 @@ def _cohort_input_from_training_config(training_config: Dict[str, Any]) -> Dict[
         contract_brand = data_source["filters"].get("brand")
         if isinstance(contract_brand, str) and contract_brand:
             input_data["brand"] = contract_brand
-    # #2335: the retrain requires the features its parent was trained on. Without
-    # candidate_features, scope_builder._define_required_features falls back to a
-    # generic placeholder list (hcp_specialty, patient_count, ...) that no table
-    # carries, so every sweep retrain reported is_ready=False with a phantom "Missing
-    # required features" blocker, and detect_leakage's structural checks, the baseline
-    # stats and the Feast registrar were scoped to columns the frame does not have. A
-    # table contract names the exact columns it loads (migrations 151/163: the goldstd
-    # covariates + the label), so its covariates ARE the requirement. An explicit
-    # candidate list wins; a contract that declares no covariates adds nothing.
+    # #2335: the retrain requires what its parent was trained on. An explicit list (the
+    # trigger API's candidate_features) passes through; otherwise the pipeline's scope
+    # stage resolves the table contract's columns minus the label and records the
+    # provenance (cohort_contract.resolve_required_features, the one place). No declared
+    # source fails closed there; the trigger already refuses that contract with a 422.
     candidates = training_config.get("candidate_features")
-    if not candidates and isinstance(data_source, dict):
-        columns = data_source.get("columns")
-        if isinstance(columns, list):
-            candidates = [c for c in columns if isinstance(c, str) and c != target_outcome]
     if candidates:
         input_data["candidate_features"] = list(candidates)
     return input_data

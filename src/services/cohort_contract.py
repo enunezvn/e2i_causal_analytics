@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -281,6 +281,65 @@ def contract_from_training_config(training_config: Optional[Dict[str, Any]]) -> 
     return {k: training_config[k] for k in _KEY_TO_COLUMN if training_config.get(k) is not None}
 
 
+# #2335 (owner decision 2026-09-30): ``scope_spec.required_features`` is always DECLARED,
+# never invented. It replaced a hard-coded scaffold list (hcp_specialty, patient_count, ...)
+# four of whose columns exist in no table. The feature manifest is deliberately NOT a
+# source: its admissible features are not a subset of the real frames' columns (measured on
+# the host files, PR for #2335), so as a requirement it would raise false "missing" blockers.
+REQUIRED_FEATURES_SOURCES: Tuple[str, str] = ("explicit", "contract")
+UNDECLARED_REQUIRED_FEATURES = "declare candidate_features or a cohort contract with columns"
+
+
+class UndeclaredRequiredFeaturesError(ValueError):
+    """No declared source names the features a run requires (#2335) — fail closed."""
+
+
+def _feature_names(value: Any) -> List[str]:
+    """The non-empty string names in a list/tuple; anything else (a bare str too) is none."""
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [v for v in value if isinstance(v, str) and v]
+
+
+def declared_required_features(
+    candidate_features: Any, data_source: Any, *, targets: Iterable[Optional[str]]
+) -> Optional[Tuple[List[str], str]]:
+    """``(features, source)`` from the declared sources, or ``None`` when none declares any.
+
+    The one place the requirement resolves. Order: (a) explicit ``candidate_features``,
+    verbatim (``"explicit"``); (b) a table cohort contract's ``columns`` minus the
+    target(s) (``"contract"``) — migrations 151/163 give the 12 goldstd rows the exact
+    covariates + label the parent was trained on. A bare table name, a file source, or a
+    table dict whose columns are only the label declares nothing.
+    """
+    explicit = _feature_names(candidate_features)
+    if explicit:
+        return explicit, "explicit"
+    if isinstance(data_source, str):
+        data_source = decode_data_source(data_source)
+    if isinstance(data_source, dict) and data_source.get("type") == "table":
+        # Stripped the way the classifier strips a hint, so "  adopted  " is the label.
+        excluded = {t.strip() for t in targets if isinstance(t, str) and t.strip()}
+        covariates = [c for c in _feature_names(data_source.get("columns")) if c not in excluded]
+        if covariates:
+            return covariates, "contract"
+    return None
+
+
+def resolve_required_features(
+    candidate_features: Any, data_source: Any, *, targets: Iterable[Optional[str]]
+) -> Tuple[List[str], str]:
+    """:func:`declared_required_features`, raising when nothing declares a requirement."""
+    declared = declared_required_features(candidate_features, data_source, targets=targets)
+    if declared is None:
+        raise UndeclaredRequiredFeaturesError(
+            f"no declared required features for this run: {UNDECLARED_REQUIRED_FEATURES} "
+            "(a table cohort dict {'type': 'table', ..., 'columns': [...]} whose columns "
+            "hold more than the target)"
+        )
+    return declared
+
+
 def _encoded(key: str, value: Any) -> str:
     return (encode_data_source(value) if key == "data_source" else str(value)) or ""
 
@@ -370,9 +429,14 @@ __all__ = [
     "decode_data_source",
     "encode_data_source",
     "contract_from_training_config",
+    "declared_required_features",
     "heal_registry_cohort_contract",
     "load_registry_cohort_contract",
     "load_registry_model_identity",
     "merge_contracts",
+    "REQUIRED_FEATURES_SOURCES",
+    "resolve_required_features",
     "training_provenance_from_contract",
+    "UNDECLARED_REQUIRED_FEATURES",
+    "UndeclaredRequiredFeaturesError",
 ]

@@ -4,6 +4,10 @@ import pytest
 
 from src.agents.ml_foundation.scope_definer import ScopeDefinerAgent
 
+# #2335: the requirement is declared, never invented — the agent fails closed without
+# candidates (tests/.../test_declared_required_features_2335.py).
+_DECLARED = {"candidate_features": ["feature_a", "feature_b"]}
+
 
 @pytest.mark.asyncio
 async def test_scope_definer_agent_initialization():
@@ -63,7 +67,7 @@ async def test_scope_definer_full_pipeline_binary_classification():
         "region": "US",
     }
 
-    output = await agent.run(input_data)
+    output = await agent.run({**_DECLARED, **input_data})
 
     # Check output structure
     assert "scope_spec" in output
@@ -106,7 +110,7 @@ async def test_scope_definer_full_pipeline_regression():
         "region": "EU",
     }
 
-    output = await agent.run(input_data)
+    output = await agent.run({**_DECLARED, **input_data})
 
     # Check problem type
     scope_spec = output["scope_spec"]
@@ -135,7 +139,7 @@ async def test_scope_definer_full_pipeline_causal():
         "brand": "Remibrutinib",
     }
 
-    output = await agent.run(input_data)
+    output = await agent.run({**_DECLARED, **input_data})
 
     # Check problem type
     scope_spec = output["scope_spec"]
@@ -159,7 +163,7 @@ async def test_scope_definer_respects_problem_type_hint():
         "brand": "Kisqali",
     }
 
-    output = await agent.run(input_data)
+    output = await agent.run({**_DECLARED, **input_data})
 
     # Should use hint
     scope_spec = output["scope_spec"]
@@ -187,7 +191,7 @@ async def test_scope_definer_uses_custom_performance_requirements():
         "brand": "Fabhalta",
     }
 
-    output = await agent.run(input_data)
+    output = await agent.run({**_DECLARED, **input_data})
 
     success_criteria = output["success_criteria"]
     assert success_criteria["minimum_auc"] == 0.85
@@ -212,7 +216,7 @@ async def test_scope_definer_uses_candidate_features():
         "brand": "Kisqali",
     }
 
-    output = await agent.run(input_data)
+    output = await agent.run({**_DECLARED, **input_data})
 
     scope_spec = output["scope_spec"]
     assert scope_spec["required_features"] == custom_features
@@ -230,7 +234,7 @@ async def test_scope_definer_includes_regulatory_constraints():
         "brand": "Kisqali",
     }
 
-    output = await agent.run(input_data)
+    output = await agent.run({**_DECLARED, **input_data})
 
     scope_spec = output["scope_spec"]
     regulatory = scope_spec["regulatory_constraints"]
@@ -251,7 +255,7 @@ async def test_scope_definer_includes_ethical_constraints():
         "brand": "Kisqali",
     }
 
-    output = await agent.run(input_data)
+    output = await agent.run({**_DECLARED, **input_data})
 
     scope_spec = output["scope_spec"]
     ethical = scope_spec["ethical_constraints"]
@@ -272,7 +276,7 @@ async def test_scope_definer_excludes_pii_features():
         "brand": "Kisqali",
     }
 
-    output = await agent.run(input_data)
+    output = await agent.run({**_DECLARED, **input_data})
 
     scope_spec = output["scope_spec"]
     excluded = scope_spec["excluded_features"]
@@ -296,7 +300,7 @@ async def test_scope_definer_validation_warnings():
         "brand": "Kisqali",
     }
 
-    output = await agent.run(input_data)
+    output = await agent.run({**_DECLARED, **input_data})
 
     # Should have warnings
     assert len(output["validation_warnings"]) > 0
@@ -315,7 +319,7 @@ async def test_scope_definer_validation_passes():
         "region": "US",
     }
 
-    output = await agent.run(input_data)
+    output = await agent.run({**_DECLARED, **input_data})
 
     # Should pass validation
     assert output["validation_passed"] is True
@@ -334,8 +338,8 @@ async def test_scope_definer_experiment_id_is_unique():
         "brand": "Kisqali",
     }
 
-    output1 = await agent.run(input_data)
-    output2 = await agent.run(input_data)
+    output1 = await agent.run({**_DECLARED, **input_data})
+    output2 = await agent.run({**_DECLARED, **input_data})
 
     # Should have different experiment IDs
     assert output1["experiment_id"] != output2["experiment_id"]
@@ -352,7 +356,7 @@ async def test_scope_definer_handles_minimal_input():
         "target_outcome": "Simple outcome",
     }
 
-    output = await agent.run(input_data)
+    output = await agent.run({**_DECLARED, **input_data})
 
     # Should still produce valid output
     assert "scope_spec" in output

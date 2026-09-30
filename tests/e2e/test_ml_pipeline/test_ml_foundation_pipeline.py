@@ -37,6 +37,8 @@ def sample_input_data():
         "region": "northeast",
         "data_source": "business_metrics",
         "use_sample_data": True,
+        # #2335: a bare table name declares no columns, so the caller declares them.
+        "candidate_features": ["engagement_score", "prior_rx_volume"],
     }
 
 

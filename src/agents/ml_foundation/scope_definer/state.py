@@ -75,8 +75,11 @@ class ScopeDefinerState(BaseAgentSchema):
     # node. Accepted as ``target_variable_hint``'s alias; prefer the hint name.
     target_variable: Optional[str] = None
 
-    # Features (optional)
+    # Features: the DECLARED requirement (#2335). No placeholder default —
+    # scope_builder fails closed without candidates. required_features_source names
+    # where the pipeline resolved them from (explicit | contract); unset = explicit.
     candidate_features: Optional[List[str]] = None
+    required_features_source: Optional[str] = None
 
     # Constraints (optional)
     time_budget_hours: Optional[float] = None
