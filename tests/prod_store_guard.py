@@ -87,7 +87,8 @@ PROD_STORE_PORTS: dict[int, str] = {
     8000: "e2i API (e2i_api)",
     3030: "FalkorDB browser (e2i_falkordb_browser)",
     80: "host front door (nginx -> e2i_api)",
-    443: "host front door TLS (nginx -> e2i_api)",
+    443: "host front door TLS (sslh -> nginx -> e2i_api)",
+    4443: "host nginx TLS behind sslh (proxies the API, MLflow and Supabase)",
 }
 
 # The docker socket controls every prod container. No unit test uses the docker
@@ -263,18 +264,25 @@ def _check_socket(sock: socket.socket, address: Any) -> None:
                 raise ProdStoreRefused(errno.ECONNREFUSED, msg)
 
 
+def _pg_param(params: Mapping[str, Any], key: str, env_var: str) -> str:
+    """libpq precedence: a key present in the conninfo wins even when empty; the
+    environment is consulted only when the key is absent."""
+    if key in params:
+        return str(params[key] or "")
+    return os.environ.get(env_var, "")
+
+
 def _pg_targets(params: Mapping[str, Any]) -> list[tuple[str, int]]:
     """(host, port) pairs libpq could connect to, from the conninfo and PG* env.
 
     libpq connects to ``hostaddr`` when given and uses ``host`` for auth/SSL; both
     are checked, so a local ``hostaddr`` behind a remote ``host`` name is still
-    caught. An empty host or a unix-socket directory means this machine."""
-    port_spec = str(params.get("port") or os.environ.get("PGPORT", "") or "5432")
-    ports = [p.strip() for p in port_spec.split(",")]
+    caught. An empty host or a unix-socket directory means this machine; an empty
+    port means libpq's compiled default, 5432."""
+    ports = [p.strip() for p in _pg_param(params, "port", "PGPORT").split(",")]
     targets = []
     for key, env_var in (("hostaddr", "PGHOSTADDR"), ("host", "PGHOST")):
-        hosts = str(params.get(key) or os.environ.get(env_var, "")).split(",")
-        for i, h in enumerate(hosts):
+        for i, h in enumerate(_pg_param(params, key, env_var).split(",")):
             h = h.strip()
             if key == "hostaddr" and not h:
                 continue
@@ -290,7 +298,7 @@ def _pg_targets(params: Mapping[str, Any]) -> list[tuple[str, int]]:
 
 def _check_pg(params: Mapping[str, Any], via: str, error: type[Exception]) -> None:
     guards = tuple(reversed(_ACTIVE))  # the innermost guard owns it
-    service = params.get("service") or os.environ.get("PGSERVICE")
+    service = _pg_param(params, "service", "PGSERVICE")
     if service and guards:
         # A pg_service.conf entry hides its endpoint from the guard: fail closed.
         store = "Postgres service (endpoint unresolvable by the guard)"

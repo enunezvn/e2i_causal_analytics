@@ -14,8 +14,8 @@ Two layers are tested here:
   of the environment and runs identically in CI.
 * **Wiring** -- the conftest's guard is live during unit tests on the droplet: a bare
   TCP connect to each real prod port is refused by the guard. In CI the guard is off
-  (the unit jobs run their OWN throwaway Redis/MLflow on some of these ports) and
-  nothing prod listens, so these assertions reduce to "refused".
+  (some unit lanes run their OWN throwaway Redis/MLflow on these ports), so these
+  probes skip there.
 """
 
 from __future__ import annotations
@@ -413,6 +413,30 @@ def test_pg_multi_host_list_is_refused_on_its_local_member(listener: socket.sock
     _assert_refused_and_recorded(guard, listener, "psycopg")
 
 
+@pytest.mark.parametrize(
+    ("env", "key"),
+    [
+        ({"PGPORT": "1"}, "port"),  # explicit empty port -> 5432, not PGPORT
+        ({"PGHOST": "remote.invalid"}, "host"),  # explicit empty host -> local socket
+        ({"PGSERVICE": "l2331-unknown-service"}, "service"),  # empty service masks env
+    ],
+)
+def test_pg_explicit_empty_conninfo_values_mask_the_environment(
+    monkeypatch: pytest.MonkeyPatch, env: dict[str, str], key: str
+) -> None:
+    """libpq takes a key present in the conninfo even when empty; the environment
+    only fills absent keys. Each case here ends at local 5432."""
+    from tests.prod_store_guard import _pg_param, _pg_targets
+
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    params = {"host": "127.0.0.1", "port": "5432", key: ""}
+    if key == "service":
+        assert _pg_param(params, "service", "PGSERVICE") == ""
+    else:
+        assert ("127.0.0.1", 5432) in _pg_targets(params)
+
+
 def test_pg_service_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     """A pg_service.conf entry hides its endpoint; the guard refuses rather than guess."""
     import psycopg2
@@ -470,7 +494,7 @@ def test_deactivated_guard_restores_normal_connects(listener: socket.socket) -> 
 
 
 def test_default_targets_cover_the_prod_stores_named_in_2331() -> None:
-    for port in (6381, 6382, 5000, 54321):
+    for port in (6381, 6382, 5000, 54321, 4443):
         assert port in PROD_STORE_PORTS, port
 
 
@@ -480,15 +504,17 @@ def test_unit_test_connect_to_prod_port_is_refused(port: int) -> None:
 
     Before the guard existed this CONNECTED on the droplet (the red run). With the
     guard it is refused by the guard, tagged, before any packet leaves. In CI the
-    guard is off and nothing listens on these ports, so it is refused by the kernel."""
+    guard is off (a CI lane may run its own MLflow on 5000), so this is skipped there;
+    the listener tests above prove the mechanism in every environment."""
+    if not guard_enabled():
+        pytest.skip("the unit-tree guard is off in GitHub Actions")
     with pytest.raises(ConnectionRefusedError) as exc_info:
         socket.create_connection(("127.0.0.1", port), timeout=2).close()
-    if guard_enabled():
-        assert GUARD_TAG in str(exc_info.value)
-        # The conftest's guard recorded it. Taking the record also keeps this
-        # deliberate probe out of the summary and out of strict mode.
-        (unit_guard,) = active_guards()
-        assert [a.port for a in unit_guard.take_new_attempts()] == [port]
+    assert GUARD_TAG in str(exc_info.value)
+    # The conftest's guard recorded it. Taking the record also keeps this
+    # deliberate probe out of the summary and out of strict mode.
+    (unit_guard,) = active_guards()
+    assert [a.port for a in unit_guard.take_new_attempts()] == [port]
 
 
 # ---------------------------------------------------------------------------
