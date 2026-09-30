@@ -197,19 +197,28 @@ async def test_the_builder_records_explicit_provenance() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_builder_keeps_a_resolved_contract_provenance() -> None:
-    out = await build_scope_spec(
-        _builder_state(candidate_features=["specialty"], required_features_source="contract")
-    )
-    assert out["scope_spec"]["required_features_source"] == "contract"
+async def test_the_builder_derives_contract_provenance_from_the_data_source() -> None:
+    out = await build_scope_spec(_builder_state(data_source=TABLE_CONTRACT))
+    spec = out["scope_spec"]
+    assert spec["required_features"] == ["peer_influence_score", "years_experience", "specialty"]
+    assert spec["required_features_source"] == "contract"
 
 
 @pytest.mark.asyncio
-async def test_an_unknown_provenance_label_is_not_trusted() -> None:
+@pytest.mark.parametrize("label", ["contract", "manifest", "made_up"])
+async def test_a_caller_supplied_provenance_label_is_never_trusted(label: str) -> None:
+    """codex r1 HIGH: the provenance is derived from the evidence, not a label."""
     out = await build_scope_spec(
-        _builder_state(candidate_features=["specialty"], required_features_source="made_up")
+        _builder_state(candidate_features=["specialty"], required_features_source=label)
     )
     assert out["scope_spec"]["required_features_source"] == "explicit"
+
+
+@pytest.mark.parametrize("blank", [["   "], ["", " "], [" \t"]])
+def test_blank_candidate_names_declare_nothing(blank: List[str]) -> None:
+    """codex r1 MEDIUM: ``["   "]`` passed the 422 guard, then reported a blank column."""
+    with pytest.raises(UndeclaredRequiredFeaturesError):
+        resolve_required_features(blank, "patient_journeys", targets=["adopted"])
 
 
 # --------------------------------------------------------------------------- agent
@@ -231,7 +240,27 @@ async def test_the_agent_returns_an_actionable_error_without_a_declared_source()
 
 
 @pytest.mark.asyncio
-async def test_the_agent_threads_the_provenance_onto_scope_spec() -> None:
+async def test_the_agent_resolves_a_table_contract_it_is_given() -> None:
+    out = await ScopeDefinerAgent().run(
+        {
+            "problem_description": "Predict which HCPs adopt Kisqali",
+            "business_objective": "Grow new prescribers",
+            "target_outcome": "adopted",
+            "target_variable_hint": "adopted",
+            "data_source": TABLE_CONTRACT,
+        }
+    )
+    assert out.get("error") is None, out
+    assert out["scope_spec"]["required_features"] == [
+        "peer_influence_score",
+        "years_experience",
+        "specialty",
+    ]
+    assert out["scope_spec"]["required_features_source"] == "contract"
+
+
+@pytest.mark.asyncio
+async def test_the_agent_does_not_relabel_explicit_candidates() -> None:
     out = await ScopeDefinerAgent().run(
         {
             "problem_description": "Predict which HCPs adopt Kisqali",
@@ -244,7 +273,7 @@ async def test_the_agent_threads_the_provenance_onto_scope_spec() -> None:
     )
     assert out.get("error") is None, out
     assert out["scope_spec"]["required_features"] == ["specialty", "years_experience"]
-    assert out["scope_spec"]["required_features_source"] == "contract"
+    assert out["scope_spec"]["required_features_source"] == "explicit"
 
 
 # --------------------------------------------------------------------------- pipeline stage

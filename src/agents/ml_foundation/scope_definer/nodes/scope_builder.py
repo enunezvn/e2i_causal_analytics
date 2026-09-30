@@ -9,10 +9,8 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, cast
 
 from src.services.cohort_contract import (
-    REQUIRED_FEATURES_SOURCES,
-    UNDECLARED_REQUIRED_FEATURES,
     UndeclaredRequiredFeaturesError,
-    declared_required_features,
+    resolve_required_features,
 )
 from src.utils.sufficiency_defaults import (
     DEFAULT_MDE_BINARY_ABSOLUTE_FLOOR,
@@ -408,24 +406,27 @@ def _define_exclusion_criteria(state: Dict[str, Any]) -> List[str]:
 def _define_required_features(state: Dict[str, Any]) -> Tuple[List[str], str]:
     """``(required_features, provenance)`` — always DECLARED, never invented (#2335).
 
-    The caller declares the requirement as ``candidate_features``. The pipeline's scope
-    stage resolves it from the declared sources (explicit candidates, else a table
-    cohort contract's columns — ``cohort_contract.resolve_required_features``) and names
-    the source in ``required_features_source``; a direct caller's candidates are
-    ``"explicit"``. No candidates fails closed: the scaffold default this replaced
-    (hcp_specialty, patient_count, ...) named columns no table has, and an empty list
-    would silently widen ``detect_leakage`` to every column.
+    Resolved from the EVIDENCE in state (``cohort_contract.resolve_required_features``):
+    explicit ``candidate_features``, else the ``data_source`` table cohort contract's
+    columns minus the target. The provenance is derived from which of the two declared
+    them — never taken from a caller-supplied label (codex r1 HIGH). No declared source
+    fails closed: the scaffold default this replaced (hcp_specialty, patient_count, ...)
+    named columns no table has, and an empty list would silently widen
+    ``detect_leakage`` to every column.
     """
-    declared = declared_required_features(state.get("candidate_features"), None, targets=())
-    if declared is None:
-        raise UndeclaredRequiredFeaturesError(
-            f"scope_definer has no declared required features: {UNDECLARED_REQUIRED_FEATURES}"
+    try:
+        return resolve_required_features(
+            state.get("candidate_features"),
+            state.get("data_source"),
+            targets=(
+                state.get("target_variable_hint"),
+                state.get("target_variable"),
+                state.get("target_outcome"),
+                state.get("inferred_target_variable"),
+            ),
         )
-    features, source = declared
-    stated = state.get("required_features_source")
-    if stated in REQUIRED_FEATURES_SOURCES:
-        source = stated
-    return features, source
+    except UndeclaredRequiredFeaturesError as e:
+        raise UndeclaredRequiredFeaturesError(f"scope_definer: {e}") from e
 
 
 def _define_excluded_features(state: Dict[str, Any]) -> List[str]:

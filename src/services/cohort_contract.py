@@ -295,10 +295,13 @@ class UndeclaredRequiredFeaturesError(ValueError):
 
 
 def _feature_names(value: Any) -> List[str]:
-    """The non-empty string names in a list/tuple; anything else (a bare str too) is none."""
+    """The non-blank string names in a list/tuple; anything else (a bare str too) is none.
+
+    A whitespace-only name declares nothing (codex r1: ``["   "]`` passed the trigger's
+    422 guard and the job then reported that "column" missing)."""
     if not isinstance(value, (list, tuple)):
         return []
-    return [v for v in value if isinstance(v, str) and v]
+    return [v for v in value if isinstance(v, str) and v.strip()]
 
 
 def declared_required_features(

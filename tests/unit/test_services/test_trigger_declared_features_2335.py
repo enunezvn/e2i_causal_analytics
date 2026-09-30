@@ -80,7 +80,10 @@ def _db(cohort_data_source: Optional[str]) -> tuple[FakeAsyncSupabase, str]:
 
 
 async def _trigger(
-    db: FakeAsyncSupabase, handle: str, cohort: Optional[Dict[str, Any]]
+    db: FakeAsyncSupabase,
+    handle: str,
+    cohort: Optional[Dict[str, Any]],
+    config_overrides: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     service = RetrainingTriggerService()
     drift_repo = MagicMock()
@@ -99,7 +102,10 @@ async def _trigger(
         mock_task.delay = MagicMock(return_value=MagicMock(id="task-1"))
         try:
             job = await service.trigger_retraining(
-                model_version=handle, reason=TriggerReason.MANUAL, cohort=cohort
+                model_version=handle,
+                reason=TriggerReason.MANUAL,
+                cohort=cohort,
+                config_overrides=config_overrides,
             )
         finally:
             delay_calls = mock_task.delay.call_count
@@ -163,6 +169,30 @@ async def test_a_registry_contract_with_columns_still_enqueues() -> None:
     out = await _trigger(db, model_id, cohort=None)
     assert out["delay_calls"] == 1
     assert "candidate_features" not in out["job"].training_config
+
+
+@pytest.mark.asyncio
+async def test_overrides_that_remove_the_declaration_are_refused_too() -> None:
+    """codex r1 MEDIUM: the FINAL training_config is what the job runs, so it is checked."""
+    db, model_id = _db(json.dumps(_table_contract(COLUMNS), sort_keys=True))
+    with pytest.raises(RetrainRefusedError) as exc:
+        await _trigger(
+            db,
+            model_id,
+            cohort=None,
+            config_overrides={"data_source": {"type": "file_dir", "path": "data/rwd/x"}},
+        )
+    assert exc.value.http_status == 422
+    assert db.rows("ml_retraining_history") == []
+
+
+@pytest.mark.asyncio
+async def test_blank_request_candidates_do_not_declare_the_requirement() -> None:
+    db, model_id = _db("patient_journeys")
+    with pytest.raises(RetrainRefusedError) as exc:
+        await _trigger(db, model_id, cohort={"candidate_features": ["   "]})
+    assert exc.value.http_status == 422
+    assert db.rows("ml_retraining_history") == []
 
 
 @pytest.mark.asyncio

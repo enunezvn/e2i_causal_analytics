@@ -464,9 +464,10 @@ class MLFoundationPipeline:
 
         # #2335: the requirement is DECLARED, never invented — explicit candidate_features,
         # else a table cohort contract's columns minus the target. No declared source fails
-        # closed here, before scope_definer persists anything (the trigger API refuses the
-        # same contract with a 422 so such a job is never enqueued).
-        required_features, required_features_source = resolve_required_features(
+        # closed here, before scope_definer runs or persists anything (the trigger API
+        # refuses the same contract with a 422 so such a job is never enqueued).
+        # scope_builder resolves the same evidence again and derives the provenance.
+        resolve_required_features(
             input_data.get("candidate_features"),
             input_data.get("data_source"),
             targets=(
@@ -488,8 +489,8 @@ class MLFoundationPipeline:
             # #2284: caller's physical target column; unset, `adopted` -> `will_adopt`.
             "target_variable_hint": input_data.get("target_variable_hint"),
             "target_variable": input_data.get("target_variable"),
-            "candidate_features": required_features,
-            "required_features_source": required_features_source,
+            "candidate_features": input_data.get("candidate_features"),
+            "data_source": input_data.get("data_source"),
             "feature_manifest_source": feature_manifest_source,
             # #2248 (codex r1): an explicit clinical|commercial intent selects the
             # success-criteria bar; absent, scope_definer keeps its clinical default.

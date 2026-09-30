@@ -407,23 +407,6 @@ class RetrainingTriggerService:
                 "retrain its candidate could not be attached to",
             )
         effective_cohort = merge_contracts(cohort, registry_contract)
-        # #2335: the retrain's scope stage fails closed on an undeclared requirement, so a
-        # contract that declares none is refused HERE — nothing recorded, nothing enqueued.
-        if (
-            declared_required_features(
-                effective_cohort.get("candidate_features"),
-                effective_cohort.get("data_source"),
-                targets=(effective_cohort.get("target_outcome"),),
-            )
-            is None
-        ):
-            raise RetrainRefusedError(
-                model_version,
-                "undeclared_required_features",
-                f"retrain of {model_version!r} declares no required features: "
-                f"{UNDECLARED_REQUIRED_FEATURES} (pass candidate_features, or a table "
-                "cohort data_source whose columns hold more than the target)",
-            )
 
         drift_repo = DriftHistoryRepository(client)
         drift_records = await drift_repo.get_latest_drift_status(model_version, limit=20)
@@ -455,6 +438,24 @@ class RetrainingTriggerService:
         new_version = _candidate_version(identity["model_version"], timestamp)
         if config_overrides:
             training_config.update(config_overrides)
+        # #2335: the retrain's scope stage fails closed on an undeclared requirement, so a
+        # FINAL config (request over the registry row, then the overrides — codex r1) that
+        # declares none is refused HERE: nothing recorded, nothing enqueued.
+        if (
+            declared_required_features(
+                training_config.get("candidate_features"),
+                training_config.get("data_source"),
+                targets=(training_config.get("target_outcome"),),
+            )
+            is None
+        ):
+            raise RetrainRefusedError(
+                model_version,
+                "undeclared_required_features",
+                f"retrain of {model_version!r} declares no required features: "
+                f"{UNDECLARED_REQUIRED_FEATURES} (pass candidate_features, or a table "
+                "cohort data_source whose columns hold more than the target)",
+            )
         # After the overrides: the retrained identity is authoritative, never a knob.
         training_config["retrain_of"] = {**identity, "new_model_version": new_version}
         training_config["approved_by"] = approved_by
