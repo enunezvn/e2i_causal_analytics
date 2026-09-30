@@ -244,7 +244,7 @@ def _check_socket(sock: socket.socket, address: Any) -> None:
         if not (isinstance(address, tuple) and len(address) >= 2):
             return
         host, port = str(address[0]), address[1]
-        for guard in list(_ACTIVE):
+        for guard in reversed(tuple(_ACTIVE)):  # the innermost guard owns it
             store = guard.match_inet(host, port)
             if store is not None:
                 target = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
@@ -252,7 +252,7 @@ def _check_socket(sock: socket.socket, address: Any) -> None:
                 raise ProdStoreRefused(errno.ECONNREFUSED, msg)
     elif sock.family == getattr(socket, "AF_UNIX", None) and isinstance(address, (str, bytes)):
         path = os.fsdecode(address)
-        for guard in list(_ACTIVE):
+        for guard in reversed(tuple(_ACTIVE)):  # the innermost guard owns it
             store = guard.match_unix(path)
             if store is not None:
                 msg = guard.refuse(path, None, store, "socket")
@@ -278,7 +278,7 @@ def _pg_targets(params: Mapping[str, Any]) -> list[tuple[str, int]]:
 
 def _check_pg(params: Mapping[str, Any], via: str, error: type[Exception]) -> None:
     for host, port in _pg_targets(params):
-        for guard in list(_ACTIVE):
+        for guard in reversed(tuple(_ACTIVE)):  # the innermost guard owns it
             store = guard.match_inet(host, port)
             if store is not None:
                 raise error(guard.refuse(f"{host}:{port}", port, store, via))
