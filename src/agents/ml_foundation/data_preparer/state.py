@@ -118,6 +118,9 @@ class DataPreparerState(BaseAgentSchema):
     # ``expectation_results``. Was ``List[str]``, which crashed the graph on the
     # blocking-completeness path (#2292).
     failed_expectations: Optional[List[Dict[str, Any]]] = None
+    # Non-blocking warnings, one dict per entry, each tagged with its producer's
+    # ``kind``. No reducer: writers merge through ``warnings_channel.py`` so no
+    # node wipes another's entries (#2290).
     warnings: Optional[List[Dict[str, Any]]] = None
 
     # Dimension scores
