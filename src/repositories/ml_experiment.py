@@ -56,6 +56,11 @@ STAGE_TRANSITIONS: dict[str, frozenset[str]] = {
 }
 
 
+def stage_value(stage: Any) -> str:
+    """A registry row's stage as its ``model_stage_enum`` string; ``""`` for NULL."""
+    return (stage.value if hasattr(stage, "value") else stage) or ""
+
+
 class TrainingStatus(str, Enum):
     """Training run status."""
 
@@ -1229,6 +1234,27 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
         )
 
     @staticmethod
+    def stage_transition_refusal(model_id: Any, from_stage: str, new_stage: str) -> Optional[str]:
+        """Why the generic path may not move a ``from_stage`` row to ``new_stage``, or None.
+
+        The ONE statement of the #2318 rule: transition_stage (the DB write) and
+        model_deployer's promote_stage (before MLflow moves) both apply it. Both stages are
+        ``model_stage_enum`` values; ``from_stage`` is ``""`` for a NULL stage.
+        """
+        allowed = STAGE_TRANSITIONS.get(from_stage)
+        if allowed is not None and new_stage not in allowed:
+            return (
+                f"model {model_id} is a '{from_stage}'; the generic path may only move it to "
+                f"{sorted(allowed)}. Use scripts/model_activation.py promote-candidate (#2318)."
+            )
+        if new_stage == ModelStage.CANDIDATE.value:
+            return (
+                f"model {model_id}: no generic transition into 'candidate'; the retrain "
+                "deployer registers it (#2310)"
+            )
+        return None
+
+    @staticmethod
     def normalize_stage(stage: str) -> str:
         """Map an MLflow or DB stage name to its ``model_stage_enum`` value, or raise ValueError.
 
@@ -1288,7 +1314,8 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
         Raises:
             ValueError: unknown stage, or production refused by the provenance gate
             StageTransitionRefused: a move ``STAGE_TRANSITIONS`` forbids (a candidate
-                promoted outside activation), or any move into ``candidate`` (#2318)
+                promoted outside activation), any move into ``candidate``, or a row whose
+                stage changed between the check and the write (#2318)
         """
         if not self.client:
             return False
@@ -1303,26 +1330,17 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
             return False
 
         # #2318: refused before any write. A candidate is promoted only by activation.
-        from_stage = (
-            current.stage.value if hasattr(current.stage, "value") else current.stage
-        ) or ""
-        allowed = STAGE_TRANSITIONS.get(from_stage)
-        if allowed is not None and new_stage not in allowed:
-            raise StageTransitionRefused(
-                f"model {model_id} is a '{from_stage}'; the generic path may only move it to "
-                f"{sorted(allowed)}. Use scripts/model_activation.py promote-candidate (#2318)."
-            )
-        if new_stage == ModelStage.CANDIDATE.value:
-            raise StageTransitionRefused(
-                "no generic transition into 'candidate'; the retrain deployer registers it (#2310)"
-            )
+        from_stage = stage_value(current.stage)
+        transition_refusal = self.stage_transition_refusal(model_id, from_stage, new_stage)
+        if transition_refusal:
+            raise StageTransitionRefused(transition_refusal)
 
         if new_stage == "production":
             refusal = self.production_refusal(model_id, current.training_provenance)
             if refusal:
                 raise ValueError(refusal)
 
-        # Promote FIRST, with the gate repeated as a predicate on the write itself: the check
+        # Promote FIRST, with the gates repeated as predicates on the write itself: the checks
         # above read a snapshot, and the row may have changed since. A write that matches no row
         # promoted nothing, and nothing has been archived yet.
         updates: Dict[str, Any] = {
@@ -1332,9 +1350,19 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
         if new_stage == "production":
             updates["is_champion"] = True
         query = self.client.table(self.table_name).update(updates).eq("id", str(model_id))
+        # #2318: the row must still be at the stage the rule was checked against; one that
+        # became a candidate since would otherwise be promoted outside activation.
+        query = query.eq("stage", from_stage) if from_stage else query.is_("stage", "null")
         if new_stage == "production":
             query = query.in_("training_provenance", list(self._PROMOTABLE_PROVENANCE))
         result = await query.execute()
+        if not (result.data or []):
+            now = await self.get_by_id(str(model_id))
+            if now is not None and stage_value(now.stage) != from_stage:
+                raise StageTransitionRefused(
+                    f"model {model_id} moved from '{from_stage}' to '{stage_value(now.stage)}' "
+                    "during the transition; nothing was written. Re-read it and retry (#2318)."
+                )
         if new_stage == "production" and not (result.data or []):
             raise ValueError(
                 f"Refusing to promote model {model_id} to production: at write time its "

@@ -84,6 +84,20 @@ class ModelStage(str, Enum):
     CANDIDATE = "candidate"  # #2310 retrain awaiting review; promoted only by activation (#2318)
 
 
+def _refuse_candidate_stage(stage: Optional[ModelStage]) -> None:
+    """MLflow has no candidate stage (#2318).
+
+    A retrain candidate is an MLflow version left at stage "None" with the tag
+    ``e2i.role=candidate`` (#2310). Mapping CANDIDATE to "None" here would report a
+    transition that set no role, or return every unassigned version as a candidate.
+    """
+    if stage == ModelStage.CANDIDATE:
+        raise ValueError(
+            "MLflow stages cannot express 'candidate': it is stage 'None' plus the "
+            "e2i.role=candidate tag (#2310); promote with scripts/model_activation.py (#2318)"
+        )
+
+
 class RunStatus(str, Enum):
     """MLflow run status values."""
 
@@ -1038,7 +1052,11 @@ class MLflowConnector:
 
         Returns:
             True if successful
+
+        Raises:
+            ValueError: ``stage`` is ``CANDIDATE``, which MLflow stages cannot express (#2318)
         """
+        _refuse_candidate_stage(stage)
         if not self._enabled:
             return True
 
@@ -1086,7 +1104,11 @@ class MLflowConnector:
 
         Returns:
             ModelVersion or None
+
+        Raises:
+            ValueError: ``stage`` is ``CANDIDATE``, which MLflow stages cannot express (#2318)
         """
+        _refuse_candidate_stage(stage)
         if not self._enabled:
             return None
 

@@ -26,7 +26,7 @@ from typing import Any, Dict, Iterator, Optional
 
 import pytest
 
-from src.repositories.ml_experiment import MLModelRegistryRepository
+from src.repositories.ml_experiment import MLModelRegistryRepository, StageTransitionRefused
 from tests.unit.test_database.learning_loop import _pg
 
 pytestmark = [
@@ -241,18 +241,58 @@ async def test_mlflow_cased_stage_persists_as_the_enum_value(
     assert _row(registry_db, model_id)["stage"] == db_stage
 
 
+@pytest.mark.parametrize(
+    "target, refusal",
+    # 'candidate' was the unknown example until migration 159 made it a stage; the generic
+    # path still refuses it, by the #2318 rule instead of the enum.
+    [("champion", "unknown model stage"), ("candidate", "no generic transition into 'candidate'")],
+)
 async def test_unknown_stage_is_refused_before_any_write(
-    registry_db: _pg.PgConn, rest: ThrowawayRest
+    registry_db: _pg.PgConn, rest: ThrowawayRest, target: str, refusal: str
 ) -> None:
-    exp = _experiment(registry_db, "lane_2259_unknown")
-    model_id = _model(registry_db, exp, "lane_2259_unknown_model", stage="staging",
+    exp = _experiment(registry_db, f"lane_2259_unknown_{target}")
+    model_id = _model(registry_db, exp, f"lane_2259_unknown_model_{target}", stage="staging",
                       provenance="real")  # fmt: skip
     repo = MLModelRegistryRepository(supabase_client=rest.service_role_client())
 
-    with pytest.raises(ValueError, match="stage"):
-        await repo.transition_stage(uuid.UUID(model_id), "candidate")
+    with pytest.raises(ValueError, match=refusal):
+        await repo.transition_stage(uuid.UUID(model_id), target)
 
     assert _row(registry_db, model_id)["stage"] == "staging"
+
+
+@pytest.mark.parametrize("target", ["Staging", "Production"])
+async def test_a_candidate_is_not_promoted_generically(
+    registry_db: _pg.PgConn, rest: ThrowawayRest, target: str
+) -> None:
+    """#2318: a candidate enters service only through activation."""
+    exp = _experiment(registry_db, f"lane_2318_candidate_{target}")
+    model_id = _model(registry_db, exp, f"lane_2318_candidate_model_{target}",
+                      stage="candidate", provenance="real")  # fmt: skip
+    repo = MLModelRegistryRepository(supabase_client=rest.service_role_client())
+
+    with pytest.raises(StageTransitionRefused, match="promote-candidate"):
+        await repo.transition_stage(uuid.UUID(model_id), target)
+    assert _row(registry_db, model_id)["stage"] == "candidate"
+
+    assert await repo.transition_stage(uuid.UUID(model_id), "Archived") is True
+    assert _row(registry_db, model_id)["stage"] == "archived"
+
+
+async def test_a_null_stage_row_still_transitions(
+    registry_db: _pg.PgConn, rest: ThrowawayRest
+) -> None:
+    """#2318 codex r1: the write's stage predicate is ``stage IS NULL`` for a NULL-stage row."""
+    exp = _experiment(registry_db, "lane_2318_null_stage")
+    model_id = _model(registry_db, exp, "lane_2318_null_stage_model", stage="staging",
+                      provenance="real")  # fmt: skip
+    registry_db.execute(
+        f"update ml_model_registry set stage = null where id = '{model_id}'", user="postgres"
+    )
+    repo = MLModelRegistryRepository(supabase_client=rest.service_role_client())
+
+    assert await repo.transition_stage(uuid.UUID(model_id), "Shadow") is True
+    assert _row(registry_db, model_id)["stage"] == "shadow"
 
 
 # ---------------------------------------------------------------------------
