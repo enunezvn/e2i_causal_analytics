@@ -30,6 +30,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any, Sequence
@@ -55,6 +56,8 @@ SKLEARN_CT_BUNDLE_FORMAT = "sklearn_ct_v1"
 # scripts/promote_hcp_adoption_champions.py, which now imports it).
 HCP_PATHOLOGY_SLOPE_RANGE = (0.5, 2.0)
 _HCP_PREFIX = "hcp_adoption_"
+
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 # Bootstrap resamples are materialised this many index cells at a time, so memory
 # stays flat for large holdouts (2000 x 1766 is ~7 chunks).
@@ -231,8 +234,9 @@ def paired_bootstrap(
     """Paired row bootstrap of the Brier and AUC differences (candidate - served).
 
     Resample ``b`` is ``default_rng(cfg.seed).integers(0, n, (B, n))[b]`` (drawn in
-    chunks; numpy's stream is identical). A resample that draws a single class has
-    no AUC; it is skipped for BOTH differences and counted.
+    chunks; numpy's stream is identical). The Brier difference is defined on every
+    resample, so ``brier_deltas`` has all B. A resample that draws a single class has
+    no AUC; it is skipped for ``auc_deltas`` only and counted.
     """
     labels = _binary_labels(y)
     s = np.asarray(served, dtype=float)
@@ -256,7 +260,7 @@ def paired_bootstrap(
         skipped += int((~ok).sum())
         denom = npos[ok] * nneg[ok]
         auc_deltas.append(num_c[ok] / denom - num_s[ok] / denom)
-        brier_deltas.append((counts[ok] @ d_brier) / n)
+        brier_deltas.append((counts @ d_brier) / n)
         done += b
     auc_arr = np.concatenate(auc_deltas)
     return {
@@ -286,6 +290,35 @@ def _probabilities(name: str, scores: Any, n: int) -> "np.ndarray":
     return arr
 
 
+def _require_evidence(
+    labels: "np.ndarray",
+    served_sha: Any,
+    candidate_sha: Any,
+    snapshot: Any,
+    model_name: Any,
+) -> None:
+    for name, value in (("served", served_sha), ("candidate", candidate_sha)):
+        if not isinstance(value, str) or not _SHA256_RE.match(value):
+            raise ValueError(f"{name}_bundle_sha256 must be 64 lowercase hex chars, got {value!r}")
+    if not isinstance(model_name, str) or not model_name:
+        raise ValueError("model_name is required")
+    if not isinstance(snapshot, dict):
+        raise ValueError("snapshot is required (load_holdout_snapshot)")
+    expected = {
+        "splits": list(OOS_EVAL_SPLITS),
+        "n": int(labels.shape[0]),
+        "n_pos": int(labels.sum()),
+    }
+    for key, want in expected.items():
+        if snapshot.get(key) != want:
+            raise ValueError(
+                f"snapshot {key}={snapshot.get(key)!r} does not describe these rows ({want!r})"
+            )
+    rows_hash = snapshot.get("rows_sha256")
+    if not isinstance(rows_hash, str) or not _SHA256_RE.match(rows_hash):
+        raise ValueError("snapshot rows_sha256 is missing or malformed")
+
+
 def _is_hcp(model_name: str | None) -> bool:
     return bool(model_name) and str(model_name).startswith(_HCP_PREFIX)
 
@@ -296,21 +329,30 @@ def evaluate_gate(
     candidate: Any,
     cfg: GateConfig | None = None,
     *,
-    served_bundle_sha256: str | None = None,
-    candidate_bundle_sha256: str | None = None,
-    snapshot: dict[str, Any] | None = None,
-    model_name: str | None = None,
+    served_bundle_sha256: str,
+    candidate_bundle_sha256: str,
+    snapshot: dict[str, Any],
+    model_name: str,
 ) -> dict[str, Any]:
     """Apply the acceptance rule; return a JSON-serialisable report.
 
     ``served`` and ``candidate`` are positive-class probabilities on the SAME rows as
-    ``y``. Raises ``ValueError`` (nothing is decided) on a thin or one-class holdout,
-    misaligned inputs, or non-finite / out-of-range scores. Every other outcome is a
-    report whose ``passed`` is true iff ``failed_checks`` is empty.
+    ``y``. The evidence (both bundle sha256s, the snapshot the rows came from, the
+    model name) is mandatory: a verdict without it could not be tied to what serves
+    (OD-3). Raises ``ValueError`` (nothing is decided) on missing or inconsistent
+    evidence, a non-default ``cfg``, a thin or one-class holdout, misaligned inputs,
+    or non-finite / out-of-range scores. Every other outcome is a report whose
+    ``passed`` is true iff ``failed_checks`` is empty.
     """
-    cfg = cfg or GateConfig()
+    if cfg is None:
+        cfg = GateConfig()
+    if cfg != GateConfig():
+        # The rule is frozen (OD-2): a report built under other constants (a smaller
+        # bootstrap, another seed or band) must never exist to be recorded.
+        raise ValueError(f"the acceptance rule is frozen; refusing GateConfig {asdict(cfg)}")
     labels = _binary_labels(y)
     n = int(labels.shape[0])
+    _require_evidence(labels, served_bundle_sha256, candidate_bundle_sha256, snapshot, model_name)
     s = _probabilities("served", served, n)
     c = _probabilities("candidate", candidate, n)
     n_pos = int(labels.sum())
@@ -338,12 +380,11 @@ def evaluate_gate(
     usable = int(boot["usable"])
     if usable < cfg.min_usable_bootstrap_frac * cfg.bootstrap_b:
         failed.append("bootstrap_unusable")
-    brier_delta_upper: float | None = None
+    brier_delta_upper = float(np.quantile(boot["brier_deltas"], 1.0 - cfg.alpha))
     bootstrap_auc_delta_p05: float | None = None
     if usable > 0:
-        brier_delta_upper = float(np.quantile(boot["brier_deltas"], 1.0 - cfg.alpha))
         bootstrap_auc_delta_p05 = float(np.quantile(boot["auc_deltas"], cfg.alpha))
-    if brier_delta_upper is None or not brier_delta_upper < cfg.brier_margin:
+    if not brier_delta_upper < cfg.brier_margin:
         failed.append("brier_noninferiority")
 
     # Candidate calibration.
@@ -536,7 +577,8 @@ async def load_holdout_snapshot(
     if label not in frame.columns or frame[label].isna().any():
         raise ValueError(f"holdout label {label!r} is missing or null on some rows")
     frame = frame.sort_values(key, kind="mergesort").reset_index(drop=True)
-    y = _binary_labels(frame[label].astype(int).to_numpy())
+    # Validate BEFORE casting: astype(int) would turn a corrupt 0.9 into a clean 0.
+    y = _binary_labels(frame[label].to_numpy())
     snapshot = {
         "splits": list(splits),
         "n": int(len(frame)),

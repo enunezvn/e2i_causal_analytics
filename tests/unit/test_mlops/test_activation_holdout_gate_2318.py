@@ -39,6 +39,22 @@ from src.mlops.activation.holdout_gate import (
 )
 
 
+def _evidence(y, model_name="initiation_kisqali_goldstd_lr_v1"):
+    """The mandatory evidence a real activation passes (load_holdout_snapshot + shas)."""
+    y = np.asarray(y)
+    return {
+        "served_bundle_sha256": "a" * 64,
+        "candidate_bundle_sha256": "b" * 64,
+        "snapshot": {
+            "splits": ["test", "holdout"],
+            "n": len(y),
+            "n_pos": int(y.sum()),
+            "rows_sha256": "c" * 64,
+        },
+        "model_name": model_name,
+    }
+
+
 def _scores(seed=0, n=2000, noise=0.0):
     r = np.random.default_rng(seed)
     y = r.integers(0, 2, n)
@@ -194,7 +210,7 @@ def test_delong_refuses_bad_input():
 
 def test_identical_models_pass_with_zero_variance_handled():
     y, a, _ = _scores()
-    rep = evaluate_gate(y, served=a, candidate=a.copy(), cfg=GateConfig())
+    rep = evaluate_gate(y, served=a, candidate=a.copy(), cfg=GateConfig(), **_evidence(y))
     # var(delta) == 0 exactly: the bound is delta itself, never a division by zero
     assert rep["passed"] and rep["auc_delta"] == 0.0 and rep["se_delta"] == 0.0
     assert rep["failed_checks"] == []
@@ -203,7 +219,7 @@ def test_identical_models_pass_with_zero_variance_handled():
 def test_a_clearly_worse_candidate_fails_on_auc():
     y, a, _ = _scores()
     worse = 0.5 * a + 0.5 * np.random.default_rng(1).random(len(a))
-    rep = evaluate_gate(y, served=a, candidate=worse, cfg=GateConfig())
+    rep = evaluate_gate(y, served=a, candidate=worse, cfg=GateConfig(), **_evidence(y))
     assert not rep["passed"] and "auc_noninferiority" in rep["failed_checks"]
 
 
@@ -211,7 +227,7 @@ def test_miscalibrated_candidate_fails_on_slope():
     y, a, _ = _scores()
     logit = np.log(a / (1 - a))
     sharp = 1 / (1 + np.exp(-3 * logit))  # same ranking, slope ~ 1/3
-    rep = evaluate_gate(y, served=a, candidate=sharp, cfg=GateConfig())
+    rep = evaluate_gate(y, served=a, candidate=sharp, cfg=GateConfig(), **_evidence(y))
     assert rep["auc_delta"] == pytest.approx(0.0, abs=1e-12)
     assert "calibration_slope" in rep["failed_checks"]
     assert not rep["passed"]
@@ -222,7 +238,7 @@ def test_brier_worse_candidate_fails_on_brier_only():
     # offset: calibration-in-the-large is off, so the Brier score degrades.
     y, a, _ = _scores()
     shifted = np.clip(a + 0.12, 0.0, 1.0)
-    rep = evaluate_gate(y, served=a, candidate=shifted, cfg=GateConfig())
+    rep = evaluate_gate(y, served=a, candidate=shifted, cfg=GateConfig(), **_evidence(y))
     assert rep["brier_delta_upper"] >= GateConfig().brier_margin
     assert "brier_noninferiority" in rep["failed_checks"]
     assert "auc_noninferiority" not in rep["failed_checks"]
@@ -233,7 +249,7 @@ def test_refuses_a_thin_or_one_class_holdout(n_pos, n_neg):
     y = np.array([1] * n_pos + [0] * n_neg)
     s = np.linspace(0, 1, len(y))
     with pytest.raises(ValueError, match="at least 100"):
-        evaluate_gate(y, served=s, candidate=s, cfg=GateConfig())
+        evaluate_gate(y, served=s, candidate=s, cfg=GateConfig(), **_evidence(y))
 
 
 @pytest.mark.parametrize("bad", [np.nan, np.inf, -0.1, 1.1])
@@ -242,21 +258,21 @@ def test_refuses_non_finite_or_out_of_range_scores_before_scoring(bad):
     b = a.copy()
     b[7] = bad
     with pytest.raises(ValueError, match="candidate"):
-        evaluate_gate(y, served=a, candidate=b, cfg=GateConfig())
+        evaluate_gate(y, served=a, candidate=b, cfg=GateConfig(), **_evidence(y))
     with pytest.raises(ValueError, match="served"):
-        evaluate_gate(y, served=b, candidate=a, cfg=GateConfig())
+        evaluate_gate(y, served=b, candidate=a, cfg=GateConfig(), **_evidence(y))
 
 
 def test_refuses_misaligned_inputs():
     y, a, _ = _scores()
     with pytest.raises(ValueError, match="same rows"):
-        evaluate_gate(y, served=a, candidate=a[:-1], cfg=GateConfig())
+        evaluate_gate(y, served=a, candidate=a[:-1], cfg=GateConfig(), **_evidence(y))
 
 
 def test_exact_zero_one_scores_give_a_finite_json_report():
     y, a, _ = _scores()
     hard = (a > 0.5).astype(float)  # exact 0/1 probabilities
-    rep = evaluate_gate(y, served=a, candidate=hard, cfg=GateConfig())
+    rep = evaluate_gate(y, served=a, candidate=hard, cfg=GateConfig(), **_evidence(y))
     json.dumps(rep, allow_nan=False)  # jsonb-safe: no NaN / inf anywhere
     assert rep["calibration_slope"] is not None and math.isfinite(rep["calibration_slope"])
     assert not rep["passed"]
@@ -267,7 +283,7 @@ def test_unfittable_slope_fails_the_rule(monkeypatch):
 
     monkeypatch.setattr(hg, "calibration_slope", lambda y, s: None)
     y, a, _ = _scores()
-    rep = hg.evaluate_gate(y, served=a, candidate=a.copy(), cfg=GateConfig())
+    rep = hg.evaluate_gate(y, served=a, candidate=a.copy(), cfg=GateConfig(), **_evidence(y))
     assert rep["calibration_slope"] is None
     assert "calibration_slope_unfittable" in rep["failed_checks"]
     assert not rep["passed"]
@@ -275,8 +291,8 @@ def test_unfittable_slope_fails_the_rule(monkeypatch):
 
 def test_report_is_json_and_deterministic():
     y, a, b = _scores(noise=0.3)
-    r1 = evaluate_gate(y, served=a, candidate=b, cfg=GateConfig())
-    r2 = evaluate_gate(y, served=a, candidate=b, cfg=GateConfig())
+    r1 = evaluate_gate(y, served=a, candidate=b, cfg=GateConfig(), **_evidence(y))
+    r2 = evaluate_gate(y, served=a, candidate=b, cfg=GateConfig(), **_evidence(y))
     assert json.dumps(r1, sort_keys=True, allow_nan=False) == json.dumps(
         r2, sort_keys=True, allow_nan=False
     )
@@ -285,7 +301,12 @@ def test_report_is_json_and_deterministic():
 def test_report_carries_every_field_the_sql_predicate_reads():
     """Lane 4's ``activation_gate_passes`` treats any missing field as a failure."""
     y, a, b = _scores(noise=0.3)
-    snap = {"splits": ["test", "holdout"], "n": len(y), "n_pos": int(y.sum())}
+    snap = {
+        "splits": ["test", "holdout"],
+        "n": len(y),
+        "n_pos": int(y.sum()),
+        "rows_sha256": "c" * 64,
+    }
     rep = evaluate_gate(
         y,
         served=a,
@@ -341,6 +362,51 @@ def test_report_carries_every_field_the_sql_predicate_reads():
     assert rep["auc_lower_bound"] == pytest.approx(lb, abs=1e-15)
 
 
+@pytest.mark.parametrize(
+    "field,value,match",
+    [
+        ("served_bundle_sha256", None, "served_bundle_sha256"),
+        ("candidate_bundle_sha256", "B" * 64, "candidate_bundle_sha256"),
+        ("candidate_bundle_sha256", "b" * 63, "candidate_bundle_sha256"),
+        ("model_name", "", "model_name"),
+        ("snapshot", None, "snapshot"),
+    ],
+)
+def test_missing_or_malformed_evidence_refuses_to_decide(field, value, match):
+    y, a, _ = _scores()
+    ev = {**_evidence(y), field: value}
+    with pytest.raises(ValueError, match=match):
+        evaluate_gate(y, served=a, candidate=a.copy(), cfg=GateConfig(), **ev)
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"n": 1999},
+        {"n_pos": 0},
+        {"splits": ["holdout"]},
+        {"rows_sha256": None},
+    ],
+)
+def test_a_snapshot_that_does_not_describe_these_rows_is_refused(patch):
+    y, a, _ = _scores()
+    ev = _evidence(y)
+    ev["snapshot"] = {**ev["snapshot"], **patch}
+    with pytest.raises(ValueError, match="snapshot"):
+        evaluate_gate(y, served=a, candidate=a.copy(), cfg=GateConfig(), **ev)
+
+
+@pytest.mark.parametrize(
+    "cfg",
+    [GateConfig(bootstrap_b=10), GateConfig(seed=7), GateConfig(slope_band=(0.1, 9.0))],
+)
+def test_a_non_default_config_is_refused(cfg):
+    """The rule is frozen: no report can be produced under other constants."""
+    y, a, _ = _scores()
+    with pytest.raises(ValueError, match="frozen"):
+        evaluate_gate(y, served=a, candidate=a.copy(), cfg=cfg, **_evidence(y))
+
+
 def test_gate_config_constants_are_the_owner_decision():
     cfg = GateConfig()
     assert (cfg.auc_margin, cfg.alpha, cfg.brier_margin) == (0.010, 0.05, 0.005)
@@ -363,14 +429,14 @@ def test_hcp_name_fails_on_brier_pathology_when_the_generic_rule_passes():
     x = r.normal(0, 1, n)
     y = (r.random(n) < 1 / (1 + np.exp(-x))).astype(int)
     s = 1 / (1 + np.exp(-(x + 1.5)))
-    generic = evaluate_gate(y, served=s, candidate=s.copy(), cfg=GateConfig())
+    generic = evaluate_gate(y, served=s, candidate=s.copy(), cfg=GateConfig(), **_evidence(y))
     assert generic["failed_checks"] == [] and generic["passed"]
     rep = evaluate_gate(
         y,
         served=s,
         candidate=s.copy(),
         cfg=GateConfig(),
-        model_name="hcp_adoption_kisqali_goldstd_lr_v1",
+        **_evidence(y, "hcp_adoption_kisqali_goldstd_lr_v1"),
     )
     assert rep["brier_candidate"] >= rep["prevalence"] * (1 - rep["prevalence"])
     assert rep["hcp_pathology_passed"] is False
@@ -394,7 +460,11 @@ def test_hcp_slope_pathology_predicate_is_the_1354_band():
 def test_hcp_name_healthy_candidate_passes_with_pathology_fields():
     y, a, b = _scores(noise=0.1)
     rep = evaluate_gate(
-        y, served=a, candidate=b, cfg=GateConfig(), model_name="hcp_adoption_fabhalta_goldstd_lr_v1"
+        y,
+        served=a,
+        candidate=b,
+        cfg=GateConfig(),
+        **_evidence(y, "hcp_adoption_fabhalta_goldstd_lr_v1"),
     )
     assert rep["hcp_pathology_passed"] is True
     assert rep["hcp_pathology_slope_ok"] is True and rep["hcp_pathology_brier_ok"] is True
@@ -447,7 +517,9 @@ def test_bootstrap_single_class_resamples_are_skipped_and_counted():
     out = paired_bootstrap(y, s, s[::-1].copy(), GateConfig(bootstrap_b=400))
     assert out["skipped_single_class"] > 0
     assert out["usable"] + out["skipped_single_class"] == 400
-    assert len(out["auc_deltas"]) == out["usable"] == len(out["brier_deltas"])
+    assert len(out["auc_deltas"]) == out["usable"]
+    # Brier is defined on a single-class resample: the Brier bound uses all B.
+    assert len(out["brier_deltas"]) == 400
 
 
 def test_too_few_usable_bootstrap_resamples_fails_the_rule(monkeypatch):
@@ -468,7 +540,7 @@ def test_too_few_usable_bootstrap_resamples_fails_the_rule(monkeypatch):
 
     monkeypatch.setattr(hg, "paired_bootstrap", thin)
     y, a, _ = _scores()
-    rep = hg.evaluate_gate(y, served=a, candidate=a.copy(), cfg=GateConfig())
+    rep = hg.evaluate_gate(y, served=a, candidate=a.copy(), cfg=GateConfig(), **_evidence(y))
     assert "bootstrap_unusable" in rep["failed_checks"] and not rep["passed"]
 
 
@@ -518,10 +590,10 @@ def test_planted_equal_model_passes_and_a_0_03_worse_model_fails():
     sd_worse = _sd_for_auc(_true_auc(_SD_SERVED) - 0.03)
     for seed in range(3):
         y, s, c = _planted(seed, _SD_SERVED, _SD_SERVED)
-        rep = evaluate_gate(y, served=s, candidate=c, cfg=GateConfig())
+        rep = evaluate_gate(y, served=s, candidate=c, cfg=GateConfig(), **_evidence(y))
         assert rep["passed"], rep["failed_checks"]
         y, s, c = _planted(seed, _SD_SERVED, sd_worse)
-        rep = evaluate_gate(y, served=s, candidate=c, cfg=GateConfig())
+        rep = evaluate_gate(y, served=s, candidate=c, cfg=GateConfig(), **_evidence(y))
         assert rep["auc_delta"] < -0.015
         assert "auc_noninferiority" in rep["failed_checks"] and not rep["passed"]
 
@@ -797,6 +869,14 @@ def test_snapshot_refuses_a_duplicated_key():
     df = _raw_frame()
     df.loc[5, "patient_id"] = df.loc[4, "patient_id"]
     with pytest.raises(ValueError, match="unique"):
+        asyncio.run(load_holdout_snapshot(_FakeDb(_rows(df)), _spec()))
+
+
+def test_snapshot_refuses_fractional_labels_rather_than_truncating_them():
+    df = _raw_frame()
+    df["treatment_initiated"] = df["treatment_initiated"].astype(float)
+    df.loc[2, "treatment_initiated"] = 0.9
+    with pytest.raises(ValueError, match="0/1"):
         asyncio.run(load_holdout_snapshot(_FakeDb(_rows(df)), _spec()))
 
 
