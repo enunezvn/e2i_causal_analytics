@@ -618,9 +618,10 @@ services:
     security_opt:
       - no-new-privileges:true
     healthcheck:
-      test: ["CMD", "celery", "-A", "src.workers.celery_app", "inspect", "ping"]
+      # #2341: one-node probe (see docker-compose.yml / src/workers/healthcheck.py).
+      test: ["CMD-SHELL", "python -m src.workers.healthcheck worker_light@$$HOSTNAME"]
       interval: 30s
-      timeout: 10s
+      timeout: 20s
       retries: 3
       start_period: 20s
     deploy:
@@ -688,9 +689,10 @@ services:
     security_opt:
       - no-new-privileges:true
     healthcheck:
-      test: ["CMD", "celery", "-A", "src.workers.celery_app", "inspect", "ping"]
+      # #2341: one-node probe (see docker-compose.yml / src/workers/healthcheck.py).
+      test: ["CMD-SHELL", "python -m src.workers.healthcheck worker_medium@$$HOSTNAME"]
       interval: 45s
-      timeout: 15s
+      timeout: 20s
       retries: 3
       start_period: 30s
     deploy:
@@ -762,7 +764,8 @@ services:
     security_opt:
       - no-new-privileges:true
     healthcheck:
-      test: ["CMD", "celery", "-A", "src.workers.celery_app", "inspect", "ping"]
+      # #2341: one-node probe (see docker-compose.yml / src/workers/healthcheck.py).
+      test: ["CMD-SHELL", "python -m src.workers.healthcheck worker_heavy@$$HOSTNAME"]
       interval: 60s
       timeout: 30s
       retries: 3

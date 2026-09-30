@@ -1034,9 +1034,14 @@ services:
       --max-memory-per-child=524288
       --hostname=worker_light@%h
     healthcheck:
-      test: ["CMD", "celery", "-A", "src.workers.celery_app", "inspect", "ping"]
+      # #2341: one-node probe, not `celery inspect ping`. The bare broadcast asks every
+      # worker, exits 0 if ANY answers, and leaks a no-TTL `<oid>.reply.celery.pidbox`
+      # key in Redis db1 whenever a reply lands after the CLI gave up (18k+ in prod).
+      # src/workers/healthcheck.py documents the mechanism. Its --timeout (5 s) plus
+      # ~4 s of import stays under this timeout, so Docker never kills it mid-wait.
+      test: ["CMD-SHELL", "python -m src.workers.healthcheck worker_light@$$HOSTNAME"]
       interval: 30s
-      timeout: 10s
+      timeout: 20s
       retries: 3
       start_period: 20s
     deploy:
@@ -1096,9 +1101,14 @@ services:
       --max-tasks-per-child=50
       --hostname=worker_medium@%h
     healthcheck:
-      test: ["CMD", "celery", "-A", "src.workers.celery_app", "inspect", "ping"]
+      # #2341: one-node probe, not `celery inspect ping`. The bare broadcast asks every
+      # worker, exits 0 if ANY answers, and leaks a no-TTL `<oid>.reply.celery.pidbox`
+      # key in Redis db1 whenever a reply lands after the CLI gave up (18k+ in prod).
+      # src/workers/healthcheck.py documents the mechanism. Its --timeout (5 s) plus
+      # ~4 s of import stays under this timeout, so Docker never kills it mid-wait.
+      test: ["CMD-SHELL", "python -m src.workers.healthcheck worker_medium@$$HOSTNAME"]
       interval: 45s
-      timeout: 15s
+      timeout: 20s
       retries: 3
       start_period: 30s
     deploy:
@@ -1154,7 +1164,12 @@ services:
       --soft-time-limit=3300
       --hostname=worker_heavy@%h
     healthcheck:
-      test: ["CMD", "celery", "-A", "src.workers.celery_app", "inspect", "ping"]
+      # #2341: one-node probe, not `celery inspect ping`. The bare broadcast asks every
+      # worker, exits 0 if ANY answers, and leaks a no-TTL `<oid>.reply.celery.pidbox`
+      # key in Redis db1 whenever a reply lands after the CLI gave up (18k+ in prod).
+      # src/workers/healthcheck.py documents the mechanism. Its --timeout (5 s) plus
+      # ~4 s of import stays under this timeout, so Docker never kills it mid-wait.
+      test: ["CMD-SHELL", "python -m src.workers.healthcheck worker_heavy@$$HOSTNAME"]
       interval: 60s
       timeout: 30s
       retries: 3
@@ -1248,9 +1263,13 @@ services:
       # MEASURED 2026-09-20 in this image: `-d worker_forecast@$HOSTNAME` exits 0 while
       # the node is up and 69 for a node that is not there; the bare broadcast exits 0
       # in both cases. CMD-SHELL because $HOSTNAME has to be expanded.
+      # #2341: `inspect ping -d` still waits for 1 s of silence and then deletes its reply
+      # mailbox, so a reply routed before that and pushed after it leaves a no-TTL
+      # `<oid>.reply.celery.pidbox` key behind. src/workers/healthcheck.py keeps the
+      # same one-node scoping and stops at the node's first reply (limit=1).
       test:
         - CMD-SHELL
-        - celery -A src.workers.celery_app inspect ping -d worker_forecast@$$HOSTNAME
+        - python -m src.workers.healthcheck worker_forecast@$$HOSTNAME
       interval: 60s
       timeout: 30s
       retries: 3
