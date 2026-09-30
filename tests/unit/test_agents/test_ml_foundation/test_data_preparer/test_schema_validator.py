@@ -321,21 +321,36 @@ class TestSchemaValidationTiming:
 
     @pytest.mark.asyncio
     async def test_timing_under_sla(self):
-        """Test validation completes quickly (under 100ms typical)."""
-        state = {
-            "experiment_id": "exp_001",
-            "data_source": "business_metrics",
-            "train_df": create_valid_business_metrics_df(),
-            "validation_df": None,
-            "test_df": None,
-            "holdout_df": None,
-            "blocking_issues": [],
-        }
+        """Steady-state validation stays fast: Pandera is the cheap first gate.
 
-        result = await run_schema_validation(state)
+        The first ``validate_dataframe`` call in a process pays a one-time
+        pandera warm-up (~2 s measured locally, even with pandera and
+        ``src.mlops.pandera_schemas`` already imported); later calls take
+        ~20-45 ms. Under xdist this test can be the first validation on its
+        worker, so timing the first call measured runner speed, not the node
+        (#2304). Warm once, then assert the SLA on a steady-state call.
+        """
 
-        # Pandera validation should be fast (~10ms)
-        # Allow up to 1000ms for slow CI environments
+        def make_state():
+            return {
+                "experiment_id": "exp_001",
+                "data_source": "business_metrics",
+                "train_df": create_valid_business_metrics_df(),
+                "validation_df": None,
+                "test_df": None,
+                "holdout_df": None,
+                "blocking_issues": [],
+            }
+
+        warmup = await run_schema_validation(make_state())
+        assert warmup["schema_validation_status"] == "passed"
+
+        result = await run_schema_validation(make_state())
+
+        assert result["schema_validation_status"] == "passed"
+        # Steady-state Pandera validation is ~10-50 ms; 1000 ms leaves
+        # >20x headroom for slow CI runners while still catching a
+        # per-call regression.
         assert result["schema_validation_time_ms"] < 1000
 
 
