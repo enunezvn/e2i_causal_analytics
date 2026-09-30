@@ -92,6 +92,25 @@ class DataPreparerState(BaseAgentSchema):
     schema_splits_validated: Optional[int] = None
     schema_validation_time_ms: Optional[int] = None
 
+    # Great Expectations validation (``nodes/ge_validator.py``). Every key the
+    # node returns must be declared here: the state is ``extra="ignore"``, so
+    # an undeclared returned key is dropped at the channel boundary — which is
+    # how GE's whole verdict was being discarded (#2288).
+    #
+    # These are RECORD-ONLY. The QC gate does not read ``ge_validation_status``;
+    # GE's blocking verdict reaches ``finalize_output`` through
+    # ``blocking_issues`` (kind ``ge_validation``, see ``blocking_issues.py``).
+    ge_validation_status: Optional[Literal["passed", "warning", "failed", "skipped", "error"]] = (
+        None
+    )
+    ge_validation_results: Optional[List[Dict[str, Any]]] = None  # one dict per split
+    ge_expectations_evaluated: Optional[int] = None
+    ge_expectations_passed: Optional[int] = None
+    ge_success_rate: Optional[float] = None
+    ge_validation_note: Optional[str] = None  # e.g. contract suite with zero expectations
+    ge_validation_reason: Optional[str] = None  # why validation was skipped
+    ge_validation_error: Optional[str] = None  # why validation errored
+
     # Quality checks
     expectation_results: Optional[List[Dict[str, Any]]] = None  # Great Expectations results
     # Structured expectation results (``expectation_type``, ``column``,
@@ -99,6 +118,9 @@ class DataPreparerState(BaseAgentSchema):
     # ``expectation_results``. Was ``List[str]``, which crashed the graph on the
     # blocking-completeness path (#2292).
     failed_expectations: Optional[List[Dict[str, Any]]] = None
+    # Non-blocking warnings, one dict per entry, each tagged with its producer's
+    # ``kind``. No reducer: writers merge through ``warnings_channel.py`` so no
+    # node wipes another's entries (#2290).
     warnings: Optional[List[Dict[str, Any]]] = None
 
     # Dimension scores
