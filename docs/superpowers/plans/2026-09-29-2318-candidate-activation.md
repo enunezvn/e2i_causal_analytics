@@ -755,7 +755,11 @@ active → rolling_back → rolled_back                      (rollback)
 -- 165: model activation ledger + transactional activate/rollback (#2318).
 -- One row per activation: the desired state scripts/model_activation.py reconciles towards,
 -- holding every id and prior value needed to undo it (the predecessor may have no MLflow
--- version and no ml_deployments row). The RPCs re-verify the gate and every identity.
+-- version and no ml_deployments row). The RPCs re-verify the gate predicates, every identity
+-- and the single-served-row invariant; identity/audit/evidence columns are immutable.
+-- TRUST NOTE: service_role can already UPDATE ml_model_registry directly, so none of this
+-- defends against a malicious service-key holder. It makes a CLI bug or a stale/forged-by-
+-- mistake report fail closed, and it keeps the audit trail append-only.
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS public.ml_model_activations (
@@ -774,18 +778,22 @@ CREATE TABLE IF NOT EXISTS public.ml_model_activations (
     candidate_bundle_path           text NOT NULL,
     predecessor_bundle_sha256       char(64) NOT NULL CHECK (predecessor_bundle_sha256 ~ '^[0-9a-f]{64}$'),
     predecessor_bundle_path         text NOT NULL,
-    gate_report                     jsonb NOT NULL CHECK (gate_report @> '{"passed": true}'::jsonb),
+    gate_report                     jsonb NOT NULL,
     phase                           text NOT NULL DEFAULT 'prepared' CHECK (phase IN
-        ('prepared', 'serving_switched', 'active', 'aborted', 'rolling_back', 'rolled_back')),
+        ('prepared', 'serving_switched', 'active', 'aborting', 'aborted', 'rolling_back', 'rolled_back')),
     approved_by                     text NOT NULL CHECK (length(btrim(approved_by)) > 0),
     rolled_back_by                  text,
     rollback_reason                 text,
     created_at                      timestamptz NOT NULL DEFAULT now(),
     serving_switched_at             timestamptz,
-    activated_at                    timestamptz,
+    activated_at                    timestamptz,       -- activation DB switch committed
     mlflow_synced_at                timestamptz,
     shap_refreshed_at               timestamptz,
-    rolled_back_at                  timestamptz,
+    rollback_serving_at             timestamptz,       -- predecessor bundle live again, verified
+    rollback_db_at                  timestamptz,       -- rollback DB switch committed
+    rollback_mlflow_synced_at       timestamptz,
+    rollback_shap_refreshed_at      timestamptz,
+    rolled_back_at                  timestamptz,       -- every rollback surface done
     CONSTRAINT ml_model_activations_distinct CHECK (candidate_registry_id <> predecessor_registry_id),
     CONSTRAINT ml_model_activations_served_stage CHECK (served_stage IN ('staging', 'production')),
     CONSTRAINT ml_model_activations_rollback_audit CHECK (
@@ -797,19 +805,106 @@ CREATE TABLE IF NOT EXISTS public.ml_model_activations (
 -- back first (no supersession in v1: every live state has exactly one undo path).
 CREATE UNIQUE INDEX IF NOT EXISTS uq_ml_model_activations_one_live
     ON public.ml_model_activations (model_name)
-    WHERE phase IN ('prepared', 'serving_switched', 'active', 'rolling_back');
+    WHERE phase IN ('prepared', 'serving_switched', 'active', 'aborting', 'rolling_back');
+
+-- Frozen acceptance-rule constants; MUST equal src/mlops/activation/holdout_gate.GateConfig
+-- (a unit test parses this file and compares). Changing them is a reviewed migration.
+CREATE OR REPLACE FUNCTION public.activation_gate_passes(r jsonb, cand_sha text, served_sha text)
+RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
+    SELECT (r->>'kind') = 'deterministic_acceptance_rule'
+       AND (r->'config'->>'auc_margin')::numeric = 0.010
+       AND (r->'config'->>'alpha')::numeric = 0.05
+       AND (r->'config'->>'brier_margin')::numeric = 0.005
+       AND (r->'config'->>'min_class_n')::int = 100
+       AND (r->>'n_pos')::int >= 100 AND ((r->>'n')::int - (r->>'n_pos')::int) >= 100
+       AND (r->>'auc_lower_bound')::numeric > -0.010
+       AND (r->>'brier_delta_upper')::numeric < 0.005
+       AND (r->>'calibration_slope')::numeric BETWEEN 0.8 AND 1.25
+       AND (r->>'candidate_bundle_sha256') = cand_sha
+       AND (r->>'served_bundle_sha256') = served_sha
+       AND coalesce((r->>'hcp_pathology_passed')::boolean, true)
+       AND (r->>'passed')::boolean
+$$;
+
+ALTER TABLE public.ml_model_activations ADD CONSTRAINT ml_model_activations_gate_passed
+    CHECK (public.activation_gate_passes(gate_report, candidate_bundle_sha256, predecessor_bundle_sha256));
+
+-- Identity, prior state, evidence and approval never change after insert; phase moves only
+-- along the state machine; a timestamp marker, once set, is never cleared or rewritten.
+CREATE OR REPLACE FUNCTION public.ml_model_activations_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF (NEW.model_name, NEW.candidate_registry_id, NEW.predecessor_registry_id, NEW.served_stage,
+        NEW.predecessor_prior_stage, NEW.predecessor_prior_is_champion, NEW.predecessor_prior_artifact_path,
+        NEW.candidate_deployment_id, NEW.candidate_mlflow_model_version, NEW.prior_mlflow_served_version,
+        NEW.candidate_bundle_sha256, NEW.candidate_bundle_path, NEW.predecessor_bundle_sha256,
+        NEW.predecessor_bundle_path, NEW.gate_report, NEW.approved_by, NEW.created_at)
+       IS DISTINCT FROM
+       (OLD.model_name, OLD.candidate_registry_id, OLD.predecessor_registry_id, OLD.served_stage,
+        OLD.predecessor_prior_stage, OLD.predecessor_prior_is_champion, OLD.predecessor_prior_artifact_path,
+        OLD.candidate_deployment_id, OLD.candidate_mlflow_model_version, OLD.prior_mlflow_served_version,
+        OLD.candidate_bundle_sha256, OLD.candidate_bundle_path, OLD.predecessor_bundle_sha256,
+        OLD.predecessor_bundle_path, OLD.gate_report, OLD.approved_by, OLD.created_at) THEN
+        RAISE EXCEPTION 'ml_model_activations %: identity/evidence/approval columns are immutable', OLD.id;
+    END IF;
+    IF OLD.rolled_back_by IS NOT NULL AND NEW.rolled_back_by IS DISTINCT FROM OLD.rolled_back_by
+       OR OLD.rollback_reason IS NOT NULL AND NEW.rollback_reason IS DISTINCT FROM OLD.rollback_reason THEN
+        RAISE EXCEPTION 'ml_model_activations %: rollback audit is immutable once set', OLD.id;
+    END IF;
+    IF (OLD.serving_switched_at IS NOT NULL AND NEW.serving_switched_at IS DISTINCT FROM OLD.serving_switched_at)
+       OR (OLD.activated_at IS NOT NULL AND NEW.activated_at IS DISTINCT FROM OLD.activated_at)
+       OR (OLD.mlflow_synced_at IS NOT NULL AND NEW.mlflow_synced_at IS DISTINCT FROM OLD.mlflow_synced_at)
+       OR (OLD.shap_refreshed_at IS NOT NULL AND NEW.shap_refreshed_at IS DISTINCT FROM OLD.shap_refreshed_at)
+       OR (OLD.rollback_serving_at IS NOT NULL AND NEW.rollback_serving_at IS DISTINCT FROM OLD.rollback_serving_at)
+       OR (OLD.rollback_db_at IS NOT NULL AND NEW.rollback_db_at IS DISTINCT FROM OLD.rollback_db_at)
+       OR (OLD.rollback_mlflow_synced_at IS NOT NULL AND NEW.rollback_mlflow_synced_at IS DISTINCT FROM OLD.rollback_mlflow_synced_at)
+       OR (OLD.rollback_shap_refreshed_at IS NOT NULL AND NEW.rollback_shap_refreshed_at IS DISTINCT FROM OLD.rollback_shap_refreshed_at)
+       OR (OLD.rolled_back_at IS NOT NULL AND NEW.rolled_back_at IS DISTINCT FROM OLD.rolled_back_at) THEN
+        RAISE EXCEPTION 'ml_model_activations %: progress markers are write-once', OLD.id;
+    END IF;
+    IF NEW.phase IS DISTINCT FROM OLD.phase AND NOT (OLD.phase, NEW.phase) IN (
+        ('prepared', 'serving_switched'), ('prepared', 'aborting'),
+        ('serving_switched', 'active'), ('serving_switched', 'aborting'),
+        ('aborting', 'aborted'),
+        ('active', 'rolling_back'), ('rolling_back', 'rolled_back')) THEN
+        RAISE EXCEPTION 'ml_model_activations %: illegal phase % -> %', OLD.id, OLD.phase, NEW.phase;
+    END IF;
+    IF NEW.phase = 'active' AND NEW.activated_at IS NULL
+       OR NEW.phase = 'serving_switched' AND NEW.serving_switched_at IS NULL
+       OR NEW.phase = 'rolled_back' AND (NEW.rollback_serving_at IS NULL OR NEW.rollback_db_at IS NULL
+            OR NEW.rollback_mlflow_synced_at IS NULL OR NEW.rollback_shap_refreshed_at IS NULL
+            OR NEW.rolled_back_at IS NULL) THEN
+        RAISE EXCEPTION 'ml_model_activations %: phase % requires its progress markers', OLD.id, NEW.phase;
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER tr_ml_model_activations_guard BEFORE UPDATE ON public.ml_model_activations
+    FOR EACH ROW EXECUTE FUNCTION public.ml_model_activations_guard();
+
+-- The single-served-row invariant, under a per-name advisory lock (no concurrent role writer
+-- can interleave): exactly one canonical-served row (staging/production) exists for the name.
+CREATE OR REPLACE FUNCTION public._activation_lock_and_count_served(p_name text, p_expect uuid)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE k int; only_id uuid;
+BEGIN
+    PERFORM pg_advisory_xact_lock(hashtextextended('ml_model_activation:' || p_name, 0));
+    PERFORM 1 FROM public.ml_model_registry WHERE model_name = p_name FOR UPDATE;
+    SELECT count(*), min(id::text)::uuid INTO k, only_id FROM public.ml_model_registry
+     WHERE model_name = p_name AND stage IN ('staging', 'production') AND NOT is_synthetic;
+    IF k <> 1 OR only_id <> p_expect THEN
+        RAISE EXCEPTION 'model % must have exactly one served row (%), found % (%)', p_name, p_expect, k, only_id;
+    END IF;
+END $$;
 
 CREATE OR REPLACE FUNCTION public.activate_model_candidate(p_activation_id uuid)
-RETURNS void LANGUAGE plpgsql AS $$
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE a public.ml_model_activations%ROWTYPE; n int;
 BEGIN
     SELECT * INTO a FROM public.ml_model_activations WHERE id = p_activation_id FOR UPDATE;
     IF NOT FOUND THEN RAISE EXCEPTION 'activation % not found', p_activation_id; END IF;
-    IF a.phase = 'active' THEN
-        -- Idempotent re-run: verify the postcondition instead of trusting the phase.
-        PERFORM 1 FROM public.ml_model_registry c, public.ml_model_registry p, public.ml_deployments d
-         WHERE c.id = a.candidate_registry_id AND c.stage = a.served_stage
-           AND p.id = a.predecessor_registry_id AND p.stage = 'archived'
+    IF a.phase = 'active' THEN   -- idempotent re-run: verify, never trust the phase
+        PERFORM public._activation_lock_and_count_served(a.model_name, a.candidate_registry_id);
+        PERFORM 1 FROM public.ml_model_registry p, public.ml_deployments d
+         WHERE p.id = a.predecessor_registry_id AND p.stage = 'archived'
            AND d.id = a.candidate_deployment_id AND d.status = 'active';
         IF NOT FOUND THEN RAISE EXCEPTION 'activation % is active but the registry has drifted', a.id; END IF;
         RETURN;
@@ -817,17 +912,17 @@ BEGIN
     IF a.phase <> 'serving_switched' THEN
         RAISE EXCEPTION 'activation % is in phase %, expected serving_switched', a.id, a.phase;
     END IF;
-    IF NOT (a.gate_report @> '{"passed": true}'::jsonb) THEN RAISE EXCEPTION 'gate did not pass'; END IF;
-
+    PERFORM public._activation_lock_and_count_served(a.model_name, a.predecessor_registry_id);
     PERFORM 1 FROM public.ml_model_registry
      WHERE id = a.candidate_registry_id AND stage = 'candidate' AND model_name = a.model_name
        AND retrain_of_id = a.predecessor_registry_id
-       AND mlflow_model_version = a.candidate_mlflow_model_version FOR UPDATE;
+       AND mlflow_model_version = a.candidate_mlflow_model_version;
     IF NOT FOUND THEN RAISE EXCEPTION 'row % is not a candidate retrain of % for %',
         a.candidate_registry_id, a.predecessor_registry_id, a.model_name; END IF;
     PERFORM 1 FROM public.ml_model_registry
-     WHERE id = a.predecessor_registry_id AND model_name = a.model_name
-       AND stage = a.predecessor_prior_stage FOR UPDATE;
+     WHERE id = a.predecessor_registry_id AND stage = a.predecessor_prior_stage
+       AND is_champion = a.predecessor_prior_is_champion
+       AND artifact_path IS NOT DISTINCT FROM a.predecessor_prior_artifact_path;
     IF NOT FOUND THEN RAISE EXCEPTION 'predecessor % changed since the gate ran', a.predecessor_registry_id; END IF;
     PERFORM 1 FROM public.ml_deployments
      WHERE id = a.candidate_deployment_id AND model_registry_id = a.candidate_registry_id FOR UPDATE;
@@ -848,27 +943,32 @@ BEGIN
            endpoint_name = a.model_name, endpoint_url = 'bentoml://e2i_bentoml/' || a.model_name
      WHERE id = a.candidate_deployment_id;
     GET DIAGNOSTICS n = ROW_COUNT; IF n <> 1 THEN RAISE EXCEPTION 'deployment update touched % rows', n; END IF;
+    PERFORM public._activation_lock_and_count_served(a.model_name, a.candidate_registry_id);  -- postcondition
     UPDATE public.ml_model_activations SET phase = 'active', activated_at = now() WHERE id = a.id;
 END $$;
 
--- Called only from phase 'rolling_back' (set by the CLI after it restored the predecessor
--- bundle). An activation that never reached 'active' is compensated by the CLI -> 'aborted'.
+-- Called in phase 'rolling_back' after the CLI restored and verified the predecessor bundle
+-- (rollback_serving_at set). Sets rollback_db_at; the phase stays 'rolling_back' until the CLI
+-- has also restored MLflow and the SHAP cache, then the CLI moves it to 'rolled_back'.
 CREATE OR REPLACE FUNCTION public.rollback_model_activation(p_activation_id uuid)
-RETURNS void LANGUAGE plpgsql AS $$
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE a public.ml_model_activations%ROWTYPE; n int;
 BEGIN
     SELECT * INTO a FROM public.ml_model_activations WHERE id = p_activation_id FOR UPDATE;
     IF NOT FOUND THEN RAISE EXCEPTION 'activation % not found', p_activation_id; END IF;
-    IF a.phase = 'rolled_back' THEN
-        PERFORM 1 FROM public.ml_model_registry c, public.ml_model_registry p
-         WHERE c.id = a.candidate_registry_id AND c.stage = 'archived'
-           AND p.id = a.predecessor_registry_id AND p.stage = a.predecessor_prior_stage;
-        IF NOT FOUND THEN RAISE EXCEPTION 'activation % is rolled_back but the registry has drifted', a.id; END IF;
+    IF a.phase NOT IN ('rolling_back', 'rolled_back') THEN
+        RAISE EXCEPTION 'activation % is in phase %, expected rolling_back', a.id, a.phase;
+    END IF;
+    IF a.rollback_db_at IS NOT NULL THEN   -- idempotent re-run: verify the postcondition
+        PERFORM public._activation_lock_and_count_served(a.model_name, a.predecessor_registry_id);
+        PERFORM 1 FROM public.ml_model_registry c WHERE c.id = a.candidate_registry_id AND c.stage = 'archived';
+        IF NOT FOUND THEN RAISE EXCEPTION 'activation % rolled back but the registry has drifted', a.id; END IF;
         RETURN;
     END IF;
-    IF a.phase <> 'rolling_back' THEN
-        RAISE EXCEPTION 'activation % is in phase %, expected rolling_back (set by the CLI after the serving restore)', a.id, a.phase;
+    IF a.rollback_serving_at IS NULL THEN
+        RAISE EXCEPTION 'activation %: restore and verify the predecessor bundle before the DB rollback', a.id;
     END IF;
+    PERFORM public._activation_lock_and_count_served(a.model_name, a.candidate_registry_id);
 
     UPDATE public.ml_model_registry SET stage = 'archived', is_champion = false
      WHERE id = a.candidate_registry_id;                                  -- OD-7
@@ -882,28 +982,38 @@ BEGIN
        SET status = 'rolled_back', rolled_back_at = now(), rollback_reason = a.rollback_reason,
            deactivated_at = now()
      WHERE id = a.candidate_deployment_id;
-    UPDATE public.ml_model_activations SET phase = 'rolled_back', rolled_back_at = now() WHERE id = a.id;
+    GET DIAGNOSTICS n = ROW_COUNT; IF n <> 1 THEN RAISE EXCEPTION 'deployment update touched % rows', n; END IF;
+    PERFORM public._activation_lock_and_count_served(a.model_name, a.predecessor_registry_id);  -- postcondition
+    UPDATE public.ml_model_activations SET rollback_db_at = now() WHERE id = a.id;
 END $$;
 
 -- Grants: service_role only (the CLI runs with the service key). Follow the idiom of
 -- 162_hcp_adoption_goldstd_view.sql:35-60 (REVOKE from PUBLIC/anon/authenticated, GRANT to
--- service_role); read it before writing these lines.
+-- service_role); read it before writing these lines. UPDATE is column-scoped to the phase,
+-- the markers and the rollback audit (the trigger additionally enforces write-once/transitions).
 REVOKE ALL ON TABLE public.ml_model_activations FROM PUBLIC, anon, authenticated;
-GRANT SELECT, INSERT, UPDATE ON TABLE public.ml_model_activations TO service_role;
+GRANT SELECT, INSERT ON TABLE public.ml_model_activations TO service_role;
+GRANT UPDATE (phase, rolled_back_by, rollback_reason, serving_switched_at, mlflow_synced_at,
+              shap_refreshed_at, rollback_serving_at, rollback_mlflow_synced_at,
+              rollback_shap_refreshed_at, rolled_back_at)
+    ON public.ml_model_activations TO service_role;
 ALTER TABLE public.ml_model_activations ENABLE ROW LEVEL SECURITY;
 CREATE POLICY ml_model_activations_service ON public.ml_model_activations
     FOR ALL TO service_role USING (true) WITH CHECK (true);
 REVOKE ALL ON FUNCTION public.activate_model_candidate(uuid) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.rollback_model_activation(uuid) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public._activation_lock_and_count_served(text, uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.activate_model_candidate(uuid) TO service_role;
 GRANT EXECUTE ON FUNCTION public.rollback_model_activation(uuid) TO service_role;
 COMMIT;
 ```
 
-- The phase transitions `prepared → serving_switched`, `→ aborted` and `active → rolling_back` are plain guarded `UPDATE … WHERE id = $1 AND phase = '<expected>'` statements from the CLI, which asserts one row was touched. Only the two role switches are RPCs, because only they touch other tables.
-- `rolling_back` requires `rolled_back_by` and `rollback_reason` (CHECK).
-- There is no DELETE grant: the ledger is append/transition only.
-- Rollback file: `DROP FUNCTION IF EXISTS public.rollback_model_activation(uuid); DROP FUNCTION IF EXISTS public.activate_model_candidate(uuid); DROP TABLE IF EXISTS public.ml_model_activations;`.
+- `activated_at` and `rollback_db_at` are writable only by the two `SECURITY DEFINER` RPCs (owner `postgres`, `search_path` pinned), not by service_role directly. Test that a direct `UPDATE … SET activated_at` as service_role is denied.
+- The CLI's guarded phase UPDATEs (`WHERE id = $1 AND phase = '<expected>'`, exactly one row) cover:
+  - `prepared → serving_switched`, `prepared|serving_switched → aborting`, `aborting → aborted`;
+  - `active → rolling_back`, `rolling_back → rolled_back` (the last only once all four `rollback_*` markers are set).
+- The trigger enforces the transitions and write-once markers even against a buggy caller.
+- The rollback file refuses to run while any live row exists (`DO $$ BEGIN IF EXISTS (SELECT 1 FROM public.ml_model_activations WHERE phase IN ('prepared','serving_switched','active','aborting','rolling_back')) THEN RAISE EXCEPTION 'live activation(s): roll back first'; END IF; END $$;`). It then **renames** the table to `ml_model_activations_retired_165` (audit history kept), and drops the trigger, the functions and the CHECK function.
 
 ### Task 4.2: Real-Postgres tests (prod-free)
 
@@ -913,13 +1023,18 @@ COMMIT;
   - `test_activate_switches_roles_in_one_transaction` — P `archived`; C `staging` with `artifact_path = candidate_bundle_path`; D `active`/`staging`; A `active`.
   - `test_activate_rerun_verifies_postcondition` — a second call is a no-op. Then flip C back to `candidate` by hand; a third call raises "drifted".
   - `test_activate_refuses_wrong_phase` — A at `prepared` → exception, nothing changed.
-  - `test_ledger_rejects_a_failed_gate` — insert with `gate_report='{"passed": false}'` → check violation. Also one with a non-hex sha → check violation.
+  - `test_ledger_rejects_a_failed_gate` — insert with `gate_report='{"passed": false}'` → check violation. Also reject: a non-hex sha; a report with `passed:true` but `auc_lower_bound=-0.02` (a **forged pass** must not pass the SQL predicate); a report whose `config.auc_margin` is 0.05; a report whose `candidate_bundle_sha256` differs from the column.
+  - `test_gate_constants_match_python` — parse `activation_gate_passes` from the migration file and assert its constants equal `GateConfig()` (Lane 5). This runs without a DB.
+  - `test_immutable_columns` — as service_role, UPDATE of `gate_report`, `candidate_bundle_sha256`, `approved_by` or `predecessor_prior_stage` → denied (column grant) or raised (trigger). Test both paths by also trying as the table owner.
+  - `test_markers_write_once_and_phase_machine` — clearing `serving_switched_at` raises; `prepared → active` raises; `rolling_back → rolled_back` without all four rollback markers raises.
+  - `test_activate_refuses_a_second_served_row` — seed an extra `staging` row for the name → exception and nothing changed. Repeat with an extra `production` row. With an unrelated champion in the same `experiment_id`, activation succeeds and leaves exactly one champion for the name.
+  - `test_rollback_db_requires_serving_restored` — `rollback_model_activation` with `rollback_serving_at` NULL → exception.
   - `test_activate_refuses_when_predecessor_moved` — set P to `production` after creating A → exception, **nothing changed**.
   - `test_activate_refuses_foreign_deployment` — D belongs to another row → exception.
   - `test_activate_refuses_candidate_of_another_parent_or_name`, `test_activate_refuses_mlflow_version_mismatch`.
   - `test_one_live_activation_per_name` — a second `prepared` row for the same name → unique violation; after the first is `rolled_back`, a new one is allowed.
   - `test_rollback_requires_audit` — setting `phase='rolling_back'` without `rolled_back_by` → check violation.
-  - `test_rollback_restores_prior_state` — P back to `staging` with champion/artifact exactly as recorded; C `archived`; D `rolled_back` with the reason; A `rolled_back`. A second call is a no-op with the postcondition verified.
+  - `test_rollback_restores_prior_state` — P back to `staging` with champion/artifact exactly as recorded; C `archived`; D `rolled_back` with the reason; A still `rolling_back` with `rollback_db_at` set (the CLI finishes the phase). A second call is a no-op with the postcondition verified.
   - `test_rollback_restores_a_production_champion` — P seeded `production` + champion (hcp shape) → after activate + rollback, P is `production` + champion, and `count(*) WHERE is_champion AND experiment_id = P.experiment_id` = 1.
   - `test_role_privileges` — `SET ROLE anon` and `SET ROLE authenticated`: SELECT on the table and EXECUTE of both functions are denied. `SET ROLE service_role`: INSERT/SELECT/UPDATE of a ledger row and EXECUTE succeed; DELETE is denied.
 - [ ] **Step 2: Run** `pytest -n 0 tests/unit/test_database/test_model_activation_rpc_realdb_2318.py -q` → FAIL (table missing).
@@ -1026,10 +1141,15 @@ def test_report_is_json_and_deterministic():
   - `evaluate_gate(y, served, candidate, cfg)` returns a JSON-serialisable dict:
     - `n`, `n_pos`, `auc_served`, `auc_candidate`, `auc_delta`, `se_delta`, `auc_lower_bound`;
     - `brier_served`, `brier_candidate`, `brier_delta_upper` (paired bootstrap, fixed seed);
-    - `calibration_slope`, `calibration_intercept`;
+    - `pr_auc_served`, `pr_auc_candidate`, `calibration_slope`, `calibration_intercept`;
+    - `candidate_bundle_sha256`, `served_bundle_sha256`, `snapshot` (Task 5.2) — the RPC's SQL predicate checks the two hashes against the ledger columns;
+    - for hcp_adoption names only, `hcp_pathology_passed` plus the individual predicates. Run the **existing** `pathology_gate(metrics, prevalence)` from `scripts/promote_hcp_adoption_champions.py:165-187` (slope outside [0.5, 2.0]; Brier ≥ prevalence·(1−prevalence)), moved into this module and shared. Test a case where the generic rule passes but each pathology predicate fails;
     - `bootstrap_auc_delta_p05` (cross-check, reported only);
     - `failed_checks: list[str]`, `passed: bool`, `config: asdict(cfg)`, `kind: "deterministic_acceptance_rule"`.
-  - Move `positive_class_scores` / `calibration_intercept` (and the slope fit) from `scripts/promote_hcp_adoption_champions.py:110-160` into this module and import them back into the script. Do not duplicate them; the script's own tests must stay green.
+  - Reuse, do not duplicate:
+    - the slope fit is `src/mlops/gold_standard_eval/scorer.py:30` `_calibration_slope`. Make it public (`calibration_slope`, keeping the private alias for existing callers) and call it;
+    - `positive_class_scores` / `calibration_intercept` live in `scripts/promote_hcp_adoption_champions.py:110-160`. Move them into `holdout_gate.py` and import them back into the script. The script's own tests must stay green.
+  - `calibration_slope` returning `None` (unfittable) fails the rule with `failed_checks` `calibration_slope_unfittable`. Add tests for exact 0/1 scores, non-finite scores (refused before scoring) and a bootstrap resample that draws a single class (skipped, counted, and the rule fails if fewer than 90% of resamples were usable).
   - The lower bound is `auc_delta - norm.ppf(1 - alpha) * se_delta` (with `se_delta = sqrt(max(var, 0))`), and the check passes iff it is `> -auc_margin`.
 
 - [ ] **Step 4: Run** → PASS, plus `pytest -n 0 tests -k promote_hcp_adoption -q` (the moved helpers).
@@ -1044,10 +1164,11 @@ def test_report_is_json_and_deterministic():
   - Neither calls any `fit`: wrap the preprocessor's `fit`/`build_from_frame` to raise and assert no error.
   - `load_holdout_snapshot` (fake async client returning a fixed frame) returns `(frame, y, snapshot)` with:
     - `snapshot = {"splits": ["test","holdout"], "n", "n_pos", "rows_sha256", "loaded_at"}`;
-    - `rows_sha256` is the sha256 over the frame sorted by `patient_id` (the id column `FeatureBuilder.load_frame` selects, `feature_builder.py:~330`), restricted to `patient_id`, `data_split`, the label and every keep-column, serialised with `to_csv(index=False, float_format="%.17g")`.
-    - Two calls over the same rows give the same hash; changing one label or one covariate changes it.
+    - The ordering key is per grain: patient `patient_id` (`load_frame` always selects it, `feature_builder.py:328-336`; measured unique per brand: Kisqali 8896/8896, Fabhalta 9068/9068, Remibrutinib 8977/8977); HCP `hcp_id` (`:431-435`; measured 5000/5000 per brand). The snapshot **asserts uniqueness** and refuses otherwise.
+    - `rows_sha256` is the sha256 of the frame sorted by that key, restricted to key, `data_split`, the label and every keep-column, with columns in sorted order. Serialise via `to_csv(index=False, float_format="%.17g", na_rep="<NA>")` after casting categoricals to `str`, and datetimes to ISO-8601 UTC.
+    - Tests: two calls over the same rows give the same hash; a shuffled input gives the same hash; changing one label or one covariate changes it; a duplicated key raises.
   - `test_keep_columns_must_match`: a candidate whose `keep_columns` set ≠ the served set is refused (`ValueError("raw contract differs")`), because the API and Feast supply the served contract (F7, `sync_goldstd_serving.py:135-164`).
-- [ ] **Step 2: Run** → FAIL. **Step 3: Implement.** Snapshot via `FeatureBuilder(spec).load_frame(db, splits=None)` filtered to `("test","holdout")`, as `run_persistence_eval.py:180-229` does. Resolve `spec` from the model name with `rematerialize_goldstd_bundles.SPEC_REGISTRY` (`:64-96`). The id column for HCP grain differs — read `feature_builder.py`'s HCP select list and key the hash on it. **Step 4:** PASS.
+- [ ] **Step 2: Run** → FAIL. **Step 3: Implement.** Snapshot via `FeatureBuilder(spec).load_frame(db, splits=None)` filtered to `("test","holdout")`, as `run_persistence_eval.py:180-229` does. Resolve `spec` from the model name with `rematerialize_goldstd_bundles.SPEC_REGISTRY` (`:64-96`). **Step 4:** PASS.
 - [ ] **Step 5: Faithful rehearsal (read-only).** Run a scratch script against prod that scores the **served bundle** (comparator) and the **v1.0 registry artifact** (as a stand-in "candidate") with `score_bundle`/`evaluate_gate`. Expected, reproducing the probe: `auc_served≈0.8521`, `auc_candidate≈0.8509`, pass. Paste the report into the PR body.
 - [ ] **Step 6: Commit** — `feat(mlops): paired DeLong non-inferiority acceptance rule on the goldstd holdout (Part of #2318)`.
 
@@ -1077,28 +1198,38 @@ def test_report_is_json_and_deterministic():
 | 4 | Gate on one snapshot (Lane 5); comparator = served bundle. Print the report. **Dry-run ends here** and prints the planned writes. | — | exit 1 on a failed gate, nothing written |
 | 5 | `--execute`: **stash** both bundles as immutable copies in `data/ml_artifacts/serving_versions/<name>/<registry_id>.<sha12>.bundle.pkl` (outside `shap_serving`, F1). **Insert** the ledger row with every prior value, `gate_report`, `prior_mlflow_served_version` and `approved_by`. | `prepared` | re-run resumes |
 | 6 | Record the holdout metrics under the candidate id (`ml_performance_metrics source='holdout'`: auc_roc, brier_score, calibration_slope, pr_auc, `sample_size=n`) via `PerformanceMetricRepository` (as `run_persistence_eval.py:300-330`). The KPI page needs them (F7). Delete-then-insert by `(model_id, source)`, so it is idempotent. | `prepared` | re-run |
-| 7 | **Swap:** copy the stashed candidate bytes to a temp file **in the live directory**, `fsync`, `os.replace` onto the live name, `fsync` the directory. **The stash is never moved** (codex r1 HIGH). Restart the sidecar and poll `/healthz` and `/model_info` until `bundle_sha256 == candidate sha` (timeout 180 s). Then guarded-UPDATE the phase. | `serving_switched` | **compensate:** swap the predecessor stash back the same way, restart, verify the predecessor sha, set `aborted`, exit 3 |
-| 8 | RPC `activate_model_candidate(ledger_id)` (Lane 4). | `active` | **compensate** as in step 7 (the RPC is all-or-nothing, so the DB is untouched), set `aborted`, exit 3 |
-| 9 | MLflow on the candidate version: set alias `served` → version (REST `POST /api/2.0/mlflow/registered-models/alias`), and tag `e2i.role=served` (`POST …/model-versions/set-tag`, overwriting `candidate`). Set `mlflow_synced_at`. | `active` | not compensated: DB + serving are correct. `status` shows `mlflow_synced_at IS NULL`, and `reconcile` retries. |
+| 7 | **Swap:** copy the stashed candidate bytes to a temp file **in the live directory**, `fsync`, `os.replace` onto the live name, `fsync` the directory. **The stash is never moved** (codex r1 HIGH). Restart the sidecar and poll `/healthz` and `/model_info` until `bundle_sha256 == candidate sha` (timeout 180 s). Then guarded-UPDATE `prepared → serving_switched` with `serving_switched_at`. | `serving_switched` | **abort** (below) |
+| 8 | RPC `activate_model_candidate(ledger_id)` (Lane 4). **On any exception, re-read the ledger before deciding** (codex r2): a commit whose response was lost shows `phase='active'`, so continue to step 9; still `serving_switched` means the transaction did not commit, so **abort**. Never compensate on the exception alone. | `active` | re-read, then continue or abort |
+| 9 | MLflow on the candidate version: set alias `served` → version (REST `POST /api/2.0/mlflow/registered-models/alias`), and tag `e2i.role=served` (`POST …/model-versions/set-tag`, overwriting `candidate`). Set `mlflow_synced_at`. | `active` | no compensation: DB + serving are correct. `status` shows `mlflow_synced_at IS NULL`, and `reconcile` retries. |
 | 10 | SHAP cache: `GET /explain/global?model_type=<cohort>&brand=<brand>&sample_size=20&refresh=true` with an admin token (`sync_goldstd_serving.py:103-116`). Assert 200 and that the features collapse to the served `keep_columns` (`_raw_covariates`, `:167-176`). Set `shap_refreshed_at`. | `active` | as step 9 |
 
-**Rollback sequence** (`rollback-activation <ledger id> --reason TEXT --approved-by NAME [--execute]`):
+**Abort** (compensation; durable and resumable):
+1. Guarded-UPDATE `prepared|serving_switched → aborting` **first**, so a crash mid-compensation resumes compensation and never re-activates.
+2. If the live file sha ≠ predecessor sha, swap the predecessor stash back (copy, verified).
+3. Restart and verify the sidecar sha == predecessor sha.
+4. Guarded-UPDATE `aborting → aborted`.
+
+The registry is untouched on this path: the RPC either never ran or rolled back entirely. An abort is only legal before `active` (the trigger forbids `active → aborting`).
+
+**Rollback sequence** (`rollback-activation <ledger id> --reason TEXT --approved-by NAME [--execute]`). The phase stays `rolling_back` until **every** surface is done; each step sets a write-once marker:
 1. Guarded-UPDATE `active → rolling_back`, with `rolled_back_by` and `rollback_reason`.
-2. Swap the **predecessor stash** back (copy, never move; verify its sha against the ledger), restart, and verify the sidecar sha == `predecessor_bundle_sha256`.
-3. RPC `rollback_model_activation` → `rolled_back`.
-4. MLflow: restore alias `served` to `prior_mlflow_served_version`, or delete it when that is NULL; set tag `e2i.role=rolled_back`.
-5. SHAP refresh for the slot.
+2. Swap the **predecessor stash** back (copy, never move; verify its sha against the ledger). Restart and verify the sidecar sha == `predecessor_bundle_sha256`. Set `rollback_serving_at`.
+3. RPC `rollback_model_activation` (it refuses unless `rollback_serving_at` is set). It sets `rollback_db_at`. On an exception, re-read `rollback_db_at` before retrying.
+4. MLflow: restore alias `served` to `prior_mlflow_served_version`, or delete it when that is NULL; set tag `e2i.role=rolled_back`. Set `rollback_mlflow_synced_at`.
+5. SHAP refresh for the slot. Set `rollback_shap_refreshed_at`.
+6. Guarded-UPDATE `rolling_back → rolled_back` with `rolled_back_at` (the trigger requires all four markers).
 
 The candidate's holdout metrics stay as history; the predecessor's are untouched.
 
-**`reconcile <ledger id>`** reads the phase and drives the table:
-- `prepared` → continue from step 6;
+**`reconcile <ledger id>`** reads the phase and markers and drives forward (never backward, except with `--abort`):
+- `prepared` → activation step 6;
 - `serving_switched` → step 8;
 - `active` with NULL `mlflow_synced_at`/`shap_refreshed_at` → steps 9/10;
-- `rolling_back` → rollback 2–5;
-- `aborted`/`rolled_back` → verify only.
+- `aborting` → abort 2–4;
+- `rolling_back` → the first rollback step whose marker is NULL;
+- `aborted`/`rolled_back` → verify only (file sha, sidecar sha, registry, alias) and report drift.
 
-Use `--abort` on `prepared`/`serving_switched` to force compensation instead. `status [<name>]` prints the ledger plus each surface's observed state (file sha, sidecar sha, registry stages, deployment, alias, cache row id) and flags drift.
+`--abort` is accepted only in `prepared`/`serving_switched`. `status [<name>]` prints the ledger plus each surface's observed state (file sha, sidecar sha, registry stages, deployment, alias, cache row id) and flags drift.
 
 ### Task 6.1: Versioned bundle store
 
@@ -1154,11 +1285,14 @@ Production binds these to Supabase, MLflow REST, the filesystem, `docker restart
   - `test_refuses_hash_mismatch_before_unpickle` — the fake returns bytes whose sha ≠ tag. Patch `pickle.loads` to raise and assert it is never reached.
   - `test_refuses_when_disk_and_sidecar_disagree`, `test_refuses_failed_gate_nothing_written`, `test_refuses_hcp_when_allowlist_empty`.
   - `test_execute_order` — stash → insert(prepared) → metrics → swap → restart+verify → set_phase(serving_switched) → rpc_activate → mlflow_set_served → refresh_shap.
+  - `test_hcp_allowlisted_still_runs_pathology_gate` — with the name in a patched allowlist, a candidate that passes the generic rule but fails `pathology_gate` is refused.
   - **Crash-injection matrix:** `@pytest.mark.parametrize("crash_after", [<each write method in order>])`. The fake raises `SystemExit` right after that call succeeds. Then `reconcile(ledger_id)` with healthy fakes must end in `active`, with the sidecar sha == candidate and every surface in the desired state, **and no step executed twice where that would be harmful** (for example, no second restart after `serving_switched`).
-  - `test_sidecar_timeout_compensates` — the predecessor stash is swapped back and verified, the phase is `aborted`, and the RPC is never called.
-  - `test_rpc_failure_compensates` — the same, after the swap.
+  - `test_sidecar_timeout_aborts` — the phase goes `aborting` → `aborted`, the predecessor stash is back and verified, and the RPC is never called.
+  - `test_rpc_uncommitted_failure_aborts` — the RPC raises and the ledger still shows `serving_switched` → abort.
+  - `test_rpc_lost_response_continues` — the RPC commits (the fake sets `active`) and *then* raises → the CLI re-reads, continues to MLflow/SHAP, and **does not** swap the predecessor back (no split-brain).
+  - `test_abort_crash_matrix` — crash after each abort write; `reconcile` ends `aborted` and never re-activates.
   - `test_rollback_order_restores_prior_alias` — with `prior_mlflow_served_version=None` the alias is deleted; with a version it is restored to that version.
-  - `test_rollback_crash_matrix_then_reconcile` — as above, ending `rolled_back`.
+  - `test_rollback_crash_matrix_then_reconcile` — crash after each rollback write, including after the RPC commit and after the MLflow alias but before the tag. `reconcile` completes exactly the missing steps and ends `rolled_back` with all four markers set.
   - `test_second_live_activation_refused`.
 - [ ] **Step 2: Run** → FAIL. **Step 3: Implement.** **Step 4:** PASS. **Commit.**
 
