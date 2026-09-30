@@ -41,12 +41,13 @@ MIRROR_TIMEOUT_SECONDS: Final = 900
 
 # The src/data/audit_sidecar_reader.py warnings that mean a sidecar's verdicts did
 # NOT reach the table: an unreadable file, an unparseable written_at (both skipped),
-# and a non-list adaptive_verdicts (read as empty). Its other warnings (schema
-# drift, unknown keys) are about rows that still land.
+# a non-list adaptive_verdicts (read as empty) and non-dict entries in it (#2278).
+# Its other warnings (schema drift, unknown keys) are about rows that still land.
 _DROPPED_SIDECAR_MARKERS: Final = (
     "SidecarReader: skipping malformed sidecar",
     "has unparseable written_at=",
     "has non-list adaptive_verdicts=",
+    "non-dict adaptive_verdicts entries",
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -65,9 +66,10 @@ def _enabled() -> bool:
     name="src.tasks.mirror_audit_sidecars",
     # No retries: a FAILED run rolls its batch back and leaves max(imported_at) where
     # it was, so the next nightly tick re-reads the same sidecars (the upsert is
-    # idempotent). A sidecar the reader DROPS is different: once later imports move
-    # the cursor past its written_at, no nightly run reads it again, which is why a
-    # drop is reported "degraded" at ERROR with the file named.
+    # idempotent). A sidecar the reader DROPS is reported "degraded" at ERROR with the
+    # file named, on every run until it is fixed; once it reads cleanly, the next run
+    # mirrors it even if the cursor has passed its written_at, because rows missing
+    # from the table are backfilled regardless of the cursor (#2278).
     max_retries=0,
 )
 def mirror_audit_sidecars() -> Dict[str, Any]:
