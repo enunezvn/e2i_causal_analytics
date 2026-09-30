@@ -15,6 +15,7 @@ Version: 1.1.0
 import asyncio
 import json
 import logging
+import os
 import tempfile
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, cast
@@ -344,6 +345,9 @@ async def log_to_mlflow(state: Dict[str, Any]) -> Dict[str, Any]:
             model_uri = await _log_model_artifact(run, trained_model, algorithm_name, framework)
             logger.info(f"Model artifact logging result: model_uri={model_uri}")
 
+            # #2318: the exact preprocessing + estimator, so this model can be served as-trained
+            await _log_serving_bundle(run, state, trained_model)
+
             # Log additional artifacts
             await _log_additional_artifacts(run, state)
 
@@ -572,6 +576,48 @@ async def _log_model_artifact(
         except Exception as e2:
             logger.error(f"Failed to log model with sklearn fallback: {e2}", exc_info=True)
             return None
+
+
+async def _log_serving_bundle(run: Any, state: Dict[str, Any], model: Any) -> Optional[str]:
+    """Log the exact preprocessing + estimator as one servable bundle (#2318); return its sha256.
+
+    Without it a candidate cannot be activated: serving it would need a re-fit. A failure is
+    logged, never raised: the training run itself succeeded, and activation refuses a candidate
+    whose run carries no bundle tag (and re-hashes the downloaded file against the tag).
+    """
+    from .serving_bundle import (
+        BUNDLE_ARTIFACT_DIR,
+        BUNDLE_FILENAME,
+        BUNDLE_SHA_TAG,
+        build_serving_bundle,
+        serialize_bundle,
+    )
+
+    preprocessor = state.get("preprocessor")
+    if preprocessor is None:
+        logger.warning(
+            "No fitted preprocessor in state: this model is not servable as-trained (#2318)"
+        )
+        return None
+    try:
+        blob, sha = serialize_bundle(build_serving_bundle(model=model, preprocessor=preprocessor))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, BUNDLE_FILENAME)
+            with open(path, "wb") as fh:
+                fh.write(blob)
+            # The connector logs and swallows MLflow errors, reporting them as False: a tag
+            # must never claim a bundle that is not in the run.
+            if await run.log_artifact(path, BUNDLE_ARTIFACT_DIR) is False:
+                raise RuntimeError("artifact upload failed")
+        if await run.set_tags({BUNDLE_SHA_TAG: sha}) is False:
+            raise RuntimeError("sha256 tag write failed")
+        logger.info(
+            "Serving bundle logged: %s/%s sha256=%s", BUNDLE_ARTIFACT_DIR, BUNDLE_FILENAME, sha
+        )
+        return sha
+    except Exception as e:  # noqa: BLE001
+        logger.error("Serving bundle NOT logged (%s): the candidate will not be activatable", e)
+        return None
 
 
 async def _log_additional_artifacts(run: Any, state: Dict[str, Any]) -> None:
