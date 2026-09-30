@@ -150,6 +150,36 @@ async def test_the_write_lands_while_the_stage_is_unchanged(stage):
     assert db.rows("ml_model_registry")[0]["stage"] == "shadow"
 
 
+@pytest.mark.asyncio
+async def test_a_write_to_a_row_that_is_gone_is_not_reported_as_done():
+    """codex r2: a zero-row write used to return True for any non-production target."""
+    db = _fake_db("staging")
+    repo = MLModelRegistryRepository(supabase_client=db)
+    snapshot = await repo.get_by_id(MODEL_ID)
+    db.store["ml_model_registry"].clear()  # deleted between the read and the write
+    reads = iter([snapshot])
+    real_get = MLModelRegistryRepository.get_by_id
+
+    async def get_by_id(model_id, *a, **k):
+        return next(reads, None) or await real_get(repo, model_id, *a, **k)
+
+    repo.get_by_id = get_by_id
+    with pytest.raises(StageTransitionRefused, match="the row is gone"):
+        await repo.transition_stage(MODEL_ID, "Shadow")
+
+
+@pytest.mark.asyncio
+async def test_a_zero_row_write_at_an_unchanged_stage_is_not_reported_as_done():
+    """E.g. a row the write cannot see (grants/RLS): nothing was written, so no True."""
+    repo = _repo_with_current("staging")
+    query = MagicMock()
+    query.eq.return_value = query
+    query.execute = AsyncMock(return_value=MagicMock(data=[]))
+    repo.client.table.return_value.update.return_value = query
+    with pytest.raises(StageTransitionRefused, match="its stage is unchanged"):
+        await repo.transition_stage(MODEL_ID, "shadow")
+
+
 # ---------------------------------------------------------------------------
 # codex r1: promote_stage refuses a candidate BEFORE MLflow moves
 # ---------------------------------------------------------------------------

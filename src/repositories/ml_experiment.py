@@ -1314,8 +1314,8 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
         Raises:
             ValueError: unknown stage, or production refused by the provenance gate
             StageTransitionRefused: a move ``STAGE_TRANSITIONS`` forbids (a candidate
-                promoted outside activation), any move into ``candidate``, or a row whose
-                stage changed between the check and the write (#2318)
+                promoted outside activation), any move into ``candidate``, or a write that
+                matched no row (the stage changed since the check, or the row is gone) (#2318)
         """
         if not self.client:
             return False
@@ -1357,17 +1357,23 @@ class MLModelRegistryRepository(BaseRepository[MLModelRegistry]):
             query = query.in_("training_provenance", list(self._PROMOTABLE_PROVENANCE))
         result = await query.execute()
         if not (result.data or []):
+            # Nothing was written: say why, never report the transition as done.
             now = await self.get_by_id(str(model_id))
             if now is not None and stage_value(now.stage) != from_stage:
                 raise StageTransitionRefused(
                     f"model {model_id} moved from '{from_stage}' to '{stage_value(now.stage)}' "
                     "during the transition; nothing was written. Re-read it and retry (#2318)."
                 )
-        if new_stage == "production" and not (result.data or []):
-            raise ValueError(
-                f"Refusing to promote model {model_id} to production: at write time its "
-                "training_provenance is not one of "
-                f"{list(self._PROMOTABLE_PROVENANCE)} (#968/#2259)."
+            if new_stage == "production" and now is not None:
+                raise ValueError(
+                    f"Refusing to promote model {model_id} to production: at write time its "
+                    "training_provenance is not one of "
+                    f"{list(self._PROMOTABLE_PROVENANCE)} (#968/#2259)."
+                )
+            raise StageTransitionRefused(
+                f"model {model_id}: the write to '{new_stage}' matched no row "
+                f"({'the row is gone' if now is None else 'its stage is unchanged'}); "
+                "nothing was written (#2318)."
             )
 
         # Then archive the model's own earlier production versions. Scoped to model_name:

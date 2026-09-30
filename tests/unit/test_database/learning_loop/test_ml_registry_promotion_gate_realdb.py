@@ -619,7 +619,11 @@ async def test_the_database_write_enforces_the_gate_not_only_the_read(
     repo = MLModelRegistryRepository(supabase_client=rest.service_role_client())
 
     async def stale(model_id: str, **_: Any) -> MLModelRegistry:
-        return MLModelRegistry(model_name="lane_2259_stale_model", training_provenance="real")
+        # The row's real stage, so only the provenance predicate can stop the write (#2318
+        # added a stage predicate; a stale stage here would block it for the wrong reason).
+        return MLModelRegistry(
+            model_name="lane_2259_stale_model", stage="staging", training_provenance="real"
+        )
 
     repo.get_by_id = stale  # type: ignore[method-assign]
 
