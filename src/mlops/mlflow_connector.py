@@ -323,24 +323,32 @@ class MLflowRun:
         """
         await self.log_metrics({key: value}, step)
 
-    async def set_tags(self, tags: Dict[str, str]) -> None:
+    async def set_tags(self, tags: Dict[str, str]) -> bool:
         """Set run tags.
 
         Args:
             tags: Dictionary of tag names to values
-        """
-        await self.connector._set_tags(self.run_id, tags)
-        self._tags.update(tags)
 
-    async def log_artifact(self, local_path: str, artifact_path: Optional[str] = None) -> None:
+        Returns:
+            Whether MLflow accepted the tags (errors are logged, not raised).
+        """
+        ok = await self.connector._set_tags(self.run_id, tags)
+        self._tags.update(tags)
+        return ok
+
+    async def log_artifact(self, local_path: str, artifact_path: Optional[str] = None) -> bool:
         """Log an artifact file.
 
         Args:
             local_path: Local path to the artifact file
             artifact_path: Destination path within artifact store
+
+        Returns:
+            Whether the upload succeeded (errors are logged, not raised).
         """
-        await self.connector._log_artifact(self.run_id, local_path, artifact_path)
+        ok = await self.connector._log_artifact(self.run_id, local_path, artifact_path)
         self._artifacts.append(local_path)
+        return ok
 
     async def log_model(
         self,
@@ -869,33 +877,37 @@ class MLflowConnector:
             self.circuit_breaker.record_failure()
             logger.error(f"Failed to log metrics: {e}")
 
-    async def _set_tags(self, run_id: str, tags: Dict[str, str]) -> None:
-        """Set tags on a run."""
+    async def _set_tags(self, run_id: str, tags: Dict[str, str]) -> bool:
+        """Set tags on a run; return whether MLflow accepted them."""
         if not self._enabled:
-            return
+            return False
 
         try:
             assert self._mlflow is not None
             self._mlflow.set_tags(tags)
             self.circuit_breaker.record_success()
+            return True
         except Exception as e:
             self.circuit_breaker.record_failure()
             logger.error(f"Failed to set tags: {e}")
+            return False
 
     async def _log_artifact(
         self, run_id: str, local_path: str, artifact_path: Optional[str] = None
-    ) -> None:
-        """Log an artifact file."""
+    ) -> bool:
+        """Log an artifact file; return whether the upload succeeded."""
         if not self._enabled:
-            return
+            return False
 
         try:
             assert self._mlflow is not None
             self._mlflow.log_artifact(local_path, artifact_path)
             self.circuit_breaker.record_success()
+            return True
         except Exception as e:
             self.circuit_breaker.record_failure()
             logger.error(f"Failed to log artifact: {e}")
+            return False
 
     async def _log_model(
         self,

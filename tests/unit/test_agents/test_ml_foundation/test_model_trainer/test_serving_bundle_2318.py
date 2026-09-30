@@ -261,3 +261,123 @@ async def test_log_to_mlflow_logs_the_bundle_of_the_deployed_model():
         loaded["model"].predict_proba(loaded["preprocessor"].transform(X[RAW])),
         model.predict_proba(pre.transform(X)),
     )
+
+
+# --------------------------------------------------------------------------- codex r1
+
+
+class _NotSidecarImportable:
+    """A class the sidecar cannot import (lives in this test module, not sklearn/numpy)."""
+
+    def __init__(self):
+        self.n_features_in_ = 15
+
+
+def test_serialize_refuses_a_bundle_the_sidecar_cannot_unpickle():
+    """sklearn/numpy only is enforced on the bytes, not promised: a foreign class is refused."""
+    pre, model, _ = _fitted()
+    bundle = build_serving_bundle(model=model, preprocessor=pre)
+    bundle["model"].stray_ = _NotSidecarImportable()
+    with pytest.raises(ValueError, match="not loadable in the serving sidecar"):
+        serialize_bundle(bundle)
+
+
+class _FailingRun(_Run):
+    """The connector swallows MLflow errors and reports them as a False return."""
+
+    def __init__(self, artifact_ok=True, tags_ok=True):
+        super().__init__()
+        self._artifact_ok, self._tags_ok = artifact_ok, tags_ok
+
+    async def log_artifact(self, local_path, artifact_path=None):
+        if not self._artifact_ok:
+            return False
+        await super().log_artifact(local_path, artifact_path)
+        return True
+
+    async def set_tags(self, tags):
+        if not self._tags_ok:
+            return False
+        await super().set_tags(tags)
+        return True
+
+
+@pytest.mark.asyncio
+async def test_a_failed_upload_writes_no_sha_tag(caplog):
+    """A tag must never claim a bundle that is not in the run."""
+    pre, model, _ = _fitted()
+    run = _FailingRun(artifact_ok=False)
+    assert await _log_serving_bundle(run, {"preprocessor": pre}, model) is None
+    assert BUNDLE_SHA_TAG not in run.tags
+    assert "Serving bundle NOT logged" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_a_failed_tag_write_is_not_reported_as_logged(caplog):
+    pre, model, _ = _fitted()
+    run = _FailingRun(tags_ok=False)
+    assert await _log_serving_bundle(run, {"preprocessor": pre}, model) is None
+    assert "Serving bundle NOT logged" in caplog.text
+
+
+@pytest.fixture
+def local_mlflow_run(tmp_path, monkeypatch):
+    """A real MLflowConnector run on a throwaway sqlite store (never the prod MLflow)."""
+    import mlflow
+
+    from src.mlops.mlflow_connector import MLflowConnector, MLflowRun
+
+    uri = f"sqlite:///{tmp_path}/mlflow.db"
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", uri)
+    monkeypatch.setattr(MLflowConnector, "_instance", None)
+    conn = MLflowConnector(tracking_uri=uri)
+    assert conn._enabled
+    mlflow.set_tracking_uri(uri)
+    exp = mlflow.create_experiment("l2318", artifact_location=f"file://{tmp_path}/artifacts")
+    with mlflow.start_run(experiment_id=exp) as r:
+        from datetime import datetime, timezone
+
+        yield MLflowRun(
+            run_id=r.info.run_id,
+            experiment_id=exp,
+            run_name="l2318",
+            start_time=datetime.now(timezone.utc),
+            connector=conn,
+        )
+    monkeypatch.setattr(MLflowConnector, "_instance", None)
+
+
+@pytest.mark.asyncio
+async def test_connector_reports_upload_and_tag_success_or_failure(local_mlflow_run, tmp_path):
+    import mlflow
+
+    f = tmp_path / "x.bin"
+    f.write_bytes(b"x")
+    assert await local_mlflow_run.log_artifact(str(f), "d") is True
+    assert await local_mlflow_run.log_artifact(str(tmp_path / "missing.bin"), "d") is False
+    assert await local_mlflow_run.set_tags({"k": "v"}) is True
+    assert mlflow.get_run(local_mlflow_run.run_id).data.tags["k"] == "v"
+
+
+@pytest.mark.asyncio
+async def test_bundle_round_trips_through_a_real_mlflow_run(local_mlflow_run, tmp_path):
+    """End to end on a real store: the downloaded file hashes to the run tag and scores identically."""
+    import mlflow
+
+    pre, model, X = _fitted()
+    sha = await _log_serving_bundle(local_mlflow_run, {"preprocessor": pre}, model)
+    assert sha is not None
+    assert mlflow.get_run(local_mlflow_run.run_id).data.tags[BUNDLE_SHA_TAG] == sha
+    local = mlflow.artifacts.download_artifacts(
+        run_id=local_mlflow_run.run_id,
+        artifact_path=f"{BUNDLE_ARTIFACT_DIR}/{BUNDLE_FILENAME}",
+        dst_path=str(tmp_path / "dl"),
+    )
+    with open(local, "rb") as fh:
+        blob = fh.read()
+    assert hashlib.sha256(blob).hexdigest() == sha
+    loaded = pickle.loads(blob)  # noqa: S301 - test of our own artifact
+    np.testing.assert_array_equal(
+        loaded["model"].predict_proba(loaded["preprocessor"].transform(X[RAW])),
+        model.predict_proba(pre.transform(X)),
+    )

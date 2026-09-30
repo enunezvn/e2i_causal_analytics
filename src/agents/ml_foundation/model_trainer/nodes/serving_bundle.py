@@ -20,6 +20,7 @@ It is logged as run artifact ``serving_bundle/bundle.pkl`` with run tag
 from __future__ import annotations
 
 import hashlib
+import io
 import pickle
 from typing import Any
 
@@ -29,6 +30,21 @@ BUNDLE_FORMAT = "sklearn_ct_v1"
 BUNDLE_ARTIFACT_DIR = "serving_bundle"
 BUNDLE_FILENAME = "bundle.pkl"
 BUNDLE_SHA_TAG = "e2i.serving_bundle_sha256"
+
+# Top-level modules a bundle may reference: what the sidecar can import (F2). A calibrated
+# booster, a custom wrapper or any ``src.*`` class is refused rather than tagged servable.
+SIDECAR_IMPORTABLE_ROOTS = frozenset(
+    {"builtins", "copyreg", "collections", "numpy", "scipy", "sklearn"}
+)
+
+
+class _SidecarImportAudit(pickle.Unpickler):
+    def find_class(self, module: str, name: str) -> Any:
+        if module.split(".", 1)[0] not in SIDECAR_IMPORTABLE_ROOTS:
+            raise ValueError(
+                f"bundle references {module}.{name}: not loadable in the serving sidecar"
+            )
+        return super().find_class(module, name)
 
 
 def _strip(name: str) -> str:
@@ -77,6 +93,11 @@ def build_serving_bundle(*, model: Any, preprocessor: Any) -> dict[str, Any]:
 
 
 def serialize_bundle(bundle: dict[str, Any]) -> tuple[bytes, str]:
-    """Pickle the bundle and return ``(bytes, sha256 hex of those bytes)``."""
+    """Pickle the bundle and return ``(bytes, sha256 hex of those bytes)``.
+
+    The bytes are loaded back once through an unpickler that admits only
+    ``SIDECAR_IMPORTABLE_ROOTS``, so a bundle the sidecar could not load is never produced.
+    """
     blob = pickle.dumps(bundle, protocol=5)
+    _SidecarImportAudit(io.BytesIO(blob)).load()
     return blob, hashlib.sha256(blob).hexdigest()

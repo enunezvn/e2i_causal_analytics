@@ -605,8 +605,12 @@ async def _log_serving_bundle(run: Any, state: Dict[str, Any], model: Any) -> Op
             path = os.path.join(tmp, BUNDLE_FILENAME)
             with open(path, "wb") as fh:
                 fh.write(blob)
-            await run.log_artifact(path, BUNDLE_ARTIFACT_DIR)
-        await run.set_tags({BUNDLE_SHA_TAG: sha})
+            # The connector logs and swallows MLflow errors, reporting them as False: a tag
+            # must never claim a bundle that is not in the run.
+            if await run.log_artifact(path, BUNDLE_ARTIFACT_DIR) is False:
+                raise RuntimeError("artifact upload failed")
+        if await run.set_tags({BUNDLE_SHA_TAG: sha}) is False:
+            raise RuntimeError("sha256 tag write failed")
         logger.info(
             "Serving bundle logged: %s/%s sha256=%s", BUNDLE_ARTIFACT_DIR, BUNDLE_FILENAME, sha
         )
