@@ -28,6 +28,12 @@ Each item: my recommendation, why, and the single fact that would reverse it. La
   - **Refuse** when the holdout has fewer than 100 positives or 100 negatives.
 - Why DeLong: both models score the same rows, so the AUCs are strongly correlated (measured r = 0.991–0.999). An unpaired comparison throws that correlation away. DeLong is the standard nonparametric paired AUC test, and is closed-form, deterministic and cheap. Paired bootstrap is reported alongside as a cross-check; it agreed on the probe (bootstrap SE 0.0006 vs DeLong 0.0006).
 - Why δ = 0.01: on this harness SE(Δ) is 0.0004–0.0012 (measured), so power is not the constraint; any δ ≥ 0.005 has power ≈ 1 at a true Δ = 0. The margin is therefore a *practical-relevance* choice: 0.01 AUC is below the week-to-week refit movement of the v1.0 row and far below the 0.05 "honest band" lift the trainer already enforces.
+- **What the gate is, stated honestly (codex r1 HIGH):** a *pre-registered, deterministic acceptance rule* with a DeLong-based bound. It is **not** a confirmatory α = 0.05 trial.
+  - The harness rows are reused across weekly candidates.
+  - The candidate's trainer already evaluated on the `test` half of them (no fitting or selection on it: HPO uses `validation`, F23).
+  - The served comparator has seen them (F3).
+  Freeze δ, α and the guards in code (`GateConfig` defaults, Lane 5) and change them only by a reviewed PR — never per activation from the CLI.
+- A cleaner confirmatory design would decide on a future temporal slice (rows appended after the candidate's training cut-off). That slice is ~1 week of frontier rows per cohort, too thin to gate on today (F24). Revisit when real data arrives.
 - **Reverses it:** the owner wants "no measurable loss" (then δ = 0.005), or wants a superiority requirement (then Δ's lower bound > 0).
 
 **OD-3 — Comparator: what "the served model" means for the gate (Lane 5, Lane 6)**
@@ -36,7 +42,8 @@ Each item: my recommendation, why, and the single fact that would reverse it. La
   - The served bundle was re-fit on *all* rows on 2026-08-12, so it is in-sample on the holdout. On the harness it scores 0.8521.
   - The registry artifact is re-fit weekly on train+validation and scores 0.8509.
   - The measured in-sample optimism is +0.0012 AUC, small against δ, and it biases the gate *against* the candidate (conservative).
-- **Reverses it:** the owner wants the gate to compare to the honest registry number (0.8509). The code supports both via `--comparator served|registry`; only the default changes.
+- **The served bundle is the mandatory comparator; there is no CLI switch** (codex r1 HIGH: a switch would let an activation skip the model it actually replaces). The v1.0 registry artifact is scored as a secondary diagnostic in the report and does not gate.
+- **Reverses it:** the owner wants the candidate to pass against *both*. Then the registry comparison also gates. That is stricter; it is never an alternative to the served comparison.
 
 **OD-4 — CLI-only or also an API endpoint (Lane 6)**
 - **Recommendation: CLI-only** (`python -m scripts.model_activation promote-candidate <id> --approved-by <name> [--execute]`), dry-run by default, run on the droplet host.
@@ -46,14 +53,22 @@ Each item: my recommendation, why, and the single fact that would reverse it. La
 - **Reverses it:** the owner wants activation from the UI. That needs a job queue with a host-side executor, which is a separate design.
 
 **OD-5 — Weekly reseed vs an activated slot (Lane 7)**
-- The weekly cron will **silently revert** an activation (F14–F16). **Recommendation: the weekly goldstd retrain SKIPS any slot with an active activation.** It logs `SKIPPED (served by activated candidate <id>, activation <id>)` and leaves the archived v1.0 row, its metrics and the served bundle untouched. The bundle re-materializer refuses the slot the same way.
-- Add a defensive guard as well: `register_model_row` refuses to upsert over a row whose stage is `archived` by an active activation.
-- **Reverses it:** the owner wants the weekly job to keep re-fitting v1.0 as a standing challenger. Then use a stage-preserving upsert (keep `archived`, do not bump `registered_at`) instead of a skip. The re-materializer must refuse either way.
+- The weekly cron will **silently revert** an activation (F14–F16).
+- The weekly retrain was added so that "the Monday-3AM frontier append is followed by a re-fit on the substrate that just grew" and so that "new frontier months become new backtest points" (commit `717dd7158`, 2026-07-04). That intent is kept.
+- **Recommendation: keep refitting, but never change roles.** The weekly job still refits and re-records the v1.0 row (its id, its metrics, its walk-forward trend). When that row is the predecessor of an `active` activation, the upsert **preserves `stage`, `is_champion` and `registered_at`** (a role-preserving upsert). It therefore stays `archived`, is never canonical, and is a standing challenger with fresh metrics.
+- Three writers must refuse the activated slot outright, because each would change what is *served* or its *role*:
+  - the bundle re-materializer (it would overwrite the served file with a re-fit);
+  - `promote_hcp_adoption_champions.py` (it would promote the archived row);
+  - the `sync_goldstd_serving` bundle phase.
+- A `pending` activation older than 24 h is reported as **stale** by these guards. They refuse (fail safe) and point to `model_activation.py reconcile <id>`, which finishes or aborts it. There is no silent expiry.
+- **Reverses it:** the owner does not want archived predecessors refit at all (cost). Then the retrain skips the slot instead. The refusals above stay either way.
 
 **OD-6 — hcp_adoption serves at `production`; the #968 gate refuses `synthetic_gold` → production (Lane 4, Lane 6)**
-- **Recommendation:** extend the existing, owner-ruled hcp_adoption exemption (`scripts/promote_hcp_adoption_champions.py:38-62`) to activation, scoped to the three `hcp_adoption_*_goldstd_lr_v1` names, with the same calibration pathology gate. All other goldstd slots activate to `staging` (their served stage today, F12).
-- Chat propensity also requires the champion row to have an `artifact_path` (`src/services/hcp_segment_likelihood.py:219-236`), so activation sets `artifact_path` to the versioned bundle path.
-- **Reverses it:** the owner does not want a retrained synthetic_gold model at production. Then hcp_adoption slots are refused by `promote-candidate`.
+- #968's intent: synthetic-trained models were cataloged as if real, so a real-mode consumer could not tell them apart. The #2259 gate therefore refuses `synthetic_gold` → production. The hcp_adoption champions are production only by an explicit owner ruling (`scripts/promote_hcp_adoption_champions.py:38-62`, #1354/#1384).
+- **Default in this plan: hcp_adoption activation FAILS CLOSED.** `promote-candidate` refuses the three `hcp_adoption_*` names until the owner rules. All other goldstd slots activate to `staging` (their served stage today, F12). There is no self-authorising CLI flag.
+- **Recommendation to the owner:** extend the existing hcp_adoption ruling to activated candidates, with the same calibration pathology gate. To grant it, merge a PR that adds the three names to a frozen `HCP_PRODUCTION_ACTIVATION_ALLOWLIST` in `src/mlops/activation/policy.py`, citing the owner's decision. Until then that constant is empty.
+- If granted, note that chat propensity requires `artifact_path` on the champion (`src/services/hcp_segment_likelihood.py:219-236`). The RPC sets it to the versioned bundle path.
+- **Reverses it:** the owner does not want a retrained synthetic_gold model at production. Then the allowlist stays empty.
 
 **OD-7 — What a rolled-back candidate becomes (Lane 4, Lane 6)**
 - **Recommendation: `archived`** (as the issue says), with the ledger row `rolled_back`. It cannot be re-activated; a new retrain is required.
@@ -148,18 +163,18 @@ Each item: my recommendation, why, and the single fact that would reverse it. La
 |---|---|---|---|---|
 | **L1** | `candidate` in `ModelStage` + registry stage-transition rules | — | no | no |
 | **L2** | Retrain logs a serving bundle + sha256 to MLflow | OD-1 | no | no (next retrain produces it) |
-| **L3** | Sidecar: sklearn pin, bundle identity (`bundle_sha256`), ColumnTransformer raw adapter | OD-1 (adapter part only) | no | sidecar rebuild at deploy |
+| **L3** | Sidecar: sklearn pin, bundle identity (`bundle_sha256`), ColumnTransformer raw adapter | OD-1 (adapter part only). Its tests build the `sklearn_ct_v1` dict inline with sklearn only, so there is no code dependency on L2; the contract keys are spelled out below. | no | sidecar rebuild at deploy |
 | **L4** | Migration 165: `ml_model_activations` ledger + `activate_model_candidate` / `rollback_model_activation` RPCs | L1 | **165** | owner applies migration |
 | **L5** | Holdout harness + non-inferiority gate (DeLong + bootstrap) | OD-2, OD-3 | no | no |
 | **L6** | `scripts/model_activation.py` CLI + reconciler (promote, rollback, status) | L1–L5 | no | no |
-| **L7** | Reseed/re-materializer/hcp-promote guards for activated slots | L4 | no | no |
+| **L7** | Role-preserving weekly upsert + refusals in the re-materializer/hcp-promote for activated slots | L4 (ledger table); it creates `src/mlops/activation/__init__.py` + `guards.py` itself if L5/L6 have not merged yet | no | no |
 | **L8** | Live verification script + prod procedure | L1–L7 deployed | no | **yes — owner-approved in-turn** |
 
 - L1, L3 and L5 start immediately in parallel.
 - L2 starts as soon as OD-1 is answered.
 - L4 after L1 merges, because it uses the enum member in Python tests.
 - L6 after L1–L5 merge.
-- L7 after L4 merges; it runs in parallel with L6.
+- L7 after L4 merges; it runs in parallel with L6. Whichever of L5/L6/L7 merges second rebases onto the first's `src/mlops/activation/__init__.py` (an empty file, so a trivial conflict).
 - **L7 must be deployed before L8's first activation** (otherwise the next Monday 03:00Z cron reverts it).
 - L8 last. It also needs a fresh retrain run after L2 is deployed.
 
@@ -182,15 +197,15 @@ L4  database/migrations/165_model_activation_ledger.sql                 (new)
     tests/unit/test_repositories/test_registry_reader_census_2310.py    (classify the RPCs)
 L5  src/mlops/activation/__init__.py, holdout_gate.py                   (new)
     tests/unit/test_mlops/test_activation_holdout_gate_2318.py          (new)
-L6  src/mlops/activation/bundle_store.py, reconcile.py                  (new)
+L6  src/mlops/activation/bundle_store.py, reconcile.py, policy.py, surfaces_live.py (new)
     scripts/model_activation.py                                         (new CLI)
     tests/unit/test_mlops/test_activation_bundle_store_2318.py          (new)
     tests/unit/test_mlops/test_activation_reconcile_2318.py             (new)
     tests/unit/test_repositories/test_registry_reader_census_2310.py    (classify new accessors)
-L7  src/mlops/activation/guards.py                                      (new: active_activation_for)
-    src/mlops/gold_standard_eval/run_persistence_eval.py, run_initiation_eval.py, run_hcp_cohorts.py (skip slot)
-    scripts/rematerialize_goldstd_bundles.py, scripts/promote_hcp_adoption_champions.py (refuse slot)
-    src/mlops/prediction_synthesizer_deploy.py::register_model_row      (defensive refusal)
+L7  src/mlops/activation/guards.py                                      (new: live_activation_for, is_stale)
+    src/mlops/prediction_synthesizer_deploy.py::register_model_row      (role-preserving upsert for a predecessor)
+    scripts/rematerialize_goldstd_bundles.py, scripts/sync_goldstd_serving.py,
+    scripts/promote_hcp_adoption_champions.py                           (refuse an activated slot)
     tests/unit/test_mlops/test_activation_guards_2318.py                (new)
 L8  scripts/verify_model_activation_live.py                             (new)
     docs/demos/results/<date>_2318_activation_live/                    (evidence)
@@ -609,11 +624,11 @@ def test_sidecar_sklearn_matches_the_training_pin():
     side = (root / "docker/bentoml/requirements-bentoml.txt").read_text()
     m = re.search(r"^scikit-learn==([\d.]+)\s*$", side, re.M)
     assert m, "sidecar must pin scikit-learn exactly"
-    repo_pins = (root / "requirements.txt").read_text()  # confirm the repo's pin file name first
+    repo_pins = (root / "requirements.txt").read_text()  # requirements.txt:299 scikit-learn==1.6.1
     assert re.search(rf"^scikit-learn==({re.escape(m.group(1))})\b", repo_pins, re.M)
 ```
 
-  (Confirm where the repo pins sklearn — `grep -rn "scikit-learn" requirements*.txt pyproject.toml` — and point the test at that file.)
+  The repo pins sklearn in `requirements.txt:299` (`==1.6.1`), with `requirements-dev.txt:262` also `==1.6.1` and `pyproject.toml:45` `>=1.6.1,<1.7`.
 
 - [ ] **Step 2: Run** → FAIL. **Step 3:** set `scikit-learn==1.6.1`. **Step 4:** PASS.
 
@@ -667,7 +682,12 @@ def test_duplicate_names_under_the_root_fail_closed(serving_module, tmp_path, fi
 
 **Files:** same service module; test (same new file).
 
-- [ ] **Step 1: Failing test.** Load an `sklearn_ct_v1` bundle built by Lane 2's `build_serving_bundle` (import it in the test; the *test* may import `src`, the sidecar may not). Then assert:
+- [ ] **Step 1: Failing test.** Build the `sklearn_ct_v1` dict inline with sklearn only, so there is no dependency on L2:
+  - `ct = ColumnTransformer([("num", Pipeline([("imp", SimpleImputer()), ("sc", StandardScaler())]), NUM), ("cat", Pipeline([("imp", SimpleImputer(strategy="most_frequent")), ("oh", OneHotEncoder(handle_unknown="ignore", sparse_output=False))]), CAT)])`, fit on a 10-column frame;
+  - `model = CalibratedClassifierCV(FrozenEstimator(LogisticRegression().fit(ct.transform(X), y)), method="sigmoid").fit(ct.transform(X), y)` (the live candidate's shape, F9);
+  - the dict carries the keys listed in Lane 2's contract, with `feature_columns = [n.split("__", 1)[1] for n in ct.get_feature_names_out()]`.
+
+  Then assert:
   - `/predict` with `raw_features` equals `bundle["model"].predict_proba(bundle["preprocessor"].transform(df))[:, 1]` **exactly**;
   - `/shap` returns `encoded_feature_columns == bundle["feature_columns"]` and satisfies additivity (`base + sum(shap) ≈ inner-LR margin`, as the existing `test_bentoml_shap.py` does);
   - `model_info.keep_columns == bundle["keep_columns"]`;
@@ -711,9 +731,21 @@ class _ColumnTransformerRawEncoder:
 
 ---
 
-## Lane 4 — Migration 165: activation ledger + transactional RPCs
+## Lane 4 — Migration 165: activation ledger + transactional, self-checking RPCs
 
-**Why:** the DB side of the switch must be one transaction (registry roles, deployments, ledger), and rollback needs the predecessor's prior stage, champion flag and artifact path recorded. Neither `ml_deployments` nor MLflow holds them (F11, F13).
+**Why:** the DB side of the switch must be one transaction (registry roles, deployments, ledger), and rollback needs the predecessor's prior stage, champion flag, artifact path and MLflow state recorded. Neither `ml_deployments` nor MLflow holds them (F11, F13). The RPCs are the last line of defence, so they re-check the gate and every identity themselves; the CLI is not trusted (codex r1 HIGH).
+
+**Phases.** `ml_model_activations.phase` is the durable state machine the reconciler drives (Lane 6):
+
+```
+prepared → serving_switched → active                    (activation)
+        ↘ aborted                                         (compensated before the DB switch)
+active → rolling_back → rolled_back                      (rollback)
+```
+
+- `prepared`: gate passed; both bundles stashed; nothing served has changed.
+- `serving_switched`: the candidate file is live and the sidecar verified it.
+- `active`: the DB roles are switched (RPC). MLflow and the SHAP cache are post-commit and idempotent, tracked by `mlflow_synced_at` / `shap_refreshed_at`.
 
 ### Task 4.1: Migration file
 
@@ -721,9 +753,9 @@ class _ColumnTransformerRawEncoder:
 
 ```sql
 -- 165: model activation ledger + transactional activate/rollback (#2318).
--- One row per activation. It is the desired state scripts/model_activation.py reconciles
--- towards, and holds every id and prior value needed to undo it (the predecessor may have no
--- MLflow version and no ml_deployments row).
+-- One row per activation: the desired state scripts/model_activation.py reconciles towards,
+-- holding every id and prior value needed to undo it (the predecessor may have no MLflow
+-- version and no ml_deployments row). The RPCs re-verify the gate and every identity.
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS public.ml_model_activations (
@@ -735,114 +767,166 @@ CREATE TABLE IF NOT EXISTS public.ml_model_activations (
     predecessor_prior_stage         model_stage_enum NOT NULL,
     predecessor_prior_is_champion   boolean NOT NULL,
     predecessor_prior_artifact_path text,
-    candidate_deployment_id         uuid REFERENCES public.ml_deployments(id),
-    candidate_mlflow_model_version  integer,
-    candidate_bundle_sha256         char(64) NOT NULL,
+    candidate_deployment_id         uuid NOT NULL REFERENCES public.ml_deployments(id),
+    candidate_mlflow_model_version  integer NOT NULL CHECK (candidate_mlflow_model_version > 0),
+    prior_mlflow_served_version     integer,          -- alias 'served' before activation (NULL = none)
+    candidate_bundle_sha256         char(64) NOT NULL CHECK (candidate_bundle_sha256 ~ '^[0-9a-f]{64}$'),
     candidate_bundle_path           text NOT NULL,
-    predecessor_bundle_sha256       char(64) NOT NULL,
+    predecessor_bundle_sha256       char(64) NOT NULL CHECK (predecessor_bundle_sha256 ~ '^[0-9a-f]{64}$'),
     predecessor_bundle_path         text NOT NULL,
-    gate_report                     jsonb NOT NULL,
-    status                          text NOT NULL DEFAULT 'pending'
-        CHECK (status IN ('pending', 'active', 'rolled_back', 'failed')),
+    gate_report                     jsonb NOT NULL CHECK (gate_report @> '{"passed": true}'::jsonb),
+    phase                           text NOT NULL DEFAULT 'prepared' CHECK (phase IN
+        ('prepared', 'serving_switched', 'active', 'aborted', 'rolling_back', 'rolled_back')),
     approved_by                     text NOT NULL CHECK (length(btrim(approved_by)) > 0),
-    created_at                      timestamptz NOT NULL DEFAULT now(),
-    activated_at                    timestamptz,
-    rolled_back_at                  timestamptz,
+    rolled_back_by                  text,
     rollback_reason                 text,
+    created_at                      timestamptz NOT NULL DEFAULT now(),
+    serving_switched_at             timestamptz,
+    activated_at                    timestamptz,
+    mlflow_synced_at                timestamptz,
+    shap_refreshed_at               timestamptz,
+    rolled_back_at                  timestamptz,
     CONSTRAINT ml_model_activations_distinct CHECK (candidate_registry_id <> predecessor_registry_id),
-    CONSTRAINT ml_model_activations_served_stage CHECK (served_stage IN ('staging', 'production'))
+    CONSTRAINT ml_model_activations_served_stage CHECK (served_stage IN ('staging', 'production')),
+    CONSTRAINT ml_model_activations_rollback_audit CHECK (
+        phase NOT IN ('rolling_back', 'rolled_back')
+        OR (length(btrim(coalesce(rolled_back_by, ''))) > 0 AND length(btrim(coalesce(rollback_reason, ''))) > 0))
 );
 
--- At most one in-flight or active activation per served name.
+-- At most one live activation per served name. Replacing an activated model means rolling it
+-- back first (no supersession in v1: every live state has exactly one undo path).
 CREATE UNIQUE INDEX IF NOT EXISTS uq_ml_model_activations_one_live
-    ON public.ml_model_activations (model_name) WHERE status IN ('pending', 'active');
+    ON public.ml_model_activations (model_name)
+    WHERE phase IN ('prepared', 'serving_switched', 'active', 'rolling_back');
 
 CREATE OR REPLACE FUNCTION public.activate_model_candidate(p_activation_id uuid)
 RETURNS void LANGUAGE plpgsql AS $$
-DECLARE a public.ml_model_activations%ROWTYPE; cand public.ml_model_registry%ROWTYPE;
+DECLARE a public.ml_model_activations%ROWTYPE; n int;
 BEGIN
     SELECT * INTO a FROM public.ml_model_activations WHERE id = p_activation_id FOR UPDATE;
     IF NOT FOUND THEN RAISE EXCEPTION 'activation % not found', p_activation_id; END IF;
-    IF a.status = 'active' THEN RETURN; END IF;                         -- idempotent re-run
-    IF a.status <> 'pending' THEN RAISE EXCEPTION 'activation % is %', a.id, a.status; END IF;
-    SELECT * INTO cand FROM public.ml_model_registry WHERE id = a.candidate_registry_id FOR UPDATE;
-    IF cand.stage <> 'candidate' OR cand.model_name <> a.model_name
-       OR cand.retrain_of_id IS DISTINCT FROM a.predecessor_registry_id THEN
-        RAISE EXCEPTION 'registry row % is not a candidate retrain of %', cand.id, a.predecessor_registry_id;
+    IF a.phase = 'active' THEN
+        -- Idempotent re-run: verify the postcondition instead of trusting the phase.
+        PERFORM 1 FROM public.ml_model_registry c, public.ml_model_registry p, public.ml_deployments d
+         WHERE c.id = a.candidate_registry_id AND c.stage = a.served_stage
+           AND p.id = a.predecessor_registry_id AND p.stage = 'archived'
+           AND d.id = a.candidate_deployment_id AND d.status = 'active';
+        IF NOT FOUND THEN RAISE EXCEPTION 'activation % is active but the registry has drifted', a.id; END IF;
+        RETURN;
     END IF;
-    PERFORM 1 FROM public.ml_model_registry WHERE id = a.predecessor_registry_id
-        AND stage = a.predecessor_prior_stage FOR UPDATE;
-    IF NOT FOUND THEN RAISE EXCEPTION 'predecessor % changed stage since the gate ran', a.predecessor_registry_id; END IF;
+    IF a.phase <> 'serving_switched' THEN
+        RAISE EXCEPTION 'activation % is in phase %, expected serving_switched', a.id, a.phase;
+    END IF;
+    IF NOT (a.gate_report @> '{"passed": true}'::jsonb) THEN RAISE EXCEPTION 'gate did not pass'; END IF;
 
+    PERFORM 1 FROM public.ml_model_registry
+     WHERE id = a.candidate_registry_id AND stage = 'candidate' AND model_name = a.model_name
+       AND retrain_of_id = a.predecessor_registry_id
+       AND mlflow_model_version = a.candidate_mlflow_model_version FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION 'row % is not a candidate retrain of % for %',
+        a.candidate_registry_id, a.predecessor_registry_id, a.model_name; END IF;
+    PERFORM 1 FROM public.ml_model_registry
+     WHERE id = a.predecessor_registry_id AND model_name = a.model_name
+       AND stage = a.predecessor_prior_stage FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION 'predecessor % changed since the gate ran', a.predecessor_registry_id; END IF;
+    PERFORM 1 FROM public.ml_deployments
+     WHERE id = a.candidate_deployment_id AND model_registry_id = a.candidate_registry_id FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION 'deployment % does not belong to the candidate', a.candidate_deployment_id; END IF;
+
+    -- Predecessor first: tr_single_champion (same experiment_id) then finds nothing to demote.
     UPDATE public.ml_model_registry SET stage = 'archived', is_champion = false
      WHERE id = a.predecessor_registry_id;
+    GET DIAGNOSTICS n = ROW_COUNT; IF n <> 1 THEN RAISE EXCEPTION 'predecessor update touched % rows', n; END IF;
     UPDATE public.ml_model_registry
        SET stage = a.served_stage, is_champion = a.predecessor_prior_is_champion,
            artifact_path = a.candidate_bundle_path, preprocessing_pipeline_path = a.candidate_bundle_path,
            promoted_at = now()
      WHERE id = a.candidate_registry_id;
+    GET DIAGNOSTICS n = ROW_COUNT; IF n <> 1 THEN RAISE EXCEPTION 'candidate update touched % rows', n; END IF;
     UPDATE public.ml_deployments
        SET status = 'active', environment = a.served_stage::text, deployed_at = now(),
            endpoint_name = a.model_name, endpoint_url = 'bentoml://e2i_bentoml/' || a.model_name
      WHERE id = a.candidate_deployment_id;
-    UPDATE public.ml_model_activations SET status = 'active', activated_at = now() WHERE id = a.id;
+    GET DIAGNOSTICS n = ROW_COUNT; IF n <> 1 THEN RAISE EXCEPTION 'deployment update touched % rows', n; END IF;
+    UPDATE public.ml_model_activations SET phase = 'active', activated_at = now() WHERE id = a.id;
 END $$;
 
-CREATE OR REPLACE FUNCTION public.rollback_model_activation(p_activation_id uuid, p_reason text)
+-- Called only from phase 'rolling_back' (set by the CLI after it restored the predecessor
+-- bundle). An activation that never reached 'active' is compensated by the CLI -> 'aborted'.
+CREATE OR REPLACE FUNCTION public.rollback_model_activation(p_activation_id uuid)
 RETURNS void LANGUAGE plpgsql AS $$
-DECLARE a public.ml_model_activations%ROWTYPE;
+DECLARE a public.ml_model_activations%ROWTYPE; n int;
 BEGIN
     SELECT * INTO a FROM public.ml_model_activations WHERE id = p_activation_id FOR UPDATE;
     IF NOT FOUND THEN RAISE EXCEPTION 'activation % not found', p_activation_id; END IF;
-    IF a.status = 'rolled_back' THEN RETURN; END IF;                    -- idempotent re-run
-    IF a.status NOT IN ('active', 'pending') THEN RAISE EXCEPTION 'activation % is %', a.id, a.status; END IF;
-    IF p_reason IS NULL OR length(btrim(p_reason)) = 0 THEN RAISE EXCEPTION 'rollback needs a reason'; END IF;
+    IF a.phase = 'rolled_back' THEN
+        PERFORM 1 FROM public.ml_model_registry c, public.ml_model_registry p
+         WHERE c.id = a.candidate_registry_id AND c.stage = 'archived'
+           AND p.id = a.predecessor_registry_id AND p.stage = a.predecessor_prior_stage;
+        IF NOT FOUND THEN RAISE EXCEPTION 'activation % is rolled_back but the registry has drifted', a.id; END IF;
+        RETURN;
+    END IF;
+    IF a.phase <> 'rolling_back' THEN
+        RAISE EXCEPTION 'activation % is in phase %, expected rolling_back (set by the CLI after the serving restore)', a.id, a.phase;
+    END IF;
 
     UPDATE public.ml_model_registry SET stage = 'archived', is_champion = false
-     WHERE id = a.candidate_registry_id;                                -- OD-7
+     WHERE id = a.candidate_registry_id;                                  -- OD-7
+    GET DIAGNOSTICS n = ROW_COUNT; IF n <> 1 THEN RAISE EXCEPTION 'candidate update touched % rows', n; END IF;
     UPDATE public.ml_model_registry
        SET stage = a.predecessor_prior_stage, is_champion = a.predecessor_prior_is_champion,
            artifact_path = a.predecessor_prior_artifact_path
      WHERE id = a.predecessor_registry_id;
+    GET DIAGNOSTICS n = ROW_COUNT; IF n <> 1 THEN RAISE EXCEPTION 'predecessor update touched % rows', n; END IF;
     UPDATE public.ml_deployments
-       SET status = 'rolled_back', rolled_back_at = now(), rollback_reason = p_reason, deactivated_at = now()
+       SET status = 'rolled_back', rolled_back_at = now(), rollback_reason = a.rollback_reason,
+           deactivated_at = now()
      WHERE id = a.candidate_deployment_id;
-    UPDATE public.ml_model_activations
-       SET status = 'rolled_back', rolled_back_at = now(), rollback_reason = p_reason
-     WHERE id = a.id;
+    UPDATE public.ml_model_activations SET phase = 'rolled_back', rolled_back_at = now() WHERE id = a.id;
 END $$;
 
-REVOKE ALL ON FUNCTION public.activate_model_candidate(uuid) FROM PUBLIC, anon, authenticated;
-REVOKE ALL ON FUNCTION public.rollback_model_activation(uuid, text) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.activate_model_candidate(uuid) TO service_role;
-GRANT EXECUTE ON FUNCTION public.rollback_model_activation(uuid, text) TO service_role;
+-- Grants: service_role only (the CLI runs with the service key). Follow the idiom of
+-- 162_hcp_adoption_goldstd_view.sql:35-60 (REVOKE from PUBLIC/anon/authenticated, GRANT to
+-- service_role); read it before writing these lines.
+REVOKE ALL ON TABLE public.ml_model_activations FROM PUBLIC, anon, authenticated;
+GRANT SELECT, INSERT, UPDATE ON TABLE public.ml_model_activations TO service_role;
 ALTER TABLE public.ml_model_activations ENABLE ROW LEVEL SECURITY;
 CREATE POLICY ml_model_activations_service ON public.ml_model_activations
     FOR ALL TO service_role USING (true) WITH CHECK (true);
+REVOKE ALL ON FUNCTION public.activate_model_candidate(uuid) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.rollback_model_activation(uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.activate_model_candidate(uuid) TO service_role;
+GRANT EXECUTE ON FUNCTION public.rollback_model_activation(uuid) TO service_role;
 COMMIT;
 ```
 
-- `tr_single_champion` (F20) fires on the candidate update. Setting `is_champion` from the predecessor's prior flag keeps hcp_adoption's champion semantics (OD-6); archiving the predecessor first means the trigger finds nothing to demote.
-- Rollback file: `DROP FUNCTION IF EXISTS …` for both functions, then `DROP TABLE IF EXISTS public.ml_model_activations;`.
-- Before writing the RLS/grant lines, read migrations 160 and 163 for this repo's role/RLS idiom. Match it and do not invent one.
+- The phase transitions `prepared → serving_switched`, `→ aborted` and `active → rolling_back` are plain guarded `UPDATE … WHERE id = $1 AND phase = '<expected>'` statements from the CLI, which asserts one row was touched. Only the two role switches are RPCs, because only they touch other tables.
+- `rolling_back` requires `rolled_back_by` and `rollback_reason` (CHECK).
+- There is no DELETE grant: the ledger is append/transition only.
+- Rollback file: `DROP FUNCTION IF EXISTS public.rollback_model_activation(uuid); DROP FUNCTION IF EXISTS public.activate_model_candidate(uuid); DROP TABLE IF EXISTS public.ml_model_activations;`.
 
 ### Task 4.2: Real-Postgres tests (prod-free)
 
-**Files:** `tests/unit/test_database/test_model_activation_rpc_realdb_2318.py`. Use the `ThrowawayPg(image=docker inspect supabase-db)` fixture exactly as `tests/unit/test_database/test_registry_candidate_readers_realdb_2310.py:96-180` does: apply the table DDL of `ml_model_registry`/`ml_deployments` + migrations 159–161 + 165.
+**Files:** `tests/unit/test_database/test_model_activation_rpc_realdb_2318.py`. Use the `ThrowawayPg(image=docker inspect supabase-db)` fixture exactly as `tests/unit/test_database/test_registry_candidate_readers_realdb_2310.py:96-180` does. Apply the table DDL of `ml_model_registry`/`ml_deployments` + migrations 159–161 + 165, and create the `anon`/`authenticated`/`service_role` roles if the image lacks them.
 
-- [ ] **Step 1: Failing tests** (psycopg against the throwaway). Seed predecessor P (`staging`, champion false, artifact `/a/p.pkl`), candidate C (`candidate`, `retrain_of_id=P`), a deployment D (`registered`/`candidate`), and a `pending` ledger row A.
-  - `test_activate_switches_roles_in_one_transaction` — after `SELECT activate_model_candidate(A)`: P is `archived`; C is `staging` with `artifact_path = candidate_bundle_path`; D is `active` and `environment='staging'`; A is `active`.
-  - `test_activate_is_idempotent` — a second call is a no-op, with no error and an unchanged `activated_at`.
-  - `test_activate_refuses_when_predecessor_moved` — set P to `production` after creating A → exception, and **nothing changed** (C still `candidate`, D still `registered`).
-  - `test_activate_refuses_a_non_candidate` and `test_activate_refuses_a_candidate_of_another_parent`.
-  - `test_one_live_activation_per_name` — a second `pending` row for the same `model_name` → unique violation.
-  - `test_rollback_restores_prior_state` — P back to `staging`, champion and artifact exactly as recorded; C `archived`; D `rolled_back` with the reason; A `rolled_back`. A second call is a no-op.
-  - `test_rollback_restores_a_production_champion` — P seeded `production`/champion (hcp shape): after activate then rollback, P is `production` + champion again. `ensure_single_champion` must not leave two champions: `SELECT count(*) … is_champion` → 1.
-  - `test_anon_cannot_execute` — `SET ROLE anon; SELECT activate_model_candidate(...)` → permission denied.
-- [ ] **Step 2: Run** `pytest -n 0 tests/unit/test_database/test_model_activation_rpc_realdb_2318.py -q` → FAIL (function missing).
+- [ ] **Step 1: Failing tests** (psycopg against the throwaway). Seed predecessor P (`staging`, champion false, artifact `/a/p.pkl`), candidate C (`candidate`, `retrain_of_id=P`, `mlflow_model_version=8`, same `experiment_id` as P — measured shape, F20), deployment D (`registered`/`candidate`, `model_registry_id=C`), and a ledger row A at `phase='serving_switched'`.
+  - `test_activate_switches_roles_in_one_transaction` — P `archived`; C `staging` with `artifact_path = candidate_bundle_path`; D `active`/`staging`; A `active`.
+  - `test_activate_rerun_verifies_postcondition` — a second call is a no-op. Then flip C back to `candidate` by hand; a third call raises "drifted".
+  - `test_activate_refuses_wrong_phase` — A at `prepared` → exception, nothing changed.
+  - `test_ledger_rejects_a_failed_gate` — insert with `gate_report='{"passed": false}'` → check violation. Also one with a non-hex sha → check violation.
+  - `test_activate_refuses_when_predecessor_moved` — set P to `production` after creating A → exception, **nothing changed**.
+  - `test_activate_refuses_foreign_deployment` — D belongs to another row → exception.
+  - `test_activate_refuses_candidate_of_another_parent_or_name`, `test_activate_refuses_mlflow_version_mismatch`.
+  - `test_one_live_activation_per_name` — a second `prepared` row for the same name → unique violation; after the first is `rolled_back`, a new one is allowed.
+  - `test_rollback_requires_audit` — setting `phase='rolling_back'` without `rolled_back_by` → check violation.
+  - `test_rollback_restores_prior_state` — P back to `staging` with champion/artifact exactly as recorded; C `archived`; D `rolled_back` with the reason; A `rolled_back`. A second call is a no-op with the postcondition verified.
+  - `test_rollback_restores_a_production_champion` — P seeded `production` + champion (hcp shape) → after activate + rollback, P is `production` + champion, and `count(*) WHERE is_champion AND experiment_id = P.experiment_id` = 1.
+  - `test_role_privileges` — `SET ROLE anon` and `SET ROLE authenticated`: SELECT on the table and EXECUTE of both functions are denied. `SET ROLE service_role`: INSERT/SELECT/UPDATE of a ledger row and EXECUTE succeed; DELETE is denied.
+- [ ] **Step 2: Run** `pytest -n 0 tests/unit/test_database/test_model_activation_rpc_realdb_2318.py -q` → FAIL (table missing).
 - [ ] **Step 3:** write the migration (Task 4.1). **Step 4:** PASS.
-- [ ] **Step 5: Census.** Add the two SQL functions to the SQL-reader classification in `tests/unit/test_repositories/test_registry_reader_census_2310.py` as `EXACT` (by id), with the reason `"#2318 activation/rollback RPC: rows named by the ledger's ids"`. Run `pytest -n 0 tests/unit/test_repositories/test_registry_reader_census_2310.py -q` → PASS.
-- [ ] **Step 6: Commit** — `feat(db): 165 model activation ledger + transactional activate/rollback RPCs (Part of #2318)`.
+- [ ] **Step 5: Teeth.** Delete the `gate_report @> '{"passed": true}'` CHECK locally; `test_ledger_rejects_a_failed_gate` must go red. Restore it.
+- [ ] **Step 6: Census.** Add the two SQL functions to the SQL-reader classification in `tests/unit/test_repositories/test_registry_reader_census_2310.py` as `EXACT` (by id), reason `"#2318 activation/rollback RPC: rows named by the ledger's ids"`. Run `pytest -n 0 tests/unit/test_repositories/test_registry_reader_census_2310.py -q` → PASS.
+- [ ] **Step 7: Commit** — `feat(db): 165 model activation ledger + self-checking activate/rollback RPCs (Part of #2318)`.
 
 **Prod apply:** owner-approved, via the repo's migration procedure (memory `reference-supabase-droplet-migration-apply`). Record the `schema_migrations` row. No data backfill.
 
@@ -873,18 +957,31 @@ def _scores(seed=0, n=2000, noise=0.0):
     return y, 1 / (1 + np.exp(-base)), 1 / (1 + np.exp(-(base + r.normal(0, noise, n))))
 
 
-def test_delong_aucs_match_sklearn():
-    y, a, b = _scores(noise=0.5)
-    aucs, cov = delong_paired(y, np.vstack([a, b]))
-    assert aucs[0] == pytest.approx(roc_auc_score(y, a), abs=1e-12)
-    assert aucs[1] == pytest.approx(roc_auc_score(y, b), abs=1e-12)
-    assert cov.shape == (2, 2) and cov[0, 1] > 0
+def test_delong_matches_sklearn_auc_and_a_hand_computed_variance():
+    # Tiny fixture with a hand-computable DeLong variance (structural components):
+    # y = [1,1,0,0], a = [.9,.4,.6,.1] -> AUC = 3/4; V10 = [1, .5], V01 = [.5, 1];
+    # var = var(V10)/2 + var(V01)/2 = 0.125/2 + 0.125/2 = 0.125 (sample var, ddof=1).
+    y = np.array([1, 1, 0, 0]); a = np.array([0.9, 0.4, 0.6, 0.1])
+    aucs, cov = delong_paired(y, np.vstack([a, a]))
+    assert aucs[0] == pytest.approx(0.75)
+    assert cov[0, 0] == pytest.approx(0.125)
+    y2, s1, s2 = _scores(noise=0.5)
+    aucs, cov = delong_paired(y2, np.vstack([s1, s2]))
+    assert aucs[0] == pytest.approx(roc_auc_score(y2, s1), abs=1e-12)
+    assert aucs[1] == pytest.approx(roc_auc_score(y2, s2), abs=1e-12)
 
 
-def test_identical_models_pass_and_report_zero_delta():
+def test_ties_use_midranks():
+    y = np.array([1, 0, 1, 0]); s = np.array([0.5, 0.5, 0.5, 0.5])
+    aucs, _ = delong_paired(y, np.vstack([s, s]))
+    assert aucs[0] == pytest.approx(0.5)
+
+
+def test_identical_models_pass_with_zero_variance_handled():
     y, a, _ = _scores()
     rep = evaluate_gate(y, served=a, candidate=a.copy(), cfg=GateConfig())
-    assert rep["passed"] and rep["auc_delta"] == 0.0
+    # var(delta) == 0 exactly: the bound is delta itself, never a division by zero
+    assert rep["passed"] and rep["auc_delta"] == 0.0 and rep["se_delta"] == 0.0
 
 
 def test_a_clearly_worse_candidate_fails_on_auc():
@@ -903,131 +1000,191 @@ def test_miscalibrated_candidate_fails_on_slope():
     assert "calibration_slope" in rep["failed_checks"]
 
 
-def test_refuses_a_thin_holdout():
-    y = np.array([0] * 500 + [1] * 50)
+@pytest.mark.parametrize("n_pos,n_neg", [(50, 500), (500, 50), (0, 500)])
+def test_refuses_a_thin_or_one_class_holdout(n_pos, n_neg):
+    y = np.array([1] * n_pos + [0] * n_neg)
     s = np.linspace(0, 1, len(y))
     with pytest.raises(ValueError, match="at least 100"):
         evaluate_gate(y, served=s, candidate=s, cfg=GateConfig())
+
+
+def test_report_is_json_and_deterministic():
+    import json
+    y, a, b = _scores(noise=0.3)
+    r1 = evaluate_gate(y, served=a, candidate=b, cfg=GateConfig())
+    r2 = evaluate_gate(y, served=a, candidate=b, cfg=GateConfig())
+    assert json.dumps(r1, sort_keys=True) == json.dumps(r2, sort_keys=True)
 ```
+
+  Double-check the hand-computed variance before committing. Work V10/V01 out on paper for the 2×2 fixture, and cross-check with the probe's `delong()` in `p2318_delong_probe.py`. If they disagree, the fixture is wrong, not the algorithm — fix the comment and the number together.
 
 - [ ] **Step 2: Run** `pytest -n 0 tests/unit/test_mlops/test_activation_holdout_gate_2318.py -q` → FAIL.
 
 - [ ] **Step 3: Implement.**
-  - `delong_paired`: the midrank/structural-component algorithm from the probe `p2318_delong_probe.py`, i.e. Sun & Xu 2014.
-  - `GateConfig(auc_margin=0.010, alpha=0.05, brier_margin=0.005, slope_band=(0.8, 1.25), bootstrap_b=2000, seed=0, min_class_n=100)`.
+  - `delong_paired`: the midrank/structural-component algorithm (Sun & Xu 2014), as in the probe.
+  - `GateConfig` is a frozen dataclass: `auc_margin=0.010, alpha=0.05, brier_margin=0.005, slope_band=(0.8, 1.25), bootstrap_b=2000, seed=0, min_class_n=100`. The CLI **cannot** override it (OD-2).
   - `evaluate_gate(y, served, candidate, cfg)` returns a JSON-serialisable dict:
     - `n`, `n_pos`, `auc_served`, `auc_candidate`, `auc_delta`, `se_delta`, `auc_lower_bound`;
     - `brier_served`, `brier_candidate`, `brier_delta_upper` (paired bootstrap, fixed seed);
-    - `calibration_slope`, `calibration_intercept` (reuse `positive_class_scores` / `calibration_intercept` semantics from `scripts/promote_hcp_adoption_champions.py:110-160` — move the shared helpers into `src/mlops/activation/holdout_gate.py` and import them back into the script; do not duplicate);
+    - `calibration_slope`, `calibration_intercept`;
     - `bootstrap_auc_delta_p05` (cross-check, reported only);
-    - `failed_checks: list[str]`, `passed: bool`, `config: asdict(cfg)`.
-  - The lower bound is `auc_delta - norm.ppf(1 - alpha) * se_delta`, and the check passes iff it is `> -auc_margin`.
+    - `failed_checks: list[str]`, `passed: bool`, `config: asdict(cfg)`, `kind: "deterministic_acceptance_rule"`.
+  - Move `positive_class_scores` / `calibration_intercept` (and the slope fit) from `scripts/promote_hcp_adoption_champions.py:110-160` into this module and import them back into the script. Do not duplicate them; the script's own tests must stay green.
+  - The lower bound is `auc_delta - norm.ppf(1 - alpha) * se_delta` (with `se_delta = sqrt(max(var, 0))`), and the check passes iff it is `> -auc_margin`.
 
-- [ ] **Step 4: Run** → PASS.
+- [ ] **Step 4: Run** → PASS, plus `pytest -n 0 tests -k promote_hcp_adoption -q` (the moved helpers).
 
 ### Task 5.2: Score both artifacts on one holdout snapshot
 
-**Files:** `src/mlops/activation/holdout_gate.py` (add `load_holdout_snapshot`, `score_bundle`). Test (same file).
+**Files:** `src/mlops/activation/holdout_gate.py` (add `load_holdout_snapshot`, `score_bundle`, `require_same_raw_contract`). Test (same file).
 
 - [ ] **Step 1: Failing tests.**
   - `score_bundle(bundle, frame)` for a FeatureBuilder bundle equals `bundle["model"].predict_proba(bundle["preprocessor"].transform(frame)[feature_columns])`.
   - For an `sklearn_ct_v1` bundle it equals `model.predict_proba(ct.transform(frame[keep_columns]))`.
-  - Neither calls any `fit`: wrap the preprocessor's `fit` to raise and assert no error.
-  - `load_holdout_snapshot` (with a fake async client returning a fixed frame) returns `(frame, y, snapshot)`, where `snapshot = {"splits": ["test","holdout"], "n", "n_pos", "row_ids_sha256"}`. The hash is over sorted `patient_journey_id` (or the cohort's id column; read `FeatureBuilder.load_frame`'s select list at `feature_builder.py:260-300` for the id column name). Two calls over the same rows give the same hash.
+  - Neither calls any `fit`: wrap the preprocessor's `fit`/`build_from_frame` to raise and assert no error.
+  - `load_holdout_snapshot` (fake async client returning a fixed frame) returns `(frame, y, snapshot)` with:
+    - `snapshot = {"splits": ["test","holdout"], "n", "n_pos", "rows_sha256", "loaded_at"}`;
+    - `rows_sha256` is the sha256 over the frame sorted by `patient_id` (the id column `FeatureBuilder.load_frame` selects, `feature_builder.py:~330`), restricted to `patient_id`, `data_split`, the label and every keep-column, serialised with `to_csv(index=False, float_format="%.17g")`.
+    - Two calls over the same rows give the same hash; changing one label or one covariate changes it.
   - `test_keep_columns_must_match`: a candidate whose `keep_columns` set ≠ the served set is refused (`ValueError("raw contract differs")`), because the API and Feast supply the served contract (F7, `sync_goldstd_serving.py:135-164`).
-- [ ] **Step 2: Run** → FAIL. **Step 3: Implement.** Snapshot via `FeatureBuilder(spec).load_frame(db, splits=None)` filtered to `("test","holdout")`, as `run_persistence_eval.py:180-229` does, and resolve `spec` from the model name with `rematerialize_goldstd_bundles.SPEC_REGISTRY` (`:64-96`). **Step 4:** PASS.
-- [ ] **Step 5: Faithful rehearsal (read-only).** Run a scratch script against prod that scores the **served bundle** and the **v1.0 registry artifact** with `score_bundle`/`evaluate_gate` (served as comparator, registry as "candidate"). Expected, reproducing the probe: `auc_served≈0.8521`, `auc_candidate≈0.8509`, and pass. Paste the report into the PR body.
-- [ ] **Step 6: Commit** — `feat(mlops): paired DeLong non-inferiority gate on the goldstd holdout (Part of #2318)`.
+- [ ] **Step 2: Run** → FAIL. **Step 3: Implement.** Snapshot via `FeatureBuilder(spec).load_frame(db, splits=None)` filtered to `("test","holdout")`, as `run_persistence_eval.py:180-229` does. Resolve `spec` from the model name with `rematerialize_goldstd_bundles.SPEC_REGISTRY` (`:64-96`). The id column for HCP grain differs — read `feature_builder.py`'s HCP select list and key the hash on it. **Step 4:** PASS.
+- [ ] **Step 5: Faithful rehearsal (read-only).** Run a scratch script against prod that scores the **served bundle** (comparator) and the **v1.0 registry artifact** (as a stand-in "candidate") with `score_bundle`/`evaluate_gate`. Expected, reproducing the probe: `auc_served≈0.8521`, `auc_candidate≈0.8509`, pass. Paste the report into the PR body.
+- [ ] **Step 6: Commit** — `feat(mlops): paired DeLong non-inferiority acceptance rule on the goldstd holdout (Part of #2318)`.
 
 ---
 
-## Lane 6 — `promote-candidate` / `rollback-activation` CLI + reconciler
+## Lane 6 — `promote-candidate` / `rollback-activation` / `reconcile` CLI
 
 **Why:** the owner-approved command. It never runs automatically, defaults to dry-run, and requires `--approved-by`.
 
-**Reconcile order** (each step idempotent; the ledger row is the desired state):
+**Honest scope of "atomic":** DB + a file + a container + MLflow cannot share one transaction. This plan makes the switch **durable, ordered, resumable and compensated**:
+- the DB part is one transaction (Lane 4);
+- the serving part is one `os.replace` plus a verified restart;
+- a recorded phase says exactly which side of each boundary a crash left us on;
+- `reconcile <ledger id>` finishes or compensates from that phase.
 
-1. **Resolve.**
-   - Candidate row by id: it must be `stage='candidate'` with `retrain_of_id` = the current canonical row of the name.
-   - Refuse if a `pending`/`active` activation exists for the name.
-   - Refuse hcp_adoption unless OD-6 is granted (`--allow-hcp-production`).
-2. **Fetch the exact artifact.**
-   - MLflow run `mlflow_run_id` → tag `e2i.serving_bundle_sha256`. Refuse if absent: "not servable as-trained; retrain after #2318 Lane 2".
-   - GET `serving_bundle/bundle.pkl` via `http://localhost:5000/api/2.0/mlflow-artifacts/artifacts/<run>/artifacts/serving_bundle/bundle.pkl`.
-   - Verify its sha256 **before unpickling**.
-3. **Snapshot the served bundle** (predecessor). Read `shap_serving/<cohort>/<name>.bundle.pkl` and hash it. Its hash must equal the sidecar's `/model_info` `bundle_sha256` for the name (Lane 3); otherwise refuse, because disk and sidecar disagree.
-4. **Gate** (Lane 5) on one snapshot. Print the report. **Dry-run stops here** and prints the exact planned writes.
-5. **`--execute`:**
-   - (a) Write both bundles into the versioned store `data/ml_artifacts/serving_versions/<name>/<registry_id>.<sha12>.bundle.pkl`. This is **outside** `shap_serving` (F1); the dir is created 0750, and each file is written to a temp file, fsynced, then renamed.
-   - (b) Insert the ledger row (`pending`) with every prior value, `gate_report` and `approved_by`.
-   - (c) Record the holdout metrics under the candidate id: `ml_performance_metrics source='holdout'` (auc_roc, brier_score, calibration_slope, pr_auc; `sample_size=n`), through `MetricRecorder`/`PerformanceMetricRepository`, as `run_persistence_eval.py:300-330` does. The KPI page needs them (F7).
-   - (d) `os.replace` the candidate bundle onto `shap_serving/<cohort>/<name>.bundle.pkl` (atomic on one filesystem; both paths are under `data/ml_artifacts`).
-   - (e) `docker restart <sidecar>`, resolving the name with `docker ps --format '{{.Names}}' | grep -E '^e2i_bentoml(_dev)?$'`. Then poll `/healthz` and `/model_info` until `bundle_sha256 == candidate sha` (timeout 180 s). On timeout: restore the predecessor file, restart, set the ledger to `failed`, exit 3.
-   - (f) RPC `activate_model_candidate(ledger_id)`.
-   - (g) MLflow on the candidate version:
-     - `POST /api/2.0/mlflow/registered-models/alias` `{name, alias: "served", version}`;
-     - `POST /api/2.0/mlflow/model-versions/set-tag` `e2i.role=served`;
-     - `DELETE` the old `e2i.role=candidate` by overwrite.
-   - (h) SHAP cache: `GET /explain/global?model_type=<cohort>&brand=<brand>&sample_size=20&refresh=true` for that one slot, with the admin token as in `sync_goldstd_serving.py:103-116`. Assert 200 and that the response's features collapse to the served `keep_columns` (`_raw_covariates`, `sync_goldstd_serving.py:167-176`).
-6. **Re-run safety.** `promote-candidate` with an existing `pending` ledger row for the same candidate resumes at the first unfinished step (each step checks its end state first). `status` prints the ledger plus every surface's observed state and flags drift.
+**Serving goes first** (codex r1 HIGH asked why). In the window between the file swap and the DB commit, the predecessor's SHAP cache row is still the one served (it is a cache *hit* — the API recomputes only on a miss or `refresh=true`, `explain.py:2707-2720`), so nothing durable is written under the wrong id. The reverse order (DB first) makes the candidate id canonical while the predecessor still serves; any `/explain/global` miss in that window would *durably* cache predecessor output under the candidate id.
+- The residual window is the restart + verify (~10–60 s). Predictions in it come from the candidate, while the registry still names the predecessor.
+- That is stated in the evidence, not hidden. A readiness fence (taking the sidecar out of the API's routing) would need an API change for a seconds-long window of a correct model, so it is not proposed; the owner can ask for it.
 
-**Rollback (`rollback-activation <ledger id> --reason ... --approved-by ...`):**
+**Activation sequence** (every step first checks its own end state, so a re-run skips done work):
 
-1. `os.replace` the predecessor file from the versioned store, after verifying its sha256.
-2. Restart the sidecar and verify `/model_info` sha == `predecessor_bundle_sha256`.
-3. RPC `rollback_model_activation`.
-4. MLflow: delete alias `served` and set tag `e2i.role=rolled_back`.
+| # | Step | Phase after | On failure |
+|---|---|---|---|
+| 1 | Resolve the candidate by id. It must be `stage='candidate'` with `retrain_of_id` = the current canonical row of the name. Refuse on a live ledger row for the name. Refuse names not in `HCP_PRODUCTION_ACTIVATION_ALLOWLIST` when the canonical row is `production` (OD-6). | — | exit 2, nothing written |
+| 2 | Fetch the exact artifact: run `mlflow_run_id` → tag `e2i.serving_bundle_sha256`; GET `…/mlflow-artifacts/artifacts/<run>/artifacts/serving_bundle/bundle.pkl`. **Verify the sha256 before unpickling.** | — | exit 2; no tag → "not servable as-trained; retrain after #2318 Lane 2" |
+| 3 | Read the served file `shap_serving/<cohort>/<name>.bundle.pkl` and hash it. It must equal the sidecar's `/model_info` `bundle_sha256` (Lane 3). Read the MLflow alias `served` (its version or none). | — | exit 2 on disagreement |
+| 4 | Gate on one snapshot (Lane 5); comparator = served bundle. Print the report. **Dry-run ends here** and prints the planned writes. | — | exit 1 on a failed gate, nothing written |
+| 5 | `--execute`: **stash** both bundles as immutable copies in `data/ml_artifacts/serving_versions/<name>/<registry_id>.<sha12>.bundle.pkl` (outside `shap_serving`, F1). **Insert** the ledger row with every prior value, `gate_report`, `prior_mlflow_served_version` and `approved_by`. | `prepared` | re-run resumes |
+| 6 | Record the holdout metrics under the candidate id (`ml_performance_metrics source='holdout'`: auc_roc, brier_score, calibration_slope, pr_auc, `sample_size=n`) via `PerformanceMetricRepository` (as `run_persistence_eval.py:300-330`). The KPI page needs them (F7). Delete-then-insert by `(model_id, source)`, so it is idempotent. | `prepared` | re-run |
+| 7 | **Swap:** copy the stashed candidate bytes to a temp file **in the live directory**, `fsync`, `os.replace` onto the live name, `fsync` the directory. **The stash is never moved** (codex r1 HIGH). Restart the sidecar and poll `/healthz` and `/model_info` until `bundle_sha256 == candidate sha` (timeout 180 s). Then guarded-UPDATE the phase. | `serving_switched` | **compensate:** swap the predecessor stash back the same way, restart, verify the predecessor sha, set `aborted`, exit 3 |
+| 8 | RPC `activate_model_candidate(ledger_id)` (Lane 4). | `active` | **compensate** as in step 7 (the RPC is all-or-nothing, so the DB is untouched), set `aborted`, exit 3 |
+| 9 | MLflow on the candidate version: set alias `served` → version (REST `POST /api/2.0/mlflow/registered-models/alias`), and tag `e2i.role=served` (`POST …/model-versions/set-tag`, overwriting `candidate`). Set `mlflow_synced_at`. | `active` | not compensated: DB + serving are correct. `status` shows `mlflow_synced_at IS NULL`, and `reconcile` retries. |
+| 10 | SHAP cache: `GET /explain/global?model_type=<cohort>&brand=<brand>&sample_size=20&refresh=true` with an admin token (`sync_goldstd_serving.py:103-116`). Assert 200 and that the features collapse to the served `keep_columns` (`_raw_covariates`, `:167-176`). Set `shap_refreshed_at`. | `active` | as step 9 |
+
+**Rollback sequence** (`rollback-activation <ledger id> --reason TEXT --approved-by NAME [--execute]`):
+1. Guarded-UPDATE `active → rolling_back`, with `rolled_back_by` and `rollback_reason`.
+2. Swap the **predecessor stash** back (copy, never move; verify its sha against the ledger), restart, and verify the sidecar sha == `predecessor_bundle_sha256`.
+3. RPC `rollback_model_activation` → `rolled_back`.
+4. MLflow: restore alias `served` to `prior_mlflow_served_version`, or delete it when that is NULL; set tag `e2i.role=rolled_back`.
 5. SHAP refresh for the slot.
-6. Metrics: the candidate's holdout rows stay (history); the predecessor's are untouched.
+
+The candidate's holdout metrics stay as history; the predecessor's are untouched.
+
+**`reconcile <ledger id>`** reads the phase and drives the table:
+- `prepared` → continue from step 6;
+- `serving_switched` → step 8;
+- `active` with NULL `mlflow_synced_at`/`shap_refreshed_at` → steps 9/10;
+- `rolling_back` → rollback 2–5;
+- `aborted`/`rolled_back` → verify only.
+
+Use `--abort` on `prepared`/`serving_switched` to force compensation instead. `status [<name>]` prints the ledger plus each surface's observed state (file sha, sidecar sha, registry stages, deployment, alias, cache row id) and flags drift.
 
 ### Task 6.1: Versioned bundle store
 
 **Files:** `src/mlops/activation/bundle_store.py`; test `tests/unit/test_mlops/test_activation_bundle_store_2318.py` (uses `tmp_path` only).
 
 - [ ] **Step 1: Failing tests.**
-  - `stash(name, registry_id, blob)` writes `serving_versions/<name>/<id>.<sha12>.bundle.pkl` and returns `(path, sha)`. Re-stashing the same bytes is a no-op; the same id with different bytes raises.
-  - `swap_in(name, cohort, path, expected_sha)` refuses on a sha mismatch, and otherwise leaves exactly one file named `<name>.bundle.pkl` under `shap_serving/` with that sha.
-  - `test_store_is_outside_the_serving_root`: `serving_versions` is not under `shap_serving`, so the sidecar's walk never sees duplicates (F1).
-  - `served_sha(name, cohort)` hashes the served file.
-- [ ] **Step 2: Run** → FAIL. **Step 3: Implement** with `tempfile.NamedTemporaryFile(dir=target.parent, delete=False)` + `os.fsync` + `os.replace`. **Step 4:** PASS. **Commit.**
+  - `stash(name, registry_id, blob) -> (path, sha)` writes `serving_versions/<name>/<id>.<sha12>.bundle.pkl` read-only (0440). Re-stashing the same bytes is a no-op; the same id with different bytes raises.
+  - `swap_in(name, cohort, stash_path, expected_sha)` refuses on a sha mismatch. Otherwise, afterwards: exactly one `<name>.bundle.pkl` under `shap_serving/`, whose sha == expected, **and the stash file still exists with its original sha** (`test_swap_never_moves_the_stash`).
+  - `test_store_is_outside_the_serving_root`: `serving_versions` is not under `shap_serving`, so the sidecar walk never sees duplicates (F1).
+  - `served_sha(name, cohort)` hashes the live file.
+  - `test_swap_is_atomic_on_crash`: monkeypatch `os.replace` to raise → the live file is unchanged and no temp files remain.
+- [ ] **Step 2: Run** → FAIL. **Step 3: Implement** with `tempfile.NamedTemporaryFile(dir=live.parent, delete=False)` + write + `os.fsync` + `os.replace(tmp, live)` + `os.fsync(dir_fd)`, and a `finally` that unlinks a leftover tmp. **Step 4:** PASS. **Commit.**
 
 ### Task 6.2: Reconciler with injectable surfaces
 
-**Files:** `src/mlops/activation/reconcile.py`; test `tests/unit/test_mlops/test_activation_reconcile_2318.py`.
+**Files:** `src/mlops/activation/reconcile.py`, `src/mlops/activation/policy.py` (`HCP_PRODUCTION_ACTIVATION_ALLOWLIST: frozenset[str] = frozenset()`); test `tests/unit/test_mlops/test_activation_reconcile_2318.py`.
 
-Design: `Surfaces` is a small protocol with methods `registry_row(id)`, `live_activation(name)`, `insert_ledger(row)`, `rpc_activate(id)`, `rpc_rollback(id, reason)`, `mlflow_bundle(run_id) -> (blob, tag_sha)`, `mlflow_set_served(name, version)`, `mlflow_clear_served(name, version)`, `sidecar_sha(name)`, `restart_sidecar()`, `refresh_shap(cohort, brand)`, `record_holdout_metrics(model_id, report)`.
-- Production binds them to Supabase / MLflow REST / docker / HTTP.
-- Tests bind in-memory fakes of these **external boundaries**; business logic (gate, ordering, idempotency, refusal) is real.
+`Surfaces` is a `typing.Protocol`. Every operation from the sequence tables has a method, and each method raises on failure (nothing returns a silent `False`):
+
+```python
+class Surfaces(Protocol):
+    # registry / ledger (Supabase, service key)
+    async def registry_row(self, registry_id: str) -> dict: ...
+    async def canonical_id(self, model_name: str) -> str | None: ...
+    async def live_activation(self, model_name: str) -> dict | None: ...
+    async def activation(self, ledger_id: str) -> dict: ...
+    async def insert_activation(self, row: dict) -> str: ...
+    async def set_phase(self, ledger_id: str, expected: str, new: str, **fields: Any) -> None: ...  # guarded, exactly 1 row
+    async def candidate_deployment_id(self, registry_id: str) -> str: ...
+    async def record_holdout_metrics(self, registry_id: str, report: dict) -> None: ...
+    async def rpc_activate(self, ledger_id: str) -> None: ...
+    async def rpc_rollback(self, ledger_id: str) -> None: ...
+    # artifacts
+    async def mlflow_bundle(self, run_id: str) -> tuple[bytes, str]: ...        # (bytes, tag sha)
+    async def mlflow_served_alias(self, model_name: str) -> int | None: ...
+    async def mlflow_set_served(self, model_name: str, version: int, role: str) -> None: ...
+    async def mlflow_restore_served(self, model_name: str, version: int | None, rolled_back_version: int) -> None: ...
+    def stash(self, model_name: str, registry_id: str, blob: bytes) -> tuple[str, str]: ...
+    def swap_in(self, model_name: str, cohort: str, stash_path: str, expected_sha: str) -> None: ...
+    def served_file_sha(self, model_name: str, cohort: str) -> str: ...
+    # serving
+    async def sidecar_sha(self, model_name: str) -> str | None: ...
+    async def restart_sidecar_and_wait(self, model_name: str, expected_sha: str, timeout_s: int = 180) -> None: ...
+    async def refresh_shap(self, cohort: str, brand: str, keep_columns: list[str]) -> None: ...
+    async def holdout_snapshot(self, model_name: str) -> tuple[Any, Any, dict]: ...
+```
+
+Production binds these to Supabase, MLflow REST, the filesystem, `docker restart` and HTTP. Tests bind in-memory fakes of these **external boundaries** only; the gate, ordering, phases, idempotency and compensation are real.
 
 - [ ] **Step 1: Failing tests.**
-  - `test_dry_run_writes_nothing` — every write-method fake records zero calls; the plan printed lists the steps in order.
+  - `test_dry_run_writes_nothing` — every write method records zero calls; the printed plan lists steps 5–10 in order.
   - `test_refuses_candidate_without_bundle_tag` (the OD-8 case).
-  - `test_refuses_hash_mismatch_before_unpickle` — the fake returns bytes whose sha ≠ tag. Assert that `pickle.loads` is never called by patching it to raise.
-  - `test_refuses_when_disk_and_sidecar_disagree`.
-  - `test_refuses_failed_gate` — no ledger row is written.
-  - `test_execute_order` — calls happen in the order stash → ledger → metrics → swap → restart → sidecar verify → rpc → mlflow → shap.
-  - `test_sidecar_timeout_restores_predecessor_and_marks_failed`.
-  - `test_resume_from_pending_skips_done_steps` — the swap already happened, so the second run does not restart twice before the RPC.
-  - `test_rollback_order_and_idempotency`.
+  - `test_refuses_hash_mismatch_before_unpickle` — the fake returns bytes whose sha ≠ tag. Patch `pickle.loads` to raise and assert it is never reached.
+  - `test_refuses_when_disk_and_sidecar_disagree`, `test_refuses_failed_gate_nothing_written`, `test_refuses_hcp_when_allowlist_empty`.
+  - `test_execute_order` — stash → insert(prepared) → metrics → swap → restart+verify → set_phase(serving_switched) → rpc_activate → mlflow_set_served → refresh_shap.
+  - **Crash-injection matrix:** `@pytest.mark.parametrize("crash_after", [<each write method in order>])`. The fake raises `SystemExit` right after that call succeeds. Then `reconcile(ledger_id)` with healthy fakes must end in `active`, with the sidecar sha == candidate and every surface in the desired state, **and no step executed twice where that would be harmful** (for example, no second restart after `serving_switched`).
+  - `test_sidecar_timeout_compensates` — the predecessor stash is swapped back and verified, the phase is `aborted`, and the RPC is never called.
+  - `test_rpc_failure_compensates` — the same, after the swap.
+  - `test_rollback_order_restores_prior_alias` — with `prior_mlflow_served_version=None` the alias is deleted; with a version it is restored to that version.
+  - `test_rollback_crash_matrix_then_reconcile` — as above, ending `rolled_back`.
   - `test_second_live_activation_refused`.
-  - `test_hcp_requires_explicit_production_grant`.
 - [ ] **Step 2: Run** → FAIL. **Step 3: Implement.** **Step 4:** PASS. **Commit.**
 
 ### Task 6.3: CLI + production bindings
 
-**Files:** `scripts/model_activation.py` (argparse: `promote-candidate <registry_id> --approved-by NAME [--execute] [--comparator served|registry] [--allow-hcp-production]`, `rollback-activation <ledger_id> --reason TEXT --approved-by NAME [--execute]`, `status [<model_name>]`).
+**Files:** `scripts/model_activation.py` (argparse):
+- `promote-candidate <registry_id> --approved-by NAME [--execute]`
+- `rollback-activation <ledger_id> --reason TEXT --approved-by NAME [--execute]`
+- `reconcile <ledger_id> [--abort] [--execute]`
+- `status [<model_name>]`
+
+Production `Surfaces` lives in `src/mlops/activation/surfaces_live.py`. Its sidecar name is resolved with `docker ps --format '{{.Names}}'` matched against `^e2i_bentoml(_dev)?$`, and it fails if there is not exactly one match.
 
 - [ ] **Step 1: Failing test.** `tests/unit/test_scripts/test_model_activation_cli_2318.py`:
-  - `--help` lists the three subcommands;
+  - `--help` lists four subcommands;
   - `promote-candidate` without `--approved-by` exits 2;
-  - the default is dry-run: construct with fake surfaces and assert no write-method calls.
+  - `rollback-activation` without `--reason` exits 2;
+  - the default is dry-run: construct with fake surfaces and assert no write calls;
+  - there is no option that overrides `GateConfig` or the comparator (parse `--help` and assert none of `margin|alpha|comparator` appear).
 - [ ] **Step 2–4:** implement, then PASS.
 - [ ] **Step 5: Census.** Classify every new `ml_model_registry` accessor in `src/mlops/activation/*.py` and `scripts/model_activation.py` in `test_registry_reader_census_2310.py`:
   - the candidate lookup is `EXACT` (by id);
-  - the "current canonical row of the name" check is `CANONICAL` via `resolve_canonical_model_id`.
-  Then run the census → PASS.
-- [ ] **Step 6: Read-only rehearsal on prod.** Run `python -m scripts.model_activation promote-candidate 44e1fe04-a19d-458b-a3d9-cfbe0c1edced --approved-by rehearsal` (dry-run). Expected: refused with the "not servable as-trained" message (OD-8). That proves the refusal on a real pre-#2318 candidate.
-- [ ] **Step 7: Commit** — `feat(mlops): owner-gated promote-candidate / rollback-activation with DB+MLflow+bundle+sidecar reconciliation (Part of #2318)`.
+  - the canonical-row check is `CANONICAL` via `resolve_canonical_model_id`.
+  Run the census → PASS.
+- [ ] **Step 6: Read-only rehearsal on prod.** Run `python -m scripts.model_activation promote-candidate 44e1fe04-a19d-458b-a3d9-cfbe0c1edced --approved-by rehearsal` (dry-run). Expected: refused with the "not servable as-trained" message (OD-8), proving the refusal on a real pre-#2318 candidate. Also run `status initiation_kisqali_goldstd_lr_v1` and expect no ledger rows, with the sidecar sha == the file sha.
+- [ ] **Step 7: Commit** — `feat(mlops): owner-gated promote-candidate / rollback-activation / reconcile with phased DB+MLflow+bundle+sidecar reconciliation (Part of #2318)`.
 
 ---
 
@@ -1035,35 +1192,41 @@ Design: `Surfaces` is a small protocol with methods `registry_row(id)`, `live_ac
 
 **Why:** F14–F16 (OD-5). This lane must be deployed before any prod activation.
 
-### Task 7.1: `active_activation_for(model_name)`
+### Task 7.1: `live_activation_for(model_name)`
 
-**Files:** `src/mlops/activation/guards.py`; test `tests/unit/test_mlops/test_activation_guards_2318.py`.
+**Files:** `src/mlops/activation/guards.py` (create `src/mlops/activation/__init__.py` if absent); test `tests/unit/test_mlops/test_activation_guards_2318.py`.
 
 - [ ] **Step 1: Failing tests.**
-  - Returns the ledger row with `status='active'` for the name, else `None`.
-  - A `pending` row also counts: fail safe while an activation is in flight.
-  - A lookup error **raises**: the callers are writers and must not proceed blind. This is the opposite of the reader fail-open in `model_registry_roles.py:114-118`, stated in the docstring.
+  - Returns the ledger row whose phase is live (`prepared`, `serving_switched`, `active`, `rolling_back`) for the name, else `None`.
+  - `is_stale(row)` is True for a non-`active` live row older than 24 h. The callers then refuse with "stale activation <id>: run model_activation.py reconcile".
+  - A lookup error **raises**: the callers are writers and must not proceed blind. This is the opposite of the reader fail-open in `model_registry_roles.py:114-118`, and the docstring says why.
 - [ ] **Step 2–4: implement → PASS.**
 
-### Task 7.2: Retrain slots skip activated names
+### Task 7.2: Role-preserving upsert for an activation's predecessor (the weekly refit continues)
 
-**Files:** `src/mlops/gold_standard_eval/run_persistence_eval.py` and `run_initiation_eval.py` (at the top of the per-slot function, before the metric delete at `run_persistence_eval.py:250-271`), `run_hcp_cohorts.py` (same). Tests in the guards test file, with a fake client.
-
-- [ ] **Step 1: Failing test.** With an active activation for `initiation_kisqali_goldstd_lr_v1`, the slot returns `{"model": name, "skipped": "served by activated candidate <cand_id> (activation <id>)"}`. `register_model_row`, `delete_metrics` and `serialize_model` are **not called**. Other slots run.
-- [ ] **Step 2: Run** → FAIL. **Step 3: Implement** the early return. `run_patient_cohorts._print_report` (`:110-125`) must render `skipped` rows without `KeyError` (the complement-validation block at `:83-107` must skip a pair with a skipped member). **Step 4:** PASS.
-- [ ] **Step 5:** extend `tests/unit/test_scripts/test_reseed_retrain_hookup.py` if it asserts the slot count, so a skipped slot is not a failure.
-
-### Task 7.3: Re-materializer, hcp promote and `register_model_row` refuse activated slots
-
-**Files:** `scripts/rematerialize_goldstd_bundles.py` (`_amain` `:157-186`), `scripts/sync_goldstd_serving.py` (it calls `_amain`), `scripts/promote_hcp_adoption_champions.py` (before `_fetch_registry_row` use), `src/mlops/prediction_synthesizer_deploy.py::register_model_row` (before the upsert, `:380-387`).
+**Files:** `src/mlops/prediction_synthesizer_deploy.py::register_model_row` (`:280-410`: build the payload, then upsert at `:380-387`, then read back at `:391-405`). Test in the guards test file with a fake client.
 
 - [ ] **Step 1: Failing tests.**
-  - `_amain([name])` with an active activation prints `SKIP <name>: served by activation <id>` and does **not** write the bundle; rc stays 0.
-  - hcp promote HOLDs the brand with the same reason.
-  - `register_model_row(..., model_name=n, model_version="1.0")`, when the existing `(n, "1.0")` row is the `predecessor_registry_id` of a live activation, raises `ValueError("… archived by activation …")` before the upsert. This is the defensive half of OD-5.
+  - When the `(model_name, model_version)` row being upserted is the `predecessor_registry_id` of a live activation, the upsert payload **omits** `stage`, `is_champion` and `registered_at`. The row stays `archived`, is not re-dated, and so is never canonical again (F15). The read-back verification (`:391-405`) checks that the stage is **unchanged** instead of `== stage`.
+  - Every other field (artifact_path, auc, feature_count, training_samples, hyperparameters) is refreshed as today, so the weekly refit's metrics and trend keep updating under that id (the `717dd7158` intent).
+  - With no live activation, behaviour is byte-identical to today: the payload equals the pre-change payload.
+- [ ] **Step 2: Run** → FAIL. **Step 3: Implement:** look up `live_activation_for(model_name)`; if its `predecessor_registry_id` equals the existing row's id, drop those three keys and log `INFO role preserved for <name> v<version>: predecessor of activation <id>`. **Step 4:** PASS.
+- [ ] **Step 5:** run the existing register/eval suites: `pytest -n 0 tests -k "register_model_row or cohort_deployer or run_persistence_eval or run_initiation_eval" -q` → PASS.
+
+### Task 7.3: Writers that change *serving* or *role* refuse an activated slot
+
+**Files:**
+- `scripts/rematerialize_goldstd_bundles.py` (`_amain` `:157-186`);
+- `scripts/sync_goldstd_serving.py` (the default phase calls `_amain`, `:96-100`, `:280-289`);
+- `scripts/promote_hcp_adoption_champions.py` (before the promotion of a brand).
+
+- [ ] **Step 1: Failing tests.**
+  - `_amain([name])` with a live activation prints `SKIP <name>: served by activation <id> (bundle is the activated artifact)` and does **not** write the bundle. rc stays 0 for a clean skip; rc 1 for a stale activation.
+  - `sync_goldstd_serving` reports the skip in its summary.
+  - hcp promote HOLDs the brand with the same reason (it would otherwise promote the archived predecessor).
 - [ ] **Step 2–4: implement → PASS.** Run `pytest -n 0 tests/unit/test_scripts/test_reseed_retrain_hookup.py tests/unit/test_mlops/test_activation_guards_2318.py -q`.
-- [ ] **Step 5: Census** — classify the new ledger reads (they read `ml_model_activations`, not the registry; add them only if the census flags them).
-- [ ] **Step 6: Commit** — `fix(goldstd): weekly retrain, re-materializer and hcp promote leave an activated slot alone (Part of #2318)`.
+- [ ] **Step 5: Census** — classify any new registry accessor; the ledger reads are on `ml_model_activations` and need a census entry only if the census flags them.
+- [ ] **Step 6: Commit** — `fix(goldstd): weekly refit keeps an activated slot's roles; re-materializer and hcp promote refuse it (Part of #2318)`.
 
 ---
 
@@ -1086,10 +1249,11 @@ Before the first paid or prod step, run `pgrep -fa` for peer sessions and `ls -d
 | 2 | Dry-run `promote-candidate <new id> --approved-by <owner>` and paste the gate report. | read-only |
 | 3 | ⚠ `promote-candidate … --execute`. | **prod write (FS bundle, sidecar restart, registry/deployments/ledger, MLflow alias/tag, metrics, SHAP cache)** |
 | 4 | Verify serving is the exact artifact. Download `serving_bundle/bundle.pkl` from MLflow, check its sha against the run tag, and compute `p_local = model.predict_proba(ct.transform(rows[keep]))[:,1]` **in the worker image** (`docker exec -i e2i-causal-analytics-worker_medium-1 python -`, sklearn 1.6.1). Assert: sidecar `/predict` for the same rows returns `p_sidecar == p_local` (max abs diff ≤ 1e-12); sidecar sha == ledger `candidate_bundle_sha256`; registry candidate stage `staging`, predecessor `archived`; deployment `active`; MLflow alias `served` → the version; `/explain/global` 200 with `cached=false` then `cached=true` under the candidate id; KPI page `summarize` includes the candidate's holdout metrics exactly once. | read-only |
-| 5 | Verify the reseed guard **without waiting for Monday**: run `python -m scripts.rematerialize_goldstd_bundles --model <name>` → `SKIP`. Also run the slot's retrain dry path, if one exists; otherwise rely on the unit tests and state that. | read-only (the SKIP path writes nothing) |
+| 5 | Verify the reseed guards **without waiting for Monday**: `python -m scripts.rematerialize_goldstd_bundles --model <name>` → `SKIP` (writes nothing); `python scripts/promote_hcp_adoption_champions.py` (dry run) → no change for the slot. The role-preserving upsert is proven by Lane 7's unit tests; say so in the evidence — do NOT run `retrain_goldstd.sh` ad hoc (it rewrites 12 rows + metrics). **Then, after the next Monday 03:00Z cron with the activation still in place** (if the owner keeps it active that long), re-read: candidate still `staging`, predecessor still `archived` with a fresh `trained_at`, sidecar sha unchanged. | read-only |
 | 6 | ⚠ `rollback-activation <ledger id> --reason "2318 live verification" --approved-by <owner> --execute`. | **prod write** |
+| 6b | Crash-recovery rehearsal is done in unit tests (Lane 6 crash matrix), **not** on prod. | — |
 | 7 | Verify the predecessor is restored: sidecar sha == P_sha; `/predict` for the 20 rows == `p_before` exactly; predecessor stage/champion/artifact_path equal the baseline; candidate `archived`; deployment `rolled_back`; ledger `rolled_back`; alias `served` absent; `/explain/global` recomputed under the predecessor id. | read-only |
-| 8 | Re-run `rollback-activation` (idempotency) → no-op, exit 0. Run `status` → no drift. | read-only |
+| 8 | Re-run `rollback-activation` (idempotency: the RPC verifies the postcondition) → no-op, exit 0. Run `status` → no drift. | read-only |
 
 **Evidence:**
 - Save all outputs to `docs/demos/results/<date>_2318_activation_live/`: JSON per step, the gate report, prediction CSVs, and a verdict line first.
