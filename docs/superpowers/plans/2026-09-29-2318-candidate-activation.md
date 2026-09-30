@@ -60,7 +60,7 @@ Each item: my recommendation, why, and the single fact that would reverse it. La
   - the bundle re-materializer (it would overwrite the served file with a re-fit);
   - `promote_hcp_adoption_champions.py` (it would promote the archived row);
   - the `sync_goldstd_serving` bundle phase.
-- A `pending` activation older than 24 h is reported as **stale** by these guards. They refuse (fail safe) and point to `model_activation.py reconcile <id>`, which finishes or aborts it. There is no silent expiry.
+- A live activation stuck in a non-`active` phase (`prepared`, `serving_switched`, `rolling_back`) for more than 24 h is reported as **stale** by these guards. They refuse (fail safe) and point to `model_activation.py reconcile <id>`, which finishes or aborts it. There is no silent expiry.
 - **Reverses it:** the owner does not want archived predecessors refit at all (cost). Then the retrain skips the slot instead. The refusals above stay either way.
 
 **OD-6 — hcp_adoption serves at `production`; the #968 gate refuses `synthetic_gold` → production (Lane 4, Lane 6)**
