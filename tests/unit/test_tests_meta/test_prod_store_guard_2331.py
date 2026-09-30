@@ -34,7 +34,6 @@ import pytest
 
 # Bound at collection time, as a module doing ``from psycopg2 import connect``
 # would be. The unit conftest installs the wrappers before collection.
-from psycopg import connect as _psycopg3_connect_alias
 from psycopg2 import connect as _psycopg2_connect_alias
 
 from tests.prod_store_guard import (
@@ -45,6 +44,11 @@ from tests.prod_store_guard import (
     active_guards,
     guard_enabled,
 )
+
+try:  # psycopg 3 is used by src/ but is not in requirements.txt, so CI lacks it
+    from psycopg import connect as _psycopg3_connect_alias
+except ImportError:
+    _psycopg3_connect_alias = None
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -357,7 +361,7 @@ def test_psycopg2_is_refused_before_libpq(listener: socket.socket) -> None:
 
 
 def test_psycopg3_sync_and_async_are_refused_before_libpq(listener: socket.socket) -> None:
-    import psycopg
+    psycopg = pytest.importorskip("psycopg")
 
     host, port = listener.getsockname()
     guard = _guard_for(port)
@@ -375,18 +379,25 @@ def test_psycopg3_sync_and_async_are_refused_before_libpq(listener: socket.socke
     _assert_refused_and_recorded(guard, listener, "psycopg")
 
 
-def test_driver_aliases_bound_at_collection_are_still_guarded(listener: socket.socket) -> None:
-    import psycopg
+def test_psycopg2_alias_bound_at_collection_is_still_guarded(listener: socket.socket) -> None:
     import psycopg2
 
     host, port = listener.getsockname()
     guard = _guard_for(port)
     with guard.active(), pytest.raises(psycopg2.OperationalError, match=r"#2331"):
         _psycopg2_connect_alias(host=host, port=port, dbname="x", connect_timeout=2)
+    _assert_refused_and_recorded(guard, listener, "psycopg2")
+
+
+def test_psycopg3_alias_bound_at_collection_is_still_guarded(listener: socket.socket) -> None:
+    psycopg = pytest.importorskip("psycopg")
+    assert _psycopg3_connect_alias is not None
+
+    host, port = listener.getsockname()
+    guard = _guard_for(port)
     with guard.active(), pytest.raises(psycopg.OperationalError, match=r"#2331"):
         _psycopg3_connect_alias(f"host={host} port={port} dbname=x connect_timeout=2")
-    assert len(guard.attempts) == 2
-    assert _backlog_empty(listener)
+    _assert_refused_and_recorded(guard, listener, "psycopg")
 
 
 def test_pg_hostaddr_env_behind_a_remote_host_name_is_refused(
@@ -404,7 +415,7 @@ def test_pg_hostaddr_env_behind_a_remote_host_name_is_refused(
 
 
 def test_pg_multi_host_list_is_refused_on_its_local_member(listener: socket.socket) -> None:
-    import psycopg
+    psycopg = pytest.importorskip("psycopg")
 
     host, port = listener.getsockname()
     guard = _guard_for(port)
