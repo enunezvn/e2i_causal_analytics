@@ -370,6 +370,17 @@ def test_psycopg3_sync_and_async_are_refused_before_libpq(listener: socket.socke
     _assert_refused_and_recorded(guard, listener, "psycopg")
 
 
+def test_innermost_active_guard_owns_the_attempt(listener: socket.socket) -> None:
+    """The conftest's per-item guard sits inside any outer guard; its report must
+    not lose the item's attempts to the outer one."""
+    outer = _guard_for(listener.getsockname()[1])
+    inner = _guard_for(listener.getsockname()[1])
+    with outer.active(), inner.active(), pytest.raises(ConnectionRefusedError):
+        socket.create_connection(listener.getsockname(), timeout=2)
+    assert outer.attempts == []
+    _assert_refused_and_recorded(inner, listener, "socket")
+
+
 def test_deactivated_guard_restores_normal_connects(listener: socket.socket) -> None:
     guard = _guard_for(listener.getsockname()[1])
     with guard.active():
