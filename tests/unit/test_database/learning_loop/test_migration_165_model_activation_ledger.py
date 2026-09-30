@@ -539,7 +539,10 @@ BAD_REPORTS = {
     "not_an_object": None,
     # codex r1 HIGH 1: the verdict must follow from the report's own numbers.
     "lower_bound_raised": _mutate("auc_lower_bound", 0.0),  # auc_delta / se_delta unchanged
-    "auc_delta_forged": _mutate("auc_delta", 0.0108),  # auc_candidate - auc_served = 0.0008
+    # auc_candidate - auc_served = 0.0008; the bound is kept consistent with the forged delta,
+    # so only the auc_delta identity can refuse it.
+    "auc_delta_forged": lambda r: r.update(auc_delta=0.0108,
+                                           auc_lower_bound=0.0108 - 1.6448536269514722 * 0.0012),
     "usable_plus_skipped_not_b": _mutate("bootstrap_skipped_single_class", 5),
     "usable_non_integral": lambda r: r.update(bootstrap_usable=1999.5,
                                               bootstrap_skipped_single_class=0.5),
