@@ -43,6 +43,10 @@ from tests import prod_store_guard as _psg
 # reported in the terminal summary, and E2I_PROD_STORE_GUARD_STRICT=1 fails
 # the offending test. Off in GitHub Actions (see ``guard_enabled``). Locked by
 # tests/unit/test_tests_meta/test_prod_store_guard_2331.py.
+# Installed at import, before any test module is collected, so a module-level
+# ``from psycopg2 import connect`` binds the wrapper. Pass-through while no
+# guard is active (always, in CI).
+_psg.install_patches()
 _PROD_STORE_GUARD = _psg.ProdStoreGuard() if _psg.guard_enabled() else None
 _PROD_STORE_USER_PROPERTY = "prod_store_guard"
 _prod_store_report: list[tuple[str, str, str]] = []
@@ -63,7 +67,7 @@ def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None):  #
     _PROD_STORE_GUARD.exempt_ports = frozenset()
 
 
-@pytest.hookimpl(hookwrapper=True)
+@pytest.hookimpl(hookwrapper=True, tryfirst=True)  # outermost: sees the final report
 def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):  # type: ignore[no-untyped-def]
     outcome = yield
     if _PROD_STORE_GUARD is None:
@@ -78,6 +82,10 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo):  # type
     report.user_properties.append((_PROD_STORE_USER_PROPERTY, described))
     if _psg.strict_mode() and report.outcome != "failed":
         report.outcome = "failed"
+        # An xfail/xpass report keeps ``wasxfail``, which makes pytest count a
+        # failed report as expected; strict mode must fail it for real.
+        if hasattr(report, "wasxfail"):
+            del report.wasxfail
         report.longrepr = (
             f"{_psg.GUARD_TAG} {_psg.STRICT_ENV_VAR}=1 and this test tried to reach "
             "a production store:\n  " + "\n  ".join(described)

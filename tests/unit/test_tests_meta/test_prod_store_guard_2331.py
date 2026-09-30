@@ -32,6 +32,11 @@ from pathlib import Path
 
 import pytest
 
+# Bound at collection time, as a module doing ``from psycopg2 import connect``
+# would be. The unit conftest installs the wrappers before collection.
+from psycopg import connect as _psycopg3_connect_alias
+from psycopg2 import connect as _psycopg2_connect_alias
+
 from tests.prod_store_guard import (
     GUARD_TAG,
     PROD_STORE_PORTS,
@@ -370,6 +375,75 @@ def test_psycopg3_sync_and_async_are_refused_before_libpq(listener: socket.socke
     _assert_refused_and_recorded(guard, listener, "psycopg")
 
 
+def test_driver_aliases_bound_at_collection_are_still_guarded(listener: socket.socket) -> None:
+    import psycopg
+    import psycopg2
+
+    host, port = listener.getsockname()
+    guard = _guard_for(port)
+    with guard.active(), pytest.raises(psycopg2.OperationalError, match=r"#2331"):
+        _psycopg2_connect_alias(host=host, port=port, dbname="x", connect_timeout=2)
+    with guard.active(), pytest.raises(psycopg.OperationalError, match=r"#2331"):
+        _psycopg3_connect_alias(f"host={host} port={port} dbname=x connect_timeout=2")
+    assert len(guard.attempts) == 2
+    assert _backlog_empty(listener)
+
+
+def test_pg_hostaddr_env_behind_a_remote_host_name_is_refused(
+    listener: socket.socket, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """libpq connects to ``hostaddr`` and only uses ``host`` for auth/SSL."""
+    import psycopg2
+
+    host, port = listener.getsockname()
+    monkeypatch.setenv("PGHOSTADDR", host)
+    guard = _guard_for(port)
+    with guard.active(), pytest.raises(psycopg2.OperationalError, match=r"#2331"):
+        psycopg2.connect(host="remote.invalid", port=port, dbname="x", connect_timeout=2)
+    _assert_refused_and_recorded(guard, listener, "psycopg2")
+
+
+def test_pg_multi_host_list_is_refused_on_its_local_member(listener: socket.socket) -> None:
+    import psycopg
+
+    host, port = listener.getsockname()
+    guard = _guard_for(port)
+    with guard.active(), pytest.raises(psycopg.OperationalError, match=r"#2331"):
+        psycopg.connect(f"host=remote.invalid,{host} port=5,{port} dbname=x connect_timeout=2")
+    _assert_refused_and_recorded(guard, listener, "psycopg")
+
+
+def test_pg_service_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pg_service.conf entry hides its endpoint; the guard refuses rather than guess."""
+    import psycopg2
+
+    monkeypatch.setenv("PGSERVICE", "l2331-unknown-service")
+    guard = ProdStoreGuard(ports={5432: "Postgres"}, unix_paths={})
+    with guard.active(), pytest.raises(psycopg2.OperationalError, match=r"#2331"):
+        psycopg2.connect(dbname="x", connect_timeout=2)
+    assert [a.target for a in guard.attempts] == ["service=l2331-unknown-service"]
+
+
+def test_linux_abstract_unix_socket_passes_through() -> None:
+    if not sys.platform.startswith("linux"):
+        pytest.skip("abstract unix sockets are Linux-only")
+    name = f"\0l2331-abstract-{os.getpid()}"
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(name)
+    srv.listen(4)
+    try:
+        guard = ProdStoreGuard(ports={}, unix_paths={"/var/run/docker.sock": "docker"})
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            with guard.active():
+                s.connect(name)
+        finally:
+            s.close()
+        assert guard.attempts == []
+    finally:
+        srv.close()
+
+
 def test_innermost_active_guard_owns_the_attempt(listener: socket.socket) -> None:
     """The conftest's per-item guard sits inside any outer guard; its report must
     not lose the item's attempts to the outer one."""
@@ -427,9 +501,24 @@ import socket
 import pytest
 
 
-def test_reaches_for_prod_falkordb():
+def _reach():
     with pytest.raises(ConnectionRefusedError):
         socket.create_connection(("127.0.0.1", 6381), timeout=2)
+
+
+def test_reaches_for_prod_falkordb():
+    _reach()
+
+
+@pytest.mark.xfail(reason="expected failure that also reaches for prod")
+def test_xfail_reaching():
+    _reach()
+    assert False
+
+
+@pytest.mark.xfail(reason="unexpected pass that also reaches for prod")
+def test_xpass_reaching():
+    _reach()
 """
 
 _INNER_CONFTEST = """
@@ -469,12 +558,15 @@ def _run_inner_session(tmp_path, strict: bool) -> subprocess.CompletedProcess[st
 def test_refused_attempt_is_reported_in_the_terminal_summary(tmp_path) -> None:
     proc = _run_inner_session(tmp_path, strict=False)
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "1 refused connection attempt(s) to PRODUCTION stores from 1 test(s)" in proc.stdout
+    assert "1 passed, 1 xfailed, 1 xpassed" in proc.stdout
+    assert "3 refused connection attempt(s) to PRODUCTION stores from 3 test(s)" in proc.stdout
     assert "test_inner.py::test_reaches_for_prod_falkordb [call] -> 127.0.0.1:6381" in proc.stdout
 
 
 def test_strict_mode_fails_the_test_that_made_the_attempt(tmp_path) -> None:
+    """Including xfail/xpass: their ``wasxfail`` would otherwise let pytest count the
+    promoted failure as expected and exit 0."""
     proc = _run_inner_session(tmp_path, strict=True)
     assert proc.returncode == 1, proc.stdout + proc.stderr
-    assert "1 failed" in proc.stdout
+    assert "3 failed" in proc.stdout
     assert f"{STRICT_ENV_VAR}=1 and this test tried to reach a production store" in proc.stdout

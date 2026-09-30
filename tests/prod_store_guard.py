@@ -195,7 +195,11 @@ class ProdStoreGuard:
         return store if is_local_host(host) else None
 
     def match_unix(self, path: str) -> str | None:
-        return self.unix_paths.get(os.path.realpath(path)) or self.unix_paths.get(path)
+        if path in self.unix_paths:
+            return self.unix_paths[path]
+        if not path or path.startswith("\0"):
+            return None  # Linux abstract socket: no filesystem path to canonicalise
+        return self.unix_paths.get(os.path.realpath(path))
 
     def refuse(self, target: str, port: int | None, store: str, via: str) -> str:
         test = self.current_test or "<outside a unit test>"
@@ -216,7 +220,7 @@ class ProdStoreGuard:
 
     @contextlib.contextmanager
     def active(self) -> Iterator[ProdStoreGuard]:
-        _install_patches()
+        install_patches()
         _ACTIVE.append(self)
         try:
             yield self
@@ -260,25 +264,39 @@ def _check_socket(sock: socket.socket, address: Any) -> None:
 
 
 def _pg_targets(params: Mapping[str, Any]) -> list[tuple[str, int]]:
-    """(host, port) pairs libpq would try. A unix-socket directory is local."""
-    host_spec = str(params.get("hostaddr") or params.get("host") or os.environ.get("PGHOST", ""))
+    """(host, port) pairs libpq could connect to, from the conninfo and PG* env.
+
+    libpq connects to ``hostaddr`` when given and uses ``host`` for auth/SSL; both
+    are checked, so a local ``hostaddr`` behind a remote ``host`` name is still
+    caught. An empty host or a unix-socket directory means this machine."""
     port_spec = str(params.get("port") or os.environ.get("PGPORT", "") or "5432")
-    hosts = host_spec.split(",")
-    ports = port_spec.split(",")
-    if len(ports) == 1:
-        ports = ports * len(hosts)
+    ports = [p.strip() for p in port_spec.split(",")]
     targets = []
-    for h, p in zip(hosts, ports, strict=False):
-        h = h.strip()
-        if not h or h.startswith("/") or h.startswith("@"):
-            h = "127.0.0.1"
-        targets.append((h, int(p.strip() or 5432)))
+    for key, env_var in (("hostaddr", "PGHOSTADDR"), ("host", "PGHOST")):
+        hosts = str(params.get(key) or os.environ.get(env_var, "")).split(",")
+        for i, h in enumerate(hosts):
+            h = h.strip()
+            if key == "hostaddr" and not h:
+                continue
+            if not h or h.startswith("/") or h.startswith("@"):
+                h = "127.0.0.1"
+            p = ports[i] if i < len(ports) else ports[0]
+            try:
+                targets.append((h, int(p or 5432)))
+            except ValueError:
+                continue  # libpq rejects it itself
     return targets
 
 
 def _check_pg(params: Mapping[str, Any], via: str, error: type[Exception]) -> None:
+    guards = tuple(reversed(_ACTIVE))  # the innermost guard owns it
+    service = params.get("service") or os.environ.get("PGSERVICE")
+    if service and guards:
+        # A pg_service.conf entry hides its endpoint from the guard: fail closed.
+        store = "Postgres service (endpoint unresolvable by the guard)"
+        raise error(guards[0].refuse(f"service={service}", None, store, via))
     for host, port in _pg_targets(params):
-        for guard in reversed(tuple(_ACTIVE)):  # the innermost guard owns it
+        for guard in guards:
             store = guard.match_inet(host, port)
             if store is not None:
                 raise error(guard.refuse(f"{host}:{port}", port, store, via))
@@ -343,7 +361,9 @@ def _patch_psycopg3() -> None:
     psycopg.connect = psycopg.Connection.connect  # the module alias is bound at import
 
 
-def _install_patches() -> None:
+def install_patches() -> None:
+    """Install the pass-through wrappers (idempotent). Call it before test modules
+    are collected, so a ``from psycopg2 import connect`` alias binds the wrapper."""
     global _INSTALLED
     with _INSTALL_LOCK:
         if _INSTALLED:
