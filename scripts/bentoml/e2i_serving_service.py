@@ -561,8 +561,10 @@ class _ColumnTransformerRawEncoder:
         missing = [c for c in self.keep_columns if c not in raw.columns]
         if missing:
             raise ValueError(f"raw_features missing covariate(s): {missing}")
-        # Select in FIT order: the ColumnTransformer checks input names against
-        # the order it was fit on, and request dict key order is arbitrary.
+        # Hand the transformer exactly its fit-time columns, in fit order. A
+        # fitted ColumnTransformer selects by name (measured on 1.6.1: reordered
+        # and extra columns give identical output), so this is defensive: the
+        # encoded matrix never depends on request key order or stray keys.
         out = self._ct.transform(raw[list(self.keep_columns)])
         return pd.DataFrame(out, columns=self._feature_columns, index=raw.index)
 
