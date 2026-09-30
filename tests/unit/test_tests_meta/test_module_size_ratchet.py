@@ -60,7 +60,8 @@ ALLOWLIST: dict[str, int] = {
     "src/api/routes/feedback.py": 2041,
     "src/api/routes/health_score.py": 2379,
     "src/api/routes/monitoring.py": 2152,
-    "src/api/routes/predictions.py": 1519,
+    # predictions.py (was 1519) is unpinned: #2343 moved the request-side encoding
+    # (feature order, vectorization, batch input) to prediction_inputs.py -> 1463.
     "src/api/routes/resource_optimizer.py": 1549,
     "src/api/routes/segments.py": 2934,
     "src/api/schemas/causal.py": 2100,

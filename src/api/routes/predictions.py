@@ -27,6 +27,9 @@ from pydantic import BaseModel, Field
 from src.api.dependencies.auth import require_auth
 from src.api.dependencies.bentoml_client import BentoMLClient, get_bentoml_client
 from src.api.dependencies.durable_job_store import DurableJobStore
+from src.api.routes.prediction_inputs import build_batch_input
+from src.api.routes.prediction_inputs import resolve_feature_order as _resolve_feature_order
+from src.api.routes.prediction_inputs import vectorize_feature_dict as _vectorize_feature_dict
 from src.api.schemas.errors import ErrorResponse, ValidationErrorResponse
 from src.feature_store.feast_client import FeastClient, get_feast_client
 from src.feature_store.model_feature_refs import MODEL_FEATURE_REFS as _MODEL_FEATURE_REFS
@@ -84,78 +87,6 @@ async def _resolve_production_model_names(limit: int = 50) -> List[str]:
     except Exception as e:
         logger.warning("Could not resolve production models from registry: %s", e)
         return []
-
-
-async def _resolve_feature_order(client: "BentoMLClient", model_name: str) -> List[str]:
-    """Resolve the served model's authoritative ordered feature names.
-
-    The live BentoML service expects ``features`` as a POSITIONAL numeric matrix
-    ordered by the model's own ``feature_columns`` (the preprocessor input
-    order, or the estimator's ``feature_names_in_``). The service exposes this
-    via ``POST /model_info`` -> ``feature_columns``. We fetch it from the model
-    itself rather than guessing/hardcoding an order (the repo has several
-    divergent feature lists; only the bundled model knows its real order).
-
-    Fails CLOSED (503) when the model exposes no feature order — never invents a
-    positional order, which would silently feed the model a mis-ordered vector
-    presented as a real prediction.
-    """
-    try:
-        info = await client.get_model_info(model_name)
-    except Exception as e:
-        logger.error("Could not fetch model_info for feature order (model=%s): %s", model_name, e)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Model metadata unavailable for '{model_name}'",
-        )
-
-    columns = info.get("feature_columns")
-    if not columns or not isinstance(columns, list):
-        logger.error(
-            "Model '%s' exposes no feature_columns order via /model_info; refusing to "
-            "vectorize a feature dict against an unknown positional order.",
-            model_name,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                f"Model '{model_name}' does not expose a feature order; cannot vectorize "
-                "feature dictionary"
-            ),
-        )
-    return [str(c) for c in columns]
-
-
-def _vectorize_feature_dict(
-    features: Dict[str, Any], feature_order: List[str], *, context: str
-) -> List[float]:
-    """Build a single ordered numeric row from a feature dict + canonical order.
-
-    Each value is read by name in ``feature_order``. A missing or null required
-    feature FAILS CLOSED with a 422 — no silent zero-fill (which would fabricate
-    a plausible-but-wrong prediction). Extra keys not in the order are ignored.
-    Non-numeric values raise a 422 with the offending field named.
-    """
-    missing = [name for name in feature_order if name not in features or features[name] is None]
-    if missing:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=(
-                f"Missing required feature(s) for {context}: {missing}. "
-                f"Expected features (in order): {feature_order}"
-            ),
-        )
-    row: List[float] = []
-    for name in feature_order:
-        value = features[name]
-        try:
-            row.append(float(value))
-        except (TypeError, ValueError):
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"Feature '{name}' is not numeric (got {value!r}) for {context}",
-            )
-    return row
 
 
 router = APIRouter(
@@ -698,44 +629,55 @@ async def predict_batch(
     failed_count = 0
 
     try:
-        # Build batch input matching the BentoML ``BatchPredictionInput`` schema
-        # (verified live 2026-06-14): {"batch_id": str, "features": [[...], ...]}.
-        # Each instance's feature DICT is vectorized into the model's authoritative
-        # POSITIONAL order (resolved from /model_info, never guessed). A missing
-        # required feature on any instance fails closed (422) — no zero-fill.
-        import uuid
-
-        feature_order = await _resolve_feature_order(client, model_name)
-        ordered_rows = [
-            _vectorize_feature_dict(
-                inst.features,
-                feature_order,
-                context=f"predict_batch(model={model_name}, instance={i})",
-            )
-            for i, inst in enumerate(request.instances)
-        ]
-
-        batch_data = {
-            "batch_id": str(uuid.uuid4()),
-            "features": ordered_rows,
-        }
+        # #2343: route by model_name and encode like single /predict (see
+        # ``build_batch_input``); a missing feature/covariate fails closed (422).
+        batch_data = await build_batch_input(
+            client, model_name, [inst.features for inst in request.instances]
+        )
 
         # Call batch endpoint
         result = await client.predict_batch(model_name, batch_data)
 
+        # Fail closed on a service-reported error (unknown model_name, or a named
+        # raw-covariate bundle refusing an encoded matrix) instead of returning a
+        # 200 with zero predictions. Mirrors the single /predict route.
+        service_error = result.get("error")
+        if service_error:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Model '{model_name}': {service_error}",
+            )
+
         # Flat-contract response: {"batch_id", "total_samples", "predictions":
-        # [number, ...], "processing_time_ms", "is_mock"}. ``predictions`` is a
-        # flat list of scalar predictions (one per instance), NOT a list of
-        # per-instance result dicts.
+        # [number, ...], "probabilities": [number, ...], "processing_time_ms",
+        # "is_mock"}. ``predictions`` is a flat list of scalar predictions (one
+        # per instance). ``probabilities`` is the per-row positive-class
+        # probability (populated on the raw-covariate path, else empty); it is
+        # mapped exactly as the single route maps its one-row list.
         raw_predictions = result.get("predictions", [])
+        raw_probs = result.get("probabilities") or []
+        if raw_probs and len(raw_probs) != len(raw_predictions):
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=(
+                    f"Model '{model_name}' returned {len(raw_probs)} probabilities "
+                    f"for {len(raw_predictions)} predictions"
+                ),
+            )
         model_version = result.get("model_id")
-        for pred in raw_predictions:
+        for idx, pred in enumerate(raw_predictions):
+            row_probs: Optional[Dict[str, float]] = None
+            row_conf: Optional[float] = None
+            if raw_probs:
+                positive = float(raw_probs[idx])
+                row_probs = {"positive_class": positive}
+                row_conf = positive
             predictions.append(
                 PredictionResponse(
                     model_name=model_name,
                     prediction=pred,
-                    confidence=None,
-                    probabilities=None,
+                    confidence=row_conf,
+                    probabilities=row_probs,
                     prediction_interval=None,
                     feature_importance=None,
                     latency_ms=result.get("processing_time_ms", 0),
