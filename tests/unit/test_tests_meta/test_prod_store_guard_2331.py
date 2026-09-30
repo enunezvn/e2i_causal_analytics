@@ -532,7 +532,7 @@ def test_unit_test_connect_to_prod_port_is_refused(port: int) -> None:
     assert GUARD_TAG in str(exc_info.value)
     # The conftest's guard recorded it. Taking the record also keeps this
     # deliberate probe out of the summary and out of strict mode.
-    (unit_guard,) = active_guards()
+    unit_guard = active_guards()[-1]  # innermost: an outer guard may also be active
     assert [a.port for a in unit_guard.take_new_attempts()] == [port]
 
 
