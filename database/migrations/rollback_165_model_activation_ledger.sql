@@ -7,16 +7,21 @@
 --
 -- Keeps the audit history: the ledger and the allowlist are RENAMED to *_retired_165 (their
 -- indexes too, so a re-applied 165 can create its own), readable by postgres only. Drops the
--- registry role guard, the ledger triggers and every 165 function, then removes 165's ledger
+-- registry role guard, the ledger triggers, every 165 function and the (always empty between
+-- transactions) RPC authority table, then removes 165's ledger
 -- row so a later deploy re-applies it (the 164 rollback does the same).
 --
 -- A second run after a clean first run is a no-op apart from the ledger-row DELETE. A second
 -- apply-then-rollback cycle fails loudly on the rename (the *_retired_165 names are taken):
 -- rename the first retired tables by hand before it.
 
+-- The live-row check runs under ACCESS EXCLUSIVE on the ledger (held to the end of this
+-- transaction): an insert still in flight either commits first and is seen here, or waits
+-- until the rollback is done and then fails on the renamed table (codex r1).
 DO $$
 BEGIN
     IF to_regclass('public.ml_model_activations') IS NOT NULL THEN
+        LOCK TABLE public.ml_model_activations IN ACCESS EXCLUSIVE MODE;
         IF EXISTS (SELECT 1 FROM public.ml_model_activations
                     WHERE phase IN ('prepared', 'serving_switched', 'active', 'aborting', 'rolling_back')) THEN
             RAISE EXCEPTION 'live activation(s) in ml_model_activations: roll back or abort them first';
@@ -54,6 +59,7 @@ DROP FUNCTION IF EXISTS public.ml_model_activations_guard();
 DROP FUNCTION IF EXISTS public.activation_gate_passes(jsonb, text, text, text, text);
 DROP FUNCTION IF EXISTS public._activation_num(jsonb, text[]);
 DROP FUNCTION IF EXISTS public.activation_gate_config();
+DROP TABLE IF EXISTS public.ml_activation_rpc_authority;   -- transient RPC tokens: nothing to keep
 
 DELETE FROM public.schema_migrations
  WHERE filename = '165_model_activation_ledger.sql';

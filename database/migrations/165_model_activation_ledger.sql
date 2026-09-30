@@ -16,8 +16,17 @@
 --     (the hcp_adoption synthetic_gold exemption, OD-6); rows only by an owner-approved migration.
 --   * activation_gate_config() / activation_gate_passes() -- the frozen acceptance rule (OD-2).
 --     The constants MUST equal src/mlops/activation/holdout_gate.GateConfig (a unit test
---     compares them). Every field is type-checked as jsonb: a NUMERIC cast of the string "NaN"
---     compares greater than every number in Postgres, so a string never counts as a number.
+--     compares them). The report must be COMPLETE and INTERNALLY CONSISTENT as Lane 5's
+--     evaluate_gate writes it: every field it always emits, typed and in range, and every
+--     derived field (auc_delta, the DeLong lower bound, the bootstrap counts) re-derived from
+--     the numbers it follows from, so a verdict cannot be edited without its evidence. Every
+--     field is type-checked as jsonb: a NUMERIC cast of the string "NaN" compares greater than
+--     every number in Postgres, so a string never counts as a number.
+--   * The ledger INSERT takes the same per-name advisory lock and SHARE ROW EXCLUSIVE registry
+--     lock as the RPCs before it counts canonical rows, so a concurrent registry writer is
+--     either counted or waits and then meets the role guard (codex r1).
+--   * abort_serving_restored_at -- an abort after the candidate bundle went live reaches
+--     'aborted' only once the predecessor bundle is live again and verified (codex r1).
 --   * activate_model_candidate() / rollback_model_activation() -- SECURITY DEFINER RPCs that
 --     re-check the gate, every identity and the single-canonical-row invariant under a lock
 --     that blocks every other registry writer for the (milliseconds) switch.
@@ -26,10 +35,16 @@
 --     change their stage, champion flag or registered_at (OD-5); and no OTHER row of that name
 --     may become canonical or champion while the activation is live. It runs in the writer's
 --     own transaction, so there is no check-then-write race.
+--   * ml_activation_rpc_authority -- how the two RPCs (and only they) get past that guard: each
+--     writes its own transaction id there before touching the registry and deletes it before
+--     returning. No API role can read or write the table. (A custom GUC flag would not do:
+--     any role can set_config() one -- codex r1.)
 --
 -- TRUST NOTE: service_role can already UPDATE ml_model_registry directly, so none of this
--- defends against a malicious service-key holder. It makes a CLI bug or a stale report fail
--- closed, and keeps the audit trail append-only.
+-- defends against a malicious service-key holder: one can still forge a complete, consistent
+-- report (the predicate checks completeness and consistency, not authenticity). It makes a
+-- CLI bug, a stale or an incomplete/inconsistent report fail closed, and keeps the audit trail
+-- append-only.
 --
 -- ROLLBACK: rollback_165_model_activation_ledger.sql (refuses while an activation is live).
 --
@@ -67,6 +82,7 @@ CREATE TABLE IF NOT EXISTS public.ml_model_activations (
     rollback_mlflow_synced_at       timestamptz,
     rollback_shap_refreshed_at      timestamptz,
     rolled_back_at                  timestamptz,       -- every rollback surface done
+    abort_serving_restored_at       timestamptz,       -- after an abort: predecessor bundle live again, verified
     CONSTRAINT ml_model_activations_distinct CHECK (candidate_registry_id <> predecessor_registry_id),
     CONSTRAINT ml_model_activations_served_stage CHECK (served_stage IN ('staging', 'production')),
     -- The candidate takes over the predecessor's served stage: an hcp_adoption name (served at
@@ -109,6 +125,14 @@ CREATE TABLE IF NOT EXISTS public.ml_activation_production_allowlist (
     added_at   timestamptz NOT NULL DEFAULT now()
 );
 
+-- The RPCs' authority over the registry role guard: the transaction id of an RPC that is
+-- switching roles right now. Written and deleted only by activate_model_candidate /
+-- rollback_model_activation (SECURITY DEFINER, owner postgres) inside their own transaction;
+-- no API role can read or write it, so unlike a GUC it cannot be set by a caller.
+CREATE TABLE IF NOT EXISTS public.ml_activation_rpc_authority (
+    xact xid8 PRIMARY KEY
+);
+
 -- ---------------------------------------------------------------------------------------------
 -- The frozen acceptance rule (OD-2). Changing a constant is a reviewed migration AND a
 -- GateConfig change; the unit test fails if they differ.
@@ -127,9 +151,16 @@ $$;
 
 -- NULL-safe: any missing, mistyped or out-of-range field makes it FALSE, never NULL. The report
 -- is Lane 5's evaluate_gate output; every check is re-derived here rather than trusting
--- "passed", and the report must describe exactly this model, these two bundles and one
--- snapshot of the holdout rows. (STABLE, not IMMUTABLE: it reads the allowlist, so it cannot
--- sit in a CHECK constraint; the insert trigger and the activation RPC both call it.)
+-- "passed", and the report must describe exactly this model, this target stage, these two
+-- bundles and one snapshot of the holdout rows. It must also be complete and consistent:
+-- every field Lane 5 always emits (the nullable ones present, number or null), AUCs, PR-AUCs
+-- and Briers in [0, 1], se_delta >= 0, integral counts, and the derived fields within 1e-9 of
+-- what they are computed from -- auc_delta = auc_candidate - auc_served, auc_lower_bound =
+-- auc_delta - z * se_delta, bootstrap_usable + bootstrap_skipped_single_class = bootstrap_b.
+-- z is Lane 5's norm.ppf(1 - alpha) for alpha = 0.05, hard-coded here so that r->'config'
+-- still equals GateConfig exactly (a unit test compares it with scipy). (STABLE, not
+-- IMMUTABLE: it reads the allowlist, so it cannot sit in a CHECK constraint; the insert
+-- trigger and the activation RPC both call it.)
 CREATE OR REPLACE FUNCTION public.activation_gate_passes(
     r jsonb, cand_sha text, served_sha text, p_name text, p_stage text)
 RETURNS boolean LANGUAGE sql STABLE SET search_path = pg_catalog, public AS $$
@@ -141,6 +172,7 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path = pg_catalog, public AS $$
             AND r->'passed' = 'true'::jsonb
             AND r->'failed_checks' = '[]'::jsonb
             AND r->'model_name' = to_jsonb(p_name)
+            AND r->'served_stage' = to_jsonb(p_stage)                  -- the target stage
             AND cand_sha ~ '^[0-9a-f]{64}$' AND served_sha ~ '^[0-9a-f]{64}$'
             AND cand_sha <> served_sha
             AND r->'candidate_bundle_sha256' = to_jsonb(cand_sha)
@@ -155,6 +187,21 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path = pg_catalog, public AS $$
             AND v.n_pos >= (v.cfg->>'min_class_n')::numeric
             AND v.n - v.n_pos >= (v.cfg->>'min_class_n')::numeric
             AND abs(v.prevalence - v.n_pos / v.n) <= 1e-9
+            -- the rest of Lane 5's schema: typed, in range
+            AND v.auc_served BETWEEN 0 AND 1 AND v.auc_candidate BETWEEN 0 AND 1
+            AND v.pr_auc_served BETWEEN 0 AND 1 AND v.pr_auc_candidate BETWEEN 0 AND 1
+            AND v.brier_served BETWEEN 0 AND 1 AND v.brier_candidate BETWEEN 0 AND 1
+            AND v.se_delta >= 0
+            AND v.usable = trunc(v.usable) AND v.usable >= 0
+            AND v.skipped = trunc(v.skipped) AND v.skipped >= 0
+            AND jsonb_typeof(r->'delong_corr') IN ('number', 'null')
+            AND jsonb_typeof(r->'calibration_intercept') IN ('number', 'null')
+            -- Lane 5 reports the bootstrap AUC p05 exactly when some resample was usable
+            AND jsonb_typeof(r->'bootstrap_auc_delta_p05') = CASE WHEN v.usable > 0 THEN 'number' ELSE 'null' END
+            -- the derived fields follow from the numbers they are computed from
+            AND abs(v.auc_delta - (v.auc_candidate - v.auc_served)) <= 1e-9
+            AND abs(v.auc_lower_bound - (v.auc_delta - v.z * v.se_delta)) <= 1e-9
+            AND v.usable + v.skipped = (v.cfg->>'bootstrap_b')::numeric
             -- the four checks, re-derived from the numbers
             AND v.auc_lower_bound > -(v.cfg->>'auc_margin')::numeric
             AND v.brier_delta_upper < (v.cfg->>'brier_margin')::numeric
@@ -162,24 +209,37 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path = pg_catalog, public AS $$
             AND v.usable >= (v.cfg->>'min_usable_bootstrap_frac')::numeric * (v.cfg->>'bootstrap_b')::numeric
             -- #1354 calibration pathology: required for every hcp_adoption name and for any
             -- production activation, which also needs the owner's allowlist entry (OD-6).
+            -- Lane 5 runs it for exactly these (evaluate_gate's served_stage).
             AND (
                 (p_name NOT LIKE 'hcp\_adoption\_%' AND p_stage <> 'production')
                 OR (
                     r->'hcp_pathology_passed' = 'true'::jsonb
+                    AND r->'hcp_pathology_slope_ok' = 'true'::jsonb
+                    AND r->'hcp_pathology_brier_ok' = 'true'::jsonb
+                    AND r->'hcp_pathology_reasons' = '[]'::jsonb
                     AND v.brier_candidate < v.prevalence * (1 - v.prevalence)
                     AND v.slope BETWEEN 0.5 AND 2.0))
             AND (p_stage <> 'production' OR EXISTS (
                 SELECT 1 FROM public.ml_activation_production_allowlist l WHERE l.model_name = p_name))
         FROM (SELECT
                 public.activation_gate_config() AS cfg,
+                1.6448536269514722::numeric AS z,           -- scipy norm.ppf(1 - 0.05)
                 public._activation_num(r, 'n') AS n,
                 public._activation_num(r, 'n_pos') AS n_pos,
                 public._activation_num(r, 'prevalence') AS prevalence,
+                public._activation_num(r, 'auc_served') AS auc_served,
+                public._activation_num(r, 'auc_candidate') AS auc_candidate,
+                public._activation_num(r, 'auc_delta') AS auc_delta,
+                public._activation_num(r, 'se_delta') AS se_delta,
                 public._activation_num(r, 'auc_lower_bound') AS auc_lower_bound,
-                public._activation_num(r, 'brier_delta_upper') AS brier_delta_upper,
+                public._activation_num(r, 'brier_served') AS brier_served,
                 public._activation_num(r, 'brier_candidate') AS brier_candidate,
+                public._activation_num(r, 'brier_delta_upper') AS brier_delta_upper,
+                public._activation_num(r, 'pr_auc_served') AS pr_auc_served,
+                public._activation_num(r, 'pr_auc_candidate') AS pr_auc_candidate,
                 public._activation_num(r, 'calibration_slope') AS slope,
-                public._activation_num(r, 'bootstrap_usable') AS usable) v
+                public._activation_num(r, 'bootstrap_usable') AS usable,
+                public._activation_num(r, 'bootstrap_skipped_single_class') AS skipped) v
     ), false)
 $$;
 
@@ -218,7 +278,9 @@ BEGIN
        OR (OLD.rollback_db_at IS NOT NULL AND NEW.rollback_db_at IS DISTINCT FROM OLD.rollback_db_at)
        OR (OLD.rollback_mlflow_synced_at IS NOT NULL AND NEW.rollback_mlflow_synced_at IS DISTINCT FROM OLD.rollback_mlflow_synced_at)
        OR (OLD.rollback_shap_refreshed_at IS NOT NULL AND NEW.rollback_shap_refreshed_at IS DISTINCT FROM OLD.rollback_shap_refreshed_at)
-       OR (OLD.rolled_back_at IS NOT NULL AND NEW.rolled_back_at IS DISTINCT FROM OLD.rolled_back_at) THEN
+       OR (OLD.rolled_back_at IS NOT NULL AND NEW.rolled_back_at IS DISTINCT FROM OLD.rolled_back_at)
+       OR (OLD.abort_serving_restored_at IS NOT NULL
+           AND NEW.abort_serving_restored_at IS DISTINCT FROM OLD.abort_serving_restored_at) THEN
         RAISE EXCEPTION 'ml_model_activations %: progress markers are write-once', OLD.id;
     END IF;
     IF NEW.phase IS DISTINCT FROM OLD.phase AND (OLD.phase, NEW.phase) NOT IN (
@@ -230,6 +292,9 @@ BEGIN
     END IF;
     IF (NEW.phase = 'serving_switched' AND NEW.serving_switched_at IS NULL)
        OR (NEW.phase = 'active' AND NEW.activated_at IS NULL)
+       -- an abort after the candidate bundle went live ends only with the predecessor's back
+       OR (NEW.phase = 'aborted' AND NEW.serving_switched_at IS NOT NULL
+           AND NEW.abort_serving_restored_at IS NULL)
        OR (NEW.phase = 'rolled_back' AND (NEW.rollback_serving_at IS NULL OR NEW.rollback_db_at IS NULL
             OR NEW.rollback_mlflow_synced_at IS NULL OR NEW.rollback_shap_refreshed_at IS NULL
             OR NEW.rolled_back_at IS NULL)) THEN
@@ -252,7 +317,9 @@ BEGIN
            AND (NEW.phase <> 'rolling_back' OR NEW.rollback_db_at IS NULL))
        OR (OLD.rollback_shap_refreshed_at IS NULL AND NEW.rollback_shap_refreshed_at IS NOT NULL
            AND (NEW.phase <> 'rolling_back' OR NEW.rollback_db_at IS NULL))
-       OR (OLD.rolled_back_at IS NULL AND NEW.rolled_back_at IS NOT NULL AND NEW.phase <> 'rolled_back') THEN
+       OR (OLD.rolled_back_at IS NULL AND NEW.rolled_back_at IS NOT NULL AND NEW.phase <> 'rolled_back')
+       OR (OLD.abort_serving_restored_at IS NULL AND NEW.abort_serving_restored_at IS NOT NULL
+           AND (NEW.phase <> 'aborting' OR NEW.serving_switched_at IS NULL)) THEN
         RAISE EXCEPTION 'ml_model_activations %: marker set outside its phase', OLD.id;
     END IF;
     RETURN NEW;
@@ -264,7 +331,14 @@ CREATE TRIGGER tr_ml_model_activations_guard BEFORE UPDATE ON public.ml_model_ac
 
 -- A new row starts 'prepared' with no markers, carries a report that satisfies the rule, and
 -- names rows that are what it says they are. The RPC re-checks all of it under its lock; this
--- only makes a wrong row fail at insert rather than after the bundle swap.
+-- makes a wrong row fail at insert rather than after the bundle swap. It reads the registry
+-- under the RPCs' locks (codex r1): without them, a concurrent writer's uncommitted canonical
+-- row is invisible here while this uncommitted ledger row is invisible to that writer's role
+-- guard, and both commit -- a live activation over two canonical rows. With them, a writer
+-- that got in first is counted once it commits; one that comes later waits for this
+-- transaction and then meets the role guard. The trigger runs as the inserting role:
+-- service_role's UPDATE on ml_model_registry permits SHARE ROW EXCLUSIVE (PG: any lock mode
+-- with UPDATE, DELETE or TRUNCATE). lock_timeout stays set for the rest of the transaction.
 CREATE OR REPLACE FUNCTION public.ml_model_activations_insert_guard() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
 DECLARE k int;
@@ -273,13 +347,17 @@ BEGIN
        OR NEW.mlflow_synced_at IS NOT NULL OR NEW.shap_refreshed_at IS NOT NULL
        OR NEW.rollback_serving_at IS NOT NULL OR NEW.rollback_db_at IS NOT NULL
        OR NEW.rollback_mlflow_synced_at IS NOT NULL OR NEW.rollback_shap_refreshed_at IS NOT NULL
-       OR NEW.rolled_back_at IS NOT NULL OR NEW.rolled_back_by IS NOT NULL OR NEW.rollback_reason IS NOT NULL THEN
+       OR NEW.rolled_back_at IS NOT NULL OR NEW.rolled_back_by IS NOT NULL OR NEW.rollback_reason IS NOT NULL
+       OR NEW.abort_serving_restored_at IS NOT NULL THEN
         RAISE EXCEPTION 'ml_model_activations: a new row starts in phase prepared with no markers';
     END IF;
     IF public.activation_gate_passes(NEW.gate_report, NEW.candidate_bundle_sha256,
             NEW.predecessor_bundle_sha256, NEW.model_name, NEW.served_stage::text) IS NOT TRUE THEN
         RAISE EXCEPTION 'ml_model_activations: gate report does not satisfy the acceptance rule';
     END IF;
+    PERFORM set_config('lock_timeout', '10s', true);
+    PERFORM pg_advisory_xact_lock(hashtextextended('ml_model_activation:' || NEW.model_name, 0));
+    LOCK TABLE public.ml_model_registry IN SHARE ROW EXCLUSIVE MODE;
     PERFORM 1 FROM public.ml_model_registry
      WHERE id = NEW.candidate_registry_id AND stage = 'candidate' AND model_name = NEW.model_name
        AND retrain_of_id = NEW.predecessor_registry_id
@@ -333,8 +411,9 @@ END $$;
 
 -- ---------------------------------------------------------------------------------------------
 -- The two RPCs. SECURITY DEFINER (owner postgres, search_path pinned): the only writers of
--- activated_at / rollback_db_at, and the only callers allowed past the registry role guard
--- (a transaction-local flag, switched off again before they return).
+-- activated_at / rollback_db_at, and the only callers allowed past the registry role guard:
+-- each writes its transaction id into ml_activation_rpc_authority before touching the
+-- registry and deletes it before returning (an error rolls the row back with everything else).
 -- ---------------------------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.activate_model_candidate(p_activation_id uuid)
 RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
@@ -360,7 +439,7 @@ BEGIN
                                      a.model_name, a.served_stage::text) IS NOT TRUE THEN
         RAISE EXCEPTION 'activation %: gate report does not satisfy the acceptance rule now', a.id;
     END IF;
-    PERFORM set_config('e2i.activation_rpc', 'on', true);   -- lets the role guard below through
+    INSERT INTO public.ml_activation_rpc_authority (xact) VALUES (pg_current_xact_id());  -- role guard: let through
     PERFORM public._activation_lock_and_count_served(a.model_name, a.predecessor_registry_id);
     PERFORM 1 FROM public.ml_model_registry
      WHERE id = a.candidate_registry_id AND stage = 'candidate' AND model_name = a.model_name
@@ -395,7 +474,7 @@ BEGIN
     GET DIAGNOSTICS n = ROW_COUNT; IF n <> 1 THEN RAISE EXCEPTION 'deployment update touched % rows', n; END IF;
     PERFORM public._activation_lock_and_count_served(a.model_name, a.candidate_registry_id);  -- postcondition
     UPDATE public.ml_model_activations SET phase = 'active', activated_at = now() WHERE id = a.id;
-    PERFORM set_config('e2i.activation_rpc', 'off', true);
+    DELETE FROM public.ml_activation_rpc_authority WHERE xact = pg_current_xact_id();
 END $$;
 
 -- Called in phase 'rolling_back' after the CLI restored and verified the predecessor bundle
@@ -424,7 +503,7 @@ BEGIN
     IF a.rollback_serving_at IS NULL THEN
         RAISE EXCEPTION 'activation %: restore and verify the predecessor bundle before the DB rollback', a.id;
     END IF;
-    PERFORM set_config('e2i.activation_rpc', 'on', true);
+    INSERT INTO public.ml_activation_rpc_authority (xact) VALUES (pg_current_xact_id());  -- role guard: let through
     PERFORM public._activation_lock_and_count_served(a.model_name, a.candidate_registry_id);
 
     UPDATE public.ml_model_registry SET stage = 'archived', is_champion = false
@@ -442,7 +521,7 @@ BEGIN
     GET DIAGNOSTICS n = ROW_COUNT; IF n <> 1 THEN RAISE EXCEPTION 'deployment update touched % rows', n; END IF;
     PERFORM public._activation_lock_and_count_served(a.model_name, a.predecessor_registry_id);  -- postcondition
     UPDATE public.ml_model_activations SET rollback_db_at = now() WHERE id = a.id;
-    PERFORM set_config('e2i.activation_rpc', 'off', true);
+    DELETE FROM public.ml_activation_rpc_authority WHERE xact = pg_current_xact_id();
 END $$;
 
 -- ---------------------------------------------------------------------------------------------
@@ -457,7 +536,9 @@ END $$;
 -- Enforced inside the writer's own transaction; the RPCs' table lock orders it after a
 -- concurrent switch. Named to sort BEFORE tr_single_champion (BEFORE row triggers fire in name
 -- order), so a restored champion flag is what that trigger sees.
--- SECURITY DEFINER so that any registry writer can read the ledger it checks.
+-- SECURITY DEFINER so that any registry writer can read the ledger and the RPC authority it
+-- checks; the only bypass is a row for the writer's own transaction in
+-- ml_activation_rpc_authority, which only the two RPCs (and the owner) can write.
 -- ---------------------------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.ml_model_registry_activation_role_guard() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
@@ -465,8 +546,8 @@ DECLARE
     live_candidate uuid;
     becomes boolean;
 BEGIN
-    IF current_setting('e2i.activation_rpc', true) = 'on' THEN
-        RETURN NEW;
+    IF EXISTS (SELECT 1 FROM public.ml_activation_rpc_authority WHERE xact = pg_current_xact_id()) THEN
+        RETURN NEW;   -- one of the two RPCs, inside its own transaction
     END IF;
     IF TG_OP = 'UPDATE' THEN
         SELECT a.candidate_registry_id INTO live_candidate FROM public.ml_model_activations a
@@ -532,7 +613,7 @@ REVOKE ALL ON TABLE public.ml_model_activations FROM PUBLIC, anon, authenticated
 GRANT SELECT, INSERT ON TABLE public.ml_model_activations TO service_role;
 GRANT UPDATE (phase, rolled_back_by, rollback_reason, serving_switched_at, mlflow_synced_at,
               shap_refreshed_at, rollback_serving_at, rollback_mlflow_synced_at,
-              rollback_shap_refreshed_at, rolled_back_at)
+              rollback_shap_refreshed_at, rolled_back_at, abort_serving_restored_at)
     ON public.ml_model_activations TO service_role;
 ALTER TABLE public.ml_model_activations ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS ml_model_activations_service ON public.ml_model_activations;
@@ -541,6 +622,10 @@ CREATE POLICY ml_model_activations_service ON public.ml_model_activations
 
 REVOKE ALL ON TABLE public.ml_activation_production_allowlist FROM PUBLIC, anon, authenticated, service_role;
 GRANT SELECT ON TABLE public.ml_activation_production_allowlist TO service_role;
+
+-- Nobody but the owner (and so the SECURITY DEFINER RPCs and role guard) touches the authority.
+REVOKE ALL ON TABLE public.ml_activation_rpc_authority FROM PUBLIC, anon, authenticated, service_role;
+ALTER TABLE public.ml_activation_rpc_authority ENABLE ROW LEVEL SECURITY;
 
 REVOKE ALL ON FUNCTION public.activation_gate_config() FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public._activation_num(jsonb, text[]) FROM PUBLIC, anon, authenticated, service_role;

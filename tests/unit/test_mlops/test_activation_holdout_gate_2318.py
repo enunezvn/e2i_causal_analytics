@@ -39,10 +39,16 @@ from src.mlops.activation.holdout_gate import (
 )
 
 
-def _evidence(y, model_name="initiation_kisqali_goldstd_lr_v1"):
-    """The mandatory evidence a real activation passes (load_holdout_snapshot + shas)."""
+def _evidence(y, model_name="initiation_kisqali_goldstd_lr_v1", served_stage=None):
+    """The mandatory evidence a real activation passes (load_holdout_snapshot + shas).
+
+    ``served_stage`` defaults to the stage the name is served at today: production for
+    hcp_adoption names, staging otherwise."""
     y = np.asarray(y)
+    if served_stage is None:
+        served_stage = "production" if model_name.startswith("hcp_adoption_") else "staging"
     return {
+        "served_stage": served_stage,
         "served_bundle_sha256": "a" * 64,
         "candidate_bundle_sha256": "b" * 64,
         "snapshot": {
@@ -316,9 +322,11 @@ def test_report_carries_every_field_the_sql_predicate_reads():
         candidate_bundle_sha256="b" * 64,
         snapshot=snap,
         model_name="initiation_kisqali_goldstd_lr_v1",
+        served_stage="staging",
     )
     for key in (
         "kind",
+        "served_stage",
         "n",
         "n_pos",
         "auc_served",
@@ -355,6 +363,7 @@ def test_report_carries_every_field_the_sql_predicate_reads():
         "min_usable_bootstrap_frac": 0.9,
     }
     assert rep["snapshot"] == snap
+    assert rep["served_stage"] == "staging"
     assert rep["candidate_bundle_sha256"] == "b" * 64
     # Non-hcp names carry no pathology fields.
     assert "hcp_pathology_passed" not in rep
@@ -469,6 +478,58 @@ def test_hcp_name_healthy_candidate_passes_with_pathology_fields():
     assert rep["hcp_pathology_passed"] is True
     assert rep["hcp_pathology_slope_ok"] is True and rep["hcp_pathology_brier_ok"] is True
     assert rep["passed"]
+
+
+def _brier_pathology_scores():
+    """Right slope, +1.5 logit offset: the generic rule passes, Brier >= p(1-p) (#1354)."""
+    r = np.random.default_rng(3)
+    n = 3000
+    x = r.normal(0, 1, n)
+    y = (r.random(n) < 1 / (1 + np.exp(-x))).astype(int)
+    return y, 1 / (1 + np.exp(-(x + 1.5)))
+
+
+def test_a_non_hcp_production_target_runs_the_pathology_gate():
+    """Lane 4's SQL requires the pathology fields for EVERY production activation (an
+    allowlisted non-hcp name too), so Lane 5 must run the gate for any production target."""
+    y, s = _brier_pathology_scores()
+    rep = evaluate_gate(
+        y, served=s, candidate=s.copy(), cfg=GateConfig(), **_evidence(y, served_stage="production")
+    )
+    assert rep["served_stage"] == "production"
+    assert rep["hcp_pathology_passed"] is False and rep["hcp_pathology_brier_ok"] is False
+    assert "hcp_pathology" in rep["failed_checks"] and not rep["passed"]
+    y, a, b = _scores(noise=0.1)
+    ok = evaluate_gate(
+        y, served=a, candidate=b, cfg=GateConfig(), **_evidence(y, served_stage="production")
+    )
+    assert ok["passed"] and ok["hcp_pathology_passed"] is True
+    assert ok["hcp_pathology_slope_ok"] is True and ok["hcp_pathology_brier_ok"] is True
+
+
+def test_a_non_hcp_staging_target_does_not_run_the_pathology_gate():
+    y, s = _brier_pathology_scores()
+    rep = evaluate_gate(
+        y, served=s, candidate=s.copy(), cfg=GateConfig(), **_evidence(y, served_stage="staging")
+    )
+    assert rep["served_stage"] == "staging" and rep["passed"]
+    assert not any(k.startswith("hcp_pathology") for k in rep)
+
+
+@pytest.mark.parametrize("stage", ["candidate", "Production", "shadow", "", None])
+def test_a_bad_served_stage_refuses_to_decide(stage):
+    y, a, _ = _scores()
+    ev = {**_evidence(y), "served_stage": stage}
+    with pytest.raises(ValueError, match="served_stage"):
+        evaluate_gate(y, served=a, candidate=a.copy(), cfg=GateConfig(), **ev)
+
+
+def test_served_stage_is_a_required_keyword():
+    y, a, _ = _scores()
+    ev = _evidence(y)
+    ev.pop("served_stage")
+    with pytest.raises(TypeError, match="served_stage"):
+        evaluate_gate(y, served=a, candidate=a.copy(), cfg=GateConfig(), **ev)
 
 
 def test_promote_script_reuses_the_moved_helpers():

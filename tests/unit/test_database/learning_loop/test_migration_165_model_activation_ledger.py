@@ -105,6 +105,32 @@ def test_the_sql_gate_constants_equal_lane5_gateconfig():
     assert tuple(holdout_gate.HCP_PATHOLOGY_SLOPE_RANGE) == (0.5, 2.0)
 
 
+def _sql_z_literal() -> float:
+    m = re.search(r"([0-9]+\.[0-9]+)::numeric AS z\b", _code(M165))
+    assert m, "the one-sided z literal (... ::numeric AS z) not found in 165"
+    return float(m.group(1))
+
+
+@pytest.mark.unit
+def test_the_sql_lower_bound_z_is_lane5s_norm_ppf():
+    """The SQL re-derives auc_lower_bound = auc_delta - z * se_delta with z hard-coded (the
+    config jsonb must stay exactly GateConfig); z must be Lane 5's norm.ppf(1 - alpha)."""
+    from scipy.stats import norm
+
+    holdout_gate = pytest.importorskip(
+        "src.mlops.activation.holdout_gate", reason="#2318 Lane 5 (holdout_gate) not merged yet"
+    )
+    assert _sql_z_literal() == float(norm.ppf(1.0 - holdout_gate.GateConfig().alpha))
+    assert _sql_z_literal() == float(norm.ppf(1.0 - FROZEN_CONFIG["alpha"]))
+
+
+@pytest.mark.unit
+def test_the_rpc_authority_is_not_a_caller_settable_guc():
+    """codex r1 MEDIUM: any role can set_config() a custom GUC, so none may authorise."""
+    assert "e2i.activation_rpc" not in _code(M165)
+    assert "current_setting(" not in _code(M165)
+
+
 @pytest.mark.unit
 def test_the_role_guard_fires_before_the_single_champion_trigger():
     """BEFORE row triggers fire in name order. The guard must restore an activated row's flag
@@ -135,9 +161,19 @@ def _one(db: _pg.PgConn, sql: str, params: Any = None, **kw: Any) -> Any:
 
 
 def report(
-    name: str, cand_sha: str = SHA_C, served_sha: str = SHA_P, **over: Any
+    name: str,
+    cand_sha: str = SHA_C,
+    served_sha: str = SHA_P,
+    *,
+    stage: Optional[str] = None,
+    **over: Any,
 ) -> Dict[str, Any]:
-    """A passing gate report in Lane 5's ``evaluate_gate`` shape (probe numbers, F22)."""
+    """A passing gate report in Lane 5's ``evaluate_gate`` shape (probe numbers, F22).
+
+    ``stage`` is the target stage (default: production for hcp_adoption names, else
+    staging); the pathology fields ride along for an hcp name or a production target."""
+    if stage is None:
+        stage = "production" if name.startswith("hcp_adoption_") else "staging"
     n, n_pos = 1766, 609
     r: Dict[str, Any] = {
         "kind": "deterministic_acceptance_rule",
@@ -175,8 +211,9 @@ def report(
             "brand": "Kisqali",
         },
         "model_name": name,
+        "served_stage": stage,
     }
-    if name.startswith("hcp_adoption_"):
+    if name.startswith("hcp_adoption_") or stage == "production":
         r.update(
             hcp_pathology_passed=True,
             hcp_pathology_slope_ok=True,
@@ -193,13 +230,20 @@ def report(
 class Slot:
     """One served name: predecessor P, candidate C (a retrain of P), C's deployment D."""
 
-    def __init__(self, db: _pg.PgConn, *, hcp: bool = False, name: Optional[str] = None):
+    def __init__(
+        self,
+        db: _pg.PgConn,
+        *,
+        hcp: bool = False,
+        name: Optional[str] = None,
+        stage: Optional[str] = None,
+    ):
         self.db = db
         tag = uuid.uuid4().hex[:8]
         self.name = name or (
             f"hcp_adoption_l4_{tag}_goldstd_lr_v1" if hcp else f"initiation_l4_{tag}_goldstd_lr_v1"
         )
-        self.stage = "production" if hcp else "staging"
+        self.stage = stage or ("production" if hcp else "staging")
         self.champion = hcp
         self.exp = str(uuid.uuid4())
         self.p, self.c, self.d = (str(uuid.uuid4()) for _ in range(3))
@@ -219,8 +263,9 @@ class Slot:
             self.p, "1.0", self.stage, champion=self.champion, artifact=self.p_artifact,
             registered_at="2026-09-28 03:03:46+00",
         )  # fmt: skip
+        self.c_version = "1.0_retrained_20260930_0100_l4"
         self.add_row(
-            self.c, "1.0_retrained_20260930_0100_l4", "candidate", retrain_of=self.p,
+            self.c, self.c_version, "candidate", retrain_of=self.p,
             mlflow_version=8, registered_at="2026-09-30 01:00:00+00",
         )  # fmt: skip
         self.add_deployment(self.d, self.c)
@@ -275,26 +320,26 @@ class Slot:
             "candidate_bundle_path": self.c_bundle,
             "predecessor_bundle_sha256": SHA_P,
             "predecessor_bundle_path": self.p_bundle,
-            "gate_report": report(self.name),
+            "gate_report": report(self.name, stage=self.stage),
             "approved_by": "owner",
         }
         row.update(over)
         return row
 
-    def insert(self, role: Optional[str] = "service_role", **over: Any) -> str:
+    def insert_sql(self, **over: Any) -> tuple:
         row = self.ledger_row(**over)
         cols = list(row)
         vals = [json.dumps(v) if k == "gate_report" else v for k, v in row.items()]
         placeholders = ", ".join("%s::jsonb" if k == "gate_report" else "%s" for k in cols)
-        return str(
-            _one(
-                self.db,
-                f"insert into ml_model_activations ({', '.join(cols)}) values ({placeholders}) "
-                "returning id",
-                vals,
-                role=role,
-            )
+        sql = (
+            f"insert into ml_model_activations ({', '.join(cols)}) values ({placeholders}) "
+            "returning id"
         )
+        return sql, vals
+
+    def insert(self, role: Optional[str] = "service_role", **over: Any) -> str:
+        sql, vals = self.insert_sql(**over)
+        return str(_one(self.db, sql, vals, role=role))
 
     def set_phase(
         self, aid: str, phase: str, role: Optional[str] = "service_role", **cols: Any
@@ -380,6 +425,17 @@ def _raises(match: str) -> Any:
     return pytest.raises(psycopg.Error, match=match)
 
 
+def _owner_write(db: _pg.PgConn, sql: str, params: Any = None) -> None:
+    """Drift the registry behind the role guard's back, as the table OWNER: the owner writes
+    this transaction's token into ``ml_activation_rpc_authority`` (the table only the RPCs --
+    and the owner -- can write) and removes it again before committing. Test setup only."""
+    with db.connect() as c:
+        c.execute("insert into ml_activation_rpc_authority (xact) values (pg_current_xact_id())")
+        c.execute(sql, params)
+        c.execute("delete from ml_activation_rpc_authority where xact = pg_current_xact_id()")
+        c.commit()
+
+
 # ---------------------------------------------------------------------------
 # Activation
 # ---------------------------------------------------------------------------
@@ -408,11 +464,8 @@ def test_activate_rerun_verifies_the_postcondition(db):
     s.activate(aid)  # a lost response re-run: no-op
     assert s.state() == before
 
-    # Drift a role behind the guard's back (the owner with the RPC flag), then re-run.
-    with db.connect() as c:
-        c.execute("select set_config('e2i.activation_rpc', 'on', true)")
-        c.execute("update ml_model_registry set stage = 'candidate' where id = %s", (s.c,))
-        c.commit()
+    # Drift a role behind the guard's back (the owner, with a token), then re-run.
+    _owner_write(db, "update ml_model_registry set stage = 'candidate' where id = %s", (s.c,))
     with _raises("drifted|exactly one canonical"):
         s.activate(aid)
 
@@ -484,7 +537,54 @@ BAD_REPORTS = {
     "snapshot_missing": _mutate("snapshot", _DROP),
     "prevalence_forged": _mutate("prevalence", 0.5),
     "not_an_object": None,
-}
+    # codex r1 HIGH 1: the verdict must follow from the report's own numbers.
+    "lower_bound_raised": _mutate("auc_lower_bound", 0.0),  # auc_delta / se_delta unchanged
+    "auc_delta_forged": _mutate("auc_delta", 0.0108),  # auc_candidate - auc_served = 0.0008
+    "usable_plus_skipped_not_b": _mutate("bootstrap_skipped_single_class", 5),
+    "usable_non_integral": lambda r: r.update(bootstrap_usable=1999.5,
+                                              bootstrap_skipped_single_class=0.5),
+    "skipped_negative": lambda r: r.update(bootstrap_usable=2001,
+                                           bootstrap_skipped_single_class=-1),
+    "auc_out_of_range": lambda r: r.update(auc_served=1.5, auc_candidate=1.5008),
+    "pr_auc_out_of_range": _mutate("pr_auc_candidate", 1.2),
+    "brier_out_of_range": _mutate("brier_served", 1.2),
+    "se_delta_negative": lambda r: r.update(se_delta=-0.0012,
+                                            auc_lower_bound=0.0008 + 1.6448536269514722 * 0.0012),
+    "auc_served_as_string": _mutate("auc_served", "0.8509"),
+    "delong_corr_as_string": _mutate("delong_corr", "0.991"),
+    "intercept_as_string": _mutate("calibration_intercept", "0.01"),
+    "p05_null_with_usable_resamples": _mutate("bootstrap_auc_delta_p05", None),
+    # codex r1 MEDIUM 6: the report must be for the stage the activation targets.
+    "served_stage_missing": _mutate("served_stage", _DROP),
+    "served_stage_other": _mutate("served_stage", "production"),
+}  # fmt: skip
+
+#: Every field Lane 5's evaluate_gate always emits; a report without any of them was not
+#: produced by it. (The nullable ones must be present too: Lane 5 writes an explicit null.)
+LANE5_REQUIRED_FIELDS = (
+    "kind", "n", "n_pos", "prevalence", "auc_served", "auc_candidate", "auc_delta", "se_delta",
+    "auc_lower_bound", "delong_corr", "brier_served", "brier_candidate", "brier_delta_upper",
+    "bootstrap_auc_delta_p05", "bootstrap_usable", "bootstrap_skipped_single_class",
+    "pr_auc_served", "pr_auc_candidate", "calibration_slope", "calibration_intercept",
+    "served_bundle_sha256", "candidate_bundle_sha256", "snapshot", "model_name", "served_stage",
+    "failed_checks", "passed", "config",
+)  # fmt: skip
+
+
+@pytest.mark.parametrize("field", LANE5_REQUIRED_FIELDS)
+def test_ledger_rejects_a_report_missing_a_lane5_field(db, field):
+    s = Slot(db)
+    bad = report(s.name)
+    bad.pop(field)
+    with _raises("acceptance rule"):
+        s.insert(gate_report=bad)
+    assert _one(db, "select count(*) from ml_model_activations") == 0
+
+
+def test_the_nullable_lane5_fields_may_be_null(db):
+    """delong_corr and calibration_intercept are None in a real report when undefined."""
+    s = Slot(db)
+    s.insert(gate_report=report(s.name, delong_corr=None, calibration_intercept=None))
 
 
 @pytest.mark.parametrize("case", sorted(BAD_REPORTS))
@@ -528,6 +628,8 @@ def test_ledger_column_checks(db, over, match):
     s = Slot(db)
     if over.get("predecessor_prior_stage") == "shadow":  # a predecessor served at shadow
         _sql(db, "update ml_model_registry set stage = 'shadow' where id = %s", (s.p,))
+        # a report for that stage, so the CHECK (not the gate's served_stage match) refuses it
+        over = dict(over, gate_report=report(s.name, stage="shadow"))
     with _raises(match):
         s.insert(**over)
 
@@ -540,6 +642,7 @@ def test_ledger_column_checks(db, over, match):
         {"mlflow_synced_at": "now"},
         {"rollback_serving_at": "now"},
         {"rolled_back_by": "x", "rollback_reason": "y"},
+        {"abort_serving_restored_at": "now"},
     ],
 )
 def test_a_new_ledger_row_starts_prepared_with_no_markers(db, cols):
@@ -625,20 +728,66 @@ def test_a_marker_is_only_set_in_its_own_phase(db, setup, col):
              role="service_role")  # fmt: skip
 
 
+def _set_restored(s: Slot, aid: str, role: Optional[str] = "service_role", value: str = "now()"):
+    _sql(s.db, f"update ml_model_activations set abort_serving_restored_at = {value} where id = %s",
+         (aid,), role=role)  # fmt: skip
+
+
+def test_an_abort_after_the_serving_switch_requires_the_served_bundle_restored(db):
+    """codex r1 HIGH 3: once the candidate bundle was live, 'aborted' (which releases the
+    live-name index and lets the rollback file retire the ledger) needs the predecessor bundle
+    live again and verified -- abort_serving_restored_at, write-once."""
+    s = Slot(db)
+    aid = s.switched()
+    s.set_phase(aid, "aborting")
+    with _raises("requires its progress markers"):
+        s.set_phase(aid, "aborted")
+    _set_restored(s, aid)
+    with _raises("write-once"):
+        _set_restored(s, aid, role=None, value="now() - interval '1 h'")
+    with _raises("write-once"):
+        _set_restored(s, aid, role=None, value="NULL")
+    s.set_phase(aid, "aborted")
+    a = s.ledger(aid)
+    assert a["phase"] == "aborted" and a["abort_serving_restored_at"] is not None
+
+
+def test_an_abort_before_the_serving_switch_needs_no_restore_marker(db):
+    s = Slot(db)
+    aid = s.insert()
+    s.set_phase(aid, "aborting")
+    with _raises("outside its phase"):  # nothing was switched, so nothing to restore
+        _set_restored(s, aid)
+    s.set_phase(aid, "aborted")
+    assert s.ledger(aid)["abort_serving_restored_at"] is None
+
+
+@pytest.mark.parametrize("setup", ["prepared", "serving_switched", "active", "rolling_back"])
+def test_the_abort_restore_marker_is_only_set_while_aborting(db, setup):
+    s = Slot(db)
+    aid = s.insert() if setup == "prepared" else s.switched()
+    if setup in ("active", "rolling_back"):
+        s.activate(aid)
+    if setup == "rolling_back":
+        s.begin_rollback(aid)
+    with _raises("outside its phase"):
+        _set_restored(s, aid)
+    with _raises("outside its phase"):  # the owner is held to it as well
+        _set_restored(s, aid, role=None)
+
+
 def test_activate_refuses_a_second_served_row(db):
     for stage in ("staging", "production", "development", "shadow", None):
         s = Slot(db)
         aid = s.switched()
-        # Past the ledger's own checks: the owner, with the RPC flag, adds a canonical row.
-        with db.connect() as c:
-            c.execute("select set_config('e2i.activation_rpc', 'on', true)")
-            c.execute(
-                "insert into ml_model_registry (id, experiment_id, model_name, model_version, "
-                "algorithm, stage, is_synthetic) values (gen_random_uuid(), %s, %s, '0.9', 'lr', "
-                "%s, %s)",
-                (s.exp, s.name, stage, stage == "staging"),  # a synthetic row counts too
-            )
-            c.commit()
+        # Past the ledger's own checks: the owner, with a token, adds a canonical row.
+        _owner_write(
+            db,
+            "insert into ml_model_registry (id, experiment_id, model_name, model_version, "
+            "algorithm, stage, is_synthetic) values (gen_random_uuid(), %s, %s, '0.9', 'lr', "
+            "%s, %s)",
+            (s.exp, s.name, stage, stage == "staging"),  # a synthetic row counts too
+        )
         before = s.state()
         with _raises("exactly one canonical"):
             s.activate(aid)
@@ -674,10 +823,8 @@ def test_activate_refuses_when_the_predecessor_moved(db):
          role="service_role")  # fmt: skip
     assert s.reg(s.p)["stage"] == "staging"
     # ... and the RPC re-checks it against the ledger when the guard is bypassed.
-    with db.connect() as c:
-        c.execute("select set_config('e2i.activation_rpc', 'on', true)")
-        c.execute("update ml_model_registry set artifact_path = '/moved.pkl' where id = %s", (s.p,))
-        c.commit()
+    _owner_write(db, "update ml_model_registry set artifact_path = '/moved.pkl' where id = %s",
+                 (s.p,))  # fmt: skip
     before = s.state()
     with _raises("changed since the gate ran"):
         s.activate(aid)
@@ -736,10 +883,7 @@ def test_one_live_activation_per_name_and_a_rolled_back_candidate_is_never_react
     s.activate(bid)
     _finish_rollback(s, bid)
     # ... a rolled-back one never (OD-7), even if someone puts it back to 'candidate'.
-    with db.connect() as c:
-        c.execute("select set_config('e2i.activation_rpc', 'on', true)")
-        c.execute("update ml_model_registry set stage = 'candidate' where id = %s", (s.c,))
-        c.commit()
+    _owner_write(db, "update ml_model_registry set stage = 'candidate' where id = %s", (s.c,))
     with pytest.raises(psycopg.errors.UniqueViolation):
         s.insert()
 
@@ -848,6 +992,11 @@ def test_production_needs_the_allowlist_and_the_pathology_gate(db):
         {"brier_candidate": prevalence * (1 - prevalence) + 1e-6},
         {"hcp_pathology_passed": False},
         {"hcp_pathology_passed": _DROP},
+        {"hcp_pathology_slope_ok": False},
+        {"hcp_pathology_brier_ok": "true"},
+        {"hcp_pathology_brier_ok": _DROP},
+        {"hcp_pathology_reasons": ["brier_score >= prevalence baseline"]},
+        {"served_stage": "staging"},
     ):
         r = report(s.name)
         for k, v in bad.items():
@@ -857,12 +1006,32 @@ def test_production_needs_the_allowlist_and_the_pathology_gate(db):
     s.insert()
 
 
+def test_an_allowlisted_non_hcp_production_name_takes_a_real_lane5_report(db):
+    """codex r1 MEDIUM 6: Lane 5 runs the pathology gate for every production target, so the
+    report of an allowlisted non-hcp production name satisfies the SQL rule."""
+    hg = pytest.importorskip("src.mlops.activation.holdout_gate")
+    s = Slot(db, stage="production")
+    _sql(db, "insert into ml_activation_production_allowlist (model_name, ruling) values (%s, %s)",
+         (s.name, "l4 test ruling"))  # fmt: skip
+    y, served, cand = _lane5_scores()
+    r = hg.evaluate_gate(
+        y, served, cand, served_bundle_sha256=SHA_P, candidate_bundle_sha256=SHA_C,
+        snapshot=_lane5_snapshot(y), model_name=s.name, served_stage="production",
+    )  # fmt: skip
+    assert r["passed"] and r["hcp_pathology_passed"] is True, r["failed_checks"]
+    aid = s.switched(gate_report=json.loads(json.dumps(r)))
+    s.activate(aid)
+    assert s.canonical() == [s.c] and s.reg(s.c)["stage"] == "production"
+
+
 def test_an_hcp_name_is_never_activated_below_its_served_stage(db):
     s = Slot(db, hcp=True)
+    staging_report = report(s.name, stage="staging")  # so the CHECK, not the gate, refuses
     with _raises("check constraint|changed since the gate ran|acceptance rule"):
-        s.insert(served_stage="staging", predecessor_prior_stage="staging")
+        s.insert(served_stage="staging", predecessor_prior_stage="staging",
+                 gate_report=staging_report)  # fmt: skip
     with _raises("check constraint"):
-        s.insert(served_stage="staging")
+        s.insert(served_stage="staging", gate_report=staging_report)
 
 
 # ---------------------------------------------------------------------------
@@ -904,6 +1073,46 @@ def test_the_weekly_upsert_keeps_the_roles_in_every_live_phase(db, phase):
         before["stage"], before["champion"], before["registered_at"],
     )  # fmt: skip
     assert float(after["auc"]) == 0.9  # the refit's metrics still land (the 717dd7158 intent)
+    assert len(s.canonical()) == 1
+
+
+#: The weekly writer's upsert aimed at the CANDIDATE's key (a refit registering under the
+#: candidate's version), also claiming a champion flag and a new preprocessing path.
+CANDIDATE_UPSERT = (
+    "insert into ml_model_registry (experiment_id, model_name, model_version, algorithm, stage, "
+    "is_champion, is_synthetic, artifact_path, preprocessing_pipeline_path, auc, feature_count, "
+    "trained_at, registered_at, training_provenance) values (%s, %s, %s, "
+    "'logistic_regression_calibrated', 'staging', true, false, '/app/data/ml_artifacts/l4/r.pkl', "
+    "'/app/data/ml_artifacts/l4/r_pre.pkl', 0.9, 25, now(), now(), 'synthetic_gold') "
+    "on conflict (model_name, model_version) do update set experiment_id = excluded.experiment_id, "
+    "algorithm = excluded.algorithm, stage = excluded.stage, is_champion = excluded.is_champion, "
+    "is_synthetic = excluded.is_synthetic, artifact_path = excluded.artifact_path, "
+    "preprocessing_pipeline_path = excluded.preprocessing_pipeline_path, auc = excluded.auc, "
+    "feature_count = excluded.feature_count, trained_at = excluded.trained_at, "
+    "registered_at = excluded.registered_at, training_provenance = excluded.training_provenance"
+)
+
+
+@pytest.mark.parametrize("phase", LIVE)
+def test_the_weekly_upsert_keeps_the_live_candidates_role_and_bundle(db, phase):
+    """codex r1 LOW 7: the candidate row of a live activation keeps stage, champion flag,
+    registered_at and both bundle paths; the refit's metrics still land."""
+    s = Slot(db)
+    aid = s.insert()
+    if phase in ("serving_switched", "active", "rolling_back"):
+        s.set_phase(aid, "serving_switched", serving_switched_at="now")
+    if phase in ("active", "rolling_back"):
+        s.activate(aid)
+    if phase == "rolling_back":
+        s.set_phase(aid, "rolling_back", rolled_back_by="o", rollback_reason="r")
+    if phase == "aborting":
+        s.set_phase(aid, "aborting")
+    before = s.reg(s.c)
+    _sql(db, CANDIDATE_UPSERT, (s.exp, s.name, s.c_version), role="service_role")
+    after = s.reg(s.c)
+    keep = ("stage", "champion", "registered_at", "artifact", "pre")
+    assert {k: after[k] for k in keep} == {k: before[k] for k in keep}
+    assert float(after["auc"]) == 0.9
     assert len(s.canonical()) == 1
 
 
@@ -950,7 +1159,7 @@ def test_no_other_row_of_an_activated_name_becomes_canonical_or_champion(db):
     assert s.canonical() == [s.c]
 
 
-def test_the_rpc_flag_does_not_outlive_the_rpc(db):
+def test_the_rpc_token_does_not_outlive_the_rpc(db):
     s = Slot(db)
     aid = s.switched()
     with db.connect() as c:
@@ -964,11 +1173,69 @@ def test_the_rpc_flag_does_not_outlive_the_rpc(db):
         c.commit()
 
 
+def test_setting_the_old_guc_is_no_bypass(db):
+    """codex r1 MEDIUM 5: any role can set_config() a custom GUC. The retired
+    ``e2i.activation_rpc`` flag must not let service_role past the role guard."""
+    s = Slot(db)
+    aid = s.switched()
+    s.activate(aid)
+    with db.connect() as c:
+        c.execute('set role "service_role"')
+        c.execute("select set_config('e2i.activation_rpc', 'on', true)")
+        c.execute(UPSERT, (s.exp, s.name, False, s.p_artifact))
+        c.execute("update ml_model_registry set stage = 'staging', is_champion = true "
+                  "where id = %s", (s.p,))  # fmt: skip
+        c.commit()
+    p = s.reg(s.p)
+    assert (p["stage"], p["champion"]) == ("archived", False)
+    assert float(p["auc"]) == 0.9  # the refit still lands
+    assert s.canonical() == [s.c]
+    with db.connect() as c:
+        c.execute('set role "service_role"')
+        c.execute("select set_config('e2i.activation_rpc', 'on', true)")
+        with _raises("live activation"):
+            c.execute(
+                "insert into ml_model_registry (experiment_id, model_name, model_version, "
+                "algorithm, stage) values (%s, %s, '1.1', 'lr', 'staging')",
+                (s.exp, s.name),
+            )
+    assert s.canonical() == [s.c]
+
+
+def test_the_rpc_token_table_is_owner_only_and_empty_after_each_rpc(db):
+    import psycopg
+
+    s = Slot(db)
+    aid = s.switched()
+    for role in ("service_role", "authenticated", "anon"):
+        for sql in (
+            "insert into ml_activation_rpc_authority (xact) values (pg_current_xact_id())",
+            "select count(*) from ml_activation_rpc_authority",
+            "delete from ml_activation_rpc_authority",
+        ):
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                _sql(db, sql, role=role)
+    for rpc in ("activate_model_candidate", "rollback_model_activation"):
+        if rpc == "rollback_model_activation":
+            s.begin_rollback(aid)
+        with db.connect() as c:
+            c.execute('set role "service_role"')
+            c.execute(f"select public.{rpc}(%s)", (aid,))
+            c.execute("reset role")  # the owner looks, in the RPC's own transaction
+            assert c.execute("select count(*) from ml_activation_rpc_authority").fetchone() == (0,)
+            c.commit()
+    assert _one(db, "select count(*) from ml_activation_rpc_authority") == 0
+    assert s.canonical() == [s.p] and s.ledger(aid)["rollback_db_at"] is not None
+
+
 def _wait_until_blocked(db: _pg.PgConn, pid: int, timeout: float = 20.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if _one(db, "select wait_event_type = 'Lock' from pg_stat_activity where pid = %s",
-                (pid,)):  # fmt: skip
+        rows = _sql(db, "select wait_event_type = 'Lock' from pg_stat_activity where pid = %s",
+                    (pid,))  # fmt: skip
+        if not rows:
+            raise AssertionError(f"backend {pid} finished without ever blocking on a lock")
+        if rows[0][0]:
             return
         time.sleep(0.05)
     raise AssertionError(f"backend {pid} never blocked on a lock")
@@ -1050,6 +1317,49 @@ def test_a_new_canonical_row_racing_the_rpc_is_refused(db):
     writer.join()
     assert writer.error is not None and "live activation" in str(writer.error)
     assert s.canonical() == [s.c]
+
+
+NEW_CANONICAL = (
+    "insert into ml_model_registry (experiment_id, model_name, model_version, algorithm, stage)"
+    " values (%s, %s, '1.1', 'lr', 'staging')"
+)
+
+
+def test_a_registry_writer_racing_an_open_ledger_insert_blocks_then_is_refused(db):
+    """codex r1 HIGH 2, order (a): the ledger insert's transaction is open. A new canonical
+    row of the name blocks behind it and, once the ledger row is committed, is refused."""
+    s = Slot(db)
+    sql, vals = s.insert_sql()
+    with db.connect() as a:
+        a.execute('set role "service_role"')
+        a.execute(sql, vals)
+        writer = _Background(db, NEW_CANONICAL, (s.exp, s.name))
+        try:
+            _wait_until_blocked(db, writer.pid)
+        finally:
+            a.commit()
+    writer.join()
+    assert writer.error is not None and "live activation" in str(writer.error), writer.error
+    assert s.canonical() == [s.p]
+
+
+def test_a_ledger_insert_racing_an_open_registry_writer_blocks_then_is_refused(db):
+    """codex r1 HIGH 2, order (b): a new canonical row is uncommitted. The ledger insert
+    blocks behind it and, once it is committed, counts two canonical rows and refuses."""
+    s = Slot(db)
+    sql, vals = s.insert_sql()
+    with db.connect() as b:
+        b.execute('set role "service_role"')
+        b.execute(NEW_CANONICAL, (s.exp, s.name))
+        ledger = _Background(db, sql, vals)
+        try:
+            _wait_until_blocked(db, ledger.pid)
+        finally:
+            b.commit()
+    ledger.join()
+    assert ledger.error is not None and "exactly one canonical" in str(ledger.error), ledger.error
+    assert _one(db, "select count(*) from ml_model_activations where model_name = %s",
+                (s.name,)) == 0  # fmt: skip
 
 
 # ---------------------------------------------------------------------------
@@ -1161,23 +1471,36 @@ async def test_the_rpcs_and_the_real_weekly_writer_through_postgrest(db, rest, t
     assert s.canonical() == [s.p] and s.reg(s.c)["stage"] == "archived"
 
 
-def test_a_real_lane5_report_passes_the_sql_rule(db):
-    """Cross-lane contract: Lane 5's evaluate_gate output is accepted by the SQL predicate."""
+def _lane5_scores(worse: bool = False) -> tuple:
     import numpy as np
 
-    hg = pytest.importorskip(
-        "src.mlops.activation.holdout_gate", reason="#2318 Lane 5 (holdout_gate) not merged yet"
-    )
-    s = Slot(db)
     rng = np.random.default_rng(7)
     p = rng.uniform(0.05, 0.95, 1200)
     y = (rng.uniform(size=1200) < p).astype(int)
     served = np.clip(p + rng.normal(0, 0.02, 1200), 0.01, 0.99)
-    snapshot = {"splits": ["test", "holdout"], "n": 1200, "n_pos": int(y.sum()),
-                "rows_sha256": ROWS_SHA}  # fmt: skip
+    if not worse:
+        return y, served, p
+    # Served plus U(-0.075, 0.075) jitter: fails ONLY auc_noninferiority (lower bound -0.0105;
+    # Brier upper 0.0049 and slope 0.93 still pass), so a forged verdict needs just the bound.
+    jitter = np.random.default_rng(3).uniform(-0.075, 0.075, 1200)
+    return y, served, np.clip(served + jitter, 0.0, 1.0)
+
+
+def _lane5_snapshot(y: Any) -> Dict[str, Any]:
+    return {"splits": ["test", "holdout"], "n": len(y), "n_pos": int(y.sum()),
+            "rows_sha256": ROWS_SHA}  # fmt: skip
+
+
+def test_a_real_lane5_report_passes_the_sql_rule(db):
+    """Cross-lane contract: Lane 5's evaluate_gate output is accepted by the SQL predicate."""
+    hg = pytest.importorskip(
+        "src.mlops.activation.holdout_gate", reason="#2318 Lane 5 (holdout_gate) not merged yet"
+    )
+    s = Slot(db)
+    y, served, p = _lane5_scores()
     r = hg.evaluate_gate(
         y, served, p, served_bundle_sha256=SHA_P, candidate_bundle_sha256=SHA_C,
-        snapshot=snapshot, model_name=s.name,
+        snapshot=_lane5_snapshot(y), model_name=s.name, served_stage="staging",
     )  # fmt: skip
     assert r["passed"], r["failed_checks"]
     s.insert(gate_report=json.loads(json.dumps(r)))
@@ -1185,6 +1508,23 @@ def test_a_real_lane5_report_passes_the_sql_rule(db):
     failed = dict(r, model_name=t.name, passed=False, failed_checks=["auc_noninferiority"])
     with _raises("acceptance rule"):
         t.insert(gate_report=failed)
+
+
+def test_a_failed_lane5_report_with_a_forged_verdict_is_refused(db):
+    """codex r1 HIGH 1: a real FAILED report whose verdict and bound were edited to pass --
+    auc_lower_bound raised, auc_delta / se_delta left as Lane 5 computed them -- is refused."""
+    hg = pytest.importorskip("src.mlops.activation.holdout_gate")
+    s = Slot(db)
+    y, served, worse = _lane5_scores(worse=True)
+    r = hg.evaluate_gate(
+        y, served, worse, served_bundle_sha256=SHA_P, candidate_bundle_sha256=SHA_C,
+        snapshot=_lane5_snapshot(y), model_name=s.name, served_stage="staging",
+    )  # fmt: skip
+    assert r["failed_checks"] == ["auc_noninferiority"], r["failed_checks"]
+    forged = dict(json.loads(json.dumps(r)), passed=True, failed_checks=[], auc_lower_bound=0.0)
+    with _raises("acceptance rule"):
+        s.insert(gate_report=forged)
+    assert _one(db, "select count(*) from ml_model_activations") == 0
 
 
 # ---------------------------------------------------------------------------
@@ -1209,6 +1549,44 @@ def _rollback(conn: _pg.PgConn):
     return conn.pg.run_script(conn.db, R165.read_bytes(), single_transaction=True, user="postgres")
 
 
+def _wait_until_psql_blocked(db: _pg.PgConn, timeout: float = 30.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _one(db, "select count(*) from pg_stat_activity where datname = current_database() "
+                    "and application_name = 'psql' and wait_event_type = 'Lock'"):  # fmt: skip
+            return
+        time.sleep(0.05)
+    raise AssertionError("the rollback file never blocked on a lock")
+
+
+def test_the_rollback_file_waits_for_an_uncommitted_activation_then_refuses(db):
+    """codex r1 HIGH 4: the live-row check runs under ACCESS EXCLUSIVE on the ledger, so a
+    'prepared' row committed while the rollback runs is seen, and nothing is dropped."""
+    s = Slot(db)
+    sql, vals = s.insert_sql()
+    out: Dict[str, Any] = {}
+    with db.connect() as ins:
+        ins.execute('set role "service_role"')
+        ins.execute(sql, vals)
+        worker = threading.Thread(target=lambda: out.update(proc=_rollback(db)), daemon=True)
+        worker.start()
+        try:
+            _wait_until_psql_blocked(db)
+        finally:
+            ins.commit()
+    worker.join(120)
+    assert not worker.is_alive()
+    proc = out["proc"]
+    assert proc.returncode != 0 and "live activation" in proc.stderr.decode(), proc.stderr
+    assert db.rows(
+        "select to_regclass('public.ml_model_activations') is not null, "
+        "to_regprocedure('public.activate_model_candidate(uuid)') is not null, "
+        "to_regclass('public.ml_activation_rpc_authority') is not null, "
+        "(select count(*) from pg_trigger where tgname = 'tr_ml_model_registry_activation_role_guard'), "
+        f"(select count(*) from schema_migrations where filename = '{KEY}')"
+    ) == ["t|t|t|1|1"]
+
+
 def test_the_rollback_refuses_while_an_activation_is_live_then_retires_and_reapplies(db):
     s = Slot(db)
     aid = s.switched()
@@ -1224,9 +1602,10 @@ def test_the_rollback_refuses_while_an_activation_is_live_then_retires_and_reapp
         "select to_regclass('public.ml_model_activations') is null, "
         "to_regclass('public.ml_model_activations_retired_165') is not null, "
         "to_regprocedure('public.activate_model_candidate(uuid)') is null, "
+        "to_regclass('public.ml_activation_rpc_authority') is null, "
         "(select count(*) from ml_model_activations_retired_165), "
         f"(select count(*) from schema_migrations where filename = '{KEY}')"
-    ) == ["t|t|t|1|0"]
+    ) == ["t|t|t|t|1|0"]
     assert db.rows(
         "select count(*) from pg_trigger where tgrelid = 'ml_model_registry'::regclass "
         "and tgname = 'tr_ml_model_registry_activation_role_guard'"

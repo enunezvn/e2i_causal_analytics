@@ -746,6 +746,13 @@ active → rolling_back → rolled_back                      (rollback; rolled_b
 - `prepared`: gate passed; both bundles stashed; nothing served has changed.
 - `serving_switched`: the candidate file is live and the sidecar verified it.
 - `active`: the DB roles are switched (RPC). MLflow and the SHAP cache are post-commit and idempotent, tracked by `mlflow_synced_at` / `shap_refreshed_at`.
+- `aborting → aborted` after `serving_switched`: requires the write-once marker `abort_serving_restored_at` (the predecessor bundle is live again and the sidecar verified it). It may be set only in `aborting` and only when `serving_switched_at` is set; an abort from `prepared` (nothing was switched) needs no marker.
+
+**Implementation revisions after codex r1 (2026-09-30).** The SQL block below is the original sketch; `database/migrations/165_model_activation_ledger.sql` is authoritative. Changes from the sketch:
+- The gate predicate requires Lane 5's complete, typed report (every field `evaluate_gate` always emits; `delong_corr` / `calibration_intercept` number-or-null; `bootstrap_auc_delta_p05` a number exactly when some resample was usable), AUCs / PR-AUCs / Briers in [0, 1], `se_delta ≥ 0`, integral counts, and re-derives within 1e-9 `auc_delta = auc_candidate − auc_served`, `auc_lower_bound = auc_delta − z·se_delta` (z = `norm.ppf(0.95)` = 1.6448536269514722, hard-coded; `config` stays exactly `GateConfig`) and `bootstrap_usable + bootstrap_skipped_single_class = bootstrap_b`. It also requires `served_stage` = the activation's stage, and for hcp/production `hcp_pathology_slope_ok` / `hcp_pathology_brier_ok` true with empty `hcp_pathology_reasons`. This rejects incomplete or internally inconsistent reports; forgery by a service-key holder stays out of scope (TRUST NOTE).
+- The ledger insert trigger takes the RPCs' per-name advisory lock and `SHARE ROW EXCLUSIVE` on `ml_model_registry` (lock_timeout 10 s) before it counts canonical rows, so it cannot interleave with a registry writer.
+- The registry role guard's bypass is no longer a GUC (any role can `set_config` one). The two RPCs write their own `pg_current_xact_id()` into `ml_activation_rpc_authority` (no API role can read or write it) before touching the registry and delete it before returning; the guard bypasses only for a row of the writer's own transaction.
+- The rollback file takes `ACCESS EXCLUSIVE` on `ml_model_activations` before its live-row check, and drops `ml_activation_rpc_authority`.
 
 ### Task 4.1: Migration file
 
@@ -1222,7 +1229,8 @@ def test_report_is_json_and_deterministic():
     - `brier_served`, `brier_candidate`, `brier_delta_upper` (paired bootstrap, fixed seed);
     - `pr_auc_served`, `pr_auc_candidate`, `calibration_slope`, `calibration_intercept`;
     - `candidate_bundle_sha256`, `served_bundle_sha256`, `snapshot` (Task 5.2), `prevalence`, `brier_candidate` — the SQL predicate (`activation_gate_passes`) reads these fields and treats any missing one as a failure;
-    - for hcp_adoption names only, `hcp_pathology_passed` plus the individual predicates. Run the **existing** `pathology_gate(metrics, prevalence)` from `scripts/promote_hcp_adoption_champions.py:165-187` (slope outside [0.5, 2.0]; Brier ≥ prevalence·(1−prevalence)), moved into this module and shared. Test a case where the generic rule passes but each pathology predicate fails;
+    - `served_stage` (required keyword, `staging` | `production`, else `ValueError`), recorded in the report; the SQL predicate requires it to equal the activation's stage;
+    - for hcp_adoption names **and every production target** (codex r1: an allowlisted non-hcp production name too), `hcp_pathology_passed` plus the individual predicates. Run the **existing** `pathology_gate(metrics, prevalence)` from `scripts/promote_hcp_adoption_champions.py:165-187` (slope outside [0.5, 2.0]; Brier ≥ prevalence·(1−prevalence)), moved into this module and shared. Test a case where the generic rule passes but each pathology predicate fails;
     - `bootstrap_auc_delta_p05` (cross-check, reported only);
     - `failed_checks: list[str]`, `passed: bool`, `config: asdict(cfg)`, `kind: "deterministic_acceptance_rule"`.
   - Reuse, do not duplicate:
@@ -1285,8 +1293,8 @@ def test_report_is_json_and_deterministic():
 **Abort** (compensation; durable and resumable):
 1. Guarded-UPDATE `prepared|serving_switched → aborting` **first**, so a crash mid-compensation resumes compensation and never re-activates.
 2. If the live file sha ≠ predecessor sha, swap the predecessor stash back (copy, verified).
-3. Restart and verify the sidecar sha == predecessor sha.
-4. Guarded-UPDATE `aborting → aborted`.
+3. Restart and verify the sidecar sha == predecessor sha. If `serving_switched_at` is set, set `abort_serving_restored_at` (write-once; the trigger refuses it in any phase but `aborting` and when nothing was switched). On resume, re-observe the file and sidecar sha even when the marker is set.
+4. Guarded-UPDATE `aborting → aborted` (the trigger refuses it while `serving_switched_at` is set and `abort_serving_restored_at` is not).
 
 The registry is untouched on this path: the RPC either never ran or rolled back entirely. An abort is only legal before `active` (the trigger forbids `active → aborting`).
 
@@ -1304,7 +1312,7 @@ The candidate's holdout metrics stay as history; the predecessor's are untouched
 - `prepared` → activation step 6;
 - `serving_switched` → step 8;
 - `active` with NULL `mlflow_synced_at`/`shap_refreshed_at` → steps 9/10;
-- `aborting` → abort 2–4;
+- `aborting` → abort 2–4 (after re-observing the file and sidecar hashes; step 3 sets `abort_serving_restored_at` when the candidate had been switched in);
 - `rolling_back` → the first rollback step whose marker is NULL, after re-observing the file and sidecar hashes (a mismatch re-runs step 2);
 - `aborted`/`rolled_back` → verify only (file sha, sidecar sha, registry, alias) and report drift.
 
