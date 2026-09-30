@@ -408,6 +408,29 @@ SQL_OBJECTS: Dict[str, Tuple[str, str]] = {
         "written is_champion=false",
     ),
     "ml_model_registry_retrain_of_immutable": (OPT_IN, "lineage trigger (160), reads OLD/NEW"),
+    # --- #2318 activation (migration 165) ------------------------------------------------------
+    "activate_model_candidate": (
+        EXACT,
+        "#2318 activation/rollback RPC: rows named by the ledger's ids",
+    ),
+    "rollback_model_activation": (
+        EXACT,
+        "#2318 activation/rollback RPC: rows named by the ledger's ids",
+    ),
+    "ml_model_activations_insert_guard": (
+        EXACT,
+        "#2318 ledger insert trigger: the ledger's candidate/predecessor ids, plus a count of "
+        "the name's canonical rows (the readers' predicate)",
+    ),
+    "_activation_lock_and_count_served": (
+        CANONICAL,
+        "#2318 single-canonical-row invariant: exactly the readers' predicate, under a lock",
+    ),
+    "ml_model_registry_activation_role_guard": (
+        OPT_IN,
+        "#2318 registry trigger (writer): keeps a live activation's roles, refuses a second "
+        "canonical/champion row of the name; reads only an exact (model_name, model_version)",
+    ),
 }
 
 _SQL_DEF = re.compile(
