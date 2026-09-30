@@ -1,0 +1,10 @@
+src from <worktree>/src/__init__.py
+Remibrutinib default rows 5000 label_rate 0.3938 severity none leaked [] findings [] blocking []
+Remibrutinib contract rows 5000 label_rate 0.3938 severity none leaked [] findings [] blocking []
+Remibrutinib empty rows 5000 label_rate 0.3938 severity none leaked [] findings [] blocking []
+Fabhalta default rows 5000 label_rate 0.4176 severity none leaked [] findings [] blocking []
+Fabhalta contract rows 5000 label_rate 0.4176 severity none leaked [] findings [] blocking []
+Fabhalta empty rows 5000 label_rate 0.4176 severity none leaked [] findings [] blocking []
+Kisqali default rows 5000 label_rate 0.4046 severity none leaked [] findings [] blocking []
+Kisqali contract rows 5000 label_rate 0.4046 severity none leaked [] findings [] blocking []
+Kisqali empty rows 5000 label_rate 0.4046 severity none leaked [] findings [] blocking []
