@@ -120,13 +120,19 @@ def test_the_healthcheck_asks_about_THIS_node_not_whether_any_worker_is_alive(fo
     container healthy while it was dead. MEASURED 2026-09-20 in the prod api image:
     `-d worker_forecast@$HOSTNAME` exits 0 for a live node and 69 for an absent one,
     while the bare broadcast exits 0 for both.
+
+    #2341 swapped `inspect ping -d` for src.workers.healthcheck. It keeps the same
+    one-node scoping and adds limit=1, so the node's reply is consumed and does not
+    leak a pidbox reply key. The node name is still the positional argument.
     """
     assert "healthcheck" in forecast
     test = forecast["healthcheck"]["test"]
     assert test[0] == "CMD-SHELL", "$HOSTNAME has to be expanded by a shell"
     command = " ".join(str(x) for x in test[1:])
-    assert "inspect ping" in command
-    assert "-d worker_forecast@" in command, "the check must name this node"
+    assert "python -m src.workers.healthcheck worker_forecast@" in command, (
+        "the check must name this node"
+    )
+    assert "inspect ping" not in command
     assert "$$HOSTNAME" in command or "$HOSTNAME" in command
 
 

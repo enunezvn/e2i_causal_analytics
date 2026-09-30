@@ -29,7 +29,7 @@ import os
 import shutil
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -340,3 +340,143 @@ def test_the_subprocess_argv_carries_nothing_from_the_environment() -> None:
         argv = assigns[0]
     assert isinstance(argv, ast.List), ast.unparse(argv)
     assert [ast.unparse(e) for e in argv.elts] == ["sys.executable", "str(_MIRROR_SCRIPT)"]
+
+
+# --------------------------------------------------------------------------
+# #2278: a sidecar the cursor has passed is still mirrored (real Postgres)
+# --------------------------------------------------------------------------
+#
+# The cursor is ``max(imported_at) - 1h`` compared against a sidecar's
+# ``written_at``. A sidecar that is not mirrored on the run that first could see it
+# (it landed late, or it was unreadable mid-write) is behind the cursor by the next
+# run, and before #2278 no run ever read it again.
+
+
+def _write_sidecar_at(root: Path, experiment_id: str, written_at: datetime, *features: str) -> Path:
+    stamp = written_at.strftime("%Y%m%dT%H%M%SZ")
+    sub = root / experiment_id
+    sub.mkdir(parents=True, exist_ok=True)
+    out = sub / f"adaptive_verdicts_{stamp}.json"
+    out.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "experiment_id": experiment_id,
+                "written_at": stamp,
+                "adaptive_verdicts": [
+                    {"feature": f, "layer": "3", "severity": "moderate"} for f in features
+                ],
+            }
+        )
+    )
+    return out
+
+
+def _yesterday() -> datetime:
+    return datetime.now(timezone.utc) - timedelta(days=1)
+
+
+def test_a_sidecar_that_lands_behind_the_cursor_is_still_mirrored_2278(
+    verdicts_db, tmp_path, monkeypatch
+) -> None:
+    """Run 1 imports a fresh sidecar, so the cursor is ~now - 1h. A sidecar written
+    yesterday then lands (a late file). Run 2 must mirror it."""
+    _arm(monkeypatch, verdicts_db, tmp_path)
+    _write_sidecar(tmp_path, "exp_fresh_2278", "age")
+    assert _task()()["status"] == "ok"
+    assert _count(verdicts_db, "exp_fresh_2278") == 1
+
+    _write_sidecar_at(tmp_path, "exp_late_2278", _yesterday(), "age", "gender")
+    second = _task()()
+    assert second["status"] == "ok", second
+    assert _count(verdicts_db, "exp_late_2278") == 2, (
+        "a sidecar written before the cursor but never mirrored must be mirrored"
+    )
+
+
+def test_the_backfill_runs_on_psycopg2_2278(verdicts_db, tmp_path, monkeypatch) -> None:
+    """Prod's image has psycopg2 only, and the backfill's key lookup binds a Python
+    list of aware datetimes to ``= ANY(%s)``. Run that path under psycopg2."""
+    _arm(monkeypatch, verdicts_db, tmp_path)
+    _write_sidecar(tmp_path, "exp_pg2fresh_2278", "age")
+    assert _task()()["status"] == "ok"
+    _write_sidecar_at(tmp_path, "exp_pg2late_2278", _yesterday(), "age")
+    shim = (
+        "import sys, runpy; sys.modules['psycopg'] = None; "
+        f"sys.argv = [{str(MIRROR_SCRIPT)!r}, '--artifacts-dir', {str(tmp_path)!r}]; "
+        f"runpy.run_path({str(MIRROR_SCRIPT)!r}, run_name='__main__')"
+    )
+    env = {
+        **verdicts_db.pg.client_env(),
+        "DATABASE_URL": verdicts_db.pg.dsn(verdicts_db.db),
+        "PYTHONPATH": str(REPO),
+    }
+    proc = subprocess.run(
+        [sys.executable, "-c", shim], cwd=str(REPO), env=env, capture_output=True, text=True,
+        timeout=240,
+    )  # fmt: skip
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    assert "backfilling 1 row(s)" in proc.stderr, proc.stderr[-2000:]
+    assert _count(verdicts_db, "exp_pg2late_2278") == 1
+
+
+def test_a_sidecar_unreadable_on_one_run_is_mirrored_once_readable_2278(
+    verdicts_db, tmp_path, monkeypatch
+) -> None:
+    """The file is caught mid-write (unreadable, so the run is degraded). Once it is
+    whole, a later run must mirror it although imports in between moved the cursor."""
+    _arm(monkeypatch, verdicts_db, tmp_path)
+    path = _write_sidecar_at(tmp_path, "exp_partial_2278", _yesterday(), "age")
+    whole = path.read_text()
+    path.write_text(whole[: len(whole) // 2])
+    _write_sidecar(tmp_path, "exp_other_2278", "age")
+
+    first = _task()()
+    assert first["status"] == "degraded", first
+    assert _count(verdicts_db, "exp_other_2278") == 1
+
+    path.write_text(whole)
+    second = _task()()
+    assert second["status"] == "ok", second
+    assert _count(verdicts_db, "exp_partial_2278") == 1
+
+
+def test_an_already_mirrored_sidecar_behind_the_cursor_is_not_re_upserted_2278(
+    verdicts_db, tmp_path, monkeypatch
+) -> None:
+    """The cursor still bounds RE-upserts: a sidecar behind it whose rows are already
+    in the table does not go through the upsert again (the write amplification the
+    cursor exists to prevent). Only rows missing from the table are backfilled."""
+    _arm(monkeypatch, verdicts_db, tmp_path)
+    path = _write_sidecar_at(tmp_path, "exp_settled_2278", _yesterday(), "age")
+    _write_sidecar(tmp_path, "exp_fresh2_2278", "age")
+    assert _task()()["status"] == "ok"
+    assert _count(verdicts_db, "exp_settled_2278") == 1
+
+    payload = json.loads(path.read_text())
+    payload["adaptive_verdicts"][0]["severity"] = "high"
+    path.write_text(json.dumps(payload))
+    assert _task()()["status"] == "ok"
+    severity = verdicts_db.rows(
+        "SELECT verdict->>'severity' FROM adaptive_validity_verdicts "
+        "WHERE experiment_id = 'exp_settled_2278'"
+    )
+    assert severity == ["moderate"], severity
+
+
+def test_a_non_dict_verdict_entry_makes_the_run_degraded_2278(
+    verdicts_db, tmp_path, monkeypatch
+) -> None:
+    """The reader drops a non-dict entry of ``adaptive_verdicts``; that verdict never
+    reaches the table, so the run is degraded and names the file, like the other
+    drop paths. The dict entries of the same sidecar still land."""
+    _arm(monkeypatch, verdicts_db, tmp_path)
+    path = _write_sidecar(tmp_path, "exp_nondict_2278", "age")
+    payload = json.loads(path.read_text())
+    payload["adaptive_verdicts"].append("gender")
+    path.write_text(json.dumps(payload))
+
+    result = _task()()
+    assert result["status"] == "degraded", result
+    assert any(str(path) in line for line in result["skipped_sidecars"]), result
+    assert _count(verdicts_db, "exp_nondict_2278") == 1

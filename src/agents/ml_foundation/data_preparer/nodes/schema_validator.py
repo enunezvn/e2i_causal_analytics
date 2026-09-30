@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from ..blocking_issues import KIND_SCHEMA_VALIDATION, merge_blocking_issues
 from ..state import DataPreparerState
+from ..warnings_channel import merge_warnings
 
 logger = logging.getLogger(__name__)
 
@@ -133,8 +134,19 @@ async def run_schema_validation(state: DataPreparerState) -> Dict[str, Any]:
                 "schema_validation_errors": [],
                 "schema_splits_validated": 0,
                 "schema_validation_time_ms": elapsed_ms,
-                "warnings": state.get("warnings", [])
-                + ["No DataFrames available for schema validation"],
+                # A dict like every other entry: the channel is
+                # ``List[Dict[str, Any]]``, and a bare str made the NEXT node's
+                # input fail validation, masking load_data's error (#2290).
+                "warnings": merge_warnings(
+                    state.get("warnings"),
+                    [
+                        {
+                            "severity": "warning",
+                            "message": "No DataFrames available for schema validation",
+                        }
+                    ],
+                    kind=KIND_SCHEMA_VALIDATION,
+                ),
             }
 
         # Validate each split

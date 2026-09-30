@@ -1198,3 +1198,18 @@ def test_fidelity_tracking_update_is_consumed_by_a_running_worker():
     assert any(
         producer_queue in _queues_of(svc) and _replicas_of(svc) >= 1 for svc in services.values()
     )
+
+
+def test_sidecar_sklearn_matches_the_training_pin():
+    """#2318: bundles are pickled by the API/workers on the repo's scikit-learn; the BentoML
+    sidecar must unpickle them on the SAME version. Unpinned, it resolved 1.9.1 against the
+    repo's 1.6.1 and logged InconsistentVersionWarning for every served bundle; a 1.6.1
+    ColumnTransformer (the retrain's serving bundle) does not unpickle on 1.9.1 at all
+    (AttributeError: _RemainderColsList)."""
+    side = (REPO_ROOT / "docker" / "bentoml" / "requirements-bentoml.txt").read_text()
+    m = re.search(r"^scikit-learn==([\d.]+)\s*$", side, re.M)
+    assert m, "docker/bentoml/requirements-bentoml.txt must pin scikit-learn exactly (==)"
+    repo_pins = (REPO_ROOT / "requirements.txt").read_text()
+    assert re.search(rf"^scikit-learn=={re.escape(m.group(1))}\s*$", repo_pins, re.M), (
+        f"sidecar scikit-learn=={m.group(1)} differs from requirements.txt's pin"
+    )

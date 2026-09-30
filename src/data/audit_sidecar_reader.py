@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Optional
@@ -95,8 +95,12 @@ _READER_SCHEMA_MAJOR = 1
 # Issue #235 A3: the set of verdict-dict keys the reader knows how to
 # surface on ``VerdictRecord``. Any unrecognized key is logged ONCE per
 # file (not per-record), with the unknown set sorted for determinism.
-# Extend this set in lockstep with new ``VerdictRecord`` fields.
-_KNOWN_VERDICT_KEYS: frozenset[str] = frozenset(
+# Keys listed here explicitly are the documented set, including the
+# producer-emitted keys kept on ``raw_verdict`` only. The effective allow-list
+# ``_KNOWN_VERDICT_KEYS`` (defined after ``VerdictRecord``) adds every
+# ``VerdictRecord`` field that ``_build_record`` reads from the verdict dict,
+# so a new record field can never trip the WARN on its own key (#2303).
+_EXPLICIT_VERDICT_KEYS: frozenset[str] = frozenset(
     {
         "feature",
         "layer",
@@ -145,6 +149,12 @@ _KNOWN_VERDICT_KEYS: frozenset[str] = frozenset(
         "evaluator_missed_considerations",
         "evaluator_notes",
         "evaluator_model",
+        # Issue #241 evaluator telemetry (missing here until #2303, which made
+        # every real sidecar log a false 'unknown verdict key(s)' WARN):
+        "evaluator_latency_ms",
+        "evaluator_input_tokens",
+        "evaluator_output_tokens",
+        "evaluator_cost_usd",
         # Issue #240 Stage 1 (shadow mode): three nullable promotion-rule
         # flags emitted by ``_ensemble_to_legacy_dict``. Registered here so
         # they parse onto VerdictRecord (and feed the mirror's dedicated
@@ -303,6 +313,28 @@ class VerdictRecord:
     audit_workflow_id: Optional[str] = None
 
 
+# ``VerdictRecord`` fields that do NOT come from the per-verdict dict: they are
+# filled from the sidecar envelope, the file path, or the file-level
+# ``role_attributions`` map. Every other field is read by ``_build_record``
+# from ``raw`` under its own name.
+_NON_VERDICT_RECORD_FIELDS: frozenset[str] = frozenset(
+    {
+        "experiment_id",
+        "written_at",
+        "source_path",
+        "raw_verdict",
+        "role_attribution",
+        "audit_workflow_id",
+    }
+)
+
+# #2303: the allow-list the unknown-key WARN checks against. Derived from the
+# record's fields so the two cannot drift apart again.
+_KNOWN_VERDICT_KEYS: frozenset[str] = _EXPLICIT_VERDICT_KEYS | (
+    frozenset(f.name for f in fields(VerdictRecord)) - _NON_VERDICT_RECORD_FIELDS
+)
+
+
 class SidecarReader:
     """Iterate over adaptive-validity sidecar JSONs under a directory.
 
@@ -390,6 +422,16 @@ class SidecarReader:
                     feature_name = attr.get("feature")
                     if isinstance(feature_name, str):
                         role_map[feature_name] = attr
+            non_dict = [i for i, raw in enumerate(verdicts_raw) if not isinstance(raw, dict)]
+            if non_dict:
+                # #2278: these verdicts are dropped, so say which file lost them.
+                logger.warning(
+                    "SidecarReader: sidecar %s has %d non-dict adaptive_verdicts "
+                    "entries at index %s; skipping them.",
+                    path,
+                    len(non_dict),
+                    non_dict,
+                )
             for raw in verdicts_raw:
                 if not isinstance(raw, dict):
                     continue

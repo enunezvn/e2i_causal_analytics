@@ -338,3 +338,90 @@ class TestUpsertGateColumns:
         # The two gate values follow the three Stage-1 shadow columns; the
         # run id (#2260) was appended after them.
         assert params[-3:-1] == ("R1", "moderate")
+
+
+# ----------------------------------------------------------------------------
+# #2278 — rows behind the cursor that are missing from the table are backfilled.
+# The real-Postgres proof is in tests/unit/test_tasks/test_audit_sidecar_mirror_task_2273.py
+# (opt-in); this pins the selection logic without a DB.
+# ----------------------------------------------------------------------------
+
+
+class _KeysCursor(_FakeCursor):
+    """Answers the existing-keys SELECT with a fixed row set."""
+
+    def __init__(self, rows: list[tuple]) -> None:
+        super().__init__()
+        self._rows = rows
+
+    def fetchall(self) -> list[tuple]:
+        return self._rows
+
+
+def _record(experiment_id: str, written_at: datetime, feature: str = "age"):
+    from dataclasses import replace
+
+    base = _verdict_record_with_shadow(
+        would_promote_severity=None, would_flag_for_review=None, rationale_incomplete_flag=None
+    )
+    return replace(base, experiment_id=experiment_id, written_at=written_at, feature=feature)
+
+
+class TestSelectRecords2278:
+    CURSOR = datetime(2026, 9, 29, 12, 0, 0, tzinfo=timezone.utc)
+    BEHIND = datetime(2026, 9, 28, 12, 0, 0, tzinfo=timezone.utc)
+    RECENT = datetime(2026, 9, 29, 12, 30, 0, tzinfo=timezone.utc)
+
+    def test_a_missing_row_behind_the_cursor_is_backfilled_and_a_present_one_is_not(
+        self,
+    ) -> None:
+        from scripts.mirror_audit_sidecar_to_supabase import _NIL_UUID, _select_records
+
+        recent = _record("exp-recent", self.RECENT)
+        settled = _record("exp-settled", self.BEHIND)
+        late = _record("exp-late", self.BEHIND)
+        cur = _KeysCursor([("exp-settled", "age", self.BEHIND, _NIL_UUID)])
+
+        selected, backfilled = _select_records(
+            _FakeConn(cur),  # type: ignore[arg-type]
+            [recent, settled, late],
+            cursor=self.CURSOR,
+        )
+
+        assert selected == [recent, late]
+        assert backfilled == 1
+        # One lookup, bound to the written_at values behind the cursor.
+        assert len(cur.calls) == 1 and cur.calls[0][1][-1] == [self.BEHIND]
+
+    def test_no_cursor_selects_everything_without_a_lookup(self) -> None:
+        from scripts.mirror_audit_sidecar_to_supabase import _select_records
+
+        cur = _KeysCursor([])
+        records = [_record("exp-a", self.BEHIND), _record("exp-b", self.RECENT)]
+        selected, backfilled = _select_records(
+            _FakeConn(cur),  # type: ignore[arg-type]
+            records,
+            cursor=None,
+        )
+        assert (selected, backfilled, cur.calls) == (records, 0, [])
+
+    def test_the_key_matches_a_db_timestamp_in_another_zone_and_an_uppercase_run_id(
+        self,
+    ) -> None:
+        """The DB returns written_at in the session's zone; equal instants must match."""
+        from dataclasses import replace
+        from datetime import timedelta
+
+        from scripts.mirror_audit_sidecar_to_supabase import _select_records
+
+        run_id = "0f5c2c1e-9d7a-4b4e-8a53-2f1f6c7e9a10"
+        settled = replace(_record("exp-settled", self.BEHIND), audit_workflow_id=run_id)
+        in_other_zone = self.BEHIND.astimezone(timezone(timedelta(hours=-5)))
+        cur = _KeysCursor([("exp-settled", "age", in_other_zone, run_id.upper())])
+
+        selected, backfilled = _select_records(
+            _FakeConn(cur),  # type: ignore[arg-type]
+            [settled],
+            cursor=self.CURSOR,
+        )
+        assert (selected, backfilled) == ([], 0)

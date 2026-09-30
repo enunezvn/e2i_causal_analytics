@@ -14,6 +14,7 @@ import pandas as pd
 
 from ..blocking_issues import KIND_QUALITY_CHECK, merge_blocking_issues
 from ..state import DataPreparerState
+from ..warnings_channel import merge_warnings
 from .qc_threshold import resolve_qc_min_overall_score
 
 logger = logging.getLogger(__name__)
@@ -76,7 +77,10 @@ async def run_quality_checks(state: DataPreparerState) -> Dict[str, Any]:
         # Initialize results
         expectation_results = []
         failed_expectations = []
-        warnings = []
+        # This node's OWN warnings for this pass. Like ``blocking_issues`` the
+        # channel has no reducer, so the return site merges these into the
+        # incoming channel instead of replacing it (#2290).
+        warnings: List[Dict[str, Any]] = []
         remediation_steps = []
         # This node's OWN blocking issues for this pass. It must not be
         # returned as-is: ``blocking_issues`` has no reducer, so returning a
@@ -189,7 +193,11 @@ async def run_quality_checks(state: DataPreparerState) -> Dict[str, Any]:
             "timeliness_score": timeliness_score,
             "expectation_results": expectation_results,
             "failed_expectations": failed_expectations,
-            "warnings": warnings,
+            "warnings": merge_warnings(
+                state.get("warnings"),
+                warnings,
+                kind=KIND_QUALITY_CHECK,
+            ),
             "remediation_steps": remediation_steps,
             # ``qc_status`` above is derived from this node's OWN issues; the
             # channel carries every producer's.

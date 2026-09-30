@@ -5,7 +5,12 @@
 bentoml==1.4.39
 
 # ML frameworks
-scikit-learn>=1.3.0
+# Exact pin to match root requirements.txt (#2318): served bundles are pickled by
+# the API/workers on this version. Unpinned, the image resolved 1.9.1 (the
+# InconsistentVersionWarning on every served bundle), and a 1.6.1-pickled
+# ColumnTransformer does not unpickle on 1.9.1 at all. Guarded by
+# tests/unit/test_docker/test_compose_runtime_invariants.py.
+scikit-learn==1.6.1
 xgboost>=2.0.0
 lightgbm>=4.0.0
 numpy>=1.24.0

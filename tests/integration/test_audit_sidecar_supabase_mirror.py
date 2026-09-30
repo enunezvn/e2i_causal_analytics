@@ -684,57 +684,67 @@ def test_since_acts_as_floor_not_replacement_when_db_cursor_is_later(
     tmp_path: Path, db_conn: psycopg.Connection, test_namespace: str
 ) -> None:
     """The load-bearing iter-2 fix: ``--since=1970-01-01T00:00:00Z`` with
-    a non-empty DB MUST NOT rescan the entire sidecar history. The
-    effective cursor is ``max(db_cursor, --since)`` — when the DB
-    cursor is later, IT wins and old sidecars stay filtered.
+    a non-empty DB MUST NOT re-upsert the entire sidecar history. The
+    effective cursor is ``max(db_cursor, --since)``; when the DB cursor is
+    later, IT wins, and sidecars behind it that are already mirrored are not
+    upserted again.
 
-    Sequence:
-      1. Mirror sidecar-A (written_at=~now) → DB has row → DB
-         cursor advances to that imported_at (effectively "now").
-      2. Drop sidecar-B (written_at=a day earlier than A).
-      3. Re-run mirror with ``--since=1970-01-01T00:00:00Z``.
-         If --since REPLACES the cursor (iter-1 behavior, the bug),
-         B is admitted and we get 2 rows.
-         If --since is a FLOOR (iter-2 fix), the DB cursor wins
-         because it's later than 1970, so the reader's effective
-         floor is roughly "now - 1h overlap" and B (yesterday) is
-         filtered out.
+    #2278 changed what "behind the cursor" means for a sidecar that was
+    NEVER mirrored: it is backfilled, whatever the cursor. So the sequence
+    now tells the two apart:
+      1. Mirror sidecar-A (written_at ~now) and sidecar-C (a day old).
+         max(imported_at) advances to ~now.
+      2. Edit C's verdict on disk and drop in sidecar-B (a day old, new).
+      3. Re-run with ``--since=1970-01-01T00:00:00Z``.
+         B is missing from the table, so it is backfilled (#2278).
+         C is behind the DB cursor and already mirrored, so its edit is
+         NOT re-upserted.
 
     FALSIFIABILITY ANCHOR: revert to the iter-1 ``cursor = since_override``
-    branch and this test trips (count_pass2 == 2 instead of 1).
+    branch and C's edit lands (severity 'high' instead of 'moderate').
     """
     exp_a = f"{test_namespace}-floorA"
     exp_b = f"{test_namespace}-floorB"
+    exp_c = f"{test_namespace}-floorC"
 
-    # Pass 1: mirror sidecar-A. This populates the DB and advances
-    # max(imported_at) to ~now.
     _write_sidecar(
         tmp_path,
         experiment_id=exp_a,
         written_at=_ago(),
         verdicts=[_make_verdict(feature="age")],
     )
+    sidecar_c = _write_sidecar(
+        tmp_path,
+        experiment_id=exp_c,
+        written_at=_ago(days=1),
+        verdicts=[_make_verdict(feature="age")],
+    )
     _run_mirror(tmp_path)
-    assert _count_rows(db_conn, experiment_id_prefix=test_namespace) == 1
+    assert _count_rows(db_conn, experiment_id_prefix=test_namespace) == 2
 
-    # Pass 2: add sidecar-B with written_at EARLIER than the imported_at
-    # that pass-1 stamped. Then run mirror with --since far in the past
-    # (1970). If --since replaces the cursor, B admits (BUG). If
-    # --since is a floor under the DB cursor, B is filtered (FIX).
+    payload = json.loads(sidecar_c.read_text())
+    payload["adaptive_verdicts"][0]["severity"] = "high"
+    sidecar_c.write_text(json.dumps(payload))
     _write_sidecar(
         tmp_path,
         experiment_id=exp_b,
-        written_at=_ago(days=1),  # 1 day before A
+        written_at=_ago(days=1),
         verdicts=[_make_verdict(feature="age")],
     )
     _run_mirror(tmp_path, since="1970-01-01T00:00:00Z")
 
     count_pass2 = _count_rows(db_conn, experiment_id_prefix=test_namespace)
-    assert count_pass2 == 1, (
+    assert count_pass2 == 3, (
+        f"sidecar-B was never mirrored, so it must be backfilled although it is "
+        f"behind the DB cursor (#2278); got {count_pass2} rows (expected 3)"
+    )
+    row_c = _fetch_one(db_conn, experiment_id=exp_c, feature="age")
+    assert row_c is not None
+    assert row_c[4]["severity"] == "moderate", (
         f"FALSIFIABILITY-ANCHOR: --since=1970 must act as a FLOOR under the DB "
-        f"cursor, not REPLACE it. Got {count_pass2} rows after pass-2 "
-        f"(expected 1: sidecar-B is older than pass-1's imported_at and the "
-        f"DB cursor wins). If this trips, the iter-2 max(db_cursor, since) "
+        f"cursor, not REPLACE it: sidecar-C is already mirrored and behind the "
+        f"cursor, so its on-disk edit must not be re-upserted. Got "
+        f"{row_c[4]['severity']!r}. If this trips, the iter-2 max(db_cursor, since) "
         f"floor regressed back to iter-1's replace-the-cursor behavior."
     )
 
@@ -742,17 +752,17 @@ def test_since_acts_as_floor_not_replacement_when_db_cursor_is_later(
 def test_since_without_flag_uses_db_cursor_as_before(
     tmp_path: Path, db_conn: psycopg.Connection, test_namespace: str
 ) -> None:
-    """When ``--since`` is NOT passed at all, the mirror behaves exactly
-    as before iter-2: ``cursor = _read_cursor()``. This pins the
-    backward-compat path — the iter-2 floor logic must not change the
-    no-flag case.
+    """When ``--since`` is NOT passed at all, the DB cursor alone decides
+    what is re-upserted, and (#2278) a sidecar behind it that was never
+    mirrored is still backfilled.
 
     Sequence:
       1. Mirror sidecar-A → DB populated, cursor advances.
-      2. Add sidecar-B with written_at EARLIER than A's imported_at.
+      2. Add sidecar-B with written_at a day EARLIER than A's imported_at
+         (a sidecar that landed late).
       3. Re-run mirror WITHOUT --since.
-         Result: B is filtered by the DB cursor (its written_at is
-         earlier than max(imported_at) - overlap), count stays at 1.
+         Before #2278, B was filtered by the cursor and never mirrored.
+         Now it is backfilled: count goes to 2.
     """
     exp_a = f"{test_namespace}-noflagA"
     exp_b = f"{test_namespace}-noflagB"
@@ -767,39 +777,26 @@ def test_since_without_flag_uses_db_cursor_as_before(
     # Inline run WITHOUT --since: bypass _run_mirror which always passes
     # the test floor. We call mirror_main directly with no --since.
     assert _TEST_DB_URL is not None
-    rc1 = mirror_main(
-        [
-            "--artifacts-dir",
-            str(tmp_path),
-            "--database-url",
-            _TEST_DB_URL,
-            "--log-level",
-            "WARNING",
-        ]
-    )
-    assert rc1 == 0
+    no_flag_argv = [
+        "--artifacts-dir",
+        str(tmp_path),
+        "--database-url",
+        _TEST_DB_URL,
+        "--log-level",
+        "WARNING",
+    ]
+    assert mirror_main(no_flag_argv) == 0
     assert _count_rows(db_conn, experiment_id_prefix=test_namespace) == 1
 
-    # Older sidecar — should be filtered out by the DB cursor on pass-2.
     _write_sidecar(
         tmp_path,
         experiment_id=exp_b,
         written_at=_ago(days=1),
         verdicts=[_make_verdict(feature="age")],
     )
-    rc2 = mirror_main(
-        [
-            "--artifacts-dir",
-            str(tmp_path),
-            "--database-url",
-            _TEST_DB_URL,
-            "--log-level",
-            "WARNING",
-        ]
-    )
-    assert rc2 == 0
+    assert mirror_main(no_flag_argv) == 0
     count_pass2 = _count_rows(db_conn, experiment_id_prefix=test_namespace)
-    assert count_pass2 == 1, (
-        f"no-flag path: older sidecar must be filtered by DB cursor, "
-        f"got {count_pass2} rows (expected 1)"
+    assert count_pass2 == 2, (
+        f"no-flag path: a late sidecar behind the DB cursor that was never "
+        f"mirrored must be backfilled (#2278); got {count_pass2} rows (expected 2)"
     )

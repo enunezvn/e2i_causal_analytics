@@ -156,8 +156,7 @@ async def test_schema_failure_survives_to_the_qc_gate(tmp_path: Path) -> None:
 
     # Precondition: the producer really did fail. That GE takes its
     # ``None``-writing happy path on this fixture is pinned separately by
-    # ``test_fixture_passes_ge_validation`` (the ``ge_validation_status`` key
-    # is not readable here — see that test's docstring).
+    # ``test_fixture_passes_ge_validation`` (see that test's docstring).
     assert final_state["schema_validation_status"] == "failed"
 
     blocking_issues = final_state.get("blocking_issues") or []
@@ -395,15 +394,12 @@ async def test_fixture_passes_ge_validation(tmp_path: Path) -> None:
 
     The graph tests above are only exercising ``ge_validator``'s
     ``None``-writing happy path while GE PASSES on this frame. That cannot be
-    asserted from the graph's final state: ``ge_validation_status`` (and every
-    other ``ge_*`` key the node returns) is **not declared on
-    ``DataPreparerState``**, and LangGraph drops undeclared keys at the channel
-    boundary, so the node's verdict never reaches state. Only
-    ``blocking_issues`` — which is declared — survives. No production code
-    reads ``ge_validation_status`` from state today (grepped repo-wide), so
-    that is a separate, currently-harmless defect; it is recorded here because
-    it is the reason this precondition is checked on the node's return value
-    instead.
+    asserted from the graph's final state at the time this was written:
+    ``ge_validation_status`` (and every other ``ge_*`` key the node returns)
+    was **not declared on ``DataPreparerState``**, so LangGraph dropped it at
+    the channel boundary. That was #2288, now fixed and pinned by
+    ``test_ge_state_channel_2288.py``; this precondition stays on the node's
+    return value because it is a fixture invariant, not a channel property.
     """
     csv_path = _write_patient_journeys_csv(tmp_path)
     state = _base_state(csv_path)
