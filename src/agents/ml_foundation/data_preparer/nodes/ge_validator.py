@@ -286,6 +286,8 @@ async def run_ge_validation(state: DataPreparerState) -> Dict[str, Any]:
             f"splits_validated={len(results)}"
         )
 
+        # The ``ge_*`` keys are record-only (declared on DataPreparerState, #2288);
+        # only ``blocking_issues`` feeds the QC gate.
         return {
             "ge_validation_status": ge_status,
             **({"ge_validation_note": ge_note} if ge_note else {}),
