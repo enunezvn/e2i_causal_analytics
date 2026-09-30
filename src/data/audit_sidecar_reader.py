@@ -422,6 +422,16 @@ class SidecarReader:
                     feature_name = attr.get("feature")
                     if isinstance(feature_name, str):
                         role_map[feature_name] = attr
+            non_dict = [i for i, raw in enumerate(verdicts_raw) if not isinstance(raw, dict)]
+            if non_dict:
+                # #2278: these verdicts are dropped, so say which file lost them.
+                logger.warning(
+                    "SidecarReader: sidecar %s has %d non-dict adaptive_verdicts "
+                    "entries at index %s; skipping them.",
+                    path,
+                    len(non_dict),
+                    non_dict,
+                )
             for raw in verdicts_raw:
                 if not isinstance(raw, dict):
                     continue

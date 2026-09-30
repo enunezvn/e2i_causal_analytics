@@ -172,6 +172,34 @@ def test_reader_tolerates_malformed_json(tmp_path, caplog):
     )
 
 
+def test_reader_warns_on_a_non_dict_verdict_entry_2278(tmp_path, caplog):
+    """#2278: a non-dict entry of ``adaptive_verdicts`` is dropped; the reader must
+    say so, naming the file, instead of dropping it silently. Dict entries still yield."""
+    from src.data.audit_sidecar_reader import SidecarReader
+
+    sub = tmp_path / "exp-nd"
+    sub.mkdir(parents=True)
+    path = sub / "adaptive_verdicts_ND.json"
+    path.write_text(
+        json.dumps(
+            {
+                "experiment_id": "exp-nd",
+                "written_at": "2026-05-15T10:00:00Z",
+                "adaptive_verdicts": [{"feature": "g", "layer": "4"}, "h", None],
+            }
+        )
+    )
+    with caplog.at_level("WARNING"):
+        records = list(SidecarReader(artifacts_dir=tmp_path).iter_verdict_records())
+    assert [r.feature for r in records] == ["g"]
+    drops = [
+        r.getMessage()
+        for r in caplog.records
+        if "non-dict adaptive_verdicts entr" in r.getMessage()
+    ]
+    assert len(drops) == 1 and str(path) in drops[0], drops
+
+
 def test_reader_empty_directory_returns_empty(tmp_path):
     from src.data.audit_sidecar_reader import SidecarReader
 

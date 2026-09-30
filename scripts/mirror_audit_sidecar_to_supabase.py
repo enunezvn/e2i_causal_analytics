@@ -28,6 +28,12 @@ subtracts a small overlap window (default 1 hour), and feeds that into
   - On first run (table empty), ``max(imported_at)`` returns NULL and the
     cursor defaults to ``NULL`` (process every sidecar in the directory).
 
+  - The cursor is not the completeness mechanism (#2278). A sidecar behind it
+    whose rows are missing from the table (it landed late, or was unreadable
+    on the run that could first see it) is still mirrored, and logged at
+    WARNING as a backfill. Rows behind the cursor that are already in the
+    table are not re-upserted; that is the bound the cursor keeps.
+
 Database connection
 -------------------
 Uses ``DATABASE_URL`` (psycopg-v3 connection string). Matches the env-var
@@ -344,11 +350,89 @@ def _read_cursor(conn: psycopg.Connection, overlap_hours: int) -> Optional[datet
         overlap_hours,
         cursor.isoformat(),
     )
-    # The reader compares against the sidecar's ``written_at``, not the
-    # imported_at. Conceptually that's fine because a sidecar can't be
-    # imported before it was written, so any sidecar with
-    # written_at < cursor is guaranteed to be already in the table.
+    # The cursor is compared against the sidecar's ``written_at``, not its
+    # imported_at. A sidecar behind the cursor is NOT guaranteed to be in the
+    # table: one that landed late, or was unreadable on the run that could first
+    # see it, is behind the cursor by the next run (#2278). ``_select_records``
+    # therefore still mirrors rows behind the cursor that are missing.
     return cursor
+
+
+# Placeholders for the NULLs the run-key index (migration 157) folds, so a key
+# built in Python compares equal to the one the table stores.
+_UNKNOWN_KEY = "__unknown__"
+_NIL_UUID = "00000000-0000-0000-0000-000000000000"
+
+RowKey = tuple[str, str, datetime, str]
+
+
+def _record_key(record: VerdictRecord) -> RowKey:
+    """The record's ``uix_adaptive_validity_verdicts_run_key`` key (migration 157)."""
+    # The reader never yields a None experiment_id / feature (it substitutes
+    # "<unknown>"), so only the run id needs folding here; the SELECT below folds
+    # all four the way the index does.
+    return (
+        record.experiment_id,
+        record.feature,
+        record.written_at,
+        (record.audit_workflow_id or _NIL_UUID).lower(),
+    )
+
+
+def _existing_row_keys(conn: psycopg.Connection, written_ats: list[datetime]) -> set[RowKey]:
+    """Run keys already in the table among rows with one of ``written_ats``."""
+    if not written_ats:
+        return set()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT COALESCE(experiment_id, %s), COALESCE(feature, %s), written_at, "
+            "COALESCE(audit_workflow_id, %s::uuid)::text "
+            "FROM adaptive_validity_verdicts WHERE written_at = ANY(%s);",
+            (_UNKNOWN_KEY, _UNKNOWN_KEY, _NIL_UUID, written_ats),
+        )
+        rows = cur.fetchall()
+    return {(str(r[0]), str(r[1]), r[2], str(r[3]).lower()) for r in rows}
+
+
+def _select_records(
+    conn: psycopg.Connection,
+    records: list[VerdictRecord],
+    *,
+    cursor: Optional[datetime],
+) -> tuple[list[VerdictRecord], int]:
+    """Pick the records to upsert, and how many of them were backfilled (#2278).
+
+    A record at or after ``cursor`` is upserted as before (a re-upsert of an
+    unchanged row is a no-op). A record behind the cursor is upserted only when
+    its run key is missing from the table: that is a sidecar an earlier run
+    never mirrored (it landed late, or it was unreadable then). Rows behind the
+    cursor that are already in the table are not re-upserted, which keeps the
+    cursor's bound on write amplification.
+
+    The reader parses every sidecar file whatever the cursor, so looking behind
+    it costs one SELECT per run (rows whose ``written_at`` matches a sidecar
+    behind the cursor), not extra file I/O.
+    """
+    if cursor is None:
+        return records, 0
+    behind = [r for r in records if r.written_at < cursor]
+    if not behind:
+        return records, 0
+    existing = _existing_row_keys(conn, sorted({r.written_at for r in behind}))
+    missing = [r for r in behind if _record_key(r) not in existing]
+    for source_path in sorted({str(r.source_path) for r in missing}):
+        rows = [r for r in missing if str(r.source_path) == source_path]
+        logger.warning(
+            "mirror: backfilling %d row(s) of sidecar %s (written_at=%s): it is behind "
+            "the cursor %s but was never mirrored (#2278)",
+            len(rows),
+            source_path,
+            rows[0].written_at.isoformat(),
+            cursor.isoformat(),
+        )
+    missing_ids = {id(r) for r in missing}
+    selected = [r for r in records if r.written_at >= cursor or id(r) in missing_ids]
+    return selected, len(missing)
 
 
 def _upsert_records(
@@ -544,13 +628,26 @@ def main(argv: Optional[list[str]] = None) -> int:
                 "cursor: db empty; using --since floor=%s",
                 since_override.isoformat(),
             )
-        reader = SidecarReader(artifacts_dir=artifacts_dir, since=cursor)
-        records = list(reader.iter_verdict_records())
-        logger.info("read %d verdict records from %s", len(records), artifacts_dir)
+        # #2278: the reader applies only the explicit --since floor. The DB cursor
+        # is applied by _select_records, which still mirrors rows behind it that
+        # are missing from the table.
+        reader = SidecarReader(artifacts_dir=artifacts_dir, since=since_override)
+        read_records = list(reader.iter_verdict_records())
+        records, backfilled = _select_records(conn, read_records, cursor=cursor)
+        logger.info(
+            "read %d verdict records from %s; %d selected (%d backfilled from behind the cursor)",
+            len(read_records),
+            artifacts_dir,
+            len(records),
+            backfilled,
+        )
         new_count, updated_count, noop_count = _upsert_records(conn, records, dry_run=args.dry_run)
         logger.info(
-            "done: read=%d, upserted_new=%d, upserted_updated=%d, noop=%d, dry_run=%s",
+            "done: read=%d, selected=%d, backfilled=%d, upserted_new=%d, "
+            "upserted_updated=%d, noop=%d, dry_run=%s",
+            len(read_records),
             len(records),
+            backfilled,
             new_count,
             updated_count,
             noop_count,
