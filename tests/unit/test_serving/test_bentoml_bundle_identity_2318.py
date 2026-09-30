@@ -326,3 +326,112 @@ def test_feature_builder_bundles_are_unchanged(serving_module: Any, tmp_path: Pa
     _write(tmp_path, "initiation", NAME, bundle)
     found = serving_module._discover_goldstd_bundles_from_fs(str(tmp_path))
     assert isinstance(found[NAME]["preprocessor"], FeatureBuilder)
+
+
+# ------------------------------------------------------------------ codex r1 findings
+
+
+def test_ct_bundle_with_permuted_feature_names_is_not_served(
+    serving_module: Any, tmp_path: Path
+) -> None:
+    """Same length, wrong order: predictions would stay right but every encoded value and
+    SHAP contribution would carry another feature's name. Refuse to load it."""
+    bad = _ct_bundle()
+    bad["feature_columns"] = list(reversed(bad["feature_columns"]))
+    _write(tmp_path, "initiation", NAME, bad)
+    assert NAME not in serving_module._discover_goldstd_bundles_from_fs(str(tmp_path))
+
+
+def test_ct_bundle_accepts_lane2_prefix_stripped_names(serving_module: Any, tmp_path: Path) -> None:
+    """Lane 2's contract strips ``num__``/``cat__`` prefixes from a verbose ColumnTransformer;
+    those stripped names are the declared feature_columns and must be accepted."""
+    X = _raw_frame()
+    y = (X["disease_severity"] > 5).astype(int)
+    ct = ColumnTransformer(
+        [
+            ("num", StandardScaler(), NUM),
+            ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), CAT),
+        ]
+    ).fit(X)
+    assert all(n.startswith(("num__", "cat__")) for n in ct.get_feature_names_out())
+    model = LogisticRegression(max_iter=500).fit(ct.transform(X), y)
+    bundle = {
+        "bundle_format": "sklearn_ct_v1",
+        "model": model,
+        "preprocessor": ct,
+        "keep_columns": [str(c) for c in ct.feature_names_in_],
+        "numeric_columns": list(NUM),
+        "feature_columns": [str(n).split("__", 1)[1] for n in ct.get_feature_names_out()],
+    }
+    _write(tmp_path, "initiation", NAME, bundle)
+    assert NAME in serving_module._discover_goldstd_bundles_from_fs(str(tmp_path))
+
+
+def test_legacy_default_dict_goes_through_the_same_bundle_checks(
+    serving_module: Any, monkeypatch: Any
+) -> None:
+    """The legacy default (store) path must not serve a bundle the routed path refuses."""
+    bad = _ct_bundle()
+    bad["bundle_format"] = "sklearn_ct_v2"
+    monkeypatch.setattr(serving_module, "_discover_goldstd_bundles", dict)
+    monkeypatch.setattr(serving_module, "_discover_model", lambda: (bad, "legacy:v1", "sklearn"))
+    service = serving_module.E2IModelService()
+    assert service._model is None
+
+    good = _ct_bundle()
+    monkeypatch.setattr(serving_module, "_discover_model", lambda: (good, "legacy:v1", "sklearn"))
+    service = serving_module.E2IModelService()
+    assert service._model is good["model"]
+    assert service._is_feature_builder(service._preprocessor)  # the adapter, not the bare CT
+    out = asyncio.run(service.predict(serving_module.PredictionInput(raw_features=[_row()])))
+    expected = good["model"].predict_proba(good["preprocessor"].transform(pd.DataFrame([_row()])))[
+        :, 1
+    ]
+    np.testing.assert_array_equal(np.asarray(out.probabilities), expected)
+
+
+def test_batch_with_model_name_and_encoded_features_is_routed(serving_module: Any) -> None:
+    """predict_batch used to ignore model_name unless raw_features were sent, scoring the
+    legacy default instead of the named model."""
+
+    class _Const:
+        def __init__(self, p: float) -> None:
+            self.p = p
+
+        def predict(self, arr: Any) -> Any:
+            return np.zeros(len(arr))
+
+        def predict_proba(self, arr: Any) -> Any:
+            return np.tile([1 - self.p, self.p], (len(arr), 1))
+
+    service = _service(
+        serving_module,
+        {
+            NAME: {
+                "model": _Const(0.8),
+                "preprocessor": None,
+                "feature_columns": ["a", "b"],
+                "bundle_sha256": "ab" * 32,
+            }
+        },
+    )
+    service._model = _Const(0.1)
+    out = asyncio.run(
+        service.predict_batch(
+            serving_module.BatchPredictionInput(
+                batch_id="b", model_name=NAME, features=[[1.0, 2.0], [3.0, 4.0]]
+            )
+        )
+    )
+    assert out.error is None
+    assert out.probabilities == [0.8, 0.8]
+    assert out.bundle_sha256 == "ab" * 32
+
+    unknown = asyncio.run(
+        service.predict_batch(
+            serving_module.BatchPredictionInput(
+                batch_id="b", model_name="nope_goldstd_lr_v1", features=[[1.0, 2.0]]
+            )
+        )
+    )
+    assert unknown.error and unknown.predictions == []

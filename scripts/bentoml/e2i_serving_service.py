@@ -582,18 +582,27 @@ def _ct_raw_encoder(obj: Dict[str, Any]) -> Optional[_ColumnTransformerRawEncode
         return None
     try:
         fitted_in = [str(c) for c in ct.feature_names_in_]
-        n_out = len(ct.get_feature_names_out())
+        fitted_out = [str(n) for n in ct.get_feature_names_out()]
     except Exception as e:
         logger.warning("sklearn_ct_v1 preprocessor is not a fitted ColumnTransformer: %s", e)
         return None
-    if fitted_in != [str(c) for c in keep] or n_out != len(feats) or not set(numeric) <= set(keep):
+    # The declared names label every encoded value and SHAP contribution, so they
+    # must equal the transformer's own output names IN ORDER — verbatim, or with
+    # the ``num__``/``cat__`` prefixes the bundle contract strips.
+    stripped = [n.split("__", 1)[1] if n.startswith(("num__", "cat__")) else n for n in fitted_out]
+    declared = [str(c) for c in feats]
+    if (
+        fitted_in != [str(c) for c in keep]
+        or declared not in (fitted_out, stripped)
+        or not set(numeric) <= set(keep)
+    ):
         logger.warning(
             "sklearn_ct_v1 contract mismatch: keep_columns=%s fitted_in=%s, "
-            "feature_columns=%d fitted_out=%d",
+            "feature_columns=%s fitted_out=%s",
             keep,
             fitted_in,
-            len(feats),
-            n_out,
+            declared,
+            fitted_out,
         )
         return None
     return _ColumnTransformerRawEncoder(ct, keep, numeric, feats)
@@ -760,6 +769,16 @@ class E2IModelService:
         self._models: Dict[str, Dict[str, Any]] = _discover_goldstd_bundles()
 
         self._model, self._model_tag, self._framework = _discover_model()
+
+        # A dict carrying ``bundle_format`` gets the same checks + adapter as a
+        # routed bundle (#2318); one they refuse is not served as the default.
+        if isinstance(self._model, dict) and "bundle_format" in self._model:
+            entry = _unwrap_bundle(self._model)
+            if entry is None:
+                logger.error("Default model %s is not a servable bundle.", self._model_tag)
+                self._model = None
+            else:
+                self._model = entry
 
         # Unwrap bundled dict if model is a dict (contains preprocessor)
         if isinstance(self._model, dict):
@@ -1540,6 +1559,38 @@ class E2IModelService:
                 predictions=out.predictions,
                 probabilities=out.probabilities,
                 processing_time_ms=elapsed_ms,
+                bundle_sha256=self._bundle_sha256(input_data.model_name),
+            )
+
+        # A named model with a pre-encoded matrix: route like single ``predict``
+        # (#2318) instead of silently scoring the legacy default model.
+        if input_data.model_name:
+            model, preprocessor, feature_columns, model_tag, err = self._resolve_active(
+                input_data.model_name
+            )
+            if err is not None:
+                return BatchPredictionOutput(
+                    batch_id=input_data.batch_id,
+                    total_samples=len(input_data.features),
+                    predictions=[],
+                    probabilities=[],
+                    processing_time_ms=0.0,
+                    error=err,
+                )
+            out = self._run_prediction(
+                input_data.features,
+                feature_source="user_provided" if input_data.features else None,
+                model=model,
+                preprocessor=preprocessor,
+                feature_columns=feature_columns,
+                model_tag=model_tag,
+            )
+            return BatchPredictionOutput(
+                batch_id=input_data.batch_id,
+                total_samples=len(input_data.features),
+                predictions=out.predictions,
+                probabilities=out.probabilities,
+                processing_time_ms=(time.time() - start) * 1000,
                 bundle_sha256=self._bundle_sha256(input_data.model_name),
             )
 
