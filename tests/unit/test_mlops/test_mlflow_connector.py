@@ -49,6 +49,7 @@ class TestModelStage:
             "production",
             "archived",
             "deprecated",
+            "candidate",
         ]
         actual_stages = [s.value for s in ModelStage]
         assert set(actual_stages) == set(expected_stages)

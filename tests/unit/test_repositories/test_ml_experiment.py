@@ -843,8 +843,11 @@ def test_normalize_stage_maps_mlflow_names_to_the_enum(given, expected):
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("given", [None, "candidate", "", " Production "])
+@pytest.mark.parametrize("given", [None, "champion", "", " Production "])
 def test_normalize_stage_refuses_anything_else(given):
-    """#2259 codex r1: Python None is malformed state, not MLflow's "None" stage."""
+    """#2259 codex r1: Python None is malformed state, not MLflow's "None" stage.
+
+    'candidate' used to be the unknown example; migration 159 made it a stage (#2318).
+    """
     with pytest.raises(ValueError, match="stage"):
         MLModelRegistryRepository.normalize_stage(given)

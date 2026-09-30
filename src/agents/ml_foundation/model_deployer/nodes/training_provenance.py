@@ -8,7 +8,8 @@
   synthetic-gold cohort landed NULL and passed the gate. Allowed values (migration
   083): ``synthetic_gold`` | ``real`` | ``mixed``; NULL = unknown.
 
-- ``production_gate``: ``promote_stage`` applies the same gate BEFORE MLflow moves (#2259).
+- ``production_gate``: ``promote_stage`` applies the same gate BEFORE MLflow moves (#2259),
+  and the #2318 stage rule (a candidate is promoted only by activation).
 
 Split out of ``registry_manager`` (module-size ratchet).
 """
@@ -108,33 +109,53 @@ async def heal_reused_row(
 
 
 async def production_gate(state: Any, target_stage: str) -> Optional[Dict[str, Any]]:
-    """The #968/#2259 gate for ``promote_stage``, applied BEFORE the MLflow transition.
+    """The registry gates for ``promote_stage``, applied BEFORE the MLflow transition.
 
     MLflow's stage is read on its own (e.g. the KPI calculator's
     ``get_latest_versions(stages=["Production", ...])``), so a promotion the registry
-    would refuse must not move MLflow either. Returns the node's refusal update, or None
-    when the target is not production or the registry row's provenance is promotable.
-    The predicate is ``MLModelRegistryRepository.production_refusal``, the same one
-    ``transition_stage`` enforces. No registry row (or no client to read it) means nothing
-    proves the training data: refused.
+    would refuse must not move MLflow either. Returns the node's refusal update, or None.
+
+    - Any target: the #2318 stage rule (``stage_transition_refusal``: a ``candidate`` is
+      promoted only by activation). An unreadable row skips it here; ``transition_stage``
+      still enforces it at the DB write.
+    - ``production``: the #968/#2259 provenance gate (``production_refusal``). No registry
+      row (or no client to read it) means nothing proves the training data: refused.
+
+    Both predicates are the ones ``transition_stage`` enforces.
     """
     from src.agents.ml_foundation.model_deployer.nodes.registry_manager import (
         _get_async_supabase_client_or_none,
     )
-    from src.repositories.ml_experiment import MLModelRegistryRepository
+    from src.repositories.ml_experiment import MLModelRegistryRepository, stage_value
 
-    if MLModelRegistryRepository.normalize_stage(target_stage) != "production":
-        return None
+    target = MLModelRegistryRepository.normalize_stage(target_stage)
     model_id = state.get("model_registry_id")
+    if target != "production" and not model_id:
+        return None
     client = await _get_async_supabase_client_or_none() if model_id else None
-    row = await MLModelRegistryRepository(client).get_by_id(str(model_id)) if client else None
-    if row is None:
-        reason: Optional[str] = (
-            f"Refusing to promote to production: no readable ml_model_registry row "
-            f"(model_registry_id={model_id!r}), so its training_provenance is unproven (#2259)."
+    row = None
+    if client:
+        try:
+            row = await MLModelRegistryRepository(client).get_by_id(str(model_id))
+        except Exception as e:
+            if target == "production":
+                raise
+            logger.warning(
+                "promote_stage: registry row %s unreadable before MLflow: %s", model_id, e
+            )
+    reason: Optional[str] = None
+    if row is not None:
+        reason = MLModelRegistryRepository.stage_transition_refusal(
+            model_id, stage_value(row.stage), target
         )
-    else:
-        reason = MLModelRegistryRepository.production_refusal(model_id, row.training_provenance)
+    if reason is None and target == "production":
+        if row is None:
+            reason = (
+                f"Refusing to promote to production: no readable ml_model_registry row "
+                f"(model_registry_id={model_id!r}), so its training_provenance is unproven (#2259)."
+            )
+        else:
+            reason = MLModelRegistryRepository.production_refusal(model_id, row.training_provenance)
     if reason is None:
         return None
     logger.error("promote_stage REFUSED before the MLflow transition: %s", reason)
