@@ -1562,8 +1562,8 @@ class E2IModelService:
                 bundle_sha256=self._bundle_sha256(input_data.model_name),
             )
 
-        # A named model with a pre-encoded matrix: route like single ``predict``
-        # (#2318) instead of silently scoring the legacy default model.
+        # A named model with a numeric matrix (#2318): route to that model instead
+        # of silently scoring the legacy default model.
         if input_data.model_name:
             model, preprocessor, feature_columns, model_tag, err = self._resolve_active(
                 input_data.model_name
@@ -1576,6 +1576,22 @@ class E2IModelService:
                     probabilities=[],
                     processing_time_ms=0.0,
                     error=err,
+                )
+            if preprocessor is not None:
+                # A routed bundle's preprocessor maps RAW covariates to the model's
+                # encoded vector; a numeric matrix is ambiguous (already encoded?)
+                # and re-transforming it mis-encodes it. Fail closed, don't guess.
+                return BatchPredictionOutput(
+                    batch_id=input_data.batch_id,
+                    total_samples=len(input_data.features),
+                    predictions=[],
+                    probabilities=[],
+                    processing_time_ms=0.0,
+                    error=(
+                        f"{input_data.model_name} encodes raw covariates; send "
+                        "raw_features, not a numeric features matrix"
+                    ),
+                    bundle_sha256=self._bundle_sha256(input_data.model_name),
                 )
             out = self._run_prediction(
                 input_data.features,

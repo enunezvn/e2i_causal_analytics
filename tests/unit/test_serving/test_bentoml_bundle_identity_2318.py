@@ -435,3 +435,30 @@ def test_batch_with_model_name_and_encoded_features_is_routed(serving_module: An
         )
     )
     assert unknown.error and unknown.predictions == []
+
+
+@pytest.mark.parametrize("kind", ["feature_builder", "sklearn_ct_v1"])
+def test_batch_encoded_matrix_to_a_named_goldstd_bundle_fails_closed(
+    serving_module: Any, tmp_path: Path, kind: str
+) -> None:
+    """A goldstd bundle's preprocessor maps RAW covariates to the encoded vector; a numeric
+    ``features`` matrix sent to it is ambiguous (encoded? raw?) and re-transforming it would
+    mis-encode it. Refuse with an error naming raw_features instead of guessing."""
+    bundle = _feature_builder_bundle() if kind == "feature_builder" else _ct_bundle()
+    sha = _write(tmp_path, "initiation", NAME, bundle)
+    service = _service(
+        serving_module, serving_module._discover_goldstd_bundles_from_fs(str(tmp_path))
+    )
+    enc = np.asarray(
+        bundle["preprocessor"].transform(pd.DataFrame([_row(0), _row(1)])), dtype=float
+    )
+    out = asyncio.run(
+        service.predict_batch(
+            serving_module.BatchPredictionInput(
+                batch_id="b", model_name=NAME, features=enc.tolist()
+            )
+        )
+    )
+    assert out.predictions == [] and out.probabilities == []
+    assert out.error and "raw_features" in out.error
+    assert out.bundle_sha256 == sha
